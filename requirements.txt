@@ -1,4 +1,4 @@
-Flask==2.3.4
+Flask==3.0.3
 gunicorn==21.2.0
 requests==2.32.5
 urllib3==2.5.0
