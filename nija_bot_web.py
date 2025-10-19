@@ -1,3 +1,12 @@
+import sys
+import os
+
+# Add the vendor folder to sys.path so Python can find vendored packages
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
+
+# Import the Coinbase Advanced Python SDK from vendor
+import coinbase_advanced_py as cap
+
 import os
 from flask import Flask, jsonify
 from nija_bot import TRADING_PAIRS, live_data, ai_signal, get_account_balance
