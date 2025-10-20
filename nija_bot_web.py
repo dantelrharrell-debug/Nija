@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # nija_bot_web.py
 
-import sys, os
+import sys
+import os
 
 # --- Add vendor folder to Python path ---
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -10,7 +11,7 @@ vendor_abs = os.path.join(ROOT, VENDOR_PATH)
 if os.path.isdir(vendor_abs):
     sys.path.insert(0, vendor_abs)
 
-# --- Load .env automatically if present ---
+# --- Load .env automatically ---
 env_path = os.path.join(ROOT, ".env")
 if os.path.isfile(env_path):
     for raw in open(env_path):
@@ -66,13 +67,19 @@ def health():
 def webhook():
     data = request.json
     print("Webhook received:", data)
-    # Add trading logic here
     try:
         result = client.place_order(**data)
     except Exception as e:
         return jsonify({"status": "error", "detail": str(e)}), 500
     return jsonify({"status": "received", "result": result}), 200
 
+# --- Run Flask with automatic free port selection ---
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
+    import socket
+    s = socket.socket()
+    s.bind(('', 0))
+    free_port = s.getsockname()[1]
+    s.close()
+    port = int(os.getenv("PORT", free_port))
+    print(f"Starting Flask on port {port}")
     app.run(host="0.0.0.0", port=port)
