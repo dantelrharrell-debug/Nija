@@ -4,3 +4,4 @@ numpy==1.26.1
 requests==2.32.0
 python-dotenv==1.0.1
 gunicorn==21.2.0
+
