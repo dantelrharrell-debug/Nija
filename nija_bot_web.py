@@ -3,7 +3,7 @@
 
 import sys, os
 
-# --- Add vendored libraries to Python path ---
+# --- Add vendor folder to Python path ---
 ROOT = os.path.dirname(os.path.abspath(__file__))
 VENDOR_PATH = os.environ.get("VENDOR_FOLDER_PATH", "vendor")
 vendor_abs = os.path.join(ROOT, VENDOR_PATH)
@@ -21,54 +21,57 @@ if os.path.isfile(env_path):
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-# --- Imports ---
-from flask import Flask, request, jsonify
-import pandas as pd
-import numpy as np
-import matplotlib
-import requests
-
-# --- Initialize Coinbase client (or dummy) ---
+# --- Coinbase client with fallback ---
 try:
-    from coinbase_advanced_py.client import CoinbaseClient
-    api_key = os.getenv("COINBASE_API_KEY", "YOUR_API_KEY")
-    api_secret = os.getenv("COINBASE_API_SECRET", "YOUR_API_SECRET")
-    api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", "YOUR_API_PASSPHRASE")
-    client = CoinbaseClient(api_key, api_secret, api_passphrase)
-    print("✅ CoinbaseClient initialized")
+    from coinbase_advanced_py import CoinbaseClient
+    print("✅ Real CoinbaseClient imported")
 except ModuleNotFoundError:
-    print("⚠️ coinbase_advanced_py not found, using DummyClient for simulation")
+    print("⚠️ coinbase_advanced_py not found. Using DummyClient for simulation.")
+
     class CoinbaseClient:
         def __init__(self, *args, **kwargs):
             print("Dummy CoinbaseClient initialized")
+
         def get_accounts(self):
-            return [{"currency":"USD","balance":"1000.00"}]
+            return [{"currency": "USD", "balance": "1000.00"}]
+
         def place_order(self, **kwargs):
             print("Simulated order:", kwargs)
-            return {"status":"simulated", "order": kwargs}
-    client = CoinbaseClient()
+            return {"status": "simulated", "order": kwargs}
 
-# --- Flask App ---
+# --- Initialize client ---
+api_key = os.getenv("COINBASE_API_KEY", "YOUR_API_KEY")
+api_secret = os.getenv("COINBASE_API_SECRET", "YOUR_API_SECRET")
+api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", "YOUR_API_PASSPHRASE")
+client = CoinbaseClient(api_key, api_secret, api_passphrase)
+
+# --- Flask setup ---
+from flask import Flask, request, jsonify
+
 app = Flask(__name__)
 
 @app.route("/")
 def index():
     return jsonify({"status": "ok", "bot": "Nija AI Trading Bot"}), 200
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    data = request.json
-    print("Webhook received:", data)
-    # Placeholder for trading logic
-    return jsonify({"status": "received"}), 200
-
 @app.route("/health")
 def health():
     try:
         accounts = client.get_accounts()
     except Exception as e:
-        return jsonify({"status":"error","detail": str(e)}), 500
-    return jsonify({"status":"ok","accounts_preview": accounts[:2]}), 200
+        return jsonify({"status": "error", "detail": str(e)}), 500
+    return jsonify({"status": "ok", "accounts_preview": accounts[:2]}), 200
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.json
+    print("Webhook received:", data)
+    # Add trading logic here
+    try:
+        result = client.place_order(**data)
+    except Exception as e:
+        return jsonify({"status": "error", "detail": str(e)}), 500
+    return jsonify({"status": "received", "result": result}), 200
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
