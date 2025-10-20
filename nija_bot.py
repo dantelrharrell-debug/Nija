@@ -1,35 +1,52 @@
-#!/usr/bin/env python3
-# nija_bot.py
+import os
+import time
+import threading
+import sys
 
-# --- Add vendored libraries to Python path ---
-import sys, os
+# Ensure vendor library is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
-# --- Imports ---
-from coinbase_advanced_py.client import CoinbaseClient
-import pandas as pd
-import numpy as np
-import matplotlib
-import requests
+try:
+    from coinbase_advanced_py import CoinbaseClient
+except ImportError:
+    raise ImportError("❌ coinbase_advanced_py not found in vendor folder.")
 
-# --- Main bot logic ---
-def main():
-    print("🟢 Nija AI Trading Bot is running!")
+# Load API keys
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
 
-    # Replace with your real Coinbase keys
-    api_key = "YOUR_API_KEY"
-    api_secret = "YOUR_API_SECRET"
-    api_passphrase = "YOUR_API_PASSPHRASE"
+if not API_KEY or not API_SECRET:
+    raise ValueError("API keys missing. Check your .env or environment variables.")
 
-    client = CoinbaseClient(api_key, api_secret, api_passphrase)
-    print("✅ CoinbaseClient initialized")
+client = CoinbaseClient(API_KEY, API_SECRET)
 
-    # Example: fetch accounts
-    try:
-        accounts = client.get_accounts()
-        print("Accounts fetched:", accounts)
-    except Exception as e:
-        print("Error fetching accounts:", e)
+# Global flag to prevent multiple threads
+running = False
+lock = threading.Lock()
 
-if __name__ == "__main__":
-    main()
+def trade_loop():
+    global running
+    with lock:
+        if running:
+            print("⚠️ Trade loop already running!")
+            return
+        running = True
+
+    print("🔥 Nija Ultimate AI Trading Loop Started 🔥")
+    while True:
+        try:
+            btc_price = client.get_price("BTC-USD")
+            print(f"BTC Price: {btc_price}")
+
+            # Example aggressive strategy
+            if btc_price < 30000:
+                client.buy("BTC", 0.001)
+                print("✅ Bought BTC!")
+            elif btc_price > 35000:
+                client.sell("BTC", 0.001)
+                print("✅ Sold BTC!")
+
+            time.sleep(60)
+        except Exception as e:
+            print(f"⚠️ Error in trade_loop: {e}")
+            time.sleep(30)
