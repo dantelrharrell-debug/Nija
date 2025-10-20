@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
+
 #!/usr/bin/env python3
 # nija_bot.py
 
