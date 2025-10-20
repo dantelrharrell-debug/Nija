@@ -38,7 +38,7 @@ def trade_loop():
             btc_price = client.get_price("BTC-USD")
             print(f"BTC Price: {btc_price}")
 
-            # Example aggressive strategy
+            # Aggressive strategy example
             if btc_price < 30000:
                 client.buy("BTC", 0.001)
                 print("✅ Bought BTC!")
