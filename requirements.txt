@@ -1,7 +1,6 @@
-flask==2.3.6
+flask==3.0.0
 pandas==2.1.1
-numpy==1.26.4
-matplotlib==3.8.1
-requests==2.32.1
-gunicorn==21.2.0
+numpy==1.26.1
+requests==2.32.0
 python-dotenv==1.0.1
+gunicorn==21.2.0
