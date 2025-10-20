@@ -1,3 +1,11 @@
+import sys, os
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+VENDOR_PATH = os.environ.get("VENDOR_FOLDER_PATH", "vendor")
+vendor_abs = os.path.join(ROOT, VENDOR_PATH)
+if os.path.isdir(vendor_abs):
+    sys.path.insert(0, vendor_abs)
+
 #!/usr/bin/env python3
 # nija_bot_web.py
 
