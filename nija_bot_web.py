@@ -1,46 +1,16 @@
-import sys, os
-from dotenv import load_dotenv
-
-# Add vendor folder for CoinbaseClient
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
-
-# Load environment variables
-env_path = os.path.join(os.path.dirname(__file__), ".env")
-load_dotenv(dotenv_path=env_path)
-
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-
-print("API Key loaded?", bool(API_KEY))
-print("API Secret loaded?", bool(API_SECRET))
-
 # nija_bot_web.py
-
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
-
-from coinbase_advanced_py.client import CoinbaseClient
-
-print("✅ CoinbaseClient loaded")
-
-from flask import Flask, jsonify
-
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return jsonify({"status": "ok", "app": "Nija Trading Bot"}), 200
-
-# --- rest of your Flask API code ---
-
-import sys, os, time, threading, signal
+import sys
+import os
+import time
+import threading
+import signal
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 
 # --- Step 1: Add vendor folder to Python path ---
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
-# --- Step 2: Import CoinbaseClient ---
+# --- Step 2: Import CoinbaseClient safely ---
 try:
     from coinbase_advanced_py.client import CoinbaseClient
 except ImportError as e:
@@ -50,11 +20,17 @@ except ImportError as e:
             return {"amount": 30000.0}
 
 # --- Step 3: Load environment variables ---
-load_dotenv()
+env_path = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path=env_path)
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
+SECRET_KEY = os.getenv("BOT_SECRET_KEY", "changeme")
+TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET", "changeme")
 
-# --- Step 4: Initialize client ---
+print("API Key loaded?", bool(API_KEY))
+print("API Secret loaded?", bool(API_SECRET))
+
+# --- Step 4: Initialize Coinbase client ---
 try:
     if API_KEY and API_SECRET:
         client = CoinbaseClient(API_KEY, API_SECRET)
@@ -65,12 +41,10 @@ except Exception:
     client = CoinbaseClient()
     print("⚠️ Simulation mode active.")
 
-# --- Step 5: Setup Flask ---
+# --- Step 5: Setup Flask app ---
 app = Flask(__name__)
-SECRET_KEY = os.getenv("BOT_SECRET_KEY", "changeme")
-TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET", "changeme")
 
-# --- Step 6: Trading loop ---
+# --- Step 6: Setup trading loop ---
 running = False
 lock = threading.Lock()
 
@@ -138,7 +112,7 @@ def webhook():
     print("📡 TradingView alert received:", data)
     return jsonify({"status": "ok", "message": "Webhook received"}), 200
 
-# --- Step 8: Run app ---
+# --- Step 8: Run Flask API ---
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     print(f"🌐 Starting Flask API on port {port}")
