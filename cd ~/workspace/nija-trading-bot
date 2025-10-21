@@ -1,8 +1,7 @@
-Nija/                     <- bot root
-├─ nija_bot_web.py         <- main Flask + trading loop
-├─ .env                    <- environment variables (keys)
-├─ requirements.txt        <- dependencies
-└─ vendor/
-   └─ coinbase_advanced_py/
-       ├─ __init__.py
-       └─ client.py
+Nija/
+│
+├─ nija_bot_web.py        # Main bot + Flask API
+├─ vendor/
+│   └─ coinbase_advanced_py/
+│       ├─ __init__.py
+│       └─ client.py
