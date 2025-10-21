@@ -113,3 +113,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     print(f"🌐 Starting Flask API on port {port}")
     app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5050))  # <-- get port from environment or default to 5050
+    app.run(host="0.0.0.0", port=port)   # <-- listen on all interfaces
