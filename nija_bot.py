@@ -1,25 +1,35 @@
 import sys, os, time, threading, signal
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
-
-from coinbase_advanced_py import CoinbaseClient
 from dotenv import load_dotenv
+
+# --- Load environment variables ---
 load_dotenv()
 
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
+# --- Add vendor folder to path ---
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
+# --- Coinbase client setup ---
 try:
+    from coinbase_advanced_py import CoinbaseClient
+
+    API_KEY = os.getenv("COINBASE_API_KEY")
+    API_SECRET = os.getenv("COINBASE_API_SECRET")
+
     if not API_KEY or not API_SECRET:
         raise ValueError("Missing COINBASE_API_KEY or COINBASE_API_SECRET")
+
     client = CoinbaseClient(API_KEY, API_SECRET)
     print("✅ CoinbaseClient loaded. Live trading ready.")
+
 except Exception as e:
-    print(f"⚠️ CoinbaseClient failed: {e}. Simulation mode.")
+    print(f"⚠️ CoinbaseClient failed: {e}. Running in simulation mode.")
+    
     class CoinbaseClient:
         def get_spot_price(self, currency_pair="BTC-USD"):
             return {"amount": 30000.0}
+
     client = CoinbaseClient()
 
+# --- Thread-safe trading loop ---
 running = False
 lock = threading.Lock()
 
@@ -46,7 +56,7 @@ def trade_loop():
             btc_price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
             print(f"BTC Price: {btc_price}")
 
-            # Example logic
+            # Example trading logic
             if btc_price < 30000:
                 print("✅ BUY BTC!")
             elif btc_price > 35000:
