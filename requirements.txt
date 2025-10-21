@@ -1,8 +1,22 @@
-python-3.12.16
-Flask==3.0.0
-pandas==2.0.3
-numpy==1.27.6
-python-dotenv==1.0.1
-requests==2.31.1
+# Python version (for reference only, not installed via pip)
+# python==3.12.16
+
+# Core web framework
+Flask==2.3.3
 gunicorn==21.2.0
-coinbase==3.0.0
+
+# HTTP requests
+requests==2.31.0
+python-dotenv==1.0.0
+
+# Coinbase advanced client
+git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase-advanced-py
+
+# Cryptography & OpenSSL (to avoid conflicts)
+cryptography==45.0.0
+pyOpenSSL==25.0.0
+
+# Data utilities
+pandas==2.1.0
+numpy==1.26.0
+matplotlib==3.8.0
