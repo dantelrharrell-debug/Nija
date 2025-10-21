@@ -1,3 +1,13 @@
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
+
+try:
+    from coinbase_advanced_py import CoinbaseClient
+except ImportError:
+    class CoinbaseClient:
+        def __init__(self, *args, **kwargs):
+            print("⚠️ Dummy CoinbaseClient active (simulation mode)")
+
 import os
 import time
 import threading
