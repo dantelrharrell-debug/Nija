@@ -1,7 +1,5 @@
 Nija/
-│
-├─ nija_bot_web.py        # Main bot + Flask API
-├─ vendor/
-│   └─ coinbase_advanced_py/
-│       ├─ __init__.py
-│       └─ client.py
+├─ nija_bot_web.py
+└─ vendor/coinbase_advanced_py/
+    ├─ __init__.py
+    └─ client.py
