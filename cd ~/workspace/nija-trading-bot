@@ -2,8 +2,7 @@ nija-trading-bot/
 ├─ nija_bot.py
 ├─ nija_bot_web.py
 ├─ requirements.txt
-└─ vendor/
-   └─ coinbase_advanced_py/
-       ├─ __init__.py
-       ├─ client.py
-       └─ other files...
+├─ test_import.py
+├─ vendor/         (optional, can remove if using pip install)
+├─ Dockerfile
+└─ runtime.txt     (optional for reference)
