@@ -1,4 +1,4 @@
-Nija/                  <- your bot root
+Nija/                  <- bot root
 ├─ nija_bot_web.py
 ├─ .env
 └─ vendor/
