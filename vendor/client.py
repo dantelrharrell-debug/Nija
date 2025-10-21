@@ -1,4 +1,3 @@
-# client.py — dummy CoinbaseClient for simulation or real API keys
 class CoinbaseClient:
     def __init__(self, api_key=None, api_secret=None):
         self.api_key = api_key
