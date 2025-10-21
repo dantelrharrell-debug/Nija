@@ -1,8 +1,10 @@
-Nija-Bot/
-├─ .devcontainer/
-│   ├─ devcontainer.json
-├─ Dockerfile
+Nija/
+├─ nija_bot.py
+├─ nija_bot_web.py
+├─ vendor/
+│   └─ coinbase_advanced_py/
+│       ├─ __init__.py
+│       ├─ client.py
+│       └─ ...
 ├─ requirements.txt
 ├─ .env
-├─ nija_bot_web.py
-├─ nija_bot.py
