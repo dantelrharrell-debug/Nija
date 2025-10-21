@@ -1,6 +1,2 @@
-# __init__.py
+# __init__.py — keep it minimal
 from .client import CoinbaseClient
-# __init__.py
-# Optional: import submodules if needed
-# Example:
-# from .client import CoinbaseClient
