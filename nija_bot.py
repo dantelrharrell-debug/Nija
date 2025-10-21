@@ -1,3 +1,4 @@
+# nija_bot.py
 import sys
 import os
 import time
@@ -6,23 +7,31 @@ import threading
 # Add vendor folder to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
-# --- Try importing your real CoinbaseClient from vendor ---
+# --- Load Coinbase client from vendor ---
 try:
     from coinbase_advanced_py import CoinbaseClient
-    client = CoinbaseClient(
-        api_key=os.getenv("COINBASE_API_KEY"),
-        api_secret=os.getenv("COINBASE_API_SECRET")
-    )
-    print("✅ CoinbaseClient loaded from vendor folder.")
-except ImportError:
-    # Fallback to simulation mode
-    print("⚠️ Dummy CoinbaseClient active (simulation mode)")
+    API_KEY = os.getenv("COINBASE_API_KEY")
+    API_SECRET = os.getenv("COINBASE_API_SECRET")
+    
+    if not API_KEY or not API_SECRET:
+        raise ValueError("❌ Missing COINBASE_API_KEY or COINBASE_API_SECRET in .env")
+
+    client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET)
+    print("✅ CoinbaseClient loaded from vendor folder. Ready for live trading!")
+
+except Exception as e:
+    # Fallback simulation mode
+    print(f"⚠️ CoinbaseClient import failed or keys missing: {e}")
+    print("⚠️ Running in simulation mode. No live trades will occur.")
+    
     class CoinbaseClient:
-        def __init__(self, *args, **kwargs):
-            pass
+        def get_spot_price(self, currency_pair="BTC-USD"):
+            # Dummy value for simulation
+            return {"amount": 30000.0}
+
     client = CoinbaseClient()
 
-# --- Trading loop ---
+# --- Thread-safe trading loop ---
 running = False
 lock = threading.Lock()
 
