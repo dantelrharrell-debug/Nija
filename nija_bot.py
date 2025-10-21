@@ -1,35 +1,39 @@
-import sys, os, time, threading, signal
+import sys
+import os
+import time
+import threading
+import signal
 from dotenv import load_dotenv
 
-# --- Load environment variables ---
-load_dotenv()
-
-# --- Add vendor folder to path ---
+# --- Step 1: Add vendor folder to Python path ---
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
-# --- Coinbase client setup ---
+# --- Step 2: Import CoinbaseClient ---
 try:
     from coinbase_advanced_py import CoinbaseClient
-
-    API_KEY = os.getenv("COINBASE_API_KEY")
-    API_SECRET = os.getenv("COINBASE_API_SECRET")
-
-    if not API_KEY or not API_SECRET:
-        raise ValueError("Missing COINBASE_API_KEY or COINBASE_API_SECRET")
-
-    client = CoinbaseClient(API_KEY, API_SECRET)
-    print("✅ CoinbaseClient loaded. Live trading ready.")
-
-except Exception as e:
-    print(f"⚠️ CoinbaseClient failed: {e}. Running in simulation mode.")
-    
+except ImportError as e:
+    print(f"⚠️ CoinbaseClient import failed: {e}. Running in simulation mode.")
     class CoinbaseClient:
         def get_spot_price(self, currency_pair="BTC-USD"):
             return {"amount": 30000.0}
 
-    client = CoinbaseClient()
+# --- Step 3: Load environment variables ---
+load_dotenv()
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
 
-# --- Thread-safe trading loop ---
+# --- Step 4: Initialize client ---
+try:
+    if API_KEY and API_SECRET:
+        client = CoinbaseClient(API_KEY, API_SECRET)
+        print("✅ CoinbaseClient loaded. Live trading ready.")
+    else:
+        raise ValueError("Missing API keys, using simulation mode.")
+except Exception:
+    client = CoinbaseClient()
+    print("⚠️ Simulation mode active.")
+
+# --- Step 5: Setup trading loop ---
 running = False
 lock = threading.Lock()
 
@@ -56,7 +60,7 @@ def trade_loop():
             btc_price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
             print(f"BTC Price: {btc_price}")
 
-            # Example trading logic
+            # Example logic
             if btc_price < 30000:
                 print("✅ BUY BTC!")
             elif btc_price > 35000:
