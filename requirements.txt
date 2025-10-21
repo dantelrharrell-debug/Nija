@@ -1,20 +1,10 @@
-# Core web framework
 Flask==2.3.3
 gunicorn==21.2.0
-
-# HTTP requests
 requests==2.31.0
 python-dotenv==1.0.0
-
-# Coinbase advanced client (from local vendor fallback)
-# Use pip fallback if vendor fails
-git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase-advanced-py
-
-# Cryptography & OpenSSL (to avoid conflicts)
-cryptography==44.0.0       # <45, satisfies pyOpenSSL
+cryptography>=41.0.5,<45
 pyOpenSSL==25.0.0
-
-# Data utilities
 pandas==2.1.0
 numpy==1.26.0
 matplotlib==3.8.0
+git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase-advanced-py
