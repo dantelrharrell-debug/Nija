@@ -1,9 +1,21 @@
+# nija_bot_web.py
+
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
 from coinbase_advanced_py.client import CoinbaseClient
 
 print("✅ CoinbaseClient loaded")
+
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return jsonify({"status": "ok", "app": "Nija Trading Bot"}), 200
+
+# --- rest of your Flask API code ---
 
 import sys, os, time, threading, signal
 from flask import Flask, jsonify, request
