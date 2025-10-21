@@ -1,4 +1,4 @@
-# Use the same base image
+# Base image
 FROM mcr.microsoft.com/devcontainers/python:3.11
 
 # Set working directory
@@ -7,12 +7,12 @@ WORKDIR /app
 # Copy project files
 COPY . /app
 
-# Install Python packages
+# Install dependencies
 RUN pip install --upgrade pip setuptools wheel
 RUN pip install -r requirements.txt
 
-# Expose port
+# Expose bot port
 EXPOSE 5000
 
-# Run your bot
+# Run bot
 CMD ["python", "nija_bot_web.py"]
