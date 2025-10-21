@@ -1,5 +1,4 @@
-# client.py
-
+# client.py — dummy CoinbaseClient for simulation or real API keys
 class CoinbaseClient:
     def __init__(self, api_key=None, api_secret=None):
         self.api_key = api_key
@@ -8,9 +7,5 @@ class CoinbaseClient:
             print("⚠️ No API keys provided. Running in simulation mode.")
 
     def get_spot_price(self, currency_pair="BTC-USD"):
-        """
-        Returns BTC price.
-        Replace with actual API calls for live trading.
-        """
-        # Dummy value for simulation
+        # If keys are missing, returns dummy value
         return {"amount": 30000.0}
