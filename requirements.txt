@@ -11,7 +11,7 @@ python-dotenv==1.0.0
 git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase-advanced-py
 
 # Cryptography & OpenSSL (to avoid conflicts)
-cryptography==45.0.0
+cryptography==44.0.0       # <45, satisfies pyOpenSSL
 pyOpenSSL==25.0.0
 
 # Data utilities
