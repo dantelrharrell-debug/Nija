@@ -1,6 +1,3 @@
-# Python version (for reference only, not installed via pip)
-# python==3.12.16
-
 # Core web framework
 Flask==2.3.3
 gunicorn==21.2.0
