@@ -1,8 +1,7 @@
-nija_bundle/
+Nija/                  <- your bot root
 ├─ nija_bot_web.py
-├─ nija_bot.py
-├─ vendor/
-│  └─ coinbase_advanced_py/
-│      ├─ __init__.py
-│      └─ client.py
-└─ .env
+├─ .env
+└─ vendor/
+   └─ coinbase_advanced_py/
+       ├─ __init__.py
+       └─ client.py
