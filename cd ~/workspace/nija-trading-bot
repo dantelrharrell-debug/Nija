@@ -1,4 +1,11 @@
-vendor/
-└─ coinbase_advanced_py/
-   ├─ __init__.py
-   └─ client.py
+Nija/
+├─ nija_bot_web.py
+├─ nija_bot.py
+├─ requirements.txt
+├─ vendor/
+│   └─ coinbase_advanced_py/
+│       ├─ __init__.py
+│       └─ client.py
+├─ .env
+└─ .devcontainer/
+    └─ devcontainer.json
