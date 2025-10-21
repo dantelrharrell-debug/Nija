@@ -1,4 +1,4 @@
-# minimal initializer — safe import
+# minimal initializer
 try:
     from .client import CoinbaseClient
 except Exception:
