@@ -1,26 +1,16 @@
 import os
 import time
 import threading
-import sys
+from coinbase.wallet.client import Client  # ✅ official SDK
 
-# Ensure vendor library is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
-
-try:
-    from coinbase_advanced_py import CoinbaseClient
-except ImportError:
-    raise ImportError("❌ coinbase_advanced_py not found in vendor folder.")
-
-# Load API keys
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
 
 if not API_KEY or not API_SECRET:
-    raise ValueError("API keys missing. Check your .env or environment variables.")
+    raise ValueError("API keys missing in .env")
 
-client = CoinbaseClient(API_KEY, API_SECRET)
+client = Client(API_KEY, API_SECRET)
 
-# Global flag to prevent multiple threads
 running = False
 lock = threading.Lock()
 
@@ -35,16 +25,14 @@ def trade_loop():
     print("🔥 Nija Ultimate AI Trading Loop Started 🔥")
     while True:
         try:
-            btc_price = client.get_price("BTC-USD")
+            btc_price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
             print(f"BTC Price: {btc_price}")
 
-            # Aggressive strategy example
+            # Example trading logic
             if btc_price < 30000:
-                client.buy("BTC", 0.001)
-                print("✅ Bought BTC!")
+                print("✅ BUY BTC!")
             elif btc_price > 35000:
-                client.sell("BTC", 0.001)
-                print("✅ Sold BTC!")
+                print("✅ SELL BTC!")
 
             time.sleep(60)
         except Exception as e:
