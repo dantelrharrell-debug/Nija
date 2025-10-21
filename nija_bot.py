@@ -1,26 +1,28 @@
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
-
-try:
-    from coinbase_advanced_py import CoinbaseClient
-except ImportError:
-    class CoinbaseClient:
-        def __init__(self, *args, **kwargs):
-            print("⚠️ Dummy CoinbaseClient active (simulation mode)")
-
+import sys
 import os
 import time
 import threading
-from coinbase.wallet.client import Client  # ✅ official SDK
 
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
+# Add vendor folder to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
-if not API_KEY or not API_SECRET:
-    raise ValueError("API keys missing in .env")
+# --- Try importing your real CoinbaseClient from vendor ---
+try:
+    from coinbase_advanced_py import CoinbaseClient
+    client = CoinbaseClient(
+        api_key=os.getenv("COINBASE_API_KEY"),
+        api_secret=os.getenv("COINBASE_API_SECRET")
+    )
+    print("✅ CoinbaseClient loaded from vendor folder.")
+except ImportError:
+    # Fallback to simulation mode
+    print("⚠️ Dummy CoinbaseClient active (simulation mode)")
+    class CoinbaseClient:
+        def __init__(self, *args, **kwargs):
+            pass
+    client = CoinbaseClient()
 
-client = Client(API_KEY, API_SECRET)
-
+# --- Trading loop ---
 running = False
 lock = threading.Lock()
 
