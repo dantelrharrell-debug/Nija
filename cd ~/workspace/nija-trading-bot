@@ -1,11 +1,5 @@
 nija-trading-bot/
-├─ nija_bot.py
-├─ nija_bot_web.py
-├─ requirements.txt       # minimal, just Flask
-├─ test_import.py
-├─ vendor/
-│   └─ coinbase_advanced_py/
-│       ├─ __init__.py
-│       ├─ client.py
-│       └─ ... (all other package files)
 ├─ Dockerfile
+├─ nija_bot_web.py
+├─ requirements.txt
+├─ vendor/coinbase_advanced_py/
