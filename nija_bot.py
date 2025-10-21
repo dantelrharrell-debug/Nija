@@ -1,3 +1,24 @@
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
+
+from coinbase_advanced_py import CoinbaseClient
+from flask import Flask, jsonify
+import os
+
+app = Flask(__name__)
+
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+
+client = CoinbaseClient(API_KEY, API_SECRET)
+
+@app.route("/")
+def index():
+    return jsonify({"status": "ok", "app": "Nija Trading Bot"}), 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5050)))
+
 # nija_bot.py
 import sys
 import os
