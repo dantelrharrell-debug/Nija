@@ -1,4 +1,20 @@
 import sys, os
+from dotenv import load_dotenv
+
+# Add vendor folder for CoinbaseClient
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
+
+# Load environment variables
+env_path = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path=env_path)
+
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+
+print("API Key loaded?", bool(API_KEY))
+print("API Secret loaded?", bool(API_SECRET))
+
+import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
 from coinbase_advanced_py.client import CoinbaseClient
