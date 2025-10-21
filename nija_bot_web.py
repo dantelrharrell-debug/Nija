@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# nija_bot_web.py
+
 import sys
 import os
 import time
@@ -6,20 +9,13 @@ import signal
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 
-# --- Add vendor folder to Python path ---
+# --- Step 1: Add vendor folder to Python path ---
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
-# --- Import CoinbaseClient safely ---
-try:
-    from coinbase_advanced_py.client import CoinbaseClient
-except ImportError as e:
-    print(f"⚠️ CoinbaseClient import failed: {e}. Running in simulation mode.")
-    class CoinbaseClient:
-        def get_spot_price(self, currency_pair="BTC-USD"):
-            return {"amount": 30000.0}
-
-# --- Load environment variables ---
+# --- Step 2: Load environment variables ---
 env_path = os.path.join(os.path.dirname(__file__), ".env")
+if not os.path.isfile(env_path):
+    raise FileNotFoundError(f".env file not found at {env_path}")
 load_dotenv(dotenv_path=env_path)
 
 API_KEY = os.getenv("COINBASE_API_KEY")
@@ -30,18 +26,27 @@ TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET", "changeme")
 print("API Key loaded?", bool(API_KEY))
 print("API Secret loaded?", bool(API_SECRET))
 
-# --- Initialize Coinbase client ---
+# --- Step 3: Import CoinbaseClient safely ---
+try:
+    from coinbase_advanced_py.client import CoinbaseClient
+except ImportError as e:
+    print(f"⚠️ CoinbaseClient import failed: {e}. Running in simulation mode.")
+    class CoinbaseClient:
+        def get_spot_price(self, currency_pair="BTC-USD"):
+            return {"amount": 30000.0}
+
+# --- Step 4: Initialize Coinbase client ---
 if API_KEY and API_SECRET:
     client = CoinbaseClient(API_KEY, API_SECRET)
     print("✅ CoinbaseClient loaded. Live trading ready.")
 else:
     client = CoinbaseClient()
-    print("⚠️ Simulation mode active.")
+    print("⚠️ Simulation mode active. Missing API keys!")
 
-# --- Setup Flask ---
+# --- Step 5: Setup Flask app ---
 app = Flask(__name__)
 
-# --- Trading loop ---
+# --- Step 6: Setup trading loop ---
 running = False
 lock = threading.Lock()
 
@@ -68,6 +73,7 @@ def trade_loop():
             btc_price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
             print(f"BTC Price: {btc_price}")
 
+            # Example trading logic
             if btc_price < 30000:
                 print("✅ BUY BTC!")
             elif btc_price > 35000:
@@ -78,7 +84,7 @@ def trade_loop():
             print(f"⚠️ Error in trade_loop: {e}")
             time.sleep(30)
 
-# --- Flask routes ---
+# --- Step 7: Flask routes ---
 @app.route("/")
 def index():
     return jsonify({"status": "ok", "bot": "Nija Ultimate AI"}), 200
@@ -96,7 +102,7 @@ def start_bot():
             globals()['trade_thread'].start()
             return jsonify({"status": "started", "message": "Trading loop is now running"}), 200
         else:
-            return jsonify({"status": "running", "message": "Trade loop already running"}), 200
+            return jsonify({"status": "running", "message": "Trading loop already running"}), 200
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -108,7 +114,7 @@ def webhook():
     print("📡 TradingView alert received:", data)
     return jsonify({"status": "ok", "message": "Webhook received"}), 200
 
-# --- Run Flask API ---
+# --- Step 8: Run Flask API ---
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     print(f"🌐 Starting Flask API on port {port}")
