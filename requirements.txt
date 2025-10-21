@@ -1,6 +1,6 @@
-flask==3.0.0
+Flask==3.0.0
 pandas==2.0.3
-numpy==1.26.1
+numpy==1.26.0
 requests==2.32.0
-python-dotenv==1.0.1
+python-dotenv==1.0.0
 gunicorn==21.2.0
