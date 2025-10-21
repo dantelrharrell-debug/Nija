@@ -1,32 +1,39 @@
-import sys, os
+# nija_bot_web.py - Render-ready and cleaned
+
+import sys
+import os
 import time
 import threading
 import signal
 from flask import Flask, jsonify, request
+from dotenv import load_dotenv
 
-# --- Step 1: Add vendor folder for CoinbaseClient ---
+# --- Add local vendor folder to Python path ---
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
-# --- Step 2: Import CoinbaseClient ---
+# --- Import Coinbase client ---
 from coinbase_advanced_py.client import CoinbaseClient
 
-# --- Step 3: Direct API keys ---
-API_KEY = "f0e7ae67-cf8a-4aee-b3cd-17227a1b8267"
-API_SECRET = "nMHcCAQEEIHVW3T1TLBFLjoNqDOsQjtPtny50auqVT1Y27fIyefOcoAoGCCqGSM49"
-SECRET_KEY = "uclgFMvRlYiVOS/HlTihim5V/RYEfuNVClKm3NhdaF9OkZN1BoB/bzN1isZN5RJGBTF/VZBrAB6gPabnisoRtA"
-TV_WEBHOOK_SECRET = "your_webhook_secret_here"
+# --- Load environment variables ---
+load_dotenv()
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+SECRET_KEY = os.getenv("SECRET_KEY")
+TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET")
 
-# --- Step 4: Initialize Coinbase client ---
+if not API_KEY or not API_SECRET:
+    raise ValueError("Coinbase API key and secret must be set in environment variables.")
+
+# --- Initialize Coinbase client ---
 client = CoinbaseClient(API_KEY, API_SECRET)
-print("✅ CoinbaseClient loaded. Live trading ready.")
+print("✅ CoinbaseClient initialized with API keys")
 
-# --- Step 5: Setup Flask app ---
+# --- Flask app setup ---
 app = Flask(__name__)
-
-# --- Step 6: Trading loop ---
 running = False
 lock = threading.Lock()
 
+# --- Graceful shutdown ---
 def shutdown(signum, frame):
     global running
     print("⚠️ Shutting down trade loop...")
@@ -36,6 +43,7 @@ def shutdown(signum, frame):
 signal.signal(signal.SIGINT, shutdown)
 signal.signal(signal.SIGTERM, shutdown)
 
+# --- Trading loop ---
 def trade_loop():
     global running
     with lock:
@@ -61,14 +69,13 @@ def trade_loop():
             print(f"⚠️ Error in trade_loop: {e}")
             time.sleep(30)
 
-# --- Step 7: Flask routes ---
+# --- Flask routes ---
 @app.route("/")
 def index():
     return jsonify({"status": "ok", "bot": "Nija Ultimate AI"}), 200
 
 @app.route("/start")
 def start_bot():
-    global trade_thread
     token = request.args.get("token", "")
     if token != SECRET_KEY:
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
@@ -91,7 +98,7 @@ def webhook():
     print("📡 TradingView alert received:", data)
     return jsonify({"status": "ok", "message": "Webhook received"}), 200
 
-# --- Step 8: Run Flask API ---
+# --- Run Flask API ---
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     print(f"🌐 Starting Flask API on port {port}")
