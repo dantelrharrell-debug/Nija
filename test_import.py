@@ -1,4 +1,11 @@
-<<<<<<< HEAD
+# test_import.py - merged version
+
+# Local test import
+print("Local test import")
+
+# Remote test import
+print("Remote test import")
+
 import sys
 import os
 
@@ -9,12 +16,3 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 from coinbase_advanced_py.client import CoinbaseClient
 
 print("✅ CoinbaseClient loaded")
-=======
-import sys, os, traceback
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
-try:
-    from coinbase_advanced_py.client import CoinbaseClient
-    print("✅ CoinbaseClient loaded successfully")
-except Exception:
-    traceback.print_exc()
->>>>>>> 5fcdf82 (Fix deploy issues)
