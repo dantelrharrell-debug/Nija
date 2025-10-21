@@ -1,1 +1,5 @@
-from .client import CoinbaseClient
+# minimal initializer — safe import
+try:
+    from .client import CoinbaseClient
+except Exception:
+    pass
