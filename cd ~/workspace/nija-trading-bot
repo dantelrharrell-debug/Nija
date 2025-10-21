@@ -1,5 +1,8 @@
-nija-trading-bot/
-├─ Dockerfile
+nija_bundle/
 ├─ nija_bot_web.py
-├─ requirements.txt
-├─ vendor/coinbase_advanced_py/
+├─ nija_bot.py
+├─ vendor/
+│  └─ coinbase_advanced_py/
+│      ├─ __init__.py
+│      └─ client.py
+└─ .env
