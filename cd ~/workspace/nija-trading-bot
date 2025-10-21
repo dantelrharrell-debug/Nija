@@ -1,8 +1,8 @@
 Nija-Trading-Bot/
-├─ nija_bot.py
-├─ nija_bot_web.py
-├─ requirements.txt
-├─ vendor/
-│  └─ coinbase_advanced_py/
-│     ├─ __init__.py
-│     └─ client.py
+│
+├─ nija_bot.py           ← THIS IS WHERE YOUR SCRIPT GOES
+├─ nija_bot_web.py       ← Flask API (optional)
+├─ requirements.txt      ← Python dependencies
+├─ .env                  ← API keys
+└─ vendor/               ← local coinbase_advanced_py clone
+       └─ coinbase_advanced_py/
