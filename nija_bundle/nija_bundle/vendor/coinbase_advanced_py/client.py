@@ -3,7 +3,7 @@ class CoinbaseClient:
         self.api_key = api_key
         self.api_secret = api_secret
         if not api_key or not api_secret:
-            print("⚠️ No API keys provided. Simulation mode active.")
+            print("⚠️ No API keys provided. Running in simulation mode.")
 
     def get_spot_price(self, currency_pair="BTC-USD"):
         return {"amount": 30000.0}  # dummy price for simulation
