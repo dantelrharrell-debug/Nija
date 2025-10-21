@@ -105,15 +105,11 @@ def webhook():
 
     data = request.json
     print("📡 TradingView alert received:", data)
-    # You can implement custom trade execution here based on webhook
+    # Implement custom trade execution here if desired
     return jsonify({"status": "ok", "message": "Webhook received"}), 200
 
 # --- Run app ---
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
+    port = int(os.getenv("PORT", 5000))  # get port from environment or default
     print(f"🌐 Starting Flask API on port {port}")
     app.run(host="0.0.0.0", port=port)
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5050))  # <-- get port from environment or default to 5050
-    app.run(host="0.0.0.0", port=port)   # <-- listen on all interfaces
