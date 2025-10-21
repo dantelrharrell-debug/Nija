@@ -1,3 +1,4 @@
 Flask
 gunicorn
 python-dotenv
+git+https://github.com/coinbase/coinbase-advanced-py.git@main#egg=coinbase-advanced-py
