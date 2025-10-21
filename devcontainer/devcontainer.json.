@@ -1,12 +1,7 @@
 {
-  "name": "Nija Trading Bot",
-  "image": "mcr.microsoft.com/devcontainers/python:3.11",
-  "postCreateCommand": "pip install --upgrade pip setuptools wheel && pip install -r requirements.txt",
-  "customizations": {
-    "vscode": {
-      "settings": {
-        "python.defaultInterpreterPath": "/usr/local/bin/python3"
-      }
-    }
-  }
+  "name": "Nija (Python 3.11)",
+  "image": "mcr.microsoft.com/vscode/devcontainers/python:0-3.11",
+  "workspaceFolder": "/workspace",
+  "forwardPorts": [5050],
+  "postCreateCommand": "python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt || true"
 }
