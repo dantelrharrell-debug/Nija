@@ -6,7 +6,8 @@ gunicorn==21.2.0
 requests==2.31.0
 python-dotenv==1.0.0
 
-# Coinbase advanced client
+# Coinbase advanced client (from local vendor fallback)
+# Use pip fallback if vendor fails
 git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase-advanced-py
 
 # Cryptography & OpenSSL (to avoid conflicts)
