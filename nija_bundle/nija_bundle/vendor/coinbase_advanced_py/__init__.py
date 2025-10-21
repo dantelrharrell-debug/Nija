@@ -1,1 +1,2 @@
-__init__.py placeholder
+from .client import CoinbaseClient
+from coinbase_advanced_py import CoinbaseClient
