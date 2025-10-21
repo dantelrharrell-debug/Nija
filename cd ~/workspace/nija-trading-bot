@@ -1,10 +1,8 @@
-Nija/
+Nija-Trading-Bot/
 ├─ nija_bot.py
 ├─ nija_bot_web.py
-├─ vendor/
-│   └─ coinbase_advanced_py/
-│       ├─ __init__.py
-│       ├─ client.py
-│       └─ ...
 ├─ requirements.txt
-├─ .env
+├─ vendor/
+│  └─ coinbase_advanced_py/
+│     ├─ __init__.py
+│     └─ client.py
