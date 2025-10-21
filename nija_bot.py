@@ -15,7 +15,7 @@ except ImportError as e:
     print(f"⚠️ CoinbaseClient import failed: {e}. Running in simulation mode.")
     class CoinbaseClient:
         def get_spot_price(self, currency_pair="BTC-USD"):
-            return {"amount": 30000.0}
+            return {"amount": 30000.0}  # Dummy price
 
 # --- Step 3: Load environment variables ---
 load_dotenv()
@@ -60,7 +60,7 @@ def trade_loop():
             btc_price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
             print(f"BTC Price: {btc_price}")
 
-            # Example logic
+            # Example trading logic
             if btc_price < 30000:
                 print("✅ BUY BTC!")
             elif btc_price > 35000:
@@ -71,5 +71,6 @@ def trade_loop():
             print(f"⚠️ Error in trade_loop: {e}")
             time.sleep(30)
 
+# --- Run the bot ---
 if __name__ == "__main__":
     trade_loop()
