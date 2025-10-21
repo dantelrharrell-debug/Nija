@@ -1,5 +1,7 @@
-vendor/
-└─ coinbase_advanced_py/
-   ├─ __init__.py
-   ├─ client.py           # main CoinbaseClient class
-   └─ other module files  # from the official repo
+nija-trading-bot/
+├─ vendor/
+│  └─ coinbase_advanced_py/
+│     ├─ __init__.py
+│     └─ client.py
+├─ nija_bot.py
+└─ nija_bot_web.py
