@@ -4,4 +4,6 @@ nija-trading-bot/
 │     ├─ __init__.py
 │     └─ client.py
 ├─ nija_bot.py
-└─ nija_bot_web.py
+├─ nija_bot_web.py
+├─ requirements.txt
+└─ .env.example
