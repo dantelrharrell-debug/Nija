@@ -1,50 +1,135 @@
-# indicators.py
-import numpy as np
-import pandas as pd
+# nija_bot_web.py - Render & Railway Ready with Coinbase Health Check
 
-def compute_vwap(df):
+import sys
+import os
+import time
+import threading
+import signal
+from flask import Flask, jsonify, request
+from dotenv import load_dotenv
+
+# --- Add local vendor folder to Python path ---
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
+
+# --- Import Coinbase client ---
+from coinbase_advanced_py.client import CoinbaseClient
+
+# --- Load environment variables ---
+load_dotenv()
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+SECRET_KEY = os.getenv("SECRET_KEY")
+TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET")
+
+if not API_KEY or not API_SECRET:
+    raise ValueError("Coinbase API key and secret must be set in environment variables.")
+
+# --- Initialize Coinbase client ---
+client = CoinbaseClient(API_KEY, API_SECRET)
+print("✅ CoinbaseClient initialized with API keys")
+
+# --- Flask app setup ---
+app = Flask(__name__)
+running = False
+lock = threading.Lock()
+trade_thread = None
+
+# --- Graceful shutdown ---
+def shutdown(signum, frame):
+    global running
+    print("⚠️ Shutting down trade loop...")
+    running = False
+    exit(0)
+
+signal.signal(signal.SIGINT, shutdown)
+signal.signal(signal.SIGTERM, shutdown)
+
+# --- Trading loop (background thread) ---
+def trade_loop():
+    global running
+    with lock:
+        if running:
+            print("⚠️ Trade loop already running!")
+            return
+        running = True
+
+    print("🔥 Nija Ultimate AI Trading Loop Started 🔥")
+    while running:
+        try:
+            btc_price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
+            print(f"BTC Price: {btc_price}")
+
+            # Example trading logic
+            if btc_price < 30000:
+                print("✅ BUY BTC!")
+            elif btc_price > 35000:
+                print("✅ SELL BTC!")
+
+            time.sleep(60)
+        except Exception as e:
+            print(f"⚠️ Error in trade_loop: {e}")
+            time.sleep(30)
+
+# --- Flask Routes ---
+
+@app.route("/health", methods=["GET"])
+def health_check():
     """
-    df must have columns: ['close','high','low','volume'] or at least ['close','volume'].
-    Returns series with VWAP for each row (cumulative typical price * volume / cumulative volume).
+    Returns:
+    - status: Flask alive
+    - trading: whether the bot thread is running
+    - coinbase: whether Coinbase API is reachable
     """
-    # typical price: (high + low + close)/3 if high/low present, else close
-    if {'high','low'}.issubset(df.columns):
-        tp = (df['high'] + df['low'] + df['close']) / 3.0
-    else:
-        tp = df['close']
-    pv = tp * df['volume']
-    cum_pv = pv.cumsum()
-    cum_vol = df['volume'].cumsum().replace(0, np.nan)
-    vwap = cum_pv / cum_vol
-    return vwap.fillna(method='ffill').fillna(df['close'])
+    # Trading loop status
+    trading_status = "live" if running else "stopped"
 
-def compute_rsi(series, period=14):
-    """
-    Classic RSI (Wilder's smoothing) implementation.
-    series must be a pandas Series of close prices.
-    Returns pandas Series of RSI values (0-100).
-    """
-    delta = series.diff()
-    up = delta.clip(lower=0.0)
-    down = -1 * delta.clip(upper=0.0)
+    # Coinbase connectivity check
+    try:
+        accounts = client.get_accounts()
+        if accounts:
+            coinbase_status = "connected"
+        else:
+            coinbase_status = "no accounts returned"
+    except Exception as e:
+        coinbase_status = f"error: {e}"
 
-    # first SMA
-    roll_up = up.rolling(window=period, min_periods=period).mean()
-    roll_down = down.rolling(window=period, min_periods=period).mean()
+    return jsonify({
+        "status": "ok",
+        "trading": trading_status,
+        "coinbase": coinbase_status
+    })
 
-    # use Wilder smoothing after initial avg
-    # initialize avg_gain & avg_loss as first SMA
-    avg_gain = roll_up.copy()
-    avg_loss = roll_down.copy()
-    # apply smoothing
-    for i in range(period, len(series)):
-        if i == period:
-            # already set by rolling mean
-            continue
-        avg_gain.iat[i] = (avg_gain.iat[i-1] * (period - 1) + up.iat[i]) / period
-        avg_loss.iat[i] = (avg_loss.iat[i-1] * (period - 1) + down.iat[i]) / period
+@app.route("/", methods=["GET"])
+def index():
+    return jsonify({"status": "ok", "bot": "Nija Ultimate AI"}), 200
 
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-    rsi = rsi.fillna(50)  # neutral where undefined
-    return rsi
+@app.route("/start", methods=["GET"])
+def start_bot():
+    global trade_thread
+    token = request.args.get("token", "")
+    if token != SECRET_KEY:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    with lock:
+        if trade_thread is None or not trade_thread.is_alive():
+            trade_thread = threading.Thread(target=trade_loop, daemon=True)
+            trade_thread.start()
+            return jsonify({"status": "started", "message": "Trading loop is now running"}), 200
+        else:
+            return jsonify({"status": "running", "message": "Trading loop already running"}), 200
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    token = request.headers.get("X-Webhook-Token")
+    if token != TV_WEBHOOK_SECRET:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    data = request.json
+    print("📡 TradingView alert received:", data)
+    return jsonify({"status": "ok", "message": "Webhook received"}), 200
+
+# --- Run Flask API ---
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    print(f"🌐 Starting Flask API on port {port}")
+    app.run(host="0.0.0.0", port=port)
