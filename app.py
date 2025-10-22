@@ -1,3 +1,6 @@
+from nija_client import client       # or: from nija_client import CLIENT as client
+from nija_orders import place_order, fetch_account_balance
+
 import time
 
 # Cache globals to avoid hammering API
