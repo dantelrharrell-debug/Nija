@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.join(os.getcwd(), 'vendor'))
+
 # test_client.py
 from nija_client import client, CLIENT
 
