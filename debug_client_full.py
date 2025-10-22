@@ -15,7 +15,7 @@ print("client type:", type(client))
 try:
     attrs = sorted([a for a in dir(client) if not a.startswith("_")])
     print("\n--- client attrs (sample) ---")
-    print(", ".join(attrs[:120]))
+    print(", ".join(attrs[:200]))
 except Exception as e:
     print("Could not list attrs:", e)
 
@@ -25,7 +25,7 @@ methods_to_try = [
     ("list_accounts", {}),
     ("get_all_accounts", {}),
     ("accounts", {}),
-    ("get_account", {"account_id": None}),  # will fail unless account id provided
+    ("get_account", {"account_id": None}),
     ("get_balances", {}),
     ("get_account_balance", {}),
     ("get_balances_for_currency", {"currency":"USD"}),
@@ -39,22 +39,18 @@ for name, kwargs in methods_to_try:
         continue
     print(f"\n{name} -> calling {name} with kwargs={kwargs} ...")
     try:
-        # try calling with no args first (some accept none)
         try:
             out = fn()
         except TypeError:
-            # attempt with kwargs if provided and method signature different
             try:
                 out = fn(**{k:v for k,v in kwargs.items() if v is not None})
             except Exception as e:
                 out = f"call failed: {e}"
-        # pretty print type and repr/summary
         print("-> type:", type(out))
         if isinstance(out, dict):
-            print("-> dict keys:", list(out.keys()))
-            # print small sample
+            print("-> dict keys:", list(out.keys())[:20])
             try:
-                print("-> preview:", json.dumps({k: out[k] for k in list(out)[:5]}, default=str, indent=2))
+                print("-> preview:", json.dumps({k: out[k] for k in list(out)[:3]}, default=str, indent=2))
             except Exception:
                 print("-> preview (repr):", repr(out)[:1000])
         elif isinstance(out, list):
@@ -69,12 +65,12 @@ for name, kwargs in methods_to_try:
             try:
                 print("-> repr/out:", repr(out)[:2000])
             except Exception:
-                print("-> output (non-serializable) - see below")
+                print("-> output (non-serializable)")
     except Exception as e:
         print("Exception when calling:", e)
         traceback.print_exc()
 
-# Try spot price as a fallback to estimate conversions
+# Try spot price helpers
 print("\n--- Trying price/market helper methods ---")
 price_methods = ["get_spot_price", "get_price", "get_ticker", "get_product_ticker", "ticker"]
 for pm in price_methods:
