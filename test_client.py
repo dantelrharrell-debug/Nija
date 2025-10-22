@@ -1,3 +1,11 @@
+# test_client.py
+from nija_client import client, CLIENT
+
+if client:
+    print("Client attached:", client)
+else:
+    print("Simulation mode active.")
+
 import sys, os
 
 # Add vendor folder to Python path
