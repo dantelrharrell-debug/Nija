@@ -1,20 +1,17 @@
+# Add vendor folder to Python path
 import sys, os
 sys.path.insert(0, os.path.join(os.getcwd(), 'vendor'))
 
-# test_client.py
+# Import your Nija client
 from nija_client import client, CLIENT
 
+# Check if client attached
 if client:
     print("Client attached:", client)
 else:
     print("Simulation mode active.")
 
-import sys, os
-
-# Add vendor folder to Python path
-sys.path.insert(0, os.path.join(os.getcwd(), 'vendor'))
-
-# Safe import
+# Optional: test direct import of CoinbaseClient
 try:
     from coinbase_advanced_py.client import CoinbaseClient
     print("✅ CoinbaseClient imported successfully")
