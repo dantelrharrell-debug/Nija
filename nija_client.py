@@ -1,3 +1,23 @@
+import sys, os
+sys.path.insert(0, os.path.join(os.getcwd(), 'vendor'))
+
+from nija_client import client, CLIENT
+from nija_orders import fetch_account_balance
+
+if client:
+    print("Client attached:", client)
+    balance = fetch_account_balance(client)
+    print("Live account balance:", balance)
+else:
+    print("Simulation mode active, cannot fetch balance.")
+
+# Optional: direct CoinbaseClient test
+try:
+    from coinbase_advanced_py.client import CoinbaseClient
+    print("✅ CoinbaseClient imported successfully")
+except Exception as e:
+    print(f"⚠️ Import failed: {e}")
+
 # ----- nija_client.py -----
 import sys, os
 sys.path.insert(0, os.path.join(os.getcwd(), 'vendor'))
