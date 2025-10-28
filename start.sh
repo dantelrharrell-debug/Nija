@@ -5,6 +5,7 @@ echo "🌟 Starting Nija bot as background worker..."
 echo "DEBUG: COINBASE_API_KEY=$COINBASE_API_KEY"
 echo "DEBUG: COINBASE_API_SECRET=$COINBASE_API_SECRET"
 echo "DEBUG: COINBASE_API_PASSPHRASE=$COINBASE_API_PASSPHRASE"
+export API_PEM_B64="$API_PEM_B64"
 
 # Activate virtual environment if needed
 # source .venv/bin/activate
