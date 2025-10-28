@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
-# start.sh — Launch Nija bot with environment variables
+# start.sh — launch the Nija bot on Render
 
 # Exit on any error
 set -e
 
-echo "🌟 Starting Nija bot in LIVE mode..."
+echo "🌟 Starting Nija bot..."
 
-# Use PORT provided by Render/Railway
-export HEALTH_PORT="${PORT:-10000}"
-export FLASK_RUN_PORT="${PORT:-10000}"
+# Ensure required environment variables are present
+: "${COINBASE_API_KEY:?COINBASE_API_KEY not set}"
+: "${COINBASE_API_SECRET:?COINBASE_API_SECRET not set}"
+: "${GITHUB_TOKEN:?GITHUB_TOKEN not set}"
+: "${RENDER_API_KEY:?RENDER_API_KEY not set}"
+: "${RAILWAY_API_KEY:?RAILWAY_API_KEY not set}"
+: "${BOT_SECRET_KEY:?BOT_SECRET_KEY not set}"
 
-echo "🔹 Health server running on port $HEALTH_PORT"
-echo "🔹 Flask server running on port $FLASK_RUN_PORT"
+# Set health port default if not provided
+export HEALTH_PORT="${HEALTH_PORT:-10000}"
+export DRY_RUN="${DRY_RUN:-False}"
+export LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
-# Run the bot (live trading)
+# Ensure run_trader.py is executable
+chmod +x run_trader.py
+
+# Launch the bot
 exec python3 run_trader.py
