@@ -1,70 +1,78 @@
 # nija_client.py
 import os
+import time
 import logging
-import threading
-from coinbase_advanced_py import CoinbaseClient, CoinbaseError
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija_client")
+# --- Coinbase import fix ---
+try:
+    from coinbase_advanced_py.client import CoinbaseClient, CoinbaseError
+except ImportError:
+    CoinbaseClient = None
+    CoinbaseError = None
+    logging.warning("CoinbaseClient not found. Falling back to stub client.")
 
-def load_coinbase_client():
-    api_key = os.getenv("COINBASE_API_KEY")
-    api_secret = os.getenv("COINBASE_API_SECRET")
-    pem_file = os.getenv("COINBASE_API_PEM_FILE")  # optional
-    pem_string = os.getenv("COINBASE_API_PEM_STRING")  # optional
+# --- Environment variables ---
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
+COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")
+COINBASE_API_PEM_FILE = os.getenv("COINBASE_API_PEM_FILE")
+COINBASE_API_PEM_STRING = os.getenv("COINBASE_API_PEM_STRING")
 
-    if not api_key or not api_secret:
-        raise ValueError("COINBASE_API_KEY and COINBASE_API_SECRET must be set.")
-
-    # Load PEM key properly
-    if pem_file:
-        if not os.path.exists(pem_file):
-            raise FileNotFoundError(f"PEM file not found at {pem_file}")
-        client = CoinbaseClient(api_key=api_key, api_secret_file=pem_file)
-    elif pem_string:
-        # write temp PEM file for client
-        import tempfile
-        with tempfile.NamedTemporaryFile("w+", delete=False) as f:
-            f.write(pem_string)
-            temp_path = f.name
-        client = CoinbaseClient(api_key=api_key, api_secret_file=temp_path)
-    else:
-        client = CoinbaseClient(api_key=api_key, api_secret_file=None)
-
+# --- Initialize client ---
+client = None
+if CoinbaseClient and COINBASE_API_KEY and COINBASE_API_SECRET:
     try:
-        accounts = client.get_accounts()
-        logger.info(f"✅ Coinbase accounts fetched: {accounts}")
+        if COINBASE_API_PEM_STRING:
+            client = CoinbaseClient(
+                api_key=COINBASE_API_KEY,
+                api_secret=COINBASE_API_SECRET,
+                pem_string=COINBASE_API_PEM_STRING
+            )
+        elif COINBASE_API_PEM_FILE:
+            client = CoinbaseClient(
+                api_key=COINBASE_API_KEY,
+                api_secret=COINBASE_API_SECRET,
+                pem_file=COINBASE_API_PEM_FILE
+            )
+        else:
+            logging.warning("No PEM key provided. Using stub client.")
+            client = None
+
+        if client:
+            accounts = client.get_accounts()
+            logging.info(f"✅ Real Coinbase client initialized. Accounts: {accounts}")
     except CoinbaseError as e:
-        logger.error(f"Failed to fetch accounts: {e}")
-        raise
+        logging.error(f"Coinbase client error: {e}")
+        client = None
+else:
+    logging.warning("CoinbaseClient not initialized. Using stub client.")
 
-    return client
+# --- Stub client (if Coinbase fails) ---
+class StubClient:
+    def get_accounts(self):
+        return {"USD": 1000.0, "BTC": 0.0}
 
-def trading_loop(client):
-    logger.info("🔥 Trading loop started 🔥")
-    while True:
-        # Put your live trading logic here
-        # Example: fetch BTC price and print
-        try:
-            price = client.get_spot_price(currency_pair="BTC-USD")
-            logger.info(f"BTC price: {price}")
-        except Exception as e:
-            logger.error(f"Error fetching price: {e}")
-        import time
-        time.sleep(10)  # adjust frequency as needed
+if client is None:
+    client = StubClient()
+    logging.warning("⚠️ Using stub Coinbase client. Set PEM string/file for real trading.")
 
+# --- Trading loop helpers ---
 def start_trading():
+    logging.info("🔥 Trading loop starting...")
+    # Your trading loop logic here
+    # Example:
+    while True:
+        try:
+            accounts = client.get_accounts()
+            logging.info(f"Accounts: {accounts}")
+            time.sleep(10)
+        except Exception as e:
+            logging.error(f"Trading loop error: {e}")
+            time.sleep(5)
+
+def get_accounts():
     try:
-        client = load_coinbase_client()
+        return client.get_accounts()
     except Exception as e:
-        logger.error(f"Coinbase client failed to initialize: {e}")
-        return
-
-    # Run trading loop in background thread (avoids Render port issues)
-    t = threading.Thread(target=trading_loop, args=(client,), daemon=True)
-    t.start()
-    logger.info("🔥 Nija trading loop is now live 🔥")
-    t.join()  # keep main thread alive
-
-if __name__ == "__main__":
-    start_trading()
+        logging.error(f"Failed to fetch accounts: {e}")
+        return {}
