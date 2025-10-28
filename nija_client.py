@@ -1,66 +1,51 @@
-import os
+import time
 import logging
+import traceback
 
-# ------------------------------
-# Coinbase imports
-# ------------------------------
+# Setup logging
+logging.basicConfig(
+    filename="nija_bot.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
+# Import your trading logic
 try:
-    from coinbase_advanced_py.client import CoinbaseClient, CoinbaseError
+    from coinbase_advanced_py.client import CoinbaseClient
 except ImportError:
     CoinbaseClient = None
-    CoinbaseError = None
-    logging.warning("CoinbaseClient not found. Falling back to stub client.")
+    logging.warning("⚠️ coinbase_advanced_py.client not found. Real trading disabled.")
 
-# ------------------------------
-# Coinbase credentials
-# ------------------------------
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")
-PEM_FILE = os.getenv("COINBASE_API_PEM_FILE")
-PEM_STRING = os.getenv("COINBASE_API_PEM_STRING")
+# Global flag for running
+running = True
 
-# ------------------------------
-# Initialize Coinbase client
-# ------------------------------
-client = None
+def start_trading(client=None):
+    logging.info("🚀 Starting Nija trading loop")
+    
+    while running:
+        try:
+            # Example: replace with your live trade function
+            if client:
+                # Put your trade execution logic here
+                logging.info("🔹 Checking market and executing trades...")
+            else:
+                logging.info("🔹 Simulation mode: client not initialized")
 
-if CoinbaseClient and API_KEY and API_SECRET and (PEM_FILE or PEM_STRING):
-    try:
-        if PEM_FILE:
-            client = CoinbaseClient(API_KEY, API_SECRET, API_PASSPHRASE, pem_file=PEM_FILE)
-        else:
-            client = CoinbaseClient(API_KEY, API_SECRET, API_PASSPHRASE, pem_string=PEM_STRING)
-        logging.info("✅ Real Coinbase client initialized.")
-    except Exception as e:
-        logging.error(f"❌ Failed to initialize Coinbase client: {e}")
+            # Sleep between iterations
+            time.sleep(5)  # adjust for frequency of checks
 
-# ------------------------------
-# Stub client for testing/fallback
-# ------------------------------
-if client is None:
-    class StubClient:
-        def get_accounts(self):
-            # Matches Coinbase API structure to prevent crash
-            return [
-                {"id": "stub_usd", "currency": "USD", "balance": {"amount": "1000.0", "currency": "USD"}},
-                {"id": "stub_btc", "currency": "BTC", "balance": {"amount": "0.0", "currency": "BTC"}},
-            ]
-    client = StubClient()
-    logging.warning("⚠️ Using stub Coinbase client. Set PEM string/file for real trading.")
+        except KeyboardInterrupt:
+            logging.info("⏹ KeyboardInterrupt detected, shutting down")
+            break
+        except Exception as e:
+            logging.error(f"❌ Error in trading loop: {e}")
+            logging.error(traceback.format_exc())
+            logging.info("🔁 Waiting 10 seconds before retry")
+            time.sleep(10)  # avoid crash loops
 
-# ------------------------------
-# Helper functions
-# ------------------------------
-def get_accounts():
-    try:
-        return client.get_accounts()
-    except Exception as e:
-        logging.error(f"❌ Failed to fetch accounts: {e}")
-        return []
+    logging.info("🛑 Nija bot stopped")
 
-def start_trading():
-    logging.info("🔥 Trading loop starting...")
-    accounts = get_accounts()
-    for account in accounts:
-        logging.info(f" - {account['currency']}: {account['balance']['amount']}")
+# Optional safe exit function
+def stop_trading():
+    global running
+    running = False
