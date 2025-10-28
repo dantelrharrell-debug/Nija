@@ -1,52 +1,28 @@
-#!/usr/bin/env python3
+# nija_live_snapshot.py
+from coinbase_advanced_py.client import CoinbaseClient
+
 import os
 import sys
-from coinbase_advanced_py.rest import CoinbaseClient
 
-# Fetch API keys from environment
-API_KEY = os.environ.get("COINBASE_API_KEY")
-API_SECRET = os.environ.get("COINBASE_API_SECRET")
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
 
-# Check if keys exist
 if not API_KEY or not API_SECRET:
-    print("⚠️ Coinbase API keys not detected. Exiting...")
+    print("❌ Coinbase API keys not set in environment.")
     sys.exit(1)
 
-# Initialize Coinbase client
-client = CoinbaseClient(
-    api_key=API_KEY,
-    api_secret=API_SECRET,
-    sandbox=False  # set True if you want to test in sandbox
-)
-
-print("🌟 Starting Nija bot live snapshot...")
-print("🔹 Coinbase API keys detected — live trading enabled.\n")
-
-# Fetch account information safely
 try:
+    client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET)
     accounts = client.get_accounts()
-    if not accounts:
-        print("⚠️ No accounts found.")
+except AttributeError:
+    print("❌ CoinbaseClient object missing 'get_accounts'. Check library version!")
+    sys.exit(1)
 except Exception as e:
-    print(f"❌ Error fetching accounts: {e}")
-    accounts = []
+    print(f"❌ Coinbase API error: {e}")
+    sys.exit(1)
 
-# Fetch open orders/positions if available
-try:
-    open_orders = client.get_open_orders() if hasattr(client, 'get_open_orders') else []
-except Exception as e:
-    print(f"❌ Error fetching open orders: {e}")
-    open_orders = []
-
-# Print live snapshot
 print("===== NIJA BOT LIVE SNAPSHOT =====")
-print(f"Trading Loop: {'✅ Running' if True else '❌ Stopped'}")  # Update with your loop status if needed
-print(f"Coinbase API: {'✅ Connected' if accounts else '❌ Error'}")
 print(f"Number of Accounts: {len(accounts)}")
-print("Open Orders/Positions:")
-if open_orders:
-    for o in open_orders:
-        print(f"  {o}")
-else:
-    print("  None")
-print("=================================\n")
+for acc in accounts:
+    print(f" - {acc['currency']}: {acc['balance']}")
+print("=================================")
