@@ -1,8 +1,7 @@
-coinbase-advanced-py==1.8.2
-pandas==2.3.3
-numpy==2.3.4
 flask==3.1.2
 gunicorn==23.0.0
+pandas==2.3.3
+numpy==2.3.4
 cryptography==46.0.3
 python-dotenv==1.2.1
 requests==2.32.5
@@ -26,3 +25,4 @@ tzdata==2025.2
 python-dateutil==2.9.0.post0
 websockets==13.1
 pytz==2025.2
+coinbase-advanced-py==1.8.2
