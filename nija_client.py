@@ -1,231 +1,141 @@
+# nija_client.py
 """
-nija_client.py
-
-Drop-in Coinbase client wrapper for Nija bot.
-
-Behavior:
-- If COINBASE_API_KEY + COINBASE_API_SECRET present AND coinbase_advanced_py is importable,
-  initialize real CoinbaseClient.
-- Otherwise, use a safe StubCoinbaseClient (no network side-effects) and log a warning.
-
-Provides:
-- client: top-level object used by rest of app
-- minimal interface: get_accounts(), get_account(account_id), place_order(...),
-  get_account_by_currency(code), get_product_ticker(product_id)
-
-This file is intentionally defensive and readable so you can restore the working
-deployment state (stub client warning), then add keys safely later.
+Drop-in nija_client with start_trading/stop_trading exports and safe stub fallback.
+Overwrite the existing file in your repo with this file (via GitHub or Render web editor).
 """
 
 from __future__ import annotations
 import os
 import time
+import threading
 import logging
-import json
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Callable
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
+                    format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("nija_client")
 
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
-COINBASE_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")  # optional depending on provider
+COINBASE_API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")
 COINBASE_SANDBOX = os.environ.get("COINBASE_SANDBOX", "false").lower() in ("1", "true", "yes")
 
-# --- Minimal safe stub client -------------------------------------------------
+
+# ---------- Safe stub client ----------
 class StubCoinbaseClient:
-    """
-    Safety-first stub client. Mimics the small subset of the real client's
-    interface needed by Nija bot. No network calls, returns deterministic
-    minimal structures so the bot can run in DRY_RUN or without keys.
-    """
     def __init__(self):
         self._accounts = [
-            # Example account entries the rest of app may expect
             {"id": "stub-usd", "currency": "USD", "balance": "1000.00", "available": "1000.00"},
             {"id": "stub-btc", "currency": "BTC", "balance": "0.0000", "available": "0.0000"},
         ]
         logger.warning("Using stub Coinbase client. Set COINBASE_API_KEY + COINBASE_API_SECRET for real trading.")
 
     def get_accounts(self) -> List[Dict[str, Any]]:
-        logger.debug("StubClient.get_accounts called")
-        # return copies so callers cannot mutate internal state accidentally
         return [dict(a) for a in self._accounts]
 
     def get_account(self, account_id: str) -> Dict[str, Any]:
-        logger.debug("StubClient.get_account(%s) called", account_id)
         for a in self._accounts:
             if a["id"] == account_id or a["currency"].upper() == account_id.upper():
                 return dict(a)
         raise KeyError(f"Stub account not found: {account_id}")
 
     def get_account_by_currency(self, currency_code: str) -> Optional[Dict[str, Any]]:
-        logger.debug("StubClient.get_account_by_currency(%s) called", currency_code)
         for a in self._accounts:
             if a["currency"].upper() == currency_code.upper():
                 return dict(a)
         return None
 
     def place_order(self, *, product_id: str, side: str, funds: Union[str, float, Decimal], **kwargs) -> Dict[str, Any]:
-        """
-        Simulate placing an order. Returns an order-like structure but does nothing.
-        Keep structure minimal and easy to inspect.
-        """
-        logger.info("StubClient.place_order called: product=%s side=%s funds=%s extra=%s", product_id, side, funds, kwargs)
-        # Return a fake order object
+        logger.info("StubClient.place_order called: %s %s %s", product_id, side, funds)
         return {
             "id": "stub-order-" + str(int(time.time())),
             "product_id": product_id,
             "side": side,
             "status": "stub",
-            "filled_size": "0",
-            "executed_value": "0",
             "funds": str(funds),
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
 
     def get_product_ticker(self, product_id: str) -> Dict[str, Any]:
-        logger.debug("StubClient.get_product_ticker(%s) called", product_id)
-        # Minimal ticker fields
         return {"product_id": product_id, "price": "0.00", "bid": "0.00", "ask": "0.00"}
 
     def close(self):
-        logger.debug("StubClient.close called")
+        logger.debug("StubClient.close")
 
-# --- Real client loader ------------------------------------------------------
-def _init_real_client():
+
+# ---------- Real client discovery (best-effort) ----------
+def _discover_and_init_real_client():
     """
-    Attempt to instantiate the real Coinbase client. If import fails or keys missing,
-    raise an exception so caller can fallback to stub.
+    Try to import/instantiate a real client from coinbase_advanced_py.
+    If it fails, raise ImportError so caller falls back to stub.
     """
     try:
-        # coinbase_advanced_py exposes a client; adapt as necessary if your dependency differs
+        # common layout attempt
         from coinbase_advanced_py.client import CoinbaseClient  # type: ignore
-    except Exception as e:
-        logger.exception("Failed to import coinbase_advanced_py (real Coinbase client not available): %s", e)
-        raise
-
-    if not COINBASE_API_KEY or not COINBASE_API_SECRET:
-        raise ValueError("Missing COINBASE_API_KEY/COINBASE_API_SECRET")
-
-    # Many Coinbase wrappers allow a sandbox flag or base_url override. Check your package docs.
-    kwargs = {}
-    if COINBASE_SANDBOX:
-        kwargs["sandbox"] = True
+        return CoinbaseClient(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET,
+                              api_passphrase=COINBASE_API_PASSPHRASE, sandbox=COINBASE_SANDBOX)
+    except Exception:
+        logger.debug("Pattern 1 failed for coinbase_advanced_py.client")
 
     try:
-        client = CoinbaseClient(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET, api_passphrase=COINBASE_PASSPHRASE, **kwargs)
-        logger.info("Real CoinbaseClient initialized (sandbox=%s)", COINBASE_SANDBOX)
-        return client
-    except Exception as e:
-        logger.exception("Failed to initialize real CoinbaseClient: %s", e)
-        raise
+        import coinbase_advanced_py as cap  # type: ignore
+        if hasattr(cap, "CoinbaseClient"):
+            return getattr(cap, "CoinbaseClient")(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET,
+                                                   api_passphrase=COINBASE_API_PASSPHRASE, sandbox=COINBASE_SANDBOX)
+    except Exception:
+        logger.debug("Pattern 2 failed for coinbase_advanced_py top-level")
 
-# --- Helper wrappers (abstracting stub vs real client) -----------------------
+    raise ImportError("Could not locate CoinbaseClient in coinbase_advanced_py")
+
+
+# ---------- Wrapper ----------
 class NijaClientWrapper:
-    def __init__(self, raw_client: Any, is_stub: bool = False):
-        self.raw = raw_client
+    def __init__(self, raw: Any, is_stub: bool):
+        self.raw = raw
         self.is_stub = is_stub
 
     def get_accounts(self) -> List[Dict[str, Any]]:
         try:
             if self.is_stub:
                 return self.raw.get_accounts()
-            # real client might return generator/objects - normalize to list of dicts
             accounts = self.raw.get_accounts()
-            # if it's a requests-like response or object list, carefully convert
-            if isinstance(accounts, (list, tuple)):
-                return [self._normalize_account(a) for a in accounts]
-            # fallback - try to iterate
-            return [self._normalize_account(a) for a in accounts]
+            return [a if isinstance(a, dict) else {"id": getattr(a, "id", str(a)),
+                                                  "currency": getattr(a, "currency", None),
+                                                  "balance": str(getattr(a, "balance", "0"))}
+                    for a in accounts]
         except Exception:
-            logger.exception("Error fetching accounts from client; returning []")
+            logger.exception("Error get_accounts")
             return []
-
-    def _normalize_account(self, a: Any) -> Dict[str, Any]:
-        # Try to be tolerant of different client return shapes
-        if isinstance(a, dict):
-            return a
-        # For object-like responses, attempt to read attributes
-        try:
-            return {
-                "id": getattr(a, "id", None) or getattr(a, "account_id", None) or str(a),
-                "currency": getattr(a, "currency", None) or getattr(a, "currency_code", None),
-                "balance": str(getattr(a, "balance", None) or getattr(a, "available", None) or "0"),
-            }
-        except Exception:
-            return {"id": str(a), "currency": None, "balance": "0"}
 
     def get_account(self, account_id: str) -> Optional[Dict[str, Any]]:
         try:
             if self.is_stub:
                 return self.raw.get_account(account_id)
-            # many clients provide get_account or get_account_by_id
             if hasattr(self.raw, "get_account"):
                 a = self.raw.get_account(account_id)
-                return self._normalize_account(a)
-            # fallback: fetch all and match
-            accounts = self.get_accounts()
-            for acc in accounts:
+                return a if isinstance(a, dict) else {"id": getattr(a, "id", str(a)),
+                                                     "currency": getattr(a, "currency", None),
+                                                     "balance": str(getattr(a, "balance", "0"))}
+            for acc in self.get_accounts():
                 if acc.get("id") == account_id or acc.get("currency", "").upper() == account_id.upper():
                     return acc
-            return None
         except Exception:
-            logger.exception("Error in get_account(%s)", account_id)
-            return None
-
-    def get_account_by_currency(self, currency_code: str) -> Optional[Dict[str, Any]]:
-        try:
-            if self.is_stub:
-                return self.raw.get_account_by_currency(currency_code)
-            # fallback loop
-            accounts = self.get_accounts()
-            for acc in accounts:
-                if acc.get("currency", "").upper() == currency_code.upper():
-                    return acc
-            return None
-        except Exception:
-            logger.exception("Error in get_account_by_currency(%s)", currency_code)
-            return None
+            logger.exception("Error get_account")
+        return None
 
     def place_order(self, product_id: str, side: str, funds: Union[str, float, Decimal], **kwargs) -> Dict[str, Any]:
-        """
-        Unified place_order wrapper. Attempts the call and returns a safe dict.
-        On failure returns a dict with 'error' key (so caller can inspect).
-        """
-        max_attempts = 2
-        for attempt in range(1, max_attempts + 1):
-            try:
-                if self.is_stub:
-                    return self.raw.place_order(product_id=product_id, side=side, funds=funds, **kwargs)
-                # Try common APIs
-                if hasattr(self.raw, "place_order"):
-                    order = self.raw.place_order(product_id=product_id, side=side, funds=str(funds), **kwargs)
-                    # Normalize
-                    if isinstance(order, dict):
-                        return order
-                    # If object-like, try to convert
-                    return json.loads(json.dumps(order, default=lambda o: getattr(o, "__dict__", str(o))))
-                elif hasattr(self.raw, "create_order"):
-                    order = self.raw.create_order(product_id=product_id, side=side, funds=str(funds), **kwargs)
-                    if isinstance(order, dict):
-                        return order
-                    return json.loads(json.dumps(order, default=lambda o: getattr(o, "__dict__", str(o))))
-                else:
-                    raise RuntimeError("Underlying client has no place_order/create_order method")
-            except Exception:
-                logger.exception("Attempt %d/%d failed to place order %s %s %s", attempt, max_attempts, product_id, side, funds)
-                if attempt < max_attempts:
-                    time.sleep(0.5)
-                else:
-                    return {"error": "order_failed", "product": product_id, "side": side, "funds": str(funds)}
-        # fallback
-        return {"error": "unknown"}
+        try:
+            if self.is_stub:
+                return self.raw.place_order(product_id=product_id, side=side, funds=funds, **kwargs)
+            if hasattr(self.raw, "place_order"):
+                return self.raw.place_order(product_id=product_id, side=side, funds=str(funds), **kwargs)
+            if hasattr(self.raw, "create_order"):
+                return self.raw.create_order(product_id=product_id, side=side, funds=str(funds), **kwargs)
+        except Exception:
+            logger.exception("place_order failed")
+        return {"error": "order_failed", "product": product_id}
 
     def get_product_ticker(self, product_id: str) -> Dict[str, Any]:
         try:
@@ -233,52 +143,108 @@ class NijaClientWrapper:
                 return self.raw.get_product_ticker(product_id)
             if hasattr(self.raw, "get_product_ticker"):
                 return self.raw.get_product_ticker(product_id)
-            # try public_products or market data endpoints
             if hasattr(self.raw, "get_ticker"):
                 return self.raw.get_ticker(product_id)
-            return {"product_id": product_id, "price": None, "bid": None, "ask": None}
         except Exception:
-            logger.exception("Error getting product ticker for %s", product_id)
-            return {"product_id": product_id, "price": None, "bid": None, "ask": None}
+            logger.exception("get_product_ticker failed")
+        return {"product_id": product_id, "price": None}
 
     def close(self):
         try:
             if hasattr(self.raw, "close"):
                 self.raw.close()
         except Exception:
-            logger.exception("Error closing underlying client")
+            logger.exception("close failed")
 
-# --- Initialize client -------------------------------------------------------
+
+# ---------- Build client ----------
 def _build_client() -> NijaClientWrapper:
-    # Prefer real client if keys present
     if COINBASE_API_KEY and COINBASE_API_SECRET:
         try:
-            real = _init_real_client()
+            real = _discover_and_init_real_client()
+            logger.info("Real Coinbase client initialized (sandbox=%s)", COINBASE_SANDBOX)
             return NijaClientWrapper(real, is_stub=False)
-        except Exception:
-            logger.warning("Falling back to stub Coinbase client due to initialization error.")
+        except Exception as e:
+            logger.error("Real client init failed: %s", e)
+            logger.warning("Falling back to stub client")
             return NijaClientWrapper(StubCoinbaseClient(), is_stub=True)
     else:
-        # No keys provided — use stub and log same style message as your working logs
         return NijaClientWrapper(StubCoinbaseClient(), is_stub=True)
 
-# The client object expected by the rest of the application
+
 client = _build_client()
 
-# --- Small quick-selftest function (safe) -----------------------------------
-def _self_test():
-    """
-    Quick safe test when module loaded. Non-destructive; uses stub when keys missing.
-    Logs a summary similar to your earlier successful boot logs.
-    """
-    try:
-        accounts = client.get_accounts()
-        if accounts:
-            logger.info("nija_client self-test: found %d accounts (first: %s)", len(accounts), accounts[0].get("currency"))
-        else:
-            logger.info("nija_client self-test: no accounts returned")
-    except Exception:
-        logger.exception("nija_client self-test failed")
 
-# Run lightweight self-test when imported (keeps behavior similar to prior logs)
+# ---------- Trading thread control (EXPORTED) ----------
+_trading_thread: Optional[threading.Thread] = None
+_trading_stop_event = threading.Event()
+_trading_lock = threading.Lock()
+
+
+def _default_loop(poll_interval: float = 2.0):
+    logger.info("🔥 Trading loop starting (pid=%s) 🔥", os.getpid())
+    while not _trading_stop_event.is_set():
+        try:
+            accounts = client.get_accounts()
+            logger.debug("Default loop accounts: %s", [a.get("currency") for a in accounts])
+            ticker = client.get_product_ticker("BTC-USD")
+            logger.debug("BTC-USD ticker: %s", ticker.get("price"))
+        except Exception:
+            logger.exception("Error in default loop")
+        _trading_stop_event.wait(poll_interval)
+    logger.info("Trading loop exiting")
+
+
+def start_trading(trading_fn: Optional[Callable[[], None]] = None, poll_interval: float = 2.0) -> threading.Thread:
+    """Start trading thread; exported so nija_live_snapshot can import it."""
+    global _trading_thread
+    with _trading_lock:
+        if _trading_thread and _trading_thread.is_alive():
+            logger.info("Trading thread already running")
+            return _trading_thread
+
+        _trading_stop_event.clear()
+
+        def runner():
+            try:
+                if trading_fn:
+                    logger.info("Custom trading_fn runner started")
+                    while not _trading_stop_event.is_set():
+                        try:
+                            trading_fn()
+                        except Exception:
+                            logger.exception("Error in trading_fn")
+                        _trading_stop_event.wait(poll_interval)
+                else:
+                    _default_loop(poll_interval=poll_interval)
+            finally:
+                logger.info("Trading runner exiting")
+
+        _trading_thread = threading.Thread(target=runner, name="nija-trading-loop", daemon=False)
+        _trading_thread.start()
+        logger.info("Trading loop thread started")
+        return _trading_thread
+
+
+def stop_trading(timeout: Optional[float] = 5.0):
+    _trading_stop_event.set()
+    global _trading_thread
+    if _trading_thread:
+        _trading_thread.join(timeout)
+        if _trading_thread.is_alive():
+            logger.warning("Trading thread did not stop in time")
+        else:
+            logger.info("Trading thread stopped")
+        _trading_thread = None
+
+
+# ---------- Self-test ----------
+def _self_test():
+    try:
+        accs = client.get_accounts()
+        logger.info("nija_client self-test: %d accounts (first: %s)", len(accs), accs[0].get("currency") if accs else None)
+    except Exception:
+        logger.exception("self-test failed")
+
+
 _self_test()
