@@ -1,9 +1,9 @@
-# nija_client.py
 import os
-import time
 import logging
 
-# --- Coinbase import fix ---
+# ------------------------------
+# Coinbase imports
+# ------------------------------
 try:
     from coinbase_advanced_py.client import CoinbaseClient, CoinbaseError
 except ImportError:
@@ -11,68 +11,56 @@ except ImportError:
     CoinbaseError = None
     logging.warning("CoinbaseClient not found. Falling back to stub client.")
 
-# --- Environment variables ---
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")
-COINBASE_API_PEM_FILE = os.getenv("COINBASE_API_PEM_FILE")
-COINBASE_API_PEM_STRING = os.getenv("COINBASE_API_PEM_STRING")
+# ------------------------------
+# Coinbase credentials
+# ------------------------------
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")
+PEM_FILE = os.getenv("COINBASE_API_PEM_FILE")
+PEM_STRING = os.getenv("COINBASE_API_PEM_STRING")
 
-# --- Initialize client ---
+# ------------------------------
+# Initialize Coinbase client
+# ------------------------------
 client = None
-if CoinbaseClient and COINBASE_API_KEY and COINBASE_API_SECRET:
+
+if CoinbaseClient and API_KEY and API_SECRET and (PEM_FILE or PEM_STRING):
     try:
-        if COINBASE_API_PEM_STRING:
-            client = CoinbaseClient(
-                api_key=COINBASE_API_KEY,
-                api_secret=COINBASE_API_SECRET,
-                pem_string=COINBASE_API_PEM_STRING
-            )
-        elif COINBASE_API_PEM_FILE:
-            client = CoinbaseClient(
-                api_key=COINBASE_API_KEY,
-                api_secret=COINBASE_API_SECRET,
-                pem_file=COINBASE_API_PEM_FILE
-            )
+        if PEM_FILE:
+            client = CoinbaseClient(API_KEY, API_SECRET, API_PASSPHRASE, pem_file=PEM_FILE)
         else:
-            logging.warning("No PEM key provided. Using stub client.")
-            client = None
+            client = CoinbaseClient(API_KEY, API_SECRET, API_PASSPHRASE, pem_string=PEM_STRING)
+        logging.info("✅ Real Coinbase client initialized.")
+    except Exception as e:
+        logging.error(f"❌ Failed to initialize Coinbase client: {e}")
 
-        if client:
-            accounts = client.get_accounts()
-            logging.info(f"✅ Real Coinbase client initialized. Accounts: {accounts}")
-    except CoinbaseError as e:
-        logging.error(f"Coinbase client error: {e}")
-        client = None
-else:
-    logging.warning("CoinbaseClient not initialized. Using stub client.")
-
-# --- Stub client (if Coinbase fails) ---
-class StubClient:
-    def get_accounts(self):
-        return {"USD": 1000.0, "BTC": 0.0}
-
+# ------------------------------
+# Stub client for testing/fallback
+# ------------------------------
 if client is None:
+    class StubClient:
+        def get_accounts(self):
+            # Matches Coinbase API structure to prevent crash
+            return [
+                {"id": "stub_usd", "currency": "USD", "balance": {"amount": "1000.0", "currency": "USD"}},
+                {"id": "stub_btc", "currency": "BTC", "balance": {"amount": "0.0", "currency": "BTC"}},
+            ]
     client = StubClient()
     logging.warning("⚠️ Using stub Coinbase client. Set PEM string/file for real trading.")
 
-# --- Trading loop helpers ---
-def start_trading():
-    logging.info("🔥 Trading loop starting...")
-    # Your trading loop logic here
-    # Example:
-    while True:
-        try:
-            accounts = client.get_accounts()
-            logging.info(f"Accounts: {accounts}")
-            time.sleep(10)
-        except Exception as e:
-            logging.error(f"Trading loop error: {e}")
-            time.sleep(5)
-
+# ------------------------------
+# Helper functions
+# ------------------------------
 def get_accounts():
     try:
         return client.get_accounts()
     except Exception as e:
-        logging.error(f"Failed to fetch accounts: {e}")
-        return {}
+        logging.error(f"❌ Failed to fetch accounts: {e}")
+        return []
+
+def start_trading():
+    logging.info("🔥 Trading loop starting...")
+    accounts = get_accounts()
+    for account in accounts:
+        logging.info(f" - {account['currency']}: {account['balance']['amount']}")
