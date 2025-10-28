@@ -1,17 +1,17 @@
 #!/bin/bash
-echo "🌟 Starting Nija bot as background worker..."
+set -e  # exit on first error
+echo "🌟 Starting Nija bot..."
 
-# Make sure environment variables are set
-echo "DEBUG: COINBASE_API_KEY=$COINBASE_API_KEY"
-echo "DEBUG: COINBASE_API_SECRET=$COINBASE_API_SECRET"
-echo "DEBUG: COINBASE_API_PASSPHRASE=$COINBASE_API_PASSPHRASE"
-echo "DEBUG: API_PEM_B64=${API_PEM_B64:0:10}..."  # first 10 chars for sanity check
+# Ensure virtual environment is active
+if [ -d ".venv" ]; then
+    source .venv/bin/activate
+fi
 
-# Export PEM for Python
-export API_PEM_B64="$API_PEM_B64"
+# Check required environment variables
+if [ -z "$COINBASE_API_KEY" ] || [ -z "$COINBASE_API_SECRET" ]; then
+    echo "❌ Missing Coinbase API_KEY or API_SECRET. Exiting."
+    exit 1
+fi
 
-# Activate virtual environment if needed
-# source .venv/bin/activate
-
-# Run the bot
+# Run the Python bot
 python3 nija_live_snapshot.py
