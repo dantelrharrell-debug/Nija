@@ -1,47 +1,53 @@
-import time
+#!/usr/bin/env python3
+# nija_client.py
+import os
 import logging
-import traceback
+from decimal import Decimal
+from coinbase_advanced_py import CoinbaseClient
 
-# Logging setup
 logging.basicConfig(
-    filename="nija_bot.log",
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
+logger = logging.getLogger(__name__)
 
+# -------------------------------
+# Coinbase client initialization
+# -------------------------------
 try:
-    from coinbase_advanced_py.client import CoinbaseClient
-except ImportError:
-    CoinbaseClient = None
-    logging.warning("⚠️ coinbase_advanced_py.client not found. Real trading disabled.")
+    client = CoinbaseClient(
+        api_key=os.environ["COINBASE_API_KEY"],
+        api_secret=os.environ["COINBASE_API_SECRET"],
+        passphrase=os.environ.get("COINBASE_PASSPHRASE")  # optional
+    )
+    logger.info("✅ Coinbase client initialized successfully.")
+except KeyError as e:
+    logger.error(f"Missing environment variable: {e}")
+    raise SystemExit(1)
+except Exception as e:
+    logger.error(f"Failed to initialize Coinbase client: {e}")
+    raise SystemExit(1)
 
-running = True
+# -------------------------------
+# Helper functions
+# -------------------------------
+def get_accounts():
+    try:
+        accounts = client.get_accounts()
+        return accounts
+    except Exception as e:
+        logger.error(f"Error fetching accounts: {e}")
+        return []
 
-def start_trading(client=None):
-    logging.info("🚀 Starting Nija trading loop")
-
-    while running:
-        try:
-            if client:
-                # Replace with your trade logic
-                logging.info("🔹 Checking market and executing trades...")
-                # Example: client.get_accounts()
-            else:
-                logging.info("🔹 Simulation mode: client not initialized")
-
-            time.sleep(5)
-
-        except KeyboardInterrupt:
-            logging.info("⏹ KeyboardInterrupt detected, stopping bot")
-            break
-        except Exception as e:
-            logging.error(f"❌ Error in trading loop: {e}")
-            logging.error(traceback.format_exc())
-            logging.info("🔁 Retrying in 10 seconds")
-            time.sleep(10)
-
-    logging.info("🛑 Nija bot stopped")
-
-def stop_trading():
-    global running
-    running = False
+def place_order(symbol: str, side: str, amount: Decimal):
+    try:
+        order = client.place_order(
+            product_id=symbol,
+            side=side,
+            size=str(amount)
+        )
+        logger.info(f"Order placed: {order}")
+        return order
+    except Exception as e:
+        logger.error(f"Failed to place order: {e}")
+        return None
