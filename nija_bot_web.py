@@ -78,24 +78,15 @@ def health_check():
     Returns:
     - status: Flask alive
     - trading: whether the bot thread is running
-    - coinbase: whether Coinbase API is reachable
+    - coinbase: whether Coinbase API is reachable (via BTC spot price)
     """
     trading_status = "live" if running else "stopped"
 
     # Coinbase connectivity check
     try:
-        accounts = client.get_accounts_list()  # <-- correct method for current library
-        if accounts and len(accounts) > 0:
-            sample_accounts = []
-            for a in accounts[:3]:
-                sample_accounts.append({
-                    "id": a.get("id"),
-                    "currency": a.get("currency"),
-                    "balance": a.get("balance")
-                })
-            coinbase_status = {"status": "connected", "sample_accounts": sample_accounts}
-        else:
-            coinbase_status = {"status": "no accounts returned"}
+        # Safe universal check using BTC spot price
+        btc_price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
+        coinbase_status = {"status": "connected", "BTC-USD": btc_price}
     except Exception as e:
         coinbase_status = {"status": f"error: {e}"}
 
