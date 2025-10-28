@@ -3,79 +3,49 @@
 import os
 import time
 import logging
-from flask import Flask, jsonify
-from coinbase_advanced_py.client import CoinbaseClient
+from nija_client import client, get_accounts, place_order
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("NijaBot")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logger = logging.getLogger(__name__)
 
-# Initialize Coinbase client using environment variables
-try:
-    client = CoinbaseClient(
-        api_key=os.environ["COINBASE_API_KEY"],
-        api_secret=os.environ["COINBASE_API_SECRET"],
-        api_passphrase=os.environ.get("COINBASE_PASSPHRASE")  # optional
-    )
-    logger.info("✅ Coinbase client initialized successfully.")
-except KeyError as e:
-    logger.error(f"Missing Coinbase environment variable: {e}")
-    raise
-except Exception as e:
-    logger.error(f"Failed to initialize Coinbase client: {e}")
-    raise
-
-# Flask app for health check
-app = Flask(__name__)
-running = False
-
-@app.route("/health", methods=["GET"])
+# -------------------------------
+# Health check (optional)
+# -------------------------------
 def health_check():
-    """
-    Returns JSON with:
-    - status: Flask alive
-    - trading: whether bot loop is running
-    - coinbase: whether Coinbase API is reachable
-    """
-    global running
-    trading_status = "live" if running else "stopped"
-
     try:
-        accounts = client.get_accounts()
-        coinbase_status = "reachable" if accounts else "unreachable"
+        accounts = get_accounts()
+        status = "live" if accounts else "no accounts"
+        logger.info(f"Health check: {status}")
+        return status
     except Exception as e:
-        coinbase_status = f"error: {e}"
+        logger.error(f"Health check failed: {e}")
+        return "error"
 
-    return jsonify({
-        "status": "Flask alive",
-        "trading": trading_status,
-        "coinbase": coinbase_status
-    })
-
-# Main trading loop (simplified)
-def trading_loop():
-    global running
-    running = True
-    logger.info("🚀 Nija bot trading loop started.")
-    try:
-        while True:
-            # Example: fetch accounts
-            accounts = client.get_accounts()
-            logger.info(f"Accounts fetched: {len(accounts)}")
-            # TODO: add your live trading logic here
-            time.sleep(10)  # adjust frequency as needed
-    except KeyboardInterrupt:
-        logger.info("⚠️ Trading loop interrupted.")
-    except Exception as e:
-        logger.error(f"Error in trading loop: {e}")
-    finally:
-        running = False
-        logger.info("⏹️ Trading loop stopped.")
+# -------------------------------
+# Main loop
+# -------------------------------
+def main_loop():
+    logger.info("🌟 Starting Nija bot main loop...")
+    while True:
+        try:
+            # Example trading logic
+            accounts = get_accounts()
+            if accounts:
+                logger.info(f"Connected to {len(accounts)} account(s).")
+                # Example: place dummy order
+                # place_order("BTC-USD", "buy", Decimal("0.001"))
+            else:
+                logger.warning("No accounts detected!")
+            time.sleep(10)
+        except KeyboardInterrupt:
+            logger.info("🚨 Nija bot stopped manually.")
+            break
+        except Exception as e:
+            logger.error(f"Error in main loop: {e}")
+            time.sleep(5)
 
 if __name__ == "__main__":
-    from threading import Thread
-    # Start trading in a separate thread
-    t = Thread(target=trading_loop)
-    t.start()
-    # Run Flask for health checks
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    main_loop()
