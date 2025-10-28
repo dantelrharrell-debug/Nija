@@ -1,48 +1,23 @@
-#!/usr/bin/env python3
 import os
-import time
-import logging
-from decimal import Decimal
-from coinbase_advanced_py import CoinbaseClient
-from dotenv import load_dotenv
+from coinbase_advanced_py.client import CoinbaseClient  # ✅ Correct import
 
-load_dotenv()
-
-# Get API keys from environment
+# Load API keys from environment
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # Optional
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")  # can be empty
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+if not API_KEY or not API_SECRET:
+    raise RuntimeError("❌ ERROR: Coinbase API keys not set!")
 
-# Initialize client (passphrase optional)
-if API_KEY and API_SECRET:
-    if API_PASSPHRASE:
-        client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET, passphrase=API_PASSPHRASE)
-    else:
-        client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET)
-    logger.info("✅ Coinbase client initialized.")
-else:
-    client = None
-    logger.warning("⚠️ Coinbase API keys not found. Bot will wait until keys are available.")
+# Initialize the Coinbase client
+client = CoinbaseClient(
+    api_key=API_KEY,
+    api_secret=API_SECRET,
+    api_passphrase=API_PASSPHRASE
+)
 
 def start_trading():
-    if not client:
-        logger.error("❌ Cannot start trading: Coinbase client not initialized.")
-        return
-
-    logger.info("🚀 Nija bot live trading started!")
-    try:
-        while True:
-            accounts = client.get_accounts()
-            logger.info(f"Accounts fetched: {accounts}")
-
-            # Placeholder for trading logic
-            logger.info("Trading logic running...")
-            time.sleep(10)
-
-    except KeyboardInterrupt:
-        logger.info("🛑 Nija bot stopped manually.")
-    except Exception as e:
-        logger.exception(f"⚠️ Error in trading loop: {e}")
+    """Main trading loop."""
+    print("🔁 Nija bot is live! Starting trading loop...")
+    # Add your live trading logic here
+    pass
