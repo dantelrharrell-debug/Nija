@@ -80,18 +80,24 @@ def health_check():
     - trading: whether the bot thread is running
     - coinbase: whether Coinbase API is reachable
     """
-    # Trading loop status
     trading_status = "live" if running else "stopped"
 
     # Coinbase connectivity check
     try:
-        accounts = client.get_accounts()
+        accounts = client.accounts()  # <-- correct method
         if accounts:
-            coinbase_status = "connected"
+            sample_accounts = []
+            for a in accounts[:3]:  # show first 3 only
+                sample_accounts.append({
+                    "id": a.get("id"),
+                    "currency": a.get("currency"),
+                    "balance": a.get("balance")
+                })
+            coinbase_status = {"status": "connected", "sample_accounts": sample_accounts}
         else:
-            coinbase_status = "no accounts returned"
+            coinbase_status = {"status": "no accounts returned"}
     except Exception as e:
-        coinbase_status = f"error: {e}"
+        coinbase_status = {"status": f"error: {e}"}
 
     return jsonify({
         "status": "ok",
@@ -131,5 +137,8 @@ def webhook():
 # --- Run Flask API ---
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    print(f"🌐 Starting Flask API on port {port}")
+    print(f"🌐 Starting Flask dev server on port {port}")
     app.run(host="0.0.0.0", port=port)
+else:
+    # Running under gunicorn (production)
+    print("🔁 Running under a WSGI server (gunicorn) — app ready")
