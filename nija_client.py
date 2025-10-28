@@ -1,119 +1,70 @@
 # nija_client.py
-#!/usr/bin/env python3
-
 import os
 import logging
 import threading
-import time
+from coinbase_advanced_py import CoinbaseClient, CoinbaseError
 
-# -----------------------------
-# Logging setup
-# -----------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_client")
 
-# -----------------------------
-# Try to initialize real Coinbase REST client
-# -----------------------------
-try:
-    from coinbase.rest import RESTClient
+def load_coinbase_client():
+    api_key = os.getenv("COINBASE_API_KEY")
+    api_secret = os.getenv("COINBASE_API_SECRET")
+    pem_file = os.getenv("COINBASE_API_PEM_FILE")  # optional
+    pem_string = os.getenv("COINBASE_API_PEM_STRING")  # optional
 
-    client = RESTClient(
-        api_key=os.getenv("COINBASE_API_KEY"),
-        api_secret=os.getenv("COINBASE_API_SECRET")
-    )
-    logging.info("✅ Real Coinbase client initialized.")
-    REAL_CLIENT = True
-except Exception as e:
-    logging.warning(f"❌ Failed to init real Coinbase client: {e}")
-    REAL_CLIENT = False
+    if not api_key or not api_secret:
+        raise ValueError("COINBASE_API_KEY and COINBASE_API_SECRET must be set.")
 
-    # Fallback stub client
-    class StubClient:
-        def get_accounts(self):
-            return [
-                {"currency": "USD", "balance": {"amount": "1000.00"}},
-                {"currency": "BTC", "balance": {"amount": "0.0000"}},
-            ]
+    # Load PEM key properly
+    if pem_file:
+        if not os.path.exists(pem_file):
+            raise FileNotFoundError(f"PEM file not found at {pem_file}")
+        client = CoinbaseClient(api_key=api_key, api_secret_file=pem_file)
+    elif pem_string:
+        # write temp PEM file for client
+        import tempfile
+        with tempfile.NamedTemporaryFile("w+", delete=False) as f:
+            f.write(pem_string)
+            temp_path = f.name
+        client = CoinbaseClient(api_key=api_key, api_secret_file=temp_path)
+    else:
+        client = CoinbaseClient(api_key=api_key, api_secret_file=None)
 
-        def place_order(self, **kwargs):
-            logging.info(f"💤 Stub order simulated: {kwargs}")
-
-    client = StubClient()
-    logging.info("⚠️ Using stub Coinbase client.")
-
-# -----------------------------
-# Helper functions
-# -----------------------------
-def get_accounts():
     try:
         accounts = client.get_accounts()
-        logging.info("💰 Accounts:")
-        for a in accounts:
-            if REAL_CLIENT:
-                # RESTClient returns nested JSON objects differently
-                currency = a.get("currency") or a.get("currency_code")
-                balance = a.get("balance", {}).get("amount")
-            else:
-                currency = a["currency"]
-                balance = a["balance"]["amount"]
-            logging.info(f" - {currency}: {balance}")
-        return accounts
-    except Exception as e:
-        logging.error(f"Failed to fetch accounts: {e}")
-        return []
+        logger.info(f"✅ Coinbase accounts fetched: {accounts}")
+    except CoinbaseError as e:
+        logger.error(f"Failed to fetch accounts: {e}")
+        raise
 
-def place_order(order_type="buy", product_id="BTC-USD", size=0.001, price=None):
-    try:
-        if REAL_CLIENT:
-            order = client.place_order(
-                product_id=product_id,
-                side=order_type,
-                type="limit" if price else "market",
-                size=size,
-                price=price
-            )
-            logging.info(f"✅ Order placed: {order}")
-        else:
-            client.place_order(
-                order_type=order_type,
-                product_id=product_id,
-                size=size,
-                price=price
-            )
-    except Exception as e:
-        logging.error(f"Failed to place order: {e}")
+    return client
 
-# -----------------------------
-# Trading loop
-# -----------------------------
-_trading_thread = None
-_trading_active = False
-
-def _trading_loop():
-    logging.info(f"🔥 Trading loop starting (pid={threading.get_ident()}) 🔥")
-    while _trading_active:
-        # Example strategy: check accounts, place a dummy order
-        accounts = get_accounts()
-        # Place small market buy if USD balance > 10
-        usd_balance = next((float(a["balance"]["amount"]) for a in accounts if a["currency"] == "USD"), 0)
-        if usd_balance >= 10:
-            place_order(order_type="buy", size=0.001)
-        time.sleep(10)  # wait 10s between iterations
+def trading_loop(client):
+    logger.info("🔥 Trading loop started 🔥")
+    while True:
+        # Put your live trading logic here
+        # Example: fetch BTC price and print
+        try:
+            price = client.get_spot_price(currency_pair="BTC-USD")
+            logger.info(f"BTC price: {price}")
+        except Exception as e:
+            logger.error(f"Error fetching price: {e}")
+        import time
+        time.sleep(10)  # adjust frequency as needed
 
 def start_trading():
-    global _trading_thread, _trading_active
-    if _trading_thread and _trading_thread.is_alive():
-        logging.info("⚠️ Trading loop already running.")
+    try:
+        client = load_coinbase_client()
+    except Exception as e:
+        logger.error(f"Coinbase client failed to initialize: {e}")
         return
-    _trading_active = True
-    _trading_thread = threading.Thread(target=_trading_loop, daemon=True)
-    _trading_thread.start()
-    logging.info("🔥 Trading loop thread started")
 
-def stop_trading():
-    global _trading_active
-    _trading_active = False
-    logging.info("🛑 Trading loop stopped")
+    # Run trading loop in background thread (avoids Render port issues)
+    t = threading.Thread(target=trading_loop, args=(client,), daemon=True)
+    t.start()
+    logger.info("🔥 Nija trading loop is now live 🔥")
+    t.join()  # keep main thread alive
+
+if __name__ == "__main__":
+    start_trading()
