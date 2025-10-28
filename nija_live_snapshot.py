@@ -1,90 +1,92 @@
 #!/usr/bin/env python3
 import os
+import sys
 import base64
 import logging
 from pathlib import Path
 
-# -------------------------------
-# ENVIRONMENT VARIABLES
-# -------------------------------
+# ---------------------------
+# Setup logging
+# ---------------------------
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s:%(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+# ---------------------------
+# Load environment variables
+# ---------------------------
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
 COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 API_PEM_B64 = os.getenv("API_PEM_B64")
 
-# -------------------------------
-# LOGGING
-# -------------------------------
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-logger = logging.getLogger("NijaBot")
+logging.debug(f"COINBASE_API_KEY={COINBASE_API_KEY}")
+logging.debug(f"COINBASE_API_SECRET={COINBASE_API_SECRET}")
+logging.debug(f"COINBASE_API_PASSPHRASE={COINBASE_API_PASSPHRASE}")
+logging.debug(f"API_PEM_B64 length={len(API_PEM_B64) if API_PEM_B64 else 0}")
 
-logger.debug(f"COINBASE_API_KEY={COINBASE_API_KEY}")
-logger.debug(f"COINBASE_API_SECRET={COINBASE_API_SECRET}")
-logger.debug(f"COINBASE_API_PASSPHRASE={COINBASE_API_PASSPHRASE}")
-logger.debug(f"API_PEM_B64={'<hidden>' if API_PEM_B64 else 'NOT SET'}")
+# ---------------------------
+# Fix Base64 padding
+# ---------------------------
+def fix_base64_padding(s: str) -> str:
+    s = s.strip().replace("\n", "")
+    return s + '=' * (-len(s) % 4)
 
-# -------------------------------
-# COINBASE CLIENT SETUP
-# -------------------------------
+# ---------------------------
+# Write PEM file safely
+# ---------------------------
+pem_path = Path("coinbase_api.pem")
+if API_PEM_B64:
+    try:
+        with open(pem_path, "wb") as f:
+            f.write(base64.b64decode(fix_base64_padding(API_PEM_B64)))
+        logging.info(f"✅ PEM file written to {pem_path}")
+    except Exception as e:
+        logging.error(f"❌ Failed to write PEM file: {e}")
+else:
+    logging.warning("⚠️ API_PEM_B64 is empty. PEM file not created.")
+
+# ---------------------------
+# Add vendor path for Coinbase client
+# ---------------------------
+sys.path.insert(0, os.path.join(os.getcwd(), "vendor"))
+
 try:
     from coinbase_advanced_py.client import CoinbaseClient
-    coinbase_client = CoinbaseClient(
-        api_key=COINBASE_API_KEY,
-        api_secret=COINBASE_API_SECRET,
-        passphrase=COINBASE_API_PASSPHRASE,
-    )
-    logger.info("Coinbase client initialized. Live trading enabled.")
+    logging.info("✅ CoinbaseClient imported successfully.")
 except ImportError:
-    logger.warning("⚠️ coinbase_advanced_py.client not found. Real trading disabled.")
-    coinbase_client = None
+    logging.warning("⚠️ coinbase_advanced_py.client not found. Real trading disabled.")
+    CoinbaseClient = None
 
-# -------------------------------
-# FUNCTION TO DECODE PEM
-# -------------------------------
-def decode_pem_b64(api_pem_b64: str) -> bytes:
-    if not api_pem_b64:
-        raise ValueError("API_PEM_B64 is empty or not set in environment.")
-    
-    # Remove non-base64 chars (spaces, newlines)
-    sanitized = ''.join(c for c in api_pem_b64 if c.isalnum() or c in '+/=')
-    
-    # Fix padding
-    missing_padding = len(sanitized) % 4
-    if missing_padding:
-        sanitized += '=' * (4 - missing_padding)
-    
-    return base64.b64decode(sanitized)
+# ---------------------------
+# Initialize Coinbase client if possible
+# ---------------------------
+client = None
+if CoinbaseClient:
+    try:
+        client = CoinbaseClient(
+            api_key=COINBASE_API_KEY,
+            api_secret=COINBASE_API_SECRET,
+            passphrase=COINBASE_API_PASSPHRASE,
+            pem_path=str(pem_path)
+        )
+        logging.info("✅ Coinbase client initialized. Ready for live trading.")
+    except Exception as e:
+        logging.error(f"❌ Failed to initialize Coinbase client: {e}")
 
-# -------------------------------
-# WRITE PEM FILE
-# -------------------------------
-pem_path = Path("/tmp/nija_api.pem")  # You can adjust the path
+# ---------------------------
+# Start bot (placeholder)
+# ---------------------------
+logging.info("🌟 Starting Nija bot main loop...")
+
+# Example: you can replace this with your actual trading loop
 try:
-    with open(pem_path, "wb") as f:
-        f.write(decode_pem_b64(API_PEM_B64))
-    logger.info(f"API PEM file written successfully to {pem_path}")
-except Exception as e:
-    logger.error(f"Failed to write API PEM file: {e}")
-    raise
-
-# -------------------------------
-# START BOT
-# -------------------------------
-def start_bot():
-    if not coinbase_client:
-        logger.warning("Coinbase client not initialized. Bot running in simulation mode.")
-    else:
-        logger.info("Starting live trading loop...")
-    
-    # Add your trading loop or snapshot logic here
-    # Example placeholder:
     while True:
-        logger.debug("Bot heartbeat...")
+        # Example heartbeat
+        logging.debug("Bot heartbeat...")
         import time
-        time.sleep(10)
-
-if __name__ == "__main__":
-    start_bot()
+        time.sleep(5)
+except KeyboardInterrupt:
+    logging.info("🛑 Nija bot stopped by user.")
