@@ -1,124 +1,112 @@
-# nija_bot_web.py - Render & Railway Ready with Coinbase Health Check
-
-import sys
+# nija_bot_web.py  — example pattern
 import os
-import time
 import threading
 import signal
-from flask import Flask, jsonify, request
-from dotenv import load_dotenv
+import logging
+import time
+from flask import Flask, request, jsonify
 
-# --- Add local vendor folder to Python path ---
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
+# --- very simple idempotent client pattern ---
+_coinbase_client = None
+_client_lock = threading.Lock()
 
-# --- Import Coinbase client ---
-from coinbase_advanced_py.client import CoinbaseClient
+def get_coinbase_client():
+    global _coinbase_client
+    with _client_lock:
+        if _coinbase_client is None:
+            # replace with your actual CoinbaseClient import/construct
+            from nija_client import client as coinbase_client_module
+            # or CoinbaseClient(api_key=..., api_secret=...)
+            _coinbase_client = coinbase_client_module
+            logging.info("✅ CoinbaseClient initialized with API keys")
+        return _coinbase_client
 
-# --- Load environment variables ---
-load_dotenv()
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-SECRET_KEY = os.getenv("SECRET_KEY")
-TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET")
+# Trading loop control
+loop_thread = None
+loop_lock = threading.Lock()
+stop_event = threading.Event()
 
-if not API_KEY or not API_SECRET:
-    raise ValueError("Coinbase API key and secret must be set in environment variables.")
-
-# --- Initialize Coinbase client ---
-client = CoinbaseClient(API_KEY, API_SECRET)
-print("✅ CoinbaseClient initialized with API keys")
-
-# --- Flask app setup ---
 app = Flask(__name__)
-running = False
-lock = threading.Lock()
-trade_thread = None
+# expected token — store in env securely on Render
+START_TOKEN = os.environ.get("START_TOKEN", "please-set-a-secret-token")
 
-# --- Graceful shutdown ---
-def shutdown(signum, frame):
-    global running
-    print("⚠️ Shutting down trade loop...")
-    running = False
-    exit(0)
+# Health endpoint (Render uses HEAD/GET)
+@app.route("/health", methods=["GET", "HEAD"])
+def health():
+    # respond OK quickly; do not start loops here
+    return ("", 200)
 
-signal.signal(signal.SIGINT, shutdown)
-signal.signal(signal.SIGTERM, shutdown)
+# Start endpoint must be POST and include token
+@app.route("/start", methods=["POST", "HEAD", "GET"])
+def start():
+    # allow HEAD/GET for health-check compatibility, but don't start loop on HEAD/GET
+    if request.method in ("HEAD", "GET"):
+        # Render sometimes probes GET/HEAD -> just respond 200
+        return ("", 200)
 
-# --- Trading loop (background thread) ---
-def trade_loop():
-    global running
-    with lock:
-        if running:
-            print("⚠️ Trade loop already running!")
-            return
-        running = True
+    token = request.args.get("token") or request.headers.get("X-Start-Token")
+    if token != START_TOKEN:
+        return jsonify({"error": "invalid token"}), 403
 
-    print("🔥 Nija Ultimate AI Trading Loop Started 🔥")
-    while running:
-        try:
-            btc_price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
-            print(f"BTC Price: {btc_price}")
+    global loop_thread
+    with loop_lock:
+        if loop_thread is not None and loop_thread.is_alive():
+            return jsonify({"status": "already_running"}), 200
 
-            # Example trading logic
-            if btc_price < 30000:
-                print("✅ BUY BTC!")
-            elif btc_price > 35000:
-                print("✅ SELL BTC!")
+        stop_event.clear()
+        # start new thread
+        loop_thread = threading.Thread(target=trading_loop, daemon=True)
+        loop_thread.start()
+        return jsonify({"status": "started"}), 200
 
-            time.sleep(60)
-        except Exception as e:
-            print(f"⚠️ Error in trade_loop: {e}")
-            time.sleep(30)
+@app.route("/stop", methods=["POST"])
+def stop():
+    token = request.args.get("token") or request.headers.get("X-Start-Token")
+    if token != START_TOKEN:
+        return jsonify({"error": "invalid token"}), 403
 
-# --- Flask Routes ---
+    stop_event.set()
+    return jsonify({"status": "stopping"}), 200
 
-@app.route("/health", methods=["GET"])
-def health_check():
-    trading_status = "live" if running else "stopped"
-
+def trading_loop():
+    client = get_coinbase_client()
+    logging.info("🔥 Nija Ultimate AI Trading Loop Started 🔥")
+    last_log = 0
     try:
-        price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
-        coinbase_status = {"BTC-USD": price, "status": "connected"}
-    except Exception as e:
-        coinbase_status = {"status": f"error: {e}"}
+        while not stop_event.is_set():
+            # Fetch price (example)
+            try:
+                # replace with your real price fetch call
+                price = client.get_price("BTC-USD") if hasattr(client, "get_price") else 30000.0
+            except Exception as e:
+                logging.exception("price fetch failed")
+                price = None
 
-    return jsonify({
-        "status": "ok",
-        "trading": trading_status,
-        "coinbase": coinbase_status
-    })
+            # throttle logs to 1/sec (or whatever you want)
+            now = time.time()
+            if now - last_log > 1 and price is not None:
+                logging.info(f"BTC Price: {price}")
+                last_log = now
 
-@app.route("/", methods=["GET"])
-def index():
-    return jsonify({"status": "ok", "bot": "Nija Ultimate AI"}), 200
+            # main trading logic here...
+            # add safe try/except around order placement
+            time.sleep(0.5)  # tick rate, tune to your needs
 
-@app.route("/start", methods=["GET"])
-def start_bot():
-    global trade_thread
-    token = request.args.get("token", "")
-    if token != SECRET_KEY:
-        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    finally:
+        logging.info("Trading loop exited cleanly")
 
-    with lock:
-        if trade_thread is None or not trade_thread.is_alive():
-            trade_thread = threading.Thread(target=trade_loop, daemon=True)
-            trade_thread.start()
-            return jsonify({"status": "started", "message": "Trading loop is now running"}), 200
-        else:
-            return jsonify({"status": "running", "message": "Trading loop already running"}), 200
+# graceful shutdown for gunicorn or other envs
+def _handle_term(signum, frame):
+    logging.info("Received signal %s: stopping loop", signum)
+    stop_event.set()
+    # optionally wait a little for thread to exit
+    with loop_lock:
+        if loop_thread:
+            loop_thread.join(timeout=5)
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    token = request.headers.get("X-Webhook-Token")
-    if token != TV_WEBHOOK_SECRET:
-        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+signal.signal(signal.SIGTERM, _handle_term)
+signal.signal(signal.SIGINT, _handle_term)
 
-    data = request.json
-    print("📡 TradingView alert received:", data)
-    return jsonify({"status": "ok", "message": "Webhook received"}), 200
-
-# --- Run Flask API ---
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))  # <-- IMPORTANT: use platform PORT
-    print(f"🌐 Starting Flask API on port {port}")
-    app.run(host="0.0.0.0", port=port)
+    # local dev only — gunicorn will run the app in production
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
