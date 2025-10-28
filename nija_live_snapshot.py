@@ -1,36 +1,41 @@
 #!/usr/bin/env python3
-# nija_live_snapshot.py
-
 import logging
+import time
 from nija_client import client, start_trading, get_accounts
 
-# -----------------------------
+# ------------------------------
 # Logging setup
-# -----------------------------
+# ------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-logging.info("🌟 Nija bot is starting...")
-
-# -----------------------------
-# Quick connectivity test
-# -----------------------------
-try:
+# ------------------------------
+# Main bot loop
+# ------------------------------
+def main():
+    logging.info("🌟 Nija bot is starting...")
+    
+    # Check accounts first
     accounts = get_accounts()
-    if accounts:
-        logging.info("✅ Successfully connected to Coinbase API. Accounts detected:")
-        for account in accounts:
-            logging.info(f" - {account['currency']}: {account['balance']['amount']}")
-    else:
-        logging.warning("⚠️ Connected to Coinbase API, but no accounts returned.")
-except Exception as e:
-    logging.exception(f"❌ Failed to connect to Coinbase API: {e}")
-    raise SystemExit("Cannot continue without Coinbase connection.")
+    if not accounts:
+        logging.error("❌ No accounts available. Cannot start trading loop.")
+        return
 
-# -----------------------------
-# Start trading loop
-# -----------------------------
-start_trading()
-logging.info("🔥 Nija trading loop is now live 🔥")
+    logging.info("🔥 Trading loop starting...")
+    
+    try:
+        while True:
+            for account in accounts:
+                try:
+                    logging.info(f" - {account['currency']}: {account['balance']['amount']}")
+                except (TypeError, KeyError):
+                    logging.warning(f"Skipping malformed account data: {account}")
+            # Add your trading logic here
+            time.sleep(5)  # loop delay for demonstration
+    except KeyboardInterrupt:
+        logging.info("🛑 Nija bot stopped by user.")
+
+if __name__ == "__main__":
+    main()
