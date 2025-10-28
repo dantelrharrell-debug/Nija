@@ -1,13 +1,25 @@
 #!/bin/bash
+set -e
+set -o pipefail
+
 echo "🌟 Starting Nija bot..."
 
-# Optional: set PORT from environment
-export HEALTH_PORT=${PORT:-8080}
-
-# Ensure environment variables exist
-if [ -z "$COINBASE_API_KEY" ] || [ -z "$COINBASE_API_SECRET" ]; then
-    echo "⚠️ Coinbase API keys not set!"
-    exit 1
+# Check Coinbase API keys
+if [[ -z "$COINBASE_API_KEY" ]] || [[ -z "$COINBASE_API_SECRET" ]] || [[ -z "$COINBASE_API_PASSPHRASE" ]]; then
+  echo "❌ ERROR: Coinbase API keys not set!"
+  exit 1
 fi
 
-python3 nija_live_snapshot.py
+# Function to run the bot with auto-restart
+run_bot() {
+  while true; do
+    echo "🔁 Launching Nija bot..."
+    python3 nija_live_snapshot.py 2>&1 | tee -a nija_bot.log
+
+    echo "⚠️ Bot crashed or stopped unexpectedly. Restarting in 5 seconds..."
+    sleep 5
+  done
+}
+
+# Start bot
+run_bot
