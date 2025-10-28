@@ -1,26 +1,17 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# ========================================
+# start.sh for Nija bot (Render / Railway)
+# ========================================
 
 echo "🌟 Starting Nija bot..."
 
-# Safe environment variable checks
-: "${COINBASE_API_KEY:?Warning: COINBASE_API_KEY not set, using stub client}"
-: "${COINBASE_API_SECRET:?Warning: COINBASE_API_SECRET not set, using stub client}"
-: "${GITHUB_TOKEN:?Warning: GITHUB_TOKEN not set, skipping GitHub features}"
-: "${BOT_SECRET_KEY:?Warning: BOT_SECRET_KEY not set}"
-: "${TV_WEBHOOK_SECRET:?Warning: TV_WEBHOOK_SECRET not set}"
+# No need to set API keys manually — they are injected by the platform
+# Just check if they exist for safety
+if [ -z "$COINBASE_API_KEY" ] || [ -z "$COINBASE_API_SECRET" ]; then
+    echo "⚠️ Coinbase API keys not set! Bot will run in stub mode."
+else
+    echo "🔹 Coinbase API keys detected — live trading enabled."
+fi
 
-# Set defaults for missing optional vars
-: "${HEALTH_PORT:=10000}"
-
-# Export if needed by Python scripts
-export COINBASE_API_KEY
-export COINBASE_API_SECRET
-export GITHUB_TOKEN
-export BOT_SECRET_KEY
-export TV_WEBHOOK_SECRET
-export HEALTH_PORT
-
-echo "🔹 Health server will run on port $HEALTH_PORT"
-
-# Run the bot
-python3 -u run_trader.py
+# Run the Python bot
+python3 nija_live_snapshot.py
