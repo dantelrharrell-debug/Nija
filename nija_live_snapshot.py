@@ -1,23 +1,21 @@
 import os
 import logging
 
-# Try to import the real client
+# Try to import real Coinbase client
 try:
     from coinbase_advanced_py.client import CoinbaseClient
 except ImportError:
-    logging.warning("coinbase_advanced_py.client not found. Using stub client.")
     CoinbaseClient = None
+    logging.warning("coinbase_advanced_py.client not found. Real trading disabled.")
 
-# Fallback stub client (you should have this already)
-from nija_client import StubCoinbaseClient
-
-# Read environment variables
+# Load environment variables
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
 PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 PEM_STRING = os.getenv("API_PEM_B64")
 
-# Initialize client
+# Initialize Coinbase client
+client = None
 if CoinbaseClient and PEM_STRING:
     logging.info("✅ Initializing real CoinbaseClient with PEM key")
     client = CoinbaseClient(
@@ -27,5 +25,8 @@ if CoinbaseClient and PEM_STRING:
         pem=PEM_STRING
     )
 else:
-    logging.warning("⚠️ Using stub Coinbase client. Real trading disabled.")
-    client = StubCoinbaseClient()
+    logging.warning("⚠️ Real CoinbaseClient not available. Trading disabled.")
+
+# Start bot logic
+logging.info("🌟 Nija bot is running...")
+# ... trading loop or worker code here ...
