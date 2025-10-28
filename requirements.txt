@@ -1,4 +1,4 @@
-coinbase-advanced-py==0.3.1
+coinbase-advanced-py==1.8.2
 pandas==2.3.3
 numpy==2.3.4
 flask==3.1.2
