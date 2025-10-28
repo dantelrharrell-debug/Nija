@@ -84,10 +84,10 @@ def health_check():
 
     # Coinbase connectivity check
     try:
-        accounts = client.accounts()  # <-- correct method
-        if accounts:
+        accounts = client.get_accounts_list()  # <-- correct method for current library
+        if accounts and len(accounts) > 0:
             sample_accounts = []
-            for a in accounts[:3]:  # show first 3 only
+            for a in accounts[:3]:
                 sample_accounts.append({
                     "id": a.get("id"),
                     "currency": a.get("currency"),
