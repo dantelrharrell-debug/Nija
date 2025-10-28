@@ -5,7 +5,7 @@ import logging
 from decimal import Decimal
 
 # ✅ Correct import for v1.8.2
-from coinbase_advanced_py.client import CoinbaseClient
+from coinbase_advanced_py import CoinbaseClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("NijaBot")
