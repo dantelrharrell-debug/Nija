@@ -1,64 +1,58 @@
 #!/usr/bin/env python3
 import os
+import sys
 import logging
 import time
-from coinbase_advanced_py import CoinbaseClient
 
-# ---------------------------
-# CONFIG
-# ---------------------------
-LOG_FILE = "nija_bot.log"
-LOG_LEVEL = logging.INFO
+# Coinbase import for v1.8.2
+try:
+    from coinbase_advanced_py.client.client import CoinbaseClient
+except ImportError as e:
+    print("❌ ERROR: Could not import CoinbaseClient. Check coinbase-advanced-py version.")
+    sys.exit(1)
 
-# Coinbase API keys (from environment variables)
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("NijaBot")
+
+# Load Coinbase API credentials from environment
+COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
+COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
+COINBASE_API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")  # optional
 
 if not COINBASE_API_KEY or not COINBASE_API_SECRET:
-    raise EnvironmentError(
-        "COINBASE_API_KEY and COINBASE_API_SECRET must be set in your environment!"
+    logger.error(
+        "❌ Coinbase API key/secret not set! Set COINBASE_API_KEY and COINBASE_API_SECRET."
     )
+    sys.exit(1)
 
-# ---------------------------
-# LOGGING SETUP
-# ---------------------------
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=LOG_LEVEL,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+# Initialize Coinbase client
+client = CoinbaseClient(
+    api_key=COINBASE_API_KEY,
+    api_secret=COINBASE_API_SECRET,
+    passphrase=COINBASE_API_PASSPHRASE,
+    sandbox=False,  # True if testing, False for live trading
 )
-logger = logging.getLogger(__name__)
 
-# ---------------------------
-# INITIALIZE COINBASE CLIENT
-# ---------------------------
-try:
-    client = CoinbaseClient(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET)
-    logger.info("✅ Coinbase client initialized with live keys")
-except Exception as e:
-    logger.error(f"❌ Failed to initialize Coinbase client: {e}")
-    raise e
+logger.info("✅ Coinbase client initialized. Starting trading loop...")
 
-# ---------------------------
-# SIMPLE TRADING LOOP
-# ---------------------------
+# Dummy trading loop for example
 def trading_loop():
-    logger.info("🔥 Trading loop starting 🔥")
     while True:
         try:
-            # Example: get account balances
+            # Replace with your actual trading logic
             accounts = client.get_accounts()
-            for acc in accounts:
-                logger.info(f"Account: {acc['currency']} | Balance: {acc['balance']['amount']}")
-            # Here you add your real trading strategy
-            time.sleep(10)  # adjust frequency as needed
+            logger.info(f"Current balances: {accounts}")
+            # Example: sleep 10 seconds between cycles
+            time.sleep(10)
         except Exception as e:
-            logger.error(f"Error in trading loop: {e}")
+            logger.error(f"⚠️ Trading loop error: {e}")
             time.sleep(5)
 
-# ---------------------------
-# START
-# ---------------------------
 if __name__ == "__main__":
-    logger.info("🌟 Nija bot started")
+    logger.info("🔥 Trading loop starting 🔥")
     trading_loop()
