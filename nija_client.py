@@ -1,42 +1,41 @@
+# nija_client.py
 import os
 import time
 import logging
-from coinbase_advanced_py import CoinbaseClient  # ✅ Correct for v1.8.2
+from decimal import Decimal
 
-# Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+# ✅ Correct import for v1.8.2
+from coinbase_advanced_py.client import CoinbaseClient
 
-# Coinbase client initialization
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("NijaBot")
+
+# Load API keys from environment variables
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
 COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")
 
-if not COINBASE_API_KEY or not COINBASE_API_SECRET:
-    logging.error("❌ ERROR: Coinbase API keys not set!")
-    raise SystemExit("Coinbase API keys are required to run the bot.")
-
+# Initialize Coinbase client
 client = CoinbaseClient(
     api_key=COINBASE_API_KEY,
     api_secret=COINBASE_API_SECRET,
-    passphrase=COINBASE_API_PASSPHRASE
+    passphrase=COINBASE_API_PASSPHRASE,
+    sandbox=False  # ✅ Change to True if testing in sandbox
 )
 
-logging.info("✅ Coinbase client initialized successfully.")
-
-# Example trading loop
 def start_trading():
-    logging.info("🌟 Starting trading loop...")
+    """
+    Example trading loop.
+    Replace this with your real trading logic.
+    """
+    logger.info("🔥 Nija bot started trading loop...")
     try:
         while True:
+            # Fetch accounts as a simple test
             accounts = client.get_accounts()
-            for account in accounts:
-                logging.info(f"Account: {account['currency']} - Balance: {account['balance']['amount']}")
-            # Add your trading logic here
-            time.sleep(10)
+            logger.info(f"Accounts: {accounts}")
+            time.sleep(10)  # wait 10 seconds between checks
     except KeyboardInterrupt:
-        logging.info("🛑 Trading stopped by user.")
+        logger.info("🛑 Nija bot stopped manually.")
     except Exception as e:
-        logging.exception(f"❌ Trading loop error: {e}")
+        logger.exception(f"💥 Error in trading loop: {e}")
