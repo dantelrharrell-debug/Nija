@@ -1,4 +1,47 @@
-#!/usr/bin/env python3
+import os
+import base64
+import logging
+from nija_client import start_trading
+from coinbase_advanced_py.client import CoinbaseClient
+
+logging.basicConfig(level=logging.INFO)
+
+# Read environment variables
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
+API_PEM_B64 = os.getenv("API_PEM_B64")
+
+# Fix padding for base64
+if API_PEM_B64:
+    API_PEM_B64 += "=" * (-len(API_PEM_B64) % 4)
+
+pem_path = "coinbase_api.pem"
+if API_PEM_B64:
+    try:
+        with open(pem_path, "wb") as f:
+            f.write(base64.b64decode(API_PEM_B64))
+        logging.info("✅ PEM file written successfully")
+    except Exception as e:
+        logging.error(f"❌ Failed to decode PEM: {e}")
+        pem_path = None
+
+# Initialize Coinbase client
+client = None
+if CoinbaseClient and API_KEY and API_SECRET and API_PASSPHRASE and pem_path:
+    try:
+        client = CoinbaseClient(
+            key=API_KEY,
+            secret=API_SECRET,
+            passphrase=API_PASSPHRASE,
+            pem_file=pem_path
+        )
+        logging.info("✅ Coinbase client initialized")
+    except Exception as e:
+        logging.error(f"❌ Failed to init Coinbase client: {e}")
+
+# Start trading loop
+start_trading(client)#!/usr/bin/env python3
 import os
 import sys
 import base64
