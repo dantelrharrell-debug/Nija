@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
-# start.sh — launch the Nija bot on Render
-
-# Exit on any error
-set -e
 
 echo "🌟 Starting Nija bot..."
 
-# Ensure required environment variables are present
-: "${COINBASE_API_KEY:?COINBASE_API_KEY not set}"
-: "${COINBASE_API_SECRET:?COINBASE_API_SECRET not set}"
-: "${GITHUB_TOKEN:?GITHUB_TOKEN not set}"
-: "${RENDER_API_KEY:?RENDER_API_KEY not set}"
-: "${RAILWAY_API_KEY:?RAILWAY_API_KEY not set}"
-: "${BOT_SECRET_KEY:?BOT_SECRET_KEY not set}"
+# Safe environment variable checks
+: "${COINBASE_API_KEY:?Warning: COINBASE_API_KEY not set, using stub client}"
+: "${COINBASE_API_SECRET:?Warning: COINBASE_API_SECRET not set, using stub client}"
+: "${GITHUB_TOKEN:?Warning: GITHUB_TOKEN not set, skipping GitHub features}"
+: "${BOT_SECRET_KEY:?Warning: BOT_SECRET_KEY not set}"
+: "${TV_WEBHOOK_SECRET:?Warning: TV_WEBHOOK_SECRET not set}"
 
-# Set health port default if not provided
-export HEALTH_PORT="${HEALTH_PORT:-10000}"
-export DRY_RUN="${DRY_RUN:-False}"
-export LOG_LEVEL="${LOG_LEVEL:-INFO}"
+# Set defaults for missing optional vars
+: "${HEALTH_PORT:=10000}"
 
-# Ensure run_trader.py is executable
-chmod +x run_trader.py
+# Export if needed by Python scripts
+export COINBASE_API_KEY
+export COINBASE_API_SECRET
+export GITHUB_TOKEN
+export BOT_SECRET_KEY
+export TV_WEBHOOK_SECRET
+export HEALTH_PORT
 
-# Launch the bot
-exec python3 run_trader.py
+echo "🔹 Health server will run on port $HEALTH_PORT"
+
+# Run the bot
+python3 -u run_trader.py
