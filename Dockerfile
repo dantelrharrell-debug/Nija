@@ -1,16 +1,16 @@
-# Base image
+# Use official Python image
 FROM python:3.11-slim
 
 # Set working directory
-WORKDIR /app
+WORKDIR /opt/render/project/src
 
-# Install system dependencies for building packages
+# Copy project files
+COPY . .
+
+# Install system dependencies
 RUN apt-get update && \
-    apt-get install -y build-essential libssl-dev libffi-dev libsqlite3-dev && \
+    apt-get install -y git build-essential && \
     rm -rf /var/lib/apt/lists/*
-
-# Copy all project files
-COPY . /app
 
 # Upgrade pip and install Python dependencies
 RUN pip install --upgrade pip
@@ -19,8 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Ensure start.sh is executable
 RUN chmod +x start.sh
 
-# Expose health port
-EXPOSE 10000
+# Expose port if needed (optional)
+EXPOSE 8080
 
-# Entrypoint
+# Run bot
 CMD ["bash", "start.sh"]
