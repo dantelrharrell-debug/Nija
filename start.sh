@@ -1,15 +1,13 @@
 #!/bin/bash
-echo "🌟 Starting Nija bot..."
+echo "🌟 Starting Nija bot as background worker..."
 
-# Export Coinbase keys from environment variables
-export COINBASE_API_KEY=${COINBASE_API_KEY}
-export COINBASE_API_SECRET=${COINBASE_API_SECRET}
-export COINBASE_API_PASSPHRASE=${COINBASE_API_PASSPHRASE}
-
-# Debug logging
+# Make sure environment variables are set
 echo "DEBUG: COINBASE_API_KEY=$COINBASE_API_KEY"
 echo "DEBUG: COINBASE_API_SECRET=$COINBASE_API_SECRET"
 echo "DEBUG: COINBASE_API_PASSPHRASE=$COINBASE_API_PASSPHRASE"
 
-# Start the bot
+# Activate virtual environment if needed
+# source .venv/bin/activate
+
+# Run bot
 python3 nija_live_snapshot.py
