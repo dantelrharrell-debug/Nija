@@ -1,8 +1,7 @@
-# nija_client.py
 import os
 import time
 import logging
-from coinbase_advanced_py import Coinbase
+from coinbase_advanced_py.client import Client  # ✅ Correct for v1.8.2
 
 # -----------------------------
 # Logging setup
@@ -23,14 +22,13 @@ if not COINBASE_API_KEY or not COINBASE_API_SECRET:
     logging.error("❌ ERROR: Coinbase API keys not set!")
     raise SystemExit("Coinbase API keys are required to run the bot.")
 
-client = Coinbase(
+client = Client(
     api_key=COINBASE_API_KEY,
     api_secret=COINBASE_API_SECRET,
     passphrase=COINBASE_API_PASSPHRASE
 )
 
 logging.info("✅ Coinbase client initialized successfully.")
-
 
 # -----------------------------
 # Example trading loop
