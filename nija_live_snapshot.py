@@ -1,41 +1,13 @@
-#!/usr/bin/env python3
 import logging
-import time
-from nija_client import client, start_trading, get_accounts
+from nija_client import start_trading, get_accounts
 
-# ------------------------------
-# Logging setup
-# ------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO)
 
-# ------------------------------
-# Main bot loop
-# ------------------------------
-def main():
-    logging.info("🌟 Nija bot is starting...")
-    
-    # Check accounts first
+try:
     accounts = get_accounts()
-    if not accounts:
-        logging.error("❌ No accounts available. Cannot start trading loop.")
-        return
+    for account in accounts:
+        logging.info(f" - {account['currency']}: {account['balance']['amount']}")
+except Exception as e:
+    logging.error(f"❌ Failed to fetch accounts: {e}")
 
-    logging.info("🔥 Trading loop starting...")
-    
-    try:
-        while True:
-            for account in accounts:
-                try:
-                    logging.info(f" - {account['currency']}: {account['balance']['amount']}")
-                except (TypeError, KeyError):
-                    logging.warning(f"Skipping malformed account data: {account}")
-            # Add your trading logic here
-            time.sleep(5)  # loop delay for demonstration
-    except KeyboardInterrupt:
-        logging.info("🛑 Nija bot stopped by user.")
-
-if __name__ == "__main__":
-    main()
+start_trading()
