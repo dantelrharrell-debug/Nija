@@ -1,27 +1,10 @@
 #!/usr/bin/env python3
-import os
+import logging
 from nija_client import client, start_trading
 
-print("🌟 Starting Nija bot snapshot...")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# -------------------------------
-# Start trading loop
-# -------------------------------
-trading_thread = start_trading()
-
-# -------------------------------
-# Snapshot accounts
-# -------------------------------
-try:
-    accounts = client.get_accounts()
-    print("===== NIJA BOT LIVE SNAPSHOT =====")
-    print("Trading Loop: ✅ Running")
-    print("Coinbase Accounts:")
-    for acc in accounts:
-        print(f" - {acc['currency']}: {acc['balance']['amount']}")
-    print("==================================")
-except Exception as e:
-    print("===== NIJA BOT LIVE SNAPSHOT =====")
-    print("Trading Loop: ❌ Stopped")
-    print(f"Coinbase API Error: {e}")
-    print("==================================")
+if __name__ == "__main__":
+    logger.info("🌟 Starting Nija bot...")
+    start_trading()
