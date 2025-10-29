@@ -1,3 +1,10 @@
+try:
+    from coinbase_advanced_py.client import CoinbaseClient
+    logger.info("[NIJA] Successfully imported CoinbaseClient")
+except ModuleNotFoundError:
+    CoinbaseClient = None
+    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient")
+
 # nija_client.py
 import os
 import logging
