@@ -1,29 +1,39 @@
-from nija_client import client
 import logging
+from nija_client import client  # auto-attaches live client
+from decimal import Decimal
 
 logger = logging.getLogger("nija.app")
 
-def place_order(symbol, type, side, amount, client_override=None):
+def place_order(symbol, trade_type, side, amount):
     """
-    Places an order on Coinbase. Falls back to simulation if client is not available.
+    Places live order if client available, otherwise simulates
     """
-    actual_client = client_override or client
-    if actual_client:
-        try:
-            # Replace with your actual client order call
-            response = actual_client.place_order(symbol=symbol, type=type, side=side, amount=amount)
-            logger.info(f"[NIJA] Live order executed -> symbol={symbol}, type={type}, side={side}, amount={amount}")
-            return response
-        except Exception as e:
-            logger.error(f"[NIJA] Live order failed, simulating instead: {e}")
-    
-    # Simulation fallback
-    logger.info(f"[NIJA] place_order called -> symbol={symbol}, type={type}, side={side}, amount={amount}, client_attached=False")
-    logger.info("[NIJA] place_order: client is None -> simulated order returned")
-    return {
-        "symbol": symbol,
-        "type": type,
-        "side": side,
-        "amount": amount,
-        "status": "simulated"
-    }
+    try:
+        if client:
+            response = client.place_order(
+                symbol=symbol,
+                type=trade_type,
+                side=side,
+                amount=Decimal(amount)
+            )
+            logger.info("Placed live order -> %s %s %s", side, amount, symbol)
+        else:
+            # fallback simulation
+            response = {
+                "symbol": symbol,
+                "side": side,
+                "amount": amount,
+                "status": "simulated"
+            }
+            logger.warning("Client not attached -> simulated order returned for %s", symbol)
+        return response
+    except Exception as e:
+        logger.error("Order failed for %s: %s", symbol, e)
+        # Return a simulated order as safe fallback
+        return {
+            "symbol": symbol,
+            "side": side,
+            "amount": amount,
+            "status": "simulated_due_to_error",
+            "error": str(e)
+        }
