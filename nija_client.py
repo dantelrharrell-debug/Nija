@@ -2,48 +2,51 @@
 import os
 import logging
 import time
+from decimal import Decimal
 
-logger = logging.getLogger("nija_client")
+# --- Setup logging ---
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_client")
 
 # --- Try importing CoinbaseClient ---
 CoinbaseClient = None
-coinbase_available = False
 try:
     from coinbase_advanced_py.client import CoinbaseClient
-    coinbase_available = True
-    logger.info("[NIJA] Successfully imported CoinbaseClient")
+    logger.info("[NIJA] CoinbaseClient imported successfully")
 except ModuleNotFoundError:
     logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient")
 
-# --- Dummy client for dry-run or missing module ---
+# --- Dummy client for testing without live trades ---
 class DummyClient:
     def get_accounts(self):
         logger.info("[NIJA-DUMMY] get_accounts called")
+        # Returns a fake account balance
         return [{"currency": "USD", "balance": "1000"}]
 
     def place_order(self, product_id, side, price, size):
-        logger.info(f"[NIJA-DUMMY] place_order called: {side} {size} {product_id} at {price}")
-        return {"id": "dummy_order", "status": "placed"}
+        logger.info(f"[NIJA-DUMMY] place_order called - {side} {size} {product_id} @ {price}")
+        # Returns a fake order confirmation
+        return {"id": "dummy_order_123", "status": "done"}
 
 # --- Initialize client ---
-if coinbase_available:
-    client = CoinbaseClient(
-        api_key=os.getenv("COINBASE_API_KEY", ""),
-        api_secret=os.getenv("COINBASE_API_SECRET", ""),
-        api_passphrase=os.getenv("COINBASE_PASSPHRASE", ""),
-        sandbox=os.getenv("DRY_RUN", "True").lower() == "true"
-    )
+if CoinbaseClient:
+    try:
+        COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
+        COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+        COINBASE_PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
+        client = CoinbaseClient(
+            api_key=COINBASE_API_KEY,
+            api_secret=COINBASE_API_SECRET,
+            passphrase=COINBASE_PASSPHRASE,
+            sandbox=False  # change to True for sandbox testing
+        )
+        logger.info("[NIJA] CoinbaseClient initialized. Live trading enabled.")
+    except Exception as e:
+        logger.exception("[NIJA] Failed to initialize CoinbaseClient. Falling back to DummyClient.")
+        client = DummyClient()
 else:
     client = DummyClient()
 
-# --- Helper function to check if Coinbase is reachable ---
+# --- Helper to check if client is live ---
 def check_live_status():
-    if not coinbase_available:
-        return False
-    try:
-        accounts = client.get_accounts()
-        return True if accounts else False
-    except Exception as e:
-        logger.warning(f"[NIJA] Coinbase connection failed: {e}")
-        return False
+    return isinstance(client, CoinbaseClient)
