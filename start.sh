@@ -1,14 +1,23 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Write Coinbase PEM from secret env into file (permission-safe)
+# Ensure secrets dir exists
 mkdir -p /opt/render/project/secrets
-if [ -n "$COINBASE_PEM_CONTENT" ]; then
-  printf "%s\n" "$COINBASE_PEM_CONTENT" > /opt/render/project/secrets/coinbase.pem
-  chmod 600 /opt/render/project/secrets/coinbase.pem
-  echo "[start.sh] Wrote PEM to /opt/render/project/secrets/coinbase.pem"
+chmod 700 /opt/render/project/secrets
+
+# Write Coinbase PEM from a Render secret env var COINBASE_PEM_CONTENT
+# NOTE: set COINBASE_PEM_CONTENT in Render's dashboard as the full PEM (including BEGIN/END lines)
+if [ -z "${COINBASE_PEM_CONTENT:-}" ]; then
+  echo "ERROR: COINBASE_PEM_CONTENT env var missing" >&2
+  exit 1
 fi
 
-# Ensure PORT is set by Render
+cat > /opt/render/project/secrets/coinbase.pem <<'PEM'
+${COINBASE_PEM_CONTENT}
+PEM
+
+chmod 600 /opt/render/project/secrets/coinbase.pem
+
+# Start the app
 export PORT=${PORT:-10000}
-exec gunicorn -b 0.0.0.0:$PORT nija_live_snapshot:app
+gunicorn -b 0.0.0.0:$PORT nija_live_snapshot:app
