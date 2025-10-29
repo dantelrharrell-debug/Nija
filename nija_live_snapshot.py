@@ -1,3 +1,25 @@
+# --- safe_env.py (paste at top of nija_live_snapshot.py or create this file and import)
+import os
+import logging
+
+logger = logging.getLogger("nija_safe_env")
+
+def get_path_env(env_name: str, required: bool = False):
+    """Return path string or None. If required and missing, raise ValueError."""
+    val = os.environ.get(env_name)
+    if val is None or val == "":
+        if required:
+            raise ValueError(f"Environment variable {env_name} is required but is not set.")
+        logger.warning("Env var %s not set", env_name)
+        return None
+    if not isinstance(val, (str, bytes, os.PathLike)):
+        raise ValueError(f"Environment variable {env_name} must be a path string.")
+    return str(val)
+
+# Example usage in nija_live_snapshot.py:
+# from safe_env import get_path_env, logger
+# COINBASE_API_SECRET_PATH = get_path_env("COINBASE_API_SECRET_PATH")
+
 #!/usr/bin/env python3
 # nija_live_snapshot.py
 import os
