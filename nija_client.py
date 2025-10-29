@@ -1,3 +1,7 @@
+import sys
+# Make sure virtualenv site-packages has priority
+sys.path.insert(0, '/opt/render/project/src/.venv/lib/python3.13/site-packages')
+
 import os
 import logging
 
