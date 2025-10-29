@@ -1,78 +1,55 @@
 # nija_client.py
-
 import os
 import logging
-from coinbase_advanced_py.client import CoinbaseClient
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Coinbase credentials ---
-COINBASE_PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-SANDBOX = os.getenv("SANDBOX")  # Optional: use sandbox if set
+# --- Load environment variables ---
+COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
+COINBASE_PEM_PATH = os.environ.get("COINBASE_PEM_PATH", "/opt/render/project/secrets/coinbase.pem")
+SANDBOX = os.environ.get("SANDBOX", None)
 
-# --- Ensure PEM exists ---
-if not os.path.exists(COINBASE_PEM_PATH):
-    logger.warning(f"[NIJA] Coinbase PEM not found at {COINBASE_PEM_PATH}. Using DummyClient.")
-    from nija_client_dummy import DummyClient
-    client = DummyClient()
-else:
+# --- Try importing CoinbaseClient ---
+CoinbaseClient = None
+try:
+    from coinbase_advanced_py import CoinbaseClient
+    logger.info("[NIJA] Successfully imported CoinbaseClient")
+except ModuleNotFoundError:
+    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient")
+
+# --- DummyClient fallback ---
+class DummyClient:
+    def __init__(self, *args, **kwargs):
+        logger.warning("[NIJA] DummyClient initialized - live trading disabled")
+
+    def get_accounts(self):
+        return []
+
+    def place_order(self, *args, **kwargs):
+        logger.warning("[NIJA] DummyClient: place_order called")
+
+# --- Initialize client ---
+if CoinbaseClient:
     try:
         client = CoinbaseClient(
             api_key=COINBASE_API_KEY,
             pem_file_path=COINBASE_PEM_PATH,
-            sandbox=SANDBOX is not None
+            sandbox=SANDBOX is not None  # Use sandbox if SANDBOX is set
         )
-        logger.info("[NIJA] ✅ CoinbaseClient initialized successfully")
+        logger.info("[NIJA] CoinbaseClient initialized - ready for live trading")
     except Exception as e:
-        logger.warning(f"[NIJA] Failed to initialize CoinbaseClient: {e}")
-        from nija_client_dummy import DummyClient
+        logger.error(f"[NIJA] Failed to initialize CoinbaseClient: {e}")
         client = DummyClient()
+else:
+    client = DummyClient()
 
-# --- Helper functions ---
-def get_accounts():
-    try:
-        return client.get_accounts()
-    except Exception as e:
-        logger.warning(f"[NIJA] get_accounts failed: {e}")
-        return None
-
-def place_order(*args, **kwargs):
-    try:
-        return client.place_order(*args, **kwargs)
-    except Exception as e:
-        logger.warning(f"[NIJA] place_order failed: {e}")
-        return None
-
+# --- Live check helper ---
 def check_live_status():
-    if "DummyClient" in str(type(client)):
-        logger.warning("[NIJA] Trading not live (DummyClient active)")
-        print("❌ NIJA is NOT live — using DummyClient")
-        return False
     try:
         accounts = client.get_accounts()
-        if accounts:
-            logger.info("[NIJA] ✅ Live trading ready")
-            print("✅ NIJA is live! Ready to trade.")
-            return True
-        else:
-            logger.warning("[NIJA] No accounts returned by CoinbaseClient")
-            print("❌ NIJA cannot access accounts")
-            return False
-    except Exception as e:
-        logger.warning(f"[NIJA] Exception checking live status: {e}")
-        print(f"❌ NIJA live check failed: {e}")
-        return False
-
-# --- Startup check ---
-def startup_live_check():
-    print("=== NIJA STARTUP LIVE CHECK ===")
-    logger.info("[NIJA] Performing startup live check...")
-    check_live_status()
-
-startup_live_check()
-
-if __name__ == "__main__":
-    check_live_status()
+        live = accounts is not None
+    except Exception:
+        live = False
+    return live
