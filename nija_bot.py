@@ -1,99 +1,68 @@
-import sys, os
-from dotenv import load_dotenv
-
-# Add vendor folder for CoinbaseClient
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
-
-# Load environment variables
-env_path = os.path.join(os.path.dirname(__file__), ".env")
-load_dotenv(dotenv_path=env_path)
-
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-
-print("API Key loaded?", bool(API_KEY))
-print("API Secret loaded?", bool(API_SECRET))
-
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
-
-from coinbase_advanced_py.client import CoinbaseClient
-
-print("✅ CoinbaseClient loaded")
-
-import sys
-import os
 import time
-import threading
-import signal
-from dotenv import load_dotenv
+import logging
+import pandas as pd
 
-# --- Step 1: Add vendor folder to Python path ---
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
+from nija_client import client
+from trading_logic import place_order
+from indicators import calculate_indicators  # your existing indicator functions
 
-# --- Step 2: Import CoinbaseClient ---
-try:
-    from coinbase_advanced_py import CoinbaseClient
-except ImportError as e:
-    print(f"⚠️ CoinbaseClient import failed: {e}. Running in simulation mode.")
-    class CoinbaseClient:
-        def get_spot_price(self, currency_pair="BTC-USD"):
-            return {"amount": 30000.0}  # Dummy price
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija.bot")
 
-# --- Step 3: Load environment variables ---
-load_dotenv()
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
+# --- Your trading symbols and settings ---
+TRADING_PAIRS = ["BTC/USD", "ETH/USD", "XRP/USD", "ADA/USD", "LTC/USD", "SOL/USD", "BNB/USD"]
+TRADE_TYPE = "Futures"  # or "Spot"
+TRADE_AMOUNT = 1  # default per trade, adjust as needed
+TRADE_INTERVAL = 5  # seconds between checks (adjust to your speed preference)
 
-# --- Step 4: Initialize client ---
-try:
-    if API_KEY and API_SECRET:
-        client = CoinbaseClient(API_KEY, API_SECRET)
-        print("✅ CoinbaseClient loaded. Live trading ready.")
-    else:
-        raise ValueError("Missing API keys, using simulation mode.")
-except Exception:
-    client = CoinbaseClient()
-    print("⚠️ Simulation mode active.")
-
-# --- Step 5: Setup trading loop ---
-running = False
-lock = threading.Lock()
-
-def shutdown(signum, frame):
-    global running
-    print("⚠️ Shutting down trade loop...")
-    running = False
-    exit(0)
-
-signal.signal(signal.SIGINT, shutdown)
-signal.signal(signal.SIGTERM, shutdown)
-
-def trade_loop():
-    global running
-    with lock:
-        if running:
-            print("⚠️ Trade loop already running!")
-            return
-        running = True
-
-    print("🔥 Nija Ultimate AI Trading Loop Started 🔥")
-    while running:
+# --- Main Trading Loop ---
+def run_trading_bot():
+    logger.info("[NIJA] Trading bot started. Live mode: %s", bool(client))
+    while True:
         try:
-            btc_price = float(client.get_spot_price(currency_pair='BTC-USD')['amount'])
-            print(f"BTC Price: {btc_price}")
-
-            # Example trading logic
-            if btc_price < 30000:
-                print("✅ BUY BTC!")
-            elif btc_price > 35000:
-                print("✅ SELL BTC!")
-
-            time.sleep(60)
+            for symbol in TRADING_PAIRS:
+                # Fetch your market data here (example placeholder)
+                df = fetch_market_data(symbol)  # implement this function
+                df = df.apply(pd.to_numeric, errors='coerce').ffill()  # fixes fillna warning
+                
+                # Calculate indicators
+                signals = calculate_indicators(df)  # your existing logic
+                
+                # Decide trade side based on signals (implement your own strategy)
+                side = "buy" if signals.get("buy_signal") else "sell"
+                
+                # Place order (automatically uses live client if available)
+                response = place_order(symbol, TRADE_TYPE, side, TRADE_AMOUNT)
+                
+                logger.info("[NIJA] Order response: %s", response)
+            
+            time.sleep(TRADE_INTERVAL)
+        
+        except KeyboardInterrupt:
+            logger.info("[NIJA] Bot stopped manually")
+            break
         except Exception as e:
-            print(f"⚠️ Error in trade_loop: {e}")
-            time.sleep(30)
+            logger.error(f"[NIJA] Unexpected error in main loop: {e}")
+            time.sleep(TRADE_INTERVAL)
 
-# --- Run the bot ---
+# --- Placeholder: implement real market data fetching ---
+def fetch_market_data(symbol):
+    # Replace this with actual Coinbase API data fetching if desired
+    import pandas as pd
+    import numpy as np
+    now = pd.Timestamp.now()
+    data = {
+        "open": [100 + np.random.rand() for _ in range(10)],
+        "high": [101 + np.random.rand() for _ in range(10)],
+        "low": [99 + np.random.rand() for _ in range(10)],
+        "close": [100 + np.random.rand() for _ in range(10)],
+        "volume": [10 + np.random.rand() for _ in range(10)],
+        "timestamp": [now - pd.Timedelta(seconds=i*60) for i in range(10)]
+    }
+    df = pd.DataFrame(data)
+    df.set_index("timestamp", inplace=True)
+    return df
+
+# --- Start Bot ---
 if __name__ == "__main__":
-    trade_loop()
+    run_trading_bot()
