@@ -1,32 +1,9 @@
 import sys
 import os
-import shutil
-
-# List of known shadowing folder names
-shadow_folders = [
-    os.path.join(os.getcwd(), "coinbase_advanced_py"),
-    os.path.join(os.getcwd(), "coinbase-advanced-py"),
-]
-
-for folder in shadow_folders:
-    if os.path.exists(folder) and os.path.isdir(folder):
-        print(f"[NIJA-SHIM] Removing shadowing folder: {folder}")
-        shutil.rmtree(folder)
-
-# Remove current working directory from sys.path temporarily to avoid shadowing
-if os.getcwd() in sys.path:
-    sys.path.remove(os.getcwd())
-    print(f"[NIJA-SHIM] Removed CWD from sys.path to prevent shadowing")
-
-import coinbase_advanced_py
-print("coinbase_advanced_py path:", coinbase_advanced_py.__path__)
-
-# nija_client.py
-import sys
-import os
 import importlib
 import logging
 from decimal import Decimal
+import shutil
 
 # ----------------- Logger Setup -----------------
 logger = logging.getLogger("nija.nija_client")
@@ -35,6 +12,21 @@ if not logger.handlers:
     h = logging.StreamHandler(sys.stdout)
     h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
     logger.addHandler(h)
+
+# ----------------- Remove Shadowing Folders -----------------
+shadow_folders = [
+    os.path.join(os.getcwd(), "coinbase_advanced_py"),
+    os.path.join(os.getcwd(), "coinbase-advanced-py"),
+]
+
+for folder in shadow_folders:
+    if os.path.exists(folder) and os.path.isdir(folder):
+        logger.info(f"[NIJA-SHIM] Removing shadowing folder: {folder}")
+        shutil.rmtree(folder)
+
+if os.getcwd() in sys.path:
+    sys.path.remove(os.getcwd())
+    logger.info(f"[NIJA-SHIM] Removed CWD from sys.path to prevent shadowing")
 
 # ----------------- Environment -----------------
 API_KEY = os.getenv("COINBASE_API_KEY")
@@ -56,29 +48,6 @@ logger.info(
     f"COINBASE_PASSPHRASE={masked(API_PASSPHRASE)} "
     f"SANDBOX={SANDBOX}"
 )
-
-# ----------------- Shadowing Fix -----------------
-def remove_shadowing_folder(module_name="coinbase_advanced_py"):
-    """
-    Remove local folders that could shadow the real site-packages module.
-    No renaming; just remove from sys.path to avoid cross-device errors.
-    """
-    cwd = os.path.abspath(os.getcwd())
-    removed = []
-    for p in list(sys.path):
-        if not p:
-            continue
-        abs_p = os.path.abspath(p)
-        if abs_p.startswith(cwd):
-            folder_candidate = os.path.join(abs_p, module_name)
-            if os.path.exists(folder_candidate):
-                if p in sys.path:
-                    sys.path.remove(p)
-                    removed.append(p)
-    if removed:
-        logger.info(f"[NIJA-SHIM] Removed local sys.path entries that could shadow packages: {removed}")
-
-remove_shadowing_folder()
 
 # ----------------- Prioritize site-packages -----------------
 venv_path = os.path.join(
@@ -118,27 +87,25 @@ if CoinbaseClientClass is None:
             return None
 
     CoinbaseClientClass = DummyClient
-    logger.warning("Using DummyClient: real Coinbase client not available.")
+    REAL_CLIENT_ACTIVE = False
+else:
+    REAL_CLIENT_ACTIVE = True
 
 # ----------------- Instantiate Client -----------------
-client = None
-_client_ready = False
-try:
-    client = CoinbaseClientClass(
-        api_key=API_KEY,
-        api_secret=API_SECRET,
-        passphrase=API_PASSPHRASE,
-        sandbox=SANDBOX
-    )
-    _client_ready = not isinstance(client, DummyClient)
-    if _client_ready:
-        logger.info(f"CoinbaseClient instantiated (sandbox={SANDBOX})")
-except Exception as e:
-    logger.exception(f"Failed to instantiate CoinbaseClient: {e}")
-    client = DummyClient()
-    _client_ready = False
-
-REAL_CLIENT_ACTIVE = _client_ready
+if CoinbaseClientClass is DummyClient:
+    client = CoinbaseClientClass()
+else:
+    try:
+        client = CoinbaseClientClass(
+            api_key=API_KEY,
+            api_secret=API_SECRET,
+            passphrase=API_PASSPHRASE,
+            sandbox=SANDBOX
+        )
+    except Exception as e:
+        logger.exception(f"Failed to instantiate CoinbaseClient: {e}")
+        client = DummyClient()
+        REAL_CLIENT_ACTIVE = False
 
 # ----------------- Helper Functions -----------------
 def get_accounts():
