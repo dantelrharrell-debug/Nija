@@ -1,51 +1,83 @@
-#!/usr/bin/env python3
 # nija_live_snapshot.py
-import os
 import time
 import logging
+from flask import Flask, jsonify
+from threading import Thread
 from nija_client import client, get_accounts, place_order
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+# ===== Logging =====
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# -------------------------------
-# Health check (optional)
-# -------------------------------
+# ===== Flask App for Health Check =====
+app = Flask(__name__)
+running = False  # Tracks trading loop
+
+@app.route("/health", methods=["GET"])
 def health_check():
+    """
+    Health endpoint for Render or manual checks.
+    Returns:
+    - status: Flask alive
+    - trading: whether bot loop is running
+    - coinbase: whether Coinbase API is reachable
+    """
     try:
         accounts = get_accounts()
-        status = "live" if accounts else "no accounts"
-        logger.info(f"Health check: {status}")
-        return status
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return "error"
+        coinbase_status = "connected" if accounts else "no accounts"
+    except Exception:
+        coinbase_status = "error"
 
-# -------------------------------
-# Main loop
-# -------------------------------
-def main_loop():
-    logger.info("🌟 Starting Nija bot main loop...")
-    while True:
-        try:
-            # Example trading logic
+    return jsonify({
+        "status": "alive",
+        "trading": "running" if running else "stopped",
+        "coinbase": coinbase_status
+    })
+
+# ===== Trading Loop =====
+def trading_loop():
+    global running
+    running = True
+    logger.info("Trading loop started")
+    
+    try:
+        while True:
             accounts = get_accounts()
-            if accounts:
-                logger.info(f"Connected to {len(accounts)} account(s).")
-                # Example: place dummy order
-                # place_order("BTC-USD", "buy", Decimal("0.001"))
-            else:
-                logger.warning("No accounts detected!")
-            time.sleep(10)
-        except KeyboardInterrupt:
-            logger.info("🚨 Nija bot stopped manually.")
-            break
-        except Exception as e:
-            logger.error(f"Error in main loop: {e}")
-            time.sleep(5)
+            if not accounts:
+                logger.warning("No accounts available, skipping trade cycle")
+                time.sleep(10)
+                continue
 
+            # Example: trade BTC-USD with 0.001 BTC per cycle (sandbox safe)
+            symbol = "BTC-USD"
+            side = "buy"
+            size = 0.001
+
+            logger.info(f"Placing order: {side} {size} {symbol}")
+            order = place_order(symbol=symbol, side=side, size=size)
+            
+            if order:
+                logger.info(f"Order executed: {order}")
+            else:
+                logger.error("Order failed")
+
+            # Wait 30 seconds before next trade cycle
+            time.sleep(30)
+    except Exception as e:
+        logger.error(f"Trading loop error: {e}")
+    finally:
+        running = False
+        logger.info("Trading loop stopped")
+
+# ===== Start Trading Thread =====
+def start_trading():
+    thread = Thread(target=trading_loop, daemon=True)
+    thread.start()
+
+# ===== Main Entrypoint =====
 if __name__ == "__main__":
-    main_loop()
+    logger.info("Starting Nija bot main...")
+    start_trading()
+    
+    # Start Flask server for Render
+    app.run(host="0.0.0.0", port=10000)
