@@ -8,7 +8,7 @@ import importlib
 import pkgutil
 import inspect
 
-# --- Ensure virtualenv site-packages is prioritized (adjust path if your venv path differs) ---
+# --- Ensure virtualenv site-packages is prioritized ---
 VENV_SITE_PACKAGES = '/opt/render/project/src/.venv/lib/python3.13/site-packages'
 if VENV_SITE_PACKAGES not in sys.path:
     sys.path.insert(0, VENV_SITE_PACKAGES)
@@ -56,39 +56,42 @@ class DummyClient:
         logger.warning("[DummyClient] place_order called - no live trading!")
         return {"status": "dummy"}
 
-# --- Helper: try_import_candidates and scan for CoinbaseClient symbol ---
-def try_import_candidates(candidates):
-    """
-    Try import candidate module paths and return the module that contains CoinbaseClient.
-    Returns tuple (module, symbol_name) or (None, None).
-    """
+# --- Try import official RESTClient first ---
+CoinbaseClient = None
+try:
+    from coinbase.rest import RESTClient as CoinbaseClient
+    logger.info("[NIJA] Successfully imported RESTClient from coinbase.rest")
+except ModuleNotFoundError as e:
+    logger.warning(f"[NIJA] RESTClient not found in coinbase.rest. Using DummyClient. ({e})")
+except Exception as e:
+    logger.warning(f"[NIJA] Error importing RESTClient: {e}. Using DummyClient.")
+
+# --- Candidate module scanning for legacy CoinbaseClient symbols ---
+def try_import_candidates(candidates, symbols=("CoinbaseClient", "RESTClient")):
     for mod_path in candidates:
         try:
             logger.info("[NIJA] Trying import: %s", mod_path)
             m = importlib.import_module(mod_path)
-            # scan module attributes for CoinbaseClient
             for name, val in vars(m).items():
-                if name == "CoinbaseClient" and inspect.isclass(val):
-                    logger.info("[NIJA] Found CoinbaseClient in %s (attribute %s)", mod_path, name)
-                    return m, name
-            # also try to search submodules if pkg
+                if name in symbols and inspect.isclass(val):
+                    logger.info("[NIJA] Found %s in %s", name, mod_path)
+                    return getattr(m, name)
             if hasattr(m, "__path__"):
                 for finder, subname, ispkg in pkgutil.iter_modules(m.__path__):
                     candidate_sub = f"{mod_path}.{subname}"
                     try:
                         ms = importlib.import_module(candidate_sub)
-                        if hasattr(ms, "CoinbaseClient") and inspect.isclass(getattr(ms, "CoinbaseClient")):
-                            logger.info("[NIJA] Found CoinbaseClient in %s (attribute CoinbaseClient)", candidate_sub)
-                            return ms, "CoinbaseClient"
+                        for name in symbols:
+                            if hasattr(ms, name) and inspect.isclass(getattr(ms, name)):
+                                logger.info("[NIJA] Found %s in %s", name, candidate_sub)
+                                return getattr(ms, name)
                     except Exception:
                         continue
-        except ModuleNotFoundError as e:
-            logger.debug("[NIJA] Module not found: %s (%s)", mod_path, e)
         except Exception as e:
-            logger.debug("[NIJA] Error importing %s: %s", mod_path, e)
-    return None, None
+            logger.debug("[NIJA] Import failed for %s: %s", mod_path, e)
+    return None
 
-# --- Candidate module paths to try (ordered) ---
+# Legacy candidates
 candidates = [
     "coinbase_advanced_py.client",
     "coinbase_advanced_py.clients",
@@ -101,54 +104,10 @@ candidates = [
     "coinbase_advanced_py._client",
 ]
 
-# Try to locate CoinbaseClient across candidates
-found_module, found_symbol = try_import_candidates(candidates)
-
-CoinbaseClient = None
-if found_module and found_symbol:
-    try:
-        CoinbaseClient = getattr(found_module, found_symbol)
-        logger.info("[NIJA] Will use CoinbaseClient from module: %s (symbol: %s)", found_module.__name__, found_symbol)
-    except Exception as e:
-        logger.warning("[NIJA] Found symbol but failed to bind: %s", e)
-
-# As a last resort, search for symbol textual occurrences under venv site-packages
-def search_for_symbol_text(root, symbol="CoinbaseClient", max_files=200):
-    matches = []
-    count = 0
-    for dirpath, dirnames, filenames in os.walk(root):
-        for fn in filenames:
-            if not fn.endswith(".py"):
-                continue
-            try:
-                count += 1
-                if count > max_files:
-                    return matches
-                p = os.path.join(dirpath, fn)
-                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                    txt = fh.read()
-                    if symbol in txt:
-                        matches.append(os.path.relpath(p, root))
-            except Exception:
-                continue
-    return matches
-
 if CoinbaseClient is None:
-    # attempt textual search (cheap snapshot) to show likely locations in logs
-    try:
-        vroot = VENV_SITE_PACKAGES
-        if os.path.exists(vroot):
-            finds = search_for_symbol_text(vroot, "CoinbaseClient", max_files=1000)
-            if finds:
-                logger.info("[NIJA] Textual search found CoinbaseClient referenced in files: %s", finds[:20])
-            else:
-                logger.info("[NIJA] Textual search did NOT find CoinbaseClient in venv site-packages")
-        else:
-            logger.info("[NIJA] VENV site-packages path does not exist: %s", vroot)
-    except Exception as e:
-        logger.debug("[NIJA] Textual search failed: %s", e)
+    CoinbaseClient = try_import_candidates(candidates)
 
-# --- Check environment readiness ---
+# --- Environment readiness ---
 def can_use_live_client():
     required_keys = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
     missing = [k for k in required_keys if not os.environ.get(k)]
@@ -157,27 +116,25 @@ def can_use_live_client():
         return False
     return True
 
-# --- Instantiate client safely (if found) ---
+# --- Instantiate client safely ---
 client = None
 if CoinbaseClient and can_use_live_client():
     try:
         client = CoinbaseClient(
             api_key=os.environ["COINBASE_API_KEY"],
-            api_secret=os.environ["COINBASE_API_SECRET"],
-            sandbox=os.environ.get("SANDBOX", "False").lower() == "true"
+            api_secret=os.environ["COINBASE_API_SECRET"]
         )
-        logger.info("[NIJA] Live CoinbaseClient instantiated successfully from located symbol")
+        logger.info("[NIJA] Live client instantiated via Coinbase RESTClient")
     except Exception as e:
-        logger.warning("[NIJA] Failed to instantiate CoinbaseClient: %s. Using DummyClient instead.", e)
+        logger.warning("[NIJA] Failed to instantiate RESTClient: %s. Falling back to DummyClient.", e)
         client = DummyClient()
 else:
     client = DummyClient()
-    logger.info("[NIJA] Using DummyClient (CoinbaseClient not located or API keys missing)")
+    logger.info("[NIJA] Using DummyClient (live client unavailable or API keys missing)")
 
 # --- Logging final status ---
-client_name = type(client).__name__ if client else "UnknownClient"
-logger.info("[NIJA] Using client: %s", client_name)
-logger.info("[NIJA] SANDBOX=%s", os.environ.get('SANDBOX', 'None'))
+logger.info("[NIJA] Using client: %s", type(client).__name__)
+logger.info("[NIJA] SANDBOX=%s", os.environ.get("SANDBOX", "None"))
 
 # --- Exports ---
 def get_accounts():
@@ -198,7 +155,7 @@ def check_live_status():
             print("✅ NIJA is live! Ready to trade.")
             return True
         else:
-            logger.warning("[NIJA] No accounts returned by CoinbaseClient")
+            logger.warning("[NIJA] No accounts returned by live client")
             print("❌ NIJA cannot access accounts")
             return False
     except Exception as e:
