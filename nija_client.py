@@ -3,7 +3,7 @@ import os
 import time
 import logging
 from decimal import Decimal
-from coinbase_advanced_py import CoinbaseClient  # <- FIXED import
+from coinbase_advanced_py import CoinbaseClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
