@@ -56,7 +56,7 @@ class DummyClient:
         logger.warning("[DummyClient] place_order called - no live trading!")
         return {"status": "dummy"}
 
-# --- Try import official RESTClient first ---
+# --- Try to import RESTClient from coinbase.rest first ---
 CoinbaseClient = None
 try:
     from coinbase.rest import RESTClient as CoinbaseClient
@@ -66,48 +66,7 @@ except ModuleNotFoundError as e:
 except Exception as e:
     logger.warning(f"[NIJA] Error importing RESTClient: {e}. Using DummyClient.")
 
-# --- Candidate module scanning for legacy CoinbaseClient symbols ---
-def try_import_candidates(candidates, symbols=("CoinbaseClient", "RESTClient")):
-    for mod_path in candidates:
-        try:
-            logger.info("[NIJA] Trying import: %s", mod_path)
-            m = importlib.import_module(mod_path)
-            for name, val in vars(m).items():
-                if name in symbols and inspect.isclass(val):
-                    logger.info("[NIJA] Found %s in %s", name, mod_path)
-                    return getattr(m, name)
-            if hasattr(m, "__path__"):
-                for finder, subname, ispkg in pkgutil.iter_modules(m.__path__):
-                    candidate_sub = f"{mod_path}.{subname}"
-                    try:
-                        ms = importlib.import_module(candidate_sub)
-                        for name in symbols:
-                            if hasattr(ms, name) and inspect.isclass(getattr(ms, name)):
-                                logger.info("[NIJA] Found %s in %s", name, candidate_sub)
-                                return getattr(ms, name)
-                    except Exception:
-                        continue
-        except Exception as e:
-            logger.debug("[NIJA] Import failed for %s: %s", mod_path, e)
-    return None
-
-# Legacy candidates
-candidates = [
-    "coinbase_advanced_py.client",
-    "coinbase_advanced_py.clients",
-    "coinbase_advanced_py.api.client",
-    "coinbase_advanced_py.api",
-    "coinbase_advanced_py",
-    "coinbase",
-    "coinbase.client",
-    "coinbase_advanced_py.client_api",
-    "coinbase_advanced_py._client",
-]
-
-if CoinbaseClient is None:
-    CoinbaseClient = try_import_candidates(candidates)
-
-# --- Environment readiness ---
+# --- Check environment readiness ---
 def can_use_live_client():
     required_keys = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
     missing = [k for k in required_keys if not os.environ.get(k)]
@@ -124,9 +83,9 @@ if CoinbaseClient and can_use_live_client():
             api_key=os.environ["COINBASE_API_KEY"],
             api_secret=os.environ["COINBASE_API_SECRET"]
         )
-        logger.info("[NIJA] Live client instantiated via Coinbase RESTClient")
+        logger.info("[NIJA] Live client instantiated via RESTClient (coinbase.rest)")
     except Exception as e:
-        logger.warning("[NIJA] Failed to instantiate RESTClient: %s. Falling back to DummyClient.", e)
+        logger.warning(f"[NIJA] Failed to instantiate RESTClient: {e}. Falling back to DummyClient.")
         client = DummyClient()
 else:
     client = DummyClient()
@@ -134,7 +93,7 @@ else:
 
 # --- Logging final status ---
 logger.info("[NIJA] Using client: %s", type(client).__name__)
-logger.info("[NIJA] SANDBOX=%s", os.environ.get("SANDBOX", "None"))
+logger.info("[NIJA] SANDBOX=%s", os.environ.get('SANDBOX', 'None'))
 
 # --- Exports ---
 def get_accounts():
@@ -155,7 +114,7 @@ def check_live_status():
             print("✅ NIJA is live! Ready to trade.")
             return True
         else:
-            logger.warning("[NIJA] No accounts returned by live client")
+            logger.warning("[NIJA] No accounts returned by CoinbaseClient")
             print("❌ NIJA cannot access accounts")
             return False
     except Exception as e:
@@ -163,5 +122,18 @@ def check_live_status():
         print(f"❌ NIJA live check failed: {e}")
         return False
 
+# --- Automatic startup check ---
+def startup_live_check():
+    print("=== NIJA STARTUP LIVE CHECK ===")
+    logger.info("[NIJA] Performing startup live check...")
+    if check_live_status():
+        logger.info("[NIJA] ✅ Nija trading is LIVE!")
+    else:
+        logger.warning("[NIJA] ❌ Nija trading is NOT live — using DummyClient")
+
+# Run immediately on import
+startup_live_check()
+
+# Optional: if script run directly
 if __name__ == "__main__":
     check_live_status()
