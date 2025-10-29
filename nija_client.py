@@ -1,73 +1,56 @@
+# nija_client.py
 import os
 import logging
+from decimal import Decimal
+import time
 
-# -------------------------------
-# Setup logging
-# -------------------------------
+# --- Setup logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# -------------------------------
-# Load live trading flag
-# -------------------------------
-LIVE_TRADING = os.environ.get("LIVE_TRADING", "0") == "1"
-DRY_RUN = os.environ.get("DRY_RUN", "1") == "1"
+# --- Load environment variables ---
+from dotenv import load_dotenv
+load_dotenv()  # loads .env automatically
 
-# -------------------------------
-# Try importing CoinbaseClient
-# -------------------------------
+LIVE_TRADING = os.getenv("LIVE_TRADING", "False").lower() in ["true", "1"]
+DRY_RUN = os.getenv("DRY_RUN", "True").lower() in ["true", "1"]
+
+# --- Load Coinbase PEM ---
+COINBASE_PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
+COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+COINBASE_PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
+
+# --- DummyClient as fallback ---
+class DummyClient:
+    def __init__(self):
+        logger.warning("[NIJA] Using DummyClient — no real trades will execute.")
+
+    def get_accounts(self):
+        return [{"currency": "USD", "balance": "1000"}]
+
+    def place_order(self, *args, **kwargs):
+        logger.info(f"[NIJA DummyClient] Simulated order: {args}, {kwargs}")
+        return {"id": "dummy_order"}
+
+# --- Try to import CoinbaseClient ---
 CoinbaseClient = None
-client_is_dummy = False
+client = None
 try:
     from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] coinbase_advanced_py imported successfully")
-except ModuleNotFoundError:
-    logger.warning("[NIJA] coinbase_advanced_py not found; using DummyClient")
-    CoinbaseClient = None
-
-# -------------------------------
-# Check for required environment keys
-# -------------------------------
-COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
-COINBASE_PASSPHRASE = os.environ.get("COINBASE_PASSPHRASE")
-COINBASE_PEM_PATH = os.environ.get(
-    "COINBASE_PEM_PATH", "/opt/render/project/secrets/coinbase.pem"
-)
-
-# -------------------------------
-# Initialize client
-# -------------------------------
-if LIVE_TRADING and CoinbaseClient and COINBASE_API_KEY and COINBASE_API_SECRET and COINBASE_PASSPHRASE:
-    try:
+    if all([COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_PASSPHRASE, os.path.exists(COINBASE_PEM_PATH)]):
         client = CoinbaseClient(
             api_key=COINBASE_API_KEY,
             api_secret=COINBASE_API_SECRET,
             passphrase=COINBASE_PASSPHRASE,
-            pem_file=COINBASE_PEM_PATH
+            pem_path=COINBASE_PEM_PATH
         )
-        logger.info("[NIJA] CoinbaseClient initialized — LIVE TRADING ENABLED ✅")
-    except Exception as e:
-        logger.error(f"[NIJA] Failed to initialize CoinbaseClient: {e}")
-        client_is_dummy = True
-else:
-    # Fallback to DummyClient
-    class DummyClient:
-        def get_accounts(self):
-            return []
-
-        def place_order(self, *args, **kwargs):
-            logger.info(f"[NIJA][DUMMY] Pretending to place order: {args}, {kwargs}")
-            return {}
-
-    client = DummyClient()
-    client_is_dummy = True
-    if LIVE_TRADING:
-        logger.warning("[NIJA] LIVE_TRADING=1 but Coinbase keys missing or invalid — running in Dummy mode ⚠️")
+        logger.info("[NIJA] CoinbaseClient initialized successfully ✅")
     else:
-        logger.info("[NIJA] Running in safe Dummy mode (LIVE_TRADING=0)")
+        logger.warning("[NIJA] Coinbase credentials or PEM missing — falling back to DummyClient")
+        client = DummyClient()
+except ModuleNotFoundError:
+    logger.warning("[NIJA] coinbase_advanced_py not found; using DummyClient")
+    client = DummyClient()
 
-# -------------------------------
-# Log final status
-# -------------------------------
-logger.info(f"[NIJA] Module loaded. DRY_RUN={DRY_RUN} LIVE_TRADING={LIVE_TRADING} client_is_dummy={client_is_dummy}")
+logger.info(f"[NIJA] Module loaded. DRY_RUN={DRY_RUN} LIVE_TRADING={LIVE_TRADING} client_is_dummy={isinstance(client, DummyClient)}")
