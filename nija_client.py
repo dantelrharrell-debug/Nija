@@ -1,40 +1,21 @@
 # nija_client.py
 import os
-import sys
 import logging
-from flask import Flask, jsonify
 
-# --- Setup logging ---
-logging.basicConfig(level=logging.INFO)
+# --- Logging Setup ---
+log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger("nija_client")
-
-# --- Remove potential shadowing folders in project root ---
-CWD = os.getcwd()
-shadow_folders = ["coinbase_advanced_py", "coinbase-advanced-py"]
-for folder in shadow_folders:
-    path = os.path.join(CWD, folder)
-    if os.path.exists(path):
-        try:
-            import shutil
-            shutil.rmtree(path)
-            logger.info(f"[NIJA-SHIM] Removed shadowing folder: {path}")
-        except Exception as e:
-            logger.warning(f"[NIJA-SHIM] Failed to remove shadowing folder: {path} ({e})")
-
-# Remove current working directory from sys.path to prevent namespace issues
-if CWD in sys.path:
-    sys.path.remove(CWD)
-    logger.info("[NIJA-SHIM] Removed CWD from sys.path to prevent shadowing")
 
 # --- Try importing CoinbaseClient ---
 CoinbaseClient = None
 try:
     from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA-SHIM] Successfully imported CoinbaseClient")
+    logger.info("[NIJA] Successfully imported CoinbaseClient")
 except ModuleNotFoundError:
-    logger.warning("[NIJA-SHIM] CoinbaseClient not available. Using DummyClient instead.")
+    logger.warning("[NIJA] CoinbaseClient not installed. Using DummyClient instead.")
 except Exception as e:
-    logger.warning(f"[NIJA-SHIM] Error importing CoinbaseClient: {e}")
+    logger.warning(f"[NIJA] Error importing CoinbaseClient: {e}")
 
 # --- Dummy client as fallback ---
 class DummyClient:
@@ -46,33 +27,41 @@ class DummyClient:
         logger.warning("[DummyClient] place_order called - no live trading!")
         return {"status": "dummy"}
 
+# --- Function to check if live trading is possible ---
+def can_use_live_client():
+    required_keys = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
+    missing_keys = [k for k in required_keys if not os.environ.get(k)]
+    if missing_keys:
+        logger.warning(f"[NIJA] Missing Coinbase API keys: {missing_keys}")
+        return False
+    return True
+
 # --- Instantiate the appropriate client ---
-client = CoinbaseClient() if CoinbaseClient else DummyClient()
-logger.info(f"[NIJA-SHIM] Using client: {'CoinbaseClient' if CoinbaseClient else 'DummyClient'}")
-logger.info(f"[NIJA-SHIM] SANDBOX={os.environ.get('SANDBOX', 'None')}")
-
-# --- Flask health check endpoint ---
-app = Flask(__name__)
-running = True  # Toggle based on whether trading loop is active
-
-@app.route("/health", methods=["GET"])
-def health_check():
-    coinbase_status = "unavailable"
+if CoinbaseClient and can_use_live_client():
     try:
-        if isinstance(client, CoinbaseClient):
-            accounts = client.get_accounts()
-            coinbase_status = "ok" if accounts is not None else "unreachable"
-        else:
-            coinbase_status = "dummy_client"
-    except Exception:
-        coinbase_status = "error"
+        client = CoinbaseClient(
+            api_key=os.environ["COINBASE_API_KEY"],
+            api_secret=os.environ["COINBASE_API_SECRET"],
+            sandbox=os.environ.get("SANDBOX", "False").lower() == "true"
+        )
+        logger.info("[NIJA] Live CoinbaseClient instantiated successfully")
+    except Exception as e:
+        logger.warning(f"[NIJA] Failed to instantiate CoinbaseClient: {e}. Using DummyClient instead.")
+        client = DummyClient()
+else:
+    client = DummyClient()
+    if CoinbaseClient:
+        logger.info("[NIJA] CoinbaseClient exists but API keys missing. Using DummyClient.")
+    else:
+        logger.info("[NIJA] CoinbaseClient unavailable. Using DummyClient.")
 
-    return jsonify({
-        "status": "alive",
-        "trading": "live" if running else "stopped",
-        "coinbase": coinbase_status
-    })
+logger.info(f"[NIJA] Using client: {'CoinbaseClient' if isinstance(client, CoinbaseClient) else 'DummyClient'}")
+logger.info(f"[NIJA] SANDBOX={os.environ.get('SANDBOX', 'None')}")
 
-# --- Optional: run Flask if script executed directly ---
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+# --- Optional health check method ---
+def health_check():
+    try:
+        accounts = client.get_accounts()
+        return {"status": "ok", "accounts": len(accounts)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
