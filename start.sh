@@ -1,17 +1,17 @@
 #!/bin/bash
-# start.sh
+set -euo pipefail
 
-# --- Ensure virtual environment ---
-source .venv/bin/activate
-
-# --- Optional: write PEM key from Render secret ---
-if [ -n "$COINBASE_PEM" ]; then
-  echo "$COINBASE_PEM" > ./coinbase.pem
-  export COINBASE_PEM_PATH="./coinbase.pem"
+# Write Coinbase PEM from secret content (if provided)
+mkdir -p /opt/render/project/secrets
+if [ -n "${COINBASE_PEM_CONTENT-}" ]; then
+  echo "$COINBASE_PEM_CONTENT" > /opt/render/project/secrets/coinbase.pem
+  chmod 600 /opt/render/project/secrets/coinbase.pem
+  echo "Wrote PEM to /opt/render/project/secrets/coinbase.pem"
 fi
 
-# --- Start Gunicorn for Flask (if your bot has Flask endpoints) ---
-gunicorn -b 0.0.0.0:10000 wsgi:app &
+# If you prefer to provide a file path instead of content:
+# set COINBASE_API_SECRET_PATH=/opt/render/project/secrets/coinbase.pem in Render env.
 
-# --- Start trader loop ---
-python3 nija_live_snapshot.py
+export PORT=${PORT:-10000}
+echo "Starting gunicorn on port $PORT"
+exec gunicorn -b 0.0.0.0:$PORT nija_live_snapshot:app
