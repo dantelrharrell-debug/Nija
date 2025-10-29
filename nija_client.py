@@ -1,36 +1,20 @@
 # nija_client.py
 
 import os
-from coinbase_advanced_py.client import CoinbaseClient
-
-# Use secret PEM path if available
-COINBASE_PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
-API_KEY = os.environ.get("COINBASE_API_KEY")
-PASSPHRASE = os.environ.get("COINBASE_PASSPHRASE")  # if needed
-
-if not os.path.exists(COINBASE_PEM_PATH):
-    raise FileNotFoundError(f"Coinbase PEM not found at {COINBASE_PEM_PATH}")
-
-client = CoinbaseClient(
-    api_key=API_KEY,
-    pem_file_path=COINBASE_PEM_PATH,
-    passphrase=PASSPHRASE
-)
-
-import os
 import logging
-from coinbase.rest import RESTClient  # Use RESTClient for live trading
+from coinbase.rest import RESTClient
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Instantiate live client ---
+# --- Load environment secrets ---
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET_PATH = os.getenv("COINBASE_API_SECRET")
 COINBASE_PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
 SANDBOX = os.getenv("SANDBOX")  # None for live
 
+# --- Instantiate live client ---
 try:
     client = RESTClient(
         key=COINBASE_API_KEY,
@@ -44,7 +28,7 @@ except Exception as e:
     from nija_client_dummy import DummyClient  # fallback
     client = DummyClient()
 
-# --- Exports ---
+# --- Helper functions ---
 def get_accounts():
     return client.get_accounts()
 
@@ -72,12 +56,7 @@ def check_live_status():
         return False
 
 # --- Automatic startup check ---
-def startup_live_check():
+if __name__ == "__main__":
     print("=== NIJA STARTUP LIVE CHECK ===")
     logger.info("[NIJA] Performing startup live check...")
-    check_live_status()
-
-startup_live_check()
-
-if __name__ == "__main__":
     check_live_status()
