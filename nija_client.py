@@ -1,3 +1,22 @@
+# nija_client.py
+
+import os
+from coinbase_advanced_py.client import CoinbaseClient
+
+# Use secret PEM path if available
+COINBASE_PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
+API_KEY = os.environ.get("COINBASE_API_KEY")
+PASSPHRASE = os.environ.get("COINBASE_PASSPHRASE")  # if needed
+
+if not os.path.exists(COINBASE_PEM_PATH):
+    raise FileNotFoundError(f"Coinbase PEM not found at {COINBASE_PEM_PATH}")
+
+client = CoinbaseClient(
+    api_key=API_KEY,
+    pem_file_path=COINBASE_PEM_PATH,
+    passphrase=PASSPHRASE
+)
+
 import os
 import logging
 from coinbase.rest import RESTClient  # Use RESTClient for live trading
