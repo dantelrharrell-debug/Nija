@@ -1,11 +1,3 @@
-try:
-    from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] Successfully imported CoinbaseClient")
-except ModuleNotFoundError:
-    CoinbaseClient = None
-    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient")
-
-# nija_client.py
 import os
 import logging
 
@@ -27,18 +19,14 @@ class DummyClient:
 # --- Attempt CoinbaseClient import ---
 CoinbaseClient = None
 try:
-    import sys
-    # Remove local shadowing
-    if "coinbase_advanced_py.client" not in sys.modules:
-        from coinbase_advanced_py.client import CoinbaseClient
-        logger.info("[NIJA] Successfully imported CoinbaseClient")
+    from coinbase_advanced_py.client import CoinbaseClient
+    logger.info("[NIJA] Successfully imported CoinbaseClient")
 except ModuleNotFoundError as e:
     logger.warning(f"[NIJA] CoinbaseClient not found. Using DummyClient. ({e})")
 except Exception as e:
     logger.warning(f"[NIJA] CoinbaseClient import error. Using DummyClient. ({e})")
-    CoinbaseClient = None
 
-# --- Check if live trading can be used ---
+# --- Check API keys ---
 def can_use_live_client():
     required_keys = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
     missing = [k for k in required_keys if not os.environ.get(k)]
@@ -48,7 +36,6 @@ def can_use_live_client():
     return True
 
 # --- Instantiate client safely ---
-client = None
 if CoinbaseClient and can_use_live_client():
     try:
         client = CoinbaseClient(
@@ -64,19 +51,14 @@ else:
     client = DummyClient()
     logger.info("[NIJA] Using DummyClient (live CoinbaseClient unavailable or API keys missing)")
 
-# --- Safe client type logging ---
-client_name = type(client).__name__ if client else "UnknownClient"
-logger.info(f"[NIJA] Using client: {client_name}")
-logger.info(f"[NIJA] SANDBOX={os.environ.get('SANDBOX', 'None')}")
-
-# --- Helper functions for live trading ---
+# --- Helper functions ---
 def get_accounts():
     return client.get_accounts()
 
 def place_order(*args, **kwargs):
     return client.place_order(*args, **kwargs)
 
-# --- Diagnostic for live readiness ---
+# --- Live diagnostic ---
 def check_live_status():
     if isinstance(client, DummyClient):
         logger.warning("[NIJA] Trading not live (DummyClient active)")
@@ -97,6 +79,6 @@ def check_live_status():
         print(f"❌ NIJA live check failed: {e}")
         return False
 
-# --- Run diagnostic on import ---
+# --- Run diagnostic if executed directly ---
 if __name__ == "__main__":
     check_live_status()
