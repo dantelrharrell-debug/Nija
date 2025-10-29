@@ -1,17 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
-# Write Coinbase PEM from secret content (if provided)
+# Ensure secrets directory exists and write PEM if provided via env
 mkdir -p /opt/render/project/secrets
-if [ -n "${COINBASE_PEM_CONTENT-}" ]; then
-  echo "$COINBASE_PEM_CONTENT" > /opt/render/project/secrets/coinbase.pem
+
+if [ -n "${COINBASE_PEM_CONTENT:-}" ]; then
+  echo "Wrote PEM from env to /opt/render/project/secrets/coinbase.pem"
+  printf "%s\n" "$COINBASE_PEM_CONTENT" > /opt/render/project/secrets/coinbase.pem
   chmod 600 /opt/render/project/secrets/coinbase.pem
-  echo "Wrote PEM to /opt/render/project/secrets/coinbase.pem"
+else
+  echo "COINBASE_PEM_CONTENT env var not set — continuing (may run in Dummy mode)"
 fi
 
-# If you prefer to provide a file path instead of content:
-# set COINBASE_API_SECRET_PATH=/opt/render/project/secrets/coinbase.pem in Render env.
-
+# Ensure PORT env is present for Render
 export PORT=${PORT:-10000}
 echo "Starting gunicorn on port $PORT"
-exec gunicorn -b 0.0.0.0:$PORT nija_live_snapshot:app
+
+# Use wsgi module if present (preferred), otherwise fallback to nija_live_snapshot:app
+if [ -f "./wsgi.py" ]; then
+  exec gunicorn -b 0.0.0.0:"$PORT" wsgi:app
+else
+  exec gunicorn -b 0.0.0.0:"$PORT" nija_live_snapshot:app
+fi
