@@ -1,6 +1,6 @@
 # nija_client.py
 """
-Robust Coinbase client initializer for NIJA (final ready-to-paste).
+Robust Coinbase client initializer for NIJA (ready-to-paste).
 - Multi-path import attempts + constructor signature trials.
 - Dynamic discovery: scans the installed coinbase_advanced_py package and submodules
   looking for any class with 'Client' in the name and tries to instantiate it.
@@ -67,18 +67,17 @@ class DummyClient:
 def safe_ctor_try(name: str, ctor, kwargs: dict):
     try:
         inst = ctor(**kwargs)
-        logger.info("[NIJA] Successfully created %s using kwargs %s", name, {k: ("<redacted>" if "key" in k or "secret" in k or "pem" in k or "pass" in k else v) for k,v in kwargs.items()})
+        logger.info("[NIJA] Successfully created %s using kwargs %s",
+                    name,
+                    {k: ("<redacted>" if "key" in k or "secret" in k or "pem" in k or "pass" in k else v)
+                     for k, v in kwargs.items()})
         return inst
     except TypeError as te:
-        # signature mismatch
         logger.debug("[NIJA] TypeError when constructing %s: %s", name, te)
         raise
-    except Exception as e:
+    except Exception:
         logger.debug("[NIJA] Exception when constructing %s: %s", name, traceback.format_exc())
         raise
-
-def redacted(kwargs):
-    return {k: ("<redacted>" if "key" in k or "secret" in k or "pem" in k or "pass" in k else v) for k,v in kwargs.items()}
 
 # --- Try a list of common import patterns and kwarg patterns ---
 client = None
@@ -91,7 +90,6 @@ try:
         if hasattr(mod, "CoinbaseClient"):
             CoinbaseClient = getattr(mod, "CoinbaseClient")
             attempts.append("import coinbase_advanced_py.client.CoinbaseClient")
-            # try common param combos
             candidates = []
             if COINBASE_API_KEY and os.path.exists(COINBASE_PEM_PATH):
                 candidates.append({"api_key": COINBASE_API_KEY, "pem_file_path": COINBASE_PEM_PATH})
@@ -119,7 +117,8 @@ if client is None:
             attempts.append("import coinbase_advanced_py.CoinbaseClient")
             try:
                 if COINBASE_API_KEY and os.path.exists(COINBASE_PEM_PATH):
-                    client = safe_ctor_try("coinbase_advanced_py.CoinbaseClient", CoinbaseClient, {"api_key": COINBASE_API_KEY, "pem_file_path": COINBASE_PEM_PATH})
+                    client = safe_ctor_try("coinbase_advanced_py.CoinbaseClient", CoinbaseClient,
+                                           {"api_key": COINBASE_API_KEY, "pem_file_path": COINBASE_PEM_PATH})
             except Exception:
                 pass
     except ModuleNotFoundError:
@@ -160,16 +159,13 @@ def dynamic_discover_and_try(pkg_name="coinbase_advanced_py"):
         return
 
     found_attrs = []
-    # list top-level attrs
     for attr_name in dir(pkg):
         found_attrs.append(attr_name)
 
     logger.info("[NIJA] dynamic discovery: top-level attrs in %s -> %s", pkg_name, found_attrs[:40])
 
-    # iterate submodules if it's a package
     if hasattr(pkg, "__path__"):
         for finder, name, ispkg in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
-            # attempt to import submodule and record its callable attrs
             try:
                 sub = importlib.import_module(name)
                 sub_attrs = [a for a in dir(sub) if "Client" in a or "client" in a or a.lower().endswith("client")]
@@ -178,9 +174,7 @@ def dynamic_discover_and_try(pkg_name="coinbase_advanced_py"):
                 for a in sub_attrs:
                     try:
                         ctor = getattr(sub, a)
-                        # only try callables / classes
                         if callable(ctor):
-                            # build candidate kwargs heuristically
                             candidates = []
                             if COINBASE_API_KEY and os.path.exists(COINBASE_PEM_PATH):
                                 candidates.append({"api_key": COINBASE_API_KEY, "pem_file_path": COINBASE_PEM_PATH})
@@ -200,7 +194,6 @@ def dynamic_discover_and_try(pkg_name="coinbase_advanced_py"):
             except Exception:
                 logger.debug("[NIJA] dynamic import failure for %s: %s", name, traceback.format_exc())
     else:
-        # not a package, try top-level client-like classes
         for a in found_attrs:
             if "Client" in a or a.lower().endswith("client"):
                 try:
