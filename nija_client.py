@@ -1,3 +1,25 @@
+import os, shutil, logging
+
+# --- Setup logging ---
+logger = logging.getLogger("nija_client")
+
+# --- Clean up duplicate Coinbase folders ---
+for name in ("coinbase_advanced_py", "coinbase-advanced-py"):
+    folder = os.path.join(os.getcwd(), name)
+    if os.path.isdir(folder):
+        backup = os.path.join(os.getcwd(), "local_shadow_backups", name)
+        os.makedirs(os.path.dirname(backup), exist_ok=True)
+        shutil.move(folder, backup)
+        logger.warning(f"[NIJA] Moved local shadow folder {folder} -> {backup}")
+
+# --- Now safe to import CoinbaseClient ---
+try:
+    from coinbase_advanced_py.client import CoinbaseClient
+    logger.info("[NIJA] Successfully imported CoinbaseClient (live mode ready)")
+except ModuleNotFoundError:
+    logger.warning("[NIJA] CoinbaseClient not found, using DummyClient fallback")
+    CoinbaseClient = None
+
 import os
 import logging
 from decimal import Decimal
