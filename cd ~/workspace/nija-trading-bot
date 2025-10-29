@@ -1,9 +1,7 @@
-nija-trading-bot/
-├─ nija_bot_web.py
-├─ nija_bot.py
-├─ requirements.txt
-├─ .env
-├─ vendor/
-│   └─ coinbase_advanced_py/
-│       ├─ __init__.py
-│       └─ client.py
+/nija-trading-bot
+│
+├── nija_client.py          <-- the client code you shared
+├── nija_live_snapshot.py   <-- your main bot script
+├── requirements.txt        <-- dependencies
+├── .env                    <-- API keys & SANDBOX
+└── other necessary scripts
