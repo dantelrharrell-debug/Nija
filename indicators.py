@@ -1,50 +1,59 @@
-# indicators.py
-import numpy as np
 import pandas as pd
 
-def compute_vwap(df):
+def calculate_vwap(df):
     """
-    df must have columns: ['close','high','low','volume'] or at least ['close','volume'].
-    Returns series with VWAP for each row (cumulative typical price * volume / cumulative volume).
+    Volume Weighted Average Price
+    df: pandas DataFrame with columns ['close', 'volume', 'high', 'low', 'open']
     """
-    # typical price: (high + low + close)/3 if high/low present, else close
-    if {'high','low'}.issubset(df.columns):
-        tp = (df['high'] + df['low'] + df['close']) / 3.0
-    else:
-        tp = df['close']
-    pv = tp * df['volume']
-    cum_pv = pv.cumsum()
-    cum_vol = df['volume'].cumsum().replace(0, np.nan)
-    vwap = cum_pv / cum_vol
-    return vwap.fillna(method='ffill').fillna(df['close'])
+    q = df['volume']
+    p = (df['high'] + df['low'] + df['close']) / 3
+    vwap = (p * q).cumsum() / q.cumsum()
+    return vwap.ffill().fillna(df['close'])  # forward-fill + fallback
 
-def compute_rsi(series, period=14):
+def calculate_rsi(df, period=14):
     """
-    Classic RSI (Wilder's smoothing) implementation.
-    series must be a pandas Series of close prices.
-    Returns pandas Series of RSI values (0-100).
+    Relative Strength Index
     """
-    delta = series.diff()
-    up = delta.clip(lower=0.0)
-    down = -1 * delta.clip(upper=0.0)
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
 
-    # first SMA
-    roll_up = up.rolling(window=period, min_periods=period).mean()
-    roll_down = down.rolling(window=period, min_periods=period).mean()
+    avg_gain = gain.rolling(window=period, min_periods=period).mean()
+    avg_loss = loss.rolling(window=period, min_periods=period).mean()
 
-    # use Wilder smoothing after initial avg
-    # initialize avg_gain & avg_loss as first SMA
-    avg_gain = roll_up.copy()
-    avg_loss = roll_down.copy()
-    # apply smoothing
-    for i in range(period, len(series)):
-        if i == period:
-            # already set by rolling mean
-            continue
-        avg_gain.iat[i] = (avg_gain.iat[i-1] * (period - 1) + up.iat[i]) / period
-        avg_loss.iat[i] = (avg_loss.iat[i-1] * (period - 1) + down.iat[i]) / period
-
-    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
-    rsi = rsi.fillna(50)  # neutral where undefined
-    return rsi
+    return rsi.ffill().fillna(50)  # fallback to neutral 50
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    """
+    Moving Average Convergence Divergence
+    """
+    exp1 = df['close'].ewm(span=fast, adjust=False).mean()
+    exp2 = df['close'].ewm(span=slow, adjust=False).mean()
+    macd_line = exp1 - exp2
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return macd_line.ffill(), signal_line.ffill(), histogram.ffill()
+
+def calculate_indicators(df):
+    """
+    Returns dictionary of calculated signals for your trading strategy
+    """
+    vwap = calculate_vwap(df)
+    rsi = calculate_rsi(df)
+    macd_line, signal_line, hist = calculate_macd(df)
+
+    # Example simple signals
+    buy_signal = (df['close'].iloc[-1] > vwap.iloc[-1]) and (rsi.iloc[-1] < 70) and (macd_line.iloc[-1] > signal_line.iloc[-1])
+    sell_signal = (df['close'].iloc[-1] < vwap.iloc[-1]) and (rsi.iloc[-1] > 30) and (macd_line.iloc[-1] < signal_line.iloc[-1])
+
+    return {
+        "vwap": vwap,
+        "rsi": rsi,
+        "macd_line": macd_line,
+        "signal_line": signal_line,
+        "histogram": hist,
+        "buy_signal": buy_signal,
+        "sell_signal": sell_signal
+    }
