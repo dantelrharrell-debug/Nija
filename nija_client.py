@@ -1,136 +1,78 @@
-import sys
+# nija_client.py
 import os
-import importlib
+import sys
 import logging
-from decimal import Decimal
-import shutil
+from flask import Flask, jsonify
 
-# ----------------- Logger Setup -----------------
-logger = logging.getLogger("nija.nija_client")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(h)
+# --- Setup logging ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_client")
 
-# ----------------- Remove Shadowing Folders -----------------
-shadow_folders = [
-    os.path.join(os.getcwd(), "coinbase_advanced_py"),
-    os.path.join(os.getcwd(), "coinbase-advanced-py"),
-]
-
+# --- Remove potential shadowing folders in project root ---
+CWD = os.getcwd()
+shadow_folders = ["coinbase_advanced_py", "coinbase-advanced-py"]
 for folder in shadow_folders:
-    if os.path.exists(folder) and os.path.isdir(folder):
-        logger.info(f"[NIJA-SHIM] Removing shadowing folder: {folder}")
-        shutil.rmtree(folder)
+    path = os.path.join(CWD, folder)
+    if os.path.exists(path):
+        try:
+            import shutil
+            shutil.rmtree(path)
+            logger.info(f"[NIJA-SHIM] Removed shadowing folder: {path}")
+        except Exception as e:
+            logger.warning(f"[NIJA-SHIM] Failed to remove shadowing folder: {path} ({e})")
 
-if os.getcwd() in sys.path:
-    sys.path.remove(os.getcwd())
-    logger.info(f"[NIJA-SHIM] Removed CWD from sys.path to prevent shadowing")
+# Remove current working directory from sys.path to prevent namespace issues
+if CWD in sys.path:
+    sys.path.remove(CWD)
+    logger.info("[NIJA-SHIM] Removed CWD from sys.path to prevent shadowing")
 
-# ----------------- Environment -----------------
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
-SANDBOX = os.getenv("SANDBOX", "True").lower() == "true"
-
-def masked(v):
-    if v is None:
-        return None
-    s = str(v)
-    if len(s) <= 6:
-        return "*****"
-    return s[:3] + "..." + s[-3:]
-
-logger.info(
-    f"Environment (masked): COINBASE_API_KEY={masked(API_KEY)} "
-    f"COINBASE_API_SECRET={masked(API_SECRET)} "
-    f"COINBASE_PASSPHRASE={masked(API_PASSPHRASE)} "
-    f"SANDBOX={SANDBOX}"
-)
-
-# ----------------- Prioritize site-packages -----------------
-venv_path = os.path.join(
-    sys.prefix, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"
-)
-if os.path.exists(venv_path) and venv_path not in sys.path:
-    sys.path.insert(0, venv_path)
-    logger.info(f"[NIJA-SHIM] Added venv site-packages to sys.path: {venv_path}")
-
-# ----------------- Import Coinbase Module -----------------
-coinbase_module = None
+# --- Try importing CoinbaseClient ---
+CoinbaseClient = None
 try:
-    coinbase_module = importlib.import_module("coinbase_advanced_py")
-    logger.info(f"[NIJA-SHIM] Imported coinbase_advanced_py -> {getattr(coinbase_module, '__file__', getattr(coinbase_module, '__path__', None))}")
+    from coinbase_advanced_py.client import CoinbaseClient
+    logger.info("[NIJA-SHIM] Successfully imported CoinbaseClient")
+except ModuleNotFoundError:
+    logger.warning("[NIJA-SHIM] CoinbaseClient not available. Using DummyClient instead.")
 except Exception as e:
-    logger.warning(f"[NIJA-SHIM] Failed to import coinbase_advanced_py: {e}")
+    logger.warning(f"[NIJA-SHIM] Error importing CoinbaseClient: {e}")
 
-# ----------------- Locate CoinbaseClient -----------------
-CoinbaseClientClass = None
-if coinbase_module:
-    try:
-        CoinbaseClientClass = getattr(coinbase_module, "CoinbaseClient")
-    except AttributeError:
-        CoinbaseClientClass = None
-
-# ----------------- DummyClient Fallback -----------------
-if CoinbaseClientClass is None:
-    class DummyClient:
-        def __init__(self):
-            logger.warning("Using DummyClient: no live Coinbase integration available.")
-
-        def get_accounts(self):
-            return []
-
-        def place_order(self, *args, **kwargs):
-            logger.warning("DummyClient.place_order called — no-op. args=%s kwargs=%s", args, kwargs)
-            return None
-
-    CoinbaseClientClass = DummyClient
-    REAL_CLIENT_ACTIVE = False
-else:
-    REAL_CLIENT_ACTIVE = True
-
-# ----------------- Instantiate Client -----------------
-if CoinbaseClientClass is DummyClient:
-    client = CoinbaseClientClass()
-else:
-    try:
-        client = CoinbaseClientClass(
-            api_key=API_KEY,
-            api_secret=API_SECRET,
-            passphrase=API_PASSPHRASE,
-            sandbox=SANDBOX
-        )
-    except Exception as e:
-        logger.exception(f"Failed to instantiate CoinbaseClient: {e}")
-        client = DummyClient()
-        REAL_CLIENT_ACTIVE = False
-
-# ----------------- Helper Functions -----------------
-def get_accounts():
-    try:
-        accounts = client.get_accounts()
-        return accounts or []
-    except Exception as e:
-        logger.exception("Error in get_accounts(): %s", e)
+# --- Dummy client as fallback ---
+class DummyClient:
+    def get_accounts(self):
+        logger.warning("[DummyClient] get_accounts called - no live trading!")
         return []
 
-def place_order(symbol, side, size, order_type="market"):
-    try:
-        try:
-            return client.place_order(product_id=symbol, side=side, order_type=order_type, size=str(size))
-        except TypeError:
-            try:
-                return client.place_order(product_id=symbol, side=side, size=str(size))
-            except TypeError:
-                return client.place_order(symbol, side, size, order_type)
-    except Exception as e:
-        logger.exception("Error placing order: %s", e)
-        return None
+    def place_order(self, *args, **kwargs):
+        logger.warning("[DummyClient] place_order called - no live trading!")
+        return {"status": "dummy"}
 
-# ----------------- Final Status -----------------
-if REAL_CLIENT_ACTIVE:
-    logger.info("nija_client: Real Coinbase client ready. Live trading possible (if SANDBOX=False).")
-else:
-    logger.warning("nija_client: Running with DummyClient — no live trading will occur until coinbase_advanced_py import is fixed.")
+# --- Instantiate the appropriate client ---
+client = CoinbaseClient() if CoinbaseClient else DummyClient()
+logger.info(f"[NIJA-SHIM] Using client: {'CoinbaseClient' if CoinbaseClient else 'DummyClient'}")
+logger.info(f"[NIJA-SHIM] SANDBOX={os.environ.get('SANDBOX', 'None')}")
+
+# --- Flask health check endpoint ---
+app = Flask(__name__)
+running = True  # Toggle based on whether trading loop is active
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    coinbase_status = "unavailable"
+    try:
+        if isinstance(client, CoinbaseClient):
+            accounts = client.get_accounts()
+            coinbase_status = "ok" if accounts is not None else "unreachable"
+        else:
+            coinbase_status = "dummy_client"
+    except Exception:
+        coinbase_status = "error"
+
+    return jsonify({
+        "status": "alive",
+        "trading": "live" if running else "stopped",
+        "coinbase": coinbase_status
+    })
+
+# --- Optional: run Flask if script executed directly ---
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
