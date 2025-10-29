@@ -1,30 +1,23 @@
 # trading_logic.py
 import logging
 from decimal import Decimal
-from nija_client import client  # auto-attaches live client (or DummyClient)
+from nija_client import client  # global client from nija_client.py
 
 logger = logging.getLogger("nija.app")
 
 def place_order(symbol, trade_type, side, amount):
     """
     Places a live order if the Coinbase client is attached; otherwise returns a simulated order.
-    Parameters:
-      - symbol: str, e.g. "BTC-USD" or "BTC/USD" depending on your client
-      - trade_type: str, e.g. "Spot" or "Futures" (passed through)
-      - side: "buy" or "sell"
-      - amount: numeric or string (converted to Decimal when possible)
-    Returns:
-      dict: response from live client or simulated order dict
     """
     try:
-        # normalize amount to Decimal (safe)
+        # normalize amount
         try:
             amount_dec = Decimal(str(amount))
         except Exception:
             logger.warning("[NIJA] Couldn't convert amount to Decimal, using raw value: %s", amount)
             amount_dec = amount
 
-        # If a real client is attached and has place_order, attempt live order
+        # Try live order if client supports it
         if client and hasattr(client, "place_order"):
             try:
                 response = client.place_order(
@@ -36,10 +29,9 @@ def place_order(symbol, trade_type, side, amount):
                 logger.info("[NIJA] Placed live order -> %s %s %s", side, amount_dec, symbol)
                 return response
             except Exception as live_err:
-                # Live order failed — log and fall back to simulated response
                 logger.error("[NIJA] Live order failed for %s: %s -- falling back to simulation", symbol, live_err)
 
-        # Fallback simulation (either no client or live order failed)
+        # Fallback simulation
         simulated = {
             "symbol": symbol,
             "type": trade_type,
