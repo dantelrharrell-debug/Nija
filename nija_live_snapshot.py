@@ -1,23 +1,52 @@
-# nija_live_snapshot.py
-from flask import Flask, jsonify
-from nija_client import check_live_status
+#!/usr/bin/env python3
+import os
+import sys
 import logging
+from nija_client import get_client, check_live_status
 
-app = Flask(__name__)
-app.logger.setLevel(logging.INFO)
+# --- Logging setup ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_live_snapshot")
 
-@app.route("/health")
-def health():
-    live = False
-    try:
-        live = check_live_status()
-    except Exception as e:
-        app.logger.exception("Health check raised: %s", e)
-    status = "alive"
-    trading = "live" if live else "not live"
-    return jsonify({"status": status, "trading": trading}), 200
+# --- Environment Variables ---
+COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
+COINBASE_PEM_PATH = os.environ.get("COINBASE_PEM_PATH")
+SANDBOX = os.environ.get("SANDBOX", "0") == "1"
 
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+if not COINBASE_API_KEY:
+    logger.error("COINBASE_API_KEY not set. Exiting.")
+    sys.exit(1)
+
+if not COINBASE_PEM_PATH or not os.path.exists(COINBASE_PEM_PATH):
+    logger.error(f"COINBASE_PEM_PATH is missing or invalid: {COINBASE_PEM_PATH}")
+    sys.exit(1)
+
+# --- Initialize Coinbase Client ---
+try:
+    client = get_client(
+        api_key=COINBASE_API_KEY,
+        pem_path=COINBASE_PEM_PATH,
+        sandbox=SANDBOX
+    )
+    logger.info("✅ CoinbaseClient initialized successfully")
+except Exception as e:
+    logger.exception("❌ Failed to initialize CoinbaseClient, exiting.")
+    sys.exit(1)
+
+# --- Startup Live Check ---
+logger.info("=== NIJA STARTUP LIVE CHECK ===")
+live_status = check_live_status(client)
+if live_status:
+    logger.info("✅ NIJA is live and ready for trading")
+else:
+    logger.warning("⚠️ NIJA is NOT live — check API keys and connectivity")
+
+# --- Example Snapshot: Fetch Accounts ---
+try:
+    accounts = client.get_accounts()
+    logger.info(f"Retrieved {len(accounts)} accounts from Coinbase")
+except Exception as e:
+    logger.exception("Failed to fetch accounts from Coinbase")
+
+# --- Placeholder for trading loop ---
+logger.info("NIJA Live Snapshot setup complete. Trading loop goes here.")
