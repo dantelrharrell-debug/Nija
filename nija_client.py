@@ -1,52 +1,40 @@
-# nija_client.py
-import os
-import time
-import logging
-from decimal import Decimal
-
-# Correct import for v1.8.2
-from coinbase_advanced_py import CoinbaseClient
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# import_fallbacks.py (put at top of nija_client.py)
+import importlib, logging, inspect, sys
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
-SANDBOX = os.getenv("SANDBOX", "True").lower() == "true"
-
-# Initialize Coinbase client
-client = CoinbaseClient(
-    api_key=API_KEY,
-    api_secret=API_SECRET,
-    passphrase=API_PASSPHRASE,
-    sandbox=SANDBOX
-)
-
-logger.info(f"CoinbaseClient initialized. Sandbox={SANDBOX}")
-
-# ===== Helper functions =====
-def get_accounts():
+def debug_coinbase_import():
     try:
-        accounts = client.get_accounts()
-        logger.info(f"Fetched {len(accounts)} accounts")
-        return accounts
+        m = importlib.import_module("coinbase_advanced_py")
+        logger.info(f"Imported coinbase_advanced_py module: {m}")
+        logger.info(f"module __file__: {getattr(m, '__file__', None)}")
+        logger.info(f"module __path__: {getattr(m, '__path__', None)}")
+        logger.info(f"available attrs (sample): {sorted([a for a in dir(m) if a.lower().startswith('coin') or 'client' in a.lower() or 'coinbase' in a.lower()])[:40]}")
+        if hasattr(m, "CoinbaseClient"):
+            logger.info("CoinbaseClient found on coinbase_advanced_py")
+            return m.CoinbaseClient
     except Exception as e:
-        logger.error(f"Error fetching accounts: {e}")
-        return []
+        logger.exception("Direct import coinbase_advanced_py failed: %s", e)
 
-def place_order(symbol, side, size, order_type="market"):
-    try:
-        order = client.place_order(
-            product_id=symbol,
-            side=side,
-            order_type=order_type,
-            size=str(size)
-        )
-        logger.info(f"Order placed: {order}")
-        return order
-    except Exception as e:
-        logger.error(f"Error placing order: {e}")
-        return None
+    # try import forms used in different code bases
+    for try_name in [
+        "coinbase_advanced_py.client",
+        "coinbase_advanced_py.client.client",
+        "coinbase_advanced_py.client_client",
+    ]:
+        try:
+            m = importlib.import_module(try_name)
+            logger.info(f"Imported {try_name}: {m}; file={getattr(m, '__file__', None)}")
+            # try common attribute names
+            for attr in ("CoinbaseClient", "CoinbaseAdvancedClient", "CoinbaseClientV1"):
+                if hasattr(m, attr):
+                    logger.info(f"Found {attr} in {try_name}")
+                    return getattr(m, attr)
+        except Exception:
+            pass
+
+    logger.error("No usable Coinbase client class found in coinbase_advanced_py package. Check package version or shadowing files.")
+    return None
+
+CoinbaseClient = debug_coinbase_import()
+if CoinbaseClient is None:
+    raise ImportError("Cannot locate CoinbaseClient in coinbase_advanced_py; see logs for details.")
