@@ -1,3 +1,33 @@
+import sys, os, importlib, logging
+
+logger = logging.getLogger(__name__)
+
+# --- BEGIN: site-packages import shim ---
+def prioritize_site_packages(module_name="coinbase_advanced_py"):
+    """Ensure the real site-packages version loads, not a local folder."""
+    for p in sys.path:
+        # Remove any local repo folder shadowing
+        if p and os.path.basename(p).lower() == module_name.lower():
+            sys.path.remove(p)
+            logger.info(f"[NIJA-SHIM] Removed shadowing path: {p}")
+
+    # Force virtualenv site-packages at front
+    venv_path = os.path.join(sys.prefix, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages")
+    if os.path.exists(venv_path):
+        if venv_path not in sys.path:
+            sys.path.insert(0, venv_path)
+            logger.info(f"[NIJA-SHIM] Added venv site-packages to sys.path: {venv_path}")
+    try:
+        m = importlib.import_module(module_name)
+        logger.info(f"[NIJA-SHIM] Successfully imported {module_name} from: {getattr(m, '__file__', getattr(m, '__path__', None))}")
+        return m
+    except Exception as e:
+        logger.exception(f"[NIJA-SHIM] Failed to import {module_name}: {e}")
+        return None
+
+coinbase_module = prioritize_site_packages()
+# --- END shim ---
+
 # nija_client.py
 # ---------- NIJA: site-packages import shim + robust fallback ----------
 import sys, os, importlib, traceback, logging, time
