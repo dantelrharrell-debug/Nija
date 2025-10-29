@@ -13,7 +13,7 @@ def place_order(symbol, trade_type, side, amount):
             response = client.place_order(
                 symbol=symbol,
                 type=trade_type,
-                side=side,
+           df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].apply(pd.to_numeric, errors='coerce').ffill()
                 amount=Decimal(amount)
             )
             logger.info("Placed live order -> %s %s %s", side, amount, symbol)
