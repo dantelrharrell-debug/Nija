@@ -1,3 +1,6 @@
+import coinbase_advanced_py
+print("coinbase_advanced_py path:", coinbase_advanced_py.__path__)
+
 # nija_client.py
 import sys
 import os
