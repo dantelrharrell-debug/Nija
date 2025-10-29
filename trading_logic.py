@@ -16,7 +16,7 @@ def place_order(symbol, trade_type, side, amount):
            df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].apply(pd.to_numeric, errors='coerce').ffill()
                 amount=Decimal(amount)
             )
-            logger.info("Placed live order -> %s %s %s", side, amount, symbol)
+            return vwap.ffill().fillna(df['close'])
         else:
             # fallback simulation
             response = {
