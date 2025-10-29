@@ -6,51 +6,74 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Initialize client ---
+# --- Initialize Coinbase client ---
 client = None
+client_attached = False
 
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
+try:
+    from coinbase_advanced_py.client import CoinbaseClient
 
-if API_KEY and API_SECRET:
-    try:
-        from coinbase_advanced_py.client import CoinbaseClient
-        client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET)
-        logger.info("[NIJA] CoinbaseClient attached -> LIVE TRADING ENABLED")
-    except ModuleNotFoundError:
-        logger.warning("[NIJA] CoinbaseClient library not found. Using simulated mode")
-        client = None
-else:
-    logger.warning("[NIJA] API keys missing. Using simulated mode")
+    # Load API credentials from environment variables
+    api_key = os.getenv("COINBASE_API_KEY")
+    api_secret = os.getenv("COINBASE_API_SECRET")
+    passphrase = os.getenv("COINBASE_PASSPHRASE")
 
-# --- Wrapper functions ---
-def place_order(symbol, side, amount, order_type="Spot"):
+    if not all([api_key, api_secret, passphrase]):
+        raise ValueError("Coinbase API keys are not fully set in environment variables.")
+
+    # Initialize live client
+    client = CoinbaseClient(
+        api_key=api_key,
+        api_secret=api_secret,
+        passphrase=passphrase,
+    )
+    client_attached = True
+    logger.info("[NIJA] CoinbaseClient initialized successfully -> LIVE TRADING ENABLED")
+
+except ModuleNotFoundError:
+    logger.warning("[NIJA] coinbase_advanced_py not installed. Using simulated client only.")
+except Exception as e:
+    client = None
+    client_attached = False
+    logger.warning(f"[NIJA] CoinbaseClient NOT initialized -> SIMULATED TRADING ONLY: {e}")
+
+
+# --- Utility functions to handle orders safely ---
+def place_order(symbol, side, type_, amount):
     """
-    symbol: str, e.g., "BTC/USD"
-    side: str, "buy" or "sell"
-    amount: float
-    order_type: str, "Spot" or "Futures"
+    Place a live order if client attached, else simulate.
     """
-    global client
-
-    if client:
-        logger.info(f"[NIJA] place_order -> symbol={symbol}, type={order_type}, side={side}, amount={amount}, client_attached=True")
-        return client.place_order(symbol=symbol, side=side, amount=amount, order_type=order_type)
+    if client_attached and client is not None:
+        logger.info(f"Placing LIVE order: {side} {amount} {symbol} ({type_})")
+        return client.place_order(symbol=symbol, side=side, type=type_, amount=amount)
     else:
-        logger.info(f"[NIJA] place_order -> symbol={symbol}, type={order_type}, side={side}, amount={amount}, client_attached=False")
-        logger.info("[NIJA] Simulated order returned")
+        logger.info(f"Simulated order: {side} {amount} {symbol} ({type_}) -> client not attached")
         return {
             "symbol": symbol,
             "side": side,
+            "type": type_,
             "amount": amount,
-            "type": order_type,
             "simulated": True
         }
 
-def fetch_account_balance():
-    global client
-    if client:
-        return client.get_accounts()
+
+def get_account_balance():
+    """
+    Fetch live account balance if client attached, else return None.
+    """
+    if client_attached and client is not None:
+        try:
+            return client.get_accounts()
+        except Exception as e:
+            logger.error(f"Failed to fetch live balance: {e}")
+            return None
     else:
-        logger.info("[NIJA] fetch_account_balance: client is None -> skipping live fetch")
+        logger.info("Skipping live balance fetch -> client not attached")
         return None
+
+
+# --- Quick check ---
+if client_attached:
+    logger.info("Client attached ✅ Ready for LIVE trading")
+else:
+    logger.warning("Client not attached ⚠️ Orders will be simulated")
