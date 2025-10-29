@@ -1,4 +1,5 @@
 # nija_client.py
+import os
 import logging
 import time
 from decimal import Decimal
@@ -7,91 +8,59 @@ from decimal import Decimal
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Live API keys (replace these with your actual keys) ---
-API_KEY = "your_live_api_key_here"
-API_SECRET = "your_live_api_secret_here"
-API_PASSPHRASE = "your_passphrase_here"  # optional
+# --- Load API keys from environment variables ---
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 
-# --- Try importing CoinbaseClient ---
+# --- Define a DummyClient fallback ---
+class DummyClient:
+    def __init__(self):
+        logger.warning("[NIJA] Using DummyClient — no live trading!")
+
+    def get_account(self, *args, **kwargs):
+        return {"balance": "0"}
+
+    def place_order(self, *args, **kwargs):
+        logger.info(f"[NIJA] Dummy order: {args}, {kwargs}")
+        return {"id": "dummy_order"}
+
+# --- Try importing and initializing CoinbaseClient ---
 CoinbaseClient = None
 client = None
-client_attached = False
-
 try:
     from coinbase_advanced_py.client import CoinbaseClient
-
-    try:
+    if API_KEY and API_SECRET and API_PASSPHRASE:
         client = CoinbaseClient(
             api_key=API_KEY,
             api_secret=API_SECRET,
             passphrase=API_PASSPHRASE
         )
-        client_attached = True
-        logger.info("[NIJA] Live Coinbase client attached successfully ✅")
-    except Exception as e:
-        client = None
-        client_attached = False
-        logger.error(f"[NIJA] Failed to attach live client: {e}")
-
+        logger.info("[NIJA] ✅ Live Coinbase client initialized — ready to trade!")
+    else:
+        logger.warning("[NIJA] Coinbase API keys missing. Falling back to DummyClient.")
+        client = DummyClient()
 except ModuleNotFoundError:
-    logger.warning("[NIJA] CoinbaseClient not found. Using DummyClient.")
-    client_attached = False
-
-# --- Dummy client for simulation if live client fails ---
-class DummyClient:
-    def place_order(self, *args, **kwargs):
-        logger.info(f"[SIMULATED ORDER] args={args}, kwargs={kwargs}")
-        return {"id": "SIM123", "status": "simulated"}
-
-    def get_balance(self, *args, **kwargs):
-        return {"USD": "1000.00"}
-
-if not client_attached:
+    logger.warning("[NIJA] coinbase_advanced_py not installed. Using DummyClient.")
     client = DummyClient()
-    logger.info("[NIJA] Running in SIMULATION mode ⚠️")
+except Exception as e:
+    logger.error(f"[NIJA] Failed to initialize CoinbaseClient: {e}")
+    client = DummyClient()
 
-# --- Helper functions for trading ---
-def place_order(side, product, size, price=None):
-    """
-    side: 'buy' or 'sell'
-    product: e.g., 'BTC-USD'
-    size: float, amount to trade
-    price: float or None (market order if None)
-    """
+# --- Optional helper functions ---
+def get_balance():
     try:
-        if client_attached:
-            order = client.place_order(
-                side=side,
-                product=product,
-                size=str(size),
-                price=str(price) if price else None,
-            )
-            logger.info(f"[NIJA] Live order executed: {order}")
-            return order
-        else:
-            order = client.place_order(side=side, product=product, size=size, price=price)
-            return order
+        account = client.get_account()
+        return Decimal(account.get("balance", 0))
     except Exception as e:
-        logger.error(f"[NIJA] Error placing order: {e}")
-        return None
+        logger.error(f"[NIJA] Failed to get balance: {e}")
+        return Decimal(0)
 
-def get_balance(currency="USD"):
+def place_order(**kwargs):
     try:
-        if client_attached:
-            balance = client.get_balance(currency)
-            logger.info(f"[NIJA] Live balance: {balance}")
-            return balance
-        else:
-            balance = client.get_balance(currency)
-            logger.info(f"[SIMULATION] Balance: {balance}")
-            return balance
+        return client.place_order(**kwargs)
     except Exception as e:
-        logger.error(f"[NIJA] Error getting balance: {e}")
-        return None
+        logger.error(f"[NIJA] Failed to place order: {e}")
+        return {"error": str(e)}
 
-# --- Example usage ---
-if __name__ == "__main__":
-    logger.info("=== NIJA Client Initialized ===")
-    get_balance()
-    # Example: place a small test order
-    # place_order("buy", "BTC-USD", 0.001)
+logger.info("[NIJA] Client setup complete.")
