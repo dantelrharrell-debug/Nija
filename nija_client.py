@@ -3,11 +3,9 @@ import os
 import time
 import logging
 from decimal import Decimal
-# Old (doesn't work)
-# from coinbase_advanced_py import CoinbaseClient
 
-# New (works in 1.8.2)
-from coinbase_advanced_py.client import CoinbaseClient
+# Correct import for v1.8.2
+from coinbase_advanced_py import CoinbaseClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,12 +27,8 @@ client = CoinbaseClient(
 
 logger.info(f"CoinbaseClient initialized. Sandbox={SANDBOX}")
 
-
 # ===== Helper functions =====
 def get_accounts():
-    """
-    Returns a list of all Coinbase accounts with balances.
-    """
     try:
         accounts = client.get_accounts()
         logger.info(f"Fetched {len(accounts)} accounts")
@@ -43,16 +37,7 @@ def get_accounts():
         logger.error(f"Error fetching accounts: {e}")
         return []
 
-
 def place_order(symbol, side, size, order_type="market"):
-    """
-    Place a trade order.
-    :param symbol: str, e.g., 'BTC-USD'
-    :param side: 'buy' or 'sell'
-    :param size: float or str amount
-    :param order_type: 'market' or 'limit'
-    :return: dict response from Coinbase
-    """
     try:
         order = client.place_order(
             product_id=symbol,
