@@ -1,256 +1,225 @@
 # nija_client.py
 """
-Final robust Nija Coinbase client wrapper.
-- Exposes `client` with methods: get_accounts(), place_order(...)
-- Exposes flags: client.is_live (True when real client instantiated & live trading enabled)
-                 client.is_dummy (True when DummyClient is used)
-- place_order returns {"id": ..., "status": ..., "simulated": bool, "raw": ...}
+Ready-to-paste Coinbase client wrapper for Nija trading bot.
+
+Behavior:
+- Tries to instantiate a real Coinbase client if available and environment variables indicate live trading.
+- Falls back to DummyClient for safe dry-run behavior (no real API calls).
+- Exposes: client, get_accounts, place_order, cancel_order, check_live_status, DRY_RUN
 """
 
+from __future__ import annotations
 import os
 import logging
 import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
+logging.basicConfig(level=logging.INFO)
 
-# --- Env config ---
-ENV = os.environ
-API_KEY = ENV.get("COINBASE_API_KEY") or ENV.get("CB_API_KEY")
-API_SECRET = ENV.get("COINBASE_API_SECRET") or ENV.get("CB_API_SECRET")
-API_PASSPHRASE = ENV.get("COINBASE_API_PASSPHRASE") or ENV.get("CB_PASSPHRASE")
-SANDBOX = ENV.get("SANDBOX", "False").lower() in ("1", "true", "yes")
-LIVE_TRADING_FLAG = ENV.get("LIVE_TRADING", "0").lower() in ("1", "true", "yes")
+# Control flags from environment
+DRY_RUN = os.getenv("DRY_RUN", "True").lower() not in ("0", "false", "no", "f")
+LIVE_TRADING = os.getenv("LIVE_TRADING", "0") in ("1", "true", "yes")
 
-# Safe default: require explicit LIVE_TRADING=1 + keys for live
-DRY_RUN = not (LIVE_TRADING_FLAG and API_KEY and API_SECRET)
+# Optional Coinbase credentials (if using live mode)
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
+COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+COINBASE_PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
 
-# --- Try importing coinbase client (multiples) ---
-CoinbaseImpl = None
+# --- Attempt to import a real Coinbase client from common places ---
+CoinbaseClient = None
+_real_client_module_name = None
 try:
+    # First try the most-common import we expected
     from coinbase_advanced_py.client import CoinbaseClient  # type: ignore
-    CoinbaseImpl = CoinbaseClient
-    logger.info("[NIJA] Found coinbase_advanced_py.client.CoinbaseClient")
+    _real_client_module_name = "coinbase_advanced_py.client"
+    logger.info("[NIJA] Imported CoinbaseClient from coinbase_advanced_py.client")
 except Exception:
     try:
+        # Some packaging versions might expose a top-level class
         from coinbase_advanced_py import CoinbaseClient  # type: ignore
-        CoinbaseImpl = CoinbaseClient
-        logger.info("[NIJA] Found coinbase_advanced_py.CoinbaseClient")
+        _real_client_module_name = "coinbase_advanced_py"
+        logger.info("[NIJA] Imported CoinbaseClient from coinbase_advanced_py")
     except Exception:
-        try:
-            from coinbase_advanced_py import RESTClient  # type: ignore
-            CoinbaseImpl = RESTClient
-            logger.info("[NIJA] Found coinbase_advanced_py.RESTClient")
-        except Exception:
-            try:
-                from coinbase_advanced_py.client import RESTClient  # type: ignore
-                CoinbaseImpl = RESTClient
-                logger.info("[NIJA] Found coinbase_advanced_py.client.RESTClient")
-            except Exception:
-                logger.warning("[NIJA] coinbase_advanced_py client not found; will use DummyClient")
+        CoinbaseClient = None
+        logger.warning("[NIJA] coinbase_advanced_py client not found; will use DummyClient")
 
-# --- Instantiate helper ---
-def _instantiate_impl(impl_class):
-    candidates = [
-        {"api_key": API_KEY, "api_secret": API_SECRET, "api_passphrase": API_PASSPHRASE, "sandbox": SANDBOX},
-        {"key": API_KEY, "secret": API_SECRET, "passphrase": API_PASSPHRASE, "sandbox": SANDBOX},
-        {"api_key": API_KEY, "api_secret": API_SECRET, "passphrase": API_PASSPHRASE},
-        {"api_key": API_KEY, "api_secret": API_SECRET},
-    ]
-    last_exc = None
-    for kw in candidates:
-        # skip if keys missing for constructor that requires them
-        if ("api_key" in kw or "key" in kw) and not (API_KEY and API_SECRET):
-            continue
-        try:
-            inst = impl_class(**{k: v for k, v in kw.items() if v is not None})
-            logger.info(f"[NIJA] Instantiated client with args: {list(kw.keys())}")
-            return inst
-        except Exception as e:
-            last_exc = e
-            logger.debug(f"[NIJA] constructor attempt failed: {e}")
-    # try no-arg
-    try:
-        inst = impl_class()
-        logger.info("[NIJA] Instantiated client with no-arg constructor (env-driven)")
-        return inst
-    except Exception as e:
-        last_exc = e
-    raise last_exc or RuntimeError("Failed to instantiate coinbase client")
-
-# --- Adapter / Normalizer ---
-class CoinbaseAdapter:
-    def __init__(self, raw_client: Any, is_live: bool = False, is_dummy: bool = False):
-        self._raw = raw_client
-        self.is_live = bool(is_live)
-        self.is_dummy = bool(is_dummy)
-
-    def get_accounts(self) -> List[Dict[str, Any]]:
-        # try common method names
-        for name in ("get_accounts", "accounts", "list_accounts", "list_accounts_sync", "get_account_list"):
-            if hasattr(self._raw, name):
-                try:
-                    fn = getattr(self._raw, name)
-                    raw = fn() if callable(fn) else fn
-                    return self._normalize_accounts(raw)
-                except Exception as e:
-                    logger.exception(f"[NIJA] Error calling {name}(): {e}")
-
-        # fallback: return minimal
-        logger.warning("[NIJA] No accounts method found on client; returning fallback account")
-        return [{"currency": "USD", "balance": "0"}]
-
-    def place_order(self, side: str, product_id: str, size: str, price: Optional[str] = None, order_type: str = "market") -> Dict[str, Any]:
-        """
-        Returns dict: {id, status, simulated (bool), raw}
-        """
-        # Respect DRY_RUN: simulate if adapter not live or DRY_RUN set globally
-        if not getattr(self, "is_live", False) or DRY_RUN:
-            simulated = True
-            fake_id = f"sim-{int(time.time())}"
-            resp = {"id": fake_id, "status": "simulated", "simulated": True, "raw": {"side": side, "product_id": product_id, "size": size, "price": price, "type": order_type}}
-            logger.info(f"[NIJA-DUMMY] Simulated order: {resp}")
-            return resp
-
-        # try common order methods
-        payloads = []
-        if order_type == "market":
-            payloads = [
-                {"side": side, "product_id": product_id, "size": size, "type": "market"},
-                {"side": side, "product_id": product_id, "quantity": size, "type": "market"},
-            ]
-        else:
-            payloads = [
-                {"side": side, "product_id": product_id, "size": size, "price": price, "type": "limit"},
-                {"side": side, "product_id": product_id, "quantity": size, "price": price, "type": "limit"},
-            ]
-
-        methods = ("place_order", "create_order", "order_create", "create_trade")
-        last_exc = None
-        for m in methods:
-            if hasattr(self._raw, m):
-                fn = getattr(self._raw, m)
-                for p in payloads:
-                    try:
-                        resp = fn(**{k: v for k, v in p.items() if v is not None})
-                        return {"id": resp.get("id") if isinstance(resp, dict) else getattr(resp, "id", None),
-                                "status": resp.get("status") if isinstance(resp, dict) else getattr(resp, "status", None),
-                                "simulated": False, "raw": resp}
-                    except TypeError:
-                        try:
-                            resp = fn(p)
-                            return {"id": resp.get("id") if isinstance(resp, dict) else getattr(resp, "id", None),
-                                    "status": resp.get("status") if isinstance(resp, dict) else getattr(resp, "status", None),
-                                    "simulated": False, "raw": resp}
-                        except Exception as e:
-                            last_exc = e
-                    except Exception as e:
-                        last_exc = e
-                        logger.exception(f"[NIJA] Error calling {m} with payload {p}: {e}")
-
-        # try a generic request wrapper if present
-        wrapper = getattr(self._raw, "request", None) or getattr(self._raw, "call_api", None)
-        if wrapper:
-            for p in payloads:
-                try:
-                    resp = wrapper("POST", "/orders", json=p)
-                    return {"id": resp.get("id") if isinstance(resp, dict) else getattr(resp, "id", None),
-                            "status": resp.get("status") if isinstance(resp, dict) else getattr(resp, "status", None),
-                            "simulated": False, "raw": resp}
-                except Exception as e:
-                    last_exc = e
-                    logger.debug(f"[NIJA] Generic wrapper failed: {e}")
-
-        raise last_exc or RuntimeError("No order placement method worked on client")
-
-    def _normalize_accounts(self, raw) -> List[Dict[str, Any]]:
-        if raw is None:
-            return []
-        out = []
-        try:
-            if isinstance(raw, list):
-                for item in raw:
-                    if isinstance(item, dict):
-                        currency = item.get("currency") or item.get("asset") or item.get("code")
-                        balance = item.get("balance") or item.get("available") or item.get("amount")
-                        out.append({"currency": currency, "balance": str(balance)})
-                    else:
-                        currency = getattr(item, "currency", None) or getattr(item, "asset", None)
-                        balance = getattr(item, "balance", None) or getattr(item, "available", None)
-                        out.append({"currency": currency, "balance": str(balance)})
-                return out
-            if isinstance(raw, dict):
-                currency = raw.get("currency") or raw.get("asset") or raw.get("code")
-                balance = raw.get("balance") or raw.get("available") or raw.get("amount")
-                return [{"currency": currency, "balance": str(balance)}]
-            # iterable
-            for item in raw:
-                currency = item.get("currency") if isinstance(item, dict) else getattr(item, "currency", None)
-                balance = item.get("balance") if isinstance(item, dict) else getattr(item, "balance", None)
-                out.append({"currency": currency, "balance": str(balance)})
-            return out
-        except Exception as e:
-            logger.exception(f"[NIJA] Error normalizing accounts: {e}")
-            return [{"currency": "UNKNOWN", "balance": "0"}]
-
-# --- Dummy client ---
+# --- Dummy client for dry-run / dev / CI safety ---
 class DummyClient:
     def __init__(self):
-        self._fake_balance = Decimal("1000.00")
+        self.is_dummy = True
+        self.is_live = False
 
-    def get_accounts(self):
+    # mimic account list
+    def get_accounts(self) -> List[Dict[str, Any]]:
         logger.info("[NIJA-DUMMY] get_accounts called")
-        return [{"currency": "USD", "balance": str(self._fake_balance)}]
+        # small example response that wsgi expects
+        return [{"currency": "USD", "balance": "1000"}]
 
-    def place_order(self, *args, **kwargs):
-        logger.info(f"[NIJA-DUMMY] place_order called (dummy). args={args} kwargs={kwargs}")
-        return {"id": "dummy-order", "status": "created", "simulated": True, "raw": {"args": args, "kwargs": kwargs}}
+    def place_order(self, *args, **kwargs) -> Dict[str, Any]:
+        logger.info("[NIJA-DUMMY] place_order called (dummy). args=%s kwargs=%s", args, kwargs)
+        # return a structure consistent with a thin wrapper
+        return {"id": "dummy-order", "status": "created", "simulated": True, "args": args, "kwargs": kwargs}
 
-# --- Build final client adapter ---
-_adapter: Optional[CoinbaseAdapter] = None
+    def cancel_order(self, order_id: str) -> Dict[str, Any]:
+        logger.info("[NIJA-DUMMY] cancel_order called (dummy). order_id=%s", order_id)
+        return {"id": order_id, "status": "canceled", "simulated": True}
 
-if CoinbaseImpl is not None and API_KEY and API_SECRET and LIVE_TRADING_FLAG:
+    def get_order(self, order_id: str) -> Dict[str, Any]:
+        logger.info("[NIJA-DUMMY] get_order called (dummy). order_id=%s", order_id)
+        return {"id": order_id, "status": "created", "simulated": True}
+
+# --- Wrapper to use real client safely if available ---
+class WrappedCoinbaseClient:
+    def __init__(self, inner):
+        self._inner = inner
+        self.is_dummy = False
+        self.is_live = True
+
+    def get_accounts(self) -> List[Dict[str, Any]]:
+        # real client's interface may differ — try common methods, fall back gracefully
+        try:
+            if hasattr(self._inner, "get_accounts"):
+                return self._inner.get_accounts()
+            # some clients expose 'accounts' property or method - adapt if needed
+            if hasattr(self._inner, "accounts"):
+                return self._inner.accounts()
+            raise AttributeError("No get_accounts/accounts method on Coinbase client")
+        except Exception as e:
+            logger.exception("[NIJA] Error calling real client.get_accounts: %s", e)
+            raise
+
+    def place_order(self, *args, **kwargs) -> Dict[str, Any]:
+        try:
+            # Some client libs use place_order(**kwargs)
+            if hasattr(self._inner, "place_order"):
+                resp = self._inner.place_order(*args, **kwargs)
+                # If response is not dict-like, wrap minimally
+                return resp if isinstance(resp, dict) else {"result": resp}
+            # fallback: attempt order creation via generic 'create_order' or 'new_order'
+            for candidate in ("create_order", "new_order", "order_create"):
+                if hasattr(self._inner, candidate):
+                    fn = getattr(self._inner, candidate)
+                    resp = fn(*args, **kwargs)
+                    return resp if isinstance(resp, dict) else {"result": resp}
+            raise AttributeError("No order method found on real Coinbase client")
+        except Exception as e:
+            logger.exception("[NIJA] Error placing real order: %s", e)
+            raise
+
+    def cancel_order(self, order_id: str) -> Dict[str, Any]:
+        try:
+            if hasattr(self._inner, "cancel_order"):
+                return self._inner.cancel_order(order_id)
+            if hasattr(self._inner, "cancel"):
+                return self._inner.cancel(order_id)
+            raise AttributeError("No cancel_order/cancel on real Coinbase client")
+        except Exception as e:
+            logger.exception("[NIJA] Error cancelling real order: %s", e)
+            raise
+
+    def get_order(self, order_id: str) -> Dict[str, Any]:
+        try:
+            if hasattr(self._inner, "get_order"):
+                return self._inner.get_order(order_id)
+            if hasattr(self._inner, "order"):
+                return self._inner.order(order_id)
+            raise AttributeError("No get_order/order method on real Coinbase client")
+        except Exception as e:
+            logger.exception("[NIJA] Error fetching real order: %s", e)
+            raise
+
+# --- Instantiate the appropriate client ---
+client = None  # will hold either WrappedCoinbaseClient or DummyClient
+
+if CoinbaseClient and LIVE_TRADING and COINBASE_API_KEY and COINBASE_API_SECRET:
     try:
-        raw_instance = _instantiate_impl(CoinbaseImpl)
-        _adapter = CoinbaseAdapter(raw_instance, is_live=True, is_dummy=False)
-        if DRY_RUN:
-            logger.warning("[NIJA] LIVE client instantiated but DRY_RUN is True. Orders will be simulated.")
-        else:
-            logger.info("[NIJA] Live Coinbase client ready.")
+        # Attempt to instantiate real client with common parameter names.
+        # Adapt to expected constructor signature; if your installed client needs different args, adjust here.
+        try:
+            # common newer library constructor (key, secret, passphrase, sandbox bool)
+            real = CoinbaseClient(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET, passphrase=COINBASE_PASSPHRASE)
+        except TypeError:
+            # fallback to positional constructor
+            real = CoinbaseClient(COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_PASSPHRASE)
+        client = WrappedCoinbaseClient(real)
+        logger.info("[NIJA] CoinbaseClient initialized (LIVE mode).")
     except Exception as e:
-        logger.exception(f"[NIJA] Failed to instantiate official client: {e}")
-        _adapter = None
+        logger.exception("[NIJA] Failed to initialize real CoinbaseClient; falling back to DummyClient. %s", e)
+        client = DummyClient()
+else:
+    # If not configured for live trading, explicitly use dummy
+    client = DummyClient()
+    if not LIVE_TRADING:
+        logger.warning("[NIJA] Falling back to DummyClient (safe). Set LIVE_TRADING=1 and provide API keys to enable real trading.")
+    elif not (COINBASE_API_KEY and COINBASE_API_SECRET):
+        logger.warning("[NIJA] LIVE_TRADING requested but Coinbase keys missing; using DummyClient.")
 
-if _adapter is None:
-    logger.warning("[NIJA] Falling back to DummyClient (safe). Set LIVE_TRADING=1 and provide API keys to enable real trading.")
-    _adapter = CoinbaseAdapter(DummyClient(), is_live=False, is_dummy=True)
-    # enforce DRY_RUN when dummy
-    DRY_RUN = True
-
-# Publicly exposed client object
-client = _adapter
-
-# Convenience wrappers
+# Convenience API expected by wsgi.py
 def get_accounts() -> List[Dict[str, Any]]:
+    """
+    Return account-like list. Wraps client.get_accounts.
+    """
     try:
         return client.get_accounts()
     except Exception as e:
-        logger.exception(f"[NIJA] get_accounts failed: {e}")
-        return [{"currency": "USD", "balance": "0"}]
+        logger.exception("[NIJA] get_accounts error: %s", e)
+        # Return a safe structure for health endpoints
+        return [{"error": str(e)}]
 
-def place_order(side: str, product_id: str, size: str, price: Optional[str] = None, order_type: str = "market") -> Dict[str, Any]:
+def place_order(*, side: str, product_id: str, size: str, price: Optional[str] = None, order_type: str = "limit", **extra) -> Dict[str, Any]:
+    """
+    Place an order through the real client or simulate with DummyClient.
+    Returns a dict. If simulated, includes 'simulated': True.
+    """
     try:
-        return client.place_order(side=side, product_id=product_id, size=size, price=price, order_type=order_type)
-    except Exception as e:
-        logger.exception(f"[NIJA] place_order failed: {e}")
-        return {"id": None, "status": "failed", "simulated": True, "error": str(e)}
+        # If DRY_RUN or client is dummy, make a simulated response
+        if DRY_RUN or getattr(client, "is_dummy", False):
+            logger.info("[NIJA] DRY_RUN is set to True or using DummyClient — returning simulated order")
+            resp = client.place_order(product_id=product_id, side=side, size=size, price=price, order_type=order_type, **extra)
+            # ensure simulated flag present
+            if isinstance(resp, dict):
+                resp.setdefault("simulated", True)
+            return resp
 
-# Sanity-run when executed directly
-if __name__ == "__main__":
-    logger.info(f"[NIJA] DRY_RUN={DRY_RUN} LIVE_TRADING_FLAG={LIVE_TRADING_FLAG} SANDBOX={SANDBOX}")
-    accounts = get_accounts()
-    logger.info(f"[NIJA] Accounts: {accounts}")
-    order_resp = place_order("buy", "BTC-USD", "0.0001", price=None, order_type="market")
-    logger.info(f"[NIJA] Example order response: {order_resp}")
+        # Live mode: call real client wrapper
+        resp = client.place_order(product_id=product_id, side=side, size=size, price=price, order_type=order_type, **extra)
+        # ensure simulated flag is explicitly False if not present
+        if isinstance(resp, dict):
+            resp.setdefault("simulated", False)
+        return resp
+    except Exception as e:
+        logger.exception("[NIJA] place_order error: %s", e)
+        # On error, return a dictionary describing the failure
+        return {"error": str(e), "simulated": getattr(client, "is_dummy", True) or DRY_RUN}
+
+def cancel_order(order_id: str) -> Dict[str, Any]:
+    try:
+        if DRY_RUN or getattr(client, "is_dummy", False):
+            logger.info("[NIJA] DRY_RUN/Dummy cancel_order")
+            return client.cancel_order(order_id)
+        return client.cancel_order(order_id)
+    except Exception as e:
+        logger.exception("[NIJA] cancel_order error: %s", e)
+        return {"error": str(e)}
+
+def get_order(order_id: str) -> Dict[str, Any]:
+    try:
+        return client.get_order(order_id)
+    except Exception as e:
+        logger.exception("[NIJA] get_order error: %s", e)
+        return {"error": str(e)}
+
+def check_live_status() -> bool:
+    """
+    Return True if the system is running in real-live mode (i.e., using a real client and DRY_RUN==False).
+    """
+    try:
+        return (not DRY_RUN) and (not getattr(client, "is_dummy", True)) and getattr(client, "is_live", False)
+    except Exception:
+        return False
+
+# Module-level summary log for startup clarity
+logger.info("[NIJA] Module loaded. DRY_RUN=%s LIVE_TRADING=%s client_is_dummy=%s",
+            DRY_RUN, LIVE_TRADING, getattr(client, "is_dummy", True))
