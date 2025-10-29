@@ -1,3 +1,23 @@
+import sys
+import os
+import shutil
+
+# List of known shadowing folder names
+shadow_folders = [
+    os.path.join(os.getcwd(), "coinbase_advanced_py"),
+    os.path.join(os.getcwd(), "coinbase-advanced-py"),
+]
+
+for folder in shadow_folders:
+    if os.path.exists(folder) and os.path.isdir(folder):
+        print(f"[NIJA-SHIM] Removing shadowing folder: {folder}")
+        shutil.rmtree(folder)
+
+# Remove current working directory from sys.path temporarily to avoid shadowing
+if os.getcwd() in sys.path:
+    sys.path.remove(os.getcwd())
+    print(f"[NIJA-SHIM] Removed CWD from sys.path to prevent shadowing")
+
 import coinbase_advanced_py
 print("coinbase_advanced_py path:", coinbase_advanced_py.__path__)
 
