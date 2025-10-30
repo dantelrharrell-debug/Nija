@@ -8,7 +8,7 @@ import time
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- DummyClient as fallback ---
+# --- DummyClient fallback ---
 class DummyClient:
     def buy(self, **kwargs):
         logger.info(f"[DummyClient] Simulated BUY {kwargs}")
@@ -17,6 +17,11 @@ class DummyClient:
     def sell(self, **kwargs):
         logger.info(f"[DummyClient] Simulated SELL {kwargs}")
         return kwargs
+
+# --- DRY_RUN toggle ---
+DRY_RUN = os.environ.get("DRY_RUN", "False").lower() in ["true", "1", "yes"]
+if DRY_RUN:
+    logger.info("[NIJA] DRY_RUN mode enabled — trades will be simulated")
 
 # --- Try importing CoinbaseClient ---
 CoinbaseClient = None
@@ -31,7 +36,7 @@ API_SECRET = os.environ.get("COINBASE_API_SECRET")
 API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")
 
 # --- Initialize client ---
-if CoinbaseClient and API_KEY and API_SECRET and API_PASSPHRASE:
+if CoinbaseClient and API_KEY and API_SECRET and API_PASSPHRASE and not DRY_RUN:
     try:
         client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET, passphrase=API_PASSPHRASE)
         logger.info("[NIJA] CoinbaseClient initialized successfully. Live trading ENABLED ✅")
@@ -42,7 +47,10 @@ if CoinbaseClient and API_KEY and API_SECRET and API_PASSPHRASE:
         client = DummyClient()
         USING_DUMMY = True
 else:
-    logger.warning("[NIJA] Missing API credentials or CoinbaseClient not available. Using DummyClient")
+    if DRY_RUN:
+        logger.info("[NIJA] DRY_RUN is active — using DummyClient for simulation")
+    else:
+        logger.warning("[NIJA] Missing API credentials or CoinbaseClient not available — using DummyClient")
     client = DummyClient()
     USING_DUMMY = True
 
@@ -52,3 +60,6 @@ def get_client():
 
 def is_dummy():
     return USING_DUMMY
+
+def is_dry_run():
+    return DRY_RUN
