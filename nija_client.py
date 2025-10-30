@@ -35,7 +35,5 @@ try:
     logger.info("[NIJA] Live RESTClient/CoinbaseClient instantiated (USE_DUMMY=False)")
 
 except Exception as e:
-    from dummy_client import DummyClient
-    client = DummyClient()
-    USE_DUMMY = True
-    logger.warning(f"[NIJA] Live CoinbaseClient not found; using DummyClient: {e}")
+    logger.error(f"[NIJA] Failed to import CoinbaseClient or missing keys: {e}")
+    raise RuntimeError("Live trading cannot start without CoinbaseClient and valid API keys.")
