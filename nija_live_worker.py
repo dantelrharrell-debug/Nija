@@ -1,54 +1,24 @@
 #!/usr/bin/env python3
-# nija_live_worker.py
+# nija_render_worker.py
 import os
 import time
 import logging
 from decimal import Decimal
 import numpy as np
+from nija_client import client  # uses the live Coinbase client
 
 # ---------------------
 # Logging
 # ---------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija_live")
-
-# ---------------------
-# Coinbase Client Setup
-# ---------------------
-try:
-    from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] CoinbaseClient imported successfully")
-except ModuleNotFoundError:
-    logger.warning("[NIJA] CoinbaseClient not found, using dummy client")
-
-    class DummyClient:
-        def buy(self, product_id, amount):
-            logger.info(f"[DummyClient] Simulated BUY {amount} {product_id}")
-
-        def sell(self, product_id, amount):
-            logger.info(f"[DummyClient] Simulated SELL {amount} {product_id}")
-
-        def get_product_ticker(self, product_id):
-            return {"price": 29500.0}  # Dummy price
-
-        def get_accounts(self):
-            return {"USD": 1000.0}  # Dummy USD balance
-
-    CoinbaseClient = DummyClient
-
-# ---------------------
-# API Keys
-# ---------------------
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET)
+logger = logging.getLogger("nija_worker")
 
 # ---------------------
 # Trading Parameters
 # ---------------------
-MIN_ALLOCATION = 0.02  # 2% min
-MAX_ALLOCATION = 0.10  # 10% max
-PRICE_HISTORY_LENGTH = 60
+MIN_ALLOCATION = 0.02  # 2% minimum
+MAX_ALLOCATION = 0.10  # 10% maximum
+PRICE_HISTORY_LENGTH = 60  # Track last 60 price points
 TRADE_PRODUCT = "BTC-USD"
 
 price_history = []
@@ -57,11 +27,11 @@ price_history = []
 # Adaptive Trade Sizing
 # ---------------------
 def calculate_risk_factor(volatility: float) -> float:
-    if volatility > 0.05:
+    if volatility > 0.05:  # High volatility
         return 0.03
-    elif volatility > 0.02:
+    elif volatility > 0.02:  # Medium
         return 0.05
-    else:
+    else:  # Low
         return 0.08
 
 def get_trade_amount(account_balance: float, volatility: float) -> float:
@@ -99,7 +69,7 @@ def execute_sell(account_balance: float, current_price: float):
 # ---------------------
 def run_worker():
     global price_history
-    logger.info("[NIJA] Worker started - LIVE trading")
+    logger.info("[NIJA] Render worker started (background) - LIVE trading")
     while True:
         try:
             # Fetch current price
@@ -115,16 +85,16 @@ def run_worker():
             account_info = client.get_accounts()
             usd_balance = float(account_info.get('USD', 0.0))
 
-            # Simple moving average strategy
+            # Simple adaptive trading strategy
             if len(price_history) >= 20:
                 short_ma = np.mean(price_history[-5:])
                 long_ma = np.mean(price_history[-20:])
-                if short_ma > long_ma:
+                if short_ma > long_ma:  # Buy signal
                     execute_buy(usd_balance, latest_price)
-                elif short_ma < long_ma:
+                elif short_ma < long_ma:  # Sell signal
                     execute_sell(usd_balance, latest_price)
 
-            time.sleep(10)  # 10 seconds cycle
+            time.sleep(10)  # Wait 10 seconds between cycles
 
         except Exception as e:
             logger.error(f"[NIJA] ERROR: {e}")
