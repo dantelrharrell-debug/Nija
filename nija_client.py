@@ -15,6 +15,8 @@ COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 
 # --- Coinbase import ---
 CoinbaseClient = None
+USE_DUMMY = True
+
 try:
     from coinbase_advanced_py.client import CoinbaseClient as _CoinbaseClient
     logger.info("[NIJA] CoinbaseClient module imported successfully")
@@ -22,8 +24,7 @@ except ModuleNotFoundError:
     logger.warning("[NIJA] CoinbaseClient module not found. DummyClient will be used.")
     _CoinbaseClient = None
 
-# --- Determine if live client can be used ---
-USE_DUMMY = True
+# --- Attempt live client initialization ---
 if _CoinbaseClient and COINBASE_API_KEY and COINBASE_API_SECRET:
     try:
         CoinbaseClient = _CoinbaseClient(
@@ -59,6 +60,7 @@ else:
 
 # --- Example function to test ---
 def test_connection():
+    global CoinbaseClient, USE_DUMMY  # <-- global declared here correctly
     if USE_DUMMY:
         logger.info("[NIJA] Running test on DummyClient")
     else:
@@ -68,6 +70,5 @@ def test_connection():
         except Exception as e:
             logger.error(f"[NIJA] Error fetching accounts: {e}")
             logger.warning("[NIJA] Switching to DummyClient")
-            global CoinbaseClient, USE_DUMMY
             CoinbaseClient = DummyClient()
             USE_DUMMY = True
