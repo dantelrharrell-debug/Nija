@@ -24,6 +24,9 @@ class DummyClient:
     def get_account_balance(self):
         return {"balance": 1000.0}  # placeholder USD balance
 
+    def get_price(self, product_id):
+        return Decimal("29500")  # placeholder BTC price
+
     def buy(self, product_id, amount):
         logger.info(f"[DummyClient] Simulated BUY {{'amount': {amount}, 'product_id': '{product_id}'}}")
         return {"status": "simulated"}
@@ -62,9 +65,19 @@ def get_usd_balance(client):
         logger.error(f"[NIJA] Failed to fetch balance: {e}")
         return Decimal("0")
 
+# Get live BTC price
+def get_btc_price(client):
+    try:
+        if isinstance(client, DummyClient):
+            return client.get_price(PRODUCT_ID)
+        ticker = client.get_ticker(PRODUCT_ID)
+        return Decimal(ticker["price"])
+    except Exception as e:
+        logger.error(f"[NIJA] Failed to fetch BTC price: {e}")
+        return Decimal("0")
+
 # Calculate trade amount dynamically
 def calculate_trade_amount(balance):
-    # Randomly pick between MIN_POSITION and MAX_POSITION
     from random import uniform
     percent = Decimal(str(uniform(float(MIN_POSITION), float(MAX_POSITION))))
     return balance * percent
@@ -83,13 +96,16 @@ def start_trading():
                 continue
 
             trade_usd = calculate_trade_amount(usd_balance)
+            btc_price = get_btc_price(client)
 
-            # Example BTC price; replace with real market price from CoinbaseClient if needed
-            btc_price = Decimal("29500")
+            if btc_price <= 0:
+                logger.warning("[NIJA] Invalid BTC price, skipping trade")
+                time.sleep(TRADE_INTERVAL)
+                continue
+
             btc_amount = (trade_usd / btc_price).quantize(Decimal("0.000001"))
-
             result = client.buy(PRODUCT_ID, float(btc_amount))
-            logger.info(f"[NIJA] BUY executed: {btc_amount} BTC @ approx ${btc_price}")
+            logger.info(f"[NIJA] BUY executed: {btc_amount} BTC @ ${btc_price}")
         except Exception as e:
             logger.error(f"[NIJA] Trading error: {e}")
 
