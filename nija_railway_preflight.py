@@ -1,4 +1,4 @@
-# nija_railway_preflight.py  (updated to allow missing passphrase and try both auth styles)
+# nija_railway_preflight.py
 import os
 import sys
 import logging
@@ -20,13 +20,13 @@ def check_library():
         logger.info("[OK] coinbase-advanced-py library is installed")
         return True
     except Exception as e:
-        logger.error(f"[FAIL] coinbase-advanced-py NOT installed or import failed: {e}")
+        logger.error(f"[FAIL] coinbase-advanced-py NOT installed: {e}")
         return False
 
 def check_env_vars():
     api_key = os.getenv("COINBASE_API_KEY")
     api_secret = os.getenv("COINBASE_API_SECRET")
-    passphrase = os.getenv("COINBASE_API_PASSPHRASE")  # may be missing
+    passphrase = os.getenv("COINBASE_API_PASSPHRASE")
 
     logger.info(f"COINBASE_API_KEY: {mask(api_key)}")
     logger.info(f"COINBASE_API_SECRET: {mask(api_secret)}")
@@ -34,34 +34,22 @@ def check_env_vars():
 
     ok_basic = bool(api_key and api_secret)
     if not ok_basic:
-        logger.error("[FAIL] API key and/or secret missing (these are required).")
+        logger.error("[FAIL] API key and/or secret missing.")
     else:
-        logger.info("[OK] API key and secret present. Passphrase optional; will attempt both auth styles.")
+        logger.info("[OK] API key and secret present. Passphrase optional.")
     return ok_basic, api_key, api_secret, passphrase
 
 def try_instantiate_and_fetch(api_key, api_secret, passphrase):
     try:
-        from coinbase_advanced_py.client import CoinbaseClient
+        from coinbase_advanced_py import CoinbaseClient
     except Exception as e:
         logger.error(f"[FAIL] Could not import CoinbaseClient: {e}")
         return False
 
-    # If passphrase present, try with it first
-    if passphrase:
-        try:
-            logger.info("[PRE-FLIGHT] Trying CoinbaseClient(api_key, api_secret, passphrase)...")
-            client = CoinbaseClient(api_key, api_secret, passphrase)
-            accounts = client.get_accounts()
-            logger.info("[OK] Authenticated with passphrase.")
-            _report_accounts(accounts)
-            return True
-        except Exception as e:
-            logger.warning(f"[PRE-FLIGHT] CoinbaseClient with passphrase failed: {e}")
-
-    # Try without passphrase
+    # Try no-passphrase first
     try:
-        logger.info("[PRE-FLIGHT] Trying CoinbaseClient(api_key, api_secret) (no passphrase)...")
-        client = CoinbaseClient(api_key, api_secret)
+        logger.info("[PRE-FLIGHT] Trying CoinbaseClient(api_key, api_secret)...")
+        client = CoinbaseClient(api_key=api_key, api_secret=api_secret)
         accounts = client.get_accounts()
         logger.info("[OK] Authenticated without passphrase.")
         _report_accounts(accounts)
@@ -69,7 +57,18 @@ def try_instantiate_and_fetch(api_key, api_secret, passphrase):
     except Exception as e:
         logger.warning(f"[PRE-FLIGHT] CoinbaseClient without passphrase failed: {e}")
 
-    # nothing worked
+    # Try with passphrase if present
+    if passphrase:
+        try:
+            logger.info("[PRE-FLIGHT] Trying CoinbaseClient(api_key, api_secret, passphrase)...")
+            client = CoinbaseClient(api_key=api_key, api_secret=api_secret, api_passphrase=passphrase)
+            accounts = client.get_accounts()
+            logger.info("[OK] Authenticated with passphrase.")
+            _report_accounts(accounts)
+            return True
+        except Exception as e:
+            logger.error(f"[PRE-FLIGHT] CoinbaseClient with passphrase failed: {e}")
+
     logger.error("[FAIL] Could not authenticate with Coinbase using either method.")
     return False
 
@@ -79,8 +78,8 @@ def _report_accounts(accounts):
         return
     currencies = sorted({a.get("currency") for a in accounts if a.get("currency")})
     usd_bal = next((Decimal(a.get("balance", "0")) for a in accounts if a.get("currency") == "USD"), Decimal("0"))
-    logger.info(f"[OK] Accounts currencies available: {currencies}")
-    logger.info(f"[OK] USD balance (summary): {usd_bal}")
+    logger.info(f"[OK] Available currencies: {currencies}")
+    logger.info(f"[OK] USD balance: {usd_bal}")
 
 def main():
     lib_ok = check_library()
