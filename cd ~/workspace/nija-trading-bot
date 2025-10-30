@@ -1,7 +1,7 @@
-nija-trading-bot/
-├─ nija_client.py          # Your Nija client code
-├─ nija_live_snapshot.py   # Main entry for live trading (optional)
-├─ keys/
-│   └─ nija_coinbase.pem   # Your live PEM key
-├─ requirements.txt        # Python dependencies
-└─ .env                    # Optional local env vars for testing
+/project
+│
+├─ app.py
+├─ nija_client.py
+├─ requirements.txt
+├─ vendor/
+│   └─ coinbase_advanced_py/   <-- paste the GitHub repo content here
