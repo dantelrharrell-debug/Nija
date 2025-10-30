@@ -1,3 +1,5 @@
+from coinbase_advanced_py import CoinbaseClient
+
 #!/usr/bin/env python3
 # nija_client.py
 import os
