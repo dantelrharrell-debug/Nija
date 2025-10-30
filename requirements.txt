@@ -26,3 +26,4 @@ python-dateutil==2.9.0.post0
 websockets==13.1
 pytz==2025.2
 coinbase-advanced-py==1.8.2
+coinbase-advanced-py>=1.0.0
