@@ -1,9 +1,9 @@
-nija_project/
+/app
 │
-├── nija_client.py       # Fixed client (from previous snippet)
-├── nija_worker.py       # Your main bot worker
-├── trading_logic.py     # Your trading logic
-├── requirements.txt     # Libraries Render will install
-├── libs/                # Local libraries folder (optional fallback)
-│   └── coinbase_advanced_py/   # Paste the downloaded library here
-│       └── ...all files...
+├── nija_railway_preflight.py     👈 put it here
+├── nija_startup.py
+├── nija_worker.py
+├── nija_coinbase_jwt.py
+├── nija_coinbase_client.py
+├── requirements.txt
+└── ...
