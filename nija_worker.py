@@ -11,12 +11,19 @@ logger = logging.getLogger("nija_worker")
 # --- Risk management ---
 MIN_PCT = 0.02  # 2% minimum
 MAX_PCT = 0.10  # 10% maximum
-MIN_USD = 1.0   # minimum trade in USD
+MIN_USD = 1.0   # minimum trade
 
 # --- Trade sizing ---
 def calculate_order_size(equity: Decimal, pct: float) -> Decimal:
     size = equity * Decimal(pct)
     return max(size, Decimal(MIN_USD))
+
+# --- Pre-flight check ---
+def pre_flight_check():
+    usd_balance = get_usd_balance(client)
+    if usd_balance <= 0:
+        raise SystemExit("[NIJA] Pre-flight check failed: USD balance is zero or unavailable.")
+    logger.info(f"[NIJA] Pre-flight check passed. USD balance: {usd_balance}")
 
 # --- Trading logic ---
 def decide_trade():
@@ -33,6 +40,7 @@ def decide_trade():
         close = analysis.indicators.get("close", 0)
         equity = get_usd_balance(client)
 
+        # Aggressive but safe signals
         if rsi < 30 and close < vwap:
             return "buy", min(MAX_PCT, 0.05)
         elif rsi > 70 and close > vwap:
@@ -42,7 +50,7 @@ def decide_trade():
         logger.error(f"[NIJA] decide_trade error: {e}")
         return None
 
-# --- Execute order ---
+# --- Place live order ---
 def place_order(trade_type: str, position_pct: float):
     equity = get_usd_balance(client)
     order_size = calculate_order_size(equity, position_pct)
@@ -61,6 +69,7 @@ def place_order(trade_type: str, position_pct: float):
 # --- Worker loop ---
 def run_worker():
     logger.info("[NIJA] Starting live trading worker...")
+    pre_flight_check()
     while True:
         try:
             signal = decide_trade()
