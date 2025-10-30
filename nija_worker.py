@@ -1,209 +1,74 @@
-# -----------------------------
-# --- Imports -----------------
-# -----------------------------
-import os
-import logging
 import time
-from decimal import Decimal, ROUND_DOWN
+import logging
+from decimal import Decimal
+from nija_client import client, get_usd_balance
 
-# -----------------------------
-# --- Logger setup ------------
-# -----------------------------
+# --- Logging setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger("nija_worker")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    import sys
-    handler = logging.StreamHandler(sys.stdout)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s:%(name)s:%(message)s")
-    handler.setFormatter(fmt)
-    logger.addHandler(handler)
 
-trade_logger = logging.getLogger("nija_trades")
-trade_logger.setLevel(logging.INFO)
-if not trade_logger.handlers:
-    file_handler = logging.FileHandler("nija_trades.log")
-    formatter = logging.Formatter("%(asctime)s - %(message)s")
-    file_handler.setFormatter(formatter)
-    trade_logger.addHandler(file_handler)
+# --- Position sizing settings ---
+MIN_PCT = 0.02  # 2% minimum
+MAX_PCT = 0.1   # 10% maximum
+MIN_USD = 1.0   # minimum USD per trade
 
-# -----------------------------
-# --- Config (env-overridable)
-# -----------------------------
-DRY_RUN = os.getenv("DRY_RUN", "False").lower() in ("true", "1", "yes")
-MIN_PCT = float(os.getenv("TRADE_MIN_PCT", "0.02"))   # 2% default
-MAX_PCT = float(os.getenv("TRADE_MAX_PCT", "0.10"))   # 10% default
-MIN_USD = float(os.getenv("TRADE_MIN_USD", "1"))      # min $1 order
-SLEEP_SECONDS = int(os.getenv("WORKER_LOOP_SLEEP", "10"))
+def calculate_order_size(equity: Decimal, pct: float):
+    """
+    Returns the order size in USD, clamped to MIN_USD.
+    """
+    size = equity * Decimal(pct)
+    if size < MIN_USD:
+        size = Decimal(MIN_USD)
+    return size
 
-logger.info(f"[NIJA] Worker config DRY_RUN={DRY_RUN} MIN_PCT={MIN_PCT} MAX_PCT={MAX_PCT} MIN_USD={MIN_USD}")
+# --- Example trading logic ---
+def decide_trade():
+    """
+    Replace this with your custom logic.
+    Returns 'buy', 'sell', or None
+    """
+    # Example placeholder: always buy 5% of account
+    return "buy", 0.05  # trade type, position % of equity
 
-# -----------------------------
-# --- Strategy hook -----------
-# -----------------------------
-try:
-    from trading_logic import decide_trade
-    logger.info("[NIJA] trading_logic.decide_trade loaded")
-except Exception:
-    decide_trade = None
-    logger.warning("[NIJA] No trading_logic.decide_trade — worker will not place orders until you provide it")
+# --- Place order function ---
+def place_order(trade_type: str, position_pct: float):
+    equity = get_usd_balance(client)
+    order_size = calculate_order_size(equity, position_pct)
+    logger.info(f"[NIJA] Preparing {trade_type.upper()} order for ${order_size:.2f} ({position_pct*100:.1f}% of equity)")
 
-# -----------------------------
-# --- Helper functions --------
-# -----------------------------
-def get_usd_balance(client):
     try:
-        if hasattr(client, "get_account_balances"):
-            b = client.get_account_balances()
-            return Decimal(str(b.get("USD", 0)))
-        if hasattr(client, "get_accounts"):
-            accs = client.get_accounts()
-            for a in accs:
-                currency = a.get("currency") if isinstance(a, dict) else getattr(a, "currency", None)
-                avail = a.get("available_balance") if isinstance(a, dict) else getattr(a, "available_balance", None)
-                if str(currency).upper() in ("USD", "USDC"):
-                    return Decimal(str(avail or 0))
+        # Example: market order for BTC-USD
+        order = client.place_order(
+            product_id="BTC-USD",
+            side=trade_type,
+            order_type="market",
+            funds=str(order_size)
+        )
+        logger.info(f"[NIJA] Order executed: {order}")
     except Exception as e:
-        logger.warning(f"[NIJA] get_usd_balance error: {e}")
-    return None
+        logger.error(f"[NIJA] Order failed: {e}")
 
-def get_price_for_product(client, product_id):
-    attempts = [
-        lambda c, p: getattr(c, "get_ticker", None) and c.get_ticker(p),
-        lambda c, p: getattr(c, "get_product_ticker", None) and c.get_product_ticker(p),
-        lambda c, p: getattr(c, "get_spot_price", None) and c.get_spot_price(p),
-        lambda c, p: getattr(c, "get_price", None) and c.get_price(p),
-        lambda c, p: getattr(c, "ticker", None) and c.ticker(p),
-    ]
-    for fn in attempts:
-        try:
-            res = fn(client, product_id)
-            if res is None:
-                continue
-            if isinstance(res, (int, float, Decimal, str)):
-                return Decimal(str(res))
-            if isinstance(res, dict):
-                for k in ("price", "last", "price_usd", "amount", "ask"):
-                    if k in res and res[k] is not None:
-                        return Decimal(str(res[k]))
-            val = getattr(res, "price", None) or getattr(res, "last", None)
-            if val is not None:
-                return Decimal(str(val))
-        except Exception:
-            continue
-    return None
-
-def place_market_order(client, action, product_id, usd_amount):
-    logger.info(f"[NIJA] Placing MARKET {action.upper()} for {product_id} US${usd_amount}")
-    candidates = [
-        ("market_order_buy", lambda c: getattr(c, "market_order_buy", None) and c.market_order_buy(**{"product_id":product_id, "usd":str(usd_amount)})),
-        ("market_order", lambda c: getattr(c, "market_order", None) and c.market_order(side=action, product_id=product_id, funds=str(usd_amount))),
-        ("buy", lambda c: getattr(c, "buy", None) and c.buy(amount=str(usd_amount), product_id=product_id)),
-        ("place_order", lambda c: getattr(c, "place_order", None) and c.place_order(side=action, product_id=product_id, funds=str(usd_amount))),
-    ]
-    last_exc = None
-    for name, fn in candidates:
-        try:
-            method = fn(client)
-            if method is None:
-                continue
-            logger.info(f"[NIJA] Used method {name} to place order")
-            return method
-        except Exception as e:
-            logger.warning(f"[NIJA] Attempt with {name} failed: {e}")
-            last_exc = e
-    raise RuntimeError(f"No supported order method found (last error: {last_exc})")
-
-def clamp(n, minn, maxn):
-    return max(minn, min(maxn, n))
-
-# -----------------------------
-# --- Debug patch -------------
-# -----------------------------
-def log_debug_state(market_data=None, decision=None, trade_result=None, client=None):
-    if market_data:
-        logger.info(f"[NIJA-DEBUG] Market price: {market_data.get('price')}")
-    if decision is not None:
-        logger.info(f"[NIJA-DEBUG] Trade decision: {decision}")
-    if trade_result is not None:
-        logger.info(f"[NIJA-DEBUG] Trade executed: {trade_result}")
-    if client:
-        try:
-            balances = client.get_account_balances()
-            logger.info(f"[NIJA-DEBUG] Account balances: {balances}")
-        except Exception as e:
-            logger.warning(f"[NIJA-DEBUG] Could not fetch balances: {e}")
-
-# -----------------------------
-# --- Main worker ------------
-# -----------------------------
-def start_worker(client):
-    logger.info(f"[NIJA] start_worker invoked. DRY_RUN={DRY_RUN}")
-    if decide_trade is None:
-        logger.warning("[NIJA] No trading_logic.decide_trade available — cannot place trades")
-
+# --- Worker loop ---
+def run_worker():
+    logger.info("[NIJA] Starting live trading worker...")
     while True:
         try:
-            signal = decide_trade(client) if decide_trade else None
-
-            if signal:
-                action = str(signal.get("action")).lower()
-                product_id = signal.get("product_id") or signal.get("symbol")
-                confidence = float(signal.get("confidence", 1.0))
-
-                logger.info(f"[NIJA] Received signal action={action} product={product_id} confidence={confidence}")
-
-                if action not in ("buy", "sell") or not product_id:
-                    logger.warning("[NIJA] Invalid action or missing product_id; skipping")
-                else:
-                    usd_balance = get_usd_balance(client)
-                    if usd_balance is None:
-                        logger.warning("[NIJA] Cannot get USD balance; skipping")
-                    else:
-                        pct = clamp(confidence * MAX_PCT, MIN_PCT, MAX_PCT)
-                        usd_to_use = (usd_balance * Decimal(str(pct))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
-                        if usd_to_use < Decimal(str(MIN_USD)):
-                            logger.warning(f"[NIJA] Order ${usd_to_use} below MIN_USD; skipping")
-                        else:
-                            price = get_price_for_product(client, product_id)
-                            logger.info(f"[NIJA] Market price for {product_id}: {price}")
-
-                            # --- Debug logging ---
-                            log_debug_state(
-                                market_data={"price": price},
-                                decision={"action": action, "product_id": product_id, "confidence": confidence},
-                                client=client
-                            )
-
-                            if DRY_RUN:
-                                logger.info(f"[NIJA] DRY_RUN enabled — would place {action} for ${usd_to_use} on {product_id}")
-                            else:
-                                try:
-                                    result = place_market_order(client, action, product_id, usd_to_use)
-                                    logger.info(f"[NIJA] Order result: {result}")
-                                    trade_logger.info(f"{action.upper()} {product_id} ${usd_to_use} -> {result}")
-
-                                    # Log balances after trade
-                                    log_debug_state(client=client)
-
-                                except Exception as e:
-                                    logger.error(f"[NIJA] Failed to place order: {e}")
+            trade_signal = decide_trade()
+            if trade_signal:
+                trade_type, pct = trade_signal
+                place_order(trade_type, pct)
             else:
-                logger.debug("[NIJA] No signal from strategy this loop")
-                # Optional: log balances even when no signal
-                log_debug_state(client=client)
-
-            time.sleep(SLEEP_SECONDS)
-
+                logger.info("[NIJA] No trade signal. Waiting...")
+            time.sleep(10)  # adjust interval as needed
         except KeyboardInterrupt:
-            logger.info("[NIJA] Worker interrupted; exiting cleanly")
+            logger.info("[NIJA] Worker stopped by user")
             break
         except Exception as e:
-            logger.exception(f"[NIJA] Worker loop error: {e}")
+            logger.error(f"[NIJA] Unexpected error in worker loop: {e}")
             time.sleep(5)
 
-# -----------------------------
-# --- Run worker if script is main ---
-# -----------------------------
 if __name__ == "__main__":
-    from nija_client import client  # live Coinbase client
-    start_worker(client)
+    run_worker()
