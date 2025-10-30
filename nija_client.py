@@ -1,68 +1,65 @@
 # nija_client.py
 import os
+import sys
 import logging
-import requests
 from decimal import Decimal
+import time
 
+# --- Add local libs folder so Python can find libraries without installing ---
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "libs"))
+
+# --- Setup logging ---
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    import sys
-    handler = logging.StreamHandler(sys.stdout)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s:%(name)s:%(message)s")
-    handler.setFormatter(fmt)
-    logger.addHandler(handler)
 
-# --- Load environment keys ---
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-USE_DUMMY = False
+# --- Try importing CoinbaseClient ---
+CoinbaseClient = None
+try:
+    from coinbase_advanced_py.client import CoinbaseClient
+    logger.info("[NIJA] Successfully imported CoinbaseClient")
+except ModuleNotFoundError:
+    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient")
 
-if not API_KEY or not API_SECRET:
-    raise RuntimeError("[NIJA] Missing API_KEY or API_SECRET — live trading cannot start")
+# --- Fallback DummyClient if needed ---
+class DummyClient:
+    def __init__(self, *args, **kwargs):
+        logger.info("[NIJA] DummyClient initialized — trading simulated")
 
-logger.info("[NIJA] Live RESTClient instantiated (no passphrase required)")
+    def place_order(self, **kwargs):
+        logger.info(f"[NIJA] Simulated order: {kwargs}")
+        return {"status": "simulated", "details": kwargs}
 
-class RESTClient:
-    """Minimal Coinbase REST client using only API key + secret."""
-    BASE_URL = "https://api.exchange.coinbase.com"
+# --- Initialize client ---
+if CoinbaseClient is not None:
+    client = CoinbaseClient(
+        api_key=os.getenv("COINBASE_API_KEY"),
+        api_secret=os.getenv("COINBASE_API_SECRET"),
+        passphrase=os.getenv("COINBASE_API_PASSPHRASE")  # optional
+    )
+    logger.info("[NIJA] Live RESTClient instantiated")
+else:
+    client = DummyClient()
 
-    def __init__(self, key, secret):
-        self.key = key
-        self.secret = secret
-        self.session = requests.Session()
-        self.session.headers.update({
-            "CB-ACCESS-KEY": key,
-            "CB-ACCESS-SIGN": secret,  # for simplicity; adjust if you have real signature logic
-            "Content-Type": "application/json"
-        })
+# --- Example function to place a trade ---
+def place_trade(product_id, side, size, price=None):
+    """
+    product_id: 'BTC-USD'
+    side: 'buy' or 'sell'
+    size: amount in crypto
+    price: optional limit price
+    """
+    order = {
+        "product_id": product_id,
+        "side": side,
+        "size": str(size)
+    }
+    if price:
+        order["price"] = str(price)
 
-    def get_account_balances(self):
-        """Return USD balance as dict"""
-        url = f"{self.BASE_URL}/accounts"
-        r = self.session.get(url, timeout=10)
-        r.raise_for_status()
-        balances = {a['currency']: a['available'] for a in r.json()}
-        return balances
-
-    def get_price(self, product_id="BTC-USD"):
-        url = f"{self.BASE_URL}/products/{product_id}/ticker"
-        r = self.session.get(url, timeout=10)
-        r.raise_for_status()
-        return Decimal(str(r.json()["price"]))
-
-    def place_order(self, side, product_id, funds):
-        url = f"{self.BASE_URL}/orders"
-        data = {
-            "type": "market",
-            "side": side,
-            "product_id": product_id,
-            "funds": str(funds)
-        }
-        r = self.session.post(url, json=data, timeout=10)
-        r.raise_for_status()
-        return r.json()
-
-
-# Instantiate client
-client = RESTClient(API_KEY, API_SECRET)
+    if CoinbaseClient is not None:
+        result = client.place_order(**order)
+        logger.info(f"[NIJA] Live trade placed: {result}")
+        return result
+    else:
+        result = client.place_order(**order)
+        return result
