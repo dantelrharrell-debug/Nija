@@ -1,9 +1,8 @@
 import time
 import logging
 from decimal import Decimal
-import pandas as pd
 from nija_client import client, get_usd_balance
-from tradingview_ta import TA_Handler, Interval, Exchange  # if you use TradingView TA
+from tradingview_ta import TA_Handler, Interval
 
 # --- Logging ---
 logging.basicConfig(
@@ -12,57 +11,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger("nija_worker")
 
-# --- Position sizing ---
-MIN_PCT = 0.02  # 2%
-MAX_PCT = 0.1   # 10%
-MIN_USD = 1.0   # minimum USD per trade
+# --- Risk management ---
+MIN_PCT = 0.02  # minimum 2% of equity
+MAX_PCT = 0.10  # maximum 10% of equity
+MIN_USD = 1.0   # minimum trade in USD
 
-# --- Calculate order size ---
-def calculate_order_size(equity: Decimal, pct: float):
+# --- Calculate trade size ---
+def calculate_order_size(equity: Decimal, pct: float) -> Decimal:
     size = equity * Decimal(pct)
     if size < MIN_USD:
         size = Decimal(MIN_USD)
     return size
 
-# --- Trading logic ---
+# --- Live trading logic ---
 def decide_trade():
     """
-    Example live crypto strategy using VWAP + RSI on BTC-USD.
-    Returns a trade signal: (side, position_pct)
+    Live trade signal using VWAP + RSI from TradingView.
+    Returns (side, position_pct) or None.
     """
     try:
-        # Use TradingView TA for live indicators
         handler = TA_Handler(
             symbol="BTCUSD",
             screener="crypto",
             exchange="COINBASE",
-            interval=Interval.INTERVAL_5_MINUTES
+            interval=Interval.INTERVAL_1_MINUTE  # super fast updates for mobile
         )
         analysis = handler.get_analysis()
-        rsi = analysis.indicators["RSI"]
-        vwap = analysis.indicators["VWAP"]
-        close_price = analysis.indicators["close"]
+        rsi = analysis.indicators.get("RSI", 50)
+        vwap = analysis.indicators.get("VWAP", 0)
+        close = analysis.indicators.get("close", 0)
 
         equity = get_usd_balance(client)
 
-        # Aggressive but safe allocation
-        if rsi < 30 and close_price < vwap:
-            pct = min(MAX_PCT, 0.05)  # 5% of equity
+        # Aggressive but safe signals
+        if rsi < 30 and close < vwap:
+            pct = min(MAX_PCT, 0.05)  # buy 5% equity
             return "buy", pct
-        elif rsi > 70 and close_price > vwap:
-            pct = min(MAX_PCT, 0.05)
+        elif rsi > 70 and close > vwap:
+            pct = min(MAX_PCT, 0.05)  # sell 5% equity
             return "sell", pct
-        else:
-            return None
+        return None
     except Exception as e:
         logger.error(f"[NIJA] decide_trade error: {e}")
         return None
 
-# --- Place order ---
+# --- Execute live order ---
 def place_order(trade_type: str, position_pct: float):
     equity = get_usd_balance(client)
     order_size = calculate_order_size(equity, position_pct)
-    logger.info(f"[NIJA] Placing {trade_type.upper()} order for ${order_size:.2f} ({position_pct*100:.1f}% of equity)")
+    logger.info(f"[NIJA] Executing {trade_type.upper()} order: ${order_size:.2f} ({position_pct*100:.1f}% equity)")
 
     try:
         order = client.place_order(
@@ -71,13 +68,13 @@ def place_order(trade_type: str, position_pct: float):
             order_type="market",
             funds=str(order_size)
         )
-        logger.info(f"[NIJA] Order executed: {order}")
+        logger.info(f"[NIJA] Order confirmed: {order}")
     except Exception as e:
         logger.error(f"[NIJA] Order failed: {e}")
 
 # --- Worker loop ---
 def run_worker():
-    logger.info("[NIJA] Starting live trading worker...")
+    logger.info("[NIJA] Starting live trading worker (mobile-ready)...")
     while True:
         try:
             trade_signal = decide_trade()
@@ -86,13 +83,13 @@ def run_worker():
                 place_order(trade_type, pct)
             else:
                 logger.info("[NIJA] No trade signal. Waiting...")
-            time.sleep(10)  # adjust interval for speed
+            time.sleep(5)  # super-fast loop for mobile responsiveness
         except KeyboardInterrupt:
             logger.info("[NIJA] Worker stopped by user")
             break
         except Exception as e:
             logger.error(f"[NIJA] Unexpected error: {e}")
-            time.sleep(5)
+            time.sleep(2)
 
 if __name__ == "__main__":
     run_worker()
