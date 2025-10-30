@@ -1,6 +1,8 @@
 # nija_client.py
 import os
 import logging
+import requests
+from decimal import Decimal
 
 logger = logging.getLogger("nija_client")
 logger.setLevel(logging.INFO)
@@ -11,30 +13,56 @@ if not logger.handlers:
     handler.setFormatter(fmt)
     logger.addHandler(handler)
 
-# -----------------------------
-# --- Environment keys -------
-# -----------------------------
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional for REST client
+# --- Load environment keys ---
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+USE_DUMMY = False
 
-# Simple check
-if not COINBASE_API_KEY or not COINBASE_API_SECRET:
-    raise RuntimeError("[NIJA] Missing Coinbase API_KEY or API_SECRET — cannot start live trading")
+if not API_KEY or not API_SECRET:
+    raise RuntimeError("[NIJA] Missing API_KEY or API_SECRET — live trading cannot start")
 
-logger.info(f"[NIJA-DEBUG] COINBASE_API_KEY present: {bool(COINBASE_API_KEY)}")
-logger.info(f"[NIJA-DEBUG] COINBASE_API_SECRET present: {bool(COINBASE_API_SECRET)}")
-logger.info(f"[NIJA-DEBUG] COINBASE_API_PASSPHRASE present: {bool(COINBASE_API_PASSPHRASE)}")
+logger.info("[NIJA] Live RESTClient instantiated (no passphrase required)")
 
-# -----------------------------
-# --- Live REST client setup --
-# -----------------------------
-try:
-    # Import your REST client here
-    from coinbase_rest_client import RESTClient  # <- your upgraded REST client
-    client = RESTClient(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET, passphrase=COINBASE_API_PASSPHRASE)
-    USE_DUMMY = False
-    logger.info("[NIJA] Live RESTClient instantiated (no passphrase required)")
-except Exception as e:
-    logger.error(f"[NIJA] Failed to instantiate live client: {e}")
-    raise RuntimeError("[NIJA] Cannot start live trading without a working RESTClient")
+class RESTClient:
+    """Minimal Coinbase REST client using only API key + secret."""
+    BASE_URL = "https://api.exchange.coinbase.com"
+
+    def __init__(self, key, secret):
+        self.key = key
+        self.secret = secret
+        self.session = requests.Session()
+        self.session.headers.update({
+            "CB-ACCESS-KEY": key,
+            "CB-ACCESS-SIGN": secret,  # for simplicity; adjust if you have real signature logic
+            "Content-Type": "application/json"
+        })
+
+    def get_account_balances(self):
+        """Return USD balance as dict"""
+        url = f"{self.BASE_URL}/accounts"
+        r = self.session.get(url, timeout=10)
+        r.raise_for_status()
+        balances = {a['currency']: a['available'] for a in r.json()}
+        return balances
+
+    def get_price(self, product_id="BTC-USD"):
+        url = f"{self.BASE_URL}/products/{product_id}/ticker"
+        r = self.session.get(url, timeout=10)
+        r.raise_for_status()
+        return Decimal(str(r.json()["price"]))
+
+    def place_order(self, side, product_id, funds):
+        url = f"{self.BASE_URL}/orders"
+        data = {
+            "type": "market",
+            "side": side,
+            "product_id": product_id,
+            "funds": str(funds)
+        }
+        r = self.session.post(url, json=data, timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+
+# Instantiate client
+client = RESTClient(API_KEY, API_SECRET)
