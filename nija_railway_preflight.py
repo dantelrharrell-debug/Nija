@@ -4,7 +4,6 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logging.info("[NIJA-PREFLIGHT] Starting Coinbase JWT preflight check...")
-
 from nija_coinbase_jwt import get_jwt_token, debug_print_jwt_payload
 
 # Generate token and print payload for inspection
