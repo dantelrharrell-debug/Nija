@@ -1,30 +1,44 @@
-#!/usr/bin/env python3
 # nija_client.py
 import os
 import logging
-from decimal import Decimal
 
-# --- Logging ---
+# --- Setup logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Coinbase Client ---
+# --- Attempt to import CoinbaseClient ---
 CoinbaseClient = None
-
 try:
-    from coinbase_advanced_py import CoinbaseClient
-except ModuleNotFoundError as e:
-    logger.error(f"[NIJA] Coinbase client import failed: {e}")
-    raise
+    from coinbase_advanced_py.client import CoinbaseClient
+    logger.info("[NIJA] CoinbaseClient module loaded")
+except ModuleNotFoundError:
+    logger.warning("[NIJA] CoinbaseClient module not found. Falling back to DummyClient")
 
-# --- Environment Variables ---
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
+# --- Load keys from Render environment variables ---
+API_KEY = os.environ.get("COINBASE_API_KEY")
+API_SECRET = os.environ.get("COINBASE_API_SECRET")
+PASSPHRASE = os.environ.get("COINBASE_PASSPHRASE")
 
-if not all([API_KEY, API_SECRET, API_PASSPHRASE]):
-    raise EnvironmentError("[NIJA] Missing Coinbase API credentials in environment variables!")
+# --- Initialize client ---
+client = None
+if API_KEY and API_SECRET and PASSPHRASE and CoinbaseClient:
+    try:
+        client = CoinbaseClient(API_KEY, API_SECRET, PASSPHRASE)
+        logger.info("[NIJA] CoinbaseClient initialized using Render env variables ✅ Live trading enabled")
+    except Exception as e:
+        logger.error(f"[NIJA] Failed to initialize CoinbaseClient: {e}")
+        client = None
 
-# --- Initialize live client ---
-client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET, passphrase=API_PASSPHRASE)
-logger.info("[NIJA] CoinbaseClient initialized — LIVE trading ENABLED")
+# --- Fallback to DummyClient only if live client failed ---
+class DummyClient:
+    def place_order(self, **kwargs):
+        logger.info(f"[DummyClient] Simulated order: {kwargs}")
+        return kwargs
+
+if client is None:
+    logger.warning("[NIJA] CoinbaseClient not initialized or keys missing. Using DummyClient (simulated orders)")
+    client = DummyClient()
+
+# --- Sanity check: prevent silent DummyClient if keys exist but import failed ---
+if isinstance(client, DummyClient) and (API_KEY and API_SECRET and PASSPHRASE):
+    logger.error("[NIJA] WARNING: Keys detected but CoinbaseClient could not be imported! Check package version and import path.")
