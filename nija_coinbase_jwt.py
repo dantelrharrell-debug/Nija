@@ -148,3 +148,19 @@ def get_jwt_token():
         except Exception as e:
             logger.error("[NIJA-JWT] Unable to create JWT: %s", e)
             raise
+
+# ------------------------------------------------------------
+# Debug helper: decode & log the JWT payload (no signature verification)
+# ------------------------------------------------------------
+def debug_print_jwt_payload():
+    try:
+        token = get_jwt_token()
+        # split token and decode payload without verifying
+        import base64, json
+        parts = token.split(".")
+        if len(parts) >= 2:
+            payload_b64 = parts[1] + "=="  # pad if needed
+            payload_json = base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)).decode()
+            logger.info("[NIJA-JWT-DEBUG] JWT payload: %s", payload_json)
+    except Exception as e:
+        logger.debug("[NIJA-JWT-DEBUG] Could not decode JWT payload: %s", e)
