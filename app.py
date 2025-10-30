@@ -7,5 +7,5 @@ app = Flask(__name__)
 def index():
     return "Nija Trading Bot online!"
 
-# Start trading automatically
+# Start trading automatically when the app runs
 start_trading()
