@@ -1,16 +1,8 @@
-from nija_coinbase_jwt import get_jwt_token
-import requests
-import os
-
-print("[NIJA] Running preflight checks...")
-
-jwt_token = get_jwt_token()
-headers = {"Authorization": f"Bearer {jwt_token}"}
-API_BASE = "https://api.coinbase.com"
-
-# Test request
-resp = requests.get(f"{API_BASE}/v2/accounts", headers=headers)
-if resp.status_code == 200:
-    print("[NIJA] Coinbase API authentication successful!")
-else:
-    print("[NIJA] Coinbase authentication failed:", resp.text)
+# nija_railway_preflight.py
+from nija_coinbase_client import get_usd_balance
+import logging
+logging.basicConfig(level=logging.INFO)
+bal = get_usd_balance()
+logging.info("[NIJA-PREFLIGHT] USD balance: %s", bal)
+if bal is None:
+    raise SystemExit("[NIJA-PREFLIGHT] Preflight failed")
