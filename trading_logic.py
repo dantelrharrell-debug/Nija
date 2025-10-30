@@ -1,46 +1,42 @@
 # trading_logic.py
-import pandas as pd
-import numpy as np
-from indicators import calculate_vwap, calculate_rsi  # make sure these exist
 
-def generate_signal(df: pd.DataFrame) -> str:
+def generate_signal(symbol, client=None):
     """
-    Generates a trading signal: 'buy', 'sell', or 'hold'.
-    Uses VWAP and RSI as simple indicators.
+    Generates a trading signal for a given symbol.
+    Accepts an optional client for live data fetching.
     """
-    if df.empty or df.shape[0] < 2:
-        return "hold"  # safe default if no data
+    # --- Fetch historical data ---
+    if client:
+        # Use live client to fetch historical prices
+        try:
+            df = client.get_historical_data(symbol)
+        except Exception as e:
+            print(f"[generate_signal] Error fetching live data for {symbol}: {e}")
+            df = fetch_dummy_data(symbol)  # fallback dummy data
+    else:
+        # No client provided: use dummy/test data
+        df = fetch_dummy_data(symbol)
 
-    # Ensure numeric types
-    df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].apply(pd.to_numeric, errors='coerce').ffill()
-
-    try:
-        vwap = calculate_vwap(df)
-        rsi = calculate_rsi(df['close'])
-    except Exception as e:
-        print(f"[trading_logic] Indicator calculation failed: {e}")
-        return "hold"
-
+    # --- Simple example signal logic ---
     latest_close = df['close'].iloc[-1]
+    avg_close = df['close'].mean()
 
-    # Example simple logic
-    if latest_close > vwap.iloc[-1] and rsi.iloc[-1] < 70:
+    if latest_close > avg_close:
         return "buy"
-    elif latest_close < vwap.iloc[-1] and rsi.iloc[-1] > 30:
+    elif latest_close < avg_close:
         return "sell"
     else:
         return "hold"
 
-# Optional: allow direct testing
-if __name__ == "__main__":
-    # create dummy DataFrame for quick test
-    data = {
-        "open": [1,2,3],
-        "high": [2,3,4],
-        "low": [1,2,3],
-        "close": [1.5,2.5,3.5],
-        "volume": [100,200,150]
-    }
-    df_test = pd.DataFrame(data)
-    signal = generate_signal(df_test)
-    print(f"Test signal: {signal}")
+
+def fetch_dummy_data(symbol):
+    """
+    Returns dummy price data in DataFrame format for testing.
+    """
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    prices = np.random.normal(loc=100, scale=5, size=50)  # 50 dummy candles
+    df = pd.DataFrame(prices, columns=['close'])
+    return df
