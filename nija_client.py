@@ -1,48 +1,54 @@
 # nija_client.py
 import os
 import logging
+from decimal import Decimal
+import time
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Try importing CoinbaseClient correctly ---
+# --- DummyClient as fallback ---
+class DummyClient:
+    def buy(self, **kwargs):
+        logger.info(f"[DummyClient] Simulated BUY {kwargs}")
+        return kwargs
+
+    def sell(self, **kwargs):
+        logger.info(f"[DummyClient] Simulated SELL {kwargs}")
+        return kwargs
+
+# --- Try importing CoinbaseClient ---
+CoinbaseClient = None
 try:
     from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] Successfully imported CoinbaseClient")
 except ModuleNotFoundError:
-    logger.warning("[NIJA] CoinbaseClient not found; using DummyClient fallback")
-    CoinbaseClient = None
+    logger.warning("[NIJA] CoinbaseClient module not found")
 
-# --- Read environment variables (Render Dashboard -> Environment tab) ---
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
-PEM_PATH = os.getenv("COINBASE_PEM_PATH")  # optional if you’re using a PEM file
-DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
+# --- Load API credentials ---
+API_KEY = os.environ.get("COINBASE_API_KEY")
+API_SECRET = os.environ.get("COINBASE_API_SECRET")
+API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")
 
-# --- Initialize the Coinbase or Dummy client ---
-class DummyClient:
-    def place_order(self, **kwargs):
-        logger.info(f"[DummyClient] Simulated order: {kwargs}")
-        return {"status": "simulated", "order": kwargs}
-
-client = None
-
-if CoinbaseClient and API_KEY and API_SECRET and PASSPHRASE:
+# --- Initialize client ---
+if CoinbaseClient and API_KEY and API_SECRET and API_PASSPHRASE:
     try:
-        client = CoinbaseClient(
-            api_key=API_KEY,
-            api_secret=API_SECRET,
-            passphrase=PASSPHRASE,
-            pem_path=PEM_PATH,
-        )
-        logger.info("[NIJA] CoinbaseClient initialized ✅ Live trading ready")
+        client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET, passphrase=API_PASSPHRASE)
+        logger.info("[NIJA] CoinbaseClient initialized successfully. Live trading ENABLED ✅")
+        USING_DUMMY = False
     except Exception as e:
         logger.error(f"[NIJA] Failed to initialize CoinbaseClient: {e}")
+        logger.warning("[NIJA] Using DummyClient instead")
         client = DummyClient()
+        USING_DUMMY = True
 else:
-    logger.warning("[NIJA] Missing API credentials — using DummyClient")
+    logger.warning("[NIJA] Missing API credentials or CoinbaseClient not available. Using DummyClient")
     client = DummyClient()
+    USING_DUMMY = True
 
-logger.info(f"[NIJA] Module ready. DRY_RUN={DRY_RUN}, Using Dummy={isinstance(client, DummyClient)}")
+# --- Expose client ---
+def get_client():
+    return client
+
+def is_dummy():
+    return USING_DUMMY
