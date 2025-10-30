@@ -1,6 +1,9 @@
-# -----------------------------
-# --- Updated balance helper ---
-# -----------------------------
+# balance_helper.py
+import logging
+from decimal import Decimal
+
+logger = logging.getLogger("nija_worker")
+
 def get_usd_balance(client):
     """
     Fetch USD balance from Coinbase account.
@@ -8,16 +11,12 @@ def get_usd_balance(client):
     Returns Decimal(0) if fetch fails.
     """
     try:
-        # Preferred: use spot account balances if available
         if hasattr(client, "get_spot_account_balances"):
             balances = client.get_spot_account_balances()
             return Decimal(str(balances.get("USD", 0)))
-        
-        # Fallback for existing client methods
         if hasattr(client, "get_account_balances"):
             balances = client.get_account_balances()
             return Decimal(str(balances.get("USD", 0)))
-        
         if hasattr(client, "get_accounts"):
             accs = client.get_accounts()
             for a in accs:
