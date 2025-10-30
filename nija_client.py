@@ -6,14 +6,6 @@ from decimal import Decimal
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-CoinbaseClient = None
-
-try:
-    from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] coinbase-advanced-py imported successfully")
-except ModuleNotFoundError:
-    logger.warning("[NIJA] coinbase-advanced-py missing. Using DummyClient instead.")
-
 # --- Dummy client fallback ---
 class DummyClient:
     def __init__(self):
@@ -29,6 +21,14 @@ class DummyClient:
         logger.info(f"[DummyClient] Simulated order: {kwargs}")
         return {"status": "simulated", "order": kwargs}
 
+# --- Correct import path for CoinbaseClient ---
+CoinbaseClient = None
+try:
+    from coinbase_advanced_py import CoinbaseClient
+    logger.info("[NIJA] CoinbaseClient imported successfully")
+except ModuleNotFoundError:
+    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient")
+
 # --- Auth detection ---
 def init_coinbase_client():
     api_key = os.getenv("COINBASE_API_KEY")
@@ -39,7 +39,7 @@ def init_coinbase_client():
         logger.error("[FAIL] Missing COINBASE_API_KEY or COINBASE_API_SECRET.")
         return DummyClient()
 
-    # Prefer Advanced Trade (no passphrase)
+    # Try Advanced Trade API (no passphrase)
     try:
         client = CoinbaseClient(api_key=api_key, api_secret=api_secret)
         logger.info("[NIJA] Initialized Advanced Trade API client (no passphrase)")
