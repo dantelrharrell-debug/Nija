@@ -1,40 +1,13 @@
-import logging
-
-logger = logging.getLogger("nija_worker")
-
-# --- DEBUG PATCH START ---
-def log_debug_state(market_data=None, decision=None, trade_result=None, client=None):
-    """
-    Prints market data, trade decisions, executed trades, and account balances.
-    Safe for live trading.
-    """
-    if market_data:
-        price = market_data.get("price")
-        logger.info(f"[NIJA-DEBUG] Market price: {price}")
-
-    if decision is not None:
-        logger.info(f"[NIJA-DEBUG] Trade decision: {decision}")
-
-    if trade_result is not None:
-        logger.info(f"[NIJA-DEBUG] Trade executed: {trade_result}")
-
-    # Log account balances if client is provided
-    if client:
-        try:
-            balances = client.get_account_balances()  # Should return dict like {'USD': xx, 'BTC': xx}
-            logger.info(f"[NIJA-DEBUG] Account balances: {balances}")
-        except Exception as e:
-            logger.warning(f"[NIJA-DEBUG] Could not fetch balances: {e}")
-# --- DEBUG PATCH END ---
-
-# nija_worker.py
+# -----------------------------
+# --- Imports -----------------
+# -----------------------------
 import os
 import logging
 import time
 from decimal import Decimal, ROUND_DOWN
 
 # -----------------------------
-# --- Setup main logger ------
+# --- Logger setup ------------
 # -----------------------------
 logger = logging.getLogger("nija_worker")
 logger.setLevel(logging.INFO)
@@ -45,9 +18,6 @@ if not logger.handlers:
     handler.setFormatter(fmt)
     logger.addHandler(handler)
 
-# -----------------------------
-# --- Trade file logger -------
-# -----------------------------
 trade_logger = logging.getLogger("nija_trades")
 trade_logger.setLevel(logging.INFO)
 if not trade_logger.handlers:
@@ -68,7 +38,7 @@ SLEEP_SECONDS = int(os.getenv("WORKER_LOOP_SLEEP", "10"))
 logger.info(f"[NIJA] Worker config DRY_RUN={DRY_RUN} MIN_PCT={MIN_PCT} MAX_PCT={MAX_PCT} MIN_USD={MIN_USD}")
 
 # -----------------------------
-# --- Strategy hook ----------
+# --- Strategy hook -----------
 # -----------------------------
 try:
     from trading_logic import decide_trade
@@ -78,7 +48,7 @@ except Exception:
     logger.warning("[NIJA] No trading_logic.decide_trade — worker will not place orders until you provide it")
 
 # -----------------------------
-# --- Helper functions -------
+# --- Helper functions --------
 # -----------------------------
 def get_usd_balance(client):
     try:
@@ -147,15 +117,34 @@ def clamp(n, minn, maxn):
     return max(minn, min(maxn, n))
 
 # -----------------------------
+# --- Debug patch -------------
+# -----------------------------
+def log_debug_state(market_data=None, decision=None, trade_result=None, client=None):
+    if market_data:
+        logger.info(f"[NIJA-DEBUG] Market price: {market_data.get('price')}")
+    if decision is not None:
+        logger.info(f"[NIJA-DEBUG] Trade decision: {decision}")
+    if trade_result is not None:
+        logger.info(f"[NIJA-DEBUG] Trade executed: {trade_result}")
+    if client:
+        try:
+            balances = client.get_account_balances()
+            logger.info(f"[NIJA-DEBUG] Account balances: {balances}")
+        except Exception as e:
+            logger.warning(f"[NIJA-DEBUG] Could not fetch balances: {e}")
+
+# -----------------------------
 # --- Main worker ------------
 # -----------------------------
 def start_worker(client):
     logger.info(f"[NIJA] start_worker invoked. DRY_RUN={DRY_RUN}")
     if decide_trade is None:
         logger.warning("[NIJA] No trading_logic.decide_trade available — cannot place trades")
+
     while True:
         try:
             signal = decide_trade(client) if decide_trade else None
+
             if signal:
                 action = str(signal.get("action")).lower()
                 product_id = signal.get("product_id") or signal.get("symbol")
@@ -177,6 +166,14 @@ def start_worker(client):
                         else:
                             price = get_price_for_product(client, product_id)
                             logger.info(f"[NIJA] Market price for {product_id}: {price}")
+
+                            # --- Debug logging ---
+                            log_debug_state(
+                                market_data={"price": price},
+                                decision={"action": action, "product_id": product_id, "confidence": confidence},
+                                client=client
+                            )
+
                             if DRY_RUN:
                                 logger.info(f"[NIJA] DRY_RUN enabled — would place {action} for ${usd_to_use} on {product_id}")
                             else:
@@ -184,15 +181,29 @@ def start_worker(client):
                                     result = place_market_order(client, action, product_id, usd_to_use)
                                     logger.info(f"[NIJA] Order result: {result}")
                                     trade_logger.info(f"{action.upper()} {product_id} ${usd_to_use} -> {result}")
+
+                                    # Log balances after trade
+                                    log_debug_state(client=client)
+
                                 except Exception as e:
                                     logger.error(f"[NIJA] Failed to place order: {e}")
             else:
                 logger.debug("[NIJA] No signal from strategy this loop")
+                # Optional: log balances even when no signal
+                log_debug_state(client=client)
 
             time.sleep(SLEEP_SECONDS)
+
         except KeyboardInterrupt:
             logger.info("[NIJA] Worker interrupted; exiting cleanly")
             break
         except Exception as e:
             logger.exception(f"[NIJA] Worker loop error: {e}")
             time.sleep(5)
+
+# -----------------------------
+# --- Run worker if script is main ---
+# -----------------------------
+if __name__ == "__main__":
+    from nija_client import client  # live Coinbase client
+    start_worker(client)
