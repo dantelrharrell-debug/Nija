@@ -29,3 +29,6 @@ coinbase-advanced-py==1.8.2
 coinbase-advanced-py>=1.0.0
 coinbase-advanced-py>=0.1
 coinbase-advancedtrade-python
+pyjwt>=2.0.0
+requests>=2.0.0
+tradingview_ta>=2.0.0   # if you keep using it for signals
