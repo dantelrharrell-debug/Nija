@@ -1,81 +1,69 @@
 import os
-import logging
+import sys
 import time
+import logging
 from decimal import Decimal
 
-logger = logging.getLogger("nija_client")
-logging.basicConfig(level=logging.INFO)
+# --- Vendor coinbase client ---
+sys.path.insert(0, os.path.join(os.getcwd(), "vendor"))
 
-# --- Try importing Coinbase client ---
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_client")
+
+# Try importing CoinbaseClient
 CoinbaseClient = None
 try:
     from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] Coinbase client available")
+    logger.info("[NIJA] Coinbase client module available")
 except ModuleNotFoundError:
     logger.warning("[NIJA] Coinbase client not found, using DummyClient")
 
-# --- Dummy client ---
+# DummyClient for simulation if CoinbaseClient not found
 class DummyClient:
-    def get_account(self, currency):
-        return {"balance": 1000.0}  # simulate $1000
-
     def buy(self, product_id, amount):
         logger.info(f"[DummyClient] Simulated BUY {{'amount': {amount}, 'product_id': '{product_id}'}}")
+        return {"status": "simulated"}
 
-    def sell(self, product_id, amount):
-        logger.info(f"[DummyClient] Simulated SELL {{'amount': {amount}, 'product_id': '{product_id}'}}")
+# Initialize client
+def get_client():
+    if CoinbaseClient and os.getenv("TRADING_MODE") == "live":
+        client = CoinbaseClient(
+            api_key=os.getenv("COINBASE_API_KEY"),
+            api_secret=os.getenv("COINBASE_API_SECRET"),
+            api_passphrase=os.getenv("COINBASE_API_PASSPHRASE")
+        )
+        logger.info("[NIJA] Live trading client initialized ✅")
+        return client
+    else:
+        logger.warning("[NIJA] Trading in simulation mode ❌")
+        return DummyClient()
 
-# --- Initialize client ---
-if CoinbaseClient and os.getenv("TRADING_MODE") == "live":
-    client = CoinbaseClient(
-        api_key=os.getenv("COINBASE_API_KEY"),
-        api_secret=os.getenv("COINBASE_API_SECRET"),
-        api_passphrase=os.getenv("COINBASE_API_PASSPHRASE")
-    )
-    logger.info("[NIJA] Live trading client initialized")
-else:
-    client = DummyClient()
-    logger.warning("[NIJA] Trading in simulation mode")
+# Trading parameters
+PRODUCT_ID = "BTC-USD"
+MIN_POSITION = Decimal("0.02")  # 2% of equity
+MAX_POSITION = Decimal("0.10")  # 10% of equity
 
-# --- Position sizing ---
-def get_position_size(account_balance):
-    """Use 2%–10% of equity per trade, aggressive but safe."""
-    min_pct, max_pct = Decimal("0.02"), Decimal("0.10")
-    trade_pct = max_pct  # always go aggressive by default
-    return round(account_balance * trade_pct, 2)
+# Example get account balance function
+def get_balance():
+    # Replace with real API call if using CoinbaseClient
+    return Decimal("1000")  # USD placeholder
 
-# --- Simple strategy (price threshold example) ---
-def check_signal(price):
-    """Return True to buy, False to skip."""
-    # Example: buy only if BTC < $30,000 (replace with your own logic)
-    return price < 30000
-
-# --- Trading loop ---
+# Start trading loop
 def start_trading():
-    product = "BTC-USD"
+    client = get_client()
     logger.info("[NIJA] Trading loop started...")
 
-    def loop():
-        while True:
-            # --- Get account balance ---
-            balance_info = client.get_account("USD")
-            balance = Decimal(balance_info.get("balance", 0))
+    while True:
+        try:
+            balance = get_balance()
+            trade_size = max(MIN_POSITION, min(MAX_POSITION, Decimal("0.05")))  # 5% example
+            amount_to_buy = balance * trade_size
+            amount_to_buy = round(amount_to_buy / 29500, 6)  # example BTC price
 
-            # --- Get current price ---
-            # DummyClient doesn't have price API, replace with real API call in live mode
-            price = Decimal("29500") if isinstance(client, DummyClient) else client.get_product_price(product)
+            result = client.buy(PRODUCT_ID, float(amount_to_buy))
+            logger.info(f"[NIJA] BUY executed: {amount_to_buy} BTC")
+        except Exception as e:
+            logger.error(f"[NIJA] Trading error: {e}")
 
-            # --- Check trading signal ---
-            if check_signal(price):
-                amount_usd = get_position_size(balance)
-                amount_btc = amount_usd / price
-                client.buy(product_id=product, amount=float(amount_btc))
-                logger.info(f"[NIJA] BUY executed: {amount_btc:.6f} BTC @ ${price}")
-            else:
-                logger.info(f"[NIJA] No signal, price at ${price}")
-
-            time.sleep(10)  # adjust interval as needed
-
-    import threading
-    t = threading.Thread(target=loop, daemon=True)
-    t.start()
+        time.sleep(10)  # Run every 10 seconds
