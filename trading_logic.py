@@ -1,30 +1,27 @@
-# --- trading_logic.py ---
+# trading_logic.py
 
-import logging
-
-def generate_signal(symbol, client=None):
+def decide_trade(client):
     """
-    Generate a trading signal for a given symbol.
-    Accepts optional client for live data or order execution.
+    Simple live buy/sell logic for BTC-USD:
+    - Buy if USD balance >= $10
+    - Sell if BTC balance >= 0.001
+    - Returns trade signal: {'action':'buy'/'sell', 'product_id':'BTC-USD', 'confidence':0.8}
     """
-    signal = None
+    try:
+        balances = client.get_account_balances()
+        usd_balance = float(balances.get("USD", 0))
+        btc_balance = float(balances.get("BTC", 0))  # adjust if your client uses a different key
 
-    if client is not None:
-        try:
-            # Fetch live market data
-            market_data = client.get_market_data(symbol)  # adjust based on your API
-            price = market_data.get("price")
-            moving_average = market_data.get("moving_average")
+        # Buy logic
+        if usd_balance >= 10:
+            return {"action": "buy", "product_id": "BTC-USD", "confidence": 1.0}
 
-            if price is not None and moving_average is not None:
-                signal = "BUY" if price < moving_average else "SELL"
-            else:
-                signal = "HOLD"
-        except Exception as e:
-            logging.error(f"[generate_signal] client error for {symbol}: {e}")
-            signal = "HOLD"
-    else:
-        # Dry-run / no client available
-        signal = "HOLD"
+        # Sell logic
+        elif btc_balance >= 0.001:
+            return {"action": "sell", "product_id": "BTC-USD", "confidence": 1.0}
 
-    return signal
+    except Exception as e:
+        print(f"[TRADING_LOGIC] Error fetching balances: {e}")
+
+    # No trade
+    return None
