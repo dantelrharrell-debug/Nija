@@ -1,42 +1,30 @@
-# trading_logic.py
+# --- trading_logic.py ---
+
+import logging
 
 def generate_signal(symbol, client=None):
     """
-    Generates a trading signal for a given symbol.
-    Accepts an optional client for live data fetching.
+    Generate a trading signal for a given symbol.
+    Accepts optional client for live data or order execution.
     """
-    # --- Fetch historical data ---
-    if client:
-        # Use live client to fetch historical prices
+    signal = None
+
+    if client is not None:
         try:
-            df = client.get_historical_data(symbol)
+            # Fetch live market data
+            market_data = client.get_market_data(symbol)  # adjust based on your API
+            price = market_data.get("price")
+            moving_average = market_data.get("moving_average")
+
+            if price is not None and moving_average is not None:
+                signal = "BUY" if price < moving_average else "SELL"
+            else:
+                signal = "HOLD"
         except Exception as e:
-            print(f"[generate_signal] Error fetching live data for {symbol}: {e}")
-            df = fetch_dummy_data(symbol)  # fallback dummy data
+            logging.error(f"[generate_signal] client error for {symbol}: {e}")
+            signal = "HOLD"
     else:
-        # No client provided: use dummy/test data
-        df = fetch_dummy_data(symbol)
+        # Dry-run / no client available
+        signal = "HOLD"
 
-    # --- Simple example signal logic ---
-    latest_close = df['close'].iloc[-1]
-    avg_close = df['close'].mean()
-
-    if latest_close > avg_close:
-        return "buy"
-    elif latest_close < avg_close:
-        return "sell"
-    else:
-        return "hold"
-
-
-def fetch_dummy_data(symbol):
-    """
-    Returns dummy price data in DataFrame format for testing.
-    """
-    import pandas as pd
-    import numpy as np
-
-    np.random.seed(42)
-    prices = np.random.normal(loc=100, scale=5, size=50)  # 50 dummy candles
-    df = pd.DataFrame(prices, columns=['close'])
-    return df
+    return signal
