@@ -5,27 +5,25 @@ from nija_client import client, get_usd_balance
 from tradingview_ta import TA_Handler, Interval
 
 # --- Logging ---
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger("nija_worker")
 
 # --- Risk management ---
 MIN_PCT = 0.02  # 2% minimum
 MAX_PCT = 0.10  # 10% maximum
-MIN_USD = 1.0   # minimum trade
+MIN_USD = 1.0   # minimum trade in USD
 
-# --- Trade sizing ---
+# --- Trade size calculation ---
 def calculate_order_size(equity: Decimal, pct: float) -> Decimal:
     size = equity * Decimal(pct)
-    return max(size, Decimal(MIN_USD))
+    if size < MIN_USD:
+        size = Decimal(MIN_USD)
+    return size
 
-# --- Pre-flight check ---
-def pre_flight_check():
-    usd_balance = get_usd_balance(client)
-    if usd_balance <= 0:
-        raise SystemExit("[NIJA] Pre-flight check failed: USD balance is zero or unavailable.")
-    logger.info(f"[NIJA] Pre-flight check passed. USD balance: {usd_balance}")
-
-# --- Trading logic ---
+# --- Live trading signal ---
 def decide_trade():
     try:
         handler = TA_Handler(
@@ -38,9 +36,9 @@ def decide_trade():
         rsi = analysis.indicators.get("RSI", 50)
         vwap = analysis.indicators.get("VWAP", 0)
         close = analysis.indicators.get("close", 0)
+
         equity = get_usd_balance(client)
 
-        # Aggressive but safe signals
         if rsi < 30 and close < vwap:
             return "buy", min(MAX_PCT, 0.05)
         elif rsi > 70 and close > vwap:
@@ -55,6 +53,7 @@ def place_order(trade_type: str, position_pct: float):
     equity = get_usd_balance(client)
     order_size = calculate_order_size(equity, position_pct)
     logger.info(f"[NIJA] Executing {trade_type.upper()} order: ${order_size:.2f} ({position_pct*100:.1f}% equity)")
+
     try:
         order = client.place_order(
             product_id="BTC-USD",
@@ -69,7 +68,6 @@ def place_order(trade_type: str, position_pct: float):
 # --- Worker loop ---
 def run_worker():
     logger.info("[NIJA] Starting live trading worker...")
-    pre_flight_check()
     while True:
         try:
             signal = decide_trade()
@@ -77,7 +75,7 @@ def run_worker():
                 trade_type, pct = signal
                 place_order(trade_type, pct)
             else:
-                logger.info("[NIJA] No trade signal, waiting...")
+                logger.info("[NIJA] No trade signal. Waiting...")
             time.sleep(5)
         except KeyboardInterrupt:
             logger.info("[NIJA] Worker stopped by user")
