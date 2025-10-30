@@ -1,3 +1,32 @@
+import logging
+
+logger = logging.getLogger("nija_worker")
+
+# --- DEBUG PATCH START ---
+def log_debug_state(market_data=None, decision=None, trade_result=None, client=None):
+    """
+    Prints market data, trade decisions, executed trades, and account balances.
+    Safe for live trading.
+    """
+    if market_data:
+        price = market_data.get("price")
+        logger.info(f"[NIJA-DEBUG] Market price: {price}")
+
+    if decision is not None:
+        logger.info(f"[NIJA-DEBUG] Trade decision: {decision}")
+
+    if trade_result is not None:
+        logger.info(f"[NIJA-DEBUG] Trade executed: {trade_result}")
+
+    # Log account balances if client is provided
+    if client:
+        try:
+            balances = client.get_account_balances()  # Should return dict like {'USD': xx, 'BTC': xx}
+            logger.info(f"[NIJA-DEBUG] Account balances: {balances}")
+        except Exception as e:
+            logger.warning(f"[NIJA-DEBUG] Could not fetch balances: {e}")
+# --- DEBUG PATCH END ---
+
 # nija_worker.py
 import os
 import logging
