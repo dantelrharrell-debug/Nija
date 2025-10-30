@@ -14,13 +14,12 @@ class DummyClient:
         return [{"currency": "USD", "balance": Decimal("1000")}]
 
 # --- Attempt to import Coinbase Exchange client ---
-CoinbaseClient = None
 try:
     from coinbase_advanced_py.client import CoinbaseClient
     logger.info("[NIJA] CoinbaseClient imported successfully")
 except ModuleNotFoundError:
-    logger.warning("[NIJA] CoinbaseClient not available, using DummyClient")
     CoinbaseClient = None
+    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient")
 
 # --- Load API keys from environment ---
 API_KEY = os.getenv("COINBASE_API_KEY")
@@ -30,20 +29,19 @@ API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 # --- Initialize client function ---
 def init_client():
     """
-    Initializes and returns a live Coinbase client if keys are valid,
-    otherwise returns DummyClient.
+    Returns a live Coinbase client if keys are valid, otherwise DummyClient.
     """
     if CoinbaseClient and API_KEY and API_SECRET and API_PASSPHRASE:
         try:
             client = CoinbaseClient(API_KEY, API_SECRET, API_PASSPHRASE)
-            # Test credentials by fetching balances
-            balances = client.get_accounts()
-            logger.info(f"[NIJA] Coinbase client authenticated. Balances fetched: {balances}")
+            # Test credentials quickly
+            _ = client.get_accounts()
+            logger.info("[NIJA] Coinbase client authenticated")
             return client
         except Exception as e:
-            logger.error(f"[NIJA] Coinbase authentication failed: {e}")
+            logger.warning(f"[NIJA] Coinbase authentication failed: {e}")
     else:
-        logger.warning("[NIJA] Missing Coinbase keys or client unavailable. Using DummyClient")
+        logger.warning("[NIJA] Missing Coinbase keys or client unavailable")
     return DummyClient()
 
 # --- Helper to get USD balance safely ---
