@@ -1,54 +1,73 @@
 # nija_client.py
 import os
 import logging
+from decimal import Decimal
+import time
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Load environment variables for Coinbase ---
+# --- Load environment variables ---
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
-COINBASE_SANDBOX = os.getenv("COINBASE_SANDBOX", "False").lower() == "true"
+COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 
-# --- Try importing CoinbaseClient ---
+# --- Coinbase import ---
 CoinbaseClient = None
 try:
-    from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] CoinbaseClient module found")
+    from coinbase_advanced_py.client import CoinbaseClient as _CoinbaseClient
+    logger.info("[NIJA] CoinbaseClient module imported successfully")
 except ModuleNotFoundError:
-    logger.warning("[NIJA] CoinbaseClient module not found")
+    logger.warning("[NIJA] CoinbaseClient module not found. DummyClient will be used.")
+    _CoinbaseClient = None
 
-# --- Dummy client as fallback ---
-class DummyClient:
-    def __init__(self, *args, **kwargs):
-        logger.info("[NIJA] Using DummyClient (no live trades)")
-    def place_order(self, *args, **kwargs):
-        logger.info(f"[DummyClient] Simulated order: {args}, {kwargs}")
-    def get_balance(self):
-        return {"USD": 1000, "BTC": 0}
-
-# --- Initialize client ---
-client = None
-if CoinbaseClient and COINBASE_API_KEY and COINBASE_API_SECRET and COINBASE_PASSPHRASE:
+# --- Determine if live client can be used ---
+USE_DUMMY = True
+if _CoinbaseClient and COINBASE_API_KEY and COINBASE_API_SECRET:
     try:
-        client = CoinbaseClient(
+        CoinbaseClient = _CoinbaseClient(
             api_key=COINBASE_API_KEY,
             api_secret=COINBASE_API_SECRET,
-            passphrase=COINBASE_PASSPHRASE,
-            sandbox=COINBASE_SANDBOX
+            passphrase=COINBASE_API_PASSPHRASE
         )
-        logger.info("[NIJA] CoinbaseClient initialized. Live trading ENABLED ✅")
+        USE_DUMMY = False
+        logger.info("[NIJA] CoinbaseClient initialized successfully. Live trading enabled!")
     except Exception as e:
-        logger.error(f"[NIJA] Failed to initialize CoinbaseClient: {e}")
-        client = DummyClient()
+        logger.error(f"[NIJA] CoinbaseClient failed to initialize: {e}")
+        CoinbaseClient = None
+        USE_DUMMY = True
 else:
-    if not CoinbaseClient:
-        logger.warning("[NIJA] CoinbaseClient module missing, using DummyClient")
-    else:
-        logger.warning("[NIJA] Missing API credentials, using DummyClient")
-    client = DummyClient()
+    logger.warning("[NIJA] Missing API keys or CoinbaseClient module — using DummyClient.")
 
-# --- Export client ---
-__all__ = ["client"]
+# --- Dummy client for safe fallback ---
+class DummyClient:
+    def buy(self, *args, **kwargs):
+        logger.info(f"[NIJA][DummyClient] Simulated BUY {args} {kwargs}")
+        return {"status": "simulated"}
+
+    def sell(self, *args, **kwargs):
+        logger.info(f"[NIJA][DummyClient] Simulated SELL {args} {kwargs}")
+        return {"status": "simulated"}
+
+# --- Final client assignment ---
+if USE_DUMMY:
+    CoinbaseClient = DummyClient()
+    logger.info("[NIJA] Using DummyClient (no live trades)")
+else:
+    logger.info("[NIJA] Live CoinbaseClient ready")
+
+# --- Example function to test ---
+def test_connection():
+    if USE_DUMMY:
+        logger.info("[NIJA] Running test on DummyClient")
+    else:
+        try:
+            accounts = CoinbaseClient.get_accounts()  # example method
+            logger.info(f"[NIJA] Coinbase accounts loaded: {accounts}")
+        except Exception as e:
+            logger.error(f"[NIJA] Error fetching accounts: {e}")
+            logger.warning("[NIJA] Switching to DummyClient")
+            global CoinbaseClient, USE_DUMMY
+            CoinbaseClient = DummyClient()
+            USE_DUMMY = True
