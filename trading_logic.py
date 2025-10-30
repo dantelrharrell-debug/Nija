@@ -1,54 +1,46 @@
 # trading_logic.py
-import logging
-from decimal import Decimal
-from nija_client import client  # global client from nija_client.py
+import pandas as pd
+import numpy as np
+from indicators import calculate_vwap, calculate_rsi  # make sure these exist
 
-logger = logging.getLogger("nija.app")
+def generate_signal(df: pd.DataFrame) -> str:
+    """
+    Generates a trading signal: 'buy', 'sell', or 'hold'.
+    Uses VWAP and RSI as simple indicators.
+    """
+    if df.empty or df.shape[0] < 2:
+        return "hold"  # safe default if no data
 
-def place_order(symbol, trade_type, side, amount):
-    """
-    Places a live order if the Coinbase client is attached; otherwise returns a simulated order.
-    """
+    # Ensure numeric types
+    df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].apply(pd.to_numeric, errors='coerce').ffill()
+
     try:
-        # normalize amount
-        try:
-            amount_dec = Decimal(str(amount))
-        except Exception:
-            logger.warning("[NIJA] Couldn't convert amount to Decimal, using raw value: %s", amount)
-            amount_dec = amount
-
-        # Try live order if client supports it
-        if client and hasattr(client, "place_order"):
-            try:
-                response = client.place_order(
-                    symbol=symbol,
-                    type=trade_type,
-                    side=side,
-                    amount=amount_dec
-                )
-                logger.info("[NIJA] Placed live order -> %s %s %s", side, amount_dec, symbol)
-                return response
-            except Exception as live_err:
-                logger.error("[NIJA] Live order failed for %s: %s -- falling back to simulation", symbol, live_err)
-
-        # Fallback simulation
-        simulated = {
-            "symbol": symbol,
-            "type": trade_type,
-            "side": side,
-            "amount": str(amount_dec),
-            "status": "simulated"
-        }
-        logger.warning("[NIJA] place_order: client is None or failed -> simulated order returned for %s", symbol)
-        return simulated
-
+        vwap = calculate_vwap(df)
+        rsi = calculate_rsi(df['close'])
     except Exception as e:
-        logger.exception("[NIJA] Unexpected error in place_order for %s: %s", symbol, e)
-        return {
-            "symbol": symbol,
-            "type": trade_type,
-            "side": side,
-            "amount": str(amount),
-            "status": "simulated_due_to_error",
-            "error": str(e)
-        }
+        print(f"[trading_logic] Indicator calculation failed: {e}")
+        return "hold"
+
+    latest_close = df['close'].iloc[-1]
+
+    # Example simple logic
+    if latest_close > vwap.iloc[-1] and rsi.iloc[-1] < 70:
+        return "buy"
+    elif latest_close < vwap.iloc[-1] and rsi.iloc[-1] > 30:
+        return "sell"
+    else:
+        return "hold"
+
+# Optional: allow direct testing
+if __name__ == "__main__":
+    # create dummy DataFrame for quick test
+    data = {
+        "open": [1,2,3],
+        "high": [2,3,4],
+        "low": [1,2,3],
+        "close": [1.5,2.5,3.5],
+        "volume": [100,200,150]
+    }
+    df_test = pd.DataFrame(data)
+    signal = generate_signal(df_test)
+    print(f"Test signal: {signal}")
