@@ -1,29 +1,26 @@
+# nija_worker.py
 import time
 import logging
 from decimal import Decimal
-from nija_client import client, get_usd_balance
 from tradingview_ta import TA_Handler, Interval
 
-# --- Logging ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
+from nija_coinbase_client import get_usd_balance, place_order_market_quote
+
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("nija_worker")
 
-# --- Risk management ---
-MIN_PCT = 0.02  # 2% minimum
-MAX_PCT = 0.10  # 10% maximum
-MIN_USD = 1.0   # minimum trade in USD
+# Risk parameters (adjust as desired)
+MIN_PCT = 0.02
+MAX_PCT = 0.10
+MIN_USD = Decimal("1.00")
 
-# --- Trade size calculation ---
 def calculate_order_size(equity: Decimal, pct: float) -> Decimal:
-    size = equity * Decimal(pct)
+    size = equity * Decimal(str(pct))
     if size < MIN_USD:
-        size = Decimal(MIN_USD)
-    return size
+        size = MIN_USD
+    return size.quantize(Decimal("0.01"))  # cents resolution
 
-# --- Live trading signal ---
 def decide_trade():
     try:
         handler = TA_Handler(
@@ -37,42 +34,37 @@ def decide_trade():
         vwap = analysis.indicators.get("VWAP", 0)
         close = analysis.indicators.get("close", 0)
 
-        equity = get_usd_balance(client)
+        equity = get_usd_balance()
 
         if rsi < 30 and close < vwap:
-            return "buy", min(MAX_PCT, 0.05)
+            pct = min(MAX_PCT, 0.05)
+            return "buy", pct
         elif rsi > 70 and close > vwap:
-            return "sell", min(MAX_PCT, 0.05)
+            pct = min(MAX_PCT, 0.05)
+            return "sell", pct
         return None
     except Exception as e:
-        logger.error(f"[NIJA] decide_trade error: {e}")
+        logger.error("[NIJA] decide_trade error: %s", e)
         return None
 
-# --- Place live order ---
 def place_order(trade_type: str, position_pct: float):
-    equity = get_usd_balance(client)
-    order_size = calculate_order_size(equity, position_pct)
-    logger.info(f"[NIJA] Executing {trade_type.upper()} order: ${order_size:.2f} ({position_pct*100:.1f}% equity)")
-
+    equity = get_usd_balance()
+    order_size = calculate_order_size(equity, position_pct)  # USD amount
+    logger.info(f"[NIJA] Executing {trade_type.upper()} order: ${order_size} ({position_pct*100:.1f}% equity)")
     try:
-        order = client.place_order(
-            product_id="BTC-USD",
-            side=trade_type,
-            order_type="market",
-            funds=str(order_size)
-        )
-        logger.info(f"[NIJA] Order confirmed: {order}")
+        # place market order using quote_size (amount in USD)
+        response = place_order_market_quote(product_id="BTC-USD", side=("BUY" if trade_type=="buy" else "SELL"), quote_size=str(order_size))
+        logger.info("[NIJA] Order response: %s", response)
     except Exception as e:
-        logger.error(f"[NIJA] Order failed: {e}")
+        logger.error("[NIJA] Order failed: %s", e)
 
-# --- Worker loop ---
 def run_worker():
-    logger.info("[NIJA] Starting live trading worker...")
+    logger.info("[NIJA] Starting live trading worker (JWT/CDP mode)...")
     while True:
         try:
-            signal = decide_trade()
-            if signal:
-                trade_type, pct = signal
+            trade_signal = decide_trade()
+            if trade_signal:
+                trade_type, pct = trade_signal
                 place_order(trade_type, pct)
             else:
                 logger.info("[NIJA] No trade signal. Waiting...")
@@ -81,7 +73,7 @@ def run_worker():
             logger.info("[NIJA] Worker stopped by user")
             break
         except Exception as e:
-            logger.error(f"[NIJA] Unexpected error: {e}")
+            logger.error("[NIJA] Unexpected error in worker: %s", e)
             time.sleep(2)
 
 if __name__ == "__main__":
