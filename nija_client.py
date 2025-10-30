@@ -17,7 +17,7 @@ except Exception as e:
 # --- Load API keys from environment ---
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional for your account
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional
 
 if not (API_KEY and API_SECRET):
     raise SystemExit("[NIJA] Missing Coinbase API_KEY or API_SECRET. Live trading cannot start.")
@@ -27,11 +27,12 @@ try:
     client = RESTClient(
         api_key=API_KEY,
         api_secret=API_SECRET,
-        api_passphrase=API_PASSPHRASE  # can be None
+        api_passphrase=API_PASSPHRASE
     )
-    # Quick test
+    # quick test call
     accounts = client.get_accounts()
-    logger.info(f"[NIJA] Coinbase client authenticated. USD balance: {next((a['balance'] for a in accounts if a['currency']=='USD'), '0')}")
+    usd_balance = next((Decimal(a["balance"]) for a in accounts if a["currency"] == "USD"), Decimal("0"))
+    logger.info(f"[NIJA] Coinbase client authenticated. USD balance: {usd_balance}")
 except Exception as e:
     raise SystemExit(f"[NIJA] Coinbase authentication failed: {e}")
 
