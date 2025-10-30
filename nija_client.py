@@ -19,8 +19,11 @@ try:
 except ModuleNotFoundError:
     logger.warning("[NIJA] Coinbase client not found, using DummyClient")
 
-# DummyClient for simulation if CoinbaseClient not found
+# DummyClient for simulation
 class DummyClient:
+    def get_account_balance(self):
+        return {"balance": 1000.0}  # placeholder USD balance
+
     def buy(self, product_id, amount):
         logger.info(f"[DummyClient] Simulated BUY {{'amount': {amount}, 'product_id': '{product_id}'}}")
         return {"status": "simulated"}
@@ -41,29 +44,53 @@ def get_client():
 
 # Trading parameters
 PRODUCT_ID = "BTC-USD"
-MIN_POSITION = Decimal("0.02")  # 2% of equity
-MAX_POSITION = Decimal("0.10")  # 10% of equity
+MIN_POSITION = Decimal("0.02")  # 2%
+MAX_POSITION = Decimal("0.10")  # 10%
+TRADE_INTERVAL = 10  # seconds
 
-# Example get account balance function
-def get_balance():
-    # Replace with real API call if using CoinbaseClient
-    return Decimal("1000")  # USD placeholder
+# Helper: Get USD balance
+def get_usd_balance(client):
+    try:
+        if isinstance(client, DummyClient):
+            return Decimal(client.get_account_balance()["balance"])
+        accounts = client.get_accounts()
+        for acct in accounts:
+            if acct["currency"] == "USD":
+                return Decimal(acct["available"])
+        return Decimal("0")
+    except Exception as e:
+        logger.error(f"[NIJA] Failed to fetch balance: {e}")
+        return Decimal("0")
 
-# Start trading loop
+# Calculate trade amount dynamically
+def calculate_trade_amount(balance):
+    # Randomly pick between MIN_POSITION and MAX_POSITION
+    from random import uniform
+    percent = Decimal(str(uniform(float(MIN_POSITION), float(MAX_POSITION))))
+    return balance * percent
+
+# Main trading loop
 def start_trading():
     client = get_client()
     logger.info("[NIJA] Trading loop started...")
 
     while True:
         try:
-            balance = get_balance()
-            trade_size = max(MIN_POSITION, min(MAX_POSITION, Decimal("0.05")))  # 5% example
-            amount_to_buy = balance * trade_size
-            amount_to_buy = round(amount_to_buy / 29500, 6)  # example BTC price
+            usd_balance = get_usd_balance(client)
+            if usd_balance <= 0:
+                logger.warning("[NIJA] USD balance zero, skipping trade")
+                time.sleep(TRADE_INTERVAL)
+                continue
 
-            result = client.buy(PRODUCT_ID, float(amount_to_buy))
-            logger.info(f"[NIJA] BUY executed: {amount_to_buy} BTC")
+            trade_usd = calculate_trade_amount(usd_balance)
+
+            # Example BTC price; replace with real market price from CoinbaseClient if needed
+            btc_price = Decimal("29500")
+            btc_amount = (trade_usd / btc_price).quantize(Decimal("0.000001"))
+
+            result = client.buy(PRODUCT_ID, float(btc_amount))
+            logger.info(f"[NIJA] BUY executed: {btc_amount} BTC @ approx ${btc_price}")
         except Exception as e:
             logger.error(f"[NIJA] Trading error: {e}")
 
-        time.sleep(10)  # Run every 10 seconds
+        time.sleep(TRADE_INTERVAL)
