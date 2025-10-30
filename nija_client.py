@@ -1,25 +1,30 @@
-from coinbase_advanced_py import CoinbaseClient
-
 #!/usr/bin/env python3
 # nija_client.py
 import os
 import logging
-from coinbase_advanced_py.client import CoinbaseClient
+from decimal import Decimal
 
-# ---------------------
-# Logging
-# ---------------------
+# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# ---------------------
-# Coinbase Client (LIVE ONLY)
-# ---------------------
+# --- Coinbase Client ---
+CoinbaseClient = None
+
+try:
+    from coinbase_advanced_py import CoinbaseClient
+except ModuleNotFoundError as e:
+    logger.error(f"[NIJA] Coinbase client import failed: {e}")
+    raise
+
+# --- Environment Variables ---
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 
-if not API_KEY or not API_SECRET:
-    raise RuntimeError("[NIJA] Coinbase API key/secret not set! Live trading cannot start.")
+if not all([API_KEY, API_SECRET, API_PASSPHRASE]):
+    raise EnvironmentError("[NIJA] Missing Coinbase API credentials in environment variables!")
 
-client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET)
-logger.info("[NIJA] CoinbaseClient initialized - LIVE trading enabled")
+# --- Initialize live client ---
+client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET, passphrase=API_PASSPHRASE)
+logger.info("[NIJA] CoinbaseClient initialized — LIVE trading ENABLED")
