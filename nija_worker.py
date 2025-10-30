@@ -1,3 +1,29 @@
+# nija_render_worker.py
+import logging
+from nija_client import client  # Only import the live client
+from trading_logic import decide_trade
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_worker")
+
+logger.info("[NIJA] Starting Nija Trading Bot...")
+
+# --- Example worker loop ---
+def run_worker():
+    logger.info("[NIJA] Worker running with live Coinbase client")
+    while True:
+        try:
+            # Call your trading logic
+            decision = decide_trade()
+            if decision:
+                # Example: execute trade
+                client.place_order(**decision)
+        except Exception as e:
+            logger.error(f"[NIJA] Worker error: {e}")
+
+if __name__ == "__main__":
+    run_worker()
+
 # nija_worker.py
 import logging, time
 from decimal import Decimal, ROUND_DOWN
