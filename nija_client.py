@@ -1,69 +1,54 @@
 # nija_client.py
+import os
 import logging
-import time
-from decimal import Decimal
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Dummy client fallback ---
-class DummyClient:
-    def buy(self, **kwargs):
-        logger.info(f"[DummyClient] Simulated BUY {kwargs}")
-        return {"status": "simulated_buy", **kwargs}
-
-    def sell(self, **kwargs):
-        logger.info(f"[DummyClient] Simulated SELL {kwargs}")
-        return {"status": "simulated_sell", **kwargs}
+# --- Load environment variables for Coinbase ---
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
+COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+COINBASE_PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
+COINBASE_SANDBOX = os.getenv("COINBASE_SANDBOX", "False").lower() == "true"
 
 # --- Try importing CoinbaseClient ---
+CoinbaseClient = None
 try:
     from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] CoinbaseClient module found ✅")
+    logger.info("[NIJA] CoinbaseClient module found")
 except ModuleNotFoundError:
-    CoinbaseClient = None
-    logger.warning("[NIJA] CoinbaseClient module not found — using DummyClient")
+    logger.warning("[NIJA] CoinbaseClient module not found")
 
-# --- Direct live API keys ---
-COINBASE_API_KEY = "YOUR_LIVE_API_KEY_HERE"
-COINBASE_API_SECRET = "YOUR_LIVE_API_SECRET_HERE"
-COINBASE_PASSPHRASE = "YOUR_LIVE_PASSPHRASE_HERE"
+# --- Dummy client as fallback ---
+class DummyClient:
+    def __init__(self, *args, **kwargs):
+        logger.info("[NIJA] Using DummyClient (no live trades)")
+    def place_order(self, *args, **kwargs):
+        logger.info(f"[DummyClient] Simulated order: {args}, {kwargs}")
+    def get_balance(self):
+        return {"USD": 1000, "BTC": 0}
 
 # --- Initialize client ---
-if CoinbaseClient:
+client = None
+if CoinbaseClient and COINBASE_API_KEY and COINBASE_API_SECRET and COINBASE_PASSPHRASE:
     try:
         client = CoinbaseClient(
             api_key=COINBASE_API_KEY,
             api_secret=COINBASE_API_SECRET,
             passphrase=COINBASE_PASSPHRASE,
-            sandbox=False  # True for sandbox mode
+            sandbox=COINBASE_SANDBOX
         )
         logger.info("[NIJA] CoinbaseClient initialized. Live trading ENABLED ✅")
     except Exception as e:
-        logger.error(f"[NIJA] CoinbaseClient failed to initialize: {e}")
-        logger.warning("[NIJA] Falling back to DummyClient ❌")
+        logger.error(f"[NIJA] Failed to initialize CoinbaseClient: {e}")
         client = DummyClient()
 else:
+    if not CoinbaseClient:
+        logger.warning("[NIJA] CoinbaseClient module missing, using DummyClient")
+    else:
+        logger.warning("[NIJA] Missing API credentials, using DummyClient")
     client = DummyClient()
 
-# --- Example trade functions ---
-def place_buy(amount, product_id):
-    """Place a buy order."""
-    try:
-        response = client.buy(amount=amount, product_id=product_id)
-        logger.info(f"[NIJA] BUY response: {response}")
-        return response
-    except Exception as e:
-        logger.error(f"[NIJA] BUY failed: {e}")
-        return None
-
-def place_sell(amount, product_id):
-    """Place a sell order."""
-    try:
-        response = client.sell(amount=amount, product_id=product_id)
-        logger.info(f"[NIJA] SELL response: {response}")
-        return response
-    except Exception as e:
-        logger.error(f"[NIJA] SELL failed: {e}")
-        return None
+# --- Export client ---
+__all__ = ["client"]
