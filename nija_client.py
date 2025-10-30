@@ -1,117 +1,140 @@
 # nija_client.py
 import os
 import logging
-from pathlib import Path
+import traceback
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Config from environment ---
-DRY_RUN = os.getenv("DRY_RUN", "False").lower() in ("1", "true", "yes")
-LIVE_TRADING = os.getenv("LIVE_TRADING", "True").lower() in ("1", "true", "yes")
-
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_PASSPHRASE = os.getenv("COINBASE_PASSPHRASE")
-COINBASE_PEM = os.getenv("COINBASE_PEM")            # full PEM text (optional)
-COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")  # explicit path (optional)
-PEM_DEFAULT_PATH = "/opt/render/project/secrets/coinbase.pem"
-
-# Ensure secrets directory exists when writing PEM
-Path("/opt/render/project/secrets").mkdir(parents=True, exist_ok=True)
-
-# --- Dummy client fallback (keeps signatures similar to real client usage) ---
-class DummyClient:
-    def fetch_account(self):
-        logger.info("[DummyClient] fetch_account called")
-        return {"balances": []}
-
-    def place_order(self, **kwargs):
-        logger.info(f"[DummyClient] Simulated place_order: {kwargs}")
-        return {
-            "id": "sim-order",
-            "status": "simulated",
-            "details": kwargs
-        }
-
-    def get_product_ticker(self, product_id):
-        logger.info(f"[DummyClient] get_product_ticker {product_id}")
-        return {"price": "0.00"}
-
-# --- Try to import the real Coinbase client the correct way ---
+# --- Helper: try import multiple possible locations for CoinbaseClient ---
 CoinbaseClient = None
-try:
-    # >>> Correct import
-    from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] coinbase_advanced_py.client import succeeded")
-except Exception as e:
-    logger.warning(f"[NIJA] coinbase_advanced_py.client import failed: {e}")
-    CoinbaseClient = None
+_import_path_used = None
+_import_errors = []
 
-# --- If PEM body provided, write it to disk (securely) ---
-def write_pem_if_present():
-    if COINBASE_PEM:
-        path = COINBASE_PEM_PATH or PEM_DEFAULT_PATH
-        try:
-            with open(path, "w", newline="\n") as f:
-                f.write(COINBASE_PEM)
-            os.chmod(path, 0o600)
-            logger.info(f"[NIJA] Wrote PEM to {path} (mode 600)")
-            return path
-        except Exception as e:
-            logger.error(f"[NIJA] Failed to write PEM to {path}: {e}")
-            return None
-    # if an explicit path env var was set but not the pem body, just return the path so client may use it
-    if COINBASE_PEM_PATH and Path(COINBASE_PEM_PATH).exists():
-        return COINBASE_PEM_PATH
-    return None
+candidates = [
+    "coinbase_advanced_py.client",        # preferred / newest
+    "coinbase_advanced_py",               # older layout might export from top-level
+    "coinbase_advanced_py.client.client", # defensive
+]
 
-pem_path_used = write_pem_if_present()  # may be None
+for path in candidates:
+    try:
+        module = __import__(path, fromlist=["CoinbaseClient"])
+        CoinbaseClient = getattr(module, "CoinbaseClient", None)
+        if CoinbaseClient:
+            _import_path_used = path
+            logger.info(f"[NIJA] coinbase import succeeded from '{path}'")
+            break
+        else:
+            raise ImportError(f"module '{path}' has no attribute CoinbaseClient")
+    except Exception as e:
+        _import_errors.append((path, str(e)))
+        # continue trying next candidate
 
-# --- Initialize client (real or dummy) ---
+if CoinbaseClient is None:
+    logger.warning("[NIJA] coinbase_advanced_py.client import failed for all candidates. See errors below:")
+    for p, err in _import_errors:
+        logger.warning(f" - tried {p}: {err}")
+
+# --- Read environment / secrets (log presence only, not values) ---
+env = {
+    "API_KEY": bool(os.getenv("COINBASE_API_KEY")),
+    "API_SECRET": bool(os.getenv("COINBASE_API_SECRET")),
+    "PASSPHRASE": bool(os.getenv("COINBASE_PASSPHRASE")),
+    "PEM": bool(os.getenv("COINBASE_PEM")),
+    "PEM_PATH": bool(os.getenv("COINBASE_PEM_PATH")),
+    "LIVE_TRADING": os.getenv("LIVE_TRADING", "False"),
+    "DRY_RUN": os.getenv("DRY_RUN", "True"),
+}
+logger.info(f"[NIJA] env presence: API_KEY={env['API_KEY']} API_SECRET={env['API_SECRET']} PASSPHRASE={env['PASSPHRASE']} PEM={env['PEM']} PEM_PATH={env['PEM_PATH']} LIVE_TRADING={env['LIVE_TRADING']} DRY_RUN={env['DRY_RUN']}")
+
+# --- If PEM provided as env var, write to well-known path ---
+pem_path = None
+if os.getenv("COINBASE_PEM"):
+    try:
+        pem_text = os.getenv("COINBASE_PEM")
+        pem_path = "/opt/render/project/secrets/coinbase.pem"
+        os.makedirs(os.path.dirname(pem_path), exist_ok=True)
+        with open(pem_path, "w") as f:
+            f.write(pem_text)
+        logger.info(f"[NIJA] Wrote COINBASE_PEM -> {pem_path}")
+    except Exception as e:
+        logger.error(f"[NIJA] Failed to write COINBASE_PEM to path: {e}")
+        pem_path = None
+elif os.getenv("COINBASE_PEM_PATH"):
+    pem_path = os.getenv("COINBASE_PEM_PATH")
+    logger.info(f"[NIJA] Using COINBASE_PEM_PATH -> {pem_path}")
+
+# --- Try to initialize Coinbase client if module found and keys/PEM present ---
 client = None
 client_is_dummy = True
 
-if not DRY_RUN and LIVE_TRADING and CoinbaseClient is not None:
-    # Need api key/secret/passphrase OR a pem path depending on your coinbase client config
+def _try_init_client_ctor(client_cls, kwargs):
+    """Try both positional and keyword constructor patterns and return instance or raise."""
     try:
-        # Prefer API key/secret/passphrase if provided
-        if COINBASE_API_KEY and COINBASE_API_SECRET and COINBASE_PASSPHRASE:
-            logger.info("[NIJA] Initializing CoinbaseClient with API key/secret/passphrase")
-            client = CoinbaseClient(
-                api_key=COINBASE_API_KEY,
-                api_secret=COINBASE_API_SECRET,
-                passphrase=COINBASE_PASSPHRASE,
-                pem_path=pem_path_used  # ok if None
-            )
-        elif pem_path_used:
-            logger.info("[NIJA] Initializing CoinbaseClient with PEM path only")
-            client = CoinbaseClient(pem_path=pem_path_used)
-        else:
-            logger.warning("[NIJA] Coinbase credentials not found in env (API key/secret/passphrase or PEM).")
+        # try keyword args first (most explicit)
+        return client_cls(**kwargs)
+    except Exception as kw_exc:
+        # try positional fallback
+        try:
+            args = []
+            if "api_key" in kwargs:
+                args.append(kwargs["api_key"])
+            if "api_secret" in kwargs:
+                args.append(kwargs["api_secret"])
+            if "passphrase" in kwargs:
+                args.append(kwargs["passphrase"])
+            if "pem_path" in kwargs:
+                args.append(kwargs["pem_path"])
+            return client_cls(*args)
+        except Exception as pos_exc:
+            # raise combined
+            raise Exception(f"keyword-init-error: {kw_exc}; positional-init-error: {pos_exc}")
+
+if CoinbaseClient:
+    init_attempts = []
+    # Build kwargs from env if present
+    kwargs = {}
+    if os.getenv("COINBASE_API_KEY"):
+        kwargs["api_key"] = os.getenv("COINBASE_API_KEY")
+    if os.getenv("COINBASE_API_SECRET"):
+        kwargs["api_secret"] = os.getenv("COINBASE_API_SECRET")
+    if os.getenv("COINBASE_PASSPHRASE"):
+        kwargs["passphrase"] = os.getenv("COINBASE_PASSPHRASE")
+    # add pem path if we have it
+    if pem_path:
+        kwargs["pem_path"] = pem_path
+    if kwargs:
+        try:
+            client = _try_init_client_ctor(CoinbaseClient, kwargs)
+            client_is_dummy = False
+            logger.info("[NIJA] CoinbaseClient initialized successfully using provided credentials/PEM. Live trading enabled.")
+        except Exception as e:
+            logger.error("[NIJA] CoinbaseClient initialization failed with provided credentials/PEM:")
+            logger.error(traceback.format_exc())
             client = None
+            client_is_dummy = True
+    else:
+        logger.warning("[NIJA] CoinbaseClient module available but no credentials/PEM found in environment. Not initializing real client.")
+else:
+    logger.warning("[NIJA] CoinbaseClient module not available; will use DummyClient.")
 
-        # Quick smoke test (non-destructive) if client was created
-        if client is not None:
-            try:
-                # some coinbase clients have a lightweight ping/fetch; adapt if necessary
-                _ = getattr(client, "fetch_account", None)
-                logger.info("[NIJA] CoinbaseClient initialized successfully ✅ Live trading enabled")
-                client_is_dummy = False
-            except Exception as e:
-                logger.error(f"[NIJA] Coinbase client initialized but smoke-check failed: {e}")
-                client = None
-    except Exception as e:
-        logger.error(f"[NIJA] Failed to initialize CoinbaseClient: {e}")
-        client = None
+# --- Fallback DummyClient for safety/testing ---
+class DummyClient:
+    def place_order(self, **kwargs):
+        logger.info(f"[DummyClient] Simulated order: {kwargs}")
+        return {"simulated": True, **kwargs}
+    def fetch_account(self):
+        logger.info("[DummyClient] fetch_account simulated")
+        return {"simulated_balance": True}
+    def __repr__(self):
+        return "<DummyClient simulated>"
 
+# final
 if client is None:
-    logger.warning("[NIJA] Using DummyClient (simulated orders). Set COINBASE_API_KEY/SECRET/PASSPHRASE or COINBASE_PEM to enable live.")
     client = DummyClient()
     client_is_dummy = True
 
-# --- Public exports ---
-__all__ = ["client", "client_is_dummy", "DRY_RUN", "LIVE_TRADING", "pem_path_used"]
-
-logger.info(f"[NIJA] Module loaded. DRY_RUN={DRY_RUN} LIVE_TRADING={LIVE_TRADING} client_is_dummy={client_is_dummy}")
+# expose for importers
+__all__ = ["client", "client_is_dummy", "CoinbaseClient", "pem_path"]
