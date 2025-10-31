@@ -1,161 +1,60 @@
-# nija_coinbase_jwt.py
-import os
-import time
-import jwt
-import logging
-import base64
 import re
-from threading import Lock
+import base64
+import logging
 
 logger = logging.getLogger("nija_coinbase_jwt")
-logger.setLevel(logging.INFO)
 
-KEY_ID = os.environ.get("COINBASE_API_KEY_ID")
-ORG_ID = os.environ.get("COINBASE_ORG_ID")
-
-if not (KEY_ID and ORG_ID):
-    logger.warning("[NIJA-JWT] COINBASE_API_KEY_ID or COINBASE_ORG_ID missing from env. JWT generation will fail until they are set.")
-
-_TOKEN_CACHE = {"token": None, "exp": 0}
-_LOCK = Lock()
-
-def _looks_like_base64(s: str) -> bool:
-    if not s:
-        return False
-    s_compact = re.sub(r"\s+", "", s.strip())
-    # base64 regex (allow padding =), length check to avoid false positives
-    return bool(re.fullmatch(r"[A-Za-z0-9+/=]+", s_compact)) and (len(s_compact) % 4 == 0 or len(s_compact) > 40)
-
-def _sanitize_and_normalize_pem(raw_pem: str, from_b64: bool=False) -> str:
+def _sanitize_and_normalize_pem(raw_pem: str, from_b64: bool=False):
     """
-    Return a well-formed PEM string. Handles:
-      - Full PEM pasted with BEGIN/END (multi-line)
-      - Single-line with literal '\n' sequences
-      - Only base64 body (will be wrapped into BEGIN/END)
-      - base64-encoded full PEM passed in (from_b64=True), decoded then sanitized
+    Normalize PEM for jwt.encode:
+      - Accepts full PEM text, single-line with '\n', or base64 body
+      - If from_b64=True, decodes base64 (can be binary DER)
+      - Returns either UTF-8 string (PEM) or bytes (DER) suitable for jwt.encode
     """
-    if raw_pem is None:
+    if not raw_pem:
         raise ValueError("No PEM provided in environment")
 
     pem = raw_pem.strip()
 
-    # If it's base64-encoded full PEM (we were told from_b64), decode it to text first
     if from_b64:
+        # remove whitespace/newlines
+        s = re.sub(r"\s+", "", pem)
+        padded = s + ("=" * (-len(s) % 4))
         try:
-            s = re.sub(r"\s+", "", pem)
-            padded = s + ("=" * (-len(s) % 4))
-            pem = base64.b64decode(padded).decode("utf-8")
+            pem_bytes = base64.b64decode(padded)
         except Exception as e:
             logger.error("[NIJA-JWT] Failed to decode COINBASE_PEM_KEY_B64: %s", e)
             raise
+        # Try decode UTF-8 for PEM header normalization, fallback to bytes
+        try:
+            pem_str = pem_bytes.decode("utf-8")
+            pem = pem_str
+        except UnicodeDecodeError:
+            logger.warning("[NIJA-JWT] PEM is binary; using raw bytes")
+            return pem_bytes  # keep as bytes for jwt.encode
 
-    # If the user pasted a string with literal backslash-n sequences, convert them
+    # Convert literal '\n' sequences to real newlines
     if "\\n" in pem and "BEGIN" in pem and "END" in pem:
         pem = pem.replace("\\n", "\n")
 
-    # Remove surrounding quotes if present
+    # Strip surrounding quotes if present
     if (pem.startswith('"') and pem.endswith('"')) or (pem.startswith("'") and pem.endswith("'")):
         pem = pem[1:-1].strip()
 
-    # If PEM already contains headers, normalize spacing/newlines
+    # If PEM already has header/trailer, normalize spacing
     if "-----BEGIN" in pem and "-----END" in pem:
         pem = pem.strip()
         if not pem.endswith("\n"):
-            pem = pem + "\n"
+            pem += "\n"
         return pem
 
-    # If it looks like a base64 body (user pasted only the MHc... piece), wrap it
-    if _looks_like_base64(pem):
+    # If it looks like base64 body, wrap it with header/trailer
+    if re.fullmatch(r"[A-Za-z0-9+/=]+", pem) and len(pem) > 40:
         logger.info("[NIJA-JWT] Detected base64 PEM body; wrapping with BEGIN/END headers")
         body = "".join(pem.split())
         wrapped = "\n".join([body[i:i+64] for i in range(0, len(body), 64)])
         pem_full = "-----BEGIN EC PRIVATE KEY-----\n" + wrapped + "\n-----END EC PRIVATE KEY-----\n"
         return pem_full
 
-    # Otherwise, return as-is and let jwt/cryptography raise a clear error
+    # fallback: return as-is
     return pem
-
-def _build_jwt():
-    """
-    Build a short-lived JWT signed with the PEM key provided in env.
-    Accepts either COINBASE_PEM_KEY (raw or base64-body or 'escaped \\n')
-    or COINBASE_PEM_KEY_B64 (base64-of-full-pem).
-    """
-    pem_b64_env = os.environ.get("COINBASE_PEM_KEY_B64")
-    raw_pem_env = os.environ.get("COINBASE_PEM_KEY")
-
-    raw_pem = None
-    from_b64 = False
-    if pem_b64_env:
-        raw_pem = pem_b64_env
-        from_b64 = True
-    elif raw_pem_env:
-        raw_pem = raw_pem_env
-        from_b64 = False
-    else:
-        raise ValueError("Missing COINBASE_PEM_KEY or COINBASE_PEM_KEY_B64 environment variable")
-
-    try:
-        pem = _sanitize_and_normalize_pem(raw_pem, from_b64=from_b64)
-    except Exception as e:
-        logger.error("[NIJA-JWT] PEM sanitization/decoding failed: %s", e)
-        raise
-
-    # sanity check
-    if "-----BEGIN" not in pem or "PRIVATE KEY" not in pem:
-        logger.error("[NIJA-JWT] PEM does not appear valid after normalization. First 120 chars: %s", pem[:120])
-        raise ValueError("Normalized PEM does not contain expected header/trailer")
-
-    now = int(time.time())
-    payload = {
-        "iat": now,
-        "exp": now + 300,   # 5 minutes
-        "sub": ORG_ID,
-        "kid": KEY_ID
-    }
-
-    try:
-        token = jwt.encode(payload, pem, algorithm="ES256")
-        if isinstance(token, bytes):
-            token = token.decode()
-        return token, payload["exp"]
-    except Exception as e:
-        logger.error("[NIJA-JWT] Failed to generate JWT: %s", e)
-        logger.error("[NIJA-JWT] Common causes: PEM formatting lost linebreaks, PEM is corrupted, or key is not a private key.")
-        logger.error("[NIJA-JWT] Tips: set COINBASE_PEM_KEY to full multi-line PEM, or set COINBASE_PEM_KEY_B64 to base64 of full PEM via an encoder site.")
-        raise
-
-def get_jwt_token():
-    """
-    Returns a cached JWT, regenerating if expired or missing.
-    Safe to call concurrently.
-    """
-    with _LOCK:
-        now = int(time.time())
-        if _TOKEN_CACHE["token"] and _TOKEN_CACHE["exp"] - 10 > now:
-            return _TOKEN_CACHE["token"]
-        try:
-            token, exp = _build_jwt()
-            _TOKEN_CACHE["token"] = token
-            _TOKEN_CACHE["exp"] = exp
-            logger.info("[NIJA-JWT] Generated new JWT (exp=%s)", exp)
-            return token
-        except Exception as e:
-            logger.error("[NIJA-JWT] Unable to create JWT: %s", e)
-            raise
-
-# ------------------------------------------------------------
-# Debug helper: decode & log the JWT payload (no signature verification)
-# ------------------------------------------------------------
-def debug_print_jwt_payload():
-    try:
-        token = get_jwt_token()
-        # split token and decode payload without verifying
-        parts = token.split(".")
-        if len(parts) >= 2:
-            payload_b64 = parts[1]
-            # pad and decode
-            payload_json = base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)).decode()
-            logger.info("[NIJA-JWT-DEBUG] JWT payload: %s", payload_json)
-    except Exception as e:
-        logger.debug("[NIJA-JWT-DEBUG] Could not decode JWT payload: %s", e)
