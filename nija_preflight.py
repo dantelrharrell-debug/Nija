@@ -7,12 +7,13 @@ logger = logging.getLogger("nija_preflight")
 
 logger.info("[NIJA-PREFLIGHT] Starting preflight check... ✅")
 
-# Attempt to fetch USD balance via REST only
-bal = get_usd_balance()
-logger.info("[NIJA-PREFLIGHT] USD balance fetched successfully: %s", bal)
+# --- Step 1: Fetch USD balance via REST only ---
+balance = get_usd_balance()
+logger.info("[NIJA-PREFLIGHT] USD balance fetched: $%s", balance)
 
-if bal is None or bal == 0:
+# --- Step 2: Check if balance is sufficient ---
+if balance is None or balance <= 0:
     logger.warning("[NIJA-PREFLIGHT] USD balance is zero or unavailable — check funding or permissions.")
     logger.warning("[NIJA-PREFLIGHT] Preflight complete, but some checks failed. Resolve errors before going live.")
 else:
-    logger.info("[NIJA-PREFLIGHT] Preflight check passed. USD balance: %s", bal)
+    logger.info("[NIJA-PREFLIGHT] Preflight check passed. Ready for live trading! ✅")
