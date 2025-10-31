@@ -4,53 +4,55 @@ import logging
 import requests
 from decimal import Decimal
 
+# --- Setup logging ---
 logger = logging.getLogger("nija_coinbase_client")
 logger.setLevel(logging.INFO)
 
+# --- Coinbase REST API ---
 COINBASE_API_URL = "https://api.coinbase.com/v2/accounts"
-
-# --- REST credentials ---
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional
-
-HEADERS = {
-    "CB-VERSION": "2025-10-01",
-    "Content-Type": "application/json"
-}
-if API_KEY and API_SECRET:
-    HEADERS.update({
-        "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": API_SECRET,  # For simple REST GET auth
-        "CB-ACCESS-PASSPHRASE": API_PASSPHRASE or ""
-    })
 
 def get_usd_balance() -> Decimal:
     """
-    Fetch USD balance from Coinbase account using REST keys.
-    Returns Decimal(0) if any failure occurs.
+    Fetch USD balance from Coinbase account using API key authentication.
+    Returns Decimal(0) if fetch fails.
     """
+    api_key = os.getenv("COINBASE_API_KEY")
+    api_secret = os.getenv("COINBASE_API_SECRET")
+
+    if not api_key or not api_secret:
+        logger.error("[NIJA-CLIENT] Missing COINBASE_API_KEY or COINBASE_API_SECRET in environment.")
+        return Decimal(0)
+
+    headers = {
+        "CB-VERSION": "2025-10-01",
+        "Authorization": f"Bearer {api_key.strip()}"
+    }
+
     try:
-        response = requests.get(COINBASE_API_URL, headers=HEADERS, timeout=10)
+        logger.info("[NIJA-CLIENT] Fetching USD balance via Coinbase REST API...")
+        response = requests.get(COINBASE_API_URL, headers=headers, timeout=10)
         response.raise_for_status()
+
         data = response.json()
         accounts = data.get("data", [])
-
-        # Debug: log full accounts list
-        logger.info("[NIJA-CLIENT] Full accounts data: %s", accounts)
+        if not accounts:
+            logger.warning("[NIJA-CLIENT] No account data returned.")
+            return Decimal(0)
 
         for acct in accounts:
-            # Coinbase sometimes returns lowercase, uppercase, or string types
             currency = str(acct.get("currency", "")).upper()
             if currency == "USD":
                 balance_str = acct.get("balance", {}).get("amount", "0")
                 balance = Decimal(balance_str)
-                logger.info("[NIJA-CLIENT] USD Balance: %s", balance)
+                logger.info("[NIJA-CLIENT] USD Balance Detected: $%s", balance)
                 return balance
 
-        logger.warning("[NIJA-CLIENT] No USD account found, returning 0")
+        logger.warning("[NIJA-CLIENT] No USD account found — returning 0.")
         return Decimal(0)
 
+    except requests.exceptions.RequestException as e:
+        logger.error("[NIJA-CLIENT] Network error fetching USD balance: %s", e)
+        return Decimal(0)
     except Exception as e:
-        logger.error("[NIJA-CLIENT] Error fetching USD balance: %s", e)
+        logger.error("[NIJA-CLIENT] Unexpected error fetching USD balance: %s", e)
         return Decimal(0)
