@@ -1,9 +1,9 @@
-/app
+/opt/render/project/src/
 │
-├── nija_railway_preflight.py     👈 put it here
-├── nija_startup.py
-├── nija_worker.py
-├── nija_coinbase_jwt.py
-├── nija_coinbase_client.py
-├── requirements.txt
-└── ...
+├─ nija_preflight.py      # preflight script checks USD balance
+├─ nija_startup.py        # main bot start script
+├─ nija_coinbase_client.py # handles USD balance fetch
+├─ nija_coinbase_jwt.py    # handles JWT token creation
+├─ requirements.txt
+├─ Dockerfile
+└─ railway.json           # contains all env variables and start command
