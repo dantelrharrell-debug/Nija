@@ -1,16 +1,22 @@
 import logging
 from nija_coinbase_client import get_usd_balance
+from nija_coinbase_jwt import debug_print_jwt_payload
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("nija_preflight")
 
 logger.info("[NIJA-PREFLIGHT] Starting preflight check... ✅")
 
-usd_balance = get_usd_balance()
-logger.info("[NIJA-PREFLIGHT] USD balance fetched: $%s", usd_balance)
+# Step 1: JWT sanity check
+try:
+    debug_print_jwt_payload()
+    logger.info("[NIJA-PREFLIGHT] JWT generated successfully.")
+except Exception as e:
+    logger.error("[NIJA-PREFLIGHT] JWT generation failed: %s", e)
 
-if usd_balance == 0:
+# Step 2: USD balance
+balance = get_usd_balance()
+if balance is None or balance == 0:
     logger.warning("[NIJA-PREFLIGHT] USD balance is zero or unavailable — check funding or permissions.")
-    logger.warning("[NIJA-PREFLIGHT] Preflight complete, but some checks failed. Resolve errors before going live.")
 else:
-    logger.info("[NIJA-PREFLIGHT] Preflight check passed ✅ Ready for live trading.")
+    logger.info("[NIJA-PREFLIGHT] Preflight check passed. USD balance: $%s", balance)
