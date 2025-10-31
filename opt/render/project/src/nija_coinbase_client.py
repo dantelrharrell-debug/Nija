@@ -1,6 +1,6 @@
 import logging
-import requests
 from decimal import Decimal
+import requests
 from nija_coinbase_jwt import get_jwt_token
 
 logger = logging.getLogger("nija_coinbase_client")
@@ -15,7 +15,10 @@ def get_usd_balance() -> Decimal:
         logger.error("[NIJA-CLIENT] Failed to get JWT: %s", e)
         return Decimal(0)
 
-    headers = {"Authorization": f"Bearer {token}", "CB-VERSION": "2025-10-01"}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "CB-VERSION": "2025-10-01"
+    }
 
     try:
         resp = requests.get(COINBASE_API_URL, headers=headers, timeout=10)
