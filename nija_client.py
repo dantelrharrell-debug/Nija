@@ -1,4 +1,4 @@
-# put this inside nija_client.py (replace existing init_client)
+# put near top of nija_client.py (after API_KEY/API_SECRET variables are defined)
 import importlib
 from decimal import Decimal
 
@@ -58,12 +58,12 @@ def init_client():
 
     for name, cls in _client_candidates:
         logger.info(f"[NIJA] Trying candidate client: {name}")
-        # positional
+        # try positional
         inst = _instantiate_and_test(cls, API_KEY, API_SECRET)
         if inst:
             logger.info(f"[NIJA] Authenticated using {name} with positional args")
             return inst
-        # keyword
+        # try keyword
         try:
             inst = _instantiate_and_test(cls, api_key=API_KEY, api_secret=API_SECRET)
             if inst:
@@ -71,7 +71,7 @@ def init_client():
                 return inst
         except Exception:
             pass
-        # passphrase forms
+        # try passphrase variants if present
         if API_PASSPHRASE:
             inst = _instantiate_and_test(cls, API_KEY, API_SECRET, API_PASSPHRASE)
             if inst:
