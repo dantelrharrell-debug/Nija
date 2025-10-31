@@ -32,3 +32,5 @@ coinbase-advancedtrade-python
 pyjwt>=2.0.0
 requests>=2.0.0
 tradingview_ta>=2.0.0   # if you keep using it for signals
+requests
+pyjwt[crypto]
