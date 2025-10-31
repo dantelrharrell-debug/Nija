@@ -6,11 +6,10 @@ private_key = ec.generate_private_key(ec.SECP256R1())  # prime256v1 / P-256
 
 pem_bytes = private_key.private_bytes(
     encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.TraditionalOpenSSL,  # "EC PRIVATE KEY" (SEC1)
+    format=serialization.PrivateFormat.TraditionalOpenSSL,  # "EC PRIVATE KEY"
     encryption_algorithm=serialization.NoEncryption()
 )
 
-pem_str = pem_bytes.decode("utf-8")
 print("==== BEGIN GENERATED PEM (copy everything between the markers) ====")
-print(pem_str)
+print(pem_bytes.decode("utf-8"))
 print("==== END GENERATED PEM ====")
