@@ -37,10 +37,26 @@ def _sanitize_and_normalize_pem(raw_pem: str, from_b64: bool=False) -> str:
       - Only base64 body (will be wrapped into BEGIN/END)
       - base64-encoded full PEM passed in (from_b64=True), decoded then sanitized
     """
-    if raw_pem is None:
-        raise ValueError("No PEM provided in environment")
+    # prefer base64 PEM env var if present (helps Render/Railway multiline issues)
+import re
 
-    pem = raw_pem.strip()
+_pem_b64_env = os.environ.get("COINBASE_PEM_KEY_B64", None)
+_raw_pem_env = os.environ.get("COINBASE_PEM_KEY", None)
+
+if _pem_b64_env:
+    try:
+        # remove whitespace/newlines that may have been inserted
+        s = re.sub(r"\s+", "", _pem_b64_env)
+        # add padding if missing
+        padded = s + ("=" * (-len(s) % 4))
+        pem_decoded = base64.b64decode(padded).decode("utf-8")
+        _RAW_PEM = pem_decoded
+    except Exception as e:
+        logger.error("[NIJA-JWT] Failed to decode COINBASE_PEM_KEY_B64: %s", e)
+        # fallback to raw env var if present
+        _RAW_PEM = _raw_pem_env
+else:
+    _RAW_PEM = _raw_pem_env
 
     # If it's base64-encoded full PEM (we were told from_b64), decode it to text
     if from_b64:
