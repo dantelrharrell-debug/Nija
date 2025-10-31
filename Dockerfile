@@ -1,31 +1,18 @@
-# Use official Python image
+# Use official Python 3.11 image
 FROM python:3.11-slim
 
 # Set working directory
-WORKDIR /opt/render/project/src
+WORKDIR /app
 
 # Copy project files
 COPY . .
 
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y git build-essential && \
-    rm -rf /var/lib/apt/lists/*
-
-# Upgrade pip
+# Install required packages
 RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Optional: set environment variables defaults (overridden by Railway)
+ENV LOG_LEVEL=INFO
 
-# Explicitly ensure coinbase-advanced-py is installed
-RUN pip install --no-cache-dir coinbase-advanced-py==1.8.2
-
-# Ensure start.sh is executable
-RUN chmod +x start.sh
-
-# Expose port if needed
-EXPOSE 8080
-
-# Run bot
-CMD ["bash", "start.sh"]
+# Command to run preflight and then start bot
+CMD ["sh", "-c", "python nija_preflight.py && python nija_startup.py"]
