@@ -1,7 +1,7 @@
-from nija_coinbase_jwt import get_jwt_token
+import logging
 import requests
 from decimal import Decimal
-import logging
+from nija_coinbase_jwt import get_jwt_token
 
 logger = logging.getLogger("nija_coinbase_client")
 logger.setLevel(logging.INFO)
@@ -30,9 +30,6 @@ def get_usd_balance() -> Decimal:
                 logger.info("[NIJA-CLIENT] USD Balance: $%s", balance)
                 return balance
         return Decimal(0)
-    except requests.exceptions.HTTPError as e:
-        logger.error("[NIJA-CLIENT] HTTP error fetching USD balance: %s | %s", e, getattr(e.response, "text", ""))
-        return Decimal(0)
     except Exception as e:
-        logger.error("[NIJA-CLIENT] Unexpected error fetching USD balance: %s", e)
+        logger.error("[NIJA-CLIENT] Error fetching USD balance: %s", e)
         return Decimal(0)
