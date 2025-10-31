@@ -1,41 +1,42 @@
-import os
+# nija_coinbase_jwt.py
+import base64
 import time
 import jwt  # PyJWT
 import logging
-import base64
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
 logger = logging.getLogger("nija_coinbase_jwt")
 logger.setLevel(logging.INFO)
 
-# Environment variables
-COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID", "").strip()
-COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID", "").strip()
-COINBASE_PEM_KEY_B64 = os.getenv("COINBASE_PEM_KEY_B64", "").strip()
+# --- Your keys (set these from env or hardcode for now) ---
+COINBASE_API_KEY_ID = "a9dae6d1-8592-4488-92cf-b3309a9ea5f2"
+COINBASE_ORG_ID = "ce77e4ea-ecca-42ec-912a-b6b4455ab9d0"
+COINBASE_PEM_KEY_B64 = "MHcCAQEEIOrZ/6/2ITZjLZAOYvnu7ZbAIQfDg8VEIP7XaqEAtZacoAoGCCqGSM49AwEHoUQDQgAELvgEIjI5gZyrhPOiZ4dZInphcm901xcHVAjdLmerldf/8agzuS1wOBJUqCeRF/wD/HuHs8fndWQACG7IUILRzw=="
 
-# Decode base64 PEM
-def _load_pem():
+# --- Load PEM key correctly ---
+def load_pem_key(pem_b64):
     try:
-        pem_bytes = base64.b64decode(COINBASE_PEM_KEY_B64)
-        key = serialization.load_pem_private_key(pem_bytes, password=None)
+        pem_bytes = base64.b64decode(pem_b64)
+        key = serialization.load_pem_private_key(pem_bytes, password=None, backend=default_backend())
         return key
     except Exception as e:
-        logger.error("[NIJA-JWT] Failed to load PEM key: %s", e)
+        logger.error(f"[NIJA-JWT] Failed to load PEM key: {e}")
         raise
 
-def get_jwt_token() -> str:
-    if not (COINBASE_API_KEY_ID and COINBASE_ORG_ID and COINBASE_PEM_KEY_B64):
-        raise ValueError("[NIJA-JWT] Missing JWT environment variables.")
-
-    private_key = _load_pem()
-    now = int(time.time())
-    payload = {
-        "iat": now,
-        "exp": now + 300,  # 5 min expiry
-        "jti": str(now),
-        "iss": COINBASE_ORG_ID,
-        "sub": COINBASE_API_KEY_ID,
-    }
-    token = jwt.encode(payload, private_key, algorithm="ES256")
-    logger.info("[NIJA-JWT] JWT token preview (first 20 chars): %s", str(token)[:20])
-    return token
+# --- Generate JWT for Coinbase REST ---
+def get_jwt_token():
+    try:
+        private_key = load_pem_key(COINBASE_PEM_KEY_B64)
+        now = int(time.time())
+        payload = {
+            "iat": now,
+            "exp": now + 60,  # short-lived token
+            "sub": COINBASE_ORG_ID,
+        }
+        token = jwt.encode(payload, private_key, algorithm="ES256")
+        logger.info(f"[NIJA-JWT] JWT token preview (first 20 chars): {token[:20]}")
+        return token
+    except Exception as e:
+        logger.error(f"[NIJA-JWT] Failed to generate JWT: {e}")
+        return None
