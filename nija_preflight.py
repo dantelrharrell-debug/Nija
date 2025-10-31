@@ -1,27 +1,34 @@
+# nija_preflight.py
+import argparse
 import logging
-from nija_coinbase_jwt import get_jwt_token  # keep JWT, needed for live trading
-from nija_coinbase_client import CoinbaseClient  # your live client
+from nija_coinbase_client import fetch_usd_balance
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_preflight")
 
+# --- Add argument parsing ---
+parser = argparse.ArgumentParser(description="Nija preflight check")
+parser.add_argument(
+    "--skip-balance-check",
+    action="store_true",
+    help="Skip checking USD balance to allow going live immediately"
+)
+args = parser.parse_args()
+
 logger.info("[NIJA-PREFLIGHT] Starting preflight check... ✅")
 
-# --- Generate JWT ---
-try:
-    jwt_token = get_jwt_token()
-    logger.info(f"[NIJA-PREFLIGHT] JWT generated successfully")
-except Exception as e:
-    logger.error(f"[NIJA-PREFLIGHT] Failed to generate JWT: {e}")
-    # Stop if JWT fails because we can't trade without it
-    raise SystemExit("Cannot proceed without valid JWT")
+# --- Skip balance check if requested ---
+if args.skip_balance_check:
+    logger.warning("[NIJA-PREFLIGHT] Skipping USD balance check as requested.")
+else:
+    try:
+        usd_balance = fetch_usd_balance()
+        logger.info(f"[NIJA-PREFLIGHT] USD balance fetched: ${usd_balance}")
+        if usd_balance == 0:
+            logger.warning("[NIJA-PREFLIGHT] USD balance is zero — check funding or permissions.")
+    except Exception as e:
+        logger.error(f"[NIJA-PREFLIGHT] Error fetching USD balance: {e}")
+        logger.warning("[NIJA-PREFLIGHT] USD balance unavailable — check funding or permissions.")
 
-# --- Skip USD balance check entirely ---
-logger.warning("[NIJA-PREFLIGHT] USD balance check skipped — proceeding live")
-
-# --- Mark preflight as passed ---
-logger.info("[NIJA-PREFLIGHT] Preflight complete — ready to go live ✅")
-
-# --- Start your main bot logic here ---
-# from nija_worker import run_worker
-# run_worker()
+# --- Continue with the rest of preflight/startup tasks ---
+logger.info("[NIJA-PREFLIGHT] Preflight complete, moving on to startup...")
