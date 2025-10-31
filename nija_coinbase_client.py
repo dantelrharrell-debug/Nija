@@ -16,23 +16,27 @@ def get_usd_balance() -> Decimal:
         return Decimal(0)
 
     headers = {
-        "CB-VERSION": "2025-10-01",
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {token}",
+        "CB-VERSION": "2025-10-01"
     }
 
     try:
+        logger.info("[NIJA-CLIENT] Fetching USD balance via Coinbase REST API (JWT)...")
         resp = requests.get(COINBASE_API_URL, headers=headers, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         accounts = data.get("data", [])
+
         for acct in accounts:
-            if acct.get("currency", "").upper() == "USD":
+            if str(acct.get("currency", "")).upper() == "USD":
                 balance_str = acct.get("balance", {}).get("amount", "0")
                 balance = Decimal(balance_str)
                 logger.info("[NIJA-CLIENT] USD Balance: $%s", balance)
                 return balance
-        logger.warning("[NIJA-CLIENT] No USD account found, returning 0")
+
+        logger.warning("[NIJA-CLIENT] No USD account found — returning 0.")
         return Decimal(0)
+
     except requests.exceptions.HTTPError as e:
         logger.error("[NIJA-CLIENT] HTTP error fetching USD balance: %s | body=%s", e, getattr(e.response, "text", ""))
         return Decimal(0)
