@@ -27,47 +27,57 @@ def _looks_like_base64(s: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9+/=]+", s_clean)) and (len(s_clean) % 4 == 0 or len(s_clean) > 40)
 
 
-def _sanitize_and_normalize_pem(raw_pem: str, from_b64: bool = False):
+def _sanitize_and_normalize_pem(raw_pem: str, from_b64: bool = False) -> str:
     """
-    Normalize PEM input for jwt ES256 signing.
-    Returns bytes (never str) to avoid UnicodeDecodeErrors.
-    Supports:
-      - raw PEM string
-      - escaped \n sequences
-      - base64 of full PEM (from_b64=True)
-      - base64 body only
+    Returns a properly formatted PEM string for Coinbase JWT.
+    Handles:
+      - full PEM pasted (multi-line)
+      - single-line PEM with '\n'
+      - base64 of just key body
+      - base64 of full PEM
     """
-    if not raw_pem:
-        raise ValueError("No PEM provided")
+    import re
+    import base64
+    pem = raw_pem.strip()
 
-    # If env is base64 PEM, decode to bytes
     if from_b64:
+        # remove all whitespace/newlines
+        b64_clean = re.sub(r"\s+", "", pem)
+        # pad base64 if needed
+        padded = b64_clean + "=" * (-len(b64_clean) % 4)
+        # decode safely; do not decode as utf-8 yet
         try:
-            decoded_bytes = base64.b64decode(raw_pem)
-            return decoded_bytes  # leave as bytes
+            decoded_bytes = base64.b64decode(padded)
         except Exception as e:
-            logger.error("[NIJA-JWT] Failed to decode base64 PEM: %s", e)
-            raise
+            raise ValueError(f"[NIJA-JWT] Failed to decode base64 PEM: {e}")
 
-    # raw_pem is str at this point
-    if isinstance(raw_pem, str):
-        # convert literal \n to real newlines
-        if "\\n" in raw_pem:
-            raw_pem = raw_pem.replace("\\n", "\n")
-        raw_pem = raw_pem.strip()
-        # remove surrounding quotes if any
-        if (raw_pem.startswith('"') and raw_pem.endswith('"')) or (raw_pem.startswith("'") and raw_pem.endswith("'")):
-            raw_pem = raw_pem[1:-1].strip()
-        # If only base64 body, wrap in PEM headers
-        if _looks_like_base64(raw_pem):
-            body = "".join(raw_pem.split())
+        # Check if decoded bytes already have PEM headers
+        if b"BEGIN" in decoded_bytes and b"END" in decoded_bytes:
+            pem = decoded_bytes.decode("utf-8")
+        else:
+            # It's just key body, wrap with header/trailer
+            body = base64.b64encode(decoded_bytes).decode("ascii")
+            # insert line breaks every 64 chars
             wrapped = "\n".join([body[i:i+64] for i in range(0, len(body), 64)])
-            pem_full = b"-----BEGIN EC PRIVATE KEY-----\n" + wrapped.encode() + b"\n-----END EC PRIVATE KEY-----\n"
-            return pem_full
-        return raw_pem.encode()  # str PEM -> bytes
+            pem = f"-----BEGIN EC PRIVATE KEY-----\n{wrapped}\n-----END EC PRIVATE KEY-----\n"
 
-    # If already bytes, return as-is
-    return raw_pem
+    # If literal '\n' in raw PEM, convert to actual newline
+    pem = pem.replace("\\n", "\n")
+
+    # If headers present, ensure proper formatting
+    if "-----BEGIN" in pem and "-----END" in pem:
+        pem = pem.strip()
+        if not pem.endswith("\n"):
+            pem += "\n"
+        return pem
+
+    # Otherwise, treat as just body
+    if re.fullmatch(r"[A-Za-z0-9+/=]+", pem):
+        wrapped = "\n".join([pem[i:i+64] for i in range(0, len(pem), 64)])
+        pem = f"-----BEGIN EC PRIVATE KEY-----\n{wrapped}\n-----END EC PRIVATE KEY-----\n"
+        return pem
+
+    raise ValueError("[NIJA-JWT] Could not normalize PEM. Check env variable formatting.")
 
 
 def _build_jwt():
