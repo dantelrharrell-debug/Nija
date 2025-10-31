@@ -9,7 +9,7 @@
   "deploy": {
     "runtime": "V2",
     "numReplicas": 1,
-    "startCommand": "python nija_preflight.py --skip-balance-check && python nija_startup.py",
+    "startCommand": "python nija_preflight.py && python nija_startup.py",
     "sleepApplication": false,
     "useLegacyStacker": false,
     "multiRegionConfig": {
