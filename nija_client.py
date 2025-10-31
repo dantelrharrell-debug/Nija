@@ -1,66 +1,91 @@
-# nija_client.py (patch snippet)
-import os, logging
+# put this inside nija_client.py (replace existing init_client)
+import importlib
 from decimal import Decimal
 
-logger = logging.getLogger("nija_client")
-logging.basicConfig(level=logging.INFO)
+_client_candidates = []
+_import_attempts = []
 
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")  # string secret, not PEM
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional
+def _discover_clients():
+    tries = [
+        ("coinbase.rest.RESTClient", "from coinbase.rest import RESTClient"),
+        ("coinbase.rest_client.RESTClient", "from coinbase.rest_client import RESTClient"),
+        ("coinbase_advanced_py.client.RESTClient", "from coinbase_advanced_py.client import RESTClient"),
+        ("coinbase_advanced_py.RESTClient", "from coinbase_advanced_py import RESTClient"),
+        ("coinbase.RESTClient", "from coinbase import RESTClient"),
+    ]
+    for _, hint in tries:
+        try:
+            parts = hint.replace("from ", "").split(" import ")
+            mod_name, cls_name = parts[0].strip(), parts[1].strip()
+            mod = importlib.import_module(mod_name)
+            cls = getattr(mod, cls_name)
+            _client_candidates.append((f"{mod_name}.{cls_name}", cls))
+            _import_attempts.append((hint, "ok"))
+            logger.info(f"[NIJA] Import succeeded: {hint}")
+        except Exception as e:
+            _import_attempts.append((hint, f"failed: {e}"))
+            logger.debug(f"[NIJA-DEBUG] Import attempt {hint} failed: {e}")
 
-class DummyClient:
-    def get_accounts(self):
-        return [{"currency": "USD", "balance": "1000.00"}]
-    def get_spot_account_balances(self):
-        return self.get_accounts()
-    def place_order(self, *args, **kwargs):
-        logger.info("[DummyClient] Simulated order: %s %s", args, kwargs)
-        return {"status": "simulated"}
+_discover_clients()
+
+def _instantiate_and_test(client_cls, *args, **kwargs):
+    try:
+        inst = client_cls(*args, **kwargs)
+    except Exception as e:
+        logger.debug(f"[NIJA-DEBUG] Instantiation failed for {client_cls} args={args} kwargs={kwargs}: {e}")
+        return None
+    try:
+        # try common balance methods
+        if hasattr(inst, "get_spot_account_balances"):
+            _ = inst.get_spot_account_balances()
+        elif hasattr(inst, "get_accounts"):
+            _ = inst.get_accounts()
+        else:
+            logger.debug(f"[NIJA-DEBUG] No balance method on {client_cls}, accepted instance.")
+        return inst
+    except Exception as e:
+        logger.debug(f"[NIJA-DEBUG] Test call failed for {client_cls}: {e}")
+        return None
 
 def init_client():
-    # Try REST key+secret first (easiest to get live)
-    if API_KEY and API_SECRET:
+    logger.info(f"[NIJA] API_KEY present: {'yes' if API_KEY else 'no'}")
+    logger.info(f"[NIJA] API_SECRET present: {'yes' if API_SECRET else 'no'}")
+    logger.info(f"[NIJA] API_PASSPHRASE present: {'yes' if API_PASSPHRASE else 'no'}")
+
+    if not (API_KEY and API_SECRET):
+        logger.warning("[NIJA] Missing API key/secret — using DummyClient")
+        return DummyClient()
+
+    for name, cls in _client_candidates:
+        logger.info(f"[NIJA] Trying candidate client: {name}")
+        # positional
+        inst = _instantiate_and_test(cls, API_KEY, API_SECRET)
+        if inst:
+            logger.info(f"[NIJA] Authenticated using {name} with positional args")
+            return inst
+        # keyword
         try:
-            from coinbase.rest import RESTClient
-            logger.info("[NIJA] Trying RESTClient with API key/secret")
-            # many SDKs accept api_key/api_secret, adjust if yours differs
-            client = RESTClient(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
-            # quick test call
+            inst = _instantiate_and_test(cls, api_key=API_KEY, api_secret=API_SECRET)
+            if inst:
+                logger.info(f"[NIJA] Authenticated using {name} with keyword api_key/api_secret")
+                return inst
+        except Exception:
+            pass
+        # passphrase forms
+        if API_PASSPHRASE:
+            inst = _instantiate_and_test(cls, API_KEY, API_SECRET, API_PASSPHRASE)
+            if inst:
+                logger.info(f"[NIJA] Authenticated using {name} with positional passphrase")
+                return inst
             try:
-                _ = client.get_accounts()
+                inst = _instantiate_and_test(cls, api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
+                if inst:
+                    logger.info(f"[NIJA] Authenticated using {name} with keyword passphrase")
+                    return inst
             except Exception:
-                # some REST clients have different method names; we still accept the client
-                logger.info("[NIJA] RESTClient instantiated (test call may differ by SDK)")
-            logger.info("[NIJA] Authenticated using API key/secret")
-            return client
-        except Exception as e:
-            logger.warning(f"[NIJA] REST key/secret auth failed: {e}")
+                pass
 
-    # Fallback: existing JWT-based init (expects COINBASE_PEM_KEY etc)
-    try:
-        from nija_coinbase_jwt import get_jwt_token  # your JWT module
-        # your existing JWT-based client construction here (depends on SDK)
-        # example: pass Authorization Bearer <JWT> header via custom client wrapper
-        logger.info("[NIJA] Falling back to JWT-based auth (if configured)")
-        # If not implemented, fall through to DummyClient
-    except Exception as e:
-        logger.debug("[NIJA] JWT fallback not available: %s", e)
-
-    logger.warning("[NIJA] No valid Coinbase client available — using DummyClient")
+    logger.warning("[NIJA] No working Coinbase client found. Falling back to DummyClient.")
+    for attempt, result in _import_attempts:
+        logger.debug(f"[NIJA-DEBUG] Import attempt: {attempt} -> {result}")
     return DummyClient()
-
-client = init_client()
-
-def get_usd_balance(client):
-    try:
-        if hasattr(client, "get_spot_account_balances"):
-            balances = client.get_spot_account_balances()
-        else:
-            balances = client.get_accounts()
-        for a in balances:
-            if a.get("currency") == "USD":
-                return Decimal(a.get("balance", "0"))
-    except Exception as e:
-        logger.warning("[NIJA-DEBUG] Could not fetch balances: %s", e)
-    return Decimal("0")
