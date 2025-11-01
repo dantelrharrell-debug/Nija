@@ -1,3 +1,8 @@
+import os
+pem = os.getenv("COINBASE_PEM_CONTENT")
+print("PEM LENGTH:", len(pem) if pem else "MISSING")
+print("PEM STARTS WITH:", pem[:30] if pem else "MISSING")
+
 # nija_worker.py
 import os
 import sys
