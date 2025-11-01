@@ -1,4 +1,8 @@
 import os
+print("COINBASE_API_KEY =", os.getenv("COINBASE_API_KEY"))
+print("COINBASE_API_SECRET =", os.getenv("COINBASE_API_SECRET"))
+
+import os
 import logging
 from decimal import Decimal
 from coinbase.rest import RESTClient
