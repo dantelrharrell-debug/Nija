@@ -1,37 +1,39 @@
-# nija_balance_helper.py (debug version)
-from decimal import Decimal
-from coinbase.rest import RESTClient
+import os
+import tempfile
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 import logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_balance_helper")
 
-client = RESTClient(api_key="YOUR_API_KEY_HERE", api_secret="YOUR_API_SECRET_HERE")
+PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # raw PEM string from Render secret
 
-def get_usd_balance():
-    """
-    Fetch USD balance from all Coinbase accounts.
-    Returns Decimal(0) if no USD found or API fails.
-    """
+def get_pem_file():
+    if not PEM_CONTENT:
+        logger.error("[NIJA-BALANCE] PEM content missing!")
+        return None
+
+    tmp_file = tempfile.NamedTemporaryFile(delete=False)
+    tmp_file.write(PEM_CONTENT.encode("utf-8"))
+    tmp_file.close()
+    return tmp_file.name
+
+def check_pem_file(path: str):
     try:
-        accounts = client.get_accounts()
-        found_usd = Decimal(0)
-        for a in accounts['data']:
-            name = a['name']
-            balance = Decimal(a['balance']['amount'])
-            currency = a['balance']['currency']
-            logger.info(f"[NIJA-BALANCE] Account: {name}, Balance: {balance} {currency}")
-            if currency == "USD":
-                found_usd += balance
-        
-        if found_usd == 0:
-            logger.warning("[NIJA-BALANCE] No USD balance found, returning 0")
-        return found_usd
-
+        with open(path, "rb") as pem_file:
+            key_data = pem_file.read()
+            serialization.load_pem_private_key(
+                key_data,
+                password=None,
+                backend=default_backend()
+            )
+        logger.info(f"[NIJA-BALANCE] PEM file loaded successfully ✅")
+        return True
     except Exception as e:
-        logger.error(f"[NIJA-BALANCE] Failed to fetch balance: {e}")
-        return Decimal(0)
+        logger.error(f"[NIJA-BALANCE] Failed to load PEM file: {e}")
+        return False
 
-if __name__ == "__main__":
-    usd = get_usd_balance()
-    print(f"Detected USD balance: {usd}")
+# --- Preflight check ---
+pem_file_path = get_pem_file()
+if not pem_file_path or not check_pem_file(pem_file_path):
+    logger.error("[NIJA-BALANCE] Aborting: fix your PEM file before running the bot.")
