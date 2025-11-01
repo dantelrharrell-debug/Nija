@@ -24,7 +24,6 @@ logger = logging.getLogger("nija_client")
 # ----------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 
 # ----------------------
 # Dummy client (safe fallback)
@@ -97,9 +96,14 @@ def _instantiate_and_test(client_cls, *args, **kwargs):
 # Public API: init_client
 # ----------------------
 def init_client():
+    """
+    Returns a client instance:
+    - Real Coinbase client if API_KEY/SECRET present and works
+    - DummyClient otherwise
+    Modern Coinbase uses JWT auth; passphrase not required.
+    """
     logger.info(f"[NIJA] API_KEY present: {'yes' if API_KEY else 'no'}")
     logger.info(f"[NIJA] API_SECRET present: {'yes' if API_SECRET else 'no'}")
-    logger.info(f"[NIJA] API_PASSPHRASE present: {'yes' if API_PASSPHRASE else 'no'}")
 
     if not (API_KEY and API_SECRET):
         logger.warning("[NIJA] Missing API key/secret — using DummyClient")
@@ -108,43 +112,16 @@ def init_client():
     for name, cls in _client_candidates:
         logger.info(f"[NIJA] Trying candidate client: {name}")
 
-        # positional args
+        # Positional JWT-style authentication
         inst = _instantiate_and_test(cls, API_KEY, API_SECRET)
         if inst:
-            logger.info(f"[NIJA] Authenticated using {name} with positional args")
+            logger.info(f"[NIJA] Authenticated {name} using API_KEY/API_SECRET only (JWT)")
             return inst
 
-        # keyword args
+        # Keyword args
         inst = _instantiate_and_test(cls, api_key=API_KEY, api_secret=API_SECRET)
         if inst:
-            logger.info(f"[NIJA] Authenticated using {name} with keyword args")
+            logger.info(f"[NIJA] Authenticated {name} using keyword args (JWT)")
             return inst
 
-        # include passphrase if available
-        if API_PASSPHRASE:
-            inst = _instantiate_and_test(cls, API_KEY, API_SECRET, API_PASSPHRASE)
-            if inst:
-                logger.info(f"[NIJA] Authenticated using {name} with positional passphrase")
-                return inst
-            inst = _instantiate_and_test(cls, api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
-            if inst:
-                logger.info(f"[NIJA] Authenticated using {name} with keyword passphrase")
-                return inst
-
-    logger.warning("[NIJA] No working Coinbase client found. Falling back to DummyClient.")
-    for attempt, result in _import_attempts:
-        logger.debug(f"[NIJA-DEBUG] Import attempt: {attempt} -> {result}")
-    return DummyClient()
-
-# ----------------------
-# Helper for fetching USD balance
-# ----------------------
-def get_usd_balance(client):
-    try:
-        if hasattr(client, "get_usd_balance"):
-            return client.get_usd_balance()
-        if hasattr(client, "get_account_balance"):
-            return client.get_account_balance()
-    except Exception as e:
-        logger.exception(f"[NIJA] Error fetching USD balance: {e}")
-    return Decimal("0")
+    # If none worked,
