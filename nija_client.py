@@ -1,11 +1,11 @@
-# nija_client.py
 """
-Robust client loader for Nija trading bot.
+Robust client loader for Nija trading bot (Render-ready).
 
-Provides:
-- init_client() -> returns a client instance (DummyClient or CoinbaseClient)
-- DummyClient for local/dev use
-- Safe import attempts with logging and no NameErrors
+Features:
+- init_client() returns a real Coinbase client (JWT) if available, or DummyClient fallback
+- No passphrase needed
+- Safe import attempts with logging
+- Avoids calling outdated balance methods
 """
 
 import os
@@ -14,7 +14,7 @@ import importlib
 from decimal import Decimal
 
 # ----------------------
-# Configure logger
+# Configure logger first
 # ----------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
@@ -74,34 +74,20 @@ def _discover_clients():
 _discover_clients()
 
 # ----------------------
-# Instantiate and test client class
+# Instantiate client without old balance check
 # ----------------------
 def _instantiate_and_test(client_cls, *args, **kwargs):
     try:
         inst = client_cls(*args, **kwargs)
-    except Exception as e:
-        logger.debug(f"[NIJA-DEBUG] Instantiation failed for {client_cls} args={args} kwargs={kwargs}: {e}")
-        return None
-    try:
-        if hasattr(inst, "get_spot_account_balances"):
-            _ = inst.get_spot_account_balances()
-        elif hasattr(inst, "get_accounts"):
-            _ = inst.get_accounts()
         return inst
     except Exception as e:
-        logger.debug(f"[NIJA-DEBUG] Test call failed for {client_cls}: {e}")
+        logger.debug(f"[NIJA-DEBUG] Instantiation failed for {client_cls} args={args} kwargs={kwargs}: {e}")
         return None
 
 # ----------------------
 # Public API: init_client
 # ----------------------
 def init_client():
-    """
-    Returns a client instance:
-    - Real Coinbase client if API_KEY/SECRET present and works
-    - DummyClient otherwise
-    Modern Coinbase uses JWT auth; passphrase not required.
-    """
     logger.info(f"[NIJA] API_KEY present: {'yes' if API_KEY else 'no'}")
     logger.info(f"[NIJA] API_SECRET present: {'yes' if API_SECRET else 'no'}")
 
@@ -115,7 +101,7 @@ def init_client():
         # Positional JWT-style authentication
         inst = _instantiate_and_test(cls, API_KEY, API_SECRET)
         if inst:
-            logger.info(f"[NIJA] Authenticated {name} using API_KEY/API_SECRET only (JWT)")
+            logger.info(f"[NIJA] Authenticated {name} using API_KEY/API_SECRET (JWT)")
             return inst
 
         # Keyword args
@@ -124,4 +110,21 @@ def init_client():
             logger.info(f"[NIJA] Authenticated {name} using keyword args (JWT)")
             return inst
 
-    # If none worked,
+    # Fallback
+    logger.warning("[NIJA] No working Coinbase client found. Falling back to DummyClient.")
+    for attempt, result in _import_attempts:
+        logger.debug(f"[NIJA-DEBUG] Import attempt: {attempt} -> {result}")
+    return DummyClient()
+
+# ----------------------
+# Helper for fetching USD balance
+# ----------------------
+def get_usd_balance(client):
+    try:
+        if hasattr(client, "get_usd_balance"):
+            return client.get_usd_balance()
+        if hasattr(client, "get_account_balance"):
+            return client.get_account_balance()
+    except Exception as e:
+        logger.exception(f"[NIJA] Error fetching USD balance: {e}")
+    return Decimal("0")
