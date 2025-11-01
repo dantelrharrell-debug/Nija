@@ -1,45 +1,46 @@
-# nija_balance_helper.py
 import os
-import tempfile
 import logging
+from decimal import Decimal
 from coinbase.rest import RESTClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_balance_helper")
 
-# --- Environment variables ---
+# --- Load environment variables ---
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # PEM content as string
 
-if not COINBASE_PEM_CONTENT:
-    raise ValueError("Set COINBASE_PEM_CONTENT in Render environment variables")
-
-# Write PEM content to a temp file for SDK use
-with tempfile.NamedTemporaryFile(delete=False) as tmp_pem_file:
-    tmp_pem_file.write(COINBASE_PEM_CONTENT.encode())
-    PEM_PATH = tmp_pem_file.name
-    logger.info(f"[NIJA-BALANCE] PEM written to temp file: {PEM_PATH}")
+if not COINBASE_API_KEY or not COINBASE_API_SECRET:
+    raise ValueError("Set COINBASE_API_KEY and COINBASE_API_SECRET in Render environment variables")
 
 # --- Initialize Coinbase client ---
 try:
     client = RESTClient(
         api_key=COINBASE_API_KEY,
-        api_secret=COINBASE_API_SECRET,
-        pem_file_path=PEM_PATH  # PEM path is required for this SDK
+        api_secret=COINBASE_API_SECRET
     )
-    logger.info("[NIJA-BALANCE] Coinbase client initialized successfully")
+    logger.info("[NIJA-BALANCE] Coinbase RESTClient initialized successfully")
 except Exception as e:
     logger.error(f"[NIJA-BALANCE] Failed to init Coinbase client: {e}")
-    raise
+    client = None  # Fallback to None, handle gracefully in balance function
 
-# --- Helper function to get USD balance ---
+# --- Helper function to fetch USD balance ---
 def get_usd_balance():
+    """
+    Fetch USD balance from Coinbase account.
+    Returns Decimal(0) if fetch fails.
+    """
+    if client is None:
+        logger.warning("[NIJA-BALANCE] Coinbase client not initialized, returning 0")
+        return Decimal(0)
+
     try:
-        accounts = client.get_accounts()
-        for acc in accounts.data:
-            if acc.currency == "USD":
-                return float(acc.balance.amount)
+        accounts = client.list_accounts()
+        for account in accounts.data:
+            if account.currency == "USD":
+                return Decimal(account.balance)
+        logger.warning("[NIJA-BALANCE] USD account not found, returning 0")
+        return Decimal(0)
     except Exception as e:
-        logger.error(f"[NIJA-BALANCE] Failed to fetch USD balance: {e}")
-    return 0.0
+        logger.error(f"[NIJA-BALANCE] Error fetching USD balance: {e}")
+        return Decimal(0)
