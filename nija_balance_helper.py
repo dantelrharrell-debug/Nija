@@ -2,54 +2,55 @@
 import os
 import tempfile
 import logging
-from decimal import Decimal
-from coinbase.rest import RESTClient  # ensure this matches your coinbase client
+from coinbase.rest import RESTClient  # make sure coinbase-sdk installed
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_balance_helper")
 
-# --- Load PEM content from environment variable ---
-PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
+# --- Load keys from environment ---
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY", "your_api_key_here")
+COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET", "your_api_secret_here")
+COINBASE_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "your_passphrase_here")
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # full PEM with BEGIN/END lines
 
-if not PEM_CONTENT:
-    logger.error("[NIJA-BALANCE] PEM content missing! Aborting balance fetch.")
+if not COINBASE_PEM_CONTENT:
+    logger.error("[NIJA-BALANCE] PEM content missing!")
+    raise ValueError("Set COINBASE_PEM_CONTENT in Render environment variables")
 
-def write_pem_temp_file():
-    """
-    Write PEM content to a temporary file and return its path.
-    """
-    if not PEM_CONTENT:
-        return None
+# --- Write PEM to a temporary file ---
+with tempfile.NamedTemporaryFile(delete=False, mode="w") as f:
+    f.write(COINBASE_PEM_CONTENT)
+    PEM_PATH = f.name
+    logger.info(f"[NIJA-BALANCE] PEM written to temp file: {PEM_PATH}")
+
+# --- Initialize Coinbase client ---
+try:
+    client = RESTClient(
+        api_key=COINBASE_API_KEY,
+        api_secret=COINBASE_API_SECRET,
+        passphrase=COINBASE_PASSPHRASE,
+        pem_file_path=PEM_PATH  # some SDKs need PEM path
+    )
+    logger.info("[NIJA-BALANCE] Coinbase client initialized ✅")
+except Exception as e:
+    logger.error(f"[NIJA-BALANCE] Failed to init Coinbase client: {e}")
+    raise
+
+# --- Fetch USD balance ---
+def get_usd_balance() -> float:
     try:
-        tmp_file = tempfile.NamedTemporaryFile(delete=False)
-        tmp_file.write(PEM_CONTENT.encode())  # write string as bytes
-        tmp_file.flush()
-        tmp_file.close()
-        logger.info("[NIJA-BALANCE] PEM content written to temporary file ✅")
-        return tmp_file.name
-    except Exception as e:
-        logger.error(f"[NIJA-BALANCE] Failed to write PEM file: {e}")
-        return None
-
-def get_usd_balance() -> Decimal:
-    """
-    Fetch USD balance from Coinbase account using RESTClient.
-    Returns Decimal('0') if fetch fails.
-    """
-    pem_path = write_pem_temp_file()
-    if not pem_path:
-        logger.error("[NIJA-BALANCE] No PEM file available, returning 0 balance.")
-        return Decimal("0")
-
-    try:
-        # Initialize client with PEM path (adjust if your SDK needs key/secret differently)
-        client = RESTClient(key=None, secret=pem_path)
         accounts = client.get_accounts()
         for acct in accounts.data:
-            if acct.currency == "USD":
-                balance = Decimal(acct.balance.amount)
-                logger.info(f"[NIJA-BALANCE] USD balance fetched: {balance}")
+            if acct.balance.currency == "USD":
+                balance = float(acct.balance.amount)
+                logger.info(f"[NIJA-BALANCE] USD Balance: ${balance}")
                 return balance
-        return Decimal("0")
+        logger.warning("[NIJA-BALANCE] USD account not found")
+        return 0.0
     except Exception as e:
         logger.error(f"[NIJA-BALANCE] Failed to fetch balance: {e}")
-        return Decimal("0")
+        return 0.0
+
+# --- Optional: Test fetch on import ---
+if __name__ == "__main__":
+    get_usd_balance()
