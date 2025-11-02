@@ -1,21 +1,18 @@
-# Use official Python 3.10 slim image (last known working version)
-FROM python:3.10-slim
+# Dockerfile.debug
+FROM python:3.11-slim  # You can also change this to 3.10-slim if that's the last working
 
-# Set working directory inside container
 WORKDIR /app
 
-# Copy all project files into container
+# Copy all project files
 COPY . .
 
-# Upgrade pip first
+# Upgrade pip and install dependencies
 RUN pip install --upgrade pip
-
-# Install all dependencies from the last working requirements.txt
 RUN pip install -r requirements.txt
 
-# Optional: default environment variables
+# Optional environment variables
 ENV LOG_LEVEL=INFO
 ENV PYTHONUNBUFFERED=1
 
-# Preflight and start bot
-CMD ["sh", "-c", "python nija_preflight.py && python nija_startup.py"]
+# Keep container alive for debugging
+CMD ["tail", "-f", "/dev/null"]
