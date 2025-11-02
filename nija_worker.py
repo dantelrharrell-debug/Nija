@@ -1,3 +1,27 @@
+# -----------------------
+# Preflight variable check
+# -----------------------
+import os
+
+print("COINBASE_API_KEY:", "FOUND" if os.getenv("COINBASE_API_KEY") else "MISSING")
+print("COINBASE_API_SECRET:", "FOUND" if os.getenv("COINBASE_API_SECRET") else "MISSING")
+print("PEM_PATH:", os.getenv("COINBASE_API_SECRET_PATH"))
+pem_content = os.getenv("COINBASE_PEM_CONTENT")
+print("PEM_CONTENT LENGTH:", len(pem_content) if pem_content else "MISSING")
+
+# -----------------------
+# Standard imports
+# -----------------------
+import sys
+import time
+import logging
+from decimal import Decimal
+from tradingview_ta import TA_Handler, Interval
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+
+from nija_coinbase_client import get_usd_balance, place_order_market_quote
+
 # nija_worker.py
 import os
 import sys
