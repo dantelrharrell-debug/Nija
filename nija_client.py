@@ -1,11 +1,26 @@
 # nija_client.py
+
 import os
 import logging
 from decimal import Decimal
-from coinbase_advancedtrade_python.client import Client as CoinbaseClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
+
+# -----------------------------
+# --- Coinbase client imports
+# -----------------------------
+try:
+    from coinbase.rest import RESTClient  # for coinbase-advanced-py
+except ImportError:
+    RESTClient = None
+    logger.warning("[NIJA] coinbase-advanced-py RESTClient not found.")
+
+try:
+    from coinbase_advancedtrade_python.client import Client as CoinbaseClient
+except ImportError:
+    CoinbaseClient = None
+    logger.warning("[NIJA] coinbase-advancedtrade-python Client not found.")
 
 # -----------------------------
 # --- Load Coinbase credentials
@@ -20,6 +35,9 @@ if not API_KEY or not API_SECRET:
 # -----------------------------
 # --- Initialize live client
 # -----------------------------
+if CoinbaseClient is None:
+    raise RuntimeError("❌ No Coinbase client available. Install coinbase-advancedtrade-python or coinbase-advanced-py")
+
 try:
     client = CoinbaseClient(
         api_key=API_KEY,
