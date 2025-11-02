@@ -1,18 +1,21 @@
-# Use Python 3.11-slim (Railway/Render compatible)
+# Use official Python 3.11 slim image
 FROM python:3.11-slim
 
-# Set working directory
+# Set working directory inside container
 WORKDIR /app
 
-# Copy project files
+# Copy all project files into container
 COPY . .
 
-# Upgrade pip and install requirements
+# Upgrade pip first
 RUN pip install --upgrade pip
+
+# Install all dependencies
 RUN pip install -r requirements.txt
 
-# Optional: set default environment variables (can be overridden in Railway/Render)
+# Optional: set default environment variables
 ENV LOG_LEVEL=INFO
+ENV PYTHONUNBUFFERED=1
 
-# Command to run preflight and then start bot
+# Preflight and start bot
 CMD ["sh", "-c", "python nija_preflight.py && python nija_startup.py"]
