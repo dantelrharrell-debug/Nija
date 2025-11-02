@@ -1,36 +1,5 @@
 import os
 import base64
-
-# Path where your PEM file will be written
-PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
-
-# Read Base64 PEM content from env var
-pem_b64 = os.getenv("COINBASE_PEM_B64")
-
-if pem_b64:
-    try:
-        # Decode Base64 into bytes
-        pem_bytes = base64.b64decode(pem_b64)
-
-        # Wrap in proper PEM header/footer
-        pem_content = b"-----BEGIN PRIVATE KEY-----\n"
-        # Split into 64-character lines as PEM standard requires
-        for i in range(0, len(pem_bytes), 48):  # 48 bytes ≈ 64 Base64 chars
-            pem_content += base64.b64encode(pem_bytes[i:i+48]) + b"\n"
-        pem_content += b"-----END PRIVATE KEY-----\n"
-
-        # Write to file
-        with open(PEM_PATH, "wb") as f:
-            f.write(pem_content)
-
-        print(f"[NIJA] PEM file written to {PEM_PATH}")
-    except Exception as e:
-        print(f"[NIJA-ERROR] Failed to generate PEM: {e}")
-else:
-    print("[NIJA-WARNING] COINBASE_PEM_B64 not set in environment.")
-
-
-import os
 import logging
 import importlib
 from decimal import Decimal
@@ -46,24 +15,8 @@ logger = logging.getLogger("nija_client")
 # ----------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-
-if not API_KEY or not API_SECRET:
-    logger.error("❌ Missing Coinbase API credentials! Trading will run in simulated mode.")
-else:
-    logger.info("✅ Coinbase API credentials present. Ready for live trading.")
-    logger.info(f"[DEBUG] API_SECRET len={len(API_SECRET)} first/last 4: {API_SECRET[:4]}...{API_SECRET[-4:]}")
-
-# ----------------------
-# CoinbaseClient setup
-# ----------------------
-CoinbaseClient = None
-try:
-    from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] Successfully imported CoinbaseClient")
-except ModuleNotFoundError:
-    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient instead.")
-except Exception as e:
-    logger.error(f"[NIJA] Unexpected error importing CoinbaseClient: {e}")
+PEM_B64 = os.getenv("COINBASE_PEM_B64")
+PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
 
 # ----------------------
 # Dummy client fallback
@@ -85,7 +38,7 @@ class DummyClient:
         return Decimal("100.00")
 
 # ----------------------
-# Discover potential real clients
+# Helper: discover real clients
 # ----------------------
 _client_candidates = []
 _import_attempts = []
@@ -120,16 +73,58 @@ def _instantiate_and_test(client_cls, *args, **kwargs):
         return None
 
 # ----------------------
+# PEM Generation Helper
+# ----------------------
+def _generate_pem_file():
+    if not PEM_B64:
+        logger.warning("[NIJA] COINBASE_PEM_B64 not set in environment.")
+        return False
+
+    try:
+        pem_bytes = base64.b64decode(PEM_B64)
+        pem_content = b"-----BEGIN PRIVATE KEY-----\n"
+        for i in range(0, len(pem_bytes), 48):  # 48 bytes ≈ 64 Base64 chars
+            pem_content += base64.b64encode(pem_bytes[i:i+48]) + b"\n"
+        pem_content += b"-----END PRIVATE KEY-----\n"
+        os.makedirs(os.path.dirname(PEM_PATH), exist_ok=True)
+        with open(PEM_PATH, "wb") as f:
+            f.write(pem_content)
+        logger.info(f"[NIJA] PEM file written to {PEM_PATH}")
+        return True
+    except Exception as e:
+        logger.error(f"[NIJA-ERROR] Failed to generate PEM: {e}")
+        return False
+
+# ----------------------
 # Public API: init_client
 # ----------------------
 def init_client():
-    logger.info(f"[NIJA] API_KEY present: {'yes' if API_KEY else 'no'}")
-    logger.info(f"[NIJA] API_SECRET present: {'yes' if API_SECRET else 'no'}")
+    # ----------------------
+    # Generate PEM if needed
+    # ----------------------
+    pem_ok = _generate_pem_file()
 
     if not (API_KEY and API_SECRET):
-        logger.warning("[NIJA] Missing API key/secret — using DummyClient")
+        logger.error("❌ Missing Coinbase API credentials! Using DummyClient.")
         return DummyClient()
 
+    logger.info("✅ Coinbase API credentials present. Ready for live trading.")
+    logger.info(f"[DEBUG] API_SECRET len={len(API_SECRET)} first/last 4: {API_SECRET[:4]}...{API_SECRET[-4:]}")
+
+    # ----------------------
+    # Try CoinbaseClient
+    # ----------------------
+    try:
+        from coinbase_advanced_py.client import CoinbaseClient
+        logger.info("[NIJA] Successfully imported CoinbaseClient")
+    except ModuleNotFoundError:
+        logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient instead.")
+    except Exception as e:
+        logger.error(f"[NIJA] Unexpected error importing CoinbaseClient: {e}")
+
+    # ----------------------
+    # Try discovered clients
+    # ----------------------
     for name, cls in _client_candidates:
         logger.info(f"[NIJA] Trying candidate client: {name}")
 
@@ -146,6 +141,7 @@ def init_client():
     logger.warning("[NIJA] No working Coinbase client found. Falling back to DummyClient.")
     for attempt, result in _import_attempts:
         logger.debug(f"[NIJA-DEBUG] Import attempt: {attempt} -> {result}")
+
     return DummyClient()
 
 # ----------------------
