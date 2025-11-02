@@ -1,4 +1,53 @@
 # nija_preflight.py
+import os
+import sys
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_preflight")
+
+# -----------------------------
+# --- Check environment
+# -----------------------------
+required_env = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
+missing = [e for e in required_env if not os.getenv(e)]
+if missing:
+    logger.error(f"❌ Missing required environment variables: {missing}")
+    sys.exit(1)
+logger.info("✅ All required environment variables are set.")
+
+# -----------------------------
+# --- Import client
+# -----------------------------
+try:
+    from nija_client import client, get_usd_balance, CLIENT_CLASS
+except ImportError as e:
+    logger.error("❌ Failed to import nija_client. Ensure your packages are installed correctly.")
+    logger.exception(e)
+    sys.exit(1)
+
+# -----------------------------
+# --- Check client type
+# -----------------------------
+logger.info(f"✅ Coinbase client class in use: {CLIENT_CLASS.__name__}")
+
+# -----------------------------
+# --- Test fetching USD balance
+# -----------------------------
+try:
+    balance = get_usd_balance()
+    logger.info(f"✅ Fetched USD balance: {balance}")
+except Exception as e:
+    logger.error("❌ Failed to fetch USD balance from Coinbase client.")
+    logger.exception(e)
+    sys.exit(1)
+
+# -----------------------------
+# --- Final confirmation
+# -----------------------------
+logger.info("🚀 Preflight checks passed. Nija is ready to run LIVE.")
+
+# nija_preflight.py
 import logging
 import sys
 from decimal import Decimal
