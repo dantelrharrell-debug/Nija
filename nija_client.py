@@ -1,54 +1,42 @@
 # nija_client.py
 import os
 import logging
-from decimal import Decimal
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
+logger.setLevel(logging.INFO)
 
-# Path to PEM file
-PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
-
-# Attempt to import CoinbaseClient
+# Try importing CoinbaseClient
 try:
     from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] Successfully imported CoinbaseClient")
+    logger.info("[NIJA] coinbase_advanced_py.client imported successfully")
 except ModuleNotFoundError:
-    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient instead.")
+    logger.warning("[NIJA] CoinbaseClient not available")
     CoinbaseClient = None
-except Exception as e:
-    logger.error(f"[NIJA] Error importing CoinbaseClient: {e}")
-    CoinbaseClient = None
-
-
-def write_pem_file(content: str):
-    """Write PEM file if missing or corrupted."""
-    try:
-        with open(PEM_PATH, "w") as f:
-            f.write(content)
-        logger.info(f"[NIJA] PEM file written to {PEM_PATH}")
-    except Exception as e:
-        logger.error(f"[NIJA] Failed to write PEM file: {e}")
-
 
 def init_client():
-    """Initialize Coinbase RESTClient with PEM and API credentials."""
+    """
+    Initialize Coinbase RESTClient using environment variables.
+    PEM content is passed directly from ENV; no file writing needed.
+    """
     if CoinbaseClient is None:
         logger.warning("[NIJA] CoinbaseClient unavailable, returning None")
         return None
 
-    # Ensure PEM exists
     pem_content = os.getenv("COINBASE_PEM_CONTENT")
-    if pem_content:
-        if not os.path.exists(PEM_PATH):
-            write_pem_file(pem_content)
+    api_key = os.getenv("COINBASE_API_KEY")
+    api_secret = os.getenv("COINBASE_API_SECRET")
+    api_passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+
+    if not all([pem_content, api_key, api_secret, api_passphrase]):
+        logger.error("[NIJA] Missing Coinbase API credentials in environment")
+        return None
 
     try:
         client = CoinbaseClient(
-            key=os.getenv("COINBASE_API_KEY"),
-            secret=os.getenv("COINBASE_API_SECRET"),
-            passphrase=os.getenv("COINBASE_API_PASSPHRASE"),
-            pem_path=PEM_PATH
+            key=api_key,
+            secret=api_secret,
+            passphrase=api_passphrase,
+            pem_content=pem_content  # pass PEM as string
         )
         logger.info("[NIJA] Coinbase RESTClient initialized successfully")
         return client
