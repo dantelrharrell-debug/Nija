@@ -2,6 +2,68 @@
 import os
 import logging
 from decimal import Decimal
+from coinbase.rest import RESTClient as CoinbaseClient
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_client")
+
+# -----------------------------
+# --- Load Coinbase credentials
+# -----------------------------
+API_KEY = os.environ.get("COINBASE_API_KEY")
+API_SECRET = os.environ.get("COINBASE_API_SECRET")
+API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE", None)  # optional
+
+if not API_KEY or not API_SECRET:
+    raise RuntimeError("❌ Missing Coinbase API_KEY or API_SECRET in environment")
+
+# -----------------------------
+# --- Initialize live client
+# -----------------------------
+try:
+    client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET)
+    logger.info("[NIJA] Coinbase RESTClient initialized ✅")
+except Exception as e:
+    logger.error(f"❌ Failed to initialize Coinbase RESTClient: {e}")
+    raise e
+
+# -----------------------------
+# --- Optional: Expose class
+# -----------------------------
+CLIENT_CLASS = CoinbaseClient
+
+# -----------------------------
+# --- Helper: Get USD balance
+# -----------------------------
+def get_usd_balance(client_obj=None) -> Decimal:
+    """
+    Fetch USD balance from Coinbase account.
+    Returns Decimal(0) if fetch fails.
+    """
+    client_obj = client_obj or client
+    try:
+        accounts = client_obj.get_accounts()  # list of accounts
+        usd_account = next(acc for acc in accounts if acc['currency'] == 'USD')
+        balance = Decimal(usd_account['balance']['amount'])
+        return balance
+    except StopIteration:
+        logger.warning("[NIJA] No USD account found")
+        return Decimal(0)
+    except Exception as e:
+        logger.error(f"[NIJA] Failed to fetch USD balance: {e}")
+        return Decimal(0)
+
+# -----------------------------
+# --- Test initialization
+# -----------------------------
+if __name__ == "__main__":
+    balance = get_usd_balance()
+    logger.info(f"[NIJA-TEST] USD Balance: {balance}")
+
+# nija_client.py
+import os
+import logging
+from decimal import Decimal
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
