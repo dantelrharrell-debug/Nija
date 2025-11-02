@@ -1,3 +1,12 @@
+from flask import Flask
+
+app = Flask(__name__)
+
+# Your routes and initialization
+@app.route("/")
+def index():
+    return "Nija is live"
+
 # -----------------------------
 # nija_app.py (LIVE ONLY)
 # -----------------------------
