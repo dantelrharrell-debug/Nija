@@ -1,18 +1,34 @@
-# nija_client.py
 import os
 import logging
+import importlib
+from decimal import Decimal
 
+# ----------------------
+# Configure logger
+# ----------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- DEBUG PATCH: ENV CHECK ---
+# ----------------------
+# DEBUG PATCH: Check environment variables
+# ----------------------
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+
 logger.info(
     "[NIJA-DEBUG] ENV CHECK: "
-    f"COINBASE_API_KEY present: {'yes' if os.getenv('COINBASE_API_KEY') else 'no'}, "
-    f"COINBASE_API_SECRET present: {'yes' if os.getenv('COINBASE_API_SECRET') else 'no'}"
+    f"COINBASE_API_KEY present: {'yes' if API_KEY else 'no'}, "
+    f"COINBASE_API_SECRET present: {'yes' if API_SECRET else 'no'}"
 )
 
-# --- Existing Coinbase client setup ---
+if API_SECRET:
+    logger.info(f"[NIJA-DEBUG] API_SECRET len={len(API_SECRET)} first/last 4: {API_SECRET[:4]}...{API_SECRET[-4:]}")
+else:
+    logger.warning("[NIJA-DEBUG] API_SECRET not visible")
+
+# ----------------------
+# Existing Coinbase client setup
+# ----------------------
 CoinbaseClient = None
 try:
     from coinbase_advanced_py.client import CoinbaseClient
@@ -21,33 +37,6 @@ except ModuleNotFoundError:
     logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient instead.")
 except Exception as e:
     logger.error(f"[NIJA] Unexpected error importing CoinbaseClient: {e}")
-
-"""
-Robust client loader for Nija trading bot (Render-ready).
-
-Features:
-- init_client() returns a real Coinbase client (JWT) if available, or DummyClient fallback
-- No passphrase needed
-- Safe import attempts with logging
-- Avoids calling outdated balance methods
-"""
-
-import os
-import logging
-import importlib
-from decimal import Decimal
-
-# ----------------------
-# Configure logger first
-# ----------------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija_client")
-
-# ----------------------
-# Environment API keys
-# ----------------------
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
 
 # ----------------------
 # Dummy client (safe fallback)
@@ -69,7 +58,7 @@ class DummyClient:
         return Decimal("100.00")
 
 # ----------------------
-# Discover potential real clients
+# Discover and test potential real clients
 # ----------------------
 _client_candidates = []
 _import_attempts = []
@@ -84,10 +73,9 @@ def _discover_clients():
     ]
     for _, hint in tries:
         try:
-            parts = hint.replace("from ", "").split(" import ")
-            mod_name, cls_name = parts[0].strip(), parts[1].strip()
-            mod = importlib.import_module(mod_name)
-            cls = getattr(mod, cls_name)
+            mod_name, cls_name = hint.replace("from ", "").split(" import ")
+            mod = importlib.import_module(mod_name.strip())
+            cls = getattr(mod, cls_name.strip())
             _client_candidates.append((f"{mod_name}.{cls_name}", cls))
             _import_attempts.append((hint, "ok"))
             logger.info(f"[NIJA] Import succeeded: {hint}")
@@ -97,13 +85,9 @@ def _discover_clients():
 
 _discover_clients()
 
-# ----------------------
-# Instantiate client without old balance check
-# ----------------------
 def _instantiate_and_test(client_cls, *args, **kwargs):
     try:
-        inst = client_cls(*args, **kwargs)
-        return inst
+        return client_cls(*args, **kwargs)
     except Exception as e:
         logger.debug(f"[NIJA-DEBUG] Instantiation failed for {client_cls} args={args} kwargs={kwargs}: {e}")
         return None
@@ -122,19 +106,16 @@ def init_client():
     for name, cls in _client_candidates:
         logger.info(f"[NIJA] Trying candidate client: {name}")
 
-        # Positional JWT-style authentication
         inst = _instantiate_and_test(cls, API_KEY, API_SECRET)
         if inst:
             logger.info(f"[NIJA] Authenticated {name} using API_KEY/API_SECRET (JWT)")
             return inst
 
-        # Keyword args
         inst = _instantiate_and_test(cls, api_key=API_KEY, api_secret=API_SECRET)
         if inst:
             logger.info(f"[NIJA] Authenticated {name} using keyword args (JWT)")
             return inst
 
-    # Fallback
     logger.warning("[NIJA] No working Coinbase client found. Falling back to DummyClient.")
     for attempt, result in _import_attempts:
         logger.debug(f"[NIJA-DEBUG] Import attempt: {attempt} -> {result}")
