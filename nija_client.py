@@ -1,30 +1,27 @@
 # nija_client.py
 import logging
+from decimal import Decimal
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# --- Try importing CoinbaseClient safely ---
+# --- Try importing real CoinbaseClient ---
 try:
-    from coinbase_advanced_py import CoinbaseClient
-    logger.info("[NIJA] CoinbaseClient imported successfully")
+    from coinbase_advanced_py.client import CoinbaseClient
+    logger.info("[NIJA] Using real CoinbaseClient")
 except ModuleNotFoundError:
-    logger.warning("[NIJA] CoinbaseClient unavailable, using DummyClient instead")
+    logger.warning("[NIJA] CoinbaseClient not available, using DummyClient instead")
+    
     class DummyClient:
-        def __init__(self, *args, **kwargs):
-            logger.info("[NIJA] DummyClient initialized (no real trading)")
-
-        def place_order(self, *args, **kwargs):
-            logger.info(f"[DummyClient] Simulated order: args={args}, kwargs={kwargs}")
-            return {"status": "simulated"}
-
+        def get_account_balance(self):
+            return Decimal("0.0")
+    
     CoinbaseClient = DummyClient
 
-# --- Helper function ---
+# --- USD balance helper ---
 def get_usd_balance(client):
-    """Fetch USD balance safely. Returns 0 if using DummyClient or on error."""
     try:
-        return client.get_balance("USD")
-    except Exception:
-        logger.warning("[NIJA] Could not fetch real balance, returning 0")
-        return 0
+        return client.get_account_balance()
+    except Exception as e:
+        logger.warning(f"[NIJA] Failed to get USD balance: {e}")
+        return Decimal("0.0")
