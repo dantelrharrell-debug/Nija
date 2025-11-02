@@ -1,43 +1,30 @@
-import os
+# nija_client.py
 import logging
-from decimal import Decimal
-from coinbase_advanced_py.client import CoinbaseClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
+# --- Try importing CoinbaseClient safely ---
+try:
+    from coinbase_advanced_py import CoinbaseClient
+    logger.info("[NIJA] CoinbaseClient imported successfully")
+except ModuleNotFoundError:
+    logger.warning("[NIJA] CoinbaseClient unavailable, using DummyClient instead")
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            logger.info("[NIJA] DummyClient initialized (no real trading)")
 
-def get_client():
-    try:
-        pem_content = os.environ.get("COINBASE_PEM_CONTENT")
-        if pem_content:
-            os.makedirs(os.path.dirname(PEM_PATH), exist_ok=True)
-            with open(PEM_PATH, "w") as f:
-                f.write(pem_content)
+        def place_order(self, *args, **kwargs):
+            logger.info(f"[DummyClient] Simulated order: args={args}, kwargs={kwargs}")
+            return {"status": "simulated"}
 
-        client = CoinbaseClient(
-            key=os.environ.get("COINBASE_API_KEY"),
-            secret=os.environ.get("COINBASE_API_SECRET"),
-            passphrase=os.environ.get("COINBASE_API_PASSPHRASE"),
-            pem_path=PEM_PATH
-        )
-        logger.info("[NIJA] Coinbase RESTClient initialized successfully")
-        return client
+    CoinbaseClient = DummyClient
 
-    except Exception as e:
-        logger.warning(f"[NIJA] CoinbaseClient unavailable: {e}")
-        return None
-
+# --- Helper function ---
 def get_usd_balance(client):
-    accounts = client.get_accounts()
-    for acct in accounts:
-        if acct['currency'] == 'USD':
-            return Decimal(acct['available'])
-    return Decimal(0)
-
-def execute_trade(client, amount_usd, product="BTC-USD"):
-    # Example: Market buy order
-    size = round(amount_usd / float(client.get_spot_price(product)), 8)
-    order = client.place_order(product_id=product, side="buy", type="market", size=size)
-    return order
+    """Fetch USD balance safely. Returns 0 if using DummyClient or on error."""
+    try:
+        return client.get_balance("USD")
+    except Exception:
+        logger.warning("[NIJA] Could not fetch real balance, returning 0")
+        return 0
