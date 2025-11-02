@@ -1,1 +1,1 @@
-web: sh start_nija.sh
+web: gunicorn nija_app:app --workers 1 --bind 0.0.0.0:$PORT
