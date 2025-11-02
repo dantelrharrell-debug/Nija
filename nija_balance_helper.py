@@ -1,11 +1,39 @@
 import os
 import logging
 from decimal import Decimal
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 from coinbase.rest import RESTClient
 
+# --- Logger Setup ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_balance_helper")
 
+# --- PEM Validation (optional but recommended) ---
+PEM_PATH = os.getenv("COINBASE_API_SECRET_PATH", "/opt/render/project/secrets/coinbase.pem")
+
+if not PEM_PATH:
+    logger.error("[NIJA-BALANCE] COINBASE_API_SECRET_PATH not set")
+else:
+    if not os.path.exists(PEM_PATH):
+        logger.error(f"[NIJA-BALANCE] PEM file not found at: {PEM_PATH}")
+    else:
+        try:
+            with open(PEM_PATH, "rb") as f:
+                pem_bytes = f.read()
+
+            private_key = serialization.load_pem_private_key(
+                pem_bytes,
+                password=None,
+                backend=default_backend()
+            )
+            logger.info("[NIJA-BALANCE] PEM loaded successfully ✅")
+
+        except Exception as e:
+            logger.error("[NIJA-BALANCE] Failed to load PEM: %s", e)
+            logger.error("Check PEM formatting (no \\n, full base64 content, valid headers).")
+
+# --- Coinbase Client Helper ---
 def get_rest_client():
     """
     Lazily initialize RESTClient only when needed.
@@ -27,6 +55,7 @@ def get_rest_client():
         return None
 
 
+# --- Balance Fetcher ---
 def get_usd_balance():
     """
     Fetch the USD balance from Coinbase account.
