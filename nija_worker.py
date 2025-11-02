@@ -1,4 +1,16 @@
 import os
+
+print("COINBASE_API_KEY:", os.getenv("COINBASE_API_KEY"))
+print("COINBASE_API_SECRET:", "FOUND" if os.getenv("COINBASE_API_SECRET") else "MISSING")
+pem = os.getenv("COINBASE_PEM_CONTENT")
+print("PEM LENGTH:", len(pem) if pem else "MISSING")
+print("PEM STARTS WITH:", pem[:30] if pem else "MISSING")
+
+import os
+print("COINBASE_API_KEY:", os.getenv("COINBASE_API_KEY"))
+print("COINBASE_API_SECRET:", os.getenv("COINBASE_API_SECRET"))
+
+import os
 pem = os.getenv("COINBASE_PEM_CONTENT")
 print("PEM LENGTH:", len(pem) if pem else "MISSING")
 print("PEM STARTS WITH:", pem[:30] if pem else "MISSING")
