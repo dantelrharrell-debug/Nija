@@ -1,25 +1,31 @@
-# nija_render_worker.py
+# nija_web_worker.py
 import logging
-from nija_client import init_client
-from nija_balance_helper import get_usd_balance
+from flask import Flask, jsonify
+from nija_render_worker import run_worker, client, usd_balance
 
-logger = logging.getLogger("nija_render_worker")
+# --- Logging setup ---
+logger = logging.getLogger("nija_web_worker")
 logger.setLevel(logging.INFO)
 
-# --- Initialize client ---
-client = init_client()
+# --- Flask app ---
+app = Flask(__name__)
 
-# --- Fetch USD balance ---
-usd_balance = get_usd_balance(client)
-logger.info(f"[NIJA] Starting worker with USD balance: {usd_balance}")
+@app.route("/")
+def index():
+    balance = usd_balance if usd_balance is not None else 0
+    return jsonify({
+        "status": "Nija Trading Bot Online",
+        "USD_balance": str(balance)
+    })
 
-def run_worker():
-    logger.info("[NIJA] Worker running...")
-    # your main loop here, pass `client` wherever needed
-    while True:
-        try:
-            balance = get_usd_balance(client)
-            logger.info(f"[NIJA] Current USD balance: {balance}")
-            # ...rest of trading logic...
-        except Exception as e:
-            logger.error(f"[NIJA] Worker loop error: {e}")
+# --- Optional health check ---
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
+
+# --- Start background worker ---
+import threading
+worker_thread = threading.Thread(target=run_worker, daemon=True)
+worker_thread.start()
+
+logger.info("[NIJA-WEB] Flask app initialized, worker thread started.")
