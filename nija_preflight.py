@@ -1,21 +1,13 @@
-# -----------------------------
 # nija_preflight.py
-# -----------------------------
 import logging
-from nija_client import client, get_usd_balance
+from nija_client import get_usd_balance
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_preflight")
 
-# -----------------------------
-# Preflight check
-# -----------------------------
-try:
+def run_preflight():
+    logger.info("[NIJA-PREFLIGHT] Checking live Coinbase connection...")
     balance = get_usd_balance()
-    logger.info(f"[NIJA] CoinbaseClient authenticated. USD Balance: {balance}")
-    logger.info("[NIJA] Mode: LIVE")
-except Exception as e:
-    logger.error(f"[NIJA] Preflight failed: {e}")
-    raise SystemExit("[NIJA] Cannot start bot. Fix credentials or connection before running.")
-
-logger.info("[NIJA] Preflight completed successfully. Bot is ready to start live.")
+    if balance > 0:
+        logger.info(f"[NIJA-PREFLIGHT] ✅ Connection OK - USD Balance: {balance}")
+    else:
+        logger.warning(f"[NIJA-PREFLIGHT] ⚠️ Connection OK but no USD funds available.")
