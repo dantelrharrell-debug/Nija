@@ -1,5 +1,20 @@
 import os
 import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_env_test")
+
+api_key = os.getenv("COINBASE_API_KEY")
+api_secret = os.getenv("COINBASE_API_SECRET")
+
+logger.info(f"COINBASE_API_KEY present: {'yes' if api_key else 'no'}")
+logger.info(f"COINBASE_API_SECRET present: {'yes' if api_secret else 'no'}")
+
+if api_secret:
+    logger.info(f"API_SECRET length: {len(api_secret)} chars, first/last 4: {api_secret[:4]}...{api_secret[-4:]}")
+
+import os
+import logging
 import importlib
 from decimal import Decimal
 
