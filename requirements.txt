@@ -25,19 +25,13 @@ tzdata==2025.2
 python-dateutil==2.9.0.post0
 websockets==13.1
 pytz==2025.2
+
+# Updated Coinbase packages for Python 3.11
 coinbase-advanced-py==1.8.2
-coinbase-advanced-py>=1.0.0
-coinbase-advanced-py>=0.1
-coinbase-advancedtrade-python
-pyjwt>=2.0.0
-requests>=2.0.0
-tradingview_ta>=2.0.0   # if you keep using it for signals
-requests
-pyjwt[crypto]
-requests
-cryptography
-tradingview_ta==3.3.0
+coinbase-advancedtrade-python>=0.6.0
 coinbase==2.1.0
+
+# Other bot-related packages
+tradingview_ta>=3.3.0
 fear-and-greed-crypto==0.1.0
-alphasquared-py==0.4.0
-coinbase-advancedtrade==1.8.2
+alphasquared-py>=0.4.0
