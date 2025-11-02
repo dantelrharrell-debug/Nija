@@ -1,53 +1,45 @@
 # -----------------------------
 # nija_client.py
-# Fully live Coinbase client for Nija bot
 # -----------------------------
 import os
 import logging
 from decimal import Decimal
+from coinbase_advancedtrade_python.client import Client as CoinbaseClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
 # -----------------------------
-# Load API credentials
+# Read API credentials from environment
 # -----------------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # Optional if your key uses passphrase
 
-if not API_KEY or not API_SECRET:
-    raise SystemExit("[NIJA] ❌ Missing Coinbase API credentials! Cannot start live bot.")
+if not (API_KEY and API_SECRET):
+    logger.error("[NIJA] Missing Coinbase API credentials! Cannot run live.")
+    raise SystemExit("[NIJA] Fix credentials before running.")
 
 # -----------------------------
-# Import CoinbaseClient
+# Initialize Coinbase client
 # -----------------------------
 try:
-    from coinbase_advanced_py.client import CoinbaseClient
-except ModuleNotFoundError:
-    raise SystemExit("[NIJA] ❌ coinbase_advanced_py is not installed or missing client.py")
+    client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET, passphrase=API_PASSPHRASE)
+    logger.info("[NIJA] Coinbase client initialized successfully.")
 except Exception as e:
-    raise SystemExit(f"[NIJA] ❌ Unexpected import error: {e}")
+    logger.error(f"[NIJA] Failed to initialize Coinbase client: {e}")
+    raise SystemExit("[NIJA] Cannot start bot without valid Coinbase client.")
 
 # -----------------------------
-# Initialize live client
+# Helper function: get USD balance
 # -----------------------------
-try:
-    client = CoinbaseClient(API_KEY, API_SECRET)
-    logger.info("[NIJA] ✅ Authenticated with CoinbaseClient successfully.")
-except Exception as e:
-    raise SystemExit(f"[NIJA] ❌ Failed to authenticate CoinbaseClient: {e}")
-
-# -----------------------------
-# Helper: fetch USD balance
-# -----------------------------
-def get_usd_balance(client):
+def get_usd_balance() -> Decimal:
     try:
-        if hasattr(client, "get_usd_balance"):
-            return client.get_usd_balance()
-        elif hasattr(client, "get_account_balance"):
-            return client.get_account_balance()
-        else:
-            raise AttributeError("Client missing balance method")
+        accounts = client.get_accounts()
+        for acct in accounts['data']:
+            if acct['currency'] == 'USD':
+                return Decimal(acct['available'])
+        return Decimal("0")
     except Exception as e:
-        logger.exception(f"[NIJA] Error fetching USD balance: {e}")
+        logger.error(f"[NIJA] Error fetching USD balance: {e}")
         return Decimal("0")
