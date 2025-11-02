@@ -1,5 +1,4 @@
 import os
-import base64
 import logging
 import importlib
 from decimal import Decimal
@@ -11,12 +10,51 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
 # ----------------------
+# PEM handling
+# ----------------------
+PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
+pem_b64 = os.getenv("COINBASE_PEM_B64")
+
+if pem_b64:
+    try:
+        # Split into 64-character lines per PEM standard
+        pem_content = (
+            "-----BEGIN PRIVATE KEY-----\n"
+            + "\n".join(pem_b64[i:i+64] for i in range(0, len(pem_b64), 64))
+            + "\n-----END PRIVATE KEY-----\n"
+        )
+        os.makedirs(os.path.dirname(PEM_PATH), exist_ok=True)
+        with open(PEM_PATH, "w") as f:
+            f.write(pem_content)
+        logger.info(f"[NIJA] PEM file written to {PEM_PATH}")
+    except Exception as e:
+        logger.error(f"[NIJA] Failed to generate PEM file: {e}")
+else:
+    logger.warning("[NIJA] COINBASE_PEM_B64 not set in environment. Coinbase client may fallback to simulated mode.")
+
+# ----------------------
 # Environment check
 # ----------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-PEM_B64 = os.getenv("COINBASE_PEM_B64")
-PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
+
+if not API_KEY or not API_SECRET:
+    logger.error("❌ Missing Coinbase API credentials! Trading will run in simulated mode.")
+else:
+    logger.info("✅ Coinbase API credentials present. Ready for live trading.")
+    logger.info(f"[DEBUG] API_SECRET len={len(API_SECRET)} first/last 4: {API_SECRET[:4]}...{API_SECRET[-4:]}")
+
+# ----------------------
+# CoinbaseClient setup
+# ----------------------
+CoinbaseClient = None
+try:
+    from coinbase_advanced_py.client import CoinbaseClient
+    logger.info("[NIJA] Successfully imported CoinbaseClient")
+except ModuleNotFoundError:
+    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient instead.")
+except Exception as e:
+    logger.error(f"[NIJA] Unexpected error importing CoinbaseClient: {e}")
 
 # ----------------------
 # Dummy client fallback
@@ -35,10 +73,10 @@ class DummyClient:
         return {"status": "simulated", "product_id": product_id, "amount": amount}
 
     def get_usd_balance(self) -> Decimal:
-        return Decimal("0")
+        return Decimal("100.00")
 
 # ----------------------
-# Helper: discover real clients
+# Discover potential real clients
 # ----------------------
 _client_candidates = []
 _import_attempts = []
@@ -73,77 +111,33 @@ def _instantiate_and_test(client_cls, *args, **kwargs):
         return None
 
 # ----------------------
-# PEM Generation Helper
-# ----------------------
-def _generate_pem_file():
-    if not PEM_B64:
-        logger.warning("[NIJA] COINBASE_PEM_B64 not set in environment.")
-        return False
-
-    try:
-        pem_bytes = base64.b64decode(PEM_B64)
-        pem_content = b"-----BEGIN PRIVATE KEY-----\n"
-        for i in range(0, len(pem_bytes), 48):
-            pem_content += base64.b64encode(pem_bytes[i:i+48]) + b"\n"
-        pem_content += b"-----END PRIVATE KEY-----\n"
-        os.makedirs(os.path.dirname(PEM_PATH), exist_ok=True)
-        with open(PEM_PATH, "wb") as f:
-            f.write(pem_content)
-        logger.info(f"[NIJA] PEM file successfully written to {PEM_PATH}")
-        return True
-    except Exception as e:
-        logger.error(f"[NIJA-ERROR] Failed to generate PEM: {e}")
-        return False
-
-# ----------------------
 # Public API: init_client
 # ----------------------
 def init_client():
-    pem_ok = _generate_pem_file()
+    logger.info(f"[NIJA] API_KEY present: {'yes' if API_KEY else 'no'}")
+    logger.info(f"[NIJA] API_SECRET present: {'yes' if API_SECRET else 'no'}")
 
     if not (API_KEY and API_SECRET):
-        logger.error("❌ Missing Coinbase API credentials! Using DummyClient.")
-        client = DummyClient()
-    else:
-        logger.info("✅ Coinbase API credentials present. Ready for live trading.")
-        logger.info(f"[DEBUG] API_SECRET len={len(API_SECRET)} first/last 4: {API_SECRET[:4]}...{API_SECRET[-4:]}")
+        logger.warning("[NIJA] Missing API key/secret — using DummyClient")
+        return DummyClient()
 
-        try:
-            from coinbase_advanced_py.client import CoinbaseClient
-            logger.info("[NIJA] Successfully imported CoinbaseClient")
-        except ModuleNotFoundError:
-            logger.warning("[NIJA] CoinbaseClient not available. Will attempt discovered clients.")
-        except Exception as e:
-            logger.error(f"[NIJA] Unexpected error importing CoinbaseClient: {e}")
+    for name, cls in _client_candidates:
+        logger.info(f"[NIJA] Trying candidate client: {name}")
 
-        client = None
-        for name, cls in _client_candidates:
-            logger.info(f"[NIJA] Trying candidate client: {name}")
-            client = _instantiate_and_test(cls, API_KEY, API_SECRET)
-            if client:
-                logger.info(f"[NIJA] Authenticated {name} using API_KEY/API_SECRET (JWT)")
-                break
-            client = _instantiate_and_test(cls, api_key=API_KEY, api_secret=API_SECRET)
-            if client:
-                logger.info(f"[NIJA] Authenticated {name} using keyword args (JWT)")
-                break
+        inst = _instantiate_and_test(cls, API_KEY, API_SECRET)
+        if inst:
+            logger.info(f"[NIJA] Authenticated {name} using API_KEY/API_SECRET (JWT)")
+            return inst
 
-        if not client:
-            logger.warning("[NIJA] No working Coinbase client found. Falling back to DummyClient.")
-            for attempt, result in _import_attempts:
-                logger.debug(f"[NIJA-DEBUG] Import attempt: {attempt} -> {result}")
-            client = DummyClient()
+        inst = _instantiate_and_test(cls, api_key=API_KEY, api_secret=API_SECRET)
+        if inst:
+            logger.info(f"[NIJA] Authenticated {name} using keyword args (JWT)")
+            return inst
 
-    # ----------------------
-    # Check USD balance
-    # ----------------------
-    try:
-        usd_balance = get_usd_balance(client)
-        logger.info(f"[NIJA] USD balance fetched: {usd_balance}")
-    except Exception as e:
-        logger.error(f"[NIJA] Failed to fetch USD balance: {e}")
-
-    return client
+    logger.warning("[NIJA] No working Coinbase client found. Falling back to DummyClient.")
+    for attempt, result in _import_attempts:
+        logger.debug(f"[NIJA-DEBUG] Import attempt: {attempt} -> {result}")
+    return DummyClient()
 
 # ----------------------
 # Helper: get USD balance
