@@ -1,26 +1,38 @@
 # nija_app.py
-from flask import Flask
 import threading
+import time
 import logging
-from nija_client import client, get_usd_balance  # your existing client logic
+from flask import Flask
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_app")
 
-# === THIS IS THE KEY: expose 'app' for Gunicorn ===
+# --- Import your client logic ---
+try:
+    from nija_client import CoinbaseClient, get_usd_balance
+    LIVE_CLIENT_AVAILABLE = True
+except Exception as e:
+    logger.warning(f"[NIJA] CoinbaseClient unavailable, using DummyClient ⚠️ ({e})")
+    from nija_client import DummyClient as CoinbaseClient, get_usd_balance
+    LIVE_CLIENT_AVAILABLE = False
+
+# --- Initialize Flask app for Gunicorn ---
 app = Flask(__name__)
 
 @app.route("/")
 def home():
     balance = get_usd_balance()
-    return f"NIJA BOT LIVE! USD Balance: {balance}"
+    status = "LIVE" if LIVE_CLIENT_AVAILABLE else "DUMMY"
+    return f"NIJA BOT {status}! USD Balance: {balance}"
 
-# Optional: start background worker thread
+# --- Background worker thread ---
 def worker_loop():
-    import time
     while True:
-        bal = get_usd_balance()
-        logger.info(f"[NIJA] Periodic USD balance: {bal}")
-        time.sleep(10)
+        try:
+            bal = get_usd_balance()
+            logger.info(f"[NIJA] Periodic USD balance: {bal}")
+        except Exception as e:
+            logger.error(f"[NIJA] Error fetching balance: {e}")
+        time.sleep(10)  # adjust your polling interval
 
 threading.Thread(target=worker_loop, daemon=True).start()
