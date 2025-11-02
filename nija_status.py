@@ -1,10 +1,11 @@
-# nija_status.py
+# nija_startup.py
 import logging
 from decimal import Decimal
 from nija_client import client, get_usd_balance
+from nija_worker import run_worker  # your main bot loop
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija_status")
+logger = logging.getLogger("nija_startup")
 
 def print_status():
     print("\n--- NIJA BOT LIVE STATUS ---\n")
@@ -30,8 +31,7 @@ def print_status():
 
     # 3️⃣ Test Trade Simulation
     try:
-        # Simulate a tiny buy order (adjust amount to minimum for your account)
-        test_order_amount = 0.001  # BTC example
+        test_order_amount = 0.001  # Adjust for your account minimum
         # Uncomment for real trade:
         # order = client.place_order(product_id="BTC-USD", side="buy", size=str(test_order_amount))
         print(f"✅ Test trade simulation OK (buy {test_order_amount} BTC)")
@@ -40,5 +40,20 @@ def print_status():
 
     print("\n--- NIJA STATUS CHECK COMPLETE ---\n")
 
+
 if __name__ == "__main__":
+    # 1️⃣ Preflight checks (existing)
+    try:
+        import nija_preflight
+        nija_preflight.run_checks()
+        print("✅ Preflight checks completed")
+    except Exception as e:
+        print(f"❌ Preflight failed: {e}")
+        exit(1)
+
+    # 2️⃣ Live status green checks
     print_status()
+
+    # 3️⃣ Start main Nija worker
+    print("🚀 Starting Nija bot worker...")
+    run_worker()
