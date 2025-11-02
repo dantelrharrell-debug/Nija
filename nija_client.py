@@ -1,3 +1,27 @@
+# nija_client.py
+import os
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_client")
+
+# --- DEBUG PATCH: ENV CHECK ---
+logger.info(
+    "[NIJA-DEBUG] ENV CHECK: "
+    f"COINBASE_API_KEY present: {'yes' if os.getenv('COINBASE_API_KEY') else 'no'}, "
+    f"COINBASE_API_SECRET present: {'yes' if os.getenv('COINBASE_API_SECRET') else 'no'}"
+)
+
+# --- Existing Coinbase client setup ---
+CoinbaseClient = None
+try:
+    from coinbase_advanced_py.client import CoinbaseClient
+    logger.info("[NIJA] Successfully imported CoinbaseClient")
+except ModuleNotFoundError:
+    logger.warning("[NIJA] CoinbaseClient not available. Using DummyClient instead.")
+except Exception as e:
+    logger.error(f"[NIJA] Unexpected error importing CoinbaseClient: {e}")
+
 """
 Robust client loader for Nija trading bot (Render-ready).
 
