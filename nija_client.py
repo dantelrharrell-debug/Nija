@@ -1,45 +1,43 @@
-# nija_client.py
 import os
 import logging
+from decimal import Decimal
+from coinbase_advanced_py.client import CoinbaseClient
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
-logger.setLevel(logging.INFO)
 
-# Try importing CoinbaseClient
-try:
-    from coinbase_advanced_py.client import CoinbaseClient
-    logger.info("[NIJA] coinbase_advanced_py.client imported successfully")
-except ModuleNotFoundError:
-    logger.warning("[NIJA] CoinbaseClient not available")
-    CoinbaseClient = None
+PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
 
-def init_client():
-    """
-    Initialize Coinbase RESTClient using environment variables.
-    PEM content is passed directly from ENV; no file writing needed.
-    """
-    if CoinbaseClient is None:
-        logger.warning("[NIJA] CoinbaseClient unavailable, returning None")
-        return None
-
-    pem_content = os.getenv("COINBASE_PEM_CONTENT")
-    api_key = os.getenv("COINBASE_API_KEY")
-    api_secret = os.getenv("COINBASE_API_SECRET")
-    api_passphrase = os.getenv("COINBASE_API_PASSPHRASE")
-
-    if not all([pem_content, api_key, api_secret, api_passphrase]):
-        logger.error("[NIJA] Missing Coinbase API credentials in environment")
-        return None
-
+def get_client():
     try:
+        pem_content = os.environ.get("COINBASE_PEM_CONTENT")
+        if pem_content:
+            os.makedirs(os.path.dirname(PEM_PATH), exist_ok=True)
+            with open(PEM_PATH, "w") as f:
+                f.write(pem_content)
+
         client = CoinbaseClient(
-            key=api_key,
-            secret=api_secret,
-            passphrase=api_passphrase,
-            pem_content=pem_content  # pass PEM as string
+            key=os.environ.get("COINBASE_API_KEY"),
+            secret=os.environ.get("COINBASE_API_SECRET"),
+            passphrase=os.environ.get("COINBASE_API_PASSPHRASE"),
+            pem_path=PEM_PATH
         )
         logger.info("[NIJA] Coinbase RESTClient initialized successfully")
         return client
+
     except Exception as e:
-        logger.error(f"[NIJA] Failed to initialize Coinbase client: {e}")
+        logger.warning(f"[NIJA] CoinbaseClient unavailable: {e}")
         return None
+
+def get_usd_balance(client):
+    accounts = client.get_accounts()
+    for acct in accounts:
+        if acct['currency'] == 'USD':
+            return Decimal(acct['available'])
+    return Decimal(0)
+
+def execute_trade(client, amount_usd, product="BTC-USD"):
+    # Example: Market buy order
+    size = round(amount_usd / float(client.get_spot_price(product)), 8)
+    order = client.place_order(product_id=product, side="buy", type="market", size=size)
+    return order
