@@ -1,52 +1,49 @@
-# nija_app.py
+# -----------------------------
+# nija_app.py (LIVE ONLY)
+# -----------------------------
 import logging
-from threading import Thread
-from time import sleep
-
-from nija_client import CoinbaseClient, get_usd_balance  # <-- safe import
+import time
+from decimal import Decimal
+from nija_client import client, get_usd_balance
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_app")
 
-# --- Initialize client ---
-client = CoinbaseClient()  # Will be real or DummyClient safely
-
-# --- PEM setup (if you use it for Coinbase auth) ---
-def write_pem():
-    try:
-        pem_content = "YOUR PEM CONTENT HERE"
-        with open("/tmp/coinbase.pem", "w") as f:
-            f.write(pem_content)
-        logger.info("[NIJA] PEM written")
-    except Exception as e:
-        logger.warning(f"[NIJA] Could not write PEM: {e}")
-
-write_pem()
-
-# --- Worker Thread ---
+# -----------------------------
+# Worker loop
+# -----------------------------
 def nija_worker():
-    logger.info("[NIJA-WORKER] Started")
+    logger.info("[NIJA-WORKER] Starting worker loop...")
     while True:
         try:
-            usd_balance = get_usd_balance(client)
-            logger.info(f"[NIJA-WORKER] USD Balance: {usd_balance}")
-            # --- Place your trading logic here ---
+            balance = get_usd_balance()
+            logger.info(f"[NIJA-WORKER] USD Balance: {balance}")
+
+            # -----------------------------
+            # Example live trade logic
+            # -----------------------------
+            # Replace with your actual trading logic
+            if balance > 10:  # just a safety example
+                logger.info("[NIJA-WORKER] Ready to trade. Add your BUY/SELL logic here.")
+
+            time.sleep(5)  # Adjust sleep for desired frequency
+        except KeyboardInterrupt:
+            logger.info("[NIJA-WORKER] KeyboardInterrupt received. Stopping worker.")
+            break
         except Exception as e:
-            logger.error(f"[NIJA-WORKER] Error: {e}")
-        sleep(5)  # adjust loop timing as needed
+            logger.exception(f"[NIJA-WORKER] Error in worker loop: {e}")
+            time.sleep(5)
 
-# --- Start worker thread ---
-Thread(target=nija_worker, daemon=True).start()
-logger.info("[NIJA-APP] Worker thread started")
-
-# --- Flask App ---
-from flask import Flask, jsonify
-
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return jsonify({"status": "NIJA app running", "client": type(client).__name__})
-
+# -----------------------------
+# Run preflight check
+# -----------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    try:
+        balance = get_usd_balance()
+        logger.info(f"[NIJA-APP] Preflight check passed. USD Balance: {balance}")
+        logger.info("[NIJA-APP] Starting LIVE bot...")
+
+        nija_worker()
+    except Exception as e:
+        logger.error(f"[NIJA-APP] Cannot start bot: {e}")
+        raise SystemExit("[NIJA] Fix Coinbase credentials or connection before running.")
