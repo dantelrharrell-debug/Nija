@@ -1,20 +1,5 @@
 import os
 import logging
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija_env_test")
-
-api_key = os.getenv("COINBASE_API_KEY")
-api_secret = os.getenv("COINBASE_API_SECRET")
-
-logger.info(f"COINBASE_API_KEY present: {'yes' if api_key else 'no'}")
-logger.info(f"COINBASE_API_SECRET present: {'yes' if api_secret else 'no'}")
-
-if api_secret:
-    logger.info(f"API_SECRET length: {len(api_secret)} chars, first/last 4: {api_secret[:4]}...{api_secret[-4:]}")
-
-import os
-import logging
 import importlib
 from decimal import Decimal
 
@@ -25,24 +10,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
 # ----------------------
-# DEBUG PATCH: Check environment variables
+# Environment check
 # ----------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
 
-logger.info(
-    "[NIJA-DEBUG] ENV CHECK: "
-    f"COINBASE_API_KEY present: {'yes' if API_KEY else 'no'}, "
-    f"COINBASE_API_SECRET present: {'yes' if API_SECRET else 'no'}"
-)
-
-if API_SECRET:
-    logger.info(f"[NIJA-DEBUG] API_SECRET len={len(API_SECRET)} first/last 4: {API_SECRET[:4]}...{API_SECRET[-4:]}")
+if not API_KEY or not API_SECRET:
+    logger.error("❌ Missing Coinbase API credentials! Trading will run in simulated mode.")
 else:
-    logger.warning("[NIJA-DEBUG] API_SECRET not visible")
+    logger.info("✅ Coinbase API credentials present. Ready for live trading.")
+    logger.info(f"[DEBUG] API_SECRET len={len(API_SECRET)} first/last 4: {API_SECRET[:4]}...{API_SECRET[-4:]}")
 
 # ----------------------
-# Existing Coinbase client setup
+# CoinbaseClient setup
 # ----------------------
 CoinbaseClient = None
 try:
@@ -54,7 +34,7 @@ except Exception as e:
     logger.error(f"[NIJA] Unexpected error importing CoinbaseClient: {e}")
 
 # ----------------------
-# Dummy client (safe fallback)
+# Dummy client fallback
 # ----------------------
 class DummyClient:
     def __init__(self):
@@ -73,7 +53,7 @@ class DummyClient:
         return Decimal("100.00")
 
 # ----------------------
-# Discover and test potential real clients
+# Discover potential real clients
 # ----------------------
 _client_candidates = []
 _import_attempts = []
@@ -137,7 +117,7 @@ def init_client():
     return DummyClient()
 
 # ----------------------
-# Helper for fetching USD balance
+# Helper: get USD balance
 # ----------------------
 def get_usd_balance(client):
     try:
