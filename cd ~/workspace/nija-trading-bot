@@ -1,9 +1,13 @@
-/opt/render/project/src/
+/src/
 │
-├─ nija_preflight.py      # preflight script checks USD balance
-├─ nija_startup.py        # main bot start script
-├─ nija_coinbase_client.py # handles USD balance fetch
-├─ nija_coinbase_jwt.py    # handles JWT token creation
-├─ requirements.txt
-├─ Dockerfile
-└─ railway.json           # contains all env variables and start command
+├── nija_app.py              ← main live Flask app + background trading worker
+├── nija_write_pem.py        ← writes your COINBASE_PEM_CONTENT secret into a .pem file
+├── nija_client.py           ← handles Coinbase authentication + balance/trade functions
+├── trading_logic.py         ← your buy/sell decision logic (optional, can expand)
+│
+├── requirements.txt         ← includes cdp-sdk, flask, gunicorn, etc.
+├── nija_preflight.py        ← quick pre-check for JWT + credentials (optional)
+│
+├── __init__.py              ← (optional) can be empty, helps Python treat folder as a module
+│
+└── Procfile                 ← tells Render how to start the app
