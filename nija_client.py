@@ -1,4 +1,36 @@
 import os
+import base64
+
+# Path where your PEM file will be written
+PEM_PATH = "/opt/render/project/secrets/coinbase.pem"
+
+# Read Base64 PEM content from env var
+pem_b64 = os.getenv("COINBASE_PEM_B64")
+
+if pem_b64:
+    try:
+        # Decode Base64 into bytes
+        pem_bytes = base64.b64decode(pem_b64)
+
+        # Wrap in proper PEM header/footer
+        pem_content = b"-----BEGIN PRIVATE KEY-----\n"
+        # Split into 64-character lines as PEM standard requires
+        for i in range(0, len(pem_bytes), 48):  # 48 bytes ≈ 64 Base64 chars
+            pem_content += base64.b64encode(pem_bytes[i:i+48]) + b"\n"
+        pem_content += b"-----END PRIVATE KEY-----\n"
+
+        # Write to file
+        with open(PEM_PATH, "wb") as f:
+            f.write(pem_content)
+
+        print(f"[NIJA] PEM file written to {PEM_PATH}")
+    except Exception as e:
+        print(f"[NIJA-ERROR] Failed to generate PEM: {e}")
+else:
+    print("[NIJA-WARNING] COINBASE_PEM_B64 not set in environment.")
+
+
+import os
 import logging
 import importlib
 from decimal import Decimal
