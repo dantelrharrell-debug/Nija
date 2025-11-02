@@ -1,20 +1,3 @@
-import os
-
-print("COINBASE_API_KEY:", os.getenv("COINBASE_API_KEY"))
-print("COINBASE_API_SECRET:", "FOUND" if os.getenv("COINBASE_API_SECRET") else "MISSING")
-pem = os.getenv("COINBASE_PEM_CONTENT")
-print("PEM LENGTH:", len(pem) if pem else "MISSING")
-print("PEM STARTS WITH:", pem[:30] if pem else "MISSING")
-
-import os
-print("COINBASE_API_KEY:", os.getenv("COINBASE_API_KEY"))
-print("COINBASE_API_SECRET:", os.getenv("COINBASE_API_SECRET"))
-
-import os
-pem = os.getenv("COINBASE_PEM_CONTENT")
-print("PEM LENGTH:", len(pem) if pem else "MISSING")
-print("PEM STARTS WITH:", pem[:30] if pem else "MISSING")
-
 # nija_worker.py
 import os
 import sys
@@ -37,33 +20,22 @@ logging.basicConfig(
 logger = logging.getLogger("nija_worker")
 
 # -----------------------
-# PEM file check
+# PEM load from environment
 # -----------------------
-PEM_PATH = os.getenv("COINBASE_API_SECRET_PATH")
-if not PEM_PATH:
-    logger.error("[NIJA-BALANCE] COINBASE_API_SECRET_PATH not set!")
+pem_content = os.getenv("COINBASE_PEM_CONTENT")
+if not pem_content:
+    logger.error("[NIJA-BALANCE] Missing COINBASE_PEM_CONTENT in environment")
     sys.exit(1)
 
-def check_pem_file(path: str) -> bool:
-    if not os.path.exists(path):
-        logger.error(f"[NIJA-BALANCE] PEM file not found at {path}")
-        return False
-    try:
-        with open(path, "rb") as pem_file:
-            key_data = pem_file.read()
-            serialization.load_pem_private_key(
-                key_data,
-                password=None,
-                backend=default_backend()
-            )
-        logger.info("[NIJA-BALANCE] PEM file loaded successfully ✅")
-        return True
-    except Exception as e:
-        logger.error(f"[NIJA-BALANCE] Failed to load PEM file: {e}")
-        return False
-
-if not check_pem_file(PEM_PATH):
-    logger.error("[NIJA-BALANCE] Aborting: fix your PEM file before running the bot.")
+try:
+    private_key = serialization.load_pem_private_key(
+        pem_content.encode(),
+        password=None,
+        backend=default_backend()
+    )
+    logger.info("[NIJA-BALANCE] PEM loaded successfully ✅")
+except Exception as e:
+    logger.error(f"[NIJA-BALANCE] Failed to load PEM: {e}")
     sys.exit(1)
 
 # -----------------------
@@ -102,11 +74,15 @@ def decide_trade():
         equity = get_usd_balance()
         logger.info(f"[NIJA] Current USD balance: {equity}")
 
+        if equity < MIN_USD:
+            logger.warning("[NIJA] USD balance too low to trade.")
+            return None
+
         if rsi < 30 and close < vwap:
-            pct = 0.05  # or min(MAX_PCT, 0.05)
+            pct = min(MAX_PCT, 0.05)
             return "buy", pct
         elif rsi > 70 and close > vwap:
-            pct = 0.05
+            pct = min(MAX_PCT, 0.05)
             return "sell", pct
         return None
     except Exception as e:
