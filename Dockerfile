@@ -1,3 +1,5 @@
+CMD ["sh", "-c", "python nija_preflight.py && python nija_startup.py"]
+
 # Use official Python 3.11 slim image
 FROM python:3.11-slim
 
