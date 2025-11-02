@@ -73,14 +73,13 @@ def run_multi_coin_worker():
                 # Example: insert your trading logic here
                 logger.info(f"[NIJA-WORKER] Evaluating trade conditions for {coin}")
                 # --- Placeholder for buy/sell logic ---
-                # Example: client.buy(coin, amount) or client.sell(coin, amount)
 
         except Exception as e:
             logger.error(f"[NIJA-WORKER] Exception: {e}")
 
         time.sleep(10)  # main loop interval
 
-# --- Start worker thread ---
+# --- Auto-start worker thread ---
 worker_thread = threading.Thread(target=run_multi_coin_worker, daemon=True)
 worker_thread.start()
-logger.info("[NIJA-WORKER] Worker thread started")
+logger.info("[NIJA-WORKER] Worker thread started automatically")
