@@ -1,33 +1,26 @@
 # test_pem_format.py
-import os
-import logging
-
+import os, logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija_pem_test")
+logger = logging.getLogger("pem_test")
 
-# 1️⃣ Read PEM from environment variable
-PEM_STRING = os.getenv("COINBASE_PEM_CONTENT")
-if not PEM_STRING:
-    logger.error("COINBASE_PEM_CONTENT is not set!")
+PEM = os.getenv("COINBASE_PEM_CONTENT")
+if PEM is None:
+    logger.error("COINBASE_PEM_CONTENT is not set in environment")
     raise SystemExit(1)
 
-# 2️⃣ Replace literal \n with real newlines
-formatted_pem = PEM_STRING.replace("\\n", "\n")
+s = PEM.strip().replace("\\n", "\n")
+lines = s.splitlines()
 
-# 3️⃣ Optional: remove extra spaces at start/end
-formatted_pem = formatted_pem.strip()
+logger.info("first line repr: %r", lines[0] if lines else "")
+logger.info("last line repr: %r", lines[-1] if lines else "")
+logger.info("total lines: %d", len(lines))
+logger.info("total chars: %d", len(s))
+# show the first 200 bytes and last 200 bytes (repr)
+logger.info("start (repr first 200 chars): %r", s[:200])
+logger.info("end (repr last 200 chars): %r", s[-200:])
 
-# 4️⃣ Print first/last lines and length for sanity check
-lines = formatted_pem.splitlines()
-logger.info(f"PEM starts with: {lines[0]}")
-logger.info(f"PEM ends with: {lines[-1]}")
-logger.info(f"PEM total lines: {len(lines)}")
-logger.info(f"PEM total chars: {len(formatted_pem)}")
-
-# 5️⃣ Optional: write to temp file to test loading
-test_path = "/tmp/test_coinbase.pem"
-with open(test_path, "w") as f:
-    f.write(formatted_pem)
-logger.info(f"PEM written to {test_path} for verification ✅")
-
-# You can now manually inspect /tmp/test_coinbase.pem in the container
+# write to /tmp/test_coinbase.pem for manual inspection
+path = "/tmp/test_coinbase.pem"
+with open(path, "w") as f:
+    f.write(s)
+logger.info("Wrote test pem to %s", path)
