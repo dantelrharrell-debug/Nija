@@ -1,25 +1,21 @@
-# Base image
-ARG PYTHON_VERSION=3.10-slim
-FROM python:${PYTHON_VERSION} AS base
+# Use a stable Python slim image
+FROM python:3.10-slim
 
+# Set working directory
 WORKDIR /app
-COPY . .
+
+# Copy requirements first (cache layer)
+COPY requirements.txt .
 
 # Upgrade pip and install dependencies
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-# Default environment variables
-ENV LOG_LEVEL=INFO
-ENV PYTHONUNBUFFERED=1
-ENV MODE=production  # default mode
+# Copy the rest of your project
+COPY . .
 
-# Set entrypoint
-ENTRYPOINT ["sh", "-c"]
+# Expose the port Railway sets
+ENV PORT 10000
 
-# Run command based on MODE environment variable
-CMD if [ "$MODE" = "debug" ]; then \
-        echo "Starting in debug mode..." && tail -f /dev/null; \
-    else \
-        echo "Starting preflight and bot..." && python nija_preflight.py && python nija_startup.py; \
-    fi
+# Command to run the Flask app
+CMD ["gunicorn", "nija_bootstrap:app", "--workers", "1", "--bind", "0.0.0.0:10000"]
