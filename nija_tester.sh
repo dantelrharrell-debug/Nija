@@ -86,3 +86,4 @@ PY
 
 # 4️⃣ Run the client
 python3 $HOME/nija/nija_client.py
+
