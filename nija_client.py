@@ -1,16 +1,13 @@
 import os
 import logging
-from coinbase_advanced_py.client import RESTClient
+from coinbase_advanced_py import RESTClient
 from cryptography.hazmat.primitives import serialization
 
-# -------------------------------
-# --- Logging setup -------------
-# -------------------------------
 logger = logging.getLogger("nija_client")
 logging.basicConfig(level=logging.INFO)
 
 # -------------------------------
-# --- Load PEM key from env var ---
+# Load PEM key from env var
 # -------------------------------
 pem_env = os.getenv("COINBASE_PEM_KEY")
 if not pem_env:
@@ -32,13 +29,13 @@ except Exception as e:
     raise
 
 # -------------------------------
-# --- Initialize RESTClient -----
+# Initialize RESTClient
 # -------------------------------
 try:
     client = RESTClient(
         api_key=os.getenv("COINBASE_API_KEY"),
         api_secret=os.getenv("COINBASE_API_SECRET"),
-        pem_key=private_key,  # Pass the loaded PEM object
+        pem_key=private_key,
     )
     logger.info("[NIJA] RESTClient initialized successfully ✅")
 except Exception as e:
@@ -46,7 +43,7 @@ except Exception as e:
     raise
 
 # -------------------------------
-# --- Fetch USD balance as test ---
+# Test fetching USD balance
 # -------------------------------
 try:
     usd_balance = client.get_account_balance("USD")
