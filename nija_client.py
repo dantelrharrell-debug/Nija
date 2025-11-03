@@ -1,3 +1,22 @@
+#!/usr/bin/env python3
+import os
+import logging
+from dotenv import load_dotenv  # add this
+
+load_dotenv()  # add this line to load .env file
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija_client")
+
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
+API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+
+if not (API_KEY and API_SECRET and API_PASSPHRASE):
+    logger.error("Missing Coinbase API credentials in environment variables.")
+    raise RuntimeError("Missing Coinbase API credentials")
+
 from dotenv import load_dotenv
 load_dotenv()  # this reads .env
 
