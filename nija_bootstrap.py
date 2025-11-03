@@ -1,4 +1,4 @@
-import debug_nija_write_pem  # temporary - will print debug lines then exit
+import debug_nija_write_pem  # temporary - prints PEM info then exits
 
 # -----------------------------
 # nija_bootstrap.py
