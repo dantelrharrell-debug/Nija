@@ -3,6 +3,9 @@ import logging
 from coinbase_advanced_py.client import RESTClient
 from cryptography.hazmat.primitives import serialization
 
+# -------------------------------
+# --- Logging setup -------------
+# -------------------------------
 logger = logging.getLogger("nija_client")
 logging.basicConfig(level=logging.INFO)
 
