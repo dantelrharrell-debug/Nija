@@ -1,24 +1,28 @@
-# Use Python 3.10-slim for maximum compatibility
+# -----------------------------
+# Dockerfile for Railway + Nija
+# -----------------------------
+
+# Base image
 FROM python:3.10-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first for caching
+# Copy only requirements first (cache layer)
 COPY requirements.txt .
 
 # Upgrade pip and install dependencies
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy all project files
+# Copy the rest of your code
 COPY . .
 
-# Set environment variables Railway can override
-ENV PORT=10000
+# Set environment variables (Railway can override)
 ENV LOG_LEVEL=INFO
+ENV PYTHONUNBUFFERED=1
 
-# Expose port
+# Expose port (Gunicorn binds here)
 EXPOSE 10000
 
-# Command to run Gunicorn with your bootstrap file
+# Start Nija with Gunicorn
 CMD ["gunicorn", "nija_bootstrap:app", "--workers", "1", "--bind", "0.0.0.0:10000"]
