@@ -1,8 +1,5 @@
 # debug_nija_write_pem.py  (temporary - safe)
-import os
-import logging
-import stat
-
+import os, logging, stat
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("debug_pem")
 
@@ -11,10 +8,8 @@ if val is None:
     log.error("COINBASE_PEM_CONTENT not set")
     raise SystemExit(1)
 
-# Normalize common issues we want to detect
 s = val.strip()
 s_singleline_converted = s.replace("\\n", "\n")
-
 lines = s_singleline_converted.splitlines()
 
 log.info("PEM (first line repr): %r", lines[0] if lines else "")
@@ -24,14 +19,11 @@ log.info("PEM total chars: %d", len(s_singleline_converted))
 log.info("PEM start repr (200 chars): %r", s_singleline_converted[:200])
 log.info("PEM end   repr (200 chars): %r", s_singleline_converted[-200:])
 
-# Write to file for inspection
 path = "/tmp/debug_coinbase.pem"
 with open(path, "w", newline="\n") as f:
     f.write(s_singleline_converted)
-
-# Make file readable only by owner
 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 log.info("Wrote debug PEM to %s (permissions set to 600)", path)
 
-# Stop here — do NOT initialize client in this debug run.
+# STOP: do not initialize client in this debug run
 raise SystemExit(0)
