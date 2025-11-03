@@ -1,10 +1,16 @@
-cat > /app/nija_client.py <<'PY'
 #!/usr/bin/env python3
 """
 NIJA Coinbase REST client using plain-text API secret.
 Detects USD Spot balance and prepares bot for live trading.
 """
-import os, time, hmac, hashlib, logging, requests, base64
+
+import os
+import time
+import hmac
+import hashlib
+import logging
+import requests
+import base64
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
@@ -37,7 +43,8 @@ def _cb_request(method: str, path: str, body: str = ""):
         "CB-VERSION": "2025-11-02",
     }
     url = API_BASE.rstrip("/") + path
-    return requests.request(method, url, headers=headers, data=body, timeout=15)
+    resp = requests.request(method, url, headers=headers, data=body, timeout=15)
+    return resp
 
 def get_usd_spot_balance():
     resp = _cb_request("GET", "/v2/accounts")
@@ -67,4 +74,3 @@ if __name__ == "__main__":
         logger.info(f"Detected USD Spot balance: {amt}, account: {acct.get('name')}, id: {acct.get('id')}")
     else:
         logger.info("No USD Spot balance detected.")
-PY
