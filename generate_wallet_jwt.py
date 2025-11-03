@@ -1,57 +1,42 @@
 #!/usr/bin/env python3
 """
-Generate a Coinbase Wallet JWT (wallet-auth) safely with helpful errors.
+Robust wallet JWT generator that accepts:
+ - WALLET_SECRET as base64 DER string (single-line)
+ - WALLET_SECRET as PEM text (-----BEGIN PRIVATE KEY-----...-----END PRIVATE KEY-----)
 
-Expects environment variables:
- - WALLET_SECRET       (base64 DER private key string)
- - REQUEST_METHOD      (e.g. "POST")
- - REQUEST_HOST        (e.g. "api.cdp.coinbase.com")
- - REQUEST_PATH        (e.g. "/platform/v2/evm/.../sign/transaction")
- - REQUEST_BODY        (JSON string or empty)
-
-This script will print a single JWT string on success or
-print a clear error and exit(1) on failure.
+Other env vars:
+ - REQUEST_METHOD
+ - REQUEST_HOST
+ - REQUEST_PATH
+ - REQUEST_BODY (optional, JSON string)
 """
 
-import os
-import sys
-import time
-import jwt
-import uuid
-import json
-import hashlib
-import base64
+import os, sys, time, jwt, uuid, json, hashlib, base64, re
 from cryptography.hazmat.primitives import serialization
 
 def fatal(msg):
     print("ERROR:", msg, file=sys.stderr)
     sys.exit(1)
 
-# Load env vars
 wallet_secret = os.getenv("WALLET_SECRET")
 request_method = os.getenv("REQUEST_METHOD", "").strip()
 request_host = os.getenv("REQUEST_HOST", "").strip()
 request_path = os.getenv("REQUEST_PATH", "").strip()
-request_body_raw = os.getenv("REQUEST_BODY")  # may be None or a JSON string
+request_body_raw = os.getenv("REQUEST_BODY")
 
-# Validate required values
 if not wallet_secret:
-    fatal("WALLET_SECRET not set. Export WALLET_SECRET with the base64 DER private key.")
+    fatal("WALLET_SECRET not set. Provide base64 DER or PEM text in WALLET_SECRET.")
 
 if not request_method or not request_host or not request_path:
     fatal("REQUEST_METHOD, REQUEST_HOST, and REQUEST_PATH must be set and non-empty.")
 
-# Parse request body if present
+# parse REQUEST_BODY
 request_body = None
 if request_body_raw:
     try:
-        # Allow REQUEST_BODY to be a JSON string (single quotes or double)
         request_body = json.loads(request_body_raw)
-    except json.JSONDecodeError:
-        fatal("REQUEST_BODY is not valid JSON. Example: export REQUEST_BODY='{\"transaction\":\"0x...\"}'")
-    except TypeError:
-        # this happens if request_body_raw is not a str/bytes
-        fatal("REQUEST_BODY environment variable has invalid type (expected JSON string).")
+    except Exception as e:
+        fatal(f"REQUEST_BODY is not valid JSON: {e}")
 
 # Build payload
 now = int(time.time())
@@ -68,10 +53,8 @@ def sort_keys(obj):
         return obj
     if isinstance(obj, list):
         return [sort_keys(i) for i in obj]
-    # dict
     return {k: sort_keys(obj[k]) for k in sorted(obj.keys())}
 
-# If body present, compute reqHash
 if request_body is not None:
     try:
         sorted_body = sort_keys(request_body)
@@ -80,24 +63,61 @@ if request_body is not None:
     except Exception as e:
         fatal(f"Failed to hash REQUEST_BODY: {e}")
 
-# Load private key (expecting base64-encoded DER by default)
-try:
-    der_bytes = base64.b64decode(wallet_secret)
-except Exception as e:
-    fatal(f"WALLET_SECRET is not valid base64: {e}")
+def try_load_private_key_from_base64(s: str):
+    # normalize + pad
+    s2 = re.sub(r"\s+", "", s)
+    pad = (-len(s2)) % 4
+    if pad:
+        s2 += "=" * pad
+    try:
+        der = base64.b64decode(s2)
+    except Exception as e:
+        raise RuntimeError(f"base64 decode failed: {e}")
+    if not der:
+        raise RuntimeError("base64 decoded to empty bytes")
+    try:
+        return serialization.load_der_private_key(der, password=None)
+    except Exception as e:
+        raise RuntimeError(f"load_der_private_key failed: {e}")
 
-if not der_bytes:
-    fatal("Decoded WALLET_SECRET is empty. Ensure WALLET_SECRET contains base64 DER content.")
+def try_load_private_key_from_pem(s: str):
+    try:
+        # cryptography can load PEM directly if bytes
+        return serialization.load_pem_private_key(s.encode("utf-8"), password=None)
+    except Exception as e:
+        raise RuntimeError(f"load_pem_private_key failed: {e}")
 
-try:
-    private_key = serialization.load_der_private_key(der_bytes, password=None)
-except Exception as e:
-    fatal(f"Failed to load private key from WALLET_SECRET (DER). Error: {e}")
+# Decide: is this PEM?
+s = wallet_secret.strip()
+private_key = None
+if "-----BEGIN" in s and "PRIVATE KEY-----" in s:
+    try:
+        private_key = try_load_private_key_from_pem(s)
+    except Exception as e:
+        # fallback: maybe user pasted PEM but line endings/extra spaces caused issue; try cleaning
+        cleaned = "\n".join([line.strip() for line in s.splitlines() if line.strip()])
+        try:
+            private_key = try_load_private_key_from_pem(cleaned)
+        except Exception as e2:
+            fatal(f"WALLET_SECRET appears to be PEM but failed to load as PEM: {e2}")
+else:
+    # try base64 DER
+    try:
+        private_key = try_load_private_key_from_base64(s)
+    except Exception as e:
+        # last-ditch: maybe they pasted PEM but without headers (just base64 body). Try to add padding and decode:
+        body = re.sub(r"-----.*-----", "", s)
+        try:
+            private_key = try_load_private_key_from_base64(body)
+        except Exception as e2:
+            fatal(f"WALLET_SECRET base64/DER load failed: {e2}\nOriginal error: {e}")
 
-# Create JWT. PyJWT can accept a cryptography key object for ES256 signing.
+if not private_key:
+    fatal("Failed to obtain a private key from WALLET_SECRET.")
+
+# Create JWT
 try:
     token = jwt.encode(payload, private_key, algorithm="ES256", headers={"typ": "JWT"})
-    # On PyJWT >= 2, encode returns str; ensure str
     if isinstance(token, bytes):
         token = token.decode("utf-8")
     print(token)
