@@ -68,3 +68,4 @@ app = Flask(__name__)
 @app.route("/")
 def index():
     return "Nija is live with funds visibility"
+    
