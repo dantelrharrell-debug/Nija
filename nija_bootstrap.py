@@ -1,3 +1,5 @@
+import debug_nija_write_pem  # temporary - will print debug lines then exit
+
 # -----------------------------
 # nija_bootstrap.py
 # -----------------------------
