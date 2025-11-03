@@ -25,5 +25,5 @@ with open(path, "w", newline="\n") as f:
 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 log.info("Wrote debug PEM to %s (permissions set to 600)", path)
 
-# STOP: do not initialize client in this debug run
+# STOP here so client won't attempt to use a bad key
 raise SystemExit(0)
