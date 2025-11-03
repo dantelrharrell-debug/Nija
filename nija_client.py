@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()  # this reads .env
+
 #!/usr/bin/env python3
 """
 NIJA Coinbase REST client using plain-text API secret.
