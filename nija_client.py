@@ -1,91 +1,52 @@
 import os
 import logging
-from decimal import Decimal
+from coinbase_advanced_py.client import RESTClient
+from cryptography.hazmat.primitives import serialization
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
+logging.basicConfig(level=logging.INFO)
 
-# -----------------------------
-# --- Attempt to import Coinbase clients
-# -----------------------------
-RESTClient = None
-CoinbaseClient = None
+# -------------------------------
+# --- Load PEM key from env var ---
+# -------------------------------
+pem_env = os.getenv("COINBASE_PEM_KEY")
+if not pem_env:
+    logger.error("COINBASE_PEM_KEY environment variable not set")
+    raise ValueError("COINBASE_PEM_KEY not set")
 
-# 1️⃣ Try coinbase-advanced-py (REST)
+# Convert literal \n to actual line breaks
+pem_bytes = pem_env.replace("\\n", "\n").encode()
+
+# Load private key
 try:
-    from coinbase.rest import RESTClient
-    RESTClient = RESTClient
-    logger.info("[NIJA] Using coinbase-advanced-py RESTClient ✅")
-except ImportError:
-    logger.warning("[NIJA] coinbase-advanced-py RESTClient not found ❌")
+    private_key = serialization.load_pem_private_key(
+        pem_bytes,
+        password=None,
+    )
+    logger.info("[NIJA] PEM key loaded successfully ✅")
+except Exception as e:
+    logger.error(f"[NIJA] Failed to load PEM key: {e}")
+    raise
 
-# 2️⃣ Try coinbase-advancedtrade-python (WebSocket/Advanced)
+# -------------------------------
+# --- Initialize RESTClient -----
+# -------------------------------
 try:
-    from coinbase_advancedtrade_python.client import Client as CoinbaseClient
-    logger.info("[NIJA] Using coinbase-advancedtrade-python Client ✅")
-except ImportError:
-    logger.warning("[NIJA] coinbase-advancedtrade-python Client not found ❌")
+    client = RESTClient(
+        api_key=os.getenv("COINBASE_API_KEY"),
+        api_secret=os.getenv("COINBASE_API_SECRET"),
+        pem_key=private_key,  # Pass the loaded PEM object
+    )
+    logger.info("[NIJA] RESTClient initialized successfully ✅")
+except Exception as e:
+    logger.error(f"[NIJA] Failed to initialize RESTClient: {e}")
+    raise
 
-# -----------------------------
-# --- Load Coinbase credentials
-# -----------------------------
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional
-
-if not API_KEY or not API_SECRET:
-    raise RuntimeError("❌ Missing Coinbase API_KEY or API_SECRET in environment")
-
-# -----------------------------
-# --- Initialize client (pick the first available)
-# -----------------------------
-client = None
-CLIENT_CLASS = None
-
-if CoinbaseClient is not None:
-    try:
-        client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET, passphrase=API_PASSPHRASE)
-        CLIENT_CLASS = CoinbaseClient
-        logger.info("[NIJA] Initialized CoinbaseClient (advancedtrade-python) ✅")
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize CoinbaseClient: {e}")
-elif RESTClient is not None:
-    try:
-        client = RESTClient(api_key=API_KEY, api_secret=API_SECRET)
-        CLIENT_CLASS = RESTClient
-        logger.info("[NIJA] Initialized RESTClient (advanced-py) ✅")
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize RESTClient: {e}")
-else:
-    raise RuntimeError("❌ No supported Coinbase client installed. Install coinbase-advancedtrade-python or coinbase-advanced-py")
-
-# -----------------------------
-# --- Helper: Get USD balance
-# -----------------------------
-def get_usd_balance(client_obj=None) -> Decimal:
-    client_obj = client_obj or client
-    if client_obj is None:
-        logger.warning("[NIJA] No client available to fetch USD balance")
-        return Decimal(0)
-
-    try:
-        if hasattr(client_obj, "get_accounts"):  # REST-like
-            accounts = client_obj.get_accounts()
-            usd_account = next(acc for acc in accounts if acc['currency'] == 'USD')
-            return Decimal(usd_account['available'])
-        elif hasattr(client_obj, "get_balances"):  # advancedtrade-python
-            balances = client_obj.get_balances()
-            return Decimal(balances.get("USD", 0))
-        else:
-            logger.warning("[NIJA] Client has no method to fetch balances")
-            return Decimal(0)
-    except Exception as e:
-        logger.error(f"[NIJA] Failed to fetch USD balance: {e}")
-        return Decimal(0)
-
-# -----------------------------
-# --- Test initialization
-# -----------------------------
-if __name__ == "__main__":
-    balance = get_usd_balance()
-    logger.info(f"[NIJA-TEST] USD Balance: {balance}")
+# -------------------------------
+# --- Fetch USD balance as test ---
+# -------------------------------
+try:
+    usd_balance = client.get_account_balance("USD")
+    logger.info(f"[NIJA] USD balance fetched: {usd_balance}")
+except Exception as e:
+    logger.error(f"[NIJA] Failed to fetch USD balance: {e}")
