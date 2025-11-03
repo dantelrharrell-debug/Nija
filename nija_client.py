@@ -2,19 +2,17 @@
 """
 NIJA Coinbase REST client using plain-text API secret.
 Detects USD Spot balance and prepares bot for live trading.
-No external Coinbase library required.
 """
 
 import os, time, hmac, hashlib, logging, requests, base64
 from dotenv import load_dotenv
 
-# Load .env if present
+# Load .env if present (for local testing)
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
 
-# Get credentials from environment
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
 API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
@@ -25,16 +23,14 @@ if not (API_KEY and API_SECRET and API_PASSPHRASE):
     raise RuntimeError("Missing Coinbase API credentials")
 
 def _make_signature(method: str, path: str, body: str = ""):
-    """Create HMAC SHA256 signature for Coinbase API"""
     ts = str(int(time.time()))
     prehash = ts + method.upper() + path + (body or "")
-    secret_bytes = API_SECRET.encode()  # plain-text
+    secret_bytes = API_SECRET.encode()  # plain-text secret
     digest = hmac.new(secret_bytes, prehash.encode("utf-8"), hashlib.sha256).digest()
     signature = base64.b64encode(digest).decode()
     return signature, ts
 
 def _cb_request(method: str, path: str, body: str = ""):
-    """Send request to Coinbase REST API"""
     signature, ts = _make_signature(method, path, body)
     headers = {
         "CB-ACCESS-KEY": API_KEY,
@@ -49,13 +45,11 @@ def _cb_request(method: str, path: str, body: str = ""):
     return resp
 
 def get_usd_spot_balance():
-    """Return USD Spot balance and matching account"""
     resp = _cb_request("GET", "/v2/accounts", "")
     if resp.status_code != 200:
         logger.error("Coinbase API error %s: %s", resp.status_code, resp.text)
         return "0", None
     data = resp.json().get("data", [])
-    # Prefer Spot USD accounts
     for acct in data:
         currency = acct.get("currency") or acct.get("balance", {}).get("currency")
         name = (acct.get("name") or "").lower()
@@ -64,7 +58,7 @@ def get_usd_spot_balance():
         amt = bal.get("amount", "0")
         if currency == "USD" and ("spot" in name or typ == "fiat"):
             return amt, acct
-    # fallback to any USD
+    # fallback any USD
     for acct in data:
         currency = acct.get("currency") or acct.get("balance", {}).get("currency")
         bal = acct.get("balance") or {}
@@ -73,7 +67,7 @@ def get_usd_spot_balance():
             return amt, acct
     return "0", None
 
-# Quick test when running standalone
+# Quick test if run standalone
 if __name__ == "__main__":
     amt, acct = get_usd_spot_balance()
     if acct:
