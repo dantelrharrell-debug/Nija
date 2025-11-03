@@ -7,7 +7,7 @@
 export COINBASE_API_KEY="f0e7ae67-cf8a-4aee-b3cd-17227a1b8267"
 export COINBASE_API_SECRET="nMHcCAQEEIHVW3T1TLBFLjoNqDOsQjtPtny50auqVT1Y27fIyefOcoAoGCCqGSM49"
 export COINBASE_API_PASSPHRASE="DanteHarrell"
-export COINBASE_API_BASE="https://api.coinbase.com        # optional, default
+export COINBASE_API_BASE="https://api.coinbase.com        
 
 # 2️⃣ Create folder for NIJA client
 mkdir -p $HOME/nija
