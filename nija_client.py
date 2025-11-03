@@ -1,31 +1,10 @@
 #!/usr/bin/env python3
-import os
-import logging
-from dotenv import load_dotenv  # add this
-
-load_dotenv()  # add this line to load .env file
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija_client")
-
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
-API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
-
-if not (API_KEY and API_SECRET and API_PASSPHRASE):
-    logger.error("Missing Coinbase API credentials in environment variables.")
-    raise RuntimeError("Missing Coinbase API credentials")
-
-from dotenv import load_dotenv
-load_dotenv()  # this reads .env
-
-#!/usr/bin/env python3
 """
 NIJA Coinbase REST client using plain-text API secret.
 Detects USD Spot balance and prepares bot for live trading.
 """
 
+from dotenv import load_dotenv
 import os
 import time
 import hmac
@@ -33,6 +12,9 @@ import hashlib
 import logging
 import requests
 import base64
+
+# Load .env (for local / Codespace testing)
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija_client")
@@ -74,6 +56,7 @@ def get_usd_spot_balance():
         logger.error("Coinbase API error %s: %s", resp.status_code, resp.text)
         return "0", None
     data = resp.json().get("data", [])
+    # Prefer Spot USD accounts
     for acct in data:
         currency = acct.get("currency") or acct.get("balance", {}).get("currency")
         name = (acct.get("name") or "").lower()
@@ -82,6 +65,7 @@ def get_usd_spot_balance():
         amt = bal.get("amount", "0")
         if currency == "USD" and ("spot" in name or typ == "fiat"):
             return amt, acct
+    # fallback any USD
     for acct in data:
         currency = acct.get("currency") or acct.get("balance", {}).get("currency")
         bal = acct.get("balance") or {}
