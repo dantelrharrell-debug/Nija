@@ -1,3 +1,5 @@
+import os
+
 # nija_app.py
 from flask import Flask, jsonify
 import time, hmac, hashlib, base64, requests, os
