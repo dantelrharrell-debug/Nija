@@ -1,30 +1,35 @@
 import os
+import logging
 from coinbase.wallet.client import Client
 
-print("=== Checking Coinbase credentials ===")
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("verify_env")
 
 api_key = os.getenv("COINBASE_API_KEY")
 api_secret = os.getenv("COINBASE_API_SECRET")
-api_passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")
 
-if not api_key or not api_secret:
-    print("❌ Missing COINBASE_API_KEY or COINBASE_API_SECRET in environment")
-    exit(1)
+# Mask keys for display
+masked_key = api_key[:4] + "****" if api_key else None
+masked_secret = api_secret[:4] + "****" if api_secret else None
 
-# If the secret was pasted with \n sequences, convert them
+log.info(f"COINBASE_API_KEY: {masked_key}")
+log.info(f"COINBASE_API_SECRET: {masked_secret}")
+log.info(f"COINBASE_API_PASSPHRASE: {'set' if api_passphrase else '(empty)'}")
+
+if not all([api_key, api_secret]):
+    log.error("Missing API credentials in environment!")
+    raise SystemExit(1)
+
+# Replace \n sequences with real newlines for Coinbase compatibility
 if "\\n" in api_secret:
     api_secret = api_secret.replace("\\n", "\n")
 
-print("✅ API key loaded (first 6 chars):", api_key[:6], "...")
-print("✅ Passphrase loaded:", bool(api_passphrase))
-
-# Test connection
 client = Client(api_key, api_secret)
 
 try:
     accounts = client.get_accounts()
-    print("✅ Connection successful! Found", len(accounts["data"]), "accounts.")
-    for a in accounts["data"]:
-        print(f"   - {a['name']}: {a['balance']['amount']} {a['balance']['currency']}")
+    data = accounts.get("data", [])
+    log.info(f"✅ Connected to Coinbase. {len(data)} account(s) found.")
 except Exception as e:
-    print("❌ Connection failed:", type(e).__name__, e)
+    log.error(f"❌ Connection failed: {type(e).__name__} – {e}")
