@@ -1,50 +1,48 @@
 # nija_client.py
 import os
-from coinbase_advanced import Client
 import logging
+from coinbase_advanced_py import Client
 
-logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("nija_client")
+logging.basicConfig(level=logging.INFO)
 
-# Initialize Coinbase Advanced client
-client = Client(
-    api_key=os.getenv("COINBASE_API_KEY"),
-    api_secret=os.getenv("COINBASE_API_SECRET"),
-    base_url="https://api.coinbase.com"
-)
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 
-def get_usd_balance():
-    """Fetch USD spot balance"""
+if not all([API_KEY, API_SECRET, API_PASSPHRASE]):
+    raise RuntimeError("Missing one of COINBASE_API_KEY / COINBASE_API_SECRET / COINBASE_API_PASSPHRASE")
+
+def make_client():
+    return Client(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
+
+def get_all_accounts():
+    client = make_client()
+    # coinbase_advanced_py returns a list/dict depending on version; handle exceptions
+    return client.get_accounts()
+
+def get_usd_spot_balance():
+    accounts = get_all_accounts()
+    # accounts may be list of dicts or similar structure
+    for a in accounts:
+        # safe access — adjust keys to match the returned structure
+        if a.get("currency") == "USD" or a.get("currency_code") == "USD":
+            bal = a.get("available", a.get("balance", a.get("amount")))
+            try:
+                return float(bal.get("amount")) if isinstance(bal, dict) else float(bal)
+            except Exception:
+                try:
+                    return float(a.get("balance", {}).get("amount", 0))
+                except Exception:
+                    return 0.0
+    return 0.0
+
+if __name__ == "__main__":
     try:
-        accounts = client.get_accounts()
-        for acc in accounts:
-            if acc['currency'] == 'USD':
-                balance = float(acc['balance']['amount'])
-                log.info(f"USD Balance: {balance}")
-                return balance
-        return 0.0
+        accts = get_all_accounts()
+        log.info("Preflight: fetched %d accounts", len(accts))
+        usd = get_usd_spot_balance()
+        log.info("USD balance: %s", usd)
     except Exception as e:
-        log.error(f"Failed to fetch USD balance: {e}")
-        return 0.0
-
-def place_order(side, product, size, price=None):
-    """Place a simple market or limit order"""
-    try:
-        if price:
-            order = client.place_limit_order(
-                product_id=product,
-                side=side,
-                price=str(price),
-                size=str(size)
-            )
-        else:
-            order = client.place_market_order(
-                product_id=product,
-                side=side,
-                size=str(size)
-            )
-        log.info(f"Order placed: {order}")
-        return order
-    except Exception as e:
-        log.error(f"Failed to place order: {e}")
-        return None
+        log.exception("Preflight failed: %s", e)
+        raise
