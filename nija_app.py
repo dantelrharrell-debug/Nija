@@ -5,10 +5,10 @@ import os, time, hmac, hashlib, base64, requests
 app = Flask(__name__)
 
 # --------------------------
-# Coinbase credentials (no passphrase)
+# Coinbase API credentials (no passphrase)
 # --------------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_SECRET = os.getenv("COINBASE_API_SECRET")  # must be base64 encoded
 API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
 if not API_KEY or not API_SECRET:
@@ -26,9 +26,9 @@ def generate_signature(path, method="GET", body=""):
     return ts, sig
 
 # --------------------------
-# Function to get USD balance
+# Get account info from Coinbase
 # --------------------------
-def get_usd_balance():
+def get_all_accounts():
     path = "/v2/accounts"
     ts, sig = generate_signature(path)
     headers = {
@@ -41,25 +41,31 @@ def get_usd_balance():
     try:
         r = requests.get(API_BASE + path, headers=headers, timeout=15)
         r.raise_for_status()
-        data = r.json()
-        if "data" in data:
-            for account in data["data"]:
-                if account.get("currency") == "USD":
-                    return float(account.get("balance", {}).get("amount", 0))
-        return 0.0
+        return r.json()
     except requests.exceptions.RequestException as e:
         print("❌ Coinbase API request failed:", e)
-        return 0.0
+        return None
 
 # --------------------------
-# Flask endpoint to test balance
+# Get USD balance
+# --------------------------
+def get_usd_balance():
+    data = get_all_accounts()
+    if not data or "data" not in data:
+        return 0.0
+    for account in data["data"]:
+        if account.get("currency") == "USD":
+            return float(account.get("balance", {}).get("amount", 0))
+    return 0.0
+
+# --------------------------
+# Flask endpoints
 # --------------------------
 @app.route("/test-balance")
 def test_balance():
     balance = get_usd_balance()
     return jsonify({"USD_Balance": balance})
 
-# Optional root endpoint
 @app.route("/")
 def index():
     return "Nija AI Bot Web Service Running"
