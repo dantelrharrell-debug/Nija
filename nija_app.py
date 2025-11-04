@@ -7,17 +7,20 @@ from flask import Flask, jsonify
 
 app = Flask(__name__)
 
+# --- Coinbase Advanced API keys ---
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
 API_BASE = "https://api.coinbase.com"
 
+# --- Helper to generate Coinbase signature ---
 def generate_signature(path, method="GET", body=""):
     ts = str(int(time.time()))
     prehash = ts + method.upper() + path + body
     sig = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).hexdigest()
     return ts, sig
 
-def get_usd_balance():
+# --- Check API permissions ---
+def check_permissions():
     path = "/v2/accounts"
     ts, sig = generate_signature(path)
     headers = {
@@ -27,23 +30,16 @@ def get_usd_balance():
         "CB-VERSION": "2025-11-02",
     }
     r = requests.get(API_BASE + path, headers=headers)
-    if r.status_code != 200:
-        print(f"Error fetching balance: {r.status_code} {r.text}")
-        return 0.0
+
+    if r.status_code == 401:
+        raise RuntimeError("❌ Coinbase API Unauthorized (401). Check your API key and permissions.")
+    elif r.status_code == 403:
+        raise RuntimeError("❌ Coinbase API Forbidden (403). Key may lack trade permissions.")
+    elif r.status_code != 200:
+        raise RuntimeError(f"❌ Coinbase API returned {r.status_code}: {r.text}")
+
+    print("✅ Coinbase API preflight passed — keys valid and permissions OK")
     data = r.json()
     for account in data.get("data", []):
         if account.get("currency") == "USD":
-            return float(account.get("balance", {}).get("amount", 0))
-    return 0.0
-
-@app.route("/test-balance")
-def test_balance():
-    balance = get_usd_balance()
-    return jsonify({"USD_Balance": balance})
-
-@app.route("/")
-def index():
-    return "Nija AI Bot Web Service Running"
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+            print(f"💰 USD balance: ${account.get('balance', {}).get('amount', 0)}")
