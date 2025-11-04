@@ -1,3 +1,6 @@
+gunicorn>=23.0
+coinbase-advanced-py
+flask
 Flask==3.1.2
 requests==2.32.5
 coinbase-advanced-py==1.8.2
