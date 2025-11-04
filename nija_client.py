@@ -1,45 +1,48 @@
+# nija_client.py
 import os
-import time
-import hmac
-import hashlib
-import base64
-import requests
-from dotenv import load_dotenv
+from coinbase.wallet.client import Client
+import logging
 
-# Load environment variables
-load_dotenv()
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("nija_client")
 
-class CoinbaseClient:
-    def __init__(self):
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-        if not all([self.api_key, self.api_secret, self.passphrase]):
-            raise ValueError("Coinbase API credentials are not set in the environment.")
+def get_coinbase_client():
+    """
+    Initializes Coinbase Client from environment variables.
+    """
+    api_key = os.getenv("COINBASE_API_KEY")
+    api_secret = os.getenv("COINBASE_API_SECRET")
+    passphrase = os.getenv("COINBASE_API_PASSPHRASE")  # optional if not needed
 
-    def _sign(self, method, path):
-        ts = str(int(time.time()))
-        prehash = ts + method.upper() + path
-        sig = base64.b64encode(
-            hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).digest()
-        ).decode()
-        return ts, sig
+    if not api_key or not api_secret:
+        log.error("Missing Coinbase API credentials in environment variables.")
+        raise RuntimeError("COINBASE_API_KEY and COINBASE_API_SECRET must be set")
 
-    def get_accounts(self):
-        path = "/v2/accounts"
-        ts, sig = self._sign("GET", path)
-        headers = {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": sig,
-            "CB-ACCESS-TIMESTAMP": ts,
-            "CB-ACCESS-PASSPHRASE": self.passphrase,
-            "CB-VERSION": "2025-11-02",
-            "Content-Type": "application/json"
-        }
-        r = requests.get(self.base_url + path, headers=headers, timeout=15)
-        try:
-            return r.status_code, r.json()
-        except Exception:
-            return r.status_code, r.text
+    # Handle multi-line secret if pasted with literal \n
+    if "\\n" in api_secret:
+        api_secret = api_secret.replace("\\n", "\n")
+
+    client = Client(api_key, api_secret)
+    log.info("Coinbase client initialized successfully.")
+    return client
+
+
+def get_usd_spot_balance(client=None):
+    """
+    Fetches USD spot balance from Coinbase account.
+    Returns a float (0 if fetch fails).
+    """
+    if client is None:
+        client = get_coinbase_client()
+
+    try:
+        accounts = client.get_accounts()
+        for acc in accounts['data']:
+            if acc['balance']['currency'] == "USD":
+                return float(acc['balance']['amount'])
+        log.warning("No USD balance found in accounts.")
+        return 0.0
+    except Exception as e:
+        log.error(f"Error fetching USD balance: {type(e).__name__} {e}")
+        return 0.0
