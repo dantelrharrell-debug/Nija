@@ -1,3 +1,6 @@
+COINBASE_API_KEY=f0e7ae67-cf8a-4aee-b3cd-17227a1b8267
+COINBASE_API_SECRET="nMHcCAQEEIOrZ/6/2ITZjLZ...OBJUqCeRF/wD/HuHs8fndWQACG7IUILRzw"
+
 # test_coinbase.py
 import os
 from coinbase.wallet.client import Client
