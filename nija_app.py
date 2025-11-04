@@ -1,4 +1,19 @@
 import os
+import sys
+
+def preflight_check():
+    required_vars = ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]
+    missing = [var for var in required_vars if not os.getenv(var)]
+    if missing:
+        print(f"❌ Missing Coinbase credentials: {', '.join(missing)}")
+        sys.exit(1)  # stop the app from starting
+    else:
+        print("✅ All Coinbase credentials detected.")
+
+# Call this at startup
+preflight_check()
+
+import os
 import time
 import hmac
 import hashlib
