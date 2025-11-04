@@ -1,36 +1,28 @@
-from flask import Flask
-import requests
-import os
-from nija_client import preflight_check, get_usd_spot_balance
+from flask import Flask, jsonify
+from nija_client import get_usd_spot_balance  # Make sure this function exists
 
 app = Flask(__name__)
 
-@app.route("/debug")
-def debug():
-    debug_info = {}
+@app.route("/")
+def home():
+    return "NIJA Trading Bot is running. Use /status for bot info."
 
-    # Get public IP
+@app.route("/status")
+def status():
     try:
-        public_ip = requests.get("https://api.ipify.org").text
-        debug_info["public_ip"] = public_ip
+        usd_balance = get_usd_spot_balance()  # Returns Decimal or float
+        trading_status = "LIVE"  # You can make this dynamic if you have a flag
+        return jsonify({
+            "bot_status": trading_status,
+            "usd_balance": float(usd_balance)  # convert Decimal to float
+        })
     except Exception as e:
-        debug_info["public_ip_error"] = str(e)
-
-    # Run Coinbase preflight
-    try:
-        preflight_result = preflight_check()
-        debug_info["coinbase_preflight"] = preflight_result
-    except Exception as e:
-        debug_info["coinbase_preflight_error"] = str(e)
-
-    # Try fetching USD balance
-    try:
-        usd_balance = get_usd_spot_balance()
-        debug_info["usd_balance"] = str(usd_balance)
-    except Exception as e:
-        debug_info["usd_balance_error"] = str(e)
-
-    return debug_info
+        return jsonify({
+            "bot_status": "ERROR",
+            "error": str(e)
+        }), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
