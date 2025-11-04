@@ -45,3 +45,6 @@ pycparser==2.23
 fear-and-greed-crypto==0.1.0
 alphasquared-py==0.4.0
 tradingview_ta>=2.0.0
+
+pynacl
+requests
