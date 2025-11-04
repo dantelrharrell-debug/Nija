@@ -1,76 +1,63 @@
-#!/usr/bin/env python3
-"""
-NIJA Coinbase REST client using plain-text API secret.
-Detects USD Spot balance and prepares bot for live trading.
-"""
-
-import os
-import time
-import hmac
-import hashlib
-import logging
-import requests
-import base64
+# nija_client.py
+import os, time, base64, logging, requests
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija_client")
+log = logging.getLogger("nija_client")
 
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-if not (API_KEY and API_SECRET and API_PASSPHRASE):
-    logger.error("Missing Coinbase API credentials in environment variables.")
-    raise RuntimeError("Missing Coinbase API credentials")
+if not API_KEY or not API_SECRET:
+    log.error("Missing Coinbase credentials.")
+    raise RuntimeError("COINBASE_API_KEY and COINBASE_API_SECRET must be set")
 
-def _make_signature(method: str, path: str, body: str = ""):
+if "\\n" in API_SECRET:
+    API_SECRET = API_SECRET.replace("\\n", "\n")
+
+try:
+    _PRIVATE_KEY = load_pem_private_key(API_SECRET.encode(), password=None)
+except Exception as e:
+    log.exception("Failed to load private key: %s", e)
+    raise
+
+def _sign(ts: str, method: str, path: str, body: str = "") -> str:
+    payload = (ts + method.upper() + path + (body or "")).encode()
+    sig_der = _PRIVATE_KEY.sign(payload, ec.ECDSA(hashes.SHA256()))
+    return base64.b64encode(sig_der).decode()
+
+def _cdp_request(method: str, path: str, body: str = ""):
     ts = str(int(time.time()))
-    prehash = ts + method.upper() + path + (body or "")
-    secret_bytes = API_SECRET.encode()
-    digest = hmac.new(secret_bytes, prehash.encode("utf-8"), hashlib.sha256).digest()
-    signature = base64.b64encode(digest).decode()
-    return signature, ts
-
-def _cb_request(method: str, path: str, body: str = ""):
-    signature, ts = _make_signature(method, path, body)
+    sig = _sign(ts, method, path, body)
     headers = {
         "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": signature,
+        "CB-ACCESS-SIGN": sig,
         "CB-ACCESS-TIMESTAMP": ts,
-        "CB-ACCESS-PASSPHRASE": API_PASSPHRASE,
         "Content-Type": "application/json",
-        "CB-VERSION": "2025-11-02",
+        "Accept": "application/json",
     }
     url = API_BASE.rstrip("/") + path
     resp = requests.request(method, url, headers=headers, data=body, timeout=15)
+    log.debug("CDP resp status=%s", resp.status_code)
     return resp
 
 def get_usd_spot_balance():
-    resp = _cb_request("GET", "/v2/accounts")
-    if resp.status_code != 200:
-        logger.error("Coinbase API error %s: %s", resp.status_code, resp.text)
-        return "0", None
-    data = resp.json().get("data", [])
-    for acct in data:
-        currency = acct.get("currency") or acct.get("balance", {}).get("currency")
-        name = (acct.get("name") or "").lower()
-        typ = (acct.get("type") or "").lower()
-        bal = acct.get("balance") or {}
-        amt = bal.get("amount", "0")
-        if currency == "USD" and ("spot" in name or typ == "fiat"):
-            return amt, acct
-    for acct in data:
-        currency = acct.get("currency") or acct.get("balance", {}).get("currency")
-        bal = acct.get("balance") or {}
-        amt = bal.get("amount", "0")
-        if currency == "USD":
-            return amt, acct
-    return "0", None
-
-if __name__ == "__main__":
-    amt, acct = get_usd_spot_balance()
-    if acct:
-        logger.info(f"Detected USD Spot balance: {amt}, account: {acct.get('name')}, id: {acct.get('id')}")
-    else:
-        logger.info("No USD Spot balance detected.")
+    """
+    Returns float USD balance (0.0 if none). Uses /v2/accounts CDP route.
+    """
+    resp = _cdp_request("GET", "/v2/accounts")
+    try:
+        data = resp.json()
+    except Exception:
+        log.error("CDP accounts not JSON: status=%s body=%s", resp.status_code, resp.text[:2000])
+        if resp.status_code == 401:
+            raise RuntimeError("Unauthorized from Coinbase Advanced API (401).")
+        resp.raise_for_status()
+    for acc in data.get("data", []):
+        bal = acc.get("balance", {})
+        if bal.get("currency") == "USD":
+            return float(bal.get("amount", 0))
+    return 0.0
