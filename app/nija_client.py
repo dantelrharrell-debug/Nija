@@ -4,103 +4,94 @@ import time
 import base64
 import logging
 import requests
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from ecdsa import SigningKey, NIST256p
 
-# ----------------------------
-# Logging
-# ----------------------------
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("nija_client")
 
-# ----------------------------
-# Load environment variables
-# ----------------------------
+# -----------------------------
+# Environment / API settings
+# -----------------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
-PASSPHRASE = ""  # Coinbase Advanced keys do not use passphrase
+API_SECRET = os.getenv("COINBASE_API_SECRET")  # single-line PEM with \n
+API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")  # Advanced default
 
 if not API_KEY or not API_SECRET:
     log.error("Missing Coinbase credentials.")
     raise RuntimeError("COINBASE_API_KEY and COINBASE_API_SECRET must be set")
 
-# Replace literal \n sequences with real newlines
+# Fix line breaks in ECDSA private key
 if "\\n" in API_SECRET:
     API_SECRET = API_SECRET.replace("\\n", "\n")
 
-# ----------------------------
 # Load ECDSA private key
-# ----------------------------
 try:
-    _PRIVATE_KEY = load_pem_private_key(API_SECRET.encode(), password=None)
+    _PRIVATE_KEY = SigningKey.from_pem(API_SECRET)
     log.info("Coinbase ECDSA private key loaded successfully.")
 except Exception as e:
     log.exception("Failed to load private key: %s", e)
     raise
 
-# ----------------------------
-# Helper: sign request
-# ----------------------------
-def sign_request(timestamp: str, method: str, path: str, body: str = "") -> str:
-    message = (timestamp + method.upper() + path + (body or "")).encode()
-    signature_der = _PRIVATE_KEY.sign(message, ec.ECDSA(hashes.SHA256()))
-    signature_b64 = base64.b64encode(signature_der).decode()
-    return signature_b64
+# -----------------------------
+# Signing function
+# -----------------------------
+def _sign(timestamp: str, method: str, path: str, body: str = "") -> str:
+    """
+    Returns base64-encoded ECDSA signature for Coinbase Advanced API.
+    """
+    message = timestamp + method.upper() + path + (body or "")
+    sig = _PRIVATE_KEY.sign(message.encode())  # ECDSA sign
+    return base64.b64encode(sig).decode()
 
-# ----------------------------
-# Helper: generic Coinbase request
-# ----------------------------
-def coinbase_request(method: str, path: str, body: str = "") -> dict:
+# -----------------------------
+# Request wrapper
+# -----------------------------
+def _cdp_request(method: str, path: str, body: str = "") -> requests.Response:
     timestamp = str(int(time.time()))
-    signature = sign_request(timestamp, method, path, body)
+    signature_b64 = _sign(timestamp, method, path, body)
+    
     headers = {
         "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": signature,
+        "CB-ACCESS-SIGN": signature_b64,
         "CB-ACCESS-TIMESTAMP": timestamp,
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+
     url = API_BASE.rstrip("/") + path
     resp = requests.request(method, url, headers=headers, data=body, timeout=15)
-    log.debug("Coinbase response status=%s body=%s", resp.status_code, resp.text[:500])
+    if resp.status_code == 401:
+        log.error("Unauthorized: check Coinbase API key/private key")
+        raise RuntimeError("Unauthorized: check Coinbase API key/private key")
+    return resp
 
-    try:
-        data = resp.json()
-    except Exception:
-        log.error("Failed to decode JSON. Status=%s Body=%s", resp.status_code, resp.text[:2000])
-        if resp.status_code == 401:
-            raise RuntimeError("Unauthorized: check Coinbase API key/private key")
-        resp.raise_for_status()
-    return data
-
-# ----------------------------
-# Get USD spot balance
-# ----------------------------
+# -----------------------------
+# Fetch USD spot balance
+# -----------------------------
 def get_usd_spot_balance() -> float:
-    data = coinbase_request("GET", "/v2/accounts")
-    for acc in data.get("data", []):
-        bal = acc.get("balance", {})
-        if bal.get("currency") == "USD":
-            return float(bal.get("amount", 0))
+    """
+    Returns USD balance as float. Uses /v2/accounts route.
+    """
+    try:
+        resp = _cdp_request("GET", "/v2/accounts")
+        data = resp.json()
+    except Exception as e:
+        log.error("Failed to decode JSON: status=%s body=%s", getattr(resp, 'status_code', None), getattr(resp, 'text', None))
+        raise RuntimeError("Failed to fetch USD Spot balance") from e
+
+    for acct in data.get("data", []):
+        balance = acct.get("balance", {})
+        if balance.get("currency") == "USD":
+            return float(balance.get("amount", 0))
     return 0.0
 
-# ----------------------------
-# Get all accounts (optional helper)
-# ----------------------------
+# -----------------------------
+# Fetch all accounts (optional)
+# -----------------------------
 def get_all_accounts() -> list:
-    data = coinbase_request("GET", "/v2/accounts")
-    return data.get("data", [])
-
-# ----------------------------
-# Debug test if run directly
-# ----------------------------
-if __name__ == "__main__":
     try:
-        usd_balance = get_usd_spot_balance()
-        log.info("✅ USD Spot Balance: %s", usd_balance)
-        accounts = get_all_accounts()
-        log.info("✅ All accounts fetched: %d accounts", len(accounts))
+        resp = _cdp_request("GET", "/v2/accounts")
+        return resp.json().get("data", [])
     except Exception as e:
-        log.exception("❌ Error fetching accounts/balance: %s", e)
+        log.error("Failed to fetch all accounts: %s", e)
+        raise
