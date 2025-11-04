@@ -70,3 +70,9 @@ def get_all_accounts() -> list:
     """
     accounts = coinbase_request("GET", "/v2/accounts")
     return accounts.get("data", [])
+
+def preflight_check():
+    # Example implementation
+    print("[NIJA] Preflight check running...")
+    # you can include any setup checks here
+    return True
