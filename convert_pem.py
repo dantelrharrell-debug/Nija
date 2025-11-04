@@ -15,4 +15,6 @@ private_key = serialization.load_pem_private_key(
 )
 
 raw_seed = private_key.private_numbers().private_value.to_bytes(32, "big")
-print(base64.b64encode(raw_seed).decode())
+b64_secret = base64.b64encode(raw_seed).decode()
+print("Copy this base64 string as your COINBASE_API_SECRET:")
+print(b64_secret)
