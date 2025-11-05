@@ -1,44 +1,89 @@
 import os
+import time
 import hmac
 import hashlib
-import base64
-import time
-import json
 import requests
+import jwt
 
-class CoinbaseClient:
+class CoinbaseClientWrapper:
     def __init__(self):
+        # Check for HMAC credentials first
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
         self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
 
-        if not all([self.api_key, self.api_secret]):
-            raise RuntimeError("❌ Coinbase API credentials missing in environment variables.")
+        self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
+        self.iss = os.getenv("COINBASE_ISS")
 
-    def _generate_jwt(self, method, path, body=""):
-        timestamp = str(int(time.time()))
-        message = timestamp + method.upper() + path + body
-        hmac_key = base64.b64decode(self.api_secret)
-        signature = hmac.new(hmac_key, message.encode("utf-8"), hashlib.sha256).digest()
-        return base64.b64encode(signature).decode()
-
-    def get_all_accounts(self):
-        url = f"{self.base_url}/v2/accounts"
-        headers = {
-            "Authorization": f"Bearer {self._generate_jwt('GET','/v2/accounts')}",
-            "Content-Type": "application/json"
-        }
-        response = requests.get(url, headers=headers)
-        if response.ok:
-            return response.json().get("data", [])
+        if self.api_key and self.api_secret and self.passphrase:
+            self.client_type = "HMAC"
+            print("✅ Using HMAC authentication for CoinbaseClient")
+        elif self.pem_content:
+            self.client_type = "JWT"
+            self.pem_path = "coinbase.pem"
+            with open(self.pem_path, "w") as f:
+                f.write(self.pem_content)
+            os.chmod(self.pem_path, 0o600)
+            print("✅ Using JWT/PEM authentication for CoinbaseClient")
         else:
-            raise RuntimeError(f"❌ Failed to fetch accounts: {response.status_code} {response.text}")
+            raise SystemExit(
+                "❌ Missing credentials: set either COINBASE_API_KEY/SECRET/PASSPHRASE or COINBASE_PEM_CONTENT"
+            )
 
-    def get_funded_account(self):
-        accounts = self.get_all_accounts()
-        for acc in accounts:
-            balance = float(acc.get("balance", {}).get("amount", 0))
-            if balance > 0:
-                return acc
-        return None
+    def fetch_accounts(self):
+        if self.client_type == "HMAC":
+            return self._fetch_accounts_hmac()
+        elif self.client_type == "JWT":
+            return self._fetch_accounts_jwt()
+        else:
+            raise RuntimeError("Unknown client type")
+
+    def _fetch_accounts_hmac(self):
+        ts = str(int(time.time()))
+        method = "GET"
+        path = "/accounts"
+        message = ts + method + path
+
+        # ✅ Fixed signing (no base64 decoding)
+        signature = hmac.new(
+            self.api_secret.encode(),  # raw secret as bytes
+            message.encode(),
+            hashlib.sha256
+        ).hexdigest()
+
+        headers = {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": signature,
+            "CB-ACCESS-TIMESTAMP": ts,
+            "CB-ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json",
+        }
+
+        r = requests.get(self.base_url + path, headers=headers, timeout=15)
+        if r.status_code != 200:
+            raise RuntimeError(f"❌ Failed to fetch accounts: {r.status_code} {r.text}")
+        return r.json()
+
+    def _fetch_accounts_jwt(self):
+        now = int(time.time())
+        payload = {"iat": now}
+        if self.iss:
+            payload["iss"] = self.iss
+        with open(self.pem_path, "rb") as f:
+            private_key = f.read()
+        token = jwt.encode(payload, private_key, algorithm="RS256")
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        url = "https://api.coinbase.com/v2/accounts"
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            raise RuntimeError(f"❌ Failed to fetch accounts (JWT): {r.status_code} {r.text}")
+        return r.json()
+
+
+# ===== Usage =====
+if __name__ == "__main__":
+    client = CoinbaseClientWrapper()
+    accounts = client.fetch_accounts()
+    print("✅ Accounts fetched successfully:")
+    print(accounts)
