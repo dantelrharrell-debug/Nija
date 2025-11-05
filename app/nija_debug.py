@@ -1,4 +1,4 @@
-from nija_client import CoinbaseClient
+from nija_client import CoinbaseClient, calculate_position_size
 
 def main():
     try:
@@ -7,18 +7,17 @@ def main():
         print(f"❌ Error creating CoinbaseClient: {e}")
         return
 
-    try:
-        accounts = client.get_all_accounts()
-        print("✅ Accounts fetched:")
-        for acct in accounts:
-            currency = acct.get("currency")
-            balance = acct.get("balance", {}).get("amount", 0)
-            print(f"{currency}: {balance}")
-    except Exception as e:
-        print(f"❌ Failed to fetch accounts: {e}")
+    acct = client.get_funded_account()
+    if not acct:
+        print("⚠️ No funded accounts found. Please fund a Coinbase account.")
+        return
 
-    usd_balance = client.get_usd_spot_balance()
-    print(f"💰 USD Spot Balance: {usd_balance}")
+    currency = acct.get("currency")
+    balance = float(acct.get("balance", {}).get("amount", 0))
+    print(f"✅ Using funded account: {currency} with balance {balance}")
+
+    trade_size = calculate_position_size(balance, risk_factor=5)  # Example risk factor
+    print(f"💰 Calculated position size: {trade_size} {currency}")
 
 if __name__ == "__main__":
     main()
