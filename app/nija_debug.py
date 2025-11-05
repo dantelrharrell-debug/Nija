@@ -2,28 +2,23 @@ from nija_client import CoinbaseClient
 
 def main():
     try:
-        # Initialize client
         client = CoinbaseClient()
-        print("✅ CoinbaseClient initialized successfully.\n")
-        
-        # Fetch all accounts
+    except Exception as e:
+        print(f"❌ Error creating CoinbaseClient: {e}")
+        return
+
+    try:
         accounts = client.get_all_accounts()
-        print("💰 All Coinbase accounts and balances:")
+        print("✅ Accounts fetched:")
         for acct in accounts:
             currency = acct.get("currency")
             balance = acct.get("balance", {}).get("amount", 0)
-            acct_type = acct.get("type")
-            print(f" - {currency} | Balance: {balance} | Type: {acct_type}")
-        
-        # Optional: check USD balance used for trading
-        usd_balance = next(
-            (float(acct.get("balance", {}).get("amount", 0)) 
-             for acct in accounts if acct.get("currency") == "USD"), 0
-        )
-        print(f"\n🔹 USD account balance used for trading: {usd_balance}\n")
-
+            print(f"{currency}: {balance}")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Failed to fetch accounts: {e}")
+
+    usd_balance = client.get_usd_spot_balance()
+    print(f"💰 USD Spot Balance: {usd_balance}")
 
 if __name__ == "__main__":
     main()
