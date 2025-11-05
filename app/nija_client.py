@@ -1,4 +1,9 @@
 import os
+print("DEBUG: COINBASE_API_KEY =", os.getenv("COINBASE_API_KEY"))
+print("DEBUG: COINBASE_API_SECRET =", os.getenv("COINBASE_API_SECRET")[:5] + "...")  # hide most
+print("DEBUG: COINBASE_PASSPHRASE =", os.getenv("COINBASE_PASSPHRASE"))
+
+import os
 import time
 import hmac
 import hashlib
