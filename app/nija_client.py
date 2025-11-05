@@ -2,63 +2,45 @@ import os
 import time
 import hmac
 import hashlib
-import requests
+import json
 import logging
+import requests
 
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("nija_client")
-log.setLevel(logging.INFO)
-
-BASE_URL = "https://api.coinbase.com"
 
 class CoinbaseClient:
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")  # optional
-        self.mode = None  # 'classic' or 'jwt'
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-        # Try auto-detect mode
-        if self._test_classic_api():
-            self.mode = "classic"
-            log.info("✅ Using Classic API Key + Passphrase mode")
-        elif self._test_jwt_api():
-            self.mode = "jwt"
-            log.info("✅ Using Advanced JWT mode")
+        if self.api_key and self.api_secret:
+            if self.passphrase:
+                log.info("✅ CoinbaseClient initialized with standard API key + passphrase.")
+            else:
+                log.info("⚠️ No passphrase provided. Using Advanced JWT key (no passphrase required).")
         else:
-            raise RuntimeError("❌ No working Coinbase API method found. Check key permissions.")
+            raise RuntimeError("❌ Coinbase API credentials missing")
 
-    # ==================== Auto-detect helpers ====================
-    def _test_classic_api(self):
-        if not self.passphrase:
-            return False
-        try:
-            self._send_request("/v2/accounts", use_jwt=False)
-            return True
-        except:
-            return False
+    def _send_request(self, endpoint, method="GET", data=None, use_jwt=None):
+        url = self.base_url + endpoint
+        headers = {}
 
-    def _test_jwt_api(self):
-        try:
-            self._send_request("/v2/accounts", use_jwt=True)
-            return True
-        except:
-            return False
-
-    # ==================== Request helper ====================
-    def _send_request(self, endpoint, use_jwt=None):
-        """use_jwt: True forces JWT, False forces Classic, None uses auto-detected mode"""
+        # Determine which auth to use
         if use_jwt is None:
-            use_jwt = (self.mode == "jwt")
+            use_jwt = not self.passphrase
 
-        headers = {"CB-VERSION": "2025-11-05"}
         if use_jwt:
             headers["Authorization"] = f"Bearer {self.api_secret}"
         else:
             timestamp = str(int(time.time()))
-            method = "GET"
-            body = ""
-            message = timestamp + method + endpoint + body
-            signature = hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+            body = json.dumps(data) if data else ""
+            message = timestamp + method.upper() + endpoint + body
+            signature = hmac.new(
+                self.api_secret.encode(), message.encode(), hashlib.sha256
+            ).hexdigest()
             headers.update({
                 "CB-ACCESS-KEY": self.api_key,
                 "CB-ACCESS-SIGN": signature,
@@ -66,18 +48,39 @@ class CoinbaseClient:
                 "CB-ACCESS-PASSPHRASE": self.passphrase,
             })
 
-        r = requests.get(BASE_URL + endpoint, headers=headers)
-        if r.status_code != 200:
-            raise RuntimeError(f"❌ Request failed: {r.status_code} {r.text[:200]}")
-        return r.json()
+        response = requests.request(method, url, headers=headers, json=data)
+        if response.status_code in (200, 201):
+            return response.json()
+        else:
+            log.error(f"❌ Request failed ({'JWT' if use_jwt else 'Classic'}): "
+                      f"{response.status_code} {response.text}")
+            raise RuntimeError(f"❌ Request failed: {response.status_code}")
 
-    # ==================== Public methods ====================
     def get_all_accounts(self):
-        return self._send_request("/v2/accounts")["data"]
+        endpoint = "/v2/accounts"
+        try:
+            return self._send_request(endpoint, use_jwt=not self.passphrase)["data"]
+        except RuntimeError as e:
+            # Fallback if JWT fails and Classic is available
+            if not self.passphrase:
+                log.warning("⚠️ JWT failed. Trying Classic API key if available...")
+                if self.passphrase:
+                    return self._send_request(endpoint, use_jwt=False)["data"]
+            raise e
 
     def get_usd_spot_balance(self):
         accounts = self.get_all_accounts()
         for a in accounts:
-            if a["currency"] == "USD":
-                return float(a["balance"]["amount"])
+            if a.get("currency") == "USD":
+                return float(a.get("balance", {}).get("amount", 0))
         return 0.0
+
+
+# Helper functions for debug script
+client = CoinbaseClient()
+
+def get_all_accounts():
+    return client.get_all_accounts()
+
+def get_usd_spot_balance():
+    return client.get_usd_spot_balance()
