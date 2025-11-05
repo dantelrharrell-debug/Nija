@@ -1,30 +1,37 @@
-COINBASE_API_KEY=f0e7ae67-cf8a-4aee-b3cd-17227a1b8267
-COINBASE_API_SECRET="nMHcCAQEEIOrZ/6/2ITZjLZ...OBJUqCeRF/wD/HuHs8fndWQACG7IUILRzw"
-
-# test_coinbase.py
 import os
-from coinbase.wallet.client import Client
+import time
+import jwt
+import requests
 
-# Prefer reading secrets from environment variables
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
+# Load your keys from environment
+API_KEY = os.getenv("organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5")
+API_SECRET = os.getenv("nMHcCAQEEIC4EDrIQiByWHS5qIrHsMI6SZb0sYSqx744G2kvqr+PCoAoGCCqGSM49\nAwEHoUQDQgAE3gkuCL8xUOM81/alCSOLqEtyUmY7A09z7QEAoN/cfCtbAslo6pXR\nqONKAu6GS9PS/W3BTFyB6ZJBRzxMZeNzBg")
+PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")
 
-# If your secret was stored with literal "\n" sequences (common when copying),
-# convert them back to real newlines:
-if API_SECRET and "\\n" in API_SECRET:
-    API_SECRET = API_SECRET.replace("\\n", "\n")
+if not all([API_KEY, API_SECRET]):
+    raise SystemExit("❌ Missing API key or secret")
 
-if not API_KEY or not API_SECRET:
-    raise SystemExit("Missing COINBASE_API_KEY or COINBASE_API_SECRET environment variables.")
+# Coinbase Advanced JWT payload
+timestamp = int(time.time())
+payload = {
+    "iat": timestamp,
+    "exp": timestamp + 300,  # token valid 5 minutes
+    "sub": API_KEY,
+}
 
-client = Client(API_KEY, API_SECRET)
+token = jwt.encode(payload, API_SECRET, algorithm="HS256")
 
-try:
-    accounts = client.get_accounts()  # fetch accounts
-    for acc in accounts['data']:
-        name = acc.get('name') or acc.get('currency')
-        balance = acc.get('balance', {}).get('amount')
-        currency = acc.get('balance', {}).get('currency')
-        print(f"{name}: {balance} {currency}")
-except Exception as e:
-    print("Error connecting to Coinbase:", type(e).__name__, e)
+headers = {
+    "CB-ACCESS-KEY": API_KEY,
+    "CB-ACCESS-SIGN": token,
+    "CB-ACCESS-PASSPHRASE": PASSPHRASE,
+    "Content-Type": "application/json",
+}
+
+# Test endpoint: get accounts
+url = "https://api.coinbase.com/v2/accounts"
+
+response = requests.get(url, headers=headers)
+
+print("Status code:", response.status_code)
+print("Response:", response.text)
