@@ -47,17 +47,30 @@ class CoinbaseClient:
         except Exception as e:
             raise RuntimeError(f"❌ Failed to fetch accounts: {e}")
 
+    def get_funded_account(self, preferred_currency="USD"):
+        """
+        Automatically pick the first account with a balance > 0.
+        Prioritize 'preferred_currency'.
+        """
+        accounts = self.get_all_accounts()
+        # Try preferred currency first
+        for acct in accounts:
+            amount = float(acct.get("balance", {}).get("amount", 0))
+            if acct.get("currency") == preferred_currency and amount > 0:
+                return acct
+        # If preferred not funded, pick first account with funds
+        for acct in accounts:
+            amount = float(acct.get("balance", {}).get("amount", 0))
+            if amount > 0:
+                return acct
+        return None  # no funded accounts
+
     def get_usd_spot_balance(self):
-        """Return USD balance; 0 if not found."""
-        try:
-            accounts = self.get_all_accounts()
-            for acct in accounts:
-                if acct.get("currency") == "USD":
-                    return float(acct.get("balance", {}).get("amount", 0))
-            return 0
-        except Exception as e:
-            print(f"❌ Warning: Unable to fetch USD balance: {e}")
-            return 0
+        """Return USD balance or 0."""
+        acct = self.get_funded_account(preferred_currency="USD")
+        if acct:
+            return float(acct.get("balance", {}).get("amount", 0))
+        return 0
 
 # Position sizing helper
 def calculate_position_size(account_equity, risk_factor=1.0, min_percent=2, max_percent=10):
