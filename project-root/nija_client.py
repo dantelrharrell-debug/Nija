@@ -1,4 +1,4 @@
-# nija_client.py
+# nija_client.py (fixed endpoint)
 import os
 import time
 import jwt
@@ -36,7 +36,7 @@ class CoinbaseClient:
         return headers
 
     def _send_request(self, endpoint):
-        url = f"{self.base_url}/api/v3{endpoint}"
+        url = f"{self.base_url}/v2{endpoint}"  # <--- Use /v2
         headers = self._generate_jwt_headers()
         response = requests.get(url, headers=headers)
 
@@ -54,7 +54,7 @@ class CoinbaseClient:
         """
         Returns a list of account dicts from Advanced API
         """
-        data = self._send_request("/accounts")
+        data = self._send_request("/accounts")  # <--- corrected endpoint
         accounts = data.get("data", [])
         return accounts
 
@@ -69,7 +69,7 @@ class CoinbaseClient:
                 usd_balance += float(acc.get("available_balance", 0))
         return usd_balance
 
-# Helper functions to keep nija_debug.py working
+# Helper functions
 client = CoinbaseClient()
 
 def get_all_accounts():
