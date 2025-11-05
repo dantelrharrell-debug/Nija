@@ -1,4 +1,3 @@
-# nija_client.py
 import os
 import time
 import jwt
@@ -12,63 +11,72 @@ class CoinbaseClient:
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")  # optional
         self.base_url = "https://api.coinbase.com"
+        self.use_jwt = False
 
-        if not all([self.api_key, self.api_secret]):
-            raise RuntimeError("❌ Missing Coinbase API credentials")
+        if not self.api_key or not self.api_secret:
+            raise RuntimeError("❌ Missing Coinbase API_KEY or API_SECRET")
 
-        log.info("⚠️ No passphrase required for Advanced JWT keys.")
+        # Detect JWT usage
+        if not self.passphrase:
+            self.use_jwt = True
+            log.info("⚠️ No passphrase provided. Using Advanced JWT key (no passphrase required).")
+        else:
+            log.info("✅ Passphrase provided. Using Base API key.")
+
         log.info("✅ CoinbaseClient initialized successfully (Advanced JWT compatible).")
 
-    def _get_jwt_token(self):
+    def _generate_jwt(self):
         timestamp = int(time.time())
         payload = {
             "iat": timestamp,
-            "exp": timestamp + 300,  # 5 min expiration
+            "exp": timestamp + 300,
             "sub": self.api_key
         }
         token = jwt.encode(payload, self.api_secret, algorithm="HS256")
         return token
 
-    def _send_request(self, endpoint, method="GET", data=None):
-        url = f"{self.base_url}{endpoint}"
-        token = self._get_jwt_token()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
+    def _send_request(self, endpoint, method="GET"):
+        if self.use_jwt:
+            url = f"{self.base_url}{endpoint}"
+            headers = {
+                "Authorization": f"Bearer {self._generate_jwt()}",
+                "Content-Type": "application/json"
+            }
+        else:
+            url = f"{self.base_url}/v2{endpoint}"
+            headers = {
+                "CB-ACCESS-KEY": self.api_key,
+                "CB-ACCESS-SIGN": self._generate_jwt(),
+                "CB-ACCESS-PASSPHRASE": self.passphrase,
+                "Content-Type": "application/json"
+            }
 
         try:
-            if method == "GET":
-                resp = requests.get(url, headers=headers)
-            else:
-                resp = requests.post(url, headers=headers, json=data)
-
-            if resp.status_code == 200:
-                return resp.json()
-            elif resp.status_code == 401:
-                log.error("❌ Unauthorized: JWT not accepted. Check key permissions.")
-                raise RuntimeError("❌ 401 Unauthorized")
-            else:
-                log.error(f"❌ Request failed: {resp.status_code} {resp.text}")
-                raise RuntimeError(f"❌ Request failed: {resp.status_code}")
-        except Exception as e:
-            log.error(f"❌ Request exception: {e}")
-            raise
+            response = requests.request(method, url, headers=headers)
+            if response.status_code == 401:
+                raise RuntimeError(f"❌ 401 Unauthorized. Check key permissions and JWT usage.")
+            if response.status_code >= 400:
+                raise RuntimeError(f"❌ Request failed: {response.status_code} {response.text}")
+            return response.json()
+        except requests.RequestException as e:
+            raise RuntimeError(f"❌ Request exception: {e}")
 
     def get_all_accounts(self):
-        return self._send_request("/v2/accounts")
+        endpoint = "/accounts" if self.use_jwt else "/accounts"
+        data = self._send_request(endpoint)
+        return data.get("data", [])
 
     def get_usd_spot_balance(self):
-        accounts_data = self.get_all_accounts()
-        usd_balance = 0.0
-        for account in accounts_data.get("data", []):
-            if account.get("currency") == "USD":
-                usd_balance = float(account.get("balance", {}).get("amount", 0))
-        return usd_balance
+        accounts = self.get_all_accounts()
+        for acct in accounts:
+            if acct.get("currency") == "USD":
+                return float(acct.get("balance", {}).get("amount", 0))
+        return 0.0
 
 
-# Helper functions for nija_debug.py
+# Helpers to mimic old imports
 client = CoinbaseClient()
 
 def get_all_accounts():
