@@ -1,4 +1,4 @@
-from nija_client import CoinbaseClient
+from nija_client import CoinbaseClientWrapper as CoinbaseClient
 
 def main():
     try:
