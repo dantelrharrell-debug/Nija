@@ -4,7 +4,6 @@ import logging
 import time
 import hmac
 import hashlib
-import base64
 import json
 
 log = logging.getLogger("nija_client")
@@ -12,7 +11,6 @@ log.setLevel(logging.INFO)
 
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 COINBASE_API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
 if not all([COINBASE_API_KEY, COINBASE_API_SECRET]):
@@ -42,20 +40,15 @@ def _send_request(path, method="GET", body=""):
         "Content-Type": "application/json"
     }
 
-    # Add passphrase header if available
-    if COINBASE_API_PASSPHRASE:
-        headers["CB-ACCESS-PASSPHRASE"] = COINBASE_API_PASSPHRASE
+    # NOTE: Passphrase header skipped entirely
 
     url = COINBASE_API_BASE + path
     r = requests.request(method, url, headers=headers, data=body)
     
-    # If 401 Unauthorized and no passphrase, give clear guidance
-    if r.status_code == 401 and not COINBASE_API_PASSPHRASE:
-        raise RuntimeError(
-            "❌ 401 Unauthorized: Your API key requires a passphrase. "
-            "Please set COINBASE_API_PASSPHRASE in your environment variables."
-        )
-    
+    if r.status_code == 401:
+        log.error("❌ 401 Unauthorized. Your API key may require a passphrase, or permissions are missing.")
+        raise RuntimeError("❌ 401 Unauthorized. Check key permissions.")
+
     r.raise_for_status()
     return r.json()
 
