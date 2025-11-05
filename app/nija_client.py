@@ -6,9 +6,15 @@ import hmac
 import hashlib
 import json
 
+# ---------------------------
+# Logging
+# ---------------------------
 log = logging.getLogger("nija_client")
 log.setLevel(logging.INFO)
 
+# ---------------------------
+# Coinbase Advanced credentials
+# ---------------------------
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
 COINBASE_API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
@@ -17,7 +23,7 @@ if not all([COINBASE_API_KEY, COINBASE_API_SECRET]):
     raise RuntimeError("Missing Coinbase API key/secret. Please set COINBASE_API_KEY and COINBASE_API_SECRET.")
 
 # ---------------------------
-# Helper for signing requests
+# Helper: sign requests
 # ---------------------------
 def _sign_request(path, method="GET", body=""):
     timestamp = str(int(time.time()))
@@ -29,7 +35,7 @@ def _sign_request(path, method="GET", body=""):
     return timestamp, signature
 
 # ---------------------------
-# Send REST request
+# Helper: send request
 # ---------------------------
 def _send_request(path, method="GET", body=""):
     timestamp, signature = _sign_request(path, method, body)
@@ -40,16 +46,15 @@ def _send_request(path, method="GET", body=""):
         "Content-Type": "application/json"
     }
 
-    # NOTE: Passphrase header skipped entirely
-
     url = COINBASE_API_BASE + path
     r = requests.request(method, url, headers=headers, data=body)
-    
-    if r.status_code == 401:
-        log.error("❌ 401 Unauthorized. Your API key may require a passphrase, or permissions are missing.")
-        raise RuntimeError("❌ 401 Unauthorized. Check key permissions.")
 
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        log.error(f"❌ Coinbase request failed ({r.status_code}): {r.text}")
+        raise RuntimeError(f"Coinbase request failed: {r.status_code} {r.text}") from e
+
     return r.json()
 
 # ---------------------------
@@ -57,7 +62,8 @@ def _send_request(path, method="GET", body=""):
 # ---------------------------
 def get_all_accounts():
     try:
-        return _send_request("/v2/accounts")["data"]
+        data = _send_request("/v2/accounts")
+        return data.get("data", [])
     except Exception as e:
         log.error(f"Failed to fetch accounts: {e}")
         raise RuntimeError(f"Failed to fetch accounts: {e}")
@@ -71,3 +77,14 @@ def get_usd_spot_balance():
         if acct.get("currency") == "USD":
             return float(acct.get("balance", {}).get("amount", 0))
     return 0.0
+
+# ---------------------------
+# Example usage
+# ---------------------------
+if __name__ == "__main__":
+    log.info("Testing Coinbase Advanced connection...")
+    try:
+        balance = get_usd_spot_balance()
+        log.info(f"✅ USD Spot Balance: ${balance}")
+    except Exception as e:
+        log.error(f"Failed to fetch USD balance: {e}")
