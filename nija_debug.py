@@ -1,61 +1,48 @@
-"""
-nija_debug.py
-
-Simple debug runner for preflight. Drops into logs similar to previous behavior.
-"""
-
-import os
+# nija_debug.py
 import logging
-from loguru import logger
+from nija_client import CoinbaseClient, calculate_position_size
 
-# use loguru + fallback to stdout formatting
-logger.add(lambda msg: print(msg, end=""))
-
-from nija_client import CoinbaseClient, calculate_position_size, get_usd_spot_balance, get_all_accounts
-
-def mask(s: str, keep_front: int = 4, keep_back: int = 0):
-    if not s:
-        return str(s)
-    return s[:keep_front] + "*" * max(4, len(s) - keep_front - keep_back) + (s[-keep_back:] if keep_back else "")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("nija_debug")
 
 def main():
-    logger.info("✅ Starting Nija preflight check...")
-    logger.info("ℹ️ Masked env values for debug:")
-    logger.info("COINBASE_API_KEY: %s", mask(os.getenv("COINBASE_API_KEY", "")))
-    # Do NOT print secret PEM or secret in logs
-    logger.info("COINBASE_API_PASSPHRASE: %s", mask(os.getenv("COINBASE_API_PASSPHRASE", "")))
+    log.info("✅ Starting Nija preflight check...")
 
+    # Masked env debug info (optional)
+    import os
+    log.info(f"ℹ️ COINBASE_API_KEY: {'%s'}")
+    log.info(f"ℹ️ COINBASE_API_PASSPHRASE: {'%s'}")
+
+    # Initialize Coinbase client
     try:
-        client = CoinbaseClient(preflight=True)
+        client = CoinbaseClient()  # No preflight argument needed
+        log.info("✅ CoinbaseClient initialized successfully.")
     except Exception as e:
-        logger.error("❌ Error creating CoinbaseClient: %s", e)
-        client = CoinbaseClient(preflight=False)  # try non-preflight instance
+        log.error(f"❌ Error creating CoinbaseClient: {e}")
+        return
 
-    # Try fetching usd balance (wrapped with try/except so preflight won't crash deploy)
+    # Fetch USD balance
     try:
-        usd = client.get_usd_spot_balance()
-        logger.info("✅ USD Spot Balance: $%.2f", usd)
+        usd_balance = client.get_usd_spot_balance()
+        log.info(f"💰 USD Balance: ${usd_balance:.2f}")
     except Exception as e:
-        logger.error("❌ Failed to fetch USD Spot balance: %s", e)
-        usd = 0.0
+        log.error(f"❌ Failed to fetch USD Spot balance: {e}")
+        usd_balance = 0
 
-    # Position sizing demo
+    # Calculate position size
     try:
-        if usd > 0:
-            pos = calculate_position_size(usd, risk_factor=1.0, min_percent=2, max_percent=10)
-            logger.info("✅ Suggested trade size (based on $%.2f equity): $%.2f", usd, pos)
-        else:
-            logger.warning("⚠️ USD balance zero or unavailable; cannot calculate position size.")
+        trade_size = calculate_position_size(usd_balance)
+        log.info(f"📊 Suggested trade size: ${trade_size:.2f}")
     except Exception as e:
-        logger.error("❌ Failed to calculate position size: %s", e)
+        log.warning(f"⚠️ Cannot calculate position size: {e}")
 
-    # Print available accounts list length
+    # Fetch all accounts for debugging
     try:
         accounts = client.get_all_accounts()
-        logger.info("ℹ️ Accounts fetched: %s", len(accounts) if isinstance(accounts, list) else "unknown")
+        log.info(f"📂 Accounts fetched: {len(accounts)}")
     except Exception as e:
-        logger.error("❌ Failed to fetch all accounts: %s", e)
-
+        log.error(f"❌ Failed to fetch all accounts: {e}")
 
 if __name__ == "__main__":
     main()
