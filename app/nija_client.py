@@ -1,40 +1,31 @@
 import os
-import stat
 import time
-import jwt
+import hmac
+import hashlib
 import requests
+import jwt
 
 class CoinbaseClientWrapper:
     def __init__(self):
-        # Try HMAC auth first
-        api_key = os.getenv("COINBASE_API_KEY")
-        api_secret = os.getenv("COINBASE_API_SECRET")
-        passphrase = os.getenv("COINBASE_API_PASSPHRASE")
-        base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
+        # Check for HMAC credentials first
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
 
-        pem_content = os.getenv("COINBASE_PEM_CONTENT")
-        self.client_type = None
+        self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
+        self.iss = os.getenv("COINBASE_ISS")
 
-        if api_key and api_secret and passphrase:
-            # Use HMAC
-            self.api_key = api_key
-            self.api_secret = api_secret
-            self.passphrase = passphrase
-            self.base_url = base_url
+        if self.api_key and self.api_secret and self.passphrase:
             self.client_type = "HMAC"
             print("✅ Using HMAC authentication for CoinbaseClient")
-
-        elif pem_content:
-            # Write PEM to file
-            pem_path = "coinbase.pem"
-            with open(pem_path, "w") as f:
-                f.write(pem_content)
-            os.chmod(pem_path, 0o600)
-            self.pem_path = pem_path
-            self.iss = os.getenv("COINBASE_ISS")
+        elif self.pem_content:
             self.client_type = "JWT"
+            self.pem_path = "coinbase.pem"
+            with open(self.pem_path, "w") as f:
+                f.write(self.pem_content)
+            os.chmod(self.pem_path, 0o600)
             print("✅ Using JWT/PEM authentication for CoinbaseClient")
-
         else:
             raise SystemExit(
                 "❌ Missing credentials: set either COINBASE_API_KEY/SECRET/PASSPHRASE or COINBASE_PEM_CONTENT"
@@ -53,9 +44,13 @@ class CoinbaseClientWrapper:
         method = "GET"
         path = "/accounts"
         message = ts + method + path
-        signature = base64.b64encode(
-            hmac.new(base64.b64decode(self.api_secret), message.encode(), hashlib.sha256).digest()
-        ).decode()
+
+        # ✅ Fixed signing (no base64 decoding)
+        signature = hmac.new(
+            self.api_secret.encode(),  # raw secret as bytes
+            message.encode(),
+            hashlib.sha256
+        ).hexdigest()
 
         headers = {
             "CB-ACCESS-KEY": self.api_key,
