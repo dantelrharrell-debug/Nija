@@ -1,33 +1,21 @@
 from nija_client import CoinbaseClient, calculate_position_size
 
 def main():
-    print("✅ Starting Nija preflight check...")
-
     try:
         client = CoinbaseClient()
-    except Exception as e:
-        print(f"❌ Failed to initialize CoinbaseClient: {e}")
-        return
-
-    # Fetch USD balance safely
-    try:
         usd_balance = client.get_usd_spot_balance()
-        print(f"✅ USD Spot Balance: ${usd_balance:.2f}")
-    except Exception as e:
-        print(f"❌ Failed to fetch USD Spot balance: {e}")
-        usd_balance = 0
+        print(f"💰 USD Spot Balance: ${usd_balance:.2f}")
 
-    # Calculate position size only if balance > 0
-    try:
+        # Example position sizing
         if usd_balance > 0:
-            trade_size = calculate_position_size(usd_balance)
-            print(f"✅ Calculated Trade Size: ${trade_size:.2f}")
+            trade_size = calculate_position_size(usd_balance, risk_factor=5)
+            print(f"📊 Suggested Trade Size: ${trade_size:.2f}")
         else:
-            print("⚠️ USD balance is 0. Skipping position size calculation.")
-    except Exception as e:
-        print(f"❌ Failed to calculate position size: {e}")
+            print("⚠️ Account balance is 0, cannot calculate position size.")
 
-    print("✅ Nija preflight check complete.")
+    except Exception as e:
+        print(f"❌ Error in Nija debug: {e}")
+
 
 if __name__ == "__main__":
     main()
