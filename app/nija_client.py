@@ -1,85 +1,80 @@
 import os
-import time
-import jwt
 import requests
-import logging
 
-LOG = logging.getLogger("nija_client")
-if not LOG.handlers:
-    logging.basicConfig(level=logging.INFO)
-
+# ----------------------------
+# Coinbase Classic Client
+# ----------------------------
 class CoinbaseClient:
     def __init__(self):
-        LOG.info("🔍 Checking Coinbase credentials...")
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
         self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
         self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-        if not (self.api_key and self.api_secret):
-            raise RuntimeError("❌ Missing Coinbase API credentials")
+        if not all([self.api_key, self.api_secret, self.passphrase]):
+            raise RuntimeError("❌ Coinbase API credentials missing in environment variables.")
 
-        if isinstance(self.api_secret, str) and "\\n" in self.api_secret:
-            self.api_secret = self.api_secret.replace("\\n", "\n").strip()
+        # Classic mode active
+        self.mode = "classic"
+        print("INFO: CoinbaseClient initialized (classic mode)")
 
-        self.mode = "advanced" if "BEGIN EC PRIVATE KEY" in (self.api_secret or "") else "classic"
-        LOG.info("✅ CoinbaseClient initialized (%s mode)", self.mode)
-
-    def _generate_jwt(self, method, endpoint, body=""):
-        payload = {
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 120,
-            "method": method.upper(),
-            "request_path": endpoint,
-            "body": body or ""
+    def _headers(self):
+        """Return headers for classic API key mode."""
+        return {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": self.api_secret,  # For classic API, pass as signature placeholder
+            "CB-ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json"
         }
-        return jwt.encode(payload, self.api_secret, algorithm="ES256")
-
-    def _headers(self, method, endpoint, body=""):
-        if self.mode == "advanced":
-            return {"Authorization": f"Bearer {self._generate_jwt(method, endpoint, body)}",
-                    "Content-Type": "application/json"}
-        return {"CB-ACCESS-KEY": self.api_key, "CB-VERSION": "2021-05-24", "Content-Type": "application/json"}
-
-    def _send_request(self, endpoint, method="GET", body=""):
-        url = self.base_url.rstrip("/") + endpoint
-        headers = self._headers(method, endpoint, body)
-        r = requests.request(method, url, headers=headers, data=body, timeout=15)
-        if not r.ok:
-            raise RuntimeError(f"❌ {r.status_code} {r.reason}: {r.text}")
-        return r.json()
 
     def get_all_accounts(self):
-        resp = self._send_request("/v2/accounts")
-        if "data" not in resp:
-            raise RuntimeError("Unexpected response shape (missing 'data')")
-        return resp["data"]
+        """Fetch all accounts from Coinbase."""
+        try:
+            url = f"{self.base_url}/v2/accounts"
+            resp = requests.get(url, headers=self._headers(), timeout=10)
+            if resp.status_code == 401:
+                raise RuntimeError(f"❌ 401 Unauthorized: Check API key + permissions")
+            resp.raise_for_status()
+            return resp.json().get("data", [])
+        except Exception as e:
+            raise RuntimeError(f"❌ Failed to fetch all accounts: {e}")
 
     def get_usd_spot_balance(self):
-        accounts = self.get_all_accounts()
-        for acct in accounts:
-            currency = acct.get("currency") or acct.get("balance", {}).get("currency")
-            amount = acct.get("balance", {}).get("amount") if acct.get("balance") else None
-            if currency == "USD":
-                try:
-                    return float(amount or 0)
-                except Exception:
-                    return 0.0
-        return 0.0
+        """Fetch USD balance. Returns 0 if not found."""
+        try:
+            accounts = self.get_all_accounts()
+            for acct in accounts:
+                if acct.get("currency") == "USD":
+                    return float(acct.get("balance", {}).get("amount", 0))
+            return 0.0
+        except Exception as e:
+            print(f"❌ Warning: Unable to fetch USD balance: {e}")
+            return 0.0
 
-def _inst_client():
-    return CoinbaseClient()
 
-def get_all_accounts():
-    return _inst_client().get_all_accounts()
-
-def get_usd_spot_balance():
-    return _inst_client().get_usd_spot_balance()
-
+# ----------------------------
+# Position sizing utility
+# ----------------------------
 def calculate_position_size(account_equity, risk_factor=1.0, min_percent=2, max_percent=10):
+    """
+    Returns trade size in USD.
+    - account_equity: USD available
+    - risk_factor: percentage of equity to risk (1% = 1.0)
+    - min_percent/max_percent: bounds for position sizing
+    """
     if account_equity <= 0:
         raise ValueError("Account equity must be > 0 to trade.")
-    raw = account_equity * (risk_factor / 100)
-    return max(account_equity * (min_percent / 100), min(raw, account_equity * (max_percent / 100)))
 
-__all__ = ["CoinbaseClient", "get_all_accounts", "get_usd_spot_balance", "calculate_position_size"]
+    raw_allocation = account_equity * (risk_factor / 100)
+    min_alloc = account_equity * (min_percent / 100)
+    max_alloc = account_equity * (max_percent / 100)
+
+    trade_size = max(min_alloc, min(raw_allocation, max_alloc))
+    return trade_size
+
+
+# ----------------------------
+# Exported for nija_debug.py
+# ----------------------------
+get_all_accounts = CoinbaseClient().get_all_accounts
+get_usd_spot_balance = CoinbaseClient().get_usd_spot_balance
