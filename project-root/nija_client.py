@@ -1,5 +1,4 @@
 import os
-import stat
 import time
 import hmac
 import hashlib
@@ -14,7 +13,6 @@ if pem_content:
     pem_content = pem_content.replace("\\n", "\n")  # convert literal \n to real line breaks
     with open("coinbase.pem", "w") as f:
         f.write(pem_content)
-    os.chmod("coinbase.pem", 0o600)  # secure permissions
 
 # ===== Coinbase Client Wrapper =====
 class CoinbaseClientWrapper:
@@ -25,7 +23,7 @@ class CoinbaseClientWrapper:
         self.passphrase = os.getenv("COINBASE_PASSPHRASE")
         self.base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
 
-        # JWT/PEM credentials
+        # JWT/PEM credentials (optional)
         self.pem_path = "coinbase.pem" if pem_content else None
         self.iss = os.getenv("COINBASE_ISS")
 
@@ -75,14 +73,14 @@ class CoinbaseClientWrapper:
             raise RuntimeError(f"❌ Failed to fetch accounts: {r.status_code} {r.text}")
         return r.json()
 
-    # ===== JWT fetch (EC PEM support) =====
+    # ===== JWT fetch (fallback) =====
     def _fetch_accounts_jwt(self):
         now = int(time.time())
         payload = {"iat": now}
         if self.iss:
             payload["iss"] = self.iss
 
-        # ✅ Load EC private key properly
+        # Load EC private key properly
         with open(self.pem_path, "rb") as f:
             private_key_bytes = f.read()
             private_key = serialization.load_pem_private_key(
@@ -91,7 +89,6 @@ class CoinbaseClientWrapper:
                 backend=default_backend()
             )
 
-        # Algorithm must match key type: EC → ES256
         token = jwt.encode(payload, private_key, algorithm="ES256")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         url = "https://api.coinbase.com/v2/accounts"
@@ -100,19 +97,13 @@ class CoinbaseClientWrapper:
             raise RuntimeError(f"❌ Failed to fetch accounts (JWT): {r.status_code} {r.text}")
         return r.json()
 
-    # ===== Find first funded account =====
+    # ===== Get first funded account =====
     def get_funded_account(self, min_balance=1.0):
-        """
-        Returns the first account with balance >= min_balance
-        """
         accounts = self.fetch_accounts()
-        # JWT returns 'data', HMAC might return list directly
         account_list = accounts.get("data", accounts) if isinstance(accounts, dict) else accounts
         for acct in account_list:
-            # handle balance field for JWT vs HMAC
             bal_info = acct.get("balance", acct)
             balance = float(bal_info.get("amount", bal_info if isinstance(bal_info, (int,float)) else 0))
-            currency = bal_info.get("currency", acct.get("currency", "USD"))
             if balance >= min_balance:
                 return acct
         raise RuntimeError("❌ No funded account found")
