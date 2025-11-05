@@ -3,52 +3,24 @@ import time
 import hmac
 import hashlib
 import requests
-import jwt
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
 
-# ===== Write PEM from environment if present =====
-pem_content = os.getenv("COINBASE_PEM_CONTENT")
-if pem_content:
-    pem_content = pem_content.replace("\\n", "\n")  # convert literal \n to real line breaks
-    with open("coinbase.pem", "w") as f:
-        f.write(pem_content)
-
-# ===== Coinbase Client Wrapper =====
 class CoinbaseClientWrapper:
     def __init__(self):
-        # HMAC credentials
+        # HMAC credentials from environment
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
         self.passphrase = os.getenv("COINBASE_PASSPHRASE")
         self.base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
 
-        # JWT/PEM credentials (optional)
-        self.pem_path = "coinbase.pem" if pem_content else None
-        self.iss = os.getenv("COINBASE_ISS")
-
-        if self.api_key and self.api_secret and self.passphrase:
+        # Force HMAC authentication
+        if all([self.api_key, self.api_secret, self.passphrase]):
             self.client_type = "HMAC"
-            print("✅ Using HMAC authentication for CoinbaseClient")
-        elif self.pem_path:
-            self.client_type = "JWT"
-            print("✅ Using JWT/PEM authentication for CoinbaseClient")
+            print("✅ Using HMAC authentication for CoinbaseClient (forced)")
         else:
-            raise SystemExit(
-                "❌ Missing credentials: set either COINBASE_API_KEY/SECRET/PASSPHRASE or COINBASE_PEM_CONTENT"
-            )
+            raise SystemExit("❌ HMAC credentials missing; cannot use JWT fallback")
 
-    # ===== Fetch all accounts =====
+    # ===== Fetch accounts via HMAC =====
     def fetch_accounts(self):
-        if self.client_type == "HMAC":
-            return self._fetch_accounts_hmac()
-        elif self.client_type == "JWT":
-            return self._fetch_accounts_jwt()
-        else:
-            raise RuntimeError("Unknown client type")
-
-    # ===== HMAC fetch =====
-    def _fetch_accounts_hmac(self):
         ts = str(int(time.time()))
         method = "GET"
         path = "/accounts"
@@ -73,30 +45,6 @@ class CoinbaseClientWrapper:
             raise RuntimeError(f"❌ Failed to fetch accounts: {r.status_code} {r.text}")
         return r.json()
 
-    # ===== JWT fetch (fallback) =====
-    def _fetch_accounts_jwt(self):
-        now = int(time.time())
-        payload = {"iat": now}
-        if self.iss:
-            payload["iss"] = self.iss
-
-        # Load EC private key properly
-        with open(self.pem_path, "rb") as f:
-            private_key_bytes = f.read()
-            private_key = serialization.load_pem_private_key(
-                private_key_bytes,
-                password=None,
-                backend=default_backend()
-            )
-
-        token = jwt.encode(payload, private_key, algorithm="ES256")
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        url = "https://api.coinbase.com/v2/accounts"
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code != 200:
-            raise RuntimeError(f"❌ Failed to fetch accounts (JWT): {r.status_code} {r.text}")
-        return r.json()
-
     # ===== Get first funded account =====
     def get_funded_account(self, min_balance=1.0):
         accounts = self.fetch_accounts()
@@ -107,6 +55,7 @@ class CoinbaseClientWrapper:
             if balance >= min_balance:
                 return acct
         raise RuntimeError("❌ No funded account found")
+
 
 # ===== Quick test =====
 if __name__ == "__main__":
