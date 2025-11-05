@@ -19,11 +19,13 @@ class CoinbaseClient:
         
         log.info("⚠️ No passphrase required for Advanced JWT keys.")
         log.info("✅ CoinbaseClient initialized successfully (Advanced JWT compatible).")
+        
+        # Run preflight
+        self._preflight_check()
     
     def _generate_jwt(self, method="GET", endpoint="/v2/accounts", body=None):
         timestamp = int(time.time())
         body_str = body if body else ""
-        message = f"{timestamp}{method}{endpoint}{body_str}"
         payload = {
             "iat": timestamp,
             "exp": timestamp + 60,
@@ -50,6 +52,18 @@ class CoinbaseClient:
             log.error(f"❌ Request failed: {response.status_code} {response.text}")
             raise RuntimeError(f"❌ Request failed: {response.status_code} {response.text}")
         return response.json()
+    
+    def _preflight_check(self):
+        """
+        Check if the JWT key has wallet:accounts:read permission
+        """
+        log.info("ℹ️ Running preflight check...")
+        try:
+            accounts = self.get_all_accounts()
+            log.info(f"✅ Preflight check passed. Found {len(accounts)} accounts.")
+        except RuntimeError as e:
+            log.error("❌ Preflight failed. Your JWT key may be missing required permissions.")
+            raise e
     
     def get_all_accounts(self):
         endpoint = "/v2/accounts"
