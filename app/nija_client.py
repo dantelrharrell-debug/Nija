@@ -18,6 +18,13 @@ class CoinbaseClientWrapper:
             raise SystemExit("❌ HMAC credentials missing; cannot use JWT fallback")
         print("✅ Using HMAC authentication for CoinbaseClient (forced)")
 
+        # Fetch funded account immediately
+        try:
+            funded = self.get_funded_account(min_balance=1)
+            print("✅ Funded account found on startup:", funded)
+        except Exception as e:
+            print(f"❌ Failed to fetch funded account on startup: {e}")
+
     # ===== Internal: Build headers =====
     def _get_headers(self, method, path, body=""):
         ts = str(int(time.time()))
@@ -67,8 +74,7 @@ class CoinbaseClientWrapper:
         raise RuntimeError("❌ No funded account found")
 
 
-# ===== Quick test =====
+# ===== Quick test / live-ready instantiation =====
 if __name__ == "__main__":
+    # Instantiating the client auto-fetches the funded account
     client = CoinbaseClientWrapper()
-    funded = client.get_funded_account(min_balance=1)
-    print("✅ Funded account found:", funded)
