@@ -1,90 +1,67 @@
 import os
-import time
-import hmac
-import hashlib
-import base64
-import json
-import logging
 import requests
+import logging
 
-log = logging.getLogger("nija_client")
 logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("nija_client")
+
 
 class CoinbaseClient:
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")  # JWT doesn't need this
         self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
         if not self.api_key or not self.api_secret:
-            raise RuntimeError("❌ Missing Coinbase API credentials.")
+            raise RuntimeError("❌ Missing Coinbase API credentials")
 
-        if self.passphrase:
-            log.info("✅ CoinbaseClient initialized with standard API key + passphrase.")
-        else:
-            log.info("⚠️ No passphrase provided. Using Advanced JWT key (no passphrase required).")
-        
+        if not self.passphrase:
+            log.warning("⚠️ No passphrase provided. Using Advanced JWT key (no passphrase required).")
+
         log.info("✅ CoinbaseClient initialized successfully (Advanced JWT compatible).")
 
-    # ------------------------
-    # Core request handler
-    # ------------------------
     def _send_request(self, endpoint, method="GET", data=None):
-        url = f"{self.base_url}{endpoint}"
         headers = {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-VERSION": "2025-11-04"
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
         }
 
-        timestamp = str(int(time.time()))
-        body = json.dumps(data) if data else ""
-        message = timestamp + method.upper() + endpoint + body
-        signature = hmac.new(
-            self.api_secret.encode(),
-            message.encode(),
-            hashlib.sha256
-        ).hexdigest()
-
-        headers.update({
-            "CB-ACCESS-SIGN": signature,
-            "CB-ACCESS-TIMESTAMP": timestamp
-        })
-        if self.passphrase:
-            headers["CB-ACCESS-PASSPHRASE"] = self.passphrase
+        url = self.base_url.rstrip("/") + endpoint
 
         try:
-            response = requests.request(method, url, headers=headers, data=body)
-            if response.status_code == 401:
+            if method.upper() == "GET":
+                resp = requests.get(url, headers=headers)
+            else:
+                resp = requests.post(url, headers=headers, json=data)
+
+            if resp.status_code == 401:
                 log.error("❌ 401 Unauthorized: Check API key permissions and JWT usage")
                 raise RuntimeError("❌ 401 Unauthorized: Check API key permissions and JWT usage")
-            elif response.status_code >= 400:
-                log.error(f"❌ Request failed: {response.status_code} {response.text}")
-                raise RuntimeError(f"❌ Request failed: {response.status_code} {response.text}")
 
-            return response.json()
+            if resp.status_code >= 400:
+                log.error(f"❌ Request failed: {resp.status_code} {resp.text}")
+                raise RuntimeError(f"❌ Request failed: {resp.status_code} {resp.text}")
+
+            return resp.json()
+
         except requests.RequestException as e:
             log.error(f"❌ Request exception: {e}")
-            raise
+            raise RuntimeError(f"❌ Request exception: {e}")
 
-    # ------------------------
-    # Account Methods
-    # ------------------------
     def get_all_accounts(self):
-        """Fetch all accounts from Coinbase."""
-        return self._send_request("/v2/accounts")["data"]
+        endpoint = "/v2/accounts"
+        data = self._send_request(endpoint)
+        return data.get("data", [])
 
-    def get_usd_spot_balance(self) -> float:
-        """Fetch USD balance from Coinbase accounts."""
+    def get_usd_spot_balance(self):
         accounts = self.get_all_accounts()
-        usd_account = next((a for a in accounts if a["currency"] == "USD"), None)
-        if usd_account:
-            return float(usd_account.get("balance", {}).get("amount", 0))
+        for acc in accounts:
+            if acc.get("currency") == "USD":
+                return float(acc.get("balance", {}).get("amount", 0))
         return 0.0
 
-# ------------------------
-# Utility: Position sizing
-# ------------------------
+
 def calculate_position_size(account_equity, risk_factor=1.0, min_percent=2, max_percent=10):
     """
     Calculates position size for a trade based on account equity.
@@ -108,19 +85,14 @@ def calculate_position_size(account_equity, risk_factor=1.0, min_percent=2, max_
     trade_size = max(min_alloc, min(raw_allocation, max_alloc))
     return trade_size
 
-# ------------------------
-# Preflight check
-# ------------------------
-def preflight_check():
-    log.info("✅ Starting Nija preflight check...")
-    client = CoinbaseClient()
-    try:
-        usd_balance = client.get_usd_spot_balance()
-        log.info(f"✅ USD Spot Balance: ${usd_balance:.2f}")
-        return True
-    except Exception as e:
-        log.error(f"❌ Error in Nija preflight: {e}")
-        return False
 
-if __name__ == "__main__":
-    preflight_check()
+# Singleton client for external calls
+client = CoinbaseClient()
+
+
+def get_usd_spot_balance():
+    return client.get_usd_spot_balance()
+
+
+def get_all_accounts():
+    return client.get_all_accounts()
