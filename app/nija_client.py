@@ -1,4 +1,20 @@
 import os
+import stat
+import time
+import jwt
+import requests
+import hmac
+import hashlib
+
+# ✅ Write PEM from environment if present
+pem_content = os.getenv("COINBASE_PEM_CONTENT")
+if pem_content:
+    pem_content = pem_content.replace("\\n", "\n")  # converts \n to actual line breaks
+    with open("coinbase.pem", "w") as f:
+        f.write(pem_content)
+    os.chmod("coinbase.pem", 0o600)  # secure permissions
+
+import os
 import time
 import hmac
 import hashlib
