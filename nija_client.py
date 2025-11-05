@@ -4,56 +4,84 @@ import hmac
 import hashlib
 import base64
 import requests
-import json
+import logging
 
+log = logging.getLogger("nija_client")
+logging.basicConfig(level=logging.INFO)
+
+# Environment variables
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # Optional
 BASE_URL = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-def get_coinbase_headers(method, path, body=""):
+if not API_KEY or not API_SECRET:
+    raise RuntimeError("Missing Coinbase API credentials (key/secret)")
+
+log.info("✅ Coinbase API credentials look valid (preflight check passed)")
+
+def _get_timestamp():
+    return str(int(time.time()))
+
+def _sign_request(method, path, body=""):
     """
-    Build headers for Coinbase REST request, using optional passphrase.
+    Create Coinbase signature. Tries base64 first, then hex digest fallback.
     """
-    ts = str(int(time.time()))
+    ts = _get_timestamp()
     message = ts + method.upper() + path + body
+    key_bytes = base64.b64decode(API_SECRET)
+    signature_b64 = base64.b64encode(hmac.new(key_bytes, message.encode(), hashlib.sha256).digest()).decode()
+    signature_hex = hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return ts, signature_b64, signature_hex
 
-    # Create HMAC signature
-    signature = hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
-
+def _send_request(path, method="GET", body=""):
+    ts, sig_b64, sig_hex = _sign_request(method, path, body)
     headers = {
         "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": signature,
+        "CB-ACCESS-SIGN": sig_b64,
         "CB-ACCESS-TIMESTAMP": ts,
-        "Content-Type": "application/json",
     }
-
-    # Only add passphrase if present
     if API_PASSPHRASE:
         headers["CB-ACCESS-PASSPHRASE"] = API_PASSPHRASE
 
-    return headers
-
-def manual_get_accounts():
-    path = "/api/v3/brokerage/accounts"
     url = BASE_URL + path
+    r = requests.request(method, url, headers=headers, data=body)
+    
+    if r.status_code == 401:
+        log.warning("⚠️ b64 signature failed, trying hex digest fallback")
+        headers["CB-ACCESS-SIGN"] = sig_hex
+        r = requests.request(method, url, headers=headers, data=body)
 
-    headers = get_coinbase_headers("GET", path)
-    response = requests.get(url, headers=headers, timeout=10)
+    if r.status_code != 200:
+        log.error(f"❌ Coinbase request failed ({r.status_code}): {r.text}")
+        r.raise_for_status()
 
-    if response.status_code == 200:
-        return response.json()
-    elif response.status_code == 401:
-        raise RuntimeError("❌ Unauthorized: Check API key/secret and permissions (wallet/accounts).")
-    else:
-        raise RuntimeError(f"❌ Failed to fetch accounts: {response.status_code} {response.text}")
+    return r.json()
+
+# --------------------------
+# Public methods
+# --------------------------
 
 def get_all_accounts():
     """
-    Main entry point to fetch all Coinbase accounts.
+    Fetch all Coinbase accounts.
     """
     try:
-        return manual_get_accounts()
+        return _send_request("/v2/accounts")
     except Exception as e:
-        print(f"⚠️ manual_get_accounts failed: {e}")
-        raise
+        raise RuntimeError(f"Failed to fetch accounts: {e}")
+
+def get_usd_spot_balance():
+    """
+    Returns USD spot balance.
+    """
+    accounts = get_all_accounts()
+    for acct in accounts.get("data", []):
+        if acct.get("currency") == "USD":
+            return float(acct.get("balance", {}).get("amount", 0))
+    return 0.0
+
+# --------------------------
+# Explicit exports
+# --------------------------
+__all__ = ["get_all_accounts", "get_usd_spot_balance"]
