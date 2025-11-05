@@ -4,24 +4,26 @@ import hmac
 import hashlib
 import base64
 import requests
-import json
 
 class CoinbaseClientWrapper:
     def __init__(self):
+        # HMAC credentials from environment
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
         self.passphrase = os.getenv("COINBASE_PASSPHRASE")
         self.base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
 
+        # Validate credentials
         if not all([self.api_key, self.api_secret, self.passphrase]):
             raise SystemExit("❌ HMAC credentials missing; cannot use JWT fallback")
         print("✅ Using HMAC authentication for CoinbaseClient (forced)")
 
+    # ===== Internal: Build headers =====
     def _get_headers(self, method, path, body=""):
         ts = str(int(time.time()))
         message = ts + method + path + body
 
-        # Coinbase requires the API_SECRET to be base64-decoded first
+        # Coinbase requires base64-decoded secret for HMAC
         secret_bytes = base64.b64decode(self.api_secret)
 
         signature = hmac.new(
@@ -41,7 +43,7 @@ class CoinbaseClientWrapper:
         }
         return headers
 
-    # ===== Fetch accounts =====
+    # ===== Fetch accounts via HMAC =====
     def fetch_accounts(self):
         path = "/accounts"
         method = "GET"
