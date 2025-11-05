@@ -1,4 +1,24 @@
 import os
+
+# Auto-fix PEM formatting for Advanced JWT key
+def load_pem_from_env(var_name="COINBASE_API_SECRET"):
+    pem = os.getenv(var_name)
+    if pem is None:
+        raise ValueError(f"Environment variable {var_name} is not set.")
+    
+    # Replace literal "\n" with actual newlines and strip extra whitespace
+    pem_fixed = pem.replace("\\n", "\n").strip()
+    
+    # Ensure proper BEGIN/END framing
+    if not pem_fixed.startswith("-----BEGIN EC PRIVATE KEY-----") or not pem_fixed.endswith("-----END EC PRIVATE KEY-----"):
+        raise ValueError("PEM content is malformed. Check BEGIN/END lines.")
+    
+    return pem_fixed
+
+# Usage inside CoinbaseClient __init__:
+# self.api_secret = load_pem_from_env()
+
+import os
 import jwt
 import requests
 import time
