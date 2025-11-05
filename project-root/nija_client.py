@@ -1,4 +1,5 @@
-# nija_client.py
+# nija_client.py (updated)
+
 import os
 import time
 import jwt
@@ -63,7 +64,23 @@ class CoinbaseClient:
             log.info(f"✅ Preflight check passed. Found {len(accounts)} accounts.")
         except RuntimeError as e:
             log.error("❌ Preflight failed. Your JWT key may be missing required permissions.")
+            self.list_jwt_permissions()
             raise e
+
+    def list_jwt_permissions(self):
+        """
+        Inspect the JWT payload for permissions.
+        Note: Coinbase JWT keys encode allowed scopes. This is a static check.
+        """
+        try:
+            payload = jwt.decode(self.api_secret, options={"verify_signature": False})
+            log.info(f"ℹ️ JWT payload (decoded, no verification): {payload}")
+            if "permissions" in payload:
+                log.info(f"✅ JWT permissions: {payload['permissions']}")
+            else:
+                log.warning("⚠️ No 'permissions' field found in JWT payload.")
+        except Exception as e:
+            log.error(f"❌ Failed to decode JWT: {e}")
     
     def get_all_accounts(self):
         endpoint = "/v2/accounts"
