@@ -1,10 +1,30 @@
-# ----------------------------
-# Preflight environment check
-# ----------------------------
-import os, logging, sys
+# nija_client.py
+# -------------------------
+# Coinbase client & manual REST fallback with preflight and skew adjustment
+# -------------------------
 
-log = logging.getLogger("nija_preflight")
+import os
+import time
+import hmac
+import hashlib
+import base64
+import logging
+import requests
+import sys
+
+# -------------------------
+# Logging
+# -------------------------
+log = logging.getLogger("nija_client")
 logging.basicConfig(level=logging.INFO)
+
+# -------------------------
+# Environment variables / preflight
+# -------------------------
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional
+API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
 def preflight_check():
     required_vars = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
@@ -12,63 +32,67 @@ def preflight_check():
     if missing_required:
         log.error("❌ Missing required Coinbase credentials: %s", ", ".join(missing_required))
         sys.exit(1)
-
-    passphrase_present = bool(os.getenv("COINBASE_API_PASSPHRASE"))
-    log.info("✅ COINBASE_API_KEY present: %s", bool(os.getenv("COINBASE_API_KEY")))
-    log.info("✅ COINBASE_API_SECRET present: %s", bool(os.getenv("COINBASE_API_SECRET")))
-    log.info("COINBASE_API_PASSPHRASE present: %s", passphrase_present)
-    if not passphrase_present:
-        log.warning("⚠️ COINBASE_API_PASSPHRASE not set — continuing without passphrase header.")
+    log.info("✅ COINBASE_API_KEY present: %s", bool(API_KEY))
+    log.info("✅ COINBASE_API_SECRET present: %s", bool(API_SECRET))
+    log.info("COINBASE_API_PASSPHRASE present: %s", bool(API_PASSPHRASE))
+    if not API_PASSPHRASE:
+        log.warning("⚠️ COINBASE_API_PASSPHRASE not set — continuing without passphrase if key allows.")
 
 preflight_check()
 
-# ----------------------------
-# nija_client.py
-# ----------------------------
-import time
-import hmac
-import hashlib
-import base64
-import requests
+# -------------------------
+# Server time helper + skew adjustment
+# -------------------------
+_time_skew = None
 
-log = logging.getLogger("nija_client")
-logging.basicConfig(level=logging.INFO)
+def get_coinbase_server_time():
+    """Fetch Coinbase server time in UNIX timestamp."""
+    try:
+        r = requests.get(API_BASE + "/v2/time", timeout=10)
+        r.raise_for_status()
+        server_ts = int(r.json()["data"]["epoch"])
+        log.info("Coinbase server time: %s (UTC)", server_ts)
+        return server_ts
+    except Exception as e:
+        log.warning("Failed to fetch Coinbase server time: %s", e)
+        return int(time.time())
 
-# Credentials (passphrase optional)
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional
-API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
-
-if not all([API_KEY, API_SECRET]):
-    raise RuntimeError("Missing required COINBASE_API_KEY or COINBASE_API_SECRET")
+def get_adjusted_ts():
+    """Return timestamp adjusted for server vs local skew."""
+    global _time_skew
+    local_ts = int(time.time())
+    if _time_skew is None:
+        server_ts = get_coinbase_server_time()
+        _time_skew = local_ts - server_ts
+        if abs(_time_skew) > 5:
+            log.warning(
+                "⚠️ Detected time skew: local ts=%s, server ts=%s, skew=%s seconds",
+                local_ts, server_ts, _time_skew
+            )
+    return str(local_ts - _time_skew)
 
 # -------------------------
-# Library Client (optional)
+# Try to import a Client
 # -------------------------
 ClientClass = None
 client_import_source = None
-
-try:
-    from coinbase_advanced_py import Client as _Client
-    ClientClass = _Client
-    client_import_source = "coinbase_advanced_py.Client"
-    log.info("Imported Client from coinbase_advanced_py.Client")
-except Exception:
+for attempt in [
+    ("coinbase_advanced_py", "Client"),
+    ("coinbase_advanced_py.client", "Client"),
+    ("coinbase_advanced", "Client")
+]:
+    module_name, cls_name = attempt
     try:
-        from coinbase_advanced_py.client import Client as _Client
-        ClientClass = _Client
-        client_import_source = "coinbase_advanced_py.client.Client"
-        log.info("Imported Client from coinbase_advanced_py.client.Client")
+        mod = __import__(module_name, fromlist=[cls_name])
+        ClientClass = getattr(mod, cls_name)
+        client_import_source = f"{module_name}.{cls_name}"
+        log.info("Imported Client from %s", client_import_source)
+        break
     except Exception:
-        try:
-            from coinbase_advanced import Client as _Client
-            ClientClass = _Client
-            client_import_source = "coinbase_advanced.Client"
-            log.info("Imported Client from coinbase_advanced.Client")
-        except Exception:
-            log.warning("Could not import Client; falling back to manual REST requests.")
-            ClientClass = None
+        continue
+
+if ClientClass is None:
+    log.warning("No library Client found; will use manual REST fallback.")
 
 def make_client():
     if ClientClass is None:
@@ -83,7 +107,7 @@ def make_client():
             return None
 
 # -------------------------
-# Manual REST helpers
+# Manual REST fallback
 # -------------------------
 def _sig_hex_no_decode(ts, method, path, body=""):
     prehash = ts + method.upper() + path + body
@@ -100,68 +124,48 @@ def _sig_base64_decode_then_b64(ts, method, path, body=""):
 
 def manual_get_accounts_try(method="hex"):
     path = "/v2/accounts"
-    ts = str(int(time.time()))
-    sig = _sig_hex_no_decode(ts, "GET", path) if method=="hex" else _sig_base64_decode_then_b64(ts, "GET", path)
+    ts = get_adjusted_ts()
+    sig = _sig_hex_no_decode(ts, "GET", path) if method == "hex" else _sig_base64_decode_then_b64(ts, "GET", path)
     headers = {
         "CB-ACCESS-KEY": API_KEY,
         "CB-ACCESS-SIGN": sig,
         "CB-ACCESS-TIMESTAMP": ts,
-        "CB-VERSION": "2025-11-04",
-        "Content-Type": "application/json"
+        "CB-ACCESS-PASSPHRASE": API_PASSPHRASE or "",
+        "CB-VERSION": "2025-11-02",
+        "Content-Type": "application/json",
     }
-    if API_PASSPHRASE:
-        headers["CB-ACCESS-PASSPHRASE"] = API_PASSPHRASE
-
     r = requests.get(API_BASE + path, headers=headers, timeout=15)
     return r
 
-# -------------------------
-# Fetch accounts
-# -------------------------
 def get_all_accounts():
     client = make_client()
     if client:
-        try:
-            log.info("Using library Client from %s", client_import_source or "unknown")
-            if hasattr(client, "get_accounts"):
-                return client.get_accounts()
-            if hasattr(client, "accounts"):
-                return client.accounts()
-            if hasattr(client, "request"):
-                return client.request("GET", "/v2/accounts")
-            raise RuntimeError("Library client found but no known method to list accounts.")
-        except Exception as e:
-            log.warning("Library client call failed: %s — will try manual REST fallback", e)
-
-    # Manual REST fallback
-    log.info("Trying manual REST fallback (base64 signature first)...")
-    r_b64 = manual_get_accounts_try("b64")
-    if r_b64.status_code == 200:
-        return r_b64.json().get("data", r_b64.json())
-    log.warning("b64-signature attempt failed: %s %s", r_b64.status_code, r_b64.text[:300])
-
-    log.info("Trying manual REST fallback (hex signature)...")
-    r_hex = manual_get_accounts_try("hex")
-    if r_hex.status_code == 200:
-        return r_hex.json().get("data", r_hex.json())
-    log.warning("hex-signature attempt failed: %s %s", r_hex.status_code, r_hex.text[:300])
-
+        for method_name in ["get_accounts", "accounts", "request"]:
+            try:
+                if hasattr(client, method_name):
+                    fn = getattr(client, method_name)
+                    res = fn() if callable(fn) else fn
+                    return res
+            except Exception as e:
+                log.warning("Library client call failed: %s", e)
+    # Manual fallback
+    for method in ["b64", "hex"]:
+        log.info("Trying manual REST fallback: %s", method)
+        r = manual_get_accounts_try(method)
+        if r.status_code == 200:
+            return r.json().get("data", r.json())
+        log.warning("%s attempt failed: %s %s", method, r.status_code, r.text[:300])
     raise RuntimeError(
-        f"Failed to fetch accounts via library or manual methods. "
-        f"b64_status={r_b64.status_code} hex_status={r_hex.status_code} "
-        f"b64_resp={r_b64.text[:300]} hex_resp={r_hex.text[:300]}"
+        "Failed to fetch accounts via library or manual signature methods. "
+        "Check API key/secret/passphrase, permissions (wallet/accounts), and server time sync."
     )
 
 # -------------------------
-# Get USD spot balance
+# USD spot balance helper
 # -------------------------
 def get_usd_spot_balance():
     accts = get_all_accounts()
-    if isinstance(accts, dict) and "data" in accts:
-        data = accts["data"]
-    else:
-        data = accts
-
+    data = accts.get("data", accts) if isinstance(accts, dict) else accts
     for a in data:
         cur = a.get("currency") or a.get("currency_code") or a.get("asset")
         if cur == "USD":
@@ -173,13 +177,16 @@ def get_usd_spot_balance():
             try:
                 return float(amt)
             except Exception:
-                continue
+                return 0.0
     return 0.0
 
 # -------------------------
-# CLI test
+# Local CLI preflight test
 # -------------------------
 if __name__ == "__main__":
+    log.info("Running full preflight check...")
+    preflight_check()
+    get_adjusted_ts()  # detect skew
     try:
         accts = get_all_accounts()
         log.info("Fetched %d accounts", len(accts) if isinstance(accts, list) else len(accts.get("data", [])))
