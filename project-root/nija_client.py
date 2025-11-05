@@ -1,54 +1,85 @@
-# nija_preflight.py
+# nija_client.py
+
 import os
-from nija_client import CoinbaseClient, calculate_position_size
+import jwt
+import requests
+import time
 
-def main():
-    print("🔹 Starting Nija Preflight Check 🔹\n")
+class CoinbaseClient:
+    """
+    Coinbase API client supporting both standard API keys + passphrase
+    and Advanced JWT keys (no passphrase required).
+    """
 
-    client = None
+    def __init__(self):
+        # Load environment variables
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-    # Attempt Advanced JWT first
-    try:
-        print("ℹ️ Trying Advanced JWT...")
-        client = CoinbaseClient()  # Ensure your env variable COINBASE_API_SECRET contains the PEM
-        accounts = client.get_all_accounts()
-        print(f"✅ Advanced JWT succeeded. Fetched {len(accounts)} accounts.\n")
-    except Exception as jwt_error:
-        print(f"⚠️ Advanced JWT failed: {jwt_error}")
-        # Attempt Classic API key fallback
+        # Automatically fix PEM formatting if using Advanced JWT
+        if self.api_secret and "BEGIN EC PRIVATE KEY" in self.api_secret:
+            self.api_secret = self.api_secret.replace("\\n", "\n").strip()
+
+        # Run preflight check to verify credentials
+        self._preflight_check()
+
+    def _preflight_check(self):
+        print("ℹ️ Running preflight check...")
         try:
-            print("ℹ️ Trying Classic API key + passphrase...")
-            os.environ["COINBASE_API_SECRET"] = os.getenv("COINBASE_API_SECRET_CLASSIC", "")
-            os.environ["COINBASE_API_KEY"] = os.getenv("COINBASE_API_KEY_CLASSIC", "")
-            os.environ["COINBASE_API_PASSPHRASE"] = os.getenv("COINBASE_API_PASSPHRASE_CLASSIC", "")
-            client = CoinbaseClient()
-            accounts = client.get_all_accounts()
-            print(f"✅ Classic API key succeeded. Fetched {len(accounts)} accounts.\n")
-        except Exception as classic_error:
-            print(f"❌ Both Advanced JWT and Classic API key failed:")
-            print(f"  - JWT error: {jwt_error}")
-            print(f"  - Classic API error: {classic_error}")
-            return
+            accounts = self.get_all_accounts()
+            print(f"✅ Preflight check passed. Accounts fetched: {len(accounts)}")
+        except Exception as e:
+            print(f"❌ Preflight check failed: {str(e)}")
 
-    # Show account balances
-    for account in accounts:
-        print(f"  - {account['currency']}: {account['balance']['amount']} {account['balance']['currency']}")
+    def _generate_jwt(self, method, endpoint, body=""):
+        """Generate JWT token for Advanced API access."""
+        payload = {
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 300,  # 5 min expiry
+            "method": method.upper(),
+            "request_path": endpoint,
+            "body": body or ""
+        }
+        token = jwt.encode(payload, self.api_secret, algorithm="ES256")
+        return token
 
-    # Test position sizing calculation
-    try:
-        usd_account = next((a for a in accounts if a["currency"] == "USD"), None)
-        if usd_account:
-            balance = float(usd_account["balance"]["amount"])
-            trade_size = calculate_position_size(balance)
-            print(f"\n✅ Position sizing calculation successful: ${trade_size:.2f} (from ${balance:.2f})")
-        else:
-            print("\n⚠️ No USD account found for position sizing test.")
-    except Exception as e:
-        print(f"❌ Failed to calculate position size: {e}")
-        return
+    def _send_request(self, endpoint, method="GET", body=""):
+        """Send authenticated request to Coinbase API."""
+        headers = {
+            "Authorization": f"Bearer {self._generate_jwt(method, endpoint, body)}",
+            "Content-Type": "application/json",
+        }
+        response = requests.request(method, self.base_url + endpoint, headers=headers, data=body)
+        if not response.ok:
+            raise RuntimeError(f"❌ Request failed: {response.status_code} {response.text}")
+        return response.json()
 
-    print("\n🔹 Nija Preflight Check Complete 🔹")
-    print("✅ All checks passed. Nija is ready to trade live.")
+    def get_all_accounts(self):
+        """Return list of all Coinbase accounts."""
+        return self._send_request("/v2/accounts")["data"]
 
-if __name__ == "__main__":
-    main()
+
+def calculate_position_size(account_equity, risk_factor=1.0, min_percent=2, max_percent=10):
+    """
+    Calculates position size for a trade based on account equity.
+
+    account_equity : float : USD account balance
+    risk_factor    : float : Multiplier for trade confidence (default=1.0)
+    min_percent    : int   : Minimum % of equity to trade
+    max_percent    : int   : Maximum % of equity to trade
+
+    returns : float : Trade size in USD
+    """
+    if account_equity <= 0:
+        raise ValueError("Account equity must be greater than 0 to trade.")
+
+    raw_allocation = account_equity * (risk_factor / 100)
+
+    # Clamp allocation between min and max percent
+    min_alloc = account_equity * (min_percent / 100)
+    max_alloc = account_equity * (max_percent / 100)
+
+    trade_size = max(min_alloc, min(raw_allocation, max_alloc))
+    return trade_size
