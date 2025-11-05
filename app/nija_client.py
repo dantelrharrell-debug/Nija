@@ -107,3 +107,29 @@ if __name__ == "__main__":
         log.info(f"✅ USD Balance: {usd_balance}")
     except Exception as e:
         log.error(f"❌ Error during client debug: {e}")
+
+
+# -----------------------
+# Backwards-compatible helpers (keeps nija_debug.py unchanged)
+# -----------------------
+def get_all_accounts():
+    """
+    Backwards-compatible wrapper that returns list of account dicts.
+    If the underlying client returns {'data': [...]}, this returns the inner list.
+    """
+    client = CoinbaseClient()
+    data = client.get_all_accounts()
+    # Normalize returned shape to a list of account dicts
+    if isinstance(data, dict) and "data" in data:
+        return data["data"]
+    # If get_all_accounts returned already a list, return it directly
+    return data
+
+
+def get_usd_spot_balance():
+    """
+    Backwards-compatible wrapper that returns a float USD balance.
+    """
+    client = CoinbaseClient()
+    # CoinbaseClient.get_usd_spot_balance already returns float or raises; just forward
+    return client.get_usd_spot_balance()
