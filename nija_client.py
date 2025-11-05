@@ -1,84 +1,109 @@
 import os
-import requests
-import logging
 import time
-import hmac
-import hashlib
 import json
+import logging
+import requests
+from coinbase.rest import RESTClient
+from loguru import logger
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("nija_client")
-log.setLevel(logging.INFO)
 
-# ---------------------------
-# Load API credentials
-# ---------------------------
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # ignored for Advanced/Base
-COINBASE_API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-if not all([COINBASE_API_KEY, COINBASE_API_SECRET]):
-    raise RuntimeError(
-        "Missing Coinbase API key/secret. Set COINBASE_API_KEY and COINBASE_API_SECRET."
-    )
+class CoinbaseClient:
+    def __init__(self):
+        # --- Load API credentials from environment ---
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-# ---------------------------
-# Helper for signing requests
-# ---------------------------
-def _sign_request(path, method="GET", body=""):
-    timestamp = str(int(time.time()))
-    body_str = body if isinstance(body, str) else json.dumps(body) if body else ""
-    message = timestamp + method.upper() + path + body_str
-    signature = hmac.new(
-        COINBASE_API_SECRET.encode(), message.encode(), hashlib.sha256
-    ).hexdigest()
-    return timestamp, signature
+        # --- Validate ---
+        if not all([self.api_key, self.api_secret]):
+            raise RuntimeError("❌ Missing Coinbase credentials: COINBASE_API_KEY or COINBASE_API_SECRET")
 
-# ---------------------------
-# Send REST request
-# ---------------------------
-def _send_request(path, method="GET", body=""):
-    timestamp, signature = _sign_request(path, method, body)
-    headers = {
-        "CB-ACCESS-KEY": COINBASE_API_KEY,
-        "CB-ACCESS-SIGN": signature,
-        "CB-ACCESS-TIMESTAMP": timestamp,
-        "Content-Type": "application/json",
-    }
+        # --- Initialize Coinbase REST client (no passphrase needed) ---
+        self.client = RESTClient(api_key=self.api_key, api_secret=self.api_secret)
 
-    # Only add passphrase if explicitly set (Advanced/Base keys do NOT need it)
-    if COINBASE_API_PASSPHRASE:
-        headers["CB-ACCESS-PASSPHRASE"] = COINBASE_API_PASSPHRASE
+        logger.info("✅ CoinbaseClient initialized successfully (no passphrase required).")
 
-    url = COINBASE_API_BASE + path
-    r = requests.request(method, url, headers=headers, data=body)
-    
-    if r.status_code == 401:
-        raise RuntimeError(
-            "❌ 401 Unauthorized. Check API key permissions (View + Trade) "
-            "and confirm it is an Advanced/Base key."
-        )
+    # ---------------------------------------------------------
+    # Generic GET request helper
+    # ---------------------------------------------------------
+    def _send_request(self, endpoint: str, method="GET", params=None):
+        """Send HTTP request to Coinbase API (handles auth and errors)."""
+        url = f"{self.base_url}{endpoint}"
+        headers = {"CB-VERSION": "2021-11-01"}
 
-    r.raise_for_status()
-    return r.json()
+        response = requests.request(method, url, headers=headers, params=params)
+        if response.status_code == 401:
+            raise RuntimeError(
+                "❌ 401 Unauthorized. Check API key permissions (View + Trade) and confirm it’s an Advanced/Base key."
+            )
+        elif not response.ok:
+            raise RuntimeError(f"❌ Request failed: {response.status_code} {response.text}")
 
-# ---------------------------
-# Fetch all accounts
-# ---------------------------
-def get_all_accounts():
+        return response.json()
+
+    # ---------------------------------------------------------
+    # Fetch all accounts
+    # ---------------------------------------------------------
+    def get_all_accounts(self):
+        """Return all Coinbase account balances."""
+        try:
+            data = self._send_request("/v2/accounts")
+            return data
+        except Exception as e:
+            log.error(f"Failed to fetch accounts: {e}")
+            raise RuntimeError(f"Failed to fetch accounts: {e}")
+
+    # ---------------------------------------------------------
+    # Fetch USD balance (spot)
+    # ---------------------------------------------------------
+    def get_usd_spot_balance(self):
+        """Return USD spot balance from Coinbase."""
+        try:
+            accounts = self.get_all_accounts()
+            usd_accounts = [
+                acct for acct in accounts.get("data", []) if acct["balance"]["currency"] == "USD"
+            ]
+            if not usd_accounts:
+                raise RuntimeError("No USD account found.")
+            balance = float(usd_accounts[0]["balance"]["amount"])
+            logger.info(f"💵 USD Spot Balance: {balance}")
+            return balance
+        except Exception as e:
+            log.error(f"❌ Failed to fetch USD Spot balance: {e}")
+            raise RuntimeError(f"Failed to fetch USD Spot balance: {e}")
+
+    # ---------------------------------------------------------
+    # Place order (simple market)
+    # ---------------------------------------------------------
+    def place_market_order(self, product_id="BTC-USD", side="buy", funds=10.0):
+        """Place a simple market order on Coinbase."""
+        try:
+            payload = {
+                "side": side,
+                "product_id": product_id,
+                "funds": str(funds),
+                "type": "market",
+            }
+            response = self.client.orders.create_order(**payload)
+            logger.info(f"✅ Market order placed: {side} {funds} {product_id}")
+            return response
+        except Exception as e:
+            log.error(f"❌ Failed to place order: {e}")
+            raise RuntimeError(f"Failed to place order: {e}")
+
+
+# ---------------------------------------------------------
+# Standalone debug check (when run directly)
+# ---------------------------------------------------------
+if __name__ == "__main__":
+    log.info("🔍 [DEBUG] Starting CoinbaseClient test...")
     try:
-        data = _send_request("/v2/accounts")
-        return data.get("data", [])
+        client = CoinbaseClient()
+        usd_balance = client.get_usd_spot_balance()
+        log.info(f"✅ USD Balance: {usd_balance}")
     except Exception as e:
-        log.error(f"Failed to fetch accounts: {e}")
-        raise RuntimeError(f"Failed to fetch accounts: {e}")
-
-# ---------------------------
-# Fetch USD spot balance
-# ---------------------------
-def get_usd_spot_balance():
-    accounts = get_all_accounts()
-    for acct in accounts:
-        if acct.get("currency") == "USD":
-            return float(acct.get("balance", {}).get("amount", 0))
-    return 0.0
+        log.error(f"❌ Error during client debug: {e}")
