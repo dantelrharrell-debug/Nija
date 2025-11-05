@@ -1,56 +1,30 @@
 import logging
-from nija_client import CoinbaseClient, get_usd_spot_balance, get_all_accounts
+from nija_client import CoinbaseClient
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("nija_debug")
 
-# --- Position Sizing Function ---
-def calculate_position_size(account_equity, risk_factor=1.0, min_percent=2, max_percent=10):
-    """
-    Calculates position size for a trade based on account equity.
-    
-    account_equity : float : USD account balance
-    risk_factor    : float : Multiplier for trade confidence (default=1.0)
-    min_percent    : int   : Minimum % of equity to trade
-    max_percent    : int   : Maximum % of equity to trade
-    
-    returns : float : Trade size in USD
-    """
-    if account_equity <= 0:
-        raise ValueError("Account equity must be greater than 0 to trade.")
-    
-    raw_allocation = account_equity * (risk_factor / 100)
-    
-    # Clamp allocation between min and max percent
-    min_alloc = account_equity * (min_percent / 100)
-    max_alloc = account_equity * (max_percent / 100)
-    
-    trade_size = max(min_alloc, min(raw_allocation, max_alloc))
-    return trade_size
-
-# --- Main Preflight & Trading Flow ---
-def main():
+def get_usd_spot_balance():
     try:
-        log.info("✅ Starting Nija preflight check...")
-        
-        # Fetch account balances
-        usd_balance = get_usd_spot_balance()
-        log.info(f"💰 Current USD balance: {usd_balance}")
-        
-        # Fetch all accounts for reference
-        accounts = get_all_accounts()
-        log.info(f"📊 Total accounts fetched: {len(accounts)}")
-        
-        # Calculate trade size dynamically
-        trade_size = calculate_position_size(usd_balance, risk_factor=1)
-        log.info(f"📈 Calculated trade size: ${trade_size:.2f}")
-        
-        # --- Here: Call your live trade function ---
-        # Example: NijaBot.place_order(symbol="BTC-USD", size=trade_size)
-        log.info("🚀 Ready to place live trade (insert order execution here)")
-
+        client = CoinbaseClient()
+        balance = client.get_usd_spot_balance()
+        log.info(f"💰 USD Spot Balance: ${balance:.2f}")
+        return balance, client
     except Exception as e:
-        log.error(f"❌ Error in Nija debug: {e}")
+        log.error(f"❌ Failed to fetch USD Spot balance: {e}")
+        return 0.0, None
+
+def get_suggested_trade_size(client, account_balance, risk_factor=1.0):
+    try:
+        trade_size = client.calculate_position_size(account_balance, risk_factor)
+        log.info(f"📊 Suggested Trade Size: ${trade_size:.2f} (Risk Factor: {risk_factor})")
+        return trade_size
+    except Exception as e:
+        log.error(f"❌ Failed to calculate trade size: {e}")
+        return 0.0
 
 if __name__ == "__main__":
-    main()
+    balance, client = get_usd_spot_balance()
+    if client and balance > 0:
+        # Example: Default risk_factor = 1.0 (can adjust higher/lower for confidence)
+        suggested_size = get_suggested_trade_size(client, balance, risk_factor=1.0)
