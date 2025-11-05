@@ -1,9 +1,8 @@
 import os
+import jwt
 import requests
+import time
 
-# ----------------------------
-# Coinbase Classic Client
-# ----------------------------
 class CoinbaseClient:
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
@@ -14,67 +13,57 @@ class CoinbaseClient:
         if not all([self.api_key, self.api_secret, self.passphrase]):
             raise RuntimeError("❌ Coinbase API credentials missing in environment variables.")
 
-        # Classic mode active
-        self.mode = "classic"
-        print("INFO: CoinbaseClient initialized (classic mode)")
+        # Fix PEM formatting for Advanced Trade API if needed
+        if "BEGIN EC PRIVATE KEY" in self.api_secret:
+            self.api_secret = self.api_secret.replace("\\n", "\n").strip()
 
-    def _headers(self):
-        """Return headers for classic API key mode."""
-        return {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": self.api_secret,  # For classic API, pass as signature placeholder
-            "CB-ACCESS-PASSPHRASE": self.passphrase,
-            "Content-Type": "application/json"
+    def _generate_jwt(self, method, endpoint, body=""):
+        payload = {
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 120,  # 2-minute expiry
+            "method": method.upper(),
+            "request_path": endpoint,
+            "body": body or ""
         }
+        token = jwt.encode(payload, self.api_secret, algorithm="ES256")
+        return token
+
+    def _send_request(self, endpoint, method="GET", body=""):
+        headers = {
+            "Authorization": f"Bearer {self._generate_jwt(method, endpoint, body)}",
+            "Content-Type": "application/json",
+        }
+        response = requests.request(method, self.base_url + endpoint, headers=headers, data=body)
+        if not response.ok:
+            raise RuntimeError(f"❌ Request failed: {response.status_code} {response.text}")
+        return response.json()
 
     def get_all_accounts(self):
         """Fetch all accounts from Coinbase."""
         try:
-            url = f"{self.base_url}/v2/accounts"
-            resp = requests.get(url, headers=self._headers(), timeout=10)
-            if resp.status_code == 401:
-                raise RuntimeError(f"❌ 401 Unauthorized: Check API key + permissions")
-            resp.raise_for_status()
-            return resp.json().get("data", [])
+            return self._send_request("/v2/accounts")["data"]
+        except KeyError:
+            raise RuntimeError("❌ Response missing 'data'. Check API credentials.")
         except Exception as e:
-            raise RuntimeError(f"❌ Failed to fetch all accounts: {e}")
+            raise RuntimeError(f"❌ Failed to fetch accounts: {e}")
 
     def get_usd_spot_balance(self):
-        """Fetch USD balance. Returns 0 if not found."""
+        """Return USD balance; 0 if not found."""
         try:
             accounts = self.get_all_accounts()
             for acct in accounts:
                 if acct.get("currency") == "USD":
                     return float(acct.get("balance", {}).get("amount", 0))
-            return 0.0
+            return 0
         except Exception as e:
             print(f"❌ Warning: Unable to fetch USD balance: {e}")
-            return 0.0
+            return 0
 
-
-# ----------------------------
-# Position sizing utility
-# ----------------------------
+# Position sizing helper
 def calculate_position_size(account_equity, risk_factor=1.0, min_percent=2, max_percent=10):
-    """
-    Returns trade size in USD.
-    - account_equity: USD available
-    - risk_factor: percentage of equity to risk (1% = 1.0)
-    - min_percent/max_percent: bounds for position sizing
-    """
     if account_equity <= 0:
-        raise ValueError("Account equity must be > 0 to trade.")
-
+        raise ValueError("Account equity must be greater than 0 to trade.")
     raw_allocation = account_equity * (risk_factor / 100)
     min_alloc = account_equity * (min_percent / 100)
     max_alloc = account_equity * (max_percent / 100)
-
-    trade_size = max(min_alloc, min(raw_allocation, max_alloc))
-    return trade_size
-
-
-# ----------------------------
-# Exported for nija_debug.py
-# ----------------------------
-get_all_accounts = CoinbaseClient().get_all_accounts
-get_usd_spot_balance = CoinbaseClient().get_usd_spot_balance
+    return max(min_alloc, min(raw_allocation, max_alloc))
