@@ -5,11 +5,13 @@ import hmac
 import hashlib
 import requests
 import jwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
 # ===== Write PEM from environment if present =====
 pem_content = os.getenv("COINBASE_PEM_CONTENT")
 if pem_content:
-    pem_content = pem_content.replace("\\n", "\n")  # convert literal \n to real newlines
+    pem_content = pem_content.replace("\\n", "\n")  # convert literal \n to real line breaks
     with open("coinbase.pem", "w") as f:
         f.write(pem_content)
     os.chmod("coinbase.pem", 0o600)  # secure permissions
@@ -73,15 +75,24 @@ class CoinbaseClientWrapper:
             raise RuntimeError(f"❌ Failed to fetch accounts: {r.status_code} {r.text}")
         return r.json()
 
-    # ===== JWT fetch =====
+    # ===== JWT fetch (EC PEM support) =====
     def _fetch_accounts_jwt(self):
         now = int(time.time())
         payload = {"iat": now}
         if self.iss:
             payload["iss"] = self.iss
+
+        # ✅ Load EC private key properly
         with open(self.pem_path, "rb") as f:
-            private_key = f.read()
-        token = jwt.encode(payload, private_key, algorithm="RS256")
+            private_key_bytes = f.read()
+            private_key = serialization.load_pem_private_key(
+                private_key_bytes,
+                password=None,
+                backend=default_backend()
+            )
+
+        # Algorithm must match key type: EC → ES256
+        token = jwt.encode(payload, private_key, algorithm="ES256")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         url = "https://api.coinbase.com/v2/accounts"
         r = requests.get(url, headers=headers, timeout=15)
