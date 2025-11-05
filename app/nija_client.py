@@ -10,24 +10,22 @@ class CoinbaseClient:
         self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
         self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-        # Automatically fix PEM formatting if using Advanced JWT
+        # Automatically fix PEM formatting for Advanced JWT
         if self.api_secret and "BEGIN EC PRIVATE KEY" in self.api_secret:
             self.api_secret = self.api_secret.replace("\\n", "\n").strip()
 
-        # Run preflight check
+        # Preflight check
         self._preflight_check()
 
     def _preflight_check(self):
         print("ℹ️ Running preflight check...")
         try:
             accounts = self.get_all_accounts()
-            usd_balance = self.get_usd_spot_balance()
-            print(f"✅ Preflight check passed. {len(accounts)} accounts found. USD balance: {usd_balance}")
+            print(f"✅ Preflight check passed. Accounts fetched: {len(accounts)}")
         except Exception as e:
-            print("❌ Preflight check failed:", str(e))
+            print(f"❌ Preflight check failed: {e}")
 
     def _generate_jwt(self, method, endpoint, body=""):
-        """Generate JWT token for Advanced JWT key"""
         payload = {
             "iat": int(time.time()),
             "exp": int(time.time()) + 300,
@@ -39,7 +37,6 @@ class CoinbaseClient:
         return token
 
     def _send_request(self, endpoint, method="GET", body=""):
-        """Send authenticated request to Coinbase API"""
         headers = {
             "Authorization": f"Bearer {self._generate_jwt(method, endpoint, body)}",
             "Content-Type": "application/json",
@@ -50,28 +47,28 @@ class CoinbaseClient:
         return response.json()
 
     def get_all_accounts(self):
-        """Return all Coinbase accounts"""
-        return self._send_request("/v2/accounts")["data"]
+        try:
+            return self._send_request("/v2/accounts")["data"]
+        except KeyError:
+            raise RuntimeError("❌ Response missing 'data' key. Check API access and PEM formatting.")
+        except Exception as e:
+            raise RuntimeError(f"❌ Failed to fetch accounts: {e}")
 
     def get_usd_spot_balance(self):
-        """Return USD account balance"""
-        accounts = self.get_all_accounts()
-        for acct in accounts:
-            if acct['currency'] == 'USD':
-                return float(acct['balance']['amount'])
-        raise RuntimeError("No USD account found")
+        """Fetch USD balance. Returns 0 if fetch fails."""
+        try:
+            accounts = self.get_all_accounts()
+            for acct in accounts:
+                if acct.get("currency") == "USD":
+                    return float(acct.get("balance", {}).get("amount", 0))
+            return 0
+        except Exception as e:
+            print(f"❌ Warning: Unable to fetch USD balance: {e}")
+            return 0
 
-# Optional: Position sizing function
+
+# Position sizing function
 def calculate_position_size(account_equity, risk_factor=1.0, min_percent=2, max_percent=10):
-    """
-    Calculates trade size based on account equity.
-
-    account_equity : float : USD account balance
-    risk_factor    : float : Confidence multiplier (default=1.0)
-    min_percent    : int   : Minimum % of equity to trade
-    max_percent    : int   : Maximum % of equity to trade
-    returns        : float : Trade size in USD
-    """
     if account_equity <= 0:
         raise ValueError("Account equity must be greater than 0 to trade.")
     raw_allocation = account_equity * (risk_factor / 100)
