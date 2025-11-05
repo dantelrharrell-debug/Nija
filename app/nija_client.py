@@ -1,75 +1,74 @@
-# nija_client.py (fixed endpoint)
+# nija_client.py
 import os
 import time
 import jwt
 import requests
 import logging
 
-log = logging.getLogger("nija_client")
 logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("nija_client")
 
 class CoinbaseClient:
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+        self.base_url = "https://api.coinbase.com"
 
-        if not self.api_key or not self.api_secret:
-            raise RuntimeError("❌ Missing Coinbase credentials")
+        if not all([self.api_key, self.api_secret]):
+            raise RuntimeError("❌ Missing Coinbase API credentials")
 
-        log.info("⚠️ No passphrase provided. Using Advanced JWT key (no passphrase required).")
+        log.info("⚠️ No passphrase required for Advanced JWT keys.")
         log.info("✅ CoinbaseClient initialized successfully (Advanced JWT compatible).")
 
-    def _generate_jwt_headers(self):
+    def _get_jwt_token(self):
         timestamp = int(time.time())
         payload = {
             "iat": timestamp,
-            "exp": timestamp + 300,  # 5 minutes expiration
+            "exp": timestamp + 300,  # 5 min expiration
             "sub": self.api_key
         }
         token = jwt.encode(payload, self.api_secret, algorithm="HS256")
+        return token
 
+    def _send_request(self, endpoint, method="GET", data=None):
+        url = f"{self.base_url}{endpoint}"
+        token = self._get_jwt_token()
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-        return headers
 
-    def _send_request(self, endpoint):
-        url = f"{self.base_url}/v2{endpoint}"  # <--- Use /v2
-        headers = self._generate_jwt_headers()
-        response = requests.get(url, headers=headers)
+        try:
+            if method == "GET":
+                resp = requests.get(url, headers=headers)
+            else:
+                resp = requests.post(url, headers=headers, json=data)
 
-        if response.status_code == 401:
-            log.error("❌ Unauthorized: JWT not accepted. Check API key permissions and JWT usage.")
-            raise RuntimeError("❌ 401 Unauthorized")
-
-        if not response.ok:
-            log.error(f"❌ Request failed: {response.status_code} {response.text}")
-            raise RuntimeError(f"❌ Request failed: {response.status_code}")
-
-        return response.json()
+            if resp.status_code == 200:
+                return resp.json()
+            elif resp.status_code == 401:
+                log.error("❌ Unauthorized: JWT not accepted. Check key permissions.")
+                raise RuntimeError("❌ 401 Unauthorized")
+            else:
+                log.error(f"❌ Request failed: {resp.status_code} {resp.text}")
+                raise RuntimeError(f"❌ Request failed: {resp.status_code}")
+        except Exception as e:
+            log.error(f"❌ Request exception: {e}")
+            raise
 
     def get_all_accounts(self):
-        """
-        Returns a list of account dicts from Advanced API
-        """
-        data = self._send_request("/accounts")  # <--- corrected endpoint
-        accounts = data.get("data", [])
-        return accounts
+        return self._send_request("/v2/accounts")
 
     def get_usd_spot_balance(self):
-        """
-        Returns total USD balance from accounts
-        """
-        accounts = self.get_all_accounts()
+        accounts_data = self.get_all_accounts()
         usd_balance = 0.0
-        for acc in accounts:
-            if acc.get("currency") == "USD":
-                usd_balance += float(acc.get("available_balance", 0))
+        for account in accounts_data.get("data", []):
+            if account.get("currency") == "USD":
+                usd_balance = float(account.get("balance", {}).get("amount", 0))
         return usd_balance
 
-# Helper functions
+
+# Helper functions for nija_debug.py
 client = CoinbaseClient()
 
 def get_all_accounts():
