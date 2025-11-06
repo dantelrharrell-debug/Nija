@@ -1,6 +1,19 @@
 # nija_debug.py
 import os
-from nija_client import CoinbaseClient
+import sys
+
+# Debug info: show current working directory and files
+print("ℹ️ Current working directory:", os.getcwd())
+print("ℹ️ Files in project root:", os.listdir("."))
+
+# Attempt import with fallback info
+try:
+    from nija_client import CoinbaseClient
+    print("✅ Successfully imported CoinbaseClient")
+except ImportError as e:
+    print("❌ ImportError:", e)
+    print("Make sure nija_client.py exists and defines 'CoinbaseClient'")
+    sys.exit(1)
 
 def check_env():
     """Check if all required Coinbase API keys are set."""
