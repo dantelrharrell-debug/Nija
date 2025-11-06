@@ -1,76 +1,86 @@
-# nija_client.py
 import os
 import time
 import hmac
 import hashlib
 import base64
 import requests
-import logging
+import json
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("nija_client")
-
-# Environment variables
+# Coinbase credentials from environment variables
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
 API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
-BASE_URL = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+BASE_URL = os.getenv("COINBASE_API_BASE", "https://api.exchange.coinbase.com")  # Coinbase Pro / Advanced
 
-HEADERS = {
-    "CB-ACCESS-KEY": API_KEY,
-    "CB-ACCESS-PASSPHRASE": API_PASSPHRASE,
-    "Content-Type": "application/json"
-}
+if not all([API_KEY, API_SECRET, API_PASSPHRASE]):
+    raise EnvironmentError("HMAC credentials missing! Set API_KEY, API_SECRET, and API_PASSPHRASE.")
 
-def safe_get(endpoint):
-    url = f"{BASE_URL}{endpoint}"
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        log.error(f"GET {endpoint} failed: {e}")
-        return {"error": str(e)}
+# --- Helper functions ---
 
-def safe_post(endpoint, data):
-    url = f"{BASE_URL}{endpoint}"
-    try:
-        response = requests.post(url, headers=HEADERS, json=data, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        log.error(f"POST {endpoint} failed: {e}")
-        return {"error": str(e)}
-
-def get_account_balance(currency="USD"):
-    data = safe_get("/v2/accounts")
-    if "error" in data:
-        return 0
-    for acc in data.get("data", []):
-        if acc["currency"] == currency:
-            return float(acc["balance"]["amount"])
-    return 0
-
-def calculate_position_size(balance, percent=5):
-    """
-    balance: float, current account balance
-    percent: int, % of balance to use
-    """
-    percent = max(2, min(percent, 10))  # clamp 2–10%
-    return balance * (percent / 100)
-
-def place_order(symbol, side, size, price=None):
-    """
-    side: 'buy' or 'sell'
-    size: float, in units of crypto
-    price: float or None for market
-    """
-    data = {
-        "type": "market" if price is None else "limit",
-        "side": side,
-        "product_id": symbol,
-        "size": str(size)
+def _get_headers(method, path, body=""):
+    """Generate HMAC headers for Coinbase API."""
+    timestamp = str(int(time.time()))
+    message = timestamp + method.upper() + path + body
+    hmac_key = base64.b64decode(API_SECRET)
+    signature = hmac.new(hmac_key, message.encode(), hashlib.sha256)
+    signature_b64 = base64.b64encode(signature.digest()).decode()
+    return {
+        "CB-ACCESS-KEY": API_KEY,
+        "CB-ACCESS-SIGN": signature_b64,
+        "CB-ACCESS-TIMESTAMP": timestamp,
+        "CB-ACCESS-PASSPHRASE": API_PASSPHRASE,
+        "Content-Type": "application/json"
     }
-    if price:
-        data["price"] = str(price)
-    return safe_post(f"/v2/orders", data)
+
+# --- Core functions ---
+
+def get_account_balance():
+    """Return funded accounts with balances > 0."""
+    try:
+        path = "/accounts"
+        url = BASE_URL + path
+        headers = _get_headers("GET", path)
+        r = requests.get(url, headers=headers)
+        data = r.json()
+        # Return only accounts with balance > 0
+        return {a['currency']: float(a['balance']) for a in data if float(a['balance']) > 0}
+    except Exception as e:
+        return {"error": str(e)}
+
+def calculate_position_size(account_balance, percent=2):
+    """Calculate position size based on account balance and percent allocation."""
+    return account_balance * (percent / 100)
+
+def place_order(account_id, side="buy", size=0, product_id="BTC-USD"):
+    """
+    Place a market order on Coinbase.
+    side: 'buy' or 'sell'
+    size: amount in base currency (BTC for BTC-USD)
+    product_id: trading pair
+    """
+    try:
+        path = "/orders"
+        url = BASE_URL + path
+        body = {
+            "type": "market",
+            "side": side,
+            "product_id": product_id,
+            "size": str(size)
+        }
+        body_json = json.dumps(body)
+        headers = _get_headers("POST", path, body_json)
+        r = requests.post(url, headers=headers, data=body_json)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- Debug/Test function ---
+
+def debug_funded_accounts():
+    """Print all funded accounts and balances."""
+    accounts = get_account_balance()
+    if "error" in accounts:
+        print("Error:", accounts["error"])
+    else:
+        print("Funded Accounts:", accounts)
+    return accounts
