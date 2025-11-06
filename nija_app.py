@@ -1,43 +1,40 @@
 # nija_app.py
 from flask import Flask, jsonify
 import os
-
-# lightweight import to avoid failing at import-time if nija_client has issues
-try:
-    from nija_client import CoinbaseClient
-except Exception as e:
-    CoinbaseClient = None
-    client_import_error = str(e)
-else:
-    client_import_error = None
+from nija_client import CoinbaseClient
 
 app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Nija trading service — alive", 200
+    return jsonify({"service": "nija", "status": "running"}), 200
 
 @app.route("/health")
 def health():
-    info = {"service": "nija", "status": "ok"}
-    # include Coinbase connectivity info if possible
-    if CoinbaseClient is None:
-        info["coinbase"] = {"status": "unavailable", "error": client_import_error}
-        return jsonify(info), 200
-
+    # simple health check that attempts to connect to Coinbase but never raises
     try:
         client = CoinbaseClient()
     except Exception as e:
-        info["coinbase"] = {"status": "init_error", "error": str(e)}
-        return jsonify(info), 200
+        return jsonify({"status": "error", "error": f"client_init_failed: {str(e)}"}), 200
 
     try:
-        accounts = client.list_accounts()
-        # If accounts is None or empty, report but do not fail HTTP status.
-        info["coinbase"] = {"status": "connected", "accounts_count": len(accounts) if accounts is not None else 0}
+        accounts = client.get_accounts()
+        if accounts:
+            # Try to compute accounts_count robustly
+            if isinstance(accounts, dict):
+                data = accounts.get("data") or accounts.get("accounts")
+                if isinstance(data, list):
+                    count = len(data)
+                else:
+                    # unknown structure, return raw top-key summary
+                    count = None
+            else:
+                count = None
+            return jsonify({"status": "ok", "accounts_count": count}), 200
+        else:
+            return jsonify({"status": "ok", "accounts_count": None, "note": "no accounts returned (check API keys)"}), 200
     except Exception as e:
-        info["coinbase"] = {"status": "error", "error": str(e)}
-    return jsonify(info), 200
+        return jsonify({"status": "error", "error": str(e)}), 200
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
