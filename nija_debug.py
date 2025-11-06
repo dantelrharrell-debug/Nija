@@ -28,15 +28,21 @@ except ImportError as e:
     sys.exit(1)
 
 def check_env():
-    """Check if all required Coinbase API keys are set."""
+    """Check if required Coinbase API keys are set. Passphrase is optional."""
     missing = []
-    for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+    for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET"]:
         if not os.getenv(key):
             missing.append(key)
     if missing:
         print(f"❌ Missing environment variables: {', '.join(missing)}")
         return False
-    print("✅ All required environment variables are set.")
+
+    if not os.getenv("COINBASE_API_PASSPHRASE"):
+        print("⚠️ COINBASE_API_PASSPHRASE not set. Skipping passphrase authentication (optional).")
+    else:
+        print("✅ COINBASE_API_PASSPHRASE is set.")
+
+    print("✅ Required environment variables are set.")
     return True
 
 def test_client():
