@@ -1,86 +1,72 @@
+# nija_client.py
 import os
 import time
+import json
+import requests
 import hmac
 import hashlib
 import base64
-import requests
-import json
 
-# Coinbase credentials from environment variables
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
-BASE_URL = os.getenv("COINBASE_API_BASE", "https://api.exchange.coinbase.com")  # Coinbase Pro / Advanced
+# Environment variables
+API_KEY_ID     = os.getenv("COINBASE_KEY_NAME")      # e.g., organizations/{org_id}/apiKeys/{key_id}
+API_KEY_SECRET = os.getenv("COINBASE_KEY_SECRET")    # private key or secret
+REQUEST_HOST   = os.getenv("COINBASE_REQUEST_HOST", "api.exchange.coinbase.com")
+BASE_URL       = os.getenv("COINBASE_API_BASE", f"https://{REQUEST_HOST}")
 
-if not all([API_KEY, API_SECRET, API_PASSPHRASE]):
-    raise EnvironmentError("HMAC credentials missing! Set API_KEY, API_SECRET, and API_PASSPHRASE.")
+if not all([API_KEY_ID, API_KEY_SECRET]):
+    raise EnvironmentError("Missing Coinbase CDP server‑side API credentials")
 
-# --- Helper functions ---
-
-def _get_headers(method, path, body=""):
-    """Generate HMAC headers for Coinbase API."""
+def _generate_signature(method: str, path: str, body: str="") -> str:
+    """
+    Generate the signature according to Coinbase CDP REST API specification.
+    """
     timestamp = str(int(time.time()))
+    # According to spec: message = timestamp + method + request_path + body
     message = timestamp + method.upper() + path + body
-    hmac_key = base64.b64decode(API_SECRET)
-    signature = hmac.new(hmac_key, message.encode(), hashlib.sha256)
-    signature_b64 = base64.b64encode(signature.digest()).decode()
+    # Depending on algorithm: if secret is base64 or PEM private key...
+    key_bytes = base64.b64decode(API_KEY_SECRET)
+    signature = hmac.new(key_bytes, message.encode('utf-8'), hashlib.sha256).digest()
+    signature_b64 = base64.b64encode(signature).decode()
+    return timestamp, signature_b64
+
+def _get_headers(method: str, path: str, body: dict=None) -> dict:
+    body_json = ""
+    if body is not None:
+        body_json = json.dumps(body, separators=(",", ":"))
+    timestamp, signature = _generate_signature(method, path, body_json)
     return {
-        "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": signature_b64,
+        "CB-ACCESS-KEY": API_KEY_ID,
+        "CB-ACCESS-SIGN": signature,
         "CB-ACCESS-TIMESTAMP": timestamp,
-        "CB-ACCESS-PASSPHRASE": API_PASSPHRASE,
         "Content-Type": "application/json"
     }
 
-# --- Core functions ---
-
 def get_account_balance():
-    """Return funded accounts with balances > 0."""
+    path = "/v2/accounts"
+    url  = BASE_URL + path
+    headers = _get_headers("GET", path, body=None)
+    resp = requests.get(url, headers=headers, timeout=10)
     try:
-        path = "/accounts"
-        url = BASE_URL + path
-        headers = _get_headers("GET", path)
-        r = requests.get(url, headers=headers)
-        data = r.json()
-        # Return only accounts with balance > 0
-        return {a['currency']: float(a['balance']) for a in data if float(a['balance']) > 0}
+        resp.raise_for_status()
+        return resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e), "status_code": resp.status_code}
 
-def calculate_position_size(account_balance, percent=2):
-    """Calculate position size based on account balance and percent allocation."""
-    return account_balance * (percent / 100)
-
-def place_order(account_id, side="buy", size=0, product_id="BTC-USD"):
-    """
-    Place a market order on Coinbase.
-    side: 'buy' or 'sell'
-    size: amount in base currency (BTC for BTC-USD)
-    product_id: trading pair
-    """
+def place_order(product_id: str, side: str, size: str, price: str=None):
+    path = "/v2/orders"
+    url  = BASE_URL + path
+    body = {
+        "type": "market" if price is None else "limit",
+        "side": side,
+        "product_id": product_id,
+        "size": size
+    }
+    if price is not None:
+        body["price"] = price
+    headers = _get_headers("POST", path, body=body)
+    resp = requests.post(url, headers=headers, json=body, timeout=10)
     try:
-        path = "/orders"
-        url = BASE_URL + path
-        body = {
-            "type": "market",
-            "side": side,
-            "product_id": product_id,
-            "size": str(size)
-        }
-        body_json = json.dumps(body)
-        headers = _get_headers("POST", path, body_json)
-        r = requests.post(url, headers=headers, data=body_json)
-        return r.json()
+        resp.raise_for_status()
+        return resp.json()
     except Exception as e:
-        return {"error": str(e)}
-
-# --- Debug/Test function ---
-
-def debug_funded_accounts():
-    """Print all funded accounts and balances."""
-    accounts = get_account_balance()
-    if "error" in accounts:
-        print("Error:", accounts["error"])
-    else:
-        print("Funded Accounts:", accounts)
-    return accounts
+        return {"error": str(e), "status_code": resp.status_code}
