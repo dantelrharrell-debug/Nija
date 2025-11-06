@@ -1,5 +1,12 @@
-# Debug-env start (drop at top of nija_client.py for 1 deploy only)
+# nija_client.py
 import os
+import time
+import hmac
+import hashlib
+import base64
+import requests
+
+# ---------- DEBUG ENV (drop at top for 1 deploy only) ----------
 def mask(v, keep=4):
     if v is None:
         return None
@@ -13,22 +20,11 @@ print("DEBUG ENV - COINBASE_API_SECRET (masked):", mask(os.getenv("COINBASE_API_
 print("DEBUG ENV - COINBASE_PASSPHRASE:", mask(os.getenv("COINBASE_PASSPHRASE")))
 print("DEBUG ENV - COINBASE_API_BASE:", mask(os.getenv("COINBASE_API_BASE")))
 
-# Fail fast with clearer message so logs are obvious
+# Fail fast so logs clearly show missing envs
 if not all([os.getenv("COINBASE_API_KEY"), os.getenv("COINBASE_API_SECRET"), os.getenv("COINBASE_PASSPHRASE")]):
     raise SystemExit("DEBUG: One or more Coinbase HMAC env vars are missing or empty.")
-# Debug-env end
+# ---------- end debug ----------
 
-import os
-print("DEBUG: COINBASE_API_KEY =", os.getenv("COINBASE_API_KEY"))
-print("DEBUG: COINBASE_API_SECRET =", os.getenv("COINBASE_API_SECRET")[:5] + "...")  # hide most
-print("DEBUG: COINBASE_PASSPHRASE =", os.getenv("COINBASE_PASSPHRASE"))
-
-import os
-import time
-import hmac
-import hashlib
-import base64
-import requests
 
 class CoinbaseClientWrapper:
     def __init__(self):
@@ -38,12 +34,12 @@ class CoinbaseClientWrapper:
         self.passphrase = os.getenv("COINBASE_PASSPHRASE")
         self.base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
 
-        # Validate credentials
+        # Validate credentials (should be present because debug check ran)
         if not all([self.api_key, self.api_secret, self.passphrase]):
             raise SystemExit("❌ HMAC credentials missing; cannot use JWT fallback")
         print("✅ Using HMAC authentication for CoinbaseClient (forced)")
 
-        # Fetch funded account immediately
+        # Fetch funded account immediately (non-fatal)
         try:
             funded = self.get_funded_account(min_balance=1)
             print("✅ Funded account found on startup:", funded)
@@ -93,7 +89,7 @@ class CoinbaseClientWrapper:
         account_list = accounts.get("data", accounts) if isinstance(accounts, dict) else accounts
         for acct in account_list:
             bal_info = acct.get("balance", acct)
-            balance = float(bal_info.get("amount", bal_info if isinstance(bal_info, (int,float)) else 0))
+            balance = float(bal_info.get("amount", bal_info if isinstance(bal_info, (int, float)) else 0))
             if balance >= min_balance:
                 return acct
         raise RuntimeError("❌ No funded account found")
@@ -101,5 +97,4 @@ class CoinbaseClientWrapper:
 
 # ===== Quick test / live-ready instantiation =====
 if __name__ == "__main__":
-    # Instantiating the client auto-fetches the funded account
     client = CoinbaseClientWrapper()
