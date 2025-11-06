@@ -2,6 +2,18 @@
 import os
 import sys
 
+# Attempt to load .env if it exists
+try:
+    from dotenv import load_dotenv
+    env_path = os.path.join(os.getcwd(), ".env")
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        print(f"ℹ️ Loaded environment variables from {env_path}")
+    else:
+        print("ℹ️ No .env file found; using system environment variables")
+except ImportError:
+    print("⚠️ python-dotenv not installed; skipping .env load")
+
 # Debug info: show current working directory and files
 print("ℹ️ Current working directory:", os.getcwd())
 print("ℹ️ Files in project root:", os.listdir("."))
