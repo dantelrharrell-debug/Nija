@@ -1,47 +1,34 @@
 # nija_app.py
 from flask import Flask, jsonify
-import threading
-import time
-from nija_preflight_check import run_preflight
-from nija_trader import start_trading_loop  # your main trading function
+import os
+
+# Safe import of CoinbaseClient
+try:
+    from nija_client import CoinbaseClient
+except ImportError as e:
+    print(f"❌ Unable to import CoinbaseClient: {e}")
+    CoinbaseClient = None
 
 app = Flask(__name__)
 
-# ----------------------------
-# Background Thread: Bot Runner
-# ----------------------------
-def bot_runner():
-    print("ℹ️ Starting preflight check for Coinbase Advanced API...")
-    accounts = run_preflight()
-    if accounts:
-        print("✅ Preflight passed. Starting trading loop...")
-        start_trading_loop()  # this should run your live trading logic
-    else:
-        print("❌ Preflight failed. Bot will not start. Fix API keys/permissions.")
+# Health check endpoint
+@app.route("/", methods=["GET"])
+def health_check():
+    return jsonify({"status": "ok", "message": "Nija bot is alive"}), 200
 
-threading.Thread(target=bot_runner, daemon=True).start()
+# Optional test endpoint to check Coinbase API
+@app.route("/test-coinbase", methods=["GET"])
+def test_coinbase():
+    if not CoinbaseClient:
+        return jsonify({"error": "CoinbaseClient not available"}), 500
+    client = CoinbaseClient()
+    accounts = client.get_accounts()
+    if accounts is None:
+        return jsonify({"error": "Unauthorized or API issue"}), 401
+    return jsonify({"accounts": accounts}), 200
 
-# ----------------------------
-# Health Check Endpoint
-# ----------------------------
-@app.route("/", methods=["GET", "HEAD"])
-def health():
-    return jsonify({"status": "OK", "message": "Nija Bot is running"}), 200
 
-# ----------------------------
-# Optional: Status Endpoint
-# ----------------------------
-@app.route("/status", methods=["GET"])
-def status():
-    return jsonify({
-        "status": "running",
-        "bot": "Nija Trading Bot",
-        "version": "Advanced API"
-    }), 200
-
-# ----------------------------
-# App Runner
-# ----------------------------
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
+    # Use port from Render environment variable
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
