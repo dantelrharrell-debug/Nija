@@ -1,3 +1,5 @@
+print("DBG ENV:", {k: os.getenv(k) for k in ["COINBASE_API_KEY","COINBASE_API_SECRET","COINBASE_PASSPHRASE"]})
+
 # nija_client.py
 import os
 import time
