@@ -1,12 +1,32 @@
-from nija_client import CoinbaseClient
+import os
+import time
+import hmac
+import hashlib
+import base64
+import requests
+import json
 
-client = CoinbaseClient()
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
+BASE_URL = "https://api.coinbase.com"
 
-accounts = client.get_accounts()
-if accounts:
-    print("✅ API connection OK. Accounts fetched successfully:")
-    for acc in accounts:
-        print(f"{acc['currency']}: {acc['balance']}")
-    print("\nYour bot is ready to trade live.")
-else:
-    print("❌ No accounts fetched. Check API keys and permissions.")
+def get_accounts():
+    method = "GET"
+    path = "/v2/accounts"
+    timestamp = str(int(time.time()))
+    message = timestamp + method + path
+    signature = hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+    headers = {
+        "CB-ACCESS-KEY": API_KEY,
+        "CB-ACCESS-SIGN": signature,
+        "CB-ACCESS-TIMESTAMP": timestamp,
+        "CB-ACCESS-PASSPHRASE": API_PASSPHRASE,
+    }
+
+    response = requests.get(BASE_URL + path, headers=headers)
+    return response.json()
+
+accounts = get_accounts()
+print(json.dumps(accounts, indent=2))
