@@ -1,9 +1,9 @@
 # nija_debug.py
 import os
 import sys
-import requests  # needed for HTTPError handling
+import json
 
-# Load .env if available
+# load .env if python-dotenv installed
 try:
     from dotenv import load_dotenv
     env_path = os.path.join(os.getcwd(), ".env")
@@ -12,54 +12,44 @@ try:
         print(f"ℹ️ Loaded environment variables from {env_path}")
     else:
         print("ℹ️ No .env file found; using system environment variables")
-except ImportError:
-    print("⚠️ python-dotenv not installed; skipping .env load")
+except Exception:
+    print("⚠️ python-dotenv not available; using system environment variables")
 
-# Debug info: working directory & files
 print("ℹ️ Current working directory:", os.getcwd())
-print("ℹ️ Files in project root:", os.listdir("."))
+print("ℹ️ Files in project root:", sorted(os.listdir(".")))
 
-# Import Coinbase client
+# quick env check
+required = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
+missing = [k for k in required if not os.getenv(k)]
+if missing:
+    print(f"❌ Missing required env vars: {', '.join(missing)}")
+    sys.exit(1)
+else:
+    print("✅ Required environment variables are set.")
+
+# import client
 try:
     from nija_client import CoinbaseClient
     print("✅ Successfully imported CoinbaseClient")
-except ImportError as e:
+except Exception as e:
     print("❌ ImportError:", e)
     sys.exit(1)
 
-def check_env():
-    """Check if required Coinbase API keys exist. Passphrase is optional."""
-    missing = []
-    for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET"]:
-        if not os.getenv(key):
-            missing.append(key)
-    if missing:
-        print(f"❌ Missing environment variables: {', '.join(missing)}")
-        return False
-
-    if not os.getenv("COINBASE_API_PASSPHRASE"):
-        print("⚠️ COINBASE_API_PASSPHRASE not set. Ignored for Coinbase Advanced API.")
-    else:
-        print("✅ COINBASE_API_PASSPHRASE is set (legacy API).")
-
-    print("✅ Required environment variables are set.")
-    return True
-
-def test_client():
-    """Test CoinbaseClient instantiation and fetching accounts."""
+# attempt to list accounts and print helpful debug
+try:
+    client = CoinbaseClient()
+    accounts = client.list_accounts()
+    print("✅ CoinbaseClient instantiated.")
+    print("Accounts:", json.dumps(accounts, indent=2) if accounts is not None else "None")
+except Exception as e:
+    # If requests not imported here, print general exception
+    print("❌ Error initializing CoinbaseClient or fetching accounts:", str(e))
+    # If requests is available, show more
     try:
-        client = CoinbaseClient()
-        try:
-            accounts = client.get_accounts()  # Make sure this method exists
-            print("✅ CoinbaseClient instantiated successfully.")
-            print("Accounts:", accounts)
-        except requests.exceptions.HTTPError as e:
-            print(f"❌ Coinbase API returned an HTTP error: {e}")
-        except Exception as e:
-            print(f"❌ Error fetching accounts: {e}")
-    except Exception as e:
-        print("❌ Error initializing CoinbaseClient:", e)
+        import requests
+        # no-op - but if a response object exists within exception, not always accessible
+    except Exception:
+        pass
+    sys.exit(1)
 
-if __name__ == "__main__":
-    if check_env():
-        test_client()
+print("✅ Debug finished.")
