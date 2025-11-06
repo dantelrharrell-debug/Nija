@@ -1,5 +1,5 @@
 from flask import Flask, jsonify
-from nija_client import CoinbaseClient
+from nija_client import CoinbaseClient  # works for Render and Railway
 
 app = Flask(__name__)
 
@@ -13,4 +13,4 @@ def health():
         return jsonify({"status": "error", "error": str(e)})
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=10000)
