@@ -2,28 +2,17 @@ import time
 from loguru import logger
 from nija_coinbase_client import CoinbaseClient
 from trading_logic import signal_generator
+from nija_preflight import get_funded_accounts
 
 TRADE_INTERVAL = 10
-MIN_BALANCE = 10.0
 POSITION_SIZE = 0.5
 PRODUCTS = ["BTC-USD", "ETH-USD", "LTC-USD"]
 
 logger.info("Nija Live Trader starting...")
-
 client = CoinbaseClient()
 
-def preflight_check():
-    funded = client.get_funded_accounts(min_balance=MIN_BALANCE)
-    if not funded["ok"]:
-        logger.error(f"Failed preflight check: {funded.get('error')}")
-        return []
-
-    accounts = funded["funded_accounts"]
-    logger.info(f"Funded accounts ready: {[a['currency'] for a in accounts]}")
-    return accounts
-
 def main():
-    accounts = preflight_check()
+    accounts = get_funded_accounts()
     if not accounts:
         logger.warning("No funded accounts found. Exiting...")
         return
@@ -31,8 +20,7 @@ def main():
     while True:
         for acct in accounts:
             account_id = acct["id"]
-            balance = float(acct["balance"])
-            currency = acct["currency"]
+            balance = acct["balance"]
 
             for product in PRODUCTS:
                 signal = signal_generator(product)
@@ -41,10 +29,9 @@ def main():
                 if signal in ["buy", "sell"]:
                     res = client.place_order(account_id, signal, product, size=size)
                     if res.get("ok"):
-                        logger.info(f"Order executed: {res['order']}")
+                        logger.info(f"Order executed: {res['data']}")
                     else:
                         logger.error(f"Order failed: {res.get('error')}")
-
         logger.info(f"Sleeping {TRADE_INTERVAL}s for next cycle...")
         time.sleep(TRADE_INTERVAL)
 
