@@ -1,178 +1,112 @@
 # nija_client.py
 import os
 import time
-import hmac
-import hashlib
-import base64
+import jwt
 import requests
-import jwt  # PyJWT
+import json
+from loguru import logger
 
-# ---------- DEBUG ENV ----------
-def mask(v, keep=4):
-    if v is None:
-        return None
-    s = str(v)
-    if len(s) <= keep * 2:
-        return s[:keep] + "..." + s[-keep:]
-    return s[:keep] + "..." + s[-keep:]
+# --------------------------
+# ENVIRONMENT VARIABLES
+# --------------------------
+CLIENT_ID = os.getenv("COINBASE_CLIENT_ID")
+PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # The private key for JWT
+API_VERSION = os.getenv("COINBASE_API_VERSION", "2025-11-05")  # today’s CDP version
+BASE_URL = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")  # CDP endpoint
 
-keys = sorted([k for k in os.environ.keys() if k.upper().startswith("COINBASE") or k.upper().startswith("CDP")])
-print("DBG KEYS:", keys)
-print("DBG - COINBASE_API_KEY:", mask(os.getenv("COINBASE_API_KEY")))
-print("DBG - COINBASE_API_SECRET:", mask(os.getenv("COINBASE_API_SECRET")))
-print("DBG - COINBASE_PASSPHRASE:", mask(os.getenv("COINBASE_PASSPHRASE")))
-print("DBG - CDP_API_KEY_ID:", mask(os.getenv("CDP_API_KEY_ID")))
-print("DBG - CDP_API_KEY_SECRET:", mask(os.getenv("CDP_API_KEY_SECRET")))
+if not all([CLIENT_ID, PEM_CONTENT]):
+    logger.error("Missing Coinbase CDP credentials")
+    raise SystemExit(1)
 
-# Ensure at least one auth method is available
-if not (all([os.getenv("COINBASE_API_KEY"), os.getenv("COINBASE_API_SECRET"), os.getenv("COINBASE_PASSPHRASE")]) or
-        all([os.getenv("CDP_API_KEY_ID"), os.getenv("CDP_API_KEY_SECRET")])):
-    raise SystemExit("❌ Missing credentials for both HMAC and CDP JWT")
-# ---------- end debug ----------
+# --------------------------
+# JWT GENERATION
+# --------------------------
+def generate_jwt():
+    iat = int(time.time())
+    payload = {
+        "iss": CLIENT_ID,
+        "iat": iat,
+        "exp": iat + 300  # Token valid for 5 minutes
+    }
+    token = jwt.encode(payload, PEM_CONTENT.encode(), algorithm="RS256")
+    return token
 
-class CoinbaseClientWrapper:
-    def __init__(self):
-        # HMAC credentials (Exchange API)
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.passphrase = os.getenv("COINBASE_PASSPHRASE")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
+# --------------------------
+# HEADER BUILDER
+# --------------------------
+def get_headers():
+    jwt_token = generate_jwt()
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "CB-VERSION": API_VERSION,
+        "Content-Type": "application/json"
+    }
+    return headers
 
-        # CDP JWT credentials
-        self.cdp_key_id = os.getenv("CDP_API_KEY_ID")
-        self.cdp_key_secret = os.getenv("CDP_API_KEY_SECRET")
-        self.cdp_base_url = os.getenv("CDP_API_BASE", "https://api.cdp.coinbase.com")
-
-        # choose auth method
-        if all([self.api_key, self.api_secret, self.passphrase]):
-            self.auth_method = "HMAC"
-            print("✅ Using HMAC authentication for CoinbaseClient")
-        elif all([self.cdp_key_id, self.cdp_key_secret]):
-            self.auth_method = "CDP_JWT"
-            print("✅ Using CDP JWT authentication for CoinbaseClient")
+# --------------------------
+# SIMPLE API REQUEST WRAPPER
+# --------------------------
+def cdp_request(method, path, data=None):
+    url = f"{BASE_URL}{path}"
+    headers = get_headers()
+    try:
+        if method.upper() == "GET":
+            resp = requests.get(url, headers=headers)
+        elif method.upper() == "POST":
+            resp = requests.post(url, headers=headers, json=data)
         else:
-            raise SystemExit("❌ Missing credentials for both HMAC and CDP JWT")
+            raise ValueError("Unsupported method")
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTPError: {e} | Response: {resp.text}")
+        return None
+    except Exception as e:
+        logger.error(f"Request failed: {e}")
+        return None
 
-    # ===== HMAC header builder =====
-    def _get_hmac_headers(self, method, path, body=""):
-        ts = str(int(time.time()))
-        message = ts + method + path + body
-        secret_bytes = base64.b64decode(self.api_secret)
-        signature = hmac.new(secret_bytes, message.encode("utf-8"), hashlib.sha256).digest()
-        signature_b64 = base64.b64encode(signature).decode()
-        headers = {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": signature_b64,
-            "CB-ACCESS-TIMESTAMP": ts,
-            "CB-ACCESS-PASSPHRASE": self.passphrase,
-            "Content-Type": "application/json"
-        }
-        return headers
+# --------------------------
+# EXAMPLE FUNCTIONS
+# --------------------------
+def get_wallets():
+    return cdp_request("GET", "/platform/v1/wallets")
 
-    # ===== CDP JWT header builder =====
-    def _get_cdp_jwt_headers(self, method, path):
-        ts = int(time.time())
-        payload = {
-            "iat": ts,
-            "exp": ts + 120,
-            "sub": self.cdp_key_id,
-            "path": path,
-            "method": method
-        }
-        token = jwt.encode(payload, self.cdp_key_secret, algorithm="ES256")  # adjust algorithm per key type
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        return headers
+def place_order(wallet_id, product_id, side, size, price=None, order_type="market"):
+    data = {
+        "wallet_id": wallet_id,
+        "product_id": product_id,
+        "side": side,
+        "size": str(size),
+        "type": order_type
+    }
+    if price:
+        data["price"] = str(price)
+    return cdp_request("POST", "/platform/v2/orders", data)
 
-    # ===== Fetch accounts via HMAC (debug) =====
-    def fetch_accounts(self):
-        path = "/accounts"
-        method = "GET"
-        body = ""
-        url = self.base_url + path
+# --------------------------
+# BASIC LIVE TRADING LOOP (Skeleton)
+# --------------------------
+def trading_loop():
+    logger.info("Starting Nija trading loop...")
+    wallets = get_wallets()
+    if not wallets:
+        logger.error("Failed to fetch wallets, stopping bot")
+        return
 
-        headers = self._get_hmac_headers(method, path, body)
+    # Example: pick first wallet
+    wallet_id = wallets[0]["id"]
+    logger.info(f"Using wallet: {wallet_id}")
 
-        print("DEBUG SIGNING -> ts:", headers.get("CB-ACCESS-TIMESTAMP"), "method:", method, "path:", path)
-        print("DEBUG KEY (masked):", (self.api_key[:4] + "..." + self.api_key[-4:]) if self.api_key else None)
-        print("DEBUG HEADERS (no secret):", {k: headers[k] for k in headers if k != "CB-ACCESS-SIGN"})
+    # Replace with your TradingView/TA signals
+    signals = ["buy", "sell", "hold"]
+    for signal in signals:
+        if signal == "buy":
+            result = place_order(wallet_id, "BTC-USD", "buy", 0.01)
+            logger.info(f"Buy order result: {result}")
+        elif signal == "sell":
+            result = place_order(wallet_id, "BTC-USD", "sell", 0.01)
+            logger.info(f"Sell order result: {result}")
+        time.sleep(1)  # Avoid spamming
 
-        r = requests.get(url, headers=headers, timeout=15)
-        print("DEBUG HTTP STATUS:", r.status_code)
-        print("DEBUG HTTP BODY:", r.text)
-
-        if r.status_code == 401:
-            raise RuntimeError("❌ Coinbase API Unauthorized (401). Check API key and permissions.")
-        if r.status_code != 200:
-            raise RuntimeError(f"❌ Failed to fetch accounts: {r.status_code} {r.text}")
-
-        return r.json()
-
-    # ===== Fetch all wallets via CDP JWT =====
-    def fetch_all_wallets(self, limit=50):
-        path = "/platform/v1/wallets"
-        method = "GET"
-        url = self.cdp_base_url + path + f"?limit={limit}"
-
-        headers = self._get_cdp_jwt_headers(method, path)
-
-        print("DEBUG CDP FETCH -> method:", method, "path:", path, "url:", url)
-        print("DEBUG HEADERS (masked):", {"Authorization": f"Bearer {self.cdp_key_id[:4]}...{self.cdp_key_id[-4:]}"})
-
-        r = requests.get(url, headers=headers, timeout=15)
-        print("DEBUG HTTP STATUS:", r.status_code)
-        print("DEBUG HTTP BODY:", r.text)
-
-        if r.status_code == 401:
-            raise RuntimeError("❌ CDP Wallets API Unauthorized (401). Check CDP API key and permissions.")
-        if r.status_code != 200:
-            raise RuntimeError(f"❌ Failed to fetch wallets/accounts: {r.status_code} {r.text}")
-
-        return r.json().get("data", [])
-
-    # ===== Get first funded account from HMAC accounts list =====
-    def get_funded_account(self, min_balance=1.0):
-        accounts = self.fetch_accounts()
-        account_list = accounts.get("data", accounts) if isinstance(accounts, dict) else accounts
-        for acct in account_list:
-            bal_info = acct.get("balance", acct)
-            balance = float(bal_info.get("amount", bal_info if isinstance(bal_info, (int, float)) else 0))
-            if balance >= min_balance:
-                return acct
-        raise RuntimeError("❌ No funded account found")
-
-    # ===== Get first funded wallet from CDP wallets list =====
-    def get_funded_wallet(self, min_balance=1.0):
-        wallets = self.fetch_all_wallets()
-        for w in wallets:
-            bal = None
-            if "balance" in w:
-                try:
-                    bal = float(w["balance"].get("amount", "0"))
-                except:
-                    bal = None
-            if bal is not None and bal >= min_balance:
-                return w
-        raise RuntimeError("❌ No funded wallet found")
-
-# ===== Quick test / live usage =====
 if __name__ == "__main__":
-    client = CoinbaseClientWrapper()
-    print("=== Using method:", client.auth_method)
-
-    if client.auth_method == "HMAC":
-        print("Fetching trading accounts (HMAC):")
-        try:
-            acct = client.get_funded_account(min_balance=1)
-            print("Funded account:", acct)
-        except Exception as e:
-            print("Error:", e)
-    if client.auth_method == "CDP_JWT":
-        print("Fetching wallet accounts (CDP):")
-        try:
-            wallet = client.get_funded_wallet(min_balance=1)
-            print("Funded wallet:", wallet)
-        except Exception as e:
-            print("Error:", e)
+    trading_loop()
