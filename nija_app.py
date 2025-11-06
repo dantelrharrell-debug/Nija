@@ -1,115 +1,87 @@
-import os
-import sys
-
-def preflight_check():
-    required_vars = ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]
-    missing = [var for var in required_vars if not os.getenv(var)]
-    if missing:
-        print(f"❌ Missing Coinbase credentials: {', '.join(missing)}")
-        sys.exit(1)  # stop the app from starting
-    else:
-        print("✅ All Coinbase credentials detected.")
-
-# Call this at startup
-preflight_check()
-
-import os
 import time
-import hmac
-import hashlib
+import logging
+from loguru import logger
+from nija_client import cdp_get
 import requests
-from flask import Flask, jsonify
 
-# ----------------------------
-# Flask app initialization
-# ----------------------------
-app = Flask(__name__)
+# -----------------------------
+# 1️⃣ Configure bot settings
+# -----------------------------
+SYMBOL = "BTC-USD"       # Default trading pair
+MIN_ALLOCATION = 0.02    # 2% of account
+MAX_ALLOCATION = 0.10    # 10% of account
+TAKE_PROFIT_PERCENT = 0.03  # 3% profit
+TRAILING_PROFIT_PERCENT = 0.01  # 1% trailing
 
-# ----------------------------
-# Coinbase API credentials
-# ----------------------------
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_BASE = "https://api.coinbase.com"
+logger.info("🚀 Nija Trading Bot starting...")
 
-# ----------------------------
-# Helper to generate Coinbase signature
-# ----------------------------
-def generate_signature(path, method="GET", body=""):
-    ts = str(int(time.time()))
-    prehash = ts + method.upper() + path + body
-    sig = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).hexdigest()
-    return ts, sig
 
-# ----------------------------
-# Preflight API permission check
-# ----------------------------
-def check_permissions():
-    path = "/v2/accounts"
-    ts, sig = generate_signature(path)
-    headers = {
-        "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": sig,
-        "CB-ACCESS-TIMESTAMP": ts,
-        "CB-VERSION": "2025-11-02",
-    }
-    r = requests.get(API_BASE + path, headers=headers)
-
-    if r.status_code == 401:
-        raise RuntimeError("❌ Coinbase API Unauthorized (401). Check your API key and permissions.")
-    elif r.status_code == 403:
-        raise RuntimeError("❌ Coinbase API Forbidden (403). Key may lack trade permissions.")
-    elif r.status_code != 200:
-        raise RuntimeError(f"❌ Coinbase API returned {r.status_code}: {r.text}")
-
-    print("✅ Coinbase API preflight passed — keys valid and permissions OK")
-    data = r.json()
-    for account in data.get("data", []):
-        if account.get("currency") == "USD":
-            print(f"💰 USD balance: ${account.get('balance', {}).get('amount', 0)}")
-
-# ----------------------------
-# Function to get USD balance
-# ----------------------------
+# -----------------------------
+# 2️⃣ Utility: Fetch account balance
+# -----------------------------
 def get_usd_balance():
-    path = "/v2/accounts"
-    ts, sig = generate_signature(path)
-    headers = {
-        "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": sig,
-        "CB-ACCESS-TIMESTAMP": ts,
-        "CB-VERSION": "2025-11-02",
-    }
-    r = requests.get(API_BASE + path, headers=headers)
-    r.raise_for_status()  # Will raise HTTPError for non-200 responses
-
-    data = r.json()
-    for account in data.get("data", []):
-        if account.get("currency") == "USD":
-            return float(account.get("balance", {}).get("amount", 0))
+    accounts = cdp_get("/platform/v2/accounts")
+    for acc in accounts.get("data", []):
+        if acc.get("currency") == "USD":
+            balance = float(acc.get("available_balance", {}).get("value", 0))
+            logger.info(f"💰 USD Balance: {balance}")
+            return balance
+    logger.warning("⚠️ USD account not found. Returning 0 balance.")
     return 0.0
 
-# ----------------------------
-# Run preflight check immediately
-# ----------------------------
-if not API_KEY or not API_SECRET:
-    raise RuntimeError("❌ Coinbase API key or secret is missing.")
-check_permissions()
 
-# ----------------------------
-# Flask endpoints
-# ----------------------------
-@app.route("/test-balance")
-def test_balance():
-    balance = get_usd_balance()
-    return jsonify({"USD_Balance": balance})
+# -----------------------------
+# 3️⃣ Utility: Calculate trade size
+# -----------------------------
+def calc_trade_size(balance):
+    size = balance * MAX_ALLOCATION
+    if size < balance * MIN_ALLOCATION:
+        size = balance * MIN_ALLOCATION
+    logger.info(f"📏 Trade size calculated: {size}")
+    return round(size, 2)
 
-@app.route("/")
-def index():
-    return "Nija AI Bot Web Service Running"
 
-# ----------------------------
-# Run Flask app
-# ----------------------------
+# -----------------------------
+# 4️⃣ Placeholder: Get latest price
+# -----------------------------
+def get_price(symbol=SYMBOL):
+    url = f"https://api.coinbase.com/v2/prices/{symbol}/spot"
+    try:
+        resp = requests.get(url).json()
+        price = float(resp["data"]["amount"])
+        logger.info(f"💹 Current {symbol} price: {price}")
+        return price
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch price: {e}")
+        return None
+
+
+# -----------------------------
+# 5️⃣ Main trade loop (simulation)
+# -----------------------------
+def trade_loop():
+    while True:
+        balance = get_usd_balance()
+        trade_size = calc_trade_size(balance)
+        price = get_price()
+        if price:
+            # Example logic: Buy if BTC < 30k, Sell if BTC > 35k
+            if price < 30000:
+                logger.success(f"🚀 Simulated BUY order for ${trade_size} BTC at ${price}")
+            elif price > 35000:
+                logger.success(f"💸 Simulated SELL order for ${trade_size} BTC at ${price}")
+            else:
+                logger.info("⏸️ No trade signal, waiting...")
+        time.sleep(15)  # Adjust frequency as needed
+
+
+# -----------------------------
+# 6️⃣ Start bot
+# -----------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    try:
+        trade_loop()
+    except KeyboardInterrupt:
+        logger.info("🛑 Nija Bot stopped manually.")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error: {e}")
