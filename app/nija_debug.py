@@ -3,7 +3,7 @@ import os
 import sys
 import json
 
-# load .env if python-dotenv installed
+# attempt to load .env for local debugging (optional)
 try:
     from dotenv import load_dotenv
     env_path = os.path.join(os.getcwd(), ".env")
@@ -13,21 +13,12 @@ try:
     else:
         print("ℹ️ No .env file found; using system environment variables")
 except Exception:
-    print("⚠️ python-dotenv not available; using system environment variables")
+    print("⚠️ python-dotenv missing or failed; using existing environment variables")
 
 print("ℹ️ Current working directory:", os.getcwd())
-print("ℹ️ Files in project root:", sorted(os.listdir(".")))
+print("ℹ️ Files in project root:", os.listdir("."))
 
-# quick env check
-required = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
-missing = [k for k in required if not os.getenv(k)]
-if missing:
-    print(f"❌ Missing required env vars: {', '.join(missing)}")
-    sys.exit(1)
-else:
-    print("✅ Required environment variables are set.")
-
-# import client
+# Import the client
 try:
     from nija_client import CoinbaseClient
     print("✅ Successfully imported CoinbaseClient")
@@ -35,21 +26,64 @@ except Exception as e:
     print("❌ ImportError:", e)
     sys.exit(1)
 
-# attempt to list accounts and print helpful debug
-try:
-    client = CoinbaseClient()
-    accounts = client.list_accounts()
-    print("✅ CoinbaseClient instantiated.")
-    print("Accounts:", json.dumps(accounts, indent=2) if accounts is not None else "None")
-except Exception as e:
-    # If requests not imported here, print general exception
-    print("❌ Error initializing CoinbaseClient or fetching accounts:", str(e))
-    # If requests is available, show more
-    try:
-        import requests
-        # no-op - but if a response object exists within exception, not always accessible
-    except Exception:
-        pass
-    sys.exit(1)
+def check_env():
+    missing = []
+    for k in ("COINBASE_API_KEY", "COINBASE_API_SECRET"):
+        if not os.getenv(k):
+            missing.append(k)
+    if missing:
+        print(f"❌ Missing env vars: {', '.join(missing)}")
+        return False
+    # passphrase optional for Advanced API
+    if not os.getenv("COINBASE_API_PASSPHRASE"):
+        print("⚠️ COINBASE_API_PASSPHRASE not set. Ignored for Coinbase Advanced API.")
+    return True
 
-print("✅ Debug finished.")
+def run():
+    if not check_env():
+        return
+
+    try:
+        client = CoinbaseClient()
+    except Exception as e:
+        print("❌ Error initializing CoinbaseClient:", e)
+        return
+
+    print("ℹ️ Attempting to fetch accounts...")
+    result = None
+    try:
+        result = client.get_accounts()
+    except Exception as e:
+        print("❌ Error calling get_accounts():", e)
+
+    if result is None:
+        print("Accounts: None (likely unauthorized, wrong base URL, or no permission).")
+    else:
+        # pretty print some info
+        try:
+            print("Accounts JSON summary:")
+            if isinstance(result, dict):
+                # show top-level keys and item count
+                keys = list(result.keys())
+                print("Top keys:", keys)
+                # try to find data array
+                data = result.get("data") or result.get("accounts") or result
+                if isinstance(data, list):
+                    print("accounts_count:", len(data))
+                    # print the first account summary
+                    if data:
+                        print("first_account_preview:", json.dumps({
+                            "id": data[0].get("id"),
+                            "currency": data[0].get("currency") or data[0].get("currency_code"),
+                            "balance": data[0].get("balance") or data[0].get("available_balance") or {}
+                        }, default=str))
+                else:
+                    print(json.dumps(result, indent=2)[:2000])
+            else:
+                print(result)
+        except Exception as e:
+            print("❌ Error summarizing accounts:", e)
+            print("raw result:", result)
+
+if __name__ == "__main__":
+    run()
