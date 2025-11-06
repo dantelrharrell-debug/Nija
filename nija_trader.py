@@ -11,11 +11,12 @@ client = CoinbaseClient()
 # Settings
 TRADE_INTERVAL = 10  # seconds between trade checks
 MIN_BALANCE = 10.0   # minimum account balance to trade
-PRODUCT_ID = "BTC-USD"  # example, can loop multiple products
+POSITION_SIZE = 0.5  # fraction of balance per trade
+PRODUCTS = ["BTC-USD", "ETH-USD", "LTC-USD"]  # list of trading pairs
 
 def main():
-    logger.info("Nija Trader starting...")
-    
+    logger.info("Nija Multi-Coin Trader starting...")
+
     # Fetch funded accounts
     funded = client.get_funded_accounts(min_balance=MIN_BALANCE)
     if not funded["ok"]:
@@ -27,7 +28,7 @@ def main():
         logger.warning("No funded accounts above minimum balance.")
         return
     
-    logger.info(f"Using funded accounts: {accounts}")
+    logger.info(f"Using funded accounts: {[acct['currency'] for acct in accounts]}")
     
     # Main trading loop
     while True:
@@ -35,25 +36,28 @@ def main():
             account_id = acct["id"]
             balance = acct["balance"]
             currency = acct["currency"]
-            
-            # Generate trading signal
-            signal = signal_generator(PRODUCT_ID)
-            if signal == "buy":
-                logger.info(f"Placing BUY order for {PRODUCT_ID} from account {account_id}")
-                result = client.place_order(account_id, "buy", PRODUCT_ID, size=balance/2)
-            elif signal == "sell":
-                logger.info(f"Placing SELL order for {PRODUCT_ID} from account {account_id}")
-                result = client.place_order(account_id, "sell", PRODUCT_ID, size=balance/2)
-            else:
-                logger.info("No signal detected. Skipping trade.")
-                result = None
 
-            if result:
-                if result["ok"]:
-                    logger.info(f"Order placed successfully: {result['order']}")
+            for product in PRODUCTS:
+                # Generate trading signal
+                signal = signal_generator(product)
+                size = balance * POSITION_SIZE
+
+                if signal == "buy":
+                    logger.info(f"[{currency}] Placing BUY order for {product} (size: {size})")
+                    result = client.place_order(account_id, "buy", product, size=size)
+                elif signal == "sell":
+                    logger.info(f"[{currency}] Placing SELL order for {product} (size: {size})")
+                    result = client.place_order(account_id, "sell", product, size=size)
                 else:
-                    logger.error(f"Failed to place order: {result['error']}")
-        
+                    logger.info(f"[{currency}] No signal detected for {product}. Skipping trade.")
+                    continue
+
+                if result:
+                    if result["ok"]:
+                        logger.info(f"Order placed successfully: {result['order']}")
+                    else:
+                        logger.error(f"Failed to place order: {result['error']}")
+
         logger.info(f"Sleeping {TRADE_INTERVAL} seconds before next trade cycle...")
         time.sleep(TRADE_INTERVAL)
 
