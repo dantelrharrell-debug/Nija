@@ -1,5 +1,5 @@
 from flask import Flask, jsonify
-from nija_client import CoinbaseClient  # your client class
+from nija_client import CoinbaseClient
 
 app = Flask(__name__)
 
@@ -7,7 +7,10 @@ app = Flask(__name__)
 def health():
     try:
         client = CoinbaseClient()
-        accounts = client.get_accounts()  # or whatever method fetches balances
+        accounts = client.get_accounts()
         return jsonify({"status": "ok", "accounts": accounts})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)})
+
+if __name__ == "__main__":
+    app.run(debug=True)
