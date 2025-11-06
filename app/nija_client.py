@@ -1,5 +1,3 @@
-print("DBG ENV:", {k: os.getenv(k) for k in ["COINBASE_API_KEY","COINBASE_API_SECRET","COINBASE_PASSPHRASE"]})
-
 # nija_client.py
 import os
 import time
@@ -7,53 +5,48 @@ import hmac
 import hashlib
 import base64
 import requests
+import jwt  # PyJWT needed
 
-# ---------- DEBUG ENV (paste at top for 1 deploy only) ----------
+# ---------- Hardcoded credentials for testing (replace with env vars in production) ----------
+COINBASE_API_KEY = "organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5"
+COINBASE_API_SECRET = """-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIB7MOrFbx1Kfc/DxXZZ3Gz4Y2hVY9SbcfUHPiuQmLSPxoAoGCCqGSM49
+AwEHoUQDQgAEiFR+zABGG0DB0HFgjo69cg3tY1Wt41T1gtQp3xrMnvWwio96ifmk
+Ah1eXfBIuinsVEJya4G9DZ01hzaF/edTIw==
+-----END EC PRIVATE KEY-----"""
+COINBASE_PASSPHRASE = "14f3af21-7544-412c-8409-98dc92cd2eec"
+# -----------------------------------------------------------------------------------------
+
 def mask(v, keep=4):
-    if v is None: return None
+    if v is None:
+        return None
     s = str(v)
-    if len(s) <= keep*2: return s[:keep] + "..." + s[-keep:]
+    if len(s) <= keep * 2:
+        return s[:keep] + "..." + s[-keep:]
     return s[:keep] + "..." + s[-keep:]
 
-keys = sorted([k for k in os.environ.keys() if k.upper().startswith("COINBASE")])
-print("DBG KEYS:", keys)
-print("DBG - COINBASE_API_KEY:", mask(os.getenv("COINBASE_API_KEY")))
-print("DBG - COINBASE_API_SECRET:", mask(os.getenv("COINBASE_API_SECRET")))
-print("DBG - COINBASE_PASSPHRASE:", mask(os.getenv("COINBASE_PASSPHRASE")))
-print("DBG - COINBASE_API_BASE:", mask(os.getenv("COINBASE_API_BASE")))
-
-if not all([os.getenv("COINBASE_API_KEY"), os.getenv("COINBASE_API_SECRET"), os.getenv("COINBASE_PASSPHRASE")]):
-    raise SystemExit("DEBUG: One or more Coinbase HMAC env vars are missing or empty.")
-# ---------- end debug ----------
+print("DBG - COINBASE_API_KEY:", mask(COINBASE_API_KEY))
+print("DBG - COINBASE_API_SECRET:", mask(COINBASE_API_SECRET))
+print("DBG - COINBASE_PASSPHRASE:", mask(COINBASE_PASSPHRASE))
 
 class CoinbaseClientWrapper:
     def __init__(self):
-        # HMAC credentials from environment
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.passphrase = os.getenv("COINBASE_PASSPHRASE")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
+        # HMAC credentials
+        self.api_key = COINBASE_API_KEY
+        self.api_secret = COINBASE_API_SECRET
+        self.passphrase = COINBASE_PASSPHRASE
+        self.base_url = "https://api.pro.coinbase.com"
 
-        # Validate credentials
-        if not all([self.api_key, self.api_secret, self.passphrase]):
-            raise SystemExit("❌ HMAC credentials missing; cannot use JWT fallback")
-        print("✅ Using HMAC authentication for CoinbaseClient (forced)")
+        self.auth_method = "HMAC"
+        print("✅ Using HMAC authentication for CoinbaseClient")
 
-        # Optional: fetch funded account immediately (non-fatal)
-        try:
-            funded = self.get_funded_account(min_balance=1)
-            print("✅ Funded account found on startup:", funded)
-        except Exception as e:
-            print(f"❌ Failed to fetch funded account on startup: {e}")
-
-    # ===== Internal: Build HMAC headers =====
-    def _get_headers(self, method, path, body=""):
+    # ===== HMAC header builder =====
+    def _get_hmac_headers(self, method, path, body=""):
         ts = str(int(time.time()))
         message = ts + method + path + body
         secret_bytes = base64.b64decode(self.api_secret)
         signature = hmac.new(secret_bytes, message.encode("utf-8"), hashlib.sha256).digest()
         signature_b64 = base64.b64encode(signature).decode()
-
         headers = {
             "CB-ACCESS-KEY": self.api_key,
             "CB-ACCESS-SIGN": signature_b64,
@@ -63,17 +56,16 @@ class CoinbaseClientWrapper:
         }
         return headers
 
-    # ===== Fetch accounts via HMAC with debug =====
+    # ===== Fetch accounts via HMAC (debug) =====
     def fetch_accounts(self):
         path = "/accounts"
         method = "GET"
         body = ""
-        headers = self._get_headers(method, path, body)
         url = self.base_url + path
 
-        # Debug: show signing info
-        ts = headers.get("CB-ACCESS-TIMESTAMP")
-        print("DEBUG SIGNING -> ts:", ts, "method:", method, "path:", path, "body_len:", len(body))
+        headers = self._get_hmac_headers(method, path, body)
+
+        print("DEBUG SIGNING -> ts:", headers.get("CB-ACCESS-TIMESTAMP"), "method:", method, "path:", path, "body_len:", len(body))
         print("DEBUG KEY (masked):", (self.api_key[:4] + "..." + self.api_key[-4:]) if self.api_key else None)
         print("DEBUG HEADERS (no secret):", {k: headers[k] for k in headers if k != "CB-ACCESS-SIGN"})
 
@@ -88,31 +80,7 @@ class CoinbaseClientWrapper:
 
         return r.json()
 
-    # ===== Fetch all Coinbase wallets via CDP API =====
-    def fetch_all_wallets(self):
-        path = "/accounts"
-        method = "GET"
-        body = ""
-        headers = self._get_headers(method, path, body)
-        url = self.base_url + path
-
-        ts = headers.get("CB-ACCESS-TIMESTAMP")
-        print("DEBUG SIGNING -> ts:", ts, "method:", method, "path:", path, "body_len:", len(body))
-        print("DEBUG KEY (masked):", (self.api_key[:4] + "..." + self.api_key[-4:]) if self.api_key else None)
-        print("DEBUG HEADERS (no secret):", {k: headers[k] for k in headers if k != "CB-ACCESS-SIGN"})
-
-        r = requests.get(url, headers=headers, timeout=15)
-        print("DEBUG HTTP STATUS:", r.status_code)
-        print("DEBUG HTTP BODY:", r.text)
-
-        if r.status_code == 401:
-            raise RuntimeError("❌ Coinbase API Unauthorized (401). Check API key and permissions.")
-        if r.status_code != 200:
-            raise RuntimeError(f"❌ Failed to fetch wallets/accounts: {r.status_code} {r.text}")
-
-        return r.json()
-
-    # ===== Get first funded account =====
+    # ===== Get first funded account from HMAC accounts list =====
     def get_funded_account(self, min_balance=1.0):
         accounts = self.fetch_accounts()
         account_list = accounts.get("data", accounts) if isinstance(accounts, dict) else accounts
@@ -123,20 +91,14 @@ class CoinbaseClientWrapper:
                 return acct
         raise RuntimeError("❌ No funded account found")
 
-
-# ===== Quick test / live-ready instantiation =====
+# ===== Quick test / live usage =====
 if __name__ == "__main__":
     client = CoinbaseClientWrapper()
-    print("=== Fetching accounts ===")
-    try:
-        accounts = client.fetch_accounts()
-        print(accounts)
-    except Exception as e:
-        print(e)
+    print("=== Using method:", client.auth_method)
 
-    print("=== Fetching all wallets ===")
+    print("Fetching trading accounts (HMAC):")
     try:
-        wallets = client.fetch_all_wallets()
-        print(wallets)
+        acct = client.get_funded_account(min_balance=1)
+        print("Funded account:", acct)
     except Exception as e:
-        print(e)
+        print("Error:", e)
