@@ -151,3 +151,4 @@ def find_funded_accounts(min_usd: float=0.0) -> list:
         if usd_accounts:
             return usd_accounts
     return funded
+    
