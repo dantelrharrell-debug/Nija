@@ -1,52 +1,50 @@
 import os
 import time
-import hmac
-import hashlib
-import base64
+import jwt
 import requests
 from loguru import logger
-import jwt
+
+CDP_BASE = "https://api.cdp.coinbase.com"
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+
+if not API_KEY or not API_SECRET:
+    logger.error("CDP API_KEY or API_SECRET not set")
+    raise SystemExit(1)
 
 class CoinbaseClient:
     def __init__(self):
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")
-        if not all([self.api_key, self.api_secret]):
-            raise ValueError("Coinbase API key/secret missing!")
+        self.api_key = API_KEY
+        self.api_secret = API_SECRET
 
-        logger.info("CoinbaseClient initialized for Advanced API.")
-
-    def _headers(self):
-        # JWT auth for Advanced API
+    def _generate_jwt(self):
         payload = {
             "iat": int(time.time()),
             "exp": int(time.time()) + 30,
-            "sub": self.api_key
         }
         token = jwt.encode(payload, self.api_secret, algorithm="HS256")
-        return {"Authorization": f"Bearer {token}"}
+        return token
 
-    def get_funded_accounts(self, min_balance=0.0):
-        url = f"{self.base_url}/platform/v2/evm/accounts"
-        resp = requests.get(url, headers=self._headers())
-        if resp.status_code != 200:
-            return {"ok": False, "status": resp.status_code, "error": resp.text}
+    def _request(self, method, path, params=None, data=None):
+        url = f"{CDP_BASE}{path}"
+        headers = {"Authorization": f"Bearer {self._generate_jwt()}"}
+        try:
+            resp = requests.request(method, url, headers=headers, params=params, json=data, timeout=10)
+            resp.raise_for_status()
+            return {"ok": True, "data": resp.json()}
+        except requests.HTTPError as e:
+            return {"ok": False, "error": str(e), "status": resp.status_code}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
-        accounts = resp.json().get("data", [])
-        funded = [a for a in accounts if float(a.get("balance", 0)) >= min_balance]
-        return {"ok": True, "funded_accounts": funded}
+    def list_accounts(self):
+        return self._request("GET", "/platform/v2/evm/accounts")
 
     def place_order(self, account_id, side, product, size):
-        url = f"{self.base_url}/platform/v2/evm/orders"
-        data = {
+        payload = {
             "account_id": account_id,
             "side": side,
-            "product": product,
-            "size": str(size)
+            "product_id": product,
+            "size": size
         }
-        resp = requests.post(url, json=data, headers=self._headers())
-        if resp.status_code == 201:
-            return {"ok": True, "order": resp.json()}
-        else:
-            return {"ok": False, "error": resp.text}
+        return self._request("POST", "/platform/v2/evm/orders", data=payload)
