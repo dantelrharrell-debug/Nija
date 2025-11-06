@@ -1,16 +1,24 @@
+# nija_app.py
 from flask import Flask, jsonify
-from nija_client import CoinbaseClient  # matches the class in nija_client.py
 
 app = Flask(__name__)
 
-@app.route("/health")
-def health():
-    try:
-        client = CoinbaseClient()
-        accounts = client.get_accounts()  # fetch balances
-        return jsonify({"status": "ok", "accounts": accounts})
-    except Exception as e:
-        return jsonify({"status": "error", "error": str(e)})
+# --- Health check endpoint ---
+@app.route("/", methods=["GET", "HEAD"])
+def health_check():
+    return jsonify({
+        "status": "ok",
+        "message": "Nija bot is alive"
+    }), 200
+
+# --- Example API endpoint ---
+@app.route("/api/test", methods=["GET"])
+def test_endpoint():
+    return jsonify({
+        "status": "ok",
+        "message": "This is a test endpoint"
+    }), 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # For local testing
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
