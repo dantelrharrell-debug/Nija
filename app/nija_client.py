@@ -1,3 +1,23 @@
+# Debug-env start (drop at top of nija_client.py for 1 deploy only)
+import os
+def mask(v, keep=4):
+    if v is None:
+        return None
+    s = str(v)
+    if len(s) <= keep*2:
+        return s[:keep] + "..." + s[-keep:]
+    return s[:keep] + "..." + s[-keep:]
+
+print("DEBUG ENV - COINBASE_API_KEY:", mask(os.getenv("COINBASE_API_KEY")))
+print("DEBUG ENV - COINBASE_API_SECRET (masked):", mask(os.getenv("COINBASE_API_SECRET")))
+print("DEBUG ENV - COINBASE_PASSPHRASE:", mask(os.getenv("COINBASE_PASSPHRASE")))
+print("DEBUG ENV - COINBASE_API_BASE:", mask(os.getenv("COINBASE_API_BASE")))
+
+# Fail fast with clearer message so logs are obvious
+if not all([os.getenv("COINBASE_API_KEY"), os.getenv("COINBASE_API_SECRET"), os.getenv("COINBASE_PASSPHRASE")]):
+    raise SystemExit("DEBUG: One or more Coinbase HMAC env vars are missing or empty.")
+# Debug-env end
+
 import os
 print("DEBUG: COINBASE_API_KEY =", os.getenv("COINBASE_API_KEY"))
 print("DEBUG: COINBASE_API_SECRET =", os.getenv("COINBASE_API_SECRET")[:5] + "...")  # hide most
