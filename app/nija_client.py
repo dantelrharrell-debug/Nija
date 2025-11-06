@@ -1,76 +1,80 @@
-# nija_client.py
 import os
 import time
-import jwt
+import hmac
+import hashlib
+import base64
+import json
 import requests
 from loguru import logger
 
 # -----------------------------
-# Load Coinbase CDP keys from environment
+# 1️⃣ Load environment variables
 # -----------------------------
-CDP_API_KEY_ID = os.getenv("CDP_API_KEY_ID")
-CDP_API_KEY_SECRET = os.getenv("CDP_API_KEY_SECRET", "").replace("\\n", "\n")  # fix escaped newlines
-CDP_API_KEY_PASSPHRASE = os.getenv("CDP_API_KEY_PASSPHRASE", "")  # optional
-CDP_API_BASE = "https://api.cdp.coinbase.com"
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
+API_BASE_URL = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")
 
-# -----------------------------
-# Preflight check for keys
-# -----------------------------
-if not all([CDP_API_KEY_ID, CDP_API_KEY_SECRET]):
-    logger.error("Missing Coinbase CDP credentials. Set CDP_API_KEY_ID and CDP_API_KEY_SECRET in environment.")
+# Safety check
+if not all([API_KEY, API_SECRET, API_PASSPHRASE]):
+    logger.error("❌ Missing Coinbase API credentials!")
     raise SystemExit(1)
+logger.info("✅ Coinbase credentials detected.")
 
-logger.info("Coinbase CDP credentials detected.")
 
 # -----------------------------
-# JWT generator
+# 2️⃣ Helper: JWT generation
 # -----------------------------
-def generate_jwt(request_method="GET", request_path="/platform/v2/accounts", request_body=""):
+def generate_jwt():
+    header = {"alg": "HS256", "typ": "JWT"}
     iat = int(time.time())
-    exp = iat + 120  # max 2 min lifetime
-    payload = {
-        "sub": CDP_API_KEY_ID,
-        "iat": iat,
-        "exp": exp,
-        "requestMethod": request_method,
-        "requestPath": request_path,
-        "requestBody": request_body
-    }
+    exp = iat + 300  # JWT valid for 5 minutes
+    payload = {"iat": iat, "exp": exp, "sub": API_KEY}
 
-    try:
-        token = jwt.encode(payload, CDP_API_KEY_SECRET, algorithm="ES256")
-        return token
-    except Exception as e:
-        logger.error(f"JWT generation failed: {e}")
-        raise
+    header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    message = f"{header_b64}.{payload_b64}"
+
+    # If API_SECRET is PEM formatted, remove newlines and decode properly
+    secret_bytes = API_SECRET.encode()
+
+    signature = hmac.new(secret_bytes, message.encode(), hashlib.sha256).digest()
+    signature_b64 = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+
+    jwt_token = f"{message}.{signature_b64}"
+    return jwt_token
+
 
 # -----------------------------
-# General Coinbase CDP request
+# 3️⃣ Helper: Make authenticated request
 # -----------------------------
-def cdp_request(method="GET", path="/platform/v2/accounts", body=""):
-    url = f"{CDP_API_BASE}{path}"
+def cdp_get(path):
+    jwt_token = generate_jwt()
     headers = {
-        "Authorization": f"Bearer {generate_jwt(method, path, body)}",
-        "CB-ACCESS-PASSPHRASE": CDP_API_KEY_PASSPHRASE,
+        "Authorization": f"Bearer {jwt_token}",
+        "CB-VERSION": "2025-11-05",
         "Content-Type": "application/json"
     }
-
-    response = requests.request(method, url, headers=headers, data=body)
+    url = f"{API_BASE_URL}{path}"
+    response = requests.get(url, headers=headers)
     if response.status_code == 401:
-        logger.error("❌ Coinbase API Unauthorized (401). Check keys & permissions.")
-    elif response.status_code >= 400:
-        logger.error(f"❌ Coinbase API Error {response.status_code}: {response.text}")
-    else:
-        logger.success(f"✅ Request successful: {response.status_code}")
-    return response
+        logger.error("❌ Coinbase API Unauthorized (401). Check API key, secret, or endpoint.")
+        logger.debug(f"Response: {response.text}")
+        raise SystemExit(1)
+    elif not response.ok:
+        logger.error(f"❌ Coinbase API Error: {response.status_code}")
+        logger.debug(f"Response: {response.text}")
+        raise SystemExit(1)
+    return response.json()
+
 
 # -----------------------------
-# Example test block
+# 4️⃣ Test endpoint
 # -----------------------------
 if __name__ == "__main__":
-    logger.info("Testing Coinbase CDP connection...")
-    resp = cdp_request()
     try:
-        print(resp.json())
+        accounts = cdp_get("/platform/v2/accounts")
+        logger.success("✅ Coinbase API test successful! Accounts data:")
+        logger.info(accounts)
     except Exception as e:
-        logger.error(f"Failed to parse JSON: {e}")
+        logger.error(f"❌ Failed to connect to Coinbase API: {e}")
