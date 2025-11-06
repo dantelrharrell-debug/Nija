@@ -1,9 +1,5 @@
 # nija_debug.py
-import os
-import sys
-import json
-
-# attempt to load .env for local debugging (optional)
+import os, sys
 try:
     from dotenv import load_dotenv
     env_path = os.path.join(os.getcwd(), ".env")
@@ -13,12 +9,12 @@ try:
     else:
         print("ℹ️ No .env file found; using system environment variables")
 except Exception:
-    print("⚠️ python-dotenv missing or failed; using existing environment variables")
+    print("⚠️ python-dotenv not available or failed; continuing without it")
 
 print("ℹ️ Current working directory:", os.getcwd())
-print("ℹ️ Files in project root:", os.listdir("."))
+print("ℹ️ Files in project root:", sorted(os.listdir(".")))
 
-# Import the client
+# Import client and run a safe accounts check
 try:
     from nija_client import CoinbaseClient
     print("✅ Successfully imported CoinbaseClient")
@@ -26,64 +22,44 @@ except Exception as e:
     print("❌ ImportError:", e)
     sys.exit(1)
 
-def check_env():
-    missing = []
-    for k in ("COINBASE_API_KEY", "COINBASE_API_SECRET"):
-        if not os.getenv(k):
-            missing.append(k)
-    if missing:
-        print(f"❌ Missing env vars: {', '.join(missing)}")
-        return False
-    # passphrase optional for Advanced API
+# Basic env check
+required = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
+missing = [k for k in required if not os.getenv(k)]
+if missing:
+    print("❌ Missing required environment variables:", missing)
+else:
     if not os.getenv("COINBASE_API_PASSPHRASE"):
         print("⚠️ COINBASE_API_PASSPHRASE not set. Ignored for Coinbase Advanced API.")
-    return True
+    print("✅ Required environment variables are set.")
 
-def run():
-    if not check_env():
-        return
-
-    try:
-        client = CoinbaseClient()
-    except Exception as e:
-        print("❌ Error initializing CoinbaseClient:", e)
-        return
-
+# Attempt accounts fetch
+import requests
+try:
+    client = CoinbaseClient()
     print("ℹ️ Attempting to fetch accounts...")
-    result = None
-    try:
-        result = client.get_accounts()
-    except Exception as e:
-        print("❌ Error calling get_accounts():", e)
-
+    result = client.get_accounts()
     if result is None:
-        print("Accounts: None (likely unauthorized, wrong base URL, or no permission).")
+        print("Accounts JSON summary:")
+        print({
+            "ok": False,
+            "url": os.getenv("COINBASE_API_BASE", "https://api.coinbase.com") + "/v2/accounts",
+            "status": 401,
+            "payload": "Unauthorized"
+        })
+    elif isinstance(result, dict) and result.get("ok") is False:
+        print("Error fetching accounts:", result["status"], result.get("payload"))
     else:
-        # pretty print some info
+        # Pretty lightweight summary
         try:
-            print("Accounts JSON summary:")
-            if isinstance(result, dict):
-                # show top-level keys and item count
-                keys = list(result.keys())
-                print("Top keys:", keys)
-                # try to find data array
-                data = result.get("data") or result.get("accounts") or result
-                if isinstance(data, list):
-                    print("accounts_count:", len(data))
-                    # print the first account summary
-                    if data:
-                        print("first_account_preview:", json.dumps({
-                            "id": data[0].get("id"),
-                            "currency": data[0].get("currency") or data[0].get("currency_code"),
-                            "balance": data[0].get("balance") or data[0].get("available_balance") or {}
-                        }, default=str))
-                else:
-                    print(json.dumps(result, indent=2)[:2000])
+            if isinstance(result, dict) and "data" in result and isinstance(result["data"], list):
+                print("Accounts: count =", len(result["data"]))
+                if len(result["data"]) > 0:
+                    print("First account keys:", list(result["data"][0].keys())[:8])
             else:
-                print(result)
+                print("Accounts result keys:", list(result.keys())[:8] if isinstance(result, dict) else str(type(result)))
         except Exception as e:
-            print("❌ Error summarizing accounts:", e)
-            print("raw result:", result)
-
-if __name__ == "__main__":
-    run()
+            print("Accounts parsing error:", e)
+except requests.exceptions.RequestException as e:
+    print("Network/Request exception while fetching accounts:", e)
+except Exception as e:
+    print("❌ Error initializing CoinbaseClient or fetching accounts:", type(e).__name__, str(e))
