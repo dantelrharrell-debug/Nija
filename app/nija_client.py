@@ -1,22 +1,3 @@
-# DEBUG - one-deploy only (paste at the VERY TOP of nija_client.py)
-import os
-def mask(v, keep=4):
-    if v is None: return None
-    s = str(v)
-    if len(s) <= keep*2: return s[:keep] + "..." + s[-keep:]
-    return s[:keep] + "..." + s[-keep:]
-
-keys = sorted([k for k in os.environ.keys() if k.upper().startswith("COINBASE")])
-print("DBG KEYS:", keys)
-print("DBG - COINBASE_API_KEY:", mask(os.getenv("COINBASE_API_KEY")))
-print("DBG - COINBASE_API_SECRET:", mask(os.getenv("COINBASE_API_SECRET")))
-print("DBG - COINBASE_PASSPHRASE:", mask(os.getenv("COINBASE_PASSPHRASE")))
-print("DBG - COINBASE_API_BASE:", mask(os.getenv("COINBASE_API_BASE")))
-# exit so logs are obvious
-if not all([os.getenv("COINBASE_API_KEY"), os.getenv("COINBASE_API_SECRET"), os.getenv("COINBASE_PASSPHRASE")]):
-    raise SystemExit("DBG: One or more Coinbase HMAC env vars are missing or empty.")
-# End debug
-
 # nija_client.py
 import os
 import time
@@ -30,7 +11,7 @@ def mask(v, keep=4):
     if v is None:
         return None
     s = str(v)
-    if len(s) <= keep*2:
+    if len(s) <= keep * 2:
         return s[:keep] + "..." + s[-keep:]
     return s[:keep] + "..." + s[-keep:]
 
