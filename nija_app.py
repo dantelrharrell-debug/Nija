@@ -1,3 +1,7 @@
+import os
+print("LIVE_TRADING =", os.getenv("LIVE_TRADING"))
+print("NIJA_DRY_RUN =", os.getenv("NIJA_DRY_RUN"))
+
 # nija_app.py
 
 import os, time, json
