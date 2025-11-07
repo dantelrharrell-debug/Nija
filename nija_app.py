@@ -1,3 +1,26 @@
+# add to nija_app.py (Flask example)
+from flask import Flask, jsonify
+import os, time
+
+app = Flask(__name__)
+
+# Replace this with however you track last order in your app
+# For demo, we read an environment variable LAST_ORDER_TS set by your order routine (optional)
+def get_last_order_ts():
+    ts = os.getenv("NIJA_LAST_ORDER_TS")  # you can set this in your order code after placing an order
+    return ts
+
+@app.route("/internal/trading-status", methods=["GET"])
+def trading_status():
+    return jsonify({
+        "live_trading_enabled": bool(os.getenv("LIVE_TRADING") in ("1","true","True")),
+        "coinbase_api_key_present": bool(os.getenv("COINBASE_API_KEY")),
+        "coinbase_pem_present": bool(os.getenv("COINBASE_PEM_CONTENT")),
+        "coinbase_base": os.getenv("COINBASE_API_BASE") or "default",
+        "last_order_ts": get_last_order_ts() or None,
+        "service_time_utc": int(time.time())
+    })
+
 # nija_app.py
 import os
 from flask import Flask, jsonify, request
