@@ -1,31 +1,32 @@
-# nija_app.py
-from flask import Flask, request, jsonify
+# nija_app.py (add below your /test-buy endpoint)
+from flask import Flask, jsonify
 from nija_client import CoinbaseClient
 
-app = Flask(__name__)
-client = CoinbaseClient()
+# Assuming `app` and `client` already exist
+# app = Flask(__name__)
+# client = CoinbaseClient()
 
-# -------------------------
-# Quick test trade endpoint
-# -------------------------
-@app.route("/test-buy", methods=["POST"])
-def test_buy():
+@app.route("/balances", methods=["GET"])
+def get_balances():
     """
-    Trigger a test buy (dry-run by default).
-    JSON body:
-    {
-        "product_id": "BTC-USD",
-        "usd_quote": 10,
-        "dry_run": true  # optional, defaults to True if LIVE_TRADING != "1"
-    }
+    Returns account balances with USD equivalents, filtering out zero balances.
     """
     try:
-        data = request.get_json(force=True)
-        product_id = data.get("product_id", "BTC-USD")
-        usd_quote = float(data.get("usd_quote", 10))
-        dry_run = data.get("dry_run", None)  # None will auto-use LIVE_TRADING setting
+        accounts = client.list_accounts()  # list_accounts returns all accounts from Coinbase
+        non_zero = []
 
-        resp = client.place_market_buy_by_quote(product_id, usd_quote, dry_run=dry_run)
-        return jsonify({"success": True, "result": resp})
+        for acc in accounts:
+            balance = float(acc.get("balance", {}).get("amount", 0))
+            currency = acc.get("balance", {}).get("currency", "USD")
+            usd_value = float(acc.get("native_balance", {}).get("amount", 0))  # USD equivalent
+
+            if balance > 0:
+                non_zero.append({
+                    "currency": currency,
+                    "balance": balance,
+                    "usd_equivalent": usd_value
+                })
+
+        return jsonify({"success": True, "accounts": non_zero})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
