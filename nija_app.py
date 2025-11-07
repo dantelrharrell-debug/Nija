@@ -7,12 +7,12 @@ import os
 app = Flask(__name__)
 
 # Environment flag for live trading
-LIVE_TRADING = True  # Force live mode
+LIVE_TRADING = True  # Always live now, no dry runs
 
 # --- ROUTE: Health check ---
 @app.route("/", methods=["GET", "HEAD"])
 def home():
-    return "NIJA Trading Bot is live and fully operational!", 200
+    return "NIJA Trading Bot is live!", 200
 
 # --- ROUTE: Check Coinbase account balances ---
 @app.route("/check_accounts", methods=["GET"])
@@ -43,7 +43,7 @@ def check_accounts():
 @app.route("/place_trade", methods=["POST"])
 def place_trade():
     """
-    Place a real trade via Coinbase.
+    Place a trade via Coinbase.
     JSON payload example:
     {
         "side": "buy",          # "buy" or "sell"
@@ -61,8 +61,6 @@ def place_trade():
             return jsonify({"status": "error", "message": "Missing parameters"}), 400
 
         client = CoinbaseClient()
-
-        # Execute real trade
         order = client.place_order(side=side, product_id=product_id, size=size)
         return jsonify({"status": "success", "order": order})
 
