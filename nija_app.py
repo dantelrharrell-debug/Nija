@@ -1,74 +1,49 @@
-# nija_app.py
-import os
-import time
-import json
 from flask import Flask, jsonify
-from loguru import logger
 from nija_client import CoinbaseClient
+from tradingview_ta import TA_Handler
+from datetime import datetime
 
-# -----------------------
-# Flask App Setup
-# -----------------------
 app = Flask(__name__)
 
-# -----------------------
-# Initialize Coinbase Client
-# -----------------------
-try:
-    client = CoinbaseClient()
-except Exception as e:
-    logger.error(f"Failed to initialize CoinbaseClient: {e}")
-    raise
+# Initialize your clients
+coinbase = CoinbaseClient()
+# Example TradingView handler; customize symbol/exchange as needed
+tv_handler = TA_Handler(
+    symbol="BTCUSDT",
+    screener="crypto",
+    exchange="BINANCE",
+    interval="1m"
+)
 
-# -----------------------
-# Trading Parameters
-# -----------------------
-PRODUCT_ID = os.getenv("TRADE_PRODUCT", "BTC-USD")
-TRADE_SIZE = float(os.getenv("TRADE_SIZE", 0.001))  # Adjust for your risk
+@app.route("/", methods=["GET"])
+def status():
+    # Basic status
+    bot_status = "✅ NIJA Trading Bot is live and operational"
 
-# -----------------------
-# Trading Function
-# -----------------------
-def trade_live():
+    # Check Coinbase connection
     try:
-        accounts = client.get_accounts()
-        logger.info(f"Accounts fetched: {accounts}")
+        coinbase.check_connection()  # Implement a simple ping method in CoinbaseClient
+        coinbase_status = "✅ Coinbase connected"
+    except Exception:
+        coinbase_status = "❌ Coinbase connection failed"
 
-        # Example: Simple buy market order logic
-        order_response = client.place_order(
-            product_id=PRODUCT_ID,
-            side="buy",
-            size=TRADE_SIZE,
-            order_type="market"
-        )
-        logger.success(f"Live trade executed: {order_response}")
-        return order_response
+    # Check TradingView connection
+    try:
+        analysis = tv_handler.get_analysis()
+        tv_status = "✅ TradingView connected"
+    except Exception:
+        tv_status = "❌ TradingView connection failed"
 
-    except Exception as e:
-        logger.error(f"Live trade failed: {e}")
-        return {"error": str(e)}
+    # Build response
+    response = {
+        "status": bot_status,
+        "coinbase": coinbase_status,
+        "tradingview": tv_status,
+        "version": "1.0.0",
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
 
-# -----------------------
-# Flask Routes
-# -----------------------
-@app.route("/")
-def home():
-    return jsonify({"status": "NIJA trading bot live ✅"})
+    return jsonify(response)
 
-@app.route("/trade")
-def trade():
-    result = trade_live()
-    return jsonify(result)
-
-# -----------------------
-# Auto Start Trading on Deploy
-# -----------------------
 if __name__ == "__main__":
-    logger.info("NIJA trading bot starting live...")
-    
-    # Optional: Start a single trade on deploy
-    trade_live()
-
-    # Run Flask app (Render expects this)
-    port = int(os.getenv("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
