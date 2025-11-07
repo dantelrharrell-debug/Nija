@@ -7,65 +7,72 @@ import base64
 import requests
 from loguru import logger
 
-class CoinbaseAdvancedClient:
+class CoinbaseClient:
+    """
+    Coinbase Advanced API client (LIVE trading ready)
+    """
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
         self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.pro.coinbase.com")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")
 
         if not all([self.api_key, self.api_secret, self.passphrase]):
-            logger.error("Coinbase Advanced API credentials missing!")
-            raise ValueError("Missing Coinbase Advanced API credentials")
-        
-        logger.info("Coinbase Advanced client initialized")
+            logger.error("Coinbase API keys or passphrase not set!")
+            raise ValueError("Missing Coinbase API credentials")
 
-    def _get_headers(self, method, request_path, body=""):
-        timestamp = str(time.time())
-        message = timestamp + method.upper() + request_path + body
-        hmac_key = base64.b64decode(self.api_secret)
-        signature = hmac.new(hmac_key, message.encode(), hashlib.sha256)
-        signature_b64 = base64.b64encode(signature.digest()).decode()
+        logger.info("CoinbaseClient initialized successfully")
 
-        return {
+    def _get_headers(self, method, path, body=""):
+        """
+        Create the headers required for Coinbase Advanced API authentication
+        """
+        timestamp = str(int(time.time()))
+        message = f"{timestamp}{method}{path}{body}"
+        signature = hmac.new(
+            self.api_secret.encode("utf-8"),
+            message.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
+
+        headers = {
             "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": signature_b64,
+            "CB-ACCESS-SIGN": signature,
             "CB-ACCESS-TIMESTAMP": timestamp,
             "CB-ACCESS-PASSPHRASE": self.passphrase,
             "Content-Type": "application/json"
         }
+        return headers
 
     def get_accounts(self):
-        request_path = "/accounts"
-        headers = self._get_headers("GET", request_path)
-        response = requests.get(self.base_url + request_path, headers=headers)
+        """
+        Get live accounts info
+        """
+        path = "/platform/v2/accounts"
+        url = self.base_url + path
+        headers = self._get_headers("GET", path)
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         return response.json()
 
-    def get_account(self, account_id):
-        request_path = f"/accounts/{account_id}"
-        headers = self._get_headers("GET", request_path)
-        response = requests.get(self.base_url + request_path, headers=headers)
-        response.raise_for_status()
-        return response.json()
-
-    def place_order(self, side, product_id, size, price=None, order_type="market"):
-        request_path = "/orders"
-        body = {
-            "side": side,             # 'buy' or 'sell'
-            "product_id": product_id, # e.g., 'BTC-USD'
-            "type": order_type,       # 'market' or 'limit'
+    def place_order(self, product_id, side, size, price=None, order_type="market"):
+        """
+        Place a buy/sell order
+        """
+        path = "/platform/v2/orders"
+        url = self.base_url + path
+        order = {
+            "product_id": product_id,
+            "side": side,
+            "type": order_type,
             "size": str(size)
         }
-
-        if order_type == "limit":
-            if price is None:
-                raise ValueError("Price must be set for limit orders")
-            body["price"] = str(price)
+        if order_type == "limit" and price:
+            order["price"] = str(price)
 
         import json
-        body_json = json.dumps(body)
-        headers = self._get_headers("POST", request_path, body_json)
-        response = requests.post(self.base_url + request_path, headers=headers, data=body_json)
+        body = json.dumps(order)
+        headers = self._get_headers("POST", path, body)
+        response = requests.post(url, headers=headers, data=body)
         response.raise_for_status()
         return response.json()
