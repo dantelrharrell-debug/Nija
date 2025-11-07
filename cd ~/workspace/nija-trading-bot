@@ -1,6 +1,19 @@
 Nija/
-├─ nija_client.py
-├─ nija_debug.py
+├─ nija_app.py
+├─ nija_bot.py
+├─ nija_bot_ws.py
 ├─ nija_bot_web.py
+├─ nija_client.py
+├─ nija_coinbase_client.py
+├─ nija_coinbase_jwt.py
+├─ nija_balance_helper.py
+├─ nija_orders.py
+├─ nija_preflight.py
+├─ nija_live_worker.py
+├─ nija_multi_coin_worker.py
+├─ indicators.py
+├─ data_fetcher.py
+├─ config.py
 ├─ requirements.txt
-└─ README.md
+├─ README.md
+└─ archive/                ← all old/debug/unused files go here
