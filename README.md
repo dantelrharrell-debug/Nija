@@ -1,10 +1,16 @@
-# Nija Trading Bot
+# NIJA Trading Bot
 
-## Setup in Codespaces
+⚡ **NIJA** is a live crypto trading bot built to execute automated trades via the Coinbase API. This README reflects the current working setup, deployment, and usage of the bot.
 
-1. Load environment variables:
+> "The Path of Struggle is Peace." — NIJA UGUMU AMANI™
 
-```bash
-cd ~/Nija
-chmod +x setup_nija_env.sh
-source setup_nija_env.sh
+---
+
+## Current Working Setup
+
+- **Deployment Platform:** Render  
+- **Live Port:** 10000  
+- **Primary URL:** [https://nija.onrender.com](https://nija.onrender.com)  
+- **Worker Type:** `sync` (Gunicorn, 1 worker)  
+
+### Example Logs from Live Deployment
