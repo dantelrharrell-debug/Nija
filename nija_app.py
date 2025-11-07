@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 # nija_app.py
 import os
 from flask import Flask, jsonify
