@@ -1,36 +1,18 @@
 # nija_app.py
 from flask import Flask, jsonify, request
+from nija_client import CoinbaseClient
 import os
 
-# --- MOCK COINBASE CLIENT (temporary for live deploy) ---
-class CoinbaseClient:
-    def __init__(self):
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
-
-    def get_accounts(self):
-        # Replace this with real Coinbase API call when ready
-        return [
-            {"currency": "BTC", "balance": "0.001"},
-            {"currency": "USD", "balance": "1000"}
-        ]
-
-    def place_order(self, side, product_id, size, type="market"):
-        # Simulated order for dry-run
-        return {"side": side, "product_id": product_id, "size": size, "type": type, "status": "simulated"}
-
-# --- FLASK APP ---
+# Initialize Flask app
 app = Flask(__name__)
 
-# Environment flags
-LIVE_TRADING = os.getenv("LIVE_TRADING", "0") == "1"
-NIJA_DRY_RUN = os.getenv("NIJA_DRY_RUN", None)
+# Environment flag for live trading
+LIVE_TRADING = True  # Force live mode
 
 # --- ROUTE: Health check ---
 @app.route("/", methods=["GET", "HEAD"])
 def home():
-    return "NIJA Trading Bot is live!", 200
+    return "NIJA Trading Bot is live and fully operational!", 200
 
 # --- ROUTE: Check Coinbase account balances ---
 @app.route("/check_accounts", methods=["GET"])
@@ -55,13 +37,20 @@ def check_accounts():
             return jsonify({"status": "success", "balances": balances})
 
     except Exception as e:
-        if request.headers.get("Accept", "").lower() == "application/json":
-            return jsonify({"status": "error", "message": str(e)}), 500
-        return f"<p>Error: {str(e)}</p>", 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- ROUTE: Place a trade ---
+# --- ROUTE: Place a trade (LIVE ONLY) ---
 @app.route("/place_trade", methods=["POST"])
 def place_trade():
+    """
+    Place a real trade via Coinbase.
+    JSON payload example:
+    {
+        "side": "buy",          # "buy" or "sell"
+        "product_id": "BTC-USD",
+        "size": "0.001"         # amount in base currency
+    }
+    """
     try:
         data = request.get_json()
         side = data.get("side")
@@ -73,16 +62,9 @@ def place_trade():
 
         client = CoinbaseClient()
 
-        if LIVE_TRADING:
-            # Replace with real API call when ready
-            order = client.place_order(side=side, product_id=product_id, size=size)
-            return jsonify({"status": "success", "order": order})
-        else:
-            # Dry run mode
-            return jsonify({
-                "status": "dry_run",
-                "message": f"Trade simulated: {side} {size} {product_id}"
-            })
+        # Execute real trade
+        order = client.place_order(side=side, product_id=product_id, size=size)
+        return jsonify({"status": "success", "order": order})
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
