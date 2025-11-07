@@ -1,58 +1,96 @@
+#!/usr/bin/env python3
+"""
+nija_client.py
+Clean Coinbase Advanced Trade API client for Nija bot.
+Supports: get_accounts(), get_account_by_currency(), submit_order()
+No passphrase required.
+"""
+
 import os
-import time
-import hmac
-import hashlib
-import base64
 import requests
 import json
+from typing import List, Optional
 
 class CoinbaseClient:
     def __init__(self):
-        # Load API credentials from environment
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        # Passphrase is optional for Advanced API
-        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE", None)
         self.base_url = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")
 
-        if not all([self.api_key, self.api_secret]):
-            raise ValueError("COINBASE_API_KEY and COINBASE_API_SECRET must be set")
+        if not self.api_key or not self.api_secret:
+            raise ValueError("API key and secret must be set in environment variables")
 
-    def _get_headers(self, method, path, body=""):
-        timestamp = str(int(time.time()))
-        message = timestamp + method.upper() + path + body
-        signature = hmac.new(
-            self.api_secret.encode(), message.encode(), hashlib.sha256
-        ).hexdigest()
-
-        headers = {
+        self.headers = {
             "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": signature,
-            "CB-ACCESS-TIMESTAMP": timestamp,
-            "Content-Type": "application/json",
+            "CB-VERSION": "2025-01-01",  # use a fixed version
+            "Content-Type": "application/json"
         }
-        # Only include passphrase if it exists (for Pro keys)
-        if self.passphrase:
-            headers["CB-ACCESS-PASSPHRASE"] = self.passphrase
-        return headers
+        print("CoinbaseClient initialized successfully ✅")
 
-    def get_accounts(self):
-        path = "/platform/v2/accounts"
-        url = self.base_url + path
-        headers = self._get_headers("GET", path)
-        resp = requests.get(url, headers=headers)
-        if resp.status_code >= 400:
-            resp.raise_for_status()
-        return resp.json().get("data", [])
+    def _request(self, method: str, path: str, data: Optional[dict] = None):
+        url = f"{self.base_url}{path}"
+        try:
+            if method.upper() == "GET":
+                r = requests.get(url, headers=self.headers, timeout=10)
+            elif method.upper() == "POST":
+                r = requests.post(url, headers=self.headers, json=data, timeout=10)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
 
-    def submit_order(self, account_id, side, size, price=None, order_type="market"):
-        path = f"/platform/v2/accounts/{account_id}/orders"
-        body = {"side": side, "size": size, "type": order_type}
-        if price:
-            body["price"] = price
-        body_json = json.dumps(body)
-        headers = self._get_headers("POST", path, body_json)
-        resp = requests.post(self.base_url + path, headers=headers, data=body_json)
-        if resp.status_code >= 400:
-            resp.raise_for_status()
-        return resp.json()
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.HTTPError as e:
+            print(f"HTTP error: {e}")
+            if e.response is not None:
+                print(f"Status code: {e.response.status_code}, Response: {e.response.text}")
+            raise
+        except Exception as e:
+            print(f"Request error: {e}")
+            raise
+
+    def get_accounts(self) -> List[dict]:
+        """Return all accounts (wallets/portfolio)"""
+        data = self._request("GET", "/platform/v2/accounts")
+        return data.get("data", [])
+
+    def get_account_by_currency(self, currency: str) -> Optional[dict]:
+        """Return a single account by currency symbol (USD, BTC, ETH, etc.)"""
+        accounts = self.get_accounts()
+        for acct in accounts:
+            if acct.get("balance", {}).get("currency") == currency.upper():
+                return acct
+        return None
+
+    def submit_order(self, account_id: str, side: str, product_id: str, size: str, order_type="market"):
+        """
+        Submit a trade order
+        side: 'buy' or 'sell'
+        product_id: e.g., 'BTC-USD'
+        size: amount in base currency
+        order_type: 'market' or 'limit'
+        """
+        data = {
+            "account_id": account_id,
+            "side": side.lower(),
+            "product_id": product_id.upper(),
+            "size": size,
+            "type": order_type
+        }
+        return self._request("POST", "/platform/v2/orders", data=data)
+
+
+if __name__ == "__main__":
+    # Quick test to check connection & balance
+    c = CoinbaseClient()
+    try:
+        accounts = c.get_accounts()
+        if not accounts:
+            print("No accounts returned. Check API key permissions or IP allowlist ❌")
+        else:
+            print("Connected accounts:")
+            for a in accounts:
+                name = a.get("name", "<unknown>")
+                bal = a.get("balance", {})
+                print(f"{name}: {bal.get('amount','0')} {bal.get('currency','?')}")
+    except Exception as e:
+        print("Error connecting to Coinbase:", e)
