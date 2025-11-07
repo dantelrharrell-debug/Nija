@@ -1,45 +1,74 @@
 # nija_app.py
-from flask import Flask, request, jsonify
+import os
+import time
+import json
+from flask import Flask, jsonify
+from loguru import logger
 from nija_client import CoinbaseClient
 
-# ---- LIVE FLASK APP ----
+# -----------------------
+# Flask App Setup
+# -----------------------
 app = Flask(__name__)
-client = CoinbaseClient()  # Live trading client
 
-@app.route("/accounts", methods=["GET"])
-def get_accounts():
+# -----------------------
+# Initialize Coinbase Client
+# -----------------------
+try:
+    client = CoinbaseClient()
+except Exception as e:
+    logger.error(f"Failed to initialize CoinbaseClient: {e}")
+    raise
+
+# -----------------------
+# Trading Parameters
+# -----------------------
+PRODUCT_ID = os.getenv("TRADE_PRODUCT", "BTC-USD")
+TRADE_SIZE = float(os.getenv("TRADE_SIZE", 0.001))  # Adjust for your risk
+
+# -----------------------
+# Trading Function
+# -----------------------
+def trade_live():
     try:
         accounts = client.get_accounts()
-        return jsonify({"status": "success", "accounts": accounts})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.info(f"Accounts fetched: {accounts}")
 
-@app.route("/trade", methods=["POST"])
+        # Example: Simple buy market order logic
+        order_response = client.place_order(
+            product_id=PRODUCT_ID,
+            side="buy",
+            size=TRADE_SIZE,
+            order_type="market"
+        )
+        logger.success(f"Live trade executed: {order_response}")
+        return order_response
+
+    except Exception as e:
+        logger.error(f"Live trade failed: {e}")
+        return {"error": str(e)}
+
+# -----------------------
+# Flask Routes
+# -----------------------
+@app.route("/")
+def home():
+    return jsonify({"status": "NIJA trading bot live ✅"})
+
+@app.route("/trade")
 def trade():
-    """
-    Place a LIVE trade.
-    JSON payload example:
-    {
-        "side": "buy",
-        "product_id": "BTC-USD",
-        "size": "0.001"
-    }
-    """
-    try:
-        data = request.get_json()
-        side = data.get("side")
-        product_id = data.get("product_id")
-        size = data.get("size")
+    result = trade_live()
+    return jsonify(result)
 
-        if not all([side, product_id, size]):
-            return jsonify({"status": "error", "message": "Missing parameters"}), 400
-
-        order = client.place_order(side, product_id, size)
-        return jsonify({"status": "success", "order": order})
-
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# ---- RUN ONLY IF LOCAL, NOT RENDER ----
+# -----------------------
+# Auto Start Trading on Deploy
+# -----------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    logger.info("NIJA trading bot starting live...")
+    
+    # Optional: Start a single trade on deploy
+    trade_live()
+
+    # Run Flask app (Render expects this)
+    port = int(os.getenv("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
