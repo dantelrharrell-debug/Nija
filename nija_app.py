@@ -1,72 +1,66 @@
-# nija_app.py
-from flask import Flask, jsonify, request
-from nija_client import CoinbaseClient
+# nija_client.py
 import os
+import time
+import hmac
+import hashlib
+import base64
+import requests
 
-# Initialize Flask app
-app = Flask(__name__)
-
-# Environment flag for live trading
-LIVE_TRADING = True  # Always live now, no dry runs
-
-# --- ROUTE: Health check ---
-@app.route("/", methods=["GET", "HEAD"])
-def home():
-    return "NIJA Trading Bot is live!", 200
-
-# --- ROUTE: Check Coinbase account balances ---
-@app.route("/check_accounts", methods=["GET"])
-def check_accounts():
-    try:
-        client = CoinbaseClient()
-        accounts = client.get_accounts()
-        balances = {acct['currency']: acct['balance'] for acct in accounts}
-
-        # Detect if request is from browser
-        user_agent = request.headers.get("User-Agent", "").lower()
-        is_browser = any(browser in user_agent for browser in ["mozilla", "chrome", "safari", "edge"])
-
-        if is_browser:
-            html = "<h2>Coinbase Account Balances</h2><table border='1' style='border-collapse: collapse;'>"
-            html += "<tr><th>Currency</th><th>Balance</th></tr>"
-            for currency, balance in balances.items():
-                html += f"<tr><td>{currency}</td><td>{balance}</td></tr>"
-            html += "</table>"
-            return html
-        else:
-            return jsonify({"status": "success", "balances": balances})
-
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- ROUTE: Place a trade (LIVE ONLY) ---
-@app.route("/place_trade", methods=["POST"])
-def place_trade():
+class CoinbaseClient:
     """
-    Place a trade via Coinbase.
-    JSON payload example:
-    {
-        "side": "buy",          # "buy" or "sell"
-        "product_id": "BTC-USD",
-        "size": "0.001"         # amount in base currency
-    }
+    Simple Coinbase client for live trading.
+    Make sure the following environment variables are set:
+    COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_API_PASSPHRASE
     """
-    try:
-        data = request.get_json()
-        side = data.get("side")
-        product_id = data.get("product_id")
-        size = data.get("size")
+    def __init__(self):
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.exchange.coinbase.com")
 
-        if not all([side, product_id, size]):
-            return jsonify({"status": "error", "message": "Missing parameters"}), 400
+        if not all([self.api_key, self.api_secret, self.passphrase]):
+            raise ValueError("Missing Coinbase API credentials")
 
-        client = CoinbaseClient()
-        order = client.place_order(side=side, product_id=product_id, size=size)
-        return jsonify({"status": "success", "order": order})
+    def _sign(self, method, path, body=""):
+        timestamp = str(int(time.time()))
+        message = timestamp + method.upper() + path + body
+        hmac_key = base64.b64decode(self.api_secret)
+        signature = hmac.new(hmac_key, message.encode("utf-8"), hashlib.sha256).digest()
+        signature_b64 = base64.b64encode(signature).decode()
+        return {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": signature_b64,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+            "CB-ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json"
+        }
 
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    def get_accounts(self):
+        path = "/accounts"
+        headers = self._sign("GET", path)
+        url = self.base_url + path
+        r = requests.get(url, headers=headers)
+        r.raise_for_status()
+        return r.json()
 
-# Run the app (for local testing)
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    def place_order(self, side, product_id, size):
+        """
+        Place a live order on Coinbase.
+        side: "buy" or "sell"
+        product_id: e.g., "BTC-USD"
+        size: amount in base currency, as string
+        """
+        path = "/orders"
+        body = {
+            "side": side,
+            "product_id": product_id,
+            "size": size,
+            "type": "market"
+        }
+        import json
+        body_json = json.dumps(body)
+        headers = self._sign("POST", path, body_json)
+        url = self.base_url + path
+        r = requests.post(url, headers=headers, data=body_json)
+        r.raise_for_status()
+        return r.json()
