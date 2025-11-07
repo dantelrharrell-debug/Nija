@@ -1,16 +1,13 @@
 from nija_client import CoinbaseClient
 
-try:
-    c = CoinbaseClient()
-    acct = next((a for a in c.get_accounts() if a.get('primary')), None)
-    if acct:
-        bal = acct['balance']
-        print(f"Primary account: {acct['name']}")
-        print(f"Balance: {bal['amount']} {bal['currency']}")
-        print("Account is ready for trading ✅")
+if __name__ == "__main__":
+    client = CoinbaseClient()
+    accounts = client.get_accounts()
+    if not accounts:
+        print("No accounts returned. Check key permissions or IP allowlist ❌")
     else:
-        print("No primary account found. Check API permissions ❌")
-except Exception as e:
-    print("Error connecting to Coinbase:", e)
-    if hasattr(e, 'response'):
-        print("HTTP status code:", e.response.status_code)
+        print("Connected accounts:")
+        for a in accounts:
+            name = a.get("name", "<unknown>")
+            bal = a.get("balance", {})
+            print(f"{name}: {bal.get('amount', '0')} {bal.get('currency', '?')}")
