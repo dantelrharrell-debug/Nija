@@ -1,39 +1,28 @@
-# startup_env.py  -- import this before creating the Coinbase client
+# startup_env.py
 import os
+import logging
 import stat
-from loguru import logger
 
-# Load local .env for development only
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("startup_env")
+
+# Load .env if it exists (for local development)
 if os.path.exists(".env"):
     try:
         from dotenv import load_dotenv
         load_dotenv(".env")
-        logger.info(".env loaded for local dev")
-    except Exception:
-        logger.warning("python-dotenv not available, skipping .env load")
+        log.info(".env loaded for local dev")
+    except ImportError:
+        log.warning("python-dotenv not installed, skipping .env load")
 
-# Write PEM content (if provided) to a secure file before client init
-pem = os.getenv("COINBASE_PEM_CONTENT")
-if pem:
-    pem_path = os.getenv("COINBASE_PEM_PATH", "/tmp/coinbase.pem")
-    try:
-        # convert escaped newlines \n into real newlines
-        with open(pem_path, "w") as f:
-            f.write(pem.replace("\\n", "\n"))
-        # owner read/write only
-        os.chmod(pem_path, 0o600)
-        os.environ["COINBASE_PEM_PATH"] = pem_path
-        logger.info(f"Wrote PEM to {pem_path}")
-    except Exception as e:
-        logger.exception("Failed writing PEM: {}", e)
-        raise
-
-# Check required Coinbase envs (add PASSPHRASE if your client needs it)
-required = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
-missing = [k for k in required if not os.getenv(k)]
-if missing:
-    msg = f"Missing Coinbase API credentials: {', '.join(missing)}"
-    logger.error(msg)
-    raise SystemExit(msg)
-
-logger.info(f"Coinbase env check passed. LIVE_TRADING={os.getenv('LIVE_TRADING')}")
+# Write PEM content to a temporary file (if provided)
+pem_content = os.getenv("COINBASE_PEM_CONTENT")
+if pem_content:
+    pem_path = "/tmp/coinbase.pem"
+    with open(pem_path, "w") as f:
+        f.write(pem_content.replace("\\n", "\n"))
+    os.chmod(pem_path, stat.S_IRUSR)  # read-only by owner
+    os.environ["COINBASE_PEM_PATH"] = pem_path
+    log.info(f"PEM file written to {pem_path}")
+else:
+    log.warning("COINBASE_PEM_CONTENT not set; make sure you have API keys")
