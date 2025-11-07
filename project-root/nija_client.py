@@ -1,37 +1,44 @@
 # nija_client.py
 import os
 import requests
+import jwt
+import time
 from loguru import logger
 
 class CoinbaseClient:
-    BASE_URL = "https://api.coinbase.com/v2"
-
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")  # optional, if using auth
-        if not all([self.api_key, self.api_secret]):
-            logger.error("Coinbase API credentials missing")
-            raise ValueError("API_KEY and API_SECRET must be set")
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+        self.pem_path = os.getenv("COINBASE_PEM_PATH")
+
+        if not all([self.api_key, self.api_secret, self.passphrase, self.pem_path]):
+            logger.warning("Some Coinbase credentials are missing. Check Render env variables.")
+
         logger.info("Coinbase client initialized")
 
     def get_accounts(self):
-        """
-        Example read-only API call to Coinbase.
-        """
-        url = f"{self.BASE_URL}/accounts"
+        """Retrieve accounts from Coinbase Advanced API (JWT auth)."""
+        timestamp = str(int(time.time()))
+        method = "GET"
+        request_path = "/v2/accounts"
+        message = timestamp + method + request_path
+        signature = jwt.encode(
+            {"iat": int(time.time())},
+            open(self.pem_path, "r").read(),
+            algorithm="RS256"
+        )
+
         headers = {
             "CB-ACCESS-KEY": self.api_key,
-            "CB-VERSION": "2023-11-06"
+            "CB-ACCESS-SIGN": signature,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+            "CB-ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json"
         }
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            return data.get("data", [])
-        except Exception as e:
-            logger.exception("Failed to fetch accounts")
-            return []
 
-# Create a **global client instance** so nija_app.py can import it
-client = CoinbaseClient()
+        url = self.base_url + request_path
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
