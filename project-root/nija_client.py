@@ -27,7 +27,8 @@ TIMEOUT = float(os.getenv("TIMEOUT_SECONDS", "15"))
 # ------------------------
 # Retry decorator
 # ------------------------
-def retry_with_backoff(max_attempts: int = RETRY_MAX, base: float = RETRY_BASE, allowed_statuses: List[int] = None):
+def retry_with_backoff(max_attempts: int = RETRY_MAX, base: float = RETRY_BASE,
+                       allowed_statuses: List[int] = None):
     allowed_statuses = allowed_statuses or [429, 500, 502, 503, 504]
 
     def deco(func):
@@ -166,6 +167,13 @@ class CoinbaseClient:
 
     def place_market_buy_by_quote(self, product_id: str, usd_quote: float, client_order_id: Optional[str] = None,
                                   dry_run: Optional[bool] = None) -> Dict[str, Any]:
+        return self._place_order("BUY", product_id, usd_quote, client_order_id, dry_run)
+
+    def place_market_sell_by_quote(self, product_id: str, usd_quote: float, client_order_id: Optional[str] = None,
+                                   dry_run: Optional[bool] = None) -> Dict[str, Any]:
+        return self._place_order("SELL", product_id, usd_quote, client_order_id, dry_run)
+
+    def _place_order(self, side: str, product_id: str, usd_quote: float, client_order_id: Optional[str], dry_run: Optional[bool]):
         if usd_quote <= 0:
             raise ValueError("usd_quote must be > 0")
 
@@ -176,14 +184,14 @@ class CoinbaseClient:
                 "id": "sim-" + str(uuid.uuid4()),
                 "client_order_id": client_order_id or str(uuid.uuid4()),
                 "product_id": product_id,
-                "side": "BUY",
+                "side": side,
                 "order_configuration": {"market_market_ioc": {"quote_size": f"{usd_quote:.2f}"}},
                 "status": "SIMULATED",
                 "filled_size": "0",
                 "filled_value": f"{usd_quote:.2f}",
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             }
-            LOG.info("DRY-RUN ORDER: %s", simulated["client_order_id"])
+            LOG.info("DRY-RUN %s ORDER: %s", side, simulated["client_order_id"])
             self._notify_webhook("order.simulated", simulated)
             return {"simulated": True, "order": simulated}
 
@@ -191,22 +199,23 @@ class CoinbaseClient:
         payload = {
             "client_order_id": client_order_id or str(uuid.uuid4()),
             "product_id": product_id,
-            "side": "BUY",
+            "side": side,
             "order_configuration": {"market_market_ioc": {"quote_size": f"{usd_quote:.2f}"}}
         }
-        LOG.info("Submitting order: client_order_id=%s product=%s usd_quote=%s",
-                 payload["client_order_id"], product_id, usd_quote)
+        LOG.info("Submitting %s order: client_order_id=%s product=%s usd_quote=%s",
+                 side, payload["client_order_id"], product_id, usd_quote)
         try:
             r = self._http_post(self.orders_endpoint, headers=headers, json_body=payload)
             j = r.json()
-            LOG.info("Order submitted: id=%s status=%s", j.get("id"), j.get("status"))
+            LOG.info("%s Order submitted: id=%s status=%s", side, j.get("id"), j.get("status"))
             self._notify_webhook("order.submitted", {"request": payload, "response": j})
             return {"simulated": False, "order": j}
         except Exception as e:
-            LOG.exception("Order submission failed")
+            LOG.exception("%s order submission failed", side)
             self._notify_webhook("order.failed", {"request": payload, "error": str(e)})
             raise
 
+    @retry_with_backoff()
     def get_spot_price_usd(self, currency: str) -> float:
         c = currency.upper()
         if c in ("USD", "USDC", "USDT"):
@@ -219,3 +228,26 @@ class CoinbaseClient:
         if amt is None:
             raise RuntimeError("No spot price returned for " + currency)
         return float(amt)
+
+# ------------------------
+# Quick CLI test
+# ------------------------
+if __name__ == "__main__":
+    try:
+        client = CoinbaseClient()
+        LOG.info("Listing accounts...")
+        accounts = client.list_accounts()
+        for a in accounts[:10]:
+            avail = a.get("available_balance") or {}
+            val = avail.get("value") or avail.get("amount") or "0"
+            LOG.info("acct %s | %s | %s", a.get("uuid"), a.get("currency", "n/a"), val)
+
+        LOG.info("Attempting example dry-run buy (10 USD BTC-USD)...")
+        resp = client.place_market_buy_by_quote("BTC-USD", 10.0)
+        LOG.info("Buy result: %s", json.dumps(resp, indent=2))
+
+        LOG.info("Attempting example dry-run sell (10 USD BTC-USD)...")
+        resp2 = client.place_market_sell_by_quote("BTC-USD", 10.0)
+        LOG.info("Sell result: %s", json.dumps(resp2, indent=2))
+    except Exception as exc:
+        LOG.exception("Error in nija_client CLI: %s", exc)
