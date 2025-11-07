@@ -1,35 +1,30 @@
 # nija_app.py
-
 from flask import Flask, jsonify
 from loguru import logger
-from nija_client import client  # your Coinbase client
+from nija_client import client  # safe import now
 import os
 
-# -----------------------------
-# App setup
-# -----------------------------
 app = Flask(__name__)
-PRIMARY_CURRENCY = "USD"  # your main funded account currency
+PRIMARY_CURRENCY = "USD"  # main funded account
 
 # -----------------------------
-# Health check endpoint
+# Health check route
 # -----------------------------
 @app.route("/health")
 def health():
-    # Check required environment variables
     missing = [k for k in ("COINBASE_API_KEY","COINBASE_API_SECRET") if not os.getenv(k)]
     if missing:
         return jsonify({"ok": False, "missing_env": missing}), 500
 
     try:
-        accounts = client.get_accounts()  # read-only API call
+        accounts = client.get_accounts()
         if not accounts:
             return jsonify({"ok": False, "funded": False, "error": "No accounts returned"}), 500
 
-        # Find the first funded account in the primary currency
+        # Find funded account in primary currency
         funded_account = next(
-            (acct for acct in accounts 
-             if acct["balance"]["currency"] == PRIMARY_CURRENCY 
+            (acct for acct in accounts
+             if acct["balance"]["currency"] == PRIMARY_CURRENCY
              and float(acct["balance"]["amount"]) > 0),
             None
         )
@@ -55,14 +50,14 @@ def health():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 # -----------------------------
-# Example root route
+# Root route
 # -----------------------------
 @app.route("/")
 def index():
     return jsonify({"message": "NIJA trading bot is running"})
 
 # -----------------------------
-# Run the app
+# Run app
 # -----------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
