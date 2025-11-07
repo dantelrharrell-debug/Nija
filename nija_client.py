@@ -1,39 +1,41 @@
 # nija_client.py
 import os
-import time
-import hmac
-import hashlib
 import requests
 from loguru import logger
 
-class NijaCoinbaseClient:
-    def __init__(self):
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.passphrase = os.getenv("COINBASE_PASSPHRASE")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+class CoinbaseClient:
+    """
+    Simple Coinbase client for read-only operations.
+    Add more methods if needed for trading.
+    """
+    BASE_URL = "https://api.coinbase.com/v2"
 
-        if not all([self.api_key, self.api_secret, self.passphrase]):
-            logger.error("Missing Coinbase API credentials!")
-            raise SystemExit(1)
+    def __init__(self, api_key=None, api_secret=None, passphrase=None):
+        self.api_key = api_key or os.getenv("COINBASE_API_KEY")
+        self.api_secret = api_secret or os.getenv("COINBASE_API_SECRET")
+        self.passphrase = passphrase or os.getenv("COINBASE_API_PASSPHRASE")
 
-    def _get_headers(self, method, path, body=""):
-        timestamp = str(int(time.time()))
-        message = timestamp + method + path + body
-        signature = hmac.new(
-            self.api_secret.encode(), message.encode(), hashlib.sha256
-        ).hexdigest()
-        return {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": signature,
-            "CB-ACCESS-TIMESTAMP": timestamp,
-            "CB-ACCESS-PASSPHRASE": self.passphrase,
-            "Content-Type": "application/json",
-        }
+        if not all([self.api_key, self.api_secret]):
+            logger.error("Coinbase API credentials are missing")
+            raise ValueError("API_KEY and API_SECRET must be set")
 
     def get_accounts(self):
-        path = "/accounts"
-        url = self.base_url + path
-        headers = self._get_headers("GET", path)
-        r = requests.get(url, headers=headers)
-        return r.json()
+        """
+        Fetch all accounts (read-only)
+        """
+        url = f"{self.BASE_URL}/accounts"
+        headers = {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-VERSION": "2023-11-06"
+        }
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("data", [])
+        except Exception as e:
+            logger.exception("Failed to fetch accounts")
+            raise e
+
+# Initialize a global client instance
+client = CoinbaseClient()
