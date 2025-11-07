@@ -1,40 +1,49 @@
-# nija_client.py
 import os
-from coinbase_advanced_py import CoinbaseAdvanced
+import requests
+import hmac
+import hashlib
+import time
+import json
+from loguru import logger
 
 class CoinbaseClient:
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.passphrase = None  # Advanced Trade keys do not need this
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-        if not all([self.api_key, self.api_secret]):
-            raise ValueError("Missing Coinbase API key or secret")
+        if not all([self.api_key, self.api_secret, self.passphrase]):
+            logger.error("Coinbase API credentials are missing!")
+            raise ValueError("Missing Coinbase API credentials")
+        else:
+            logger.info("CoinbaseClient initialized successfully ✅")
 
-        # Initialize client
-        self.client = CoinbaseAdvanced(
-            api_key=self.api_key,
-            api_secret=self.api_secret
+    def _headers(self, method: str, path: str, body: str = ""):
+        timestamp = str(int(time.time()))
+        message = f"{timestamp}{method.upper()}{path}{body}"
+        hmac_key = hmac.new(
+            self.api_secret.encode("utf-8"),
+            message.encode("utf-8"),
+            hashlib.sha256
         )
-        print("CoinbaseClient initialized successfully ✅")
+        signature = hmac_key.hexdigest()
+
+        return {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": signature,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+            "CB-ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json"
+        }
 
     def get_accounts(self):
-        """Returns all accounts from Advanced Trade"""
-        return self.client.get_accounts()
-
-
-if __name__ == "__main__":
-    # Quick test
-    c = CoinbaseClient()
-    try:
-        accounts = c.get_accounts()
-        if not accounts:
-            print("No accounts returned. Check key permissions or IP allowlist ❌")
-        else:
-            print("Connected accounts:")
-            for a in accounts:
-                name = a.get("name", "<unknown>")
-                bal = a.get("balance", {})
-                print(f"{name}: {bal.get('amount','0')} {bal.get('currency','?')}")
-    except Exception as e:
-        print("Error connecting to Coinbase:", e)
+        path = "/v2/accounts"
+        url = self.base_url + path
+        headers = self._headers("GET", path)
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            logger.error(f"Error fetching accounts: {response.status_code} {response.text}")
+            return []
+        data = response.json()
+        return data.get("data", [])
