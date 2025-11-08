@@ -49,14 +49,14 @@ class CoinbaseJWTClient:
         token = jwt.encode(payload, self.private_key, algorithm="ES256")
         return token
 
-    def request(self, method, path, data=None):
+    def request(self, method, path, data=None, params=None):
         token = self.generate_jwt()
         url = f"{self.base_url}{path}"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-        resp = requests.request(method, url, headers=headers, json=data)
+        resp = requests.request(method, url, headers=headers, json=data, params=params)
         if resp.status_code not in [200, 201]:
             logger.error("Error %s %s: %s", method, path, resp.text)
         return resp.json()
@@ -73,34 +73,39 @@ class CoinbaseJWTClient:
         }
         return self.request("POST", "/trades", data)
 
+    def fetch_ohlcv(self, product_id, granularity=60, limit=100):
+        params = {"granularity": granularity, "limit": limit}
+        path = f"/products/{product_id.replace('/', '-')}/candles"
+        data = self.request("GET", path, params=params)
+        if not data:
+            logger.warning("No OHLCV data returned for %s", product_id)
+            return pd.DataFrame()
+        df = pd.DataFrame(data, columns=["timestamp", "low", "high", "open", "close", "volume"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+        df.set_index("timestamp", inplace=True)
+        df = df.apply(pd.to_numeric, errors="coerce").sort_index()
+        return df
+
 # --- Initialize client ---
 client = CoinbaseJWTClient()
 accounts = client.list_accounts()
 logger.info("Accounts: %s", accounts)
 
+# --- Dynamic position sizing ---
+def calculate_position_size(account_balance, trade_pct=0.05):
+    """
+    Returns trade size in units.
+    - account_balance: USD equivalent of total balance for that coin or account
+    - trade_pct: fraction of account balance to risk per trade (2%-10% recommended)
+    """
+    # Ensure safe boundaries
+    trade_pct = max(0.02, min(0.10, trade_pct))
+    return account_balance * trade_pct
+
 # --- Trading settings ---
 TRADING_PAIRS = ["BTC/USD", "ETH/USD", "ADA/USD", "SOL/USD", "LTC/USD", "BNB/USD"]
-TRADE_AMOUNT = 0.01  # Default size per trade, adjust per coin
-TRADE_INTERVAL = 5  # seconds
-
-# --- Market data fetcher ---
-def fetch_market_data(symbol):
-    """
-    Replace with real Coinbase market data fetch if needed.
-    Here we create a dummy DataFrame for testing and indicator calculations.
-    """
-    now = pd.Timestamp.now()
-    data = {
-        "open": [100 + i for i in range(10)],
-        "high": [101 + i for i in range(10)],
-        "low": [99 + i for i in range(10)],
-        "close": [100 + i for i in range(10)],
-        "volume": [10 + i for i in range(10)],
-        "timestamp": [now - pd.Timedelta(minutes=i) for i in range(10)]
-    }
-    df = pd.DataFrame(data)
-    df.set_index("timestamp", inplace=True)
-    return df
+TRADE_INTERVAL = 5  # seconds between cycles
+TRADE_RISK_PCT = 0.05  # 5% of account per trade (adjustable 0.02-0.10)
 
 # --- Main trading loop ---
 def run_trading_bot():
@@ -109,19 +114,29 @@ def run_trading_bot():
         try:
             for symbol in TRADING_PAIRS:
                 # 1️⃣ Fetch market data
-                df = fetch_market_data(symbol)
+                df = client.fetch_ohlcv(symbol, granularity=60, limit=100)
+                if df.empty:
+                    continue
 
-                # 2️⃣ Calculate signals using your custom indicators
-                signals = calculate_indicators(df)  # returns {"buy_signal": True/False}
+                # 2️⃣ Calculate signals
+                signals = calculate_indicators(df)  # {"buy_signal": True/False}
 
                 # 3️⃣ Determine trade side
                 side = "buy" if signals.get("buy_signal") else "sell"
 
-                # 4️⃣ Place live trade
-                response = client.create_trade(product_id=symbol, side=side, size=TRADE_AMOUNT)
+                # 4️⃣ Determine trade size dynamically based on USD account balance
+                # Example: use first account's balance in USD
+                usd_account = next((a for a in accounts if a.get("currency") == "USD"), None)
+                if not usd_account:
+                    logger.warning("USD account not found. Skipping trade for %s", symbol)
+                    continue
+                account_balance = float(usd_account.get("balance", 0))
+                trade_size = calculate_position_size(account_balance, trade_pct=TRADE_RISK_PCT)
+
+                # 5️⃣ Place trade
+                response = client.create_trade(product_id=symbol, side=side, size=trade_size)
                 logger.info("[NIJA] Trade %s %s: %s", symbol, side, response)
 
-            # 5️⃣ Wait before next cycle
             time.sleep(TRADE_INTERVAL)
 
         except KeyboardInterrupt:
