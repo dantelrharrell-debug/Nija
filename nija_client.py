@@ -1,254 +1,152 @@
+# nija_client.py
+#!/usr/bin/env python3
 """
-nija_client.py
+Robust Coinbase client helper for Nija bot.
+Tries common Coinbase REST and Coinbase Advanced (CDP) endpoints
+and prints useful diagnostics on failure.
 
-A self-contained Coinbase client initializer used by the NIJA trading bot.
-
-Features:
-- Supports two modes:
-    * REST API Key/Secret mode (default)
-    * Advanced / JWT PEM mode (set COINBASE_API_TYPE=advanced)
-- Writes PEM content from env var to a file (if provided).
-- Validates and logs exactly which env vars are missing.
-- Provides `list_accounts()` plus backward-compatible aliases `get_accounts()` and `accounts()`.
-- Clear error messages (no secrets printed).
+Usage:
+    from nija_client import CoinbaseClient
+    c = CoinbaseClient()
+    accounts = c.get_accounts()
 """
 
 import os
-import logging
-import tempfile
-import time
-import hmac
-import hashlib
-import base64
 import json
-from typing import Optional, Dict, Any
-
 import requests
+from typing import List, Optional
 
-logger = logging.getLogger(__name__)
-logger.setLevel(os.environ.get("LOGLEVEL", "INFO"))
+DEFAULT_REST_BASE = "https://api.coinbase.com"
+DEFAULT_CDP_BASE = "https://api.cdp.coinbase.com"
 
-# Simple console handler if none configured upstream
-if not logger.handlers:
-    ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s:%(lineno)d - %(message)s"))
-    logger.addHandler(ch)
-
+def _norm_secret(s: Optional[str]) -> Optional[str]:
+    """If secret contains literal '\n', convert to real newlines."""
+    if not s:
+        return s
+    return s.replace("\\n", "\n") if "\\n" in s else s
 
 class CoinbaseClient:
-    """
-    Initialize like:
-        client = CoinbaseClient()
-    Then:
-        accounts = client.list_accounts()
-        # or backward compatible:
-        accounts = client.get_accounts()
-        accounts = client.accounts()
-    """
-
-    DEFAULT_BASE = "https://api.coinbase.com"            # Coinbase (merchant) API default
-    DEFAULT_EXCHANGE_BASE = "https://api.exchange.coinbase.com"  # Coinbase Pro / Exchange base (if needed)
-
     def __init__(self):
-        # Mode flag: "rest" (API_KEY/API_SECRET) or "advanced" (JWT/PEM)
-        self.api_type = os.getenv("COINBASE_API_TYPE", "rest").lower()
-        self.base_url = os.getenv("COINBASE_API_BASE", self.DEFAULT_BASE)
-
-        # REST credentials
         self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE")  # sometimes used by exchange endpoints
+        self.api_secret = _norm_secret(os.getenv("COINBASE_API_SECRET"))
+        self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", None)
+        self.base_url = os.getenv("COINBASE_API_BASE", "").strip() or DEFAULT_REST_BASE
 
-        # Advanced/JWT credentials
-        # Accept either COINBASE_PEM (raw PEM content), COINBASE_PEM_B64 (base64 encoded PEM), or COINBASE_PEM_PATH (existing file)
-        self.pem_content = os.getenv("COINBASE_PEM")
-        self.pem_b64 = os.getenv("COINBASE_PEM_B64")
-        self.pem_path = os.getenv("COINBASE_PEM_PATH")
-
-        # Other optional config
-        self.request_timeout = float(os.getenv("COINBASE_REQUEST_TIMEOUT", "10"))
-
-        # Internal: path to written PEM (if used)
-        self._written_pem_path: Optional[str] = None
-
-        logger.info("Initializing CoinbaseClient (api_type=%s, base_url=%s)", self.api_type, self.base_url)
-
-        # Validate presence of credentials depending on mode
-        self._validate_and_prepare_credentials()
-
-    def _validate_and_prepare_credentials(self):
-        """
-        Validate environment variables for the selected mode.
-        If using PEM content, write it to a temp file for libraries that require a file path.
-        Raises ValueError listing which variables are missing.
-        """
-        missing = []
-        if self.api_type == "advanced":
-            # advanced mode expects PEM content or path
-            if not any([self.pem_content, self.pem_b64, self.pem_path]):
-                missing.append("COINBASE_PEM (or COINBASE_PEM_B64 or COINBASE_PEM_PATH)")
-            # Optionally accept API key id/email if needed by your JWT flow; do not mandate here.
-        else:
-            # rest mode requires API key + secret
-            if not self.api_key:
-                missing.append("COINBASE_API_KEY")
-            if not self.api_secret:
-                missing.append("COINBASE_API_SECRET")
-            # passphrase is optional for some endpoints; warn if missing but don't fail.
-            if not self.api_passphrase:
-                logger.debug("COINBASE_API_PASSPHRASE not set (may be optional depending on API).")
-
-        if missing:
-            logger.error("Missing Coinbase env vars: %s", ", ".join(missing))
-            raise ValueError(f"Missing Coinbase API credentials: {', '.join(missing)}")
-
-        # If PEM content is provided, write it to a secure temp file
-        if self.api_type == "advanced":
-            if self.pem_path:
-                if not os.path.exists(self.pem_path):
-                    logger.error("COINBASE_PEM_PATH set but file does not exist: %s", self.pem_path)
-                    raise ValueError("COINBASE_PEM_PATH points to a non-existent file.")
-                self._written_pem_path = self.pem_path
-                logger.info("Using existing PEM file from COINBASE_PEM_PATH")
-            else:
-                pem_text = None
-                if self.pem_content:
-                    pem_text = self.pem_content
-                elif self.pem_b64:
-                    try:
-                        pem_text = base64.b64decode(self.pem_b64).decode("utf-8")
-                    except Exception as e:
-                        logger.exception("Failed to base64-decode COINBASE_PEM_B64: %s", e)
-                        raise ValueError("COINBASE_PEM_B64 is not valid base64-encoded PEM content.")
-                if pem_text:
-                    # Normalize escaped newlines if someone stored it as a single-line with \n
-                    pem_text = pem_text.replace("\\n", "\n")
-                    self._written_pem_path = self._write_pem_to_file(pem_text)
-                    logger.info("Wrote PEM content to temporary file: %s", self._written_pem_path)
-        else:
-            logger.info("REST mode: using API_KEY/SECRET environment variables.")
-
-    def _write_pem_to_file(self, pem_text: str) -> str:
-        """
-        Write the provided PEM text to a secure temp file and return its path.
-        """
-        fd, path = tempfile.mkstemp(prefix="coinbase_pem_", suffix=".pem")
-        # Close the fd and write with proper permissions
-        os.close(fd)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(pem_text)
-        # Set restrictive file permissions
-        try:
-            os.chmod(path, 0o600)
-        except Exception:
-            logger.debug("Unable to set strict file permissions on PEM file (non-fatal).")
-        return path
-
-    def _get_rest_headers(self, method: str, request_path: str, body: Optional[str] = "") -> Dict[str, str]:
-        """
-        Build Coinbase REST API headers (signature-based). Works for exchange.coinbase.com style.
-        If you use a different client library, adjust accordingly.
-        """
+        # Quick validation
         if not self.api_key or not self.api_secret:
-            raise ValueError("API key/secret are required for REST requests.")
+            raise ValueError("Missing COINBASE_API_KEY or COINBASE_API_SECRET in environment")
 
-        timestamp = str(int(time.time()))
-        message = timestamp + method.upper() + request_path + (body or "")
-        secret = self.api_secret.encode("utf-8")
-        signature = base64.b64encode(hmac.new(secret, message.encode("utf-8"), hashlib.sha256).digest()).decode()
-        headers = {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": signature,
-            "CB-ACCESS-TIMESTAMP": timestamp,
-            # passphrase is sometimes required for exchange API; include if set.
-            "CB-ACCESS-PASSPHRASE": self.api_passphrase or "",
+        # Common headers used for the simple REST-style auth paths we call.
+        # NOTE: Advanced/CDP org-key auth sometimes uses JWT/PEM; this client will still attempt
+        # the simple header approach and print the HTTP response for debugging.
+        self.common_headers = {
             "Content-Type": "application/json",
+            "CB-ACCESS-KEY": self.api_key,
         }
-        return headers
+        if self.api_passphrase:
+            self.common_headers["CB-ACCESS-PASSPHRASE"] = self.api_passphrase
 
-    def _request(self, method: str, path: str, params: Optional[Dict[str, Any]] = None, data: Optional[Any] = None):
-        """
-        Low-level request helper. path should be the full path including leading slash (e.g. "/accounts").
-        """
+        # friendly log
+        print(f"Initializing CoinbaseClient (base_url={self.base_url})")
+
+    def _request(self, method: str, path: str, headers=None, params=None, json_body=None, timeout=10):
         url = self.base_url.rstrip("/") + path
-        body_text = json.dumps(data) if data is not None else ""
-        method_up = method.upper()
-
-        # For REST mode, sign the request headers
-        if self.api_type != "advanced":
-            headers = self._get_rest_headers(method_up, path, body_text)
-        else:
-            # Advanced/JWT mode: for now we assume a header-based token or library will be used.
-            # If you have a JWT creation routine, replace this section to generate Authorization header.
-            headers = {"Content-Type": "application/json"}
-            logger.debug("Advanced mode: request will use generic headers. Implement JWT header generation if needed.")
-
-        logger.debug("Request %s %s (headers keys: %s)", method_up, url, list(headers.keys()))
+        hdrs = dict(self.common_headers)
+        if headers:
+            hdrs.update(headers)
         try:
-            resp = requests.request(method_up, url, params=params, data=body_text or None, headers=headers, timeout=self.request_timeout)
-            resp.raise_for_status()
+            if method.upper() == "GET":
+                r = requests.get(url, headers=hdrs, params=params, timeout=timeout)
+            elif method.upper() == "POST":
+                r = requests.post(url, headers=hdrs, json=json_body, timeout=timeout)
+            else:
+                raise ValueError("Unsupported method")
+            # For debugging: always show response text on non-2xx to help diagnose endpoints/auth
+            r.raise_for_status()
             try:
-                return resp.json()
-            except ValueError:
-                return resp.text
-        except requests.HTTPError as e:
-            logger.error("HTTP error during Coinbase request: %s - %s", resp.status_code if 'resp' in locals() else "N/A", getattr(e, "response", e))
+                return r.json()
+            except Exception:
+                return r.text
+        except requests.exceptions.HTTPError as e:
+            # Surface full status + truncated body
+            body = ""
+            try:
+                body = e.response.text[:2000]
+            except Exception:
+                body = "<unavailable>"
+            print(f"HTTP error during Coinbase request: {e.response.status_code} - {body}")
             raise
         except Exception as e:
-            logger.exception("Error during Coinbase API request: %s", e)
+            print(f"Network/Request exception while calling {url}: {e}")
             raise
 
-    # ---------- Convenience methods ----------
-    def list_accounts(self):
+    def get_accounts(self) -> List[dict]:
         """
-        Fetch accounts. This maps to GET /accounts on Coinbase REST API.
-        For advanced/JWT flows you may need to change base_url or auth generation.
-        Returns parsed JSON response.
+        Attempts to fetch accounts using the most common endpoints:
+         1) /v2/accounts   (standard Coinbase REST)
+         2) /platform/v2/accounts  (Coinbase Advanced / CDP)
+        Returns list of account dicts or raises.
         """
-        logger.info("Fetching accounts from Coinbase at %s", self.base_url)
-        return self._request("GET", "/accounts")
-
-    # Backwards-compatible aliases (some codebases call different method names)
-    def get_accounts(self):
-        """
-        Backwards-compatible alias for list_accounts().
-        """
-        logger.debug("get_accounts() -> calling list_accounts()")
-        return self.list_accounts()
-
-    def accounts(self):
-        """
-        Extra compatibility alias.
-        """
-        logger.debug("accounts() -> calling list_accounts()")
-        return self.list_accounts()
-
-    def get_account(self, account_id: str):
-        """
-        Get a specific account by id: GET /accounts/{account_id}
-        """
-        return self._request("GET", f"/accounts/{account_id}")
-
-    def close(self):
-        """
-        Cleanup (remove written PEM file if we created one).
-        """
-        if self._written_pem_path and os.path.exists(self._written_pem_path):
+        tried = []
+        # preferred order
+        candidate_paths = ["/v2/accounts", "/platform/v2/accounts", "/accounts"]
+        last_exc = None
+        for p in candidate_paths:
             try:
-                os.remove(self._written_pem_path)
-                logger.info("Removed temporary PEM file: %s", self._written_pem_path)
-            except Exception:
-                logger.debug("Failed to remove temporary PEM file (non-fatal).")
+                print(f"Fetching accounts from {self.base_url}{p}")
+                resp = self._request("GET", p)
+                # many Coinbase endpoints wrap data in {"data": [...]}
+                if isinstance(resp, dict) and "data" in resp and isinstance(resp["data"], list):
+                    return resp["data"]
+                # sometimes the API returns a top-level list
+                if isinstance(resp, list):
+                    return resp
+                # sometimes returns an object with "accounts" key
+                if isinstance(resp, dict) and "accounts" in resp and isinstance(resp["accounts"], list):
+                    return resp["accounts"]
+                # otherwise return raw resp inside list for inspection
+                return [resp]
+            except Exception as e:
+                last_exc = e
+                tried.append(p)
+                # try next candidate
+        # If we reach here, all endpoints failed
+        print(f"All candidate account endpoints failed: tried {tried}")
+        if last_exc:
+            raise last_exc
+        return []
 
+    def get_primary_account(self) -> Optional[dict]:
+        """Return the first account marked primary if available."""
+        accts = self.get_accounts()
+        for a in accts:
+            if isinstance(a, dict) and a.get("primary"):
+                return a
+        return accts[0] if accts else None
 
-# If the file is executed directly, print simple env check results (no secrets).
+    def submit_order(self, *args, **kwargs):
+        """
+        Placeholder helper for submitting orders.
+        Real implementation depends on the API (Advanced / REST / JWT). Keep as stub until
+        you choose the API path and auth method.
+        """
+        raise NotImplementedError("Order submission not implemented in this helper. Use nija_coinbase_* helpers.")
+
 if __name__ == "__main__":
+    # quick local smoke test
+    c = CoinbaseClient()
     try:
-        client = CoinbaseClient()
-        logger.info("CoinbaseClient initialized successfully.")
-        # Note: do not auto-call live API methods in production. Uncomment if you want a live check.
-        # accounts = client.list_accounts()
-        # logger.info("Accounts fetched: %s", json.dumps(accounts, indent=2)[:1000])
+        accts = c.get_accounts()
+        if not accts:
+            print("No accounts returned (empty). Check API permissions and IP allowlist.")
+        else:
+            print("Accounts (first 10):")
+            for i, a in enumerate(accts[:10]):
+                if isinstance(a, dict):
+                    name = a.get("name", "<unknown>")
+                    bal = a.get("balance", {})
+                    print(f" {i+1}. {name}: {bal.get('amount','?')} {bal.get('currency','?')} (primary={a.get('primary')})")
+                else:
+                    print(f" {i+1}. {a}")
     except Exception as e:
-        logger.exception("Failed to initialize CoinbaseClient: %s", e)
-        raise
+        print("Error fetching accounts:", e)
