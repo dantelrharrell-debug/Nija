@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import time
 import pandas as pd
 from nija_coinbase_jwt_client import CoinbaseJWTClient
 
@@ -15,26 +16,20 @@ SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD"]
 
 # --- Trade state per account per symbol ---
 TRADE_STATE = {}  # TRADE_STATE[account_id][symbol] = {trade info}
+LAST_TRADE = {}   # Last trade timestamp per symbol for rate limiting
 
 # --- Trading parameters ---
 MIN_ALLOCATION = 0.02  # 2% per trade
 MAX_ALLOCATION = 0.10  # 10% per trade
 VOLATILITY_FACTOR = 0.5  # dynamic allocation adjustment
-
 VWAP_WINDOW = 14
 RSI_PERIOD = 14
-
-# --- VWAP crossover ---
 FAST_VWAP_WINDOW = 5
 SLOW_VWAP_WINDOW = 20
 
+# --- Helper functions ---
 def compute_vwap(prices):
     return sum(prices) / len(prices)
-
-def compute_fast_slow_vwap(prices):
-    fast_vwap = compute_vwap(prices[-FAST_VWAP_WINDOW:]) if len(prices) >= FAST_VWAP_WINDOW else compute_vwap(prices)
-    slow_vwap = compute_vwap(prices[-SLOW_VWAP_WINDOW:]) if len(prices) >= SLOW_VWAP_WINDOW else compute_vwap(prices)
-    return fast_vwap, slow_vwap
 
 def compute_rsi(prices, period=RSI_PERIOD):
     deltas = pd.Series(prices).diff().dropna()
@@ -47,14 +42,23 @@ def compute_rsi(prices, period=RSI_PERIOD):
 def compute_volatility(prices):
     return pd.Series(prices).pct_change().std()
 
-# --- Fetch historical prices ---
-async def fetch_prices(symbol):
-    resp = client.request("GET", f"/market_data/{symbol}/candles?granularity=60")  # 1-min candles
-    df = pd.DataFrame(resp)
-    df["close"] = df["close"].astype(float)
-    return df["close"].tolist()
+def compute_fast_slow_vwap(prices):
+    fast_vwap = compute_vwap(prices[-FAST_VWAP_WINDOW:]) if len(prices) >= FAST_VWAP_WINDOW else compute_vwap(prices)
+    slow_vwap = compute_vwap(prices[-SLOW_VWAP_WINDOW:]) if len(prices) >= SLOW_VWAP_WINDOW else compute_vwap(prices)
+    return fast_vwap, slow_vwap
 
-# --- Fetch live account balances ---
+def get_trade_size(account_balance, allocation, volatility):
+    size = account_balance * allocation * (1 - volatility * VOLATILITY_FACTOR)
+    return max(size, 0)
+
+async def dynamic_sleep(symbol):
+    now = time.time()
+    last = LAST_TRADE.get(symbol, 0)
+    sleep_time = max(1, 10 - (now - last))  # e.g., min 1s, max 10s
+    await asyncio.sleep(sleep_time)
+    LAST_TRADE[symbol] = time.time()
+
+# --- Coinbase wrappers ---
 def get_accounts():
     return client.get_accounts()
 
@@ -65,17 +69,17 @@ def get_account_balance(account):
             total += float(a["balance"]["available"])
     return total
 
-# --- Execute order ---
+async def fetch_prices(symbol):
+    resp = client.request("GET", f"/market_data/{symbol}/candles?granularity=60")
+    df = pd.DataFrame(resp)
+    df["close"] = df["close"].astype(float)
+    return df["close"].tolist()
+
 async def execute_order(account_id, symbol, side, size):
     logger.info(f"[{account_id}] Executing {side.upper()} order for {symbol}, size {size:.4f}")
     data = {"side": side, "size": size, "symbol": symbol}
     resp = client.request("POST", "/orders", data)
     return resp
-
-# --- Dynamic trade sizing ---
-def get_trade_size(account_balance, allocation, volatility):
-    size = account_balance * allocation * (1 - volatility * VOLATILITY_FACTOR)
-    return max(size, 0)
 
 # --- Trailing Take-Profit & Stop-Loss ---
 async def check_trailing(account_id, symbol, prices):
@@ -112,6 +116,7 @@ async def check_trailing(account_id, symbol, prices):
 
 # --- Trading logic per account per symbol ---
 async def trade_account_symbol(account, symbol):
+    await dynamic_sleep(symbol)  # rate limiting per symbol
     account_id = account["id"]
     balance = get_account_balance([account])
     if balance <= 0:
