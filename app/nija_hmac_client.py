@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 import os
 import time
-import hmac
-import hashlib
 import json
 import asyncio
 import logging
-import aiohttp
 import pandas as pd
 from nija_hmac_client import CoinbaseClient
 
 # ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija.bot.hmac")
+logger = logging.getLogger("nija.bot.pro")
 
 # ---------------- Environment Variables ----------------
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
@@ -30,26 +27,28 @@ MIN_ALLOCATION = 0.02
 MAX_ALLOCATION = 0.10
 VOLATILITY_FACTOR = 0.5
 
+# VWAP + RSI parameters
 FAST_VWAP_WINDOW = 5
 SLOW_VWAP_WINDOW = 20
 RSI_PERIOD = 14
 
-# ---------------- HMAC Client ----------------
+# ---------------- Initialize HMAC Client ----------------
 client = CoinbaseClient()
 
-def fetch_accounts():
+# ---------------- Fetch Accounts ----------------
+async def get_accounts():
     status, accounts = client.request(method="GET", path="/v2/accounts")
     if status != 200:
         logger.error(f"❌ Failed to fetch accounts. Status: {status}")
         return []
-    logger.info("✅ Accounts fetched:")
-    for acct in accounts.get("data", []):
-        logger.info(f"{acct['name']} ({acct['currency']}): {acct['balance']['amount']}")
     return accounts.get("data", [])
 
 # ---------------- Fetch Historical Prices ----------------
 async def fetch_prices(symbol):
-    status, resp = client.request(method="GET", path=f"/market_data/{symbol}/candles?granularity=60")
+    status, resp = client.request(
+        method="GET",
+        path=f"/market_data/{symbol}/candles?granularity=60"
+    )
     if status != 200 or not resp:
         return []
     df = pd.DataFrame(resp)
@@ -87,8 +86,7 @@ async def execute_order(account_id, symbol, side, size):
     data = {"side": side, "size": size, "symbol": symbol}
     status, resp = client.request("POST", "/orders", data)
     if status != 200:
-        logger.warning(f"[{account_id}] Order failed: {resp}")
-        return None
+        logger.error(f"❌ Order failed: {resp}")
     return resp
 
 # ---------------- Trailing TTP / TSL ----------------
@@ -126,7 +124,7 @@ async def check_trailing(account_id, symbol, prices):
 # ---------------- Trading Logic ----------------
 async def trade_account_symbol(account, symbol):
     account_id = account["id"]
-    balance = float(account["balance"]["available"])
+    balance = float(account["balance"]["amount"])
     if balance <= 0:
         logger.warning(f"[{account_id}] Account balance zero, skipping {symbol}")
         return
@@ -144,6 +142,7 @@ async def trade_account_symbol(account, symbol):
     if account_id not in TRADE_STATE:
         TRADE_STATE[account_id] = {}
 
+    # VWAP crossover signals
     if fast_vwap > slow_vwap and rsi < 70 and symbol not in TRADE_STATE[account_id]:
         resp = await execute_order(account_id, symbol, "buy", trade_size)
         if resp:
@@ -161,7 +160,7 @@ async def trade_account_symbol(account, symbol):
 # ---------------- Main Loop ----------------
 async def main_loop():
     while True:
-        accounts = fetch_accounts()
+        accounts = await get_accounts()
         if not accounts:
             logger.warning("No accounts fetched. Check API key permissions.")
             await asyncio.sleep(30)
