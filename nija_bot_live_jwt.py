@@ -1,142 +1,127 @@
 import os
 import time
+import tempfile
 import logging
+import requests
 import pandas as pd
-import numpy as np
-from nija_coinbase_jwt_client import CoinbaseJWTClient
+import jwt
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija.bot.jwt.v2")
+logger = logging.getLogger("nija.jwt.bot")
 
-# --- Initialize JWT Client ---
+# --- Create temporary PEM file from env ---
+pem_content = os.getenv("COINBASE_PEM_CONTENT")
+if not pem_content:
+    raise ValueError("COINBASE_PEM_CONTENT not set in .env")
+
+temp_pem = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+temp_pem.write(pem_content.encode())
+temp_pem.flush()
+temp_pem_path = temp_pem.name
+os.environ["COINBASE_PRIVATE_KEY_PATH"] = temp_pem_path
+
+# --- Coinbase JWT Client ---
+class CoinbaseJWTClient:
+    def __init__(self):
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")
+        self.org_id = os.getenv("COINBASE_ISS")
+        self.pem_path = temp_pem_path
+
+        if not self.org_id or not self.pem_path:
+            raise Exception("Set COINBASE_ISS and COINBASE_PEM_CONTENT in your environment")
+
+        with open(self.pem_path, "r") as f:
+            self.private_key = f.read()
+
+        logger.info("CoinbaseJWTClient initialized. Org: %s", self.org_id)
+
+    def generate_jwt(self):
+        now_ts = int(time.time())
+        payload = {
+            "iss": self.org_id,
+            "sub": self.org_id,
+            "nbf": now_ts,
+            "iat": now_ts,
+            "exp": now_ts + 120
+        }
+        token = jwt.encode(payload, self.private_key, algorithm="ES256")
+        return token
+
+    def request(self, method, path, data=None):
+        token = self.generate_jwt()
+        url = f"{self.base_url}{path}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        resp = requests.request(method, url, headers=headers, json=data)
+        if resp.status_code not in [200, 201]:
+            logger.error("Error %s %s: %s", method, path, resp.text)
+        return resp.json()
+
+    def list_accounts(self):
+        return self.request("GET", "/platform/v1/wallets")
+
+    def create_trade(self, product_id, side, size, type="market"):
+        data = {
+            "product_id": product_id,
+            "side": side,
+            "size": str(size),
+            "type": type
+        }
+        return self.request("POST", "/trades", data)
+
+# --- Initialize client ---
 client = CoinbaseJWTClient()
+accounts = client.list_accounts()
+logger.info("Accounts: %s", accounts)
 
-# --- Bot Settings ---
-TRADING_PAIRS = ["BTC-USD", "ETH-USD", "XRP-USD", "ADA-USD", "LTC-USD", "SOL-USD", "BNB-USD"]
-MIN_TRADE_PERCENT = 0.02  # 2% of account equity
-MAX_TRADE_PERCENT = 0.10  # 10% of account equity
-TRADE_INTERVAL = 5  # seconds between market checks
-VWAP_PERIOD = 14
-RSI_PERIOD = 14
+# --- Trading settings ---
+TRADING_PAIRS = ["BTC/USD", "ETH/USD", "ADA/USD"]
+TRADE_AMOUNT = 0.01  # Example size
+TRADE_INTERVAL = 10  # seconds
 
-# --- Fetch Market Data ---
-def fetch_market_data(symbol, granularity=60, limit=100):
-    path = f"/platform/v1/candles?product_id={symbol}&granularity={granularity}&limit={limit}"
-    try:
-        data = client.request("GET", path)
-        if not data:
-            return pd.DataFrame()
-        df = pd.DataFrame(data)
-        df.rename(columns={
-            "time": "timestamp",
-            "low": "low",
-            "high": "high",
-            "open": "open",
-            "close": "close",
-            "volume": "volume"
-        }, inplace=True)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df.set_index('timestamp', inplace=True)
-        df = df.apply(pd.to_numeric, errors='coerce').ffill()
-        return df
-    except Exception as e:
-        logger.error("[NIJA] Error fetching market data for %s: %s", symbol, e)
-        return pd.DataFrame()
-
-# --- Calculate Indicators: SMA, VWAP, RSI ---
-def calculate_indicators(df):
-    if df.empty or len(df) < max(VWAP_PERIOD, RSI_PERIOD):
-        return {"buy_signal": False, "sell_signal": False}
-
-    # SMA crossover
-    df['fast_ma'] = df['close'].rolling(5).mean()
-    df['slow_ma'] = df['close'].rolling(20).mean()
-    
-    # VWAP
-    df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
-    
-    # RSI
-    delta = df['close'].diff()
-    up = delta.clip(lower=0)
-    down = -1 * delta.clip(upper=0)
-    roll_up = up.rolling(RSI_PERIOD).mean()
-    roll_down = down.rolling(RSI_PERIOD).mean()
-    rs = roll_up / roll_down
-    df['rsi'] = 100 - (100 / (1 + rs))
-
-    # Signals
-    buy_signal = (df['fast_ma'].iloc[-1] > df['slow_ma'].iloc[-1]) and (df['close'].iloc[-1] > df['vwap'].iloc[-1]) and (df['rsi'].iloc[-1] < 70)
-    sell_signal = (df['fast_ma'].iloc[-1] < df['slow_ma'].iloc[-1]) and (df['close'].iloc[-1] < df['vwap'].iloc[-1]) and (df['rsi'].iloc[-1] > 30)
-
-    return {"buy_signal": buy_signal, "sell_signal": sell_signal}
-
-# --- Dynamic trade sizing ---
-def get_trade_amount(account_balance, symbol):
-    amount = account_balance * MIN_TRADE_PERCENT
-    if amount > account_balance * MAX_TRADE_PERCENT:
-        amount = account_balance * MAX_TRADE_PERCENT
-    return round(amount, 8)  # round for precision
-
-# --- Place Order ---
-def place_order(symbol, side, amount):
-    path = "/platform/v1/trades"
-    order_data = {
-        "product_id": symbol,
-        "side": side,
-        "size": str(amount),
-        "type": "market"
+# --- Dummy market data fetcher ---
+def fetch_market_data(symbol):
+    now = pd.Timestamp.now()
+    data = {
+        "open": [100 + i for i in range(10)],
+        "high": [101 + i for i in range(10)],
+        "low": [99 + i for i in range(10)],
+        "close": [100 + i for i in range(10)],
+        "volume": [10 + i for i in range(10)],
+        "timestamp": [now - pd.Timedelta(minutes=i) for i in range(10)]
     }
-    try:
-        resp = client.request("POST", path, data=order_data)
-        logger.info("[NIJA] Order placed: %s %s", symbol, resp)
-        return resp
-    except Exception as e:
-        logger.error("[NIJA] Error placing order for %s: %s", symbol, e)
-        return None
+    df = pd.DataFrame(data)
+    df.set_index("timestamp", inplace=True)
+    return df
 
-# --- Main Bot Loop ---
+# --- Dummy signal calculator ---
+def calculate_signals(df):
+    # Replace with your real strategy
+    last_close = df["close"].iloc[-1]
+    signal = {"buy_signal": last_close % 2 == 0}  # example logic
+    return signal
+
+# --- Main trading loop ---
 def run_trading_bot():
-    logger.info("[NIJA] JWT Trading bot v2 started")
+    logger.info("[NIJA] Trading bot started.")
     while True:
         try:
-            # Fetch account info for dynamic sizing
-            accounts = client.get_accounts()
-            if not accounts:
-                logger.warning("[NIJA] No accounts returned. Skipping this loop.")
-                time.sleep(TRADE_INTERVAL)
-                continue
-
-            # For simplicity, use first account's balance in USD
-            account_balance = float(accounts[0].get("balance", 100))  # default 100 if missing
-
             for symbol in TRADING_PAIRS:
                 df = fetch_market_data(symbol)
-                if df.empty:
-                    continue
-
-                signals = calculate_indicators(df)
-                if signals["buy_signal"]:
-                    side = "buy"
-                elif signals["sell_signal"]:
-                    side = "sell"
-                else:
-                    continue  # no trade
-
-                trade_amount = get_trade_amount(account_balance, symbol)
-                if trade_amount <= 0:
-                    continue
-
-                place_order(symbol, side, trade_amount)
-
+                signals = calculate_signals(df)
+                side = "buy" if signals["buy_signal"] else "sell"
+                response = client.create_trade(product_id=symbol.replace("/", "-"), side=side, size=TRADE_AMOUNT)
+                logger.info("[NIJA] Trade %s %s: %s", symbol, side, response)
             time.sleep(TRADE_INTERVAL)
-
         except KeyboardInterrupt:
-            logger.info("[NIJA] Bot stopped manually")
+            logger.info("[NIJA] Bot stopped manually.")
             break
         except Exception as e:
-            logger.error("[NIJA] Unexpected error in main loop: %s", e)
+            logger.error("[NIJA] Unexpected error: %s", e)
             time.sleep(TRADE_INTERVAL)
 
-# --- Run Bot ---
+# --- Start bot ---
 if __name__ == "__main__":
     run_trading_bot()
