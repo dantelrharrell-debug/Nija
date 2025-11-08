@@ -7,9 +7,9 @@ Features:
 - Supports two modes:
     * REST API Key/Secret mode (default)
     * Advanced / JWT PEM mode (set COINBASE_API_TYPE=advanced)
-- Writes PEM content from env var to a file when needed.
+- Writes PEM content from env var to a file (if provided).
 - Validates and logs exactly which env vars are missing.
-- Provides a simple `list_accounts()` helper (uses requests).
+- Provides `list_accounts()` plus backward-compatible aliases `get_accounts()` and `accounts()`.
 - Clear error messages (no secrets printed).
 """
 
@@ -41,6 +41,9 @@ class CoinbaseClient:
         client = CoinbaseClient()
     Then:
         accounts = client.list_accounts()
+        # or backward compatible:
+        accounts = client.get_accounts()
+        accounts = client.accounts()
     """
 
     DEFAULT_BASE = "https://api.coinbase.com"            # Coinbase (merchant) API default
@@ -205,6 +208,21 @@ class CoinbaseClient:
         logger.info("Fetching accounts from Coinbase at %s", self.base_url)
         return self._request("GET", "/accounts")
 
+    # Backwards-compatible aliases (some codebases call different method names)
+    def get_accounts(self):
+        """
+        Backwards-compatible alias for list_accounts().
+        """
+        logger.debug("get_accounts() -> calling list_accounts()")
+        return self.list_accounts()
+
+    def accounts(self):
+        """
+        Extra compatibility alias.
+        """
+        logger.debug("accounts() -> calling list_accounts()")
+        return self.list_accounts()
+
     def get_account(self, account_id: str):
         """
         Get a specific account by id: GET /accounts/{account_id}
@@ -228,7 +246,7 @@ if __name__ == "__main__":
     try:
         client = CoinbaseClient()
         logger.info("CoinbaseClient initialized successfully.")
-        # We will not automatically call list_accounts here in production — uncomment if you want a live check.
+        # Note: do not auto-call live API methods in production. Uncomment if you want a live check.
         # accounts = client.list_accounts()
         # logger.info("Accounts fetched: %s", json.dumps(accounts, indent=2)[:1000])
     except Exception as e:
