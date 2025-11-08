@@ -6,10 +6,12 @@ import requests
 import pandas as pd
 import jwt
 
+from indicators import calculate_indicators  # <-- your existing indicator functions
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nija.jwt.bot")
 
-# --- Create temporary PEM file from env ---
+# --- Create temporary PEM file from .env ---
 pem_content = os.getenv("COINBASE_PEM_CONTENT")
 if not pem_content:
     raise ValueError("COINBASE_PEM_CONTENT not set in .env")
@@ -64,7 +66,7 @@ class CoinbaseJWTClient:
 
     def create_trade(self, product_id, side, size, type="market"):
         data = {
-            "product_id": product_id,
+            "product_id": product_id.replace("/", "-"),
             "side": side,
             "size": str(size),
             "type": type
@@ -77,12 +79,16 @@ accounts = client.list_accounts()
 logger.info("Accounts: %s", accounts)
 
 # --- Trading settings ---
-TRADING_PAIRS = ["BTC/USD", "ETH/USD", "ADA/USD"]
-TRADE_AMOUNT = 0.01  # Example size
-TRADE_INTERVAL = 10  # seconds
+TRADING_PAIRS = ["BTC/USD", "ETH/USD", "ADA/USD", "SOL/USD", "LTC/USD", "BNB/USD"]
+TRADE_AMOUNT = 0.01  # Default size per trade, adjust per coin
+TRADE_INTERVAL = 5  # seconds
 
-# --- Dummy market data fetcher ---
+# --- Market data fetcher ---
 def fetch_market_data(symbol):
+    """
+    Replace with real Coinbase market data fetch if needed.
+    Here we create a dummy DataFrame for testing and indicator calculations.
+    """
     now = pd.Timestamp.now()
     data = {
         "open": [100 + i for i in range(10)],
@@ -96,25 +102,28 @@ def fetch_market_data(symbol):
     df.set_index("timestamp", inplace=True)
     return df
 
-# --- Dummy signal calculator ---
-def calculate_signals(df):
-    # Replace with your real strategy
-    last_close = df["close"].iloc[-1]
-    signal = {"buy_signal": last_close % 2 == 0}  # example logic
-    return signal
-
 # --- Main trading loop ---
 def run_trading_bot():
     logger.info("[NIJA] Trading bot started.")
     while True:
         try:
             for symbol in TRADING_PAIRS:
+                # 1️⃣ Fetch market data
                 df = fetch_market_data(symbol)
-                signals = calculate_signals(df)
-                side = "buy" if signals["buy_signal"] else "sell"
-                response = client.create_trade(product_id=symbol.replace("/", "-"), side=side, size=TRADE_AMOUNT)
+
+                # 2️⃣ Calculate signals using your custom indicators
+                signals = calculate_indicators(df)  # returns {"buy_signal": True/False}
+
+                # 3️⃣ Determine trade side
+                side = "buy" if signals.get("buy_signal") else "sell"
+
+                # 4️⃣ Place live trade
+                response = client.create_trade(product_id=symbol, side=side, size=TRADE_AMOUNT)
                 logger.info("[NIJA] Trade %s %s: %s", symbol, side, response)
+
+            # 5️⃣ Wait before next cycle
             time.sleep(TRADE_INTERVAL)
+
         except KeyboardInterrupt:
             logger.info("[NIJA] Bot stopped manually.")
             break
