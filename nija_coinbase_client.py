@@ -1,50 +1,65 @@
 import os
-import time
-import jwt
 import requests
+import time
+import hmac
+import hashlib
+import base64
 from loguru import logger
 
-CDP_BASE = "https://api.cdp.coinbase.com"
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-
-if not API_KEY or not API_SECRET:
-    logger.error("CDP API_KEY or API_SECRET not set")
-    raise SystemExit(1)
-
 class CoinbaseClient:
-    def __init__(self):
-        self.api_key = API_KEY
-        self.api_secret = API_SECRET
+    def __init__(self, advanced=False):
+        """
+        Initializes Coinbase client.
 
-    def _generate_jwt(self):
-        payload = {
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 30,
+        Parameters:
+        advanced (bool): If True, uses Coinbase Advanced API, passphrase not required.
+        """
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+        self.advanced = advanced
+
+        if not self.api_key or not self.api_secret:
+            raise ValueError("Coinbase API key and secret must be set")
+
+        if not advanced and not self.passphrase:
+            raise ValueError("Coinbase API passphrase not set for standard API")
+
+        logger.success(f"CoinbaseClient initialized (Advanced={self.advanced})")
+
+    def _get_headers(self, method, path, body=""):
+        """
+        Generate authentication headers for Coinbase API.
+        """
+        timestamp = str(int(time.time()))
+        message = timestamp + method.upper() + path + body
+        secret_bytes = base64.b64decode(self.api_secret)
+        signature = hmac.new(secret_bytes, message.encode(), hashlib.sha256).digest()
+        signature_b64 = base64.b64encode(signature).decode()
+
+        headers = {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": signature_b64,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+            "Content-Type": "application/json"
         }
-        token = jwt.encode(payload, self.api_secret, algorithm="HS256")
-        return token
 
-    def _request(self, method, path, params=None, data=None):
-        url = f"{CDP_BASE}{path}"
-        headers = {"Authorization": f"Bearer {self._generate_jwt()}"}
-        try:
-            resp = requests.request(method, url, headers=headers, params=params, json=data, timeout=10)
-            resp.raise_for_status()
-            return {"ok": True, "data": resp.json()}
-        except requests.HTTPError as e:
-            return {"ok": False, "error": str(e), "status": resp.status_code}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        if not self.advanced:
+            headers["CB-ACCESS-PASSPHRASE"] = self.passphrase
 
-    def list_accounts(self):
-        return self._request("GET", "/platform/v2/evm/accounts")
+        return headers
 
-    def place_order(self, account_id, side, product, size):
-        payload = {
-            "account_id": account_id,
-            "side": side,
-            "product_id": product,
-            "size": size
-        }
-        return self._request("POST", "/platform/v2/evm/orders", data=payload)
+    def get_accounts(self):
+        """
+        Fetch all accounts from Coinbase (works with standard or Advanced API)
+        """
+        path = "/v2/accounts"
+        url = self.base_url + path
+        headers = self._get_headers("GET", path)
+
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            raise ValueError(f"Error fetching accounts: {response.status_code} {response.text}")
+
+        return response.json()
