@@ -1,4 +1,5 @@
-from nija_coinbase_client import CoinbaseClient
+# test_coinbase_client.py
+from nija_hmac_client import CoinbaseClient
 import json
 
 client = CoinbaseClient()
