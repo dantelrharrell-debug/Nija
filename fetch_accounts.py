@@ -1,24 +1,17 @@
+#!/usr/bin/env python3
+# fetch_cdp_accounts.py
+
+from coinbase_advanced_py.advanced import CoinbaseAdvanced
 import os
-from nija_coinbase_jwt_client import CoinbaseJWTClient
 
-def fix_pem(pem_env_var: str) -> str:
-    """Fix PEM formatting for JWT secret."""
-    pem = os.getenv(pem_env_var, "")
-    return pem.replace("\\n", "\n")
+client = CoinbaseAdvanced(
+    api_key=os.getenv("COINBASE_API_KEY"),
+    api_secret=os.getenv("COINBASE_API_SECRET").replace("\\n","\n"),
+    base_url="https://api.cdp.coinbase.com"
+)
 
-def main():
-    # Fix the PEM key
-    os.environ["COINBASE_API_SECRET"] = fix_pem("COINBASE_API_SECRET")
-    
-    # Initialize the JWT client
-    try:
-        client = CoinbaseJWTClient()
-        accounts = client.get_accounts()
-        print("✅ Accounts fetched successfully:")
-        for acc in accounts:
-            print(acc)
-    except Exception as e:
-        print(f"❌ Failed to fetch accounts: {e}")
-
-if __name__ == "__main__":
-    main()
+try:
+    accounts = client.get_accounts()
+    print(accounts)
+except Exception as e:
+    print("Error:", e)
