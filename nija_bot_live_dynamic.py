@@ -1,145 +1,174 @@
-#!/usr/bin/env python3
 import os
-import tempfile
-import logging
 import asyncio
-import time
-import requests
+import logging
+import pandas as pd
 from nija_coinbase_jwt_client import CoinbaseJWTClient
 
-# ---------------------------
-# Logging
-# ---------------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija.bot.dynamic")
+logger = logging.getLogger("nija.bot.pro")
 
-# ---------------------------
-# PEM setup
-# ---------------------------
-pem_content = os.getenv("COINBASE_PEM_CONTENT")
-if not pem_content:
-    raise ValueError("COINBASE_PEM_CONTENT not set in .env")
-
-temp_pem = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-temp_pem.write(pem_content.encode())
-temp_pem.flush()
-os.environ["COINBASE_PRIVATE_KEY_PATH"] = temp_pem.name
-
-# ---------------------------
-# Initialize client
-# ---------------------------
+# --- Initialize Coinbase JWT Client ---
 client = CoinbaseJWTClient()
 
-# ---------------------------
-# Indicator calculations
-# ---------------------------
-def calculate_vwap(trades):
-    total_volume = sum(t["size"] for t in trades)
-    if total_volume == 0:
-        return 0
-    return sum(t["price"] * t["size"] for t in trades) / total_volume
+# --- Example symbols ---
+SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD"]
 
-def calculate_rsi(prices, period=14):
-    if len(prices) < period + 1:
-        return 50
-    gains, losses = [], []
-    for i in range(1, period + 1):
-        delta = prices[-i] - prices[-i-1]
-        if delta > 0:
-            gains.append(delta)
-        else:
-            losses.append(abs(delta))
-    avg_gain = sum(gains)/period
-    avg_loss = sum(losses)/period
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+# --- Trade state per account per symbol ---
+TRADE_STATE = {}  # TRADE_STATE[account_id][symbol] = {trade info}
 
-def calculate_trade_size(equity, min_pct=0.02, max_pct=0.10):
-    # Risk allocation: scale trade size by account equity
-    size = equity * 0.05  # default 5%
-    return max(min(size, equity * max_pct), equity * min_pct)
+# --- Trading parameters ---
+MIN_ALLOCATION = 0.02  # 2% per trade
+MAX_ALLOCATION = 0.10  # 10% per trade
+VOLATILITY_FACTOR = 0.5  # dynamic allocation adjustment
 
-# ---------------------------
-# Coinbase requests helper
-# ---------------------------
-def get_recent_trades(symbol, limit=50):
-    url = f"{client.base_url}/market/trades?symbol={symbol}&limit={limit}"
-    resp = requests.get(url)
-    if resp.status_code != 200:
-        logger.error(f"Failed fetching trades for {symbol}: {resp.text}")
-        return []
-    data = resp.json()
-    return [{"price": float(t["price"]), "size": float(t["size"])} for t in data]
+VWAP_WINDOW = 14
+RSI_PERIOD = 14
 
-async def execute_order(symbol, side, size, price=None):
-    try:
-        data = {
-            "product_id": symbol,
-            "side": side,
-            "size": str(size),
-        }
-        if price:
-            data["price"] = str(price)
-            data["type"] = "limit"
-        else:
-            data["type"] = "market"
-        resp = client.request("POST", "/trading/orders", data)
-        logger.info(f"{symbol} {side} order executed: {resp}")
-        return resp
-    except Exception as e:
-        logger.error(f"Failed to execute {side} order for {symbol}: {e}")
+# --- VWAP crossover ---
+FAST_VWAP_WINDOW = 5
+SLOW_VWAP_WINDOW = 20
 
-# ---------------------------
-# Main trading logic per pair/account
-# ---------------------------
-async def trade_symbol(symbol, account):
-    try:
-        trades = get_recent_trades(symbol)
-        prices = [t["price"] for t in trades]
+def compute_vwap(prices):
+    return sum(prices) / len(prices)
 
-        vwap = calculate_vwap(trades)
-        rsi = calculate_rsi(prices)
+def compute_fast_slow_vwap(prices):
+    fast_vwap = compute_vwap(prices[-FAST_VWAP_WINDOW:]) if len(prices) >= FAST_VWAP_WINDOW else compute_vwap(prices)
+    slow_vwap = compute_vwap(prices[-SLOW_VWAP_WINDOW:]) if len(prices) >= SLOW_VWAP_WINDOW else compute_vwap(prices)
+    return fast_vwap, slow_vwap
 
-        equity = float(account["balance"]["amount"])
-        trade_size = calculate_trade_size(equity)
+def compute_rsi(prices, period=RSI_PERIOD):
+    deltas = pd.Series(prices).diff().dropna()
+    gain = deltas.clip(lower=0).rolling(period).mean()
+    loss = -deltas.clip(upper=0).rolling(period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1] if not rsi.empty else 50
 
-        logger.info(f"{symbol} | Account: {account['currency']} | VWAP: {vwap} | RSI: {rsi} | Trade Size: {trade_size}")
+def compute_volatility(prices):
+    return pd.Series(prices).pct_change().std()
 
-        # Signal logic
-        if rsi < 30:
-            await execute_order(symbol, "buy", trade_size)
-        elif rsi > 70:
-            await execute_order(symbol, "sell", trade_size)
-        else:
-            logger.info(f"No trade signal for {symbol} | RSI: {rsi}")
+# --- Fetch historical prices ---
+async def fetch_prices(symbol):
+    resp = client.request("GET", f"/market_data/{symbol}/candles?granularity=60")  # 1-min candles
+    df = pd.DataFrame(resp)
+    df["close"] = df["close"].astype(float)
+    return df["close"].tolist()
 
-    except Exception as e:
-        logger.error(f"Error trading {symbol}: {e}")
+# --- Fetch live account balances ---
+def get_accounts():
+    return client.get_accounts()
 
-# ---------------------------
-# Multi-account / multi-pair runner
-# ---------------------------
-async def trade_loop(symbols):
+def get_account_balance(account):
+    total = 0
+    for a in account:
+        if a["currency"] == "USD":
+            total += float(a["balance"]["available"])
+    return total
+
+# --- Execute order ---
+async def execute_order(account_id, symbol, side, size):
+    logger.info(f"[{account_id}] Executing {side.upper()} order for {symbol}, size {size:.4f}")
+    data = {"side": side, "size": size, "symbol": symbol}
+    resp = client.request("POST", "/orders", data)
+    return resp
+
+# --- Dynamic trade sizing ---
+def get_trade_size(account_balance, allocation, volatility):
+    size = account_balance * allocation * (1 - volatility * VOLATILITY_FACTOR)
+    return max(size, 0)
+
+# --- Trailing Take-Profit & Stop-Loss ---
+async def check_trailing(account_id, symbol, prices):
+    state = TRADE_STATE.get(account_id, {}).get(symbol)
+    if not state:
+        return
+
+    side = state["side"]
+    entry = state["entry"]
+    ttp = state["ttp"]
+    tsl = state["tsl"]
+    size = state["size"]
+    current_price = prices[-1]
+
+    if side == "buy":
+        if current_price > ttp:
+            state["ttp"] = current_price * 0.99
+        if current_price - entry > 0:
+            state["tsl"] = max(tsl, current_price * 0.98)
+        if current_price < tsl or current_price < ttp:
+            await execute_order(account_id, symbol, "sell", size)
+            TRADE_STATE[account_id].pop(symbol)
+            logger.info(f"[{account_id}] {symbol} BUY trade exited.")
+
+    elif side == "sell":
+        if current_price < ttp:
+            state["ttp"] = current_price * 1.01
+        if entry - current_price > 0:
+            state["tsl"] = min(tsl, current_price * 1.02)
+        if current_price > tsl or current_price > ttp:
+            await execute_order(account_id, symbol, "buy", size)
+            TRADE_STATE[account_id].pop(symbol)
+            logger.info(f"[{account_id}] {symbol} SELL trade exited.")
+
+# --- Trading logic per account per symbol ---
+async def trade_account_symbol(account, symbol):
+    account_id = account["id"]
+    balance = get_account_balance([account])
+    if balance <= 0:
+        logger.warning(f"[{account_id}] Account balance zero, skipping {symbol}")
+        return
+
+    prices = await fetch_prices(symbol)
+    if len(prices) < SLOW_VWAP_WINDOW:
+        return
+
+    fast_vwap, slow_vwap = compute_fast_slow_vwap(prices)
+    rsi = compute_rsi(prices)
+    volatility = compute_volatility(prices)
+    allocation = min(MAX_ALLOCATION, max(MIN_ALLOCATION, rsi / 100))
+    trade_size = get_trade_size(balance, allocation, volatility)
+
+    if account_id not in TRADE_STATE:
+        TRADE_STATE[account_id] = {}
+
+    # --- VWAP crossover signals ---
+    if fast_vwap > slow_vwap and rsi < 70 and symbol not in TRADE_STATE[account_id]:
+        resp = await execute_order(account_id, symbol, "buy", trade_size)
+        if resp:
+            price = prices[-1]
+            TRADE_STATE[account_id][symbol] = {
+                "side": "buy",
+                "entry": price,
+                "size": trade_size,
+                "ttp": price * 1.01,
+                "tsl": price * 0.98
+            }
+
+    elif fast_vwap < slow_vwap and rsi > 30 and symbol not in TRADE_STATE[account_id]:
+        resp = await execute_order(account_id, symbol, "sell", trade_size)
+        if resp:
+            price = prices[-1]
+            TRADE_STATE[account_id][symbol] = {
+                "side": "sell",
+                "entry": price,
+                "size": trade_size,
+                "ttp": price * 0.99,
+                "tsl": price * 1.02
+            }
+
+    await check_trailing(account_id, symbol, prices)
+
+# --- Main loop ---
+async def main_loop():
     while True:
-        accounts = client.list_accounts()
-        if not accounts:
-            logger.warning("No accounts available, retrying in 5s...")
-            await asyncio.sleep(5)
-            continue
-
+        accounts = get_accounts()
         tasks = []
         for account in accounts:
-            for symbol in symbols:
-                tasks.append(trade_symbol(symbol, account))
+            for symbol in SYMBOLS:
+                tasks.append(trade_account_symbol(account, symbol))
         await asyncio.gather(*tasks)
-        await asyncio.sleep(5)  # loop delay
+        await asyncio.sleep(60)  # recalc every minute
 
-# ---------------------------
-# Entry point
-# ---------------------------
+# --- Run bot ---
 if __name__ == "__main__":
-    symbols_to_trade = ["BTC-USD", "ETH-USD", "SOL-USD"]  # add any pair
-    logger.info("Starting Nija Dynamic Aggressive Trading Bot...")
-    asyncio.run(trade_loop(symbols_to_trade))
+    asyncio.run(main_loop())
