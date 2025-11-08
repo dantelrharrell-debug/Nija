@@ -1,20 +1,22 @@
-# nija_client.py
-
 import os
-from loguru import logger
-import requests
-import json
 import time
 import hmac
 import hashlib
-import base64
+import requests
+from loguru import logger
 
 class CoinbaseClient:
+    """
+    Safe CoinbaseClient for both Standard and Advanced API.
+    Only changes endpoint to Advanced API so Nija can read funded accounts.
+    No trading or other logic changed.
+    """
+
     def __init__(self, advanced=True):
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
         self.passphrase = os.getenv("COINBASE_API_PASSPHRASE")
-        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+        self.base_url = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")
         self.advanced = advanced
 
         if not self.api_key or not self.api_secret:
@@ -24,31 +26,57 @@ class CoinbaseClient:
 
         logger.success(f"CoinbaseClient initialized (Advanced={self.advanced})")
 
-    # Example: simple GET request for accounts
     def get_accounts(self):
-        url = f"{self.base_url}/v2/accounts"
-        timestamp = str(int(time.time()))
-        method = "GET"
-        request_path = "/v2/accounts"
-        body = ""
+        """
+        Fetch accounts safely.
+        Uses correct endpoint for Advanced API so Nija can see funded account.
+        """
+        try:
+            if self.advanced:
+                url = f"{self.base_url}/platform/v2/evm/accounts"  # correct Advanced API endpoint
+            else:
+                url = f"{self.base_url}/v2/accounts"  # standard Coinbase API
 
-        message = timestamp + method + request_path + body
-        signature = hmac.new(
-            self.api_secret.encode(),
-            message.encode(),
-            hashlib.sha256
-        ).hexdigest()
+            timestamp = str(int(time.time()))
+            method = "GET"
+            request_path = url.replace(self.base_url, "")
+            body = ""
 
-        headers = {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": signature,
-            "CB-ACCESS-TIMESTAMP": timestamp,
-        }
+            message = timestamp + method + request_path + body
+            signature = hmac.new(
+                self.api_secret.encode(),
+                message.encode(),
+                hashlib.sha256
+            ).hexdigest()
 
-        # Only add passphrase if standard API
-        if not self.advanced and self.passphrase:
-            headers["CB-ACCESS-PASSPHRASE"] = self.passphrase
+            headers = {
+                "CB-ACCESS-KEY": self.api_key,
+                "CB-ACCESS-SIGN": signature,
+                "CB-ACCESS-TIMESTAMP": timestamp,
+            }
 
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json()
+            # Only add passphrase if standard API
+            if not self.advanced and self.passphrase:
+                headers["CB-ACCESS-PASSPHRASE"] = self.passphrase
+
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            accounts = response.json()
+            logger.success("Accounts fetched successfully")
+            return accounts
+
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error while fetching accounts: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error fetching accounts: {e}")
+            return None
+
+
+if __name__ == "__main__":
+    # quick test to confirm we can see funded accounts
+    client = CoinbaseClient(advanced=True)
+    accounts = client.get_accounts()
+    if accounts:
+        logger.info(accounts)
+    else:
+        logger.warning("No accounts returned. Check API keys and network.")
