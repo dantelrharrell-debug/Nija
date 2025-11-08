@@ -1,4 +1,4 @@
-# nija_start_live_hmac.py (or your main bot entry)
+# nija_start_live_hmac.py
 from nija_hmac_client import CoinbaseClient
 from loguru import logger
 
