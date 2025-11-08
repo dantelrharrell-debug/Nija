@@ -1,3 +1,12 @@
+from nija_hmac_client import CoinbaseClient
+
+client = CoinbaseClient()
+status, accounts = client.get_accounts()
+if status != 200:
+    raise Exception(f"Failed to fetch accounts: {accounts}")
+
+print(accounts)
+
 run_trader.py
 
 # --- Existing trading logic below ---
