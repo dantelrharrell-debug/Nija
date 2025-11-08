@@ -1,3 +1,22 @@
+# nija_bot_live.py
+from nija_hmac_client import CoinbaseClient
+import time
+
+# ✅ Initialize HMAC client
+client = CoinbaseClient()
+status, accounts = client.get_accounts()
+if status != 200:
+    raise Exception(f"Failed to fetch accounts: {accounts}")
+
+print("Fetched accounts successfully:", accounts)
+
+# --- Existing trading logic below ---
+# Your trading loop can now safely use `accounts`
+while True:
+    # Example: check balances or open positions
+    print("Checking balances...")
+    time.sleep(60)
+
 # nija_trading_loop.py
 from coinbase_advanced_py.client import CoinbaseClient
 import os
