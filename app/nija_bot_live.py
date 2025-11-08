@@ -1,14 +1,4 @@
-# nija_bot_live.py
-from nija_hmac_client import CoinbaseClient
-import time
-
-# ✅ Initialize HMAC client
-client = CoinbaseClient()
-status, accounts = client.get_accounts()
-if status != 200:
-    raise Exception(f"Failed to fetch accounts: {accounts}")
-
-print("Fetched accounts successfully:", accounts)
+nija_bot_live.py
 
 # --- Existing trading logic below ---
 # Your trading loop can now safely use `accounts`
