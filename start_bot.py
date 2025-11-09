@@ -1,3 +1,93 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import time
+from loguru import logger
+from nija_client import CoinbaseClient as NijaClient
+
+# -------------------------
+# Initialize Nija Bot
+# -------------------------
+logger.info("Starting Nija bot (entrypoint)")
+
+try:
+    client = NijaClient()
+except Exception as e:
+    logger.error("Failed to initialize Nija client:", e)
+    raise
+
+# -------------------------
+# Fetch and print balances
+# -------------------------
+def fetch_and_log_balances():
+    balances = client.get_balances()
+    if not balances:
+        logger.warning("[NIJA-BALANCE] No balances returned (check JWT/PEM/ISS)")
+        return
+    usd_balance = balances.get("USD", 0) if isinstance(balances, dict) else 0
+    logger.success(f"[NIJA-BALANCE] USD: {usd_balance}")
+    for cur, amt in balances.items():
+        if cur != "USD":
+            logger.info(f"[NIJA-BALANCE] {cur}: {amt}")
+
+# -------------------------
+# Main Loop
+# -------------------------
+def main_loop():
+    while True:
+        fetch_and_log_balances()
+        time.sleep(5)  # adjust polling interval as needed
+
+# -------------------------
+# Run
+# -------------------------
+if __name__ == "__main__":
+    try:
+        fetch_and_log_balances()
+        logger.info("Startup complete — bot ready for live trading")
+        main_loop()
+    except KeyboardInterrupt:
+        logger.info("Nija bot stopped by user")
+    except Exception as e:
+        logger.error("Unhandled error in main loop:", e)
+        raise Exception as e:
+    logger.error("Failed to initialize Nija client:", e)
+    raise
+
+# -------------------------
+# Fetch and print balances
+# -------------------------
+def fetch_and_log_balances():
+    balances = client.get_balances()
+    if not balances:
+        logger.warning("[NIJA-BALANCE] No balances returned (check JWT/PEM/ISS)")
+        return
+    for cur, amt in balances.items():
+        logger.info(f"[NIJA-BALANCE] {cur}: {amt}")
+
+# -------------------------
+# Main Loop
+# -------------------------
+def main_loop():
+    while True:
+        fetch_and_log_balances()
+        time.sleep(5)  # adjust polling interval as needed
+
+# -------------------------
+# Run
+# -------------------------
+if __name__ == "__main__":
+    try:
+        fetch_and_log_balances()
+        logger.info("Startup complete — bot ready for live trading")
+        main_loop()
+    except KeyboardInterrupt:
+        logger.info("Nija bot stopped by user")
+    except Exception as e:
+        logger.error("Unhandled error in main loop:", e)
+        raise
+
 # start_bot.py
 import os
 import time
