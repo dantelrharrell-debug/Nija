@@ -27,7 +27,6 @@ def fetch_accounts():
         return []
 
 if __name__ == "__main__":
-    # Basic env check (safe, visible in logs)
     required_vars = ["COINBASE_API_KEY", "COINBASE_API_SECRET"]
     missing = [v for v in required_vars if v not in os.environ]
     if missing:
