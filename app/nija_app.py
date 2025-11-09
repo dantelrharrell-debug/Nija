@@ -1,52 +1,57 @@
 # nija_app.py
 import os
+import sys
 from loguru import logger
-from coinbase_advanced_py import CoinbaseAdvancedClient
 from decimal import Decimal
-from nija_balance_helper import get_usd_balance
+from coinbase_advanced_py import CoinbaseAdvancedClient
 
-# ---------------- Environment variables ----------------
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
+# ----------------------------
+# Environment / Config
+# ----------------------------
+PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 COINBASE_ISS = os.getenv("COINBASE_ISS")
 COINBASE_API_BASE = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")
 
-if not COINBASE_PEM_CONTENT or not COINBASE_ISS:
-    logger.error("⚠️ Missing Coinbase PEM content or ISS. Set COINBASE_PEM_CONTENT and COINBASE_ISS in env.")
-    raise RuntimeError("Missing Coinbase credentials.")
+if not PEM_CONTENT or not COINBASE_ISS:
+    logger.error("Missing Coinbase Advanced credentials (COINBASE_PEM_CONTENT or COINBASE_ISS)")
+    sys.exit(1)
 
-# ---------------- Instantiate Advanced Client ----------------
+# ----------------------------
+# Initialize client
+# ----------------------------
 try:
     client = CoinbaseAdvancedClient(
-        pem_content=COINBASE_PEM_CONTENT,
+        pem_content=PEM_CONTENT,
         iss=COINBASE_ISS,
         base_url=COINBASE_API_BASE,
-        debug=True  # optional, logs all requests/responses
+        debug=True  # set to False in production
     )
     logger.info("✅ Coinbase Advanced client initialized successfully.")
 except Exception as e:
-    logger.exception("❌ Failed to initialize Coinbase Advanced client: %s", e)
-    raise
+    logger.exception(f"Failed to initialize Coinbase Advanced client: {e}")
+    sys.exit(1)
 
-# ---------------- Fetch accounts & USD balance ----------------
-try:
-    accounts = client.get_accounts()
-    if not accounts:
-        logger.error("❌ No accounts returned from Coinbase Advanced. Check permissions.")
-        raise RuntimeError("No accounts found.")
-    logger.info(f"✅ Found {len(accounts)} account(s).")
+# ----------------------------
+# Helper: fetch USD balance
+# ----------------------------
+def get_usd_balance(client) -> Decimal:
+    try:
+        balances = client.get_spot_account_balances()
+        usd = balances.get("USD") or balances.get("USDC") or 0
+        return Decimal(str(usd))
+    except Exception as e:
+        logger.exception(f"Failed to fetch USD balance: {e}")
+        return Decimal("0")
 
+# ----------------------------
+# Main diagnostics / test
+# ----------------------------
+if __name__ == "__main__":
     usd_balance = get_usd_balance(client)
-    logger.info(f"💰 USD Balance: {usd_balance}")
-except Exception as e:
-    logger.exception("❌ Failed to fetch accounts or balances: %s", e)
-    raise
+    logger.info(f"USD Balance: {usd_balance}")
 
-# ---------------- Fetch recent trades (optional) ----------------
-try:
-    recent_trades = client.get_recent_trades(limit=5)
-    logger.info(f"📈 Recent trades (last 5): {recent_trades}")
-except Exception:
-    logger.warning("⚠️ Could not fetch recent trades. Ignoring.")
-
-# ---------------- Ready for trading ----------------
-logger.info("🚀 Nija bot is ready for trading!")
+    try:
+        trades = client.get_recent_trades(limit=5)
+        logger.info(f"Recent Trades: {trades}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch recent trades: {e}")
