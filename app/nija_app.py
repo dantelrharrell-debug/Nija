@@ -1,24 +1,22 @@
 # nija_app.py
 from loguru import logger
 from nija_coinbase_advanced import client as cb_adv_client
+import time
 
 logger = logger.bind(name="nija_app")
 
-# --- Check client ---
+# --- Test Advanced client ---
 try:
     accounts = cb_adv_client.get_accounts()
     if not accounts:
         logger.error("No accounts returned. Bot will not start.")
         exit(1)
-    else:
-        logger.info(f"Coinbase Advanced client ready. Found {len(accounts)} account(s).")
+    logger.info(f"Coinbase Advanced client ready. Found {len(accounts)} account(s).")
 except Exception as e:
     logger.exception(f"Failed to fetch accounts: {e}")
     exit(1)
 
-# --- Example trading loop ---
-import time
-
+# --- Live trading loop ---
 def live_trading_loop():
     logger.info("Starting live trading loop...")
     while True:
