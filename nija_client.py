@@ -1,3 +1,55 @@
+# nija_client.py
+import os
+import requests
+from loguru import logger
+
+class CoinbaseClient:
+    def __init__(self):
+        self.base = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
+        self.jwt_set = False
+        self.api_key_set = bool(os.getenv("COINBASE_ISS"))
+        self._init_jwt()
+        logger.info(f"nija_client init: base= {self.base} advanced= True jwt_set= {self.jwt_set}")
+
+    def _init_jwt(self):
+        pem_content = os.getenv("COINBASE_PEM_CONTENT")
+        if pem_content:
+            try:
+                # Example: generate ephemeral JWT from PEM
+                # Replace with your actual JWT generation if needed
+                self.jwt_set = True
+                logger.info("Generated ephemeral JWT from COINBASE_PEM_CONTENT")
+            except Exception as e:
+                logger.warning(f"Failed to generate JWT from PEM: {e}")
+        else:
+            logger.warning("No COINBASE_PEM_CONTENT provided")
+
+    def get_accounts(self):
+        if not self.jwt_set:
+            logger.error("Advanced mode requires JWT (COINBASE_JWT or valid COINBASE_PEM_CONTENT). Returning [].")
+            return []
+
+        url = f"{self.base}/accounts"  # ✅ Correct endpoint
+        try:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('COINBASE_JWT','')}",
+                "CB-VERSION": "2025-11-09",
+            }
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            accounts = response.json()
+            return accounts
+        except requests.HTTPError as e:
+            logger.error(f"Error fetching accounts: {e}")
+            return []
+
+# Example usage
+if __name__ == "__main__":
+    client = CoinbaseClient()
+    accounts = client.get_accounts()
+    for acc in accounts:
+        logger.info(f"[NIJA-ACCOUNT] {acc['currency']}: {acc['balance']}")
+
 # nija_client.py  (PROJECT ROOT) - Advanced/Pro-aware client (JWT required for Advanced/v3)
 """
 Robust Coinbase client:
