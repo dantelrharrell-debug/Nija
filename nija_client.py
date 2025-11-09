@@ -4,100 +4,55 @@ import os
 import time
 import json
 import requests
-import jwt
 from loguru import logger
-from typing import Dict, Any
+import hmac
+import hashlib
+import base64
 
-# === CoinbaseClient for Advanced / HMAC / JWT authentication ===
+# === CoinbaseClient for Advanced/Prime API ===
 class CoinbaseClient:
-    def __init__(
-        self,
-        api_key: str = None,
-        api_secret: str = None,
-        passphrase: str = None,
-        org_id: str = None,
-        base: str = None,
-        private_key_path: str = None,
-    ):
+    def __init__(self, api_key=None, api_secret=None, passphrase=None, base=None):
         self.api_key = api_key or os.getenv("COINBASE_API_KEY")
         self.api_secret = api_secret or os.getenv("COINBASE_API_SECRET")
-        self.passphrase = passphrase or os.getenv("COINBASE_PASSPHRASE")
-        self.org_id = org_id or os.getenv("COINBASE_ORG_ID")
-        self.base = base or os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
-        self.private_key_path = private_key_path or os.getenv("COINBASE_PRIVATE_KEY_PATH")
-
-        # JWT setup if private key exists
-        self.jwt_token = None
-        if self.private_key_path and os.path.exists(self.private_key_path):
-            try:
-                with open(self.private_key_path, "r") as f:
-                    self.private_key = f.read()
-                self.jwt_token = self._generate_jwt()
-                logger.success("JWT generated from private key")
-            except Exception as e:
-                logger.error(f"JWT generation failed: {e}")
-                self.jwt_token = None
-        else:
-            self.private_key = None
-
+        self.passphrase = passphrase or os.getenv("COINBASE_API_PASSPHRASE")
+        self.base = base or os.getenv("COINBASE_BASE", "https://api.coinbase.com")  # Correct base URL
         logger.info("CoinbaseClient initialized")
-        logger.info(f"Advanced mode: {'Yes' if self.jwt_token or self.api_key else 'No'}")
+        logger.info(f"Advanced mode: Yes")
 
-    # --- JWT generation ---
-    def _generate_jwt(self):
-        payload = {
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 60,
-            "iss": os.getenv("COINBASE_ISS", self.org_id),
-        }
-        token = jwt.encode(payload, self.private_key, algorithm="ES256")
-        return token
-
-    # --- Base headers for requests ---
-    def _headers(self):
-        if self.jwt_token:
-            return {"Authorization": f"Bearer {self.jwt_token}"}
-        # Fallback HMAC (CB-ACCESS-SIGN style)
-        ts = str(int(time.time()))
-        sig = self._hmac_sign(ts, "GET", "/v2/accounts", "")
-        return {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": sig,
-            "CB-ACCESS-TIMESTAMP": ts,
-            "CB-ACCESS-PASSPHRASE": self.passphrase,
-            "Content-Type": "application/json",
-        }
-
-    def _hmac_sign(self, timestamp: str, method: str, path: str, body: str):
-        import hmac, hashlib, base64
+    def _sign(self, method, path, body=""):
+        timestamp = str(int(time.time()))
         message = timestamp + method.upper() + path + body
-        signature = hmac.new(
-            self.api_secret.encode(), message.encode(), hashlib.sha256
-        ).digest()
-        return base64.b64encode(signature).decode()
+        hmac_key = base64.b64decode(self.api_secret)
+        signature = hmac.new(hmac_key, message.encode(), hashlib.sha256).digest()
+        signature_b64 = base64.b64encode(signature).decode()
+        return timestamp, signature_b64
 
-    # --- Fetch raw accounts list ---
     def fetch_accounts(self):
+        path = "/v2/accounts"
+        url = self.base + path
+        timestamp, signature = self._sign("GET", path)
+        headers = {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": signature,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+            "CB-ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json"
+        }
         try:
-            url = f"{self.base}/v2/accounts"
-            resp = requests.get(url, headers=self._headers(), timeout=10)
+            resp = requests.get(url, headers=headers)
             resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
+            return resp.json()["data"]
+        except requests.HTTPError as e:
             logger.error(f"Error fetching accounts: {e}")
-            return {"data": []}
+            return []
 
-    # --- Compute account balances dict ---
-    def get_account_balances(self) -> Dict[str, Any]:
-        try:
-            accounts = self.fetch_accounts()
-            balances = {}
-            for acc in accounts.get("data", []):
-                balances[acc["currency"]] = float(acc["balance"]["amount"])
-            return balances
-        except Exception as e:
-            logger.error(f"Error in get_account_balances: {e}")
-            return {}
+    # Example method to get balances for all accounts
+    def get_account_balances(self):
+        accounts = self.fetch_accounts()
+        balances = {}
+        for acc in accounts:
+            balances[acc["currency"]] = float(acc["balance"]["amount"])
+        return balances
 
 # === Backwards-compatibility aliases ===
 def _alias_if_missing():
@@ -115,6 +70,7 @@ def _alias_if_missing():
 
         if not hasattr(CoinbaseClient, "list_accounts") and hasattr(CoinbaseClient, "fetch_accounts"):
             CoinbaseClient.list_accounts = CoinbaseClient.fetch_accounts
+
     except Exception:
         pass
 
