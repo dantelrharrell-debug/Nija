@@ -1,1 +1,1 @@
-web: python3 nija_start_live_hmac.py
+python3 start_nija_live_hmac.py
