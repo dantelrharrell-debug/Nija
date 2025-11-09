@@ -1,11 +1,15 @@
-from nija_client import NijaCoinbaseClient
+from nija_client import CoinbaseClient  # <- correct class name
 
-client = NijaCoinbaseClient()
+client = CoinbaseClient(advanced=True)  # enable Advanced/JWT mode
 
-# Check balances
-balances = client.get_balances()
-print("Balances:", balances)
+# Example: check accounts/balances
+accounts = client.get_accounts()
+for acc in accounts:
+    currency = acc.get("currency") or acc.get("currency_code")
+    amt = acc.get("available_balance") or (acc.get("balance") or {}).get("amount") or acc.get("available")
+    print(f"{currency}: {amt}")
 
-# Check recent trades
-trades = client.get_recent_trades(limit=5)
-print("Recent trades:", trades)
+# If you want a helper USD balance
+from nija_balance_helper import get_usd_balance
+usd_balance = get_usd_balance(client)
+print("USD Balance:", usd_balance)
