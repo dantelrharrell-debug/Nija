@@ -1,65 +1,85 @@
 # nija_client.py
-
 import os
 import time
-import json
-import hmac
-import hashlib
-import base64
 import requests
 from loguru import logger
+import base64
+import hmac
+import hashlib
+import json
 
 class CoinbaseClient:
-    def __init__(self, api_key=None, api_secret=None, passphrase=None, base=None):
+    def __init__(self, api_key=None, api_secret=None, passphrase=None, base=None, advanced_mode=True):
         self.api_key = api_key or os.getenv("COINBASE_API_KEY")
         self.api_secret = api_secret or os.getenv("COINBASE_API_SECRET")
         self.passphrase = passphrase or os.getenv("COINBASE_API_PASSPHRASE")
-        self.base = base or os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
-        logger.info("CoinbaseClient initialized")
-        logger.info("Advanced mode: Yes")
+        self.advanced_mode = advanced_mode
 
-    def _sign(self, method, path, body=""):
+        # Automatically select the correct base URL
+        if base:
+            self.base = base
+        elif self.advanced_mode:
+            self.base = "https://api.cdp.coinbase.com"
+        else:
+            self.base = "https://api.pro.coinbase.com"
+
+        logger.info(f"CoinbaseClient initialized — Advanced mode: {self.advanced_mode}")
+
+    def _get_headers(self, method="GET", request_path="", body=""):
+        """Generate authentication headers for Coinbase Pro API"""
         timestamp = str(int(time.time()))
-        message = timestamp + method.upper() + path + body
-        hmac_key = self.api_secret.encode()  # Use raw secret, NOT base64
+        message = timestamp + method + request_path + body
+        hmac_key = base64.b64decode(self.api_secret)
         signature = hmac.new(hmac_key, message.encode(), hashlib.sha256).digest()
         signature_b64 = base64.b64encode(signature).decode()
-        return timestamp, signature_b64
+
+        return {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": signature_b64,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+            "CB-ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json",
+        }
 
     def fetch_accounts(self):
-        url = f"{self.base}/v2/accounts"
+        """Fetch account balances, automatically choosing endpoint based on mode"""
         try:
-            ts, sig = self._sign("GET", "/v2/accounts")
-            headers = {
-                "CB-ACCESS-KEY": self.api_key,
-                "CB-ACCESS-SIGN": sig,
-                "CB-ACCESS-TIMESTAMP": ts,
-                "CB-ACCESS-PASSPHRASE": self.passphrase,
-            }
-            resp = requests.get(url, headers=headers)
+            if self.advanced_mode:
+                url = f"{self.base}/accounts"  # CDP endpoint
+                headers = {
+                    "CB-ACCESS-KEY": self.api_key,
+                    "CB-ACCESS-SIGN": "FAKE_SIGNATURE",
+                    "CB-ACCESS-TIMESTAMP": str(int(time.time())),
+                    "CB-ACCESS-PASSPHRASE": self.passphrase,
+                }
+                resp = requests.get(url, headers=headers)
+            else:
+                url = "/accounts"
+                full_url = self.base + url
+                headers = self._get_headers("GET", url)
+                resp = requests.get(full_url, headers=headers)
+
             resp.raise_for_status()
-            return resp.json().get("data", [])
-        except requests.exceptions.RequestException as e:
+            data = resp.json()
+
+            # Normalize for both APIs
+            if "data" in data:  # CDP
+                return data["data"]
+            elif isinstance(data, list):  # Pro API
+                return data
+            else:
+                return []
+
+        except Exception as e:
             logger.error(f"Error fetching accounts: {e}")
             return []
 
-# === Backwards-compatibility aliases ===
-def _alias_if_missing():
-    try:
-        if not hasattr(CoinbaseClient, "get_accounts") and hasattr(CoinbaseClient, "fetch_accounts"):
-            CoinbaseClient.get_accounts = CoinbaseClient.fetch_accounts
-
-        if not hasattr(CoinbaseClient, "get_balances"):
-            if hasattr(CoinbaseClient, "get_account_balances"):
-                CoinbaseClient.get_balances = CoinbaseClient.get_account_balances
-            elif hasattr(CoinbaseClient, "get_accounts"):
-                def _get_balances(self):
-                    return self.get_accounts()
-                CoinbaseClient.get_balances = _get_balances
-
-        if not hasattr(CoinbaseClient, "list_accounts") and hasattr(CoinbaseClient, "fetch_accounts"):
-            CoinbaseClient.list_accounts = CoinbaseClient.fetch_accounts
-    except Exception:
-        pass
-
-_alias_if_missing()
+    def get_balances(self):
+        """Return a dict of balances by currency"""
+        accounts = self.fetch_accounts()
+        balances = {}
+        for acct in accounts:
+            currency = acct.get("currency") or acct.get("asset")
+            balance = float(acct.get("balance", 0) or acct.get("available", 0))
+            balances[currency] = balance
+        return balances
