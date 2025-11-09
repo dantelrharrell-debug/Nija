@@ -1,1 +1,1 @@
-python3 start_nija_live_hmac.py
+web: python3 start_bot.py
