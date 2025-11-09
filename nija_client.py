@@ -1,37 +1,28 @@
-# === Auto-generate JWT from PEM env or file path ===
-import os, time
-try:
-    import jwt as pyjwt
-    PYJWT_AVAILABLE = True
-except ImportError:
-    PYJWT_AVAILABLE = False
+# === Backwards-compatibility aliases for start_bot.py & common methods ===
+def _alias_if_missing():
+    try:
+        # Alias get_accounts to fetch_accounts if missing
+        if not hasattr(CoinbaseClient, "get_accounts") and hasattr(CoinbaseClient, "fetch_accounts"):
+            CoinbaseClient.get_accounts = CoinbaseClient.fetch_accounts
 
-pem_from_env = os.getenv("COINBASE_PEM_CONTENT", "") or None
-if not getattr(self, "jwt", None) and (getattr(self, "private_key_path", None) or pem_from_env) and getattr(self, "org_id", None):
-    if PYJWT_AVAILABLE:
-        try:
-            if pem_from_env:
-                pem_bytes = pem_from_env.encode("utf-8")
-                now = int(time.time())
-                payload = {
-                    "iss": self.org_id,
-                    "sub": self.org_id,
-                    "iat": now,
-                    "exp": now + 300,  # 5 minutes TTL
-                    "aud": "coinbase",
-                }
-                token = pyjwt.encode(payload, pem_bytes, algorithm="ES256")
-                if isinstance(token, bytes):
-                    token = token.decode("utf-8")
-                self.jwt = token
-                print("✅ Auto-generated ephemeral JWT from COINBASE_PEM_CONTENT (env).")
-            elif getattr(self, "private_key_path", None):
-                # fallback: existing PEM path method
-                token = self._generate_jwt_from_pem()
-                if token:
-                    self.jwt = token
-                    print("✅ Auto-generated ephemeral JWT from PEM path.")
-        except Exception as e:
-            print(f"⚠️ JWT auto-generation failed: {e}")
-    else:
-        print("⚠️ PyJWT not installed: cannot auto-generate JWT from PEM.")
+        # Alias get_balances to existing methods or wrap get_accounts
+        if not hasattr(CoinbaseClient, "get_balances"):
+            if hasattr(CoinbaseClient, "get_account_balances"):
+                CoinbaseClient.get_balances = CoinbaseClient.get_account_balances
+            elif hasattr(CoinbaseClient, "get_accounts"):
+                def _get_balances(self):
+                    return self.get_accounts()
+                CoinbaseClient.get_balances = _get_balances
+
+        # Alias list_accounts to fetch_accounts if missing
+        if not hasattr(CoinbaseClient, "list_accounts") and hasattr(CoinbaseClient, "fetch_accounts"):
+            CoinbaseClient.list_accounts = CoinbaseClient.fetch_accounts
+
+    except Exception:
+        # Do not crash if aliasing fails
+        pass
+
+try:
+    _alias_if_missing()
+except Exception:
+    pass
