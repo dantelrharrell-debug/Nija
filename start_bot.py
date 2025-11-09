@@ -1,48 +1,56 @@
 # start_bot.py
+import os
+import time
 from loguru import logger
-from decimal import Decimal
-from nija_balance_helper import get_usd_balance
 
-# Try to import the client under the common names we saw in repo
 try:
-    # most likely correct class name in nija_client.py
     from nija_client import CoinbaseClient as _Client
-except Exception:
+except ImportError:
     try:
         from nija_client import NijaCoinbaseClient as _Client
-    except Exception:
+    except ImportError:
         raise ImportError("Neither 'CoinbaseClient' nor 'NijaCoinbaseClient' could be imported from nija_client.py")
 
-logger.remove()
-logger.add(lambda msg: print(msg, end=""), level="INFO")
-logger = logger.bind(name="start_bot")
+# --- Initialize client ---
+client = _Client()
 
 logger.info("Starting Nija bot (entrypoint)")
 
-# instantiate client (some clients accept advanced=True)
+# --- Fetch USD balance safely ---
 try:
-    client = _Client(advanced=True)
-except TypeError:
-    # fallback if the constructor signature is different
-    client = _Client()
-
-# quick diagnostics
-try:
-    balances = client.get_balances() if hasattr(client, "get_balances") else client.get_accounts()
-    logger.info("Balances (raw): %s", balances)
+    if hasattr(client, "get_balances"):
+        balances = client.get_balances()
+    elif hasattr(client, "get_accounts"):
+        balances = client.get_accounts()
+    else:
+        balances = {}
+    usd_balance = balances.get("USD", 0) if isinstance(balances, dict) else 0
+    logger.success(f"USD balance fetched: {usd_balance}")
 except Exception as e:
-    logger.exception("Error fetching balances: %s", e)
+    logger.error(f"[NIJA-BALANCE] Error fetching USD balance: {e}")
+    usd_balance = 0
 
-# show USD via your helper
+# --- Startup complete message ---
+logger.info("Startup complete — bot ready for live trading")
+
+# --- Example live loop (replace with your trading logic) ---
 try:
-    usd = get_usd_balance(client)
-    logger.info("USD balance (helper): %s", usd)
-except Exception as e:
-    logger.exception("Error computing USD balance: %s", e)
+    while True:
+        # Fetch balances each tick
+        try:
+            balances = client.get_balances()
+            usd_balance = balances.get("USD", 0) if isinstance(balances, dict) else 0
+            logger.info(f"[NIJA-BALANCE] USD: {usd_balance}")
+        except Exception as e:
+            logger.warning(f"Balance fetch failed: {e}")
+        
+        # --- TODO: insert live trading signal handling here ---
+        # e.g., listen for TradingView alerts, execute trade
 
-# keep process alive for logs (short loop)
-import time
-for i in range(3):
-    logger.info("Startup complete — tick %d/3", i+1)
-    time.sleep(1)
-logger.info("Exiting start_bot (replace this with your live loop once verified).")
+        time.sleep(5)  # tick interval; adjust as needed
+except KeyboardInterrupt:
+    logger.info("Bot stopped manually")
+except Exception as e:
+    logger.error(f"Unexpected error: {e}")
+finally:
+    logger.info("Exiting Nija bot")
