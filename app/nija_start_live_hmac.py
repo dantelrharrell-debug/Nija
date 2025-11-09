@@ -1,3 +1,25 @@
+from nija_hmac_client import CoinbaseClient
+from loguru import logger
+
+def fetch_hmac_accounts():
+    client = CoinbaseClient(
+        api_key="YOUR_KEY_HERE",
+        api_secret="YOUR_SECRET_HERE",
+        org_id="YOUR_ORG_ID_HERE"
+    )
+
+    status, accounts = client.request("GET", "/v2/accounts")  # HMAC endpoint
+
+    if status != 200 or not accounts:
+        logger.warning(f"❌ Failed to fetch accounts. Status: {status}")
+        return []
+
+    logger.info("✅ HMAC accounts fetched:")
+    for acct in accounts.get("data", []):
+        logger.info(f"{acct['name']} ({acct['currency']}): {acct['balance']['amount']}")
+    
+    return accounts.get("data", [])
+
 # fetch_hmac_accounts.py
 
 from nija_hmac_client import CoinbaseClient
