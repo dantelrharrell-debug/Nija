@@ -1,19 +1,8 @@
-Nija/
-├─ nija_app.py
-├─ nija_bot.py
-├─ nija_bot_ws.py
-├─ nija_bot_web.py
-├─ nija_client.py
-├─ nija_coinbase_client.py
-├─ nija_coinbase_jwt.py
-├─ nija_balance_helper.py
-├─ nija_orders.py
-├─ nija_preflight.py
-├─ nija_live_worker.py
-├─ nija_multi_coin_worker.py
-├─ indicators.py
-├─ data_fetcher.py
-├─ config.py
-├─ requirements.txt
-├─ README.md
-└─ archive/                ← all old/debug/unused files go here
+/your-repo
+│
+├── start_nija_live_hmac.py       # Entry point script (canonical)
+├── nija_client.py                # Coinbase HMAC client helper
+├── nija_balance_helper.py        # USD balance helper
+├── requirements.txt              # All dependencies
+├── .env                          # Secrets and API config (COINBASE_*)
+└── README.md                     # Optional
