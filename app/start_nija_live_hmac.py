@@ -60,3 +60,4 @@ def fetch_hmac_accounts_sync(client):
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
+    
