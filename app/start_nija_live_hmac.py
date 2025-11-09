@@ -1,86 +1,85 @@
-# start_nija_live_hmac_safe.py
+#!/usr/bin/env python3
 import os
+import time
 import hmac
 import hashlib
-import time
+import base64
 import requests
-from loguru import logger
+import asyncio
+import logging
 
-# -----------------------------
-# HMAC Coinbase Client
-# -----------------------------
-class CoinbaseClient:
-    def __init__(self):
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.base = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")
-        if not self.api_key or not self.api_secret:
-            logger.error("Missing Coinbase API key or secret.")
-            raise ValueError("Missing Coinbase API key or secret")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nija.bot.hmac")
+
+# Environment variables
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")  # Retail HMAC base
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")  # Optional for Retail HMAC
+
+# HMAC Client
+class CoinbaseHMACClient:
+    def __init__(self, key, secret, base=API_BASE):
+        self.key = key
+        self.secret = secret.encode()
+        self.base = base.rstrip("/")
 
     def _sign(self, method, path, body=""):
         timestamp = str(int(time.time()))
         message = timestamp + method.upper() + path + body
-        signature = hmac.new(
-            self.api_secret.encode(), message.encode(), hashlib.sha256
-        ).hexdigest()
+        signature = hmac.new(self.secret, message.encode(), hashlib.sha256).hexdigest()
         headers = {
-            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-KEY": self.key,
             "CB-ACCESS-SIGN": signature,
             "CB-ACCESS-TIMESTAMP": timestamp,
             "Content-Type": "application/json",
         }
         return headers
 
-    def request(self, method="GET", path="/accounts", body=""):
+    def request(self, method, path, body=""):
         url = self.base + path
         headers = self._sign(method, path, body)
         try:
-            if method.upper() == "GET":
-                response = requests.get(url, headers=headers)
-            else:
-                response = requests.post(url, headers=headers, data=body)
-            try:
-                data = response.json()
-            except Exception:
-                logger.warning(f"⚠️ JSON decode failed. Status: {response.status_code}, Body: {response.text}")
-                data = {}
-            return response.status_code, data
+            response = requests.request(method, url, headers=headers, data=body, timeout=10)
         except Exception as e:
-            logger.exception(f"❌ Request failed: {e}")
-            return None, {}
+            logger.error(f"⚠️ Request failed: {e}")
+            return None, None
 
-# -----------------------------
-# Fetch HMAC Accounts safely
-# -----------------------------
+        try:
+            return response.status_code, response.json()
+        except Exception:
+            logger.warning(f"⚠️ JSON decode failed. Status: {response.status_code}, Body: {response.text}")
+            return response.status_code, None
+
+# Fetch accounts safely
 def fetch_hmac_accounts():
-    client = CoinbaseClient()
-    status, accounts = client.request(method="GET", path="/accounts")
-
-    if status == 200 and accounts:
-        logger.info("✅ Accounts fetched:")
-        for acct in accounts.get("data", []):
-            name = acct.get("name")
-            currency = acct.get("currency")
-            balance = acct.get("balance", {}).get("amount")
-            logger.info(f"{name} ({currency}): {balance}")
-        return accounts.get("data", [])
-    else:
+    client = CoinbaseHMACClient(API_KEY, API_SECRET)
+    status, accounts = client.request("GET", "/accounts")  # Correct Retail HMAC endpoint
+    if status != 200 or accounts is None:
         logger.error(f"❌ Failed to fetch accounts. Status: {status}")
         return []
+    return accounts
 
-# -----------------------------
-# Main Loop (async ready)
-# -----------------------------
-import asyncio
-
+# Main async loop
 async def main_loop():
-    accounts = fetch_hmac_accounts()
-    if not accounts:
-        logger.warning("No HMAC accounts found. Bot will not proceed.")
-        return
-    # You can continue your trading bot logic here
-    logger.info("✅ HMAC accounts ready, continue bot logic...")
+    while True:
+        accounts = fetch_hmac_accounts()
+        if not accounts:
+            logger.warning("No HMAC accounts found. Waiting 30s before retry...")
+            await asyncio.sleep(30)
+            continue
+
+        # Example: log balances for each account
+        for acct in accounts:
+            balance = acct.get("balance", {})
+            logger.info(f"Account {acct.get('id')} ({acct.get('currency')}): {balance.get('amount')}")
+
+        # Replace this with your trading logic
+        await asyncio.sleep(10)
 
 if __name__ == "__main__":
-    asyncio.run(main_loop())
+    try:
+        asyncio.run(main_loop())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped manually.")
