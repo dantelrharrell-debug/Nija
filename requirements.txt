@@ -22,3 +22,7 @@ ecdsa==0.19.1
 backoff==2.2.1
 python-dotenv==1.2.1
 python-3.11.4
+coinbase-advanced-py==1.8.2
+requests>=2.28.0
+python-dotenv
+loguru
