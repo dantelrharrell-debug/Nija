@@ -1,3 +1,5 @@
+from nija_hmac_client import CoinbaseClient
+
 from loguru import logger
 from nija_hmac_client import CoinbaseClient
 
