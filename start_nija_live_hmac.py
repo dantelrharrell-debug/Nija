@@ -15,14 +15,9 @@ API_BASE_ADV = "https://api.cdp.coinbase.com"
 API_BASE_RETAIL = "https://api.coinbase.com"
 
 # --- Determine API Base ---
-if ORG_ID:
-    API_BASE = API_BASE_ADV
-    USE_ADVANCED = True
-    logger.info("Using Coinbase Advanced API (HMAC v3).")
-else:
-    API_BASE = API_BASE_RETAIL
-    USE_ADVANCED = False
-    logger.info("Using Coinbase Retail API (HMAC v2).")
+USE_ADVANCED = bool(ORG_ID)
+API_BASE = API_BASE_ADV if USE_ADVANCED else API_BASE_RETAIL
+logger.info(f"Using {'Advanced' if USE_ADVANCED else 'Retail'} Coinbase API.")
 
 # --- HMAC Coinbase Client ---
 class CoinbaseClient:
@@ -36,7 +31,6 @@ class CoinbaseClient:
     def request(self, method="GET", path="/v3/accounts"):
         url = f"{self.base_url}{path}"
         headers = {"CB-ACCESS-KEY": self.api_key}
-
         if self.org_id:
             headers["CB-ACCESS-ORG-ID"] = self.org_id
 
@@ -52,32 +46,31 @@ class CoinbaseClient:
             logger.error(f"Request failed: {e}")
             return None, None
 
-# --- Fetch Accounts Gracefully ---
+# --- Fetch Accounts with Auto Fallback ---
 def fetch_hmac_accounts():
     client = CoinbaseClient(API_KEY, API_SECRET, ORG_ID, API_BASE)
-    endpoint = "/v3/accounts" if USE_ADVANCED else "/v2/accounts"
+    endpoints = ["/v3/accounts", "/v2/accounts"] if USE_ADVANCED else ["/v2/accounts"]
 
-    status, accounts = client.request(method="GET", path=endpoint)
-
-    if status == 404:
-        logger.warning(f"{endpoint} not found (404). Trying fallback...")
-        if USE_ADVANCED:
-            # Advanced fallback to v2 if v3 fails
-            status, accounts = client.request(method="GET", path="/v2/accounts")
-
-    if not accounts:
-        logger.error(f"❌ Failed to fetch accounts. Status: {status}")
-        return []
-
-    logger.info(f"✅ Fetched {len(accounts)} accounts.")
-    return accounts
+    for endpoint in endpoints:
+        status, accounts = client.request(method="GET", path=endpoint)
+        if status == 404:
+            logger.warning(f"{endpoint} not found (404). Trying next endpoint...")
+            continue
+        if accounts:
+            logger.info(f"✅ Fetched {len(accounts)} accounts from {endpoint}.")
+            return accounts
+        else:
+            logger.warning(f"No accounts returned from {endpoint}. Status: {status}")
+    # If all endpoints fail
+    logger.error("❌ No HMAC accounts found on any endpoint.")
+    return []
 
 # --- Main Bot Loop ---
 async def main_loop():
     logger.info("Starting HMAC live bot...")
     accounts = fetch_hmac_accounts()
     if not accounts:
-        logger.error("No HMAC accounts found. Aborting bot.")
+        logger.error("Aborting bot: no accounts available.")
         return
 
     # Placeholder: Replace with your live trading logic
