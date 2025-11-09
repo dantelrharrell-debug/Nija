@@ -1,31 +1,32 @@
-import os
-import sys
-import time
+# nija_app.py
 from loguru import logger
-from nija_client import CoinbaseClient  # our advanced-ready client
+from nija_coinbase_advanced import client as cb_adv_client
 
-logger = logger.bind(name="nija_startup")
+logger = logger.bind(name="nija_app")
 
-# Force Advanced JWT mode
-client = CoinbaseClient(advanced=True)
+# --- Check client ---
+try:
+    accounts = cb_adv_client.get_accounts()
+    if not accounts:
+        logger.error("No accounts returned. Bot will not start.")
+        exit(1)
+    else:
+        logger.info(f"Coinbase Advanced client ready. Found {len(accounts)} account(s).")
+except Exception as e:
+    logger.exception(f"Failed to fetch accounts: {e}")
+    exit(1)
 
-def list_accounts():
-    try:
-        accounts = client.get_accounts()
-        for acc in accounts:
-            bal = acc.get("balance", {})
-            logger.info(f"Account: {acc.get('name')} | Balance: {bal.get('amount')} {bal.get('currency')}")
-    except Exception as e:
-        logger.error(f"Error fetching accounts: {e}")
+# --- Example trading loop ---
+import time
 
 def live_trading_loop():
     logger.info("Starting live trading loop...")
     while True:
         try:
-            accounts = client.get_accounts()
-            for acc in accounts:
-                bal = acc.get("balance", {})
-                logger.info(f"[LIVE CHECK] {acc.get('name')}: {bal.get('amount')} {bal.get('currency')}")
+            balances = cb_adv_client.get_spot_account_balances()
+            logger.info(f"Balances: {balances}")
+            # Placeholder: replace with your signal/trade logic
+            logger.info("Checking for trading signals...")
             time.sleep(5)
         except KeyboardInterrupt:
             logger.info("Live trading stopped by user")
@@ -35,5 +36,4 @@ def live_trading_loop():
             time.sleep(5)
 
 if __name__ == "__main__":
-    list_accounts()
     live_trading_loop()
