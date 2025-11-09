@@ -32,7 +32,6 @@ if __name__ == "__main__":
     missing = [v for v in required_vars if v not in os.environ]
     if missing:
         logger.error(f"Missing environment variables: {missing}")
-        # exit non-zero would stop the container; we log and continue so you can see the error in Render
     accounts = fetch_accounts()
     if not accounts:
         logger.warning("No accounts available. Check HMAC key permissions.")
