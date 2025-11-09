@@ -6,7 +6,7 @@ import requests
 import asyncio
 from loguru import logger
 
-# ---------- HMAC v3 Coinbase Client ----------
+# ---------- HMAC Coinbase Client ----------
 class CoinbaseClient:
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
@@ -47,13 +47,20 @@ class CoinbaseClient:
             logger.exception(f"❌ HTTP request failed: {e}")
             return None, None
 
-# ---------- Fetch accounts safely ----------
+# ---------- Fetch accounts with fallback ----------
 def fetch_hmac_accounts():
     client = CoinbaseClient()
-    status, accounts = client.request("GET", "/v3/accounts")  # <-- v3 endpoint
+
+    # Try v3 first
+    status, accounts = client.request("GET", "/v3/accounts")
+    if status == 404 or accounts is None:
+        logger.warning("v3 accounts not found, trying v2 endpoint...")
+        status, accounts = client.request("GET", "/v2/accounts")
+
     if status != 200 or not accounts:
         logger.error(f"❌ Failed to fetch accounts. Status: {status}")
         return []
+
     return accounts
 
 # ---------- Main bot loop ----------
