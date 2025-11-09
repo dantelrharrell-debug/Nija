@@ -3,56 +3,45 @@
 import os
 import time
 import json
-import requests
-from loguru import logger
 import hmac
 import hashlib
 import base64
+import requests
+from loguru import logger
 
-# === CoinbaseClient for Advanced/Prime API ===
 class CoinbaseClient:
     def __init__(self, api_key=None, api_secret=None, passphrase=None, base=None):
         self.api_key = api_key or os.getenv("COINBASE_API_KEY")
         self.api_secret = api_secret or os.getenv("COINBASE_API_SECRET")
         self.passphrase = passphrase or os.getenv("COINBASE_API_PASSPHRASE")
-        self.base = base or os.getenv("COINBASE_BASE", "https://api.coinbase.com")  # Correct base URL
+        self.base = base or os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
         logger.info("CoinbaseClient initialized")
-        logger.info(f"Advanced mode: Yes")
+        logger.info("Advanced mode: Yes")
 
     def _sign(self, method, path, body=""):
         timestamp = str(int(time.time()))
         message = timestamp + method.upper() + path + body
-        hmac_key = base64.b64decode(self.api_secret)
+        hmac_key = self.api_secret.encode()  # Use raw secret, NOT base64
         signature = hmac.new(hmac_key, message.encode(), hashlib.sha256).digest()
         signature_b64 = base64.b64encode(signature).decode()
         return timestamp, signature_b64
 
     def fetch_accounts(self):
-        path = "/v2/accounts"
-        url = self.base + path
-        timestamp, signature = self._sign("GET", path)
-        headers = {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": signature,
-            "CB-ACCESS-TIMESTAMP": timestamp,
-            "CB-ACCESS-PASSPHRASE": self.passphrase,
-            "Content-Type": "application/json"
-        }
+        url = f"{self.base}/v2/accounts"
         try:
+            ts, sig = self._sign("GET", "/v2/accounts")
+            headers = {
+                "CB-ACCESS-KEY": self.api_key,
+                "CB-ACCESS-SIGN": sig,
+                "CB-ACCESS-TIMESTAMP": ts,
+                "CB-ACCESS-PASSPHRASE": self.passphrase,
+            }
             resp = requests.get(url, headers=headers)
             resp.raise_for_status()
-            return resp.json()["data"]
-        except requests.HTTPError as e:
+            return resp.json().get("data", [])
+        except requests.exceptions.RequestException as e:
             logger.error(f"Error fetching accounts: {e}")
             return []
-
-    # Example method to get balances for all accounts
-    def get_account_balances(self):
-        accounts = self.fetch_accounts()
-        balances = {}
-        for acc in accounts:
-            balances[acc["currency"]] = float(acc["balance"]["amount"])
-        return balances
 
 # === Backwards-compatibility aliases ===
 def _alias_if_missing():
@@ -70,7 +59,6 @@ def _alias_if_missing():
 
         if not hasattr(CoinbaseClient, "list_accounts") and hasattr(CoinbaseClient, "fetch_accounts"):
             CoinbaseClient.list_accounts = CoinbaseClient.fetch_accounts
-
     except Exception:
         pass
 
