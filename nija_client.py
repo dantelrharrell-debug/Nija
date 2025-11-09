@@ -1,3 +1,25 @@
+# === Backwards-compatibility aliases ===
+def _alias_if_missing():
+    try:
+        if not hasattr(CoinbaseClient, "get_accounts") and hasattr(CoinbaseClient, "fetch_accounts"):
+            CoinbaseClient.get_accounts = CoinbaseClient.fetch_accounts
+
+        if not hasattr(CoinbaseClient, "get_balances"):
+            if hasattr(CoinbaseClient, "get_account_balances"):
+                CoinbaseClient.get_balances = CoinbaseClient.get_account_balances
+            elif hasattr(CoinbaseClient, "get_accounts"):
+                def _get_balances(self):
+                    return self.get_accounts()
+                CoinbaseClient.get_balances = _get_balances
+
+        if not hasattr(CoinbaseClient, "list_accounts") and hasattr(CoinbaseClient, "fetch_accounts"):
+            CoinbaseClient.list_accounts = CoinbaseClient.fetch_accounts
+
+    except Exception:
+        pass
+
+_alias_if_missing()
+
 # nija_client.py
 
 import os, json, requests, jwt, time
