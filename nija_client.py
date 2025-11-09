@@ -1,61 +1,97 @@
-# nija_client.py
-import os, time, json, requests, jwt
+# nija_client_cdp.py
+
+import os
+import time
+import hmac
+import hashlib
+import base64
+import requests
 from loguru import logger
 
-class CoinbaseClient:
-    def __init__(self, api_key=None, api_secret=None, passphrase=None, base=None, advanced_mode=True):
+class CoinbaseAdvancedClient:
+    def __init__(self, api_key=None, api_secret=None, org_id=None, base_url=None):
         self.api_key = api_key or os.getenv("COINBASE_API_KEY")
         self.api_secret = api_secret or os.getenv("COINBASE_API_SECRET")
-        self.passphrase = passphrase or os.getenv("COINBASE_API_PASSPHRASE")
-        self.base = base or os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
-        self.advanced_mode = advanced_mode
-        logger.info(f"CoinbaseClient initialized — Advanced mode: {self.advanced_mode}")
+        self.org_id   = org_id   or os.getenv("COINBASE_ORG_ID")
+        self.base     = base_url or os.getenv("COINBASE_API_BASE", "https://api.coinbase.com/api/v3/brokerage")
 
-    def _get_headers(self):
+        logger.info("CoinbaseAdvancedClient initialized")
+        logger.info(f"Base URL = {self.base}")
+
+        if not (self.api_key and self.api_secret and self.org_id):
+            logger.error("Missing API key, secret or org_id for Coinbase Advanced.")
+            raise RuntimeError("Invalid Coinbase Advanced credentials.")
+
+    def _bearer_token(self):
+        """
+        Builds a simple JWT token for Advanced Trade if needed.
+        NOTE: Depending on your API key type, you may use JWT or HMAC.
+        This example uses HMAC‑style on `/accounts` endpoint for simplicity.
+        """
         timestamp = str(int(time.time()))
-        # You need to create a valid CB-ACCESS-SIGN if you want live trading
-        signature = "FAKE_SIGNATURE"  # Replace with HMAC calculation for live trades
+        method = "GET"
+        path   = "/accounts"
+        body   = ""
+
+        message = timestamp + method + path + body
+        hmac_key = self.api_secret.encode("utf‑8")
+        signature = hmac.new(hmac_key, message.encode("utf‑8"), hashlib.sha256).digest()
+        token     = base64.b64encode(signature).decode("utf‑8")
+
         return {
             "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": signature,
+            "CB-ACCESS-SIGN": token,
             "CB-ACCESS-TIMESTAMP": timestamp,
-            "CB-ACCESS-PASSPHRASE": self.passphrase,
+            "CB-ACCESS-ORG": self.org_id,
             "Content-Type": "application/json"
         }
 
     def fetch_accounts(self):
-        try:
-            if self.advanced_mode:
-                url = f"{self.base}/v2/accounts"  # Correct CDP endpoint
-            else:
-                url = f"{self.base}/accounts"    # Pro API endpoint
+        """
+        Fetch list of accounts (balances etc) for Coinbase Advanced endpoint.
+        Official endpoint: GET {base}/accounts (see docs)   [oai_citation:0‡Coinbase Developer Docs](https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/rest-api/accounts/list-accounts?utm_source=chatgpt.com)
+        """
+        url = f"{self.base}/accounts"
+        headers = self._bearer_token()
 
-            resp = requests.get(url, headers=self._get_headers())
+        try:
+            resp = requests.get(url, headers=headers, timeout=15)
             resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.HTTPError as e:
+            data = resp.json()
+            accounts = data.get("accounts") or data.get("data") or []
+            logger.info(f"Fetched {len(accounts)} account(s).")
+            return accounts
+        except Exception as e:
             logger.error(f"Error fetching accounts: {e}")
             return []
-        except Exception as e:
-            logger.error(f"Unexpected error fetching accounts: {e}")
-            return []
-
-    # Optional backward-compatible aliases
-    def get_accounts(self):
-        return self.fetch_accounts()
 
     def get_balances(self):
+        """
+        Returns a dict of currency → available/active balance
+        """
         accounts = self.fetch_accounts()
-        # Example: extract USD balance
-        usd_balance = 0
-        if accounts and "data" in accounts:
-            for a in accounts["data"]:
-                if a.get("currency") == "USD":
-                    usd_balance = float(a.get("balance", 0))
-        return usd_balance
+        balances = {}
+        for acct in accounts:
+            currency = acct.get("currency") or acct.get("asset") or acct.get("money_currency")
+            # Try different shapes:
+            amt = None
+            if "available_balance" in acct and isinstance(acct["available_balance"], dict):
+                amt = acct["available_balance"].get("value")
+            elif "balance" in acct:
+                amt = acct["balance"]
+            elif "available" in acct:
+                amt = acct["available"]
+            try:
+                balances[currency] = float(amt or 0)
+            except Exception:
+                balances[currency] = 0.0
+        return balances
 
-# Example test
+# === Test snippet ===
 if __name__ == "__main__":
-    client = CoinbaseClient(advanced_mode=True)
-    print(client.fetch_accounts())
-    print("USD balance:", client.get_balances())
+    client = CoinbaseAdvancedClient()
+    accounts = client.fetch_accounts()
+    print("Accounts (raw):", accounts)
+    balances = client.get_balances()
+    print("Balances:", balances)
+    print("USD balance:", balances.get("USD", balances.get("USDC", 0)))
