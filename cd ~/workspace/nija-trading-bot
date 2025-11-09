@@ -1,8 +1,7 @@
 /your-repo
-│
-├── start_nija_live_hmac.py       # Entry point script (canonical)
-├── nija_client.py                # Coinbase HMAC client helper
-├── nija_balance_helper.py        # USD balance helper
-├── requirements.txt              # All dependencies
-├── .env                          # Secrets and API config (COINBASE_*)
-└── README.md                     # Optional
+├── start_nija_live_hmac.py      # ✅ Entry point
+├── nija_client.py
+├── nija_balance_helper.py
+├── requirements.txt
+├── .env
+└── README.md
