@@ -1,61 +1,48 @@
-# nija_hmac_client.py
-"""
-Minimal HMAC client shim for Coinbase-style API.
-Drop this file in the repo root (/app) so your startup script can import it.
-"""
+# fetch_hmac_accounts.py
 
-import os
-import time
-import hmac
-import hashlib
-import base64
-import json
-import requests
-from typing import Tuple, Any
+from nija_hmac_client import CoinbaseClient
+from loguru import logger
 
-class CoinbaseClient:
-    def __init__(self):
-        # Environment variables expected by this shim
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        # Retail API base by default; change COINBASE_API_BASE if needed
-        self.base = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
-        if not (self.api_key and self.api_secret):
-            # Do NOT raise here; allow the startup script to log env issues gracefully.
-            pass
-
-    def _sign(self, method: str, path: str, body: str = "") -> Tuple[str,str]:
-        ts = str(int(time.time()))
-        message = ts + method.upper() + path + (body or "")
-        # Coinbase retail HMAC uses base64-encoded HMAC-SHA256 of message with secret (binary)
-        h = hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).digest()
-        sig = base64.b64encode(h).decode()
-        return ts, sig
-
-    def request(self, method: str, path: str, data: Any = None) -> Tuple[int, Any]:
-        """
-        method: "GET"/"POST"/etc
-        path: API path starting with /
-        data: python object to JSON-encode for body or None
-        returns: (status_code, parsed_json_or_text)
-        """
-        if not self.api_key or not self.api_secret:
-            return 0, {"error": "Missing COINBASE_API_KEY or COINBASE_API_SECRET"}
-
-        body = json.dumps(data) if data is not None else ""
-        ts, sig = self._sign(method, path, body)
-        headers = {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": sig,
-            "CB-ACCESS-TIMESTAMP": ts,
-            "Content-Type": "application/json",
-        }
-        url = self.base.rstrip("/") + path
+def fetch_hmac_accounts():
+    """
+    Fetch accounts using HMAC client safely.
+    Handles JSON errors, 404s, and empty responses without crashing.
+    Returns a list of account dicts (can be empty if nothing found).
+    """
+    try:
+        client = CoinbaseClient()
+        # Use Advanced API HMAC endpoint
+        status, resp = client.request(method="GET", path="/accounts")
+        
+        if status != 200:
+            logger.error(f"❌ Failed to fetch accounts. Status: {status}, Body: {resp}")
+            return []
+        
         try:
-            resp = requests.request(method, url, headers=headers, data=body if body else None, timeout=15)
-            try:
-                return resp.status_code, resp.json()
-            except Exception:
-                return resp.status_code, resp.text
+            # If response is already dict/list, no need to json() again
+            if isinstance(resp, (dict, list)):
+                accounts_data = resp.get("data", []) if isinstance(resp, dict) else resp
+            else:
+                accounts_data = resp.json().get("data", [])
+
+            if not accounts_data:
+                logger.warning("⚠️ No HMAC accounts found.")
+            else:
+                logger.info("✅ Accounts fetched:")
+                for acct in accounts_data:
+                    balance = acct.get("balance", {}).get("amount", "0")
+                    logger.info(f"{acct.get('name')} ({acct.get('currency')}): {balance}")
+            return accounts_data
+        
         except Exception as e:
-            return 0, {"error": str(e)}
+            logger.exception(f"⚠️ Failed to parse JSON response: {e}")
+            return []
+
+    except Exception as e:
+        logger.exception(f"❌ Error initializing CoinbaseClient or fetching accounts: {e}")
+        return []
+
+if __name__ == "__main__":
+    accounts = fetch_hmac_accounts()
+    if not accounts:
+        logger.warning("No accounts returned. Check HMAC key permissions and endpoint.")
