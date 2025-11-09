@@ -1,237 +1,182 @@
-# /app/nija_hmac_client.py
-"""
-Defensive Coinbase HMAC / Advanced client.
-- Tries Advanced (JWT) if PEM + COINBASE_ISS provided and pyjwt available.
-- Falls back to Retail HMAC (CB-ACCESS-SIGN) if Advanced not configured.
-- Safe JSON parsing (no crash on non-JSON).
-- Provides: CoinbaseClient.request(method, path, data=None) -> (status, data_or_text)
-           CoinbaseClient.get_accounts() -> (status, data_or_text)
-"""
-
+# nija_hmac_client.py
 import os
 import time
 import hmac
 import hashlib
 import base64
-import json
-import logging
-from typing import Tuple
-
 import requests
+import logging
+from typing import Tuple, Any
 
 logger = logging.getLogger("nija_hmac_client")
-logging.basicConfig(level=logging.INFO)
+logger.setLevel(logging.INFO)
 
-# envs
-COINBASE_API_BASE = os.getenv("COINBASE_API_BASE", "").rstrip("/")  # may be blank
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
-COINBASE_PRIVATE_KEY_PATH = os.getenv("COINBASE_PRIVATE_KEY_PATH")
-COINBASE_ISS = os.getenv("COINBASE_ISS") or os.getenv("COINBASE_ISSUER")
-COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+# Environment config
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")               # Retail HMAC key id or CDP key ("organizations/.../apiKeys/...")
+COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")       # Retail secret (base64) or CDP secret (string)
+COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # retail passphrase (optional)
+COINBASE_API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+COINBASE_ADVANCED_BASE = os.getenv("COINBASE_ADVANCED_BASE", "https://api.coinbase.com")  # usually https://api.coinbase.com
+# NOTE: advanced endpoints use path prefix /api/v3/brokerage/...
+# For CDP/JWT approach we also accept COINBASE_ISS / COINBASE_ORG_ID and COINBASE_PRIVATE_KEY_PATH if you generate JWTs locally.
 
-# sensible defaults
-CDP_BASE = "https://api.cdp.coinbase.com"
-RETAIL_BASE = "https://api.coinbase.com"
-if not COINBASE_API_BASE:
-    # if we have Advanced creds assume CDP, otherwise retail
-    COINBASE_API_BASE = CDP_BASE if COINBASE_ISS or COINBASE_PEM_CONTENT or COINBASE_PRIVATE_KEY_PATH else RETAIL_BASE
+# Attempt to import Coinbase Advanced helper (optional)
+_have_advanced_helper = False
+try:
+    # coinbase-advanced-py provides helpers to format/generate JWTs
+    from coinbase.jwt_generator import format_jwt_uri, build_rest_jwt  # type: ignore
+    _have_advanced_helper = True
+    logger.info("coinbase-advanced-py installed: will try JWT (Advanced) path when possible.")
+except Exception:
+    _have_advanced_helper = False
+    logger.info("coinbase-advanced-py NOT available; will fall back to HMAC retail signing when needed.")
 
-# helper: write PEM if PEM content provided
-def ensure_pem_file() -> str | None:
-    if COINBASE_PEM_CONTENT:
-        path = COINBASE_PRIVATE_KEY_PATH or "/app/coinbase_advanced.pem"
-        try:
-            os.makedirs(os.path.dirname(path) or "/app", exist_ok=True)
-            with open(path, "w") as f:
-                f.write(COINBASE_PEM_CONTENT)
-            try:
-                os.chmod(path, 0o600)
-            except Exception:
-                pass
-            logger.info(f"[nija_hmac_client] PEM content written to {path}")
-            return path
-        except Exception as e:
-            logger.exception(f"[nija_hmac_client] Failed to write PEM: {e}")
-            return None
-    if COINBASE_PRIVATE_KEY_PATH and os.path.exists(COINBASE_PRIVATE_KEY_PATH):
-        return COINBASE_PRIVATE_KEY_PATH
-    return None
-
-# JWT generation (advanced). Use pyjwt if available.
-def generate_jwt_with_pem(pem_path: str, issuer: str, ttl_seconds: int = 30) -> str | None:
-    try:
-        import jwt  # pyjwt
-    except Exception:
-        logger.warning("[nija_hmac_client] pyjwt not installed; cannot generate JWT automatically.")
-        return None
-
-    try:
-        now = int(time.time())
-        payload = {
-            "iss": issuer,
-            "iat": now,
-            "exp": now + ttl_seconds,
-        }
-        # ES256 with ECDSA PEM
-        token = jwt.encode(payload, open(pem_path, "rb").read(), algorithm="ES256")
-        logger.debug("[nija_hmac_client] JWT generated (short-lived).")
-        return token
-    except Exception as e:
-        logger.exception(f"[nija_hmac_client] Error generating JWT: {e}")
-        return None
 
 class CoinbaseClient:
-    def __init__(self, base: str | None = None, advanced: bool | None = None):
-        # allow pass-in override
-        self.base = (base or COINBASE_API_BASE).rstrip("/")
-        self.api_key = COINBASE_API_KEY
-        self.api_secret = COINBASE_API_SECRET
-        self.api_passphrase = COINBASE_API_PASSPHRASE
-        self.issuer = COINBASE_ISS
-        self.org_id = COINBASE_ORG_ID
-        self.pem_path = ensure_pem_file()
-        # mode detection
-        if advanced is None:
-            self.advanced = bool(self.issuer or self.pem_path)
-        else:
-            self.advanced = advanced
+    """
+    Resilient client supporting:
+      - Coinbase Advanced (v3 /api/v3/brokerage/*) using JWT (if helper installed)
+      - Retail HMAC (CB-ACCESS-SIGN style; /v2/accounts, etc.) fallback
+    Methods:
+      - request(method, path, data=None) -> (status_code, parsed_or_raw)
+    """
 
-        logger.info(f"[nija_hmac_client] Initialized. base={self.base} advanced={self.advanced} pem_exists={bool(self.pem_path)} issuer={bool(self.issuer)}")
+    def __init__(self):
+        self.advanced = bool(os.getenv("COINBASE_PRIVATE_KEY_PATH") or os.getenv("COINBASE_ISS") or os.getenv("COINBASE_ORG_ID"))
+        # For retail HMAC: COINBASE_API_SECRET is base64 string (we decode before using)
+        try:
+            if COINBASE_API_SECRET:
+                # not all secret formats are base64; guard decode
+                try:
+                    base64.b64decode(COINBASE_API_SECRET)
+                    self._secret_bytes = base64.b64decode(COINBASE_API_SECRET)
+                except Exception:
+                    # if it's not base64, use raw bytes
+                    self._secret_bytes = COINBASE_API_SECRET.encode()
+            else:
+                self._secret_bytes = None
+        except Exception:
+            self._secret_bytes = None
 
-    # Safe JSON parse helper
-    def _safe_json(self, resp: requests.Response):
+        logger.info(f"HMAC CoinbaseClient initialized. Advanced={self.advanced}")
+
+    def _safe_json(self, resp: requests.Response) -> Any:
+        """Try to parse JSON; on failure return raw text so callers won't crash."""
         try:
             return resp.json()
         except Exception:
-            # non-json -> return raw text for debugging
-            text = resp.text or ""
-            logger.warning(f"[nija_hmac_client] ⚠️ JSON decode failed. Status: {resp.status_code}, Body: {text[:1000]!r}")
-            return None
+            logger.warning(f"⚠️ JSON decode failed. Status: {resp.status_code}, Body: {resp.text[:200]}")
+            return {"_raw_text": resp.text}
 
-    # Retail HMAC (CB-ACCESS-SIGN) signing
-    def _sign_retail(self, method: str, path: str, body: str = "") -> dict:
-        timestamp = str(int(time.time()))
-        message = timestamp + method.upper() + path + (body or "")
-        # signature raw bytes then base64 encoded
-        secret = (self.api_secret or "").encode()
-        sig = base64.b64encode(hmac.new(secret, message.encode(), hashlib.sha256).digest()).decode()
+    def _retail_hmac_headers(self, method: str, path: str, body: str = "") -> dict:
+        """
+        Build CB-ACCESS headers for Retail API HMAC (v2 style).
+        Uses base64-decoded secret for the HMAC.
+        Prehash string per retail docs: timestamp + method + request_path + body
+        Signature must be base64-encoded HMAC-SHA256 of prehash using secret_bytes.
+        """
+        ts = str(int(time.time()))
+        request_path = path  # ensure leading slash for path like /v2/accounts
+        prehash = ts + method.upper() + request_path + (body or "")
+        secret = self._secret_bytes or b""
+        sig = base64.b64encode(hmac.new(secret, prehash.encode(), hashlib.sha256).digest()).decode()
         headers = {
-            "CB-ACCESS-KEY": self.api_key or "",
+            "CB-ACCESS-KEY": COINBASE_API_KEY or "",
             "CB-ACCESS-SIGN": sig,
-            "CB-ACCESS-TIMESTAMP": timestamp,
+            "CB-ACCESS-TIMESTAMP": ts,
             "Content-Type": "application/json",
         }
-        if self.api_passphrase:
-            headers["CB-ACCESS-PASSPHRASE"] = self.api_passphrase
+        if COINBASE_API_PASSPHRASE:
+            headers["CB-ACCESS-PASSPHRASE"] = COINBASE_API_PASSPHRASE
         return headers
 
-    # Advanced: generate JWT and set Authorization header
-    def _auth_headers_advanced(self) -> dict:
-        headers = {"Content-Type": "application/json"}
-        # Attempt to generate JWT (short-lived)
-        if self.pem_path and self.issuer:
-            jwt_token = generate_jwt_with_pem(self.pem_path, self.issuer)
-            if jwt_token:
-                headers["Authorization"] = f"Bearer {jwt_token}"
-                # include version header optionally
-                headers["CB-VERSION"] = "2025-11-09"
-                return headers
-            else:
-                logger.warning("[nija_hmac_client] Advanced mode configured but JWT generation failed.")
-        else:
-            logger.warning("[nija_hmac_client] Advanced mode but missing pem_path or issuer.")
-        return headers
-
-    # Generic request wrapper: returns (status_code, data_or_text)
-    def request(self, method: str, path: str, data: dict | None = None, timeout: int = 15) -> Tuple[int | None, object | None]:
-        """
-        method: HTTP method (GET/POST)
-        path: resource path, must start with '/'
-        data: optional dict -> JSON body
-        returns: (status_code, data) where data is dict/list if JSON parsed, else raw text if non-JSON
-        """
-        if not path.startswith("/"):
-            path = "/" + path
-
-        body = json.dumps(data) if data is not None else ""
-
-        # If advanced, try advanced-style endpoints first (often /api/v3/...)
-        if self.advanced:
-            headers = self._auth_headers_advanced()
-            # try the common Advanced endpoints that docs use:
-            candidates = [
-                (self.base, "/api/v3/brokerage" + path),
-                (self.base, "/api/v3" + path),
-                (RETAIL_BASE, "/api/v3/brokerage" + path),
-                (RETAIL_BASE, "/api/v3" + path),
-            ]
-            for base, p in candidates:
-                url = base.rstrip("/") + p
-                logger.info(f"[nija_hmac_client] Trying Advanced URL {url}")
-                try:
-                    resp = requests.request(method, url, headers=headers, timeout=timeout, data=body if body else None)
-                except Exception as e:
-                    logger.exception(f"[nija_hmac_client] Request to {url} failed: {e}")
-                    continue
-                parsed = self._safe_json(resp)
-                if resp.status_code == 200:
-                    return resp.status_code, parsed if parsed is not None else (resp.text or "")
-                # keep trying if 404/401 etc, but return helpful debug info on last attempt
-                logger.warning(f"[nija_hmac_client] Advanced try {url} returned {resp.status_code}. Body start: {repr(resp.text)[:500]}")
-            # after tries, fallthrough to retail/hmac
-            logger.warning("[nija_hmac_client] Advanced attempts failed; falling back to Retail HMAC attempts.")
-            # continue to retail attempts
-
-        # Retail HMAC attempts: use base and path directly and v2 variants
-        headers = self._sign_retail(method, path, body)
-        retail_candidates = [
-            (self.base, path),
-            (self.base, "/v2" + path),
-            (RETAIL_BASE, path),
-            (RETAIL_BASE, "/v2" + path),
-        ]
-        for base, p in retail_candidates:
-            url = base.rstrip("/") + p
-            logger.info(f"[nija_hmac_client] Trying Retail URL {url}")
-            try:
-                resp = requests.request(method, url, headers=headers, timeout=timeout, data=body if body else None)
-            except Exception as e:
-                logger.exception(f"[nija_hmac_client] Request to {url} failed: {e}")
-                continue
-            parsed = self._safe_json(resp)
-            if resp.status_code == 200:
-                return resp.status_code, parsed if parsed is not None else (resp.text or "")
-            logger.warning(f"[nija_hmac_client] Retail try {url} returned {resp.status_code}. Body start: {repr(resp.text)[:500]}")
-
-        # Nothing returned 200
-        return None, None
-
-    # convenience: get accounts (tries v3/v2)
-    def get_accounts(self) -> Tuple[int | None, object | None]:
-        # prefer the most common path that the calling code expects
-        # try /v3/accounts (raw), then /v3/brokerage/accounts, then /v2/accounts
-        for p in ["/v3/accounts", "/v3/brokerage/accounts", "/v2/accounts", "/accounts"]:
-            status, data = self.request("GET", p)
-            if status == 200 and data:
-                return status, data
-        # give up
-        return None, None
-
-# quick test if run as script (non-crashing)
-if __name__ == "__main__":
-    logger.info("[nija_hmac_client] Running quick debug test of get_accounts()")
-    client = CoinbaseClient()
-    status, data = client.get_accounts()
-    if status == 200:
-        logger.info("[nija_hmac_client] Accounts fetch OK - sample:")
+    def _advanced_jwt_headers(self, method: str, path: str) -> dict:
+        """If coinbase-advanced-py is installed, generate a JWT for the given method/path."""
+        if not _have_advanced_helper:
+            raise RuntimeError("Advanced JWT helper not available")
+        # build a formatted uri for jwt generator (see coinbase.jwt_generator docs)
+        # Format should be e.g. "GET api.coinbase.com/api/v3/brokerage/accounts"
+        host = COINBASE_ADVANCED_BASE.replace("https://", "").replace("http://", "").rstrip("/")
+        formatted = f"{method.upper()} {host}{path}"
+        # build_rest_jwt takes (uri, key, secret) or similar depending on helper. We'll attempt to call it.
         try:
-            items = data.get("data", data) if isinstance(data, dict) else data
-            for i, acct in enumerate(items[:5]):
-                logger.info(f" - {acct.get('name', acct)}")
-        except Exception:
-            logger.info(f"Data: {repr(data)[:500]}")
-    else:
-        logger.error(f"[nija_hmac_client] No accounts found. status={status} data={type(data)}. Check envs / keys / PEM.")
+            # build_rest_jwt returns a dict or token string depending on version; handle both
+            token = build_rest_jwt(formatted, COINBASE_API_KEY, COINBASE_API_SECRET)
+            if isinstance(token, dict) and "token" in token:
+                token = token["token"]
+            return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        except Exception as e:
+            logger.exception("Advanced JWT build failed: %s", e)
+            raise
+
+    def request(self, method: str = "GET", path: str = "/v2/accounts", data: dict = None) -> Tuple[int, Any]:
+        """
+        Generic request:
+          - If advanced is enabled, try advanced v3 endpoints (exact paths listed below)
+          - If advanced fails or not configured, try retail HMAC endpoints
+        Returns (status_code, parsed_json_or_raw_text)
+        """
+        body = ""
+        if data is not None:
+            body = requests.utils.requote_uri(json := requests.utils.requote_uri("")).strip()  # noop to avoid flake; we'll do normal json dump
+        import json as _json
+        body = _json.dumps(data) if data else ""
+
+        # Candidate endpoints (try advanced first when advanced=True)
+        advanced_paths = [
+            "/api/v3/brokerage/accounts",  # canonical Advanced Trade accounts endpoint
+            "/api/v3/accounts",            # possible variants
+            "/api/v3/brokerage/accounts?include=portfolio",  # example variant
+        ]
+        retail_paths = [
+            "/v2/accounts",  # classic retail endpoint
+            "/accounts",
+        ]
+
+        # If web base differs, respect COINBASE_API_BASE
+        base = COINBASE_API_BASE.rstrip("/")
+
+        # 1) Try advanced JWT approach (strict v3 brokerage path)
+        if self.advanced and _have_advanced_helper:
+            for p in advanced_paths:
+                full = base + p
+                try:
+                    headers = self._advanced_jwt_headers(method, p)
+                except Exception:
+                    headers = None
+                try:
+                    if not headers:
+                        continue
+                    resp = requests.request(method, full, headers=headers, data=body or None, timeout=15)
+                    parsed = self._safe_json(resp)
+                    if resp.status_code < 400:
+                        return resp.status_code, parsed
+                    # if 404/401 etc -> log and try next path/fallback
+                    logger.warning("Advanced attempt %s returned %s", full, resp.status_code)
+                except Exception as e:
+                    logger.exception("Advanced request to %s failed: %s", full, e)
+
+        # 2) Fallback: retail HMAC style against retail endpoints (use base retail URL if set)
+        # Decide retail base: if user set COINBASE_API_BASE explicitly to retail API host, use it;
+        # otherwise try common retail base
+        retail_base_candidates = [COINBASE_API_BASE.rstrip("/"), "https://api.coinbase.com", "https://api.cdp.coinbase.com"]
+        tried = set()
+        for base_candidate in retail_base_candidates:
+            for p in retail_paths:
+                base_candidate = base_candidate.rstrip("/")
+                if (base_candidate, p) in tried:
+                    continue
+                tried.add((base_candidate, p))
+                full = base_candidate + p
+                try:
+                    headers = self._retail_hmac_headers(method, p, body)
+                    resp = requests.request(method, full, headers=headers, data=body or None, timeout=15)
+                    parsed = self._safe_json(resp)
+                    # On success or non-json we return status and parsed/raw object.
+                    return resp.status_code, parsed
+                except Exception as e:
+                    logger.exception("Retail HMAC request to %s failed: %s", full, e)
+                    # keep trying next candidate
+
+        # If we reach here nothing worked
+        return 520, {"error": "no endpoint succeeded"}
