@@ -6,11 +6,8 @@ from nija_hmac_client import CoinbaseClient
 import os
 
 def fetch_accounts():
-    """
-    Fetch Coinbase accounts using HMAC API key/secret.
-    """
     try:
-        client = CoinbaseClient()  # HMAC client
+        client = CoinbaseClient()
         status, accounts = client.request(method="GET", path="/v2/accounts")
 
         if status != 200:
@@ -21,7 +18,6 @@ def fetch_accounts():
             for acct in accounts.get("data", []):
                 logger.info(f"{acct['name']} ({acct['currency']}): {acct['balance']['amount']}")
             return accounts.get("data", [])
-
     except Exception as e:
         logger.exception(f"❌ Error fetching accounts: {e}")
         return []
