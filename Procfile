@@ -1,1 +1,1 @@
-web: gunicorn nija_app:app --workers 1 --bind 0.0.0.0:$PORT
+web: python3 nija_start_live_hmac.py
