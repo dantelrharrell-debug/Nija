@@ -1,29 +1,20 @@
-# -----------------------------
-# Dockerfile for Nija Trading Bot
-# -----------------------------
-# Use official Python slim image
+# Base image
 FROM python:3.11-slim
 
-# Set working directory
+# Set workdir
 WORKDIR /app
 
-# Copy only requirements first (for caching)
-COPY requirements.txt .
+# Copy app code
+COPY . /app
 
-# Upgrade pip and install dependencies
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+# Upgrade pip
+RUN pip install --upgrade pip
 
-# Copy the rest of the project files
-COPY . .
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Set environment variable for Flask
-ENV FLASK_APP=nija_bootstrap.py
-ENV LOG_LEVEL=INFO
-ENV PYTHONUNBUFFERED=1
+# Expose port for Flask/Gunicorn
+EXPOSE 5000
 
-# Expose port (Railway assigns automatically, but default to 10000)
-EXPOSE 10000
-
-# Command to run the Flask app via Gunicorn
-CMD ["gunicorn", "nija_bootstrap:app", "--workers", "1", "--bind", "0.0.0.0:10000"]
+# Start your advanced bot
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "start_nija_advanced_safe:app"]
