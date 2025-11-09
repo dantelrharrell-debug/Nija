@@ -1,83 +1,92 @@
 import os
+import time
 import requests
 import logging
-import asyncio
 
-# --- Setup Logging ---
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("__main__")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 
-# --- Environment Variables ---
+# -------------------------
+# Config
+# -------------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-ORG_ID = os.getenv("COINBASE_ORG_ID")  # For Advanced HMAC
-API_BASE_ADV = "https://api.cdp.coinbase.com"
-API_BASE_RETAIL = "https://api.coinbase.com"
+ORG_ID = os.getenv("COINBASE_ORG_ID")  # Required for Advanced API (v3)
+API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
 
-# --- Determine API Base ---
-USE_ADVANCED = bool(ORG_ID)
-API_BASE = API_BASE_ADV if USE_ADVANCED else API_BASE_RETAIL
-logger.info(f"Using {'Advanced' if USE_ADVANCED else 'Retail'} Coinbase API.")
+RETRY_INTERVAL = 5  # seconds
 
-# --- HMAC Coinbase Client ---
-class CoinbaseClient:
-    def __init__(self, api_key, api_secret, org_id=None, base_url=None):
+# -------------------------
+# HMAC Client
+# -------------------------
+class CoinbaseHMACClient:
+    def __init__(self, base_url, api_key, api_secret):
+        self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.api_secret = api_secret
-        self.org_id = org_id
-        self.base_url = base_url
-        logger.info("HMAC CoinbaseClient initialized.")
 
-    def request(self, method="GET", path="/v3/accounts"):
+    def request(self, method="GET", path="/v2/accounts", **kwargs):
         url = f"{self.base_url}{path}"
-        headers = {"CB-ACCESS-KEY": self.api_key}
-        if self.org_id:
-            headers["CB-ACCESS-ORG-ID"] = self.org_id
-
+        headers = {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-VERSION": "2025-11-08"  # Example API version
+        }
         try:
-            response = requests.request(method, url, headers=headers)
-            try:
-                data = response.json()
-            except Exception:
-                logger.warning(f"⚠️ JSON decode failed. Status: {response.status_code}, Body: {response.text}")
-                return response.status_code, None
-            return response.status_code, data
+            resp = requests.request(method, url, headers=headers, **kwargs)
         except Exception as e:
-            logger.error(f"Request failed: {e}")
+            logging.error(f"Request failed: {e}")
             return None, None
 
-# --- Fetch Accounts with Auto Fallback ---
-def fetch_hmac_accounts():
-    client = CoinbaseClient(API_KEY, API_SECRET, ORG_ID, API_BASE)
-    endpoints = ["/v3/accounts", "/v2/accounts"] if USE_ADVANCED else ["/v2/accounts"]
+        # Handle non-JSON responses safely
+        try:
+            data = resp.json()
+        except Exception:
+            data = resp.text
 
-    for endpoint in endpoints:
-        status, accounts = client.request(method="GET", path=endpoint)
-        if status == 404:
-            logger.warning(f"{endpoint} not found (404). Trying next endpoint...")
-            continue
-        if accounts:
-            logger.info(f"✅ Fetched {len(accounts)} accounts from {endpoint}.")
+        return resp.status_code, data
+
+# -------------------------
+# Fetch accounts safely
+# -------------------------
+def fetch_accounts(client):
+    endpoints = ["/v3/accounts", "/v2/accounts"]  # Try v3 first, then fallback
+    for ep in endpoints:
+        status, accounts = client.request(path=ep)
+        if status == 200:
+            logging.info(f"✅ Accounts fetched from {ep}")
             return accounts
+        elif status == 401:
+            logging.warning(f"⚠️ Unauthorized (401) at {ep}. Check API key/permissions.")
+            return None
+        elif status == 404:
+            logging.warning(f"⚠️ {ep} not found (404), trying next endpoint...")
         else:
-            logger.warning(f"No accounts returned from {endpoint}. Status: {status}")
-    # If all endpoints fail
-    logger.error("❌ No HMAC accounts found on any endpoint.")
-    return []
+            logging.warning(f"⚠️ Failed at {ep}: Status {status}, Response: {accounts}")
+    return None
 
-# --- Main Bot Loop ---
-async def main_loop():
-    logger.info("Starting HMAC live bot...")
-    accounts = fetch_hmac_accounts()
-    if not accounts:
-        logger.error("Aborting bot: no accounts available.")
-        return
+# -------------------------
+# Main loop
+# -------------------------
+def main_loop():
+    client = CoinbaseHMACClient(API_BASE, API_KEY, API_SECRET)
+    logging.info("HMAC CoinbaseClient initialized.")
 
-    # Placeholder: Replace with your live trading logic
     while True:
-        logger.info("Bot running... (replace this with trade logic)")
-        await asyncio.sleep(10)
+        accounts = fetch_accounts(client)
+        if accounts:
+            logging.info(f"Fetched accounts: {accounts}")
+            # Add trading logic here
+        else:
+            logging.error("❌ No HMAC accounts found. Retrying...")
+        time.sleep(RETRY_INTERVAL)
 
-# --- Run Bot ---
+# -------------------------
+# Entry point
+# -------------------------
 if __name__ == "__main__":
-    asyncio.run(main_loop())
+    if not API_KEY or not API_SECRET:
+        logging.error("API_KEY or API_SECRET not set. Aborting.")
+    else:
+        main_loop()
