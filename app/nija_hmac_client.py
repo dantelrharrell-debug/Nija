@@ -1,30 +1,32 @@
-import os, time, hmac, hashlib, base64, json, requests
+# nija_hmac_client.py
+import os
+import time
+import hmac
+import hashlib
+import requests
+from loguru import logger
 
 class CoinbaseClient:
     def __init__(self):
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.base = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+        self.base_url = "https://api.cdp.coinbase.com"
 
-    def _sign(self, method, path, body=""):
-        ts = str(int(time.time()))
-        message = ts + method.upper() + path + body
-        h = hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).digest()
-        return ts, base64.b64encode(h).decode()
+    def request(self, method="GET", path="/v2/accounts", body=None):
+        body = body or {}
+        timestamp = str(int(time.time()))
+        message = timestamp + method + path + (str(body) if body else "")
+        signature = hmac.new(
+            self.api_secret.encode(), message.encode(), hashlib.sha256
+        ).hexdigest()
 
-    def request(self, method, path, data=None):
-        if not self.api_key or not self.api_secret:
-            return 0, {"error": "Missing COINBASE_API_KEY or COINBASE_API_SECRET"}
-        body = json.dumps(data) if data else ""
-        ts, sig = self._sign(method, path, body)
         headers = {
             "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": sig,
-            "CB-ACCESS-TIMESTAMP": ts,
-            "Content-Type": "application/json"
+            "CB-ACCESS-SIGN": signature,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+            "Content-Type": "application/json",
         }
-        try:
-            resp = requests.request(method, self.base + path, headers=headers, data=body)
-            return resp.status_code, resp.json()
-        except Exception as e:
-            return 0, {"error": str(e)}
+
+        url = self.base_url + path
+        response = requests.request(method, url, headers=headers, json=body)
+        return response.status_code, response.json()
