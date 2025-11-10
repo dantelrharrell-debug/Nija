@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-# start_bot.py
+# start_bot.py (root)
 import time
 from loguru import logger
-from app.nija_client import CoinbaseClient
+
+# Try to import from app.nija_client if available, otherwise fall back to nija_client at project root
+try:
+    from app.nija_client import CoinbaseClient
+except Exception:
+    try:
+        from nija_client import CoinbaseClient
+    except Exception as e:
+        logger.exception("Failed to import CoinbaseClient from app.nija_client or nija_client: %s", e)
+        raise
 
 logger.add(lambda r: print(r, end=""))
-
 logger.info("Starting Nija bot — LIVE mode")
+
 client = CoinbaseClient()
 
 # quick one-off fetch for immediate debug
