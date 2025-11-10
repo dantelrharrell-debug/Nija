@@ -1,38 +1,34 @@
-import os
-import logging
-from decimal import Decimal
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
+from loguru import logger
 
-logger = logging.getLogger("nija_balance_helper")
-if not logger.handlers:
-    ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    logger.addHandler(ch)
-logger.setLevel(logging.INFO)
+logger.remove()
+logger.add(lambda msg: print(msg, end=""), level="INFO")
 
-PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
+try:
+    from nija_client import CoinbaseClient
+except ImportError as e:
+    logger.error(f"Cannot import CoinbaseClient: {e}")
+    raise
 
-def _pem_load_ok(pem_bytes):
-    try:
-        serialization.load_pem_private_key(pem_bytes, password=None, backend=default_backend())
-        return True
-    except Exception:
-        return False
+def get_balances():
+    client = CoinbaseClient(advanced=True)
+    accounts = client.fetch_advanced_accounts()
+    if not accounts:
+        logger.warning("Advanced API failed; falling back to Spot API.")
+        accounts = client.fetch_spot_accounts()
+    if not accounts:
+        logger.error("No accounts returned. Check COINBASE env vars and key permissions.")
+        return []
 
-if PEM_CONTENT:
-    ok = _pem_load_ok(PEM_CONTENT.encode())
-    logger.info(f"PEM load_ok={ok}")
+    balances = []
+    for a in accounts:
+        bal = a.get("balance", {})
+        balances.append({
+            "name": a.get("name", "<unknown>"),
+            "amount": bal.get("amount", "0"),
+            "currency": bal.get("currency", "?")
+        })
+    return balances
 
-def get_usd_balance(client) -> Decimal:
-    if client is None:
-        return Decimal("0")
-    try:
-        if hasattr(client, "fetch_advanced_accounts"):
-            accounts = client.fetch_advanced_accounts()
-            for acc in accounts:
-                if acc.get("balance", {}).get("currency") in ["USD", "USDC"]:
-                    return Decimal(str(acc["balance"]["amount"]))
-    except Exception:
-        return Decimal("0")
-    return Decimal("0")
+if __name__ == "__main__":
+    for b in get_balances():
+        logger.info(f"{b['name']}: {b['amount']} {b['currency']}")
