@@ -1,6 +1,4 @@
-# nija_client.py
 import os
-import json
 import time
 import requests
 from loguru import logger
@@ -13,13 +11,16 @@ class CoinbaseClient:
         self.advanced = advanced
         self.iss = os.getenv("COINBASE_ISS")
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
+
         if not self.iss or not self.pem_content:
             raise ValueError("COINBASE_ISS or COINBASE_PEM_CONTENT missing in environment")
+
         self.token = self._generate_jwt()
         self.base_url = "https://api.coinbase.com/v3" if advanced else "https://api.coinbase.com/v2"
         logger.info(f"HMAC CoinbaseClient initialized. Advanced={self.advanced}")
 
     def _generate_jwt(self):
+        """Generate JWT for Coinbase Advanced API"""
         try:
             private_key = serialization.load_pem_private_key(
                 self.pem_content.encode(),
@@ -52,6 +53,7 @@ class CoinbaseClient:
             return None, None
 
     def fetch_advanced_accounts(self):
+        """Fetch accounts from Coinbase Advanced API"""
         try:
             status, data = self.request("/accounts")
             if status != 200 or not data:
