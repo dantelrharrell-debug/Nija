@@ -1,6 +1,6 @@
-# nija_client.py
 import os
 import time
+import jwt
 import requests
 from loguru import logger
 
@@ -9,34 +9,51 @@ logger.add(lambda msg: print(msg, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
 
 class CoinbaseClient:
     """
-    Robust Coinbase client for Advanced (JWT/service key) Coinbase API.
+    Coinbase Advanced API client (JWT / Service Key) for Nija Trading Bot
     """
-    def __init__(self, advanced=True, debug=False):
+    def __init__(self, debug=True):
         self.debug = debug
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
+
+        # Load credentials from environment
         self.iss = os.getenv("COINBASE_ISS")
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
         self.base_url = os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
-        self.advanced = advanced
 
-        # For internal tracking
-        self.failed_endpoints = set()
-        self.detected_permissions = {}
-        self.token = None  # Placeholder for JWT if implemented
+        if not self.iss or not self.pem_content:
+            raise ValueError("COINBASE_ISS or COINBASE_PEM_CONTENT missing in .env")
 
-        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base_url} debug={self.debug}")
+        logger.info(f"CoinbaseClient initialized. base={self.base_url} debug={self.debug}")
 
-    def _request(self, method="GET", path="/", headers=None, json_body=None, timeout=10):
+    def _generate_jwt(self, method="GET", path="/", body=None):
+        """
+        Generate signed JWT for Advanced API
+        """
+        iat = int(time.time())
+        payload = {
+            "iat": iat,
+            "exp": iat + 60,
+            "sub": self.iss,
+            "path": path,
+            "method": method,
+            "body": body or ""
+        }
+        token = jwt.encode(payload, self.pem_content, algorithm="ES256")
+        return token
+
+    def request(self, method="GET", path="/v3/accounts", json_body=None):
+        """
+        Make request to Coinbase Advanced API
+        """
         url = self.base_url.rstrip("/") + path
-        hdrs = headers or {}
-        hdrs.setdefault("Accept", "application/json")
-        # If JWT is required, include it here (currently placeholder)
-        if self.token:
-            hdrs["Authorization"] = f"Bearer {self.token}"
-
+        token = self._generate_jwt(method, path, body=json_body or "")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "CB-VERSION": "2025-11-10",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
         try:
-            r = requests.request(method, url, headers=hdrs, json=json_body, timeout=timeout)
+            r = requests.request(method, url, headers=headers, json=json_body, timeout=10)
             data = r.json() if r.content else None
             if self.debug:
                 logger.info(f"[DEBUG] {method} {url} -> {r.status_code} body={data}")
@@ -47,32 +64,17 @@ class CoinbaseClient:
 
     def fetch_accounts(self):
         """
-        Fetch accounts from Advanced Coinbase API.
+        Fetch all accounts from Coinbase Advanced API
         """
-        status, data = self._request("GET", "/accounts")
+        status, data = self.request("GET", "/v3/accounts")
         if status == 200 and data:
-            return data.get("data", [])
-        logger.warning(f"Failed to fetch accounts, status={status}, data={data}")
-        return []
-
-    # Example order placement method (ready for live trading)
-    def place_order(self, account_id, side, product_id, size, price=None, order_type="market"):
-        """
-        Place a market or limit order.
-        """
-        payload = {
-            "account_id": account_id,
-            "side": side,
-            "product_id": product_id,
-            "size": size,
-            "type": order_type
-        }
-        if price and order_type == "limit":
-            payload["price"] = price
-
-        status, data = self._request("POST", "/orders", json_body=payload)
-        if status == 201:
-            logger.info(f"Order placed successfully: {data}")
+            return data.get("data", data)
         else:
-            logger.warning(f"Failed to place order: status={status}, data={data}")
-        return data
+            logger.warning(f"Failed to fetch accounts, status={status}, data={data}")
+            return []
+
+# Simple test when running standalone
+if __name__ == "__main__":
+    client = CoinbaseClient(debug=True)
+    accounts = client.fetch_accounts()
+    print("Fetched accounts:", accounts)
