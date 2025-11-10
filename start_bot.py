@@ -1,12 +1,7 @@
-import sys
-import os
-from nija_client import CoinbaseClient
+from nija_client import CoinbaseClient  # import from root shim
 
 def main():
-    # Initialize Coinbase client (advanced = service-key/CDP)
     client = CoinbaseClient(advanced=True, debug=True)
-    
-    # Fetch advanced accounts
     accounts = client.fetch_advanced_accounts()
     print("Fetched accounts:", accounts)
 
