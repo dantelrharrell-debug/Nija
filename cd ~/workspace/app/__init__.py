@@ -1,5 +1,6 @@
 root/
-  __main__.py
+  .env
+  start_bot.py
   app/
-    __init__.py    <-- empty file
+    __init__.py
     nija_client.py
