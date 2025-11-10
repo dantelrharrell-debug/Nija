@@ -12,8 +12,9 @@ class NijaCoinbaseClient:
     Coinbase client supporting:
     - Advanced (CDP) mode via JWT
     - Standard API fallback via API key/secret/passphrase
+    Debug mode prints all URLs and responses for troubleshooting.
     """
-    def __init__(self):
+    def __init__(self, debug=False):
         # Base URLs
         self.base_advanced = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
         self.base_standard = "https://api.coinbase.com"
@@ -28,6 +29,8 @@ class NijaCoinbaseClient:
         self.api_secret = os.getenv("COINBASE_API_SECRET")
         self.passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")
 
+        self.debug = debug
+
         if not ((self.pem and self.iss) or (self.api_key and self.api_secret)):
             logger.error("Missing credentials: need either Advanced JWT or Standard API keys")
             raise SystemExit(1)
@@ -36,7 +39,8 @@ class NijaCoinbaseClient:
         if self.advanced_mode:
             self._init_jwt()
             self._start_jwt_refresh()
-        logger.info(f"NIJA-CLIENT-READY: advanced={self.advanced_mode}, jwt_set={bool(self.jwt)}")
+
+        logger.info(f"NIJA-CLIENT-READY: advanced={self.advanced_mode}, jwt_set={bool(self.jwt)}, debug={self.debug}")
 
     # ---------------- Advanced JWT ----------------
     def _init_jwt(self):
@@ -91,11 +95,13 @@ class NijaCoinbaseClient:
             for url in urls:
                 try:
                     r = requests.get(url, headers=self._advanced_headers(), timeout=15)
+                    if self.debug:
+                        logger.debug(f"[Advanced] GET {url} → {r.status_code}: {r.text}")
                     if r.status_code == 200:
                         data = r.json()
                         return data.get("data") or data.get("accounts") or []
                 except Exception as e:
-                    logger.warning(f"Advanced fetch failed for {url}: {e}")
+                    logger.warning(f"[Advanced] fetch failed for {url}: {e}")
             logger.warning("Advanced endpoints failed — falling back to Standard API")
             self.advanced_mode = False
 
@@ -103,6 +109,8 @@ class NijaCoinbaseClient:
         url = f"{self.base_standard}/v2/accounts"
         try:
             r = requests.get(url, headers=self._standard_headers(), timeout=15)
+            if self.debug:
+                logger.debug(f"[Standard] GET {url} → {r.status_code}: {r.text}")
             r.raise_for_status()
             data = r.json()
             return data.get("data") or []
