@@ -1,7 +1,6 @@
-/repo-root
+/app
 │
-├─ start_bot.py             # Main bot launcher
-├─ .env                     # Environment variables (keys, debug, etc.)
-├─ nija_client.py           # Shim for backward compatibility
-└─ /app
-   └─ nija_client.py       # Robust CoinbaseClient implementation
+├─ start_bot.py
+├─ nija_client_shim.py        # robust Coinbase client
+├─ .env                       # your Coinbase keys (standard + advanced)
+└─ __init__.py                # optional, just to make /app a package
