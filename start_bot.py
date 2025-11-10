@@ -1,69 +1,30 @@
-# start_bot.py
-import time
+#!/usr/bin/env python3
+import os
 from loguru import logger
 
-# Import Coinbase client
-try:
-    from nija_client import CoinbaseClient
-except ImportError as e:
-    logger.error(f"Failed to import CoinbaseClient from nija_client: {e}")
-    raise SystemExit("Cannot start bot without CoinbaseClient.")
+# import from app package
+from app.nija_client import CoinbaseClient
 
-logger.info("Starting Nija bot — LIVE mode")
-
-# Initialize Coinbase client
-try:
-    client = CoinbaseClient()
-except Exception as e:
-    logger.error(f"Failed to initialize CoinbaseClient: {e}")
-    raise SystemExit("Cannot start bot without client.")
-
-def fetch_balances():
-    """
-    Attempt to fetch accounts via Advanced API first,
-    fallback to Classic API if Advanced fails.
-    """
+def main():
+    logger.info("Starting Nija HMAC/Advanced startup (root entrypoint).")
     try:
-        accounts = client.get_accounts()
-        if accounts:
-            logger.info(f"[NIJA-BALANCE] Advanced API accounts: {accounts}")
-            return accounts
+        client = CoinbaseClient(advanced=True)
     except Exception as e:
-        logger.warning(f"Advanced API fetch failed: {e}")
+        logger.exception("Failed to initialize CoinbaseClient")
+        return
 
-    logger.warning("[NIJA-BALANCE] Advanced API failed, trying Classic API")
-    try:
-        accounts = client.get_classic_accounts()
-        if accounts:
-            logger.info(f"[NIJA-BALANCE] Classic API accounts: {accounts}")
-            return accounts
-    except Exception as e:
-        logger.warning(f"Classic API fetch failed: {e}")
+    accounts = client.fetch_advanced_accounts()
+    if not accounts:
+        logger.error("No HMAC/Advanced accounts found. Verify COINBASE_ISS, COINBASE_PEM_CONTENT, COINBASE_BASE and key permissions.")
+        return
 
-    logger.warning("[NIJA-BALANCE] No accounts returned from either API")
-    return None
+    logger.info("Accounts:")
+    for a in accounts:
+        name = a.get("name") or a.get("id") or "<unknown>"
+        bal = a.get("balance") or a.get("available") or {}
+        logger.info(f" - {name} : {bal}")
 
-def main_loop(poll_interval=10):
-    """
-    Main bot loop. Polls balances every `poll_interval` seconds.
-    Runs continuously on Render without terminal interaction.
-    """
-    while True:
-        try:
-            logger.info("Fetching balances...")
-            balances = fetch_balances()
-            if balances:
-                for acc in balances.get("data", []):
-                    name = acc.get("name", "Unknown")
-                    balance = acc.get("balance", {}).get("amount", "0")
-                    currency = acc.get("balance", {}).get("currency", "USD")
-                    logger.info(f"Account: {name} — Balance: {balance} {currency}")
-            else:
-                logger.info("No balances fetched this tick.")
-        except Exception as e:
-            logger.exception(f"Error during balance fetch: {e}")
-
-        time.sleep(poll_interval)
+    logger.info("✅ HMAC/Advanced account check complete. Bot ready to start trading loop (implement next).")
 
 if __name__ == "__main__":
-    main_loop()
+    main()
