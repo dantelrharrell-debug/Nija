@@ -1,3 +1,4 @@
+# start_bot.py
 import sys
 from loguru import logger
 from nija_client import CoinbaseClient
@@ -9,8 +10,9 @@ def main():
     logger.info("Starting Nija loader (robust).")
 
     try:
-        client = CoinbaseClient()
+        client = CoinbaseClient(advanced=True)
         accounts = client.fetch_advanced_accounts()
+
         if not accounts:
             logger.error("No accounts returned. Check COINBASE env vars and key permissions.")
             sys.exit(1)
