@@ -1,29 +1,31 @@
 import os
 from loguru import logger
 from nija_client import CoinbaseClient  # Make sure this points to your nija_client.py
+import sys
 
+# Clear default logger, print to stdout
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level="INFO")
 
 def main():
-    logger.info("Starting Nija loader (robust).")
+    logger.info("Starting Nija loader (live).")
 
     # Initialize client (auto-detects advanced vs spot)
     try:
-        client = CoinbaseClient(debug=True)  # set debug=False to reduce logging
+        client = CoinbaseClient(debug=True)  # debug=False for clean logs in production
     except ValueError as e:
         logger.error(f"Initialization failed: {e}")
-        return
+        sys.exit(1)
 
     # Attempt to fetch accounts: Advanced first, fallback to Spot
     accounts = client.fetch_advanced_accounts()
-    if not accounts and not client.advanced:  # If advanced failed or not available
+    if not accounts:
         logger.warning("Advanced API failed or unavailable; trying Spot API.")
         accounts = client.fetch_spot_accounts()
 
     if not accounts:
         logger.error("No accounts returned. Check COINBASE env vars and key permissions.")
-        return
+        sys.exit(1)  # Exit immediately in production
 
     logger.info(f"Successfully fetched {len(accounts)} accounts.")
 
