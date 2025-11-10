@@ -1,4 +1,4 @@
-from nija_client import CoinbaseClient  # import from root shim
+from nija_client import CoinbaseClient
 
 def main():
     client = CoinbaseClient(advanced=True, debug=True)
