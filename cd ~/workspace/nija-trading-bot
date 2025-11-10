@@ -1,6 +1,2 @@
-/repo-root
-    start_bot.py
-    nija_client.py        <- root shim
-    /app
-        __init__.py       <- empty file
-        nija_client.py    <- full CoinbaseClient code
+# mark app as a package (keep simple)
+__all__ = ["nija_client"]
