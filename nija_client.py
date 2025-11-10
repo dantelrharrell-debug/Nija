@@ -1,32 +1,35 @@
-import os
-import json
-import logging
+import os, json
 import requests
 from loguru import logger
 
-logger = logging.getLogger("nija_client")
-logger.setLevel(logging.INFO)
+logger.remove()
+logger.add(lambda msg: print(msg, end=""), level="INFO")
 
 class CoinbaseClient:
-    def __init__(self, advanced=False, base=None):
+    def __init__(self, advanced=True):
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+        self.base = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com")
         self.advanced = advanced
-        self.base = base or os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
         logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base}")
-        # Normally init auth headers, PEM, etc.
-        self.api_key = os.getenv("COINBASE_ISS")
 
     def request(self, method, path):
         url = self.base + path
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers = {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": self.api_secret,
+            "Content-Type": "application/json"
+        }
         try:
-            resp = requests.request(method, url, headers=headers)
-            if resp.status_code == 200:
-                return 200, resp.json()
-            else:
-                return resp.status_code, resp.text
+            r = requests.request(method, url, headers=headers, timeout=10)
+            try:
+                body = r.json()
+            except Exception:
+                body = None
+            return r.status_code, body
         except Exception as e:
-            logger.error(f"Request error: {e}")
-            return 500, None
+            logger.error(f"Request failed for {url}: {e}")
+            return None, None
 
     def fetch_advanced_accounts(self):
         paths = ["/v3/accounts", "/v2/accounts"]
@@ -41,12 +44,15 @@ class CoinbaseClient:
         logger.error("Failed to fetch accounts. No endpoint succeeded.")
         return []
 
-    def get_accounts(self):
-        # Spot API fallback
-        status, body = self.request("GET", "/accounts")
-        if status == 200 and body:
-            accounts = body.get("data", []) if isinstance(body, dict) else []
-            logger.info(f"Fetched {len(accounts)} spot accounts")
-            return accounts
+    def fetch_spot_accounts(self):
+        paths = ["/v2/accounts"]
+        for path in paths:
+            status, body = self.request("GET", path)
+            if status == 200 and body:
+                accounts = body.get("data", []) if isinstance(body, dict) else []
+                logger.info(f"Fetched {len(accounts)} spot accounts from {path}")
+                return accounts
+            else:
+                logger.warning(f"{path} returned {status}; cannot fetch spot accounts.")
         logger.error("Failed to fetch spot accounts.")
         return []
