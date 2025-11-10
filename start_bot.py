@@ -12,7 +12,6 @@ import jwt as pyjwt
 # -------------------------
 class CoinbaseClient:
     def __init__(self):
-        # Base URL from env
         self.base = os.getenv("COINBASE_BASE", "https://api.coinbase.com")
         self.jwt = None
         self._init_jwt()
@@ -36,40 +35,53 @@ class CoinbaseClient:
         else:
             logger.warning("COINBASE_PEM_CONTENT or COINBASE_ISS missing")
 
+    def _get_headers(self):
+        if self.jwt:
+            return {"Authorization": f"Bearer {self.jwt}", "CB-VERSION": "2025-11-09"}
+        return {}
+
     def fetch_accounts(self):
         """
-        Fetch all Coinbase Advanced account balances.
+        Fetch all Coinbase Advanced account balances using multiple endpoint fallbacks.
         Returns list of account dicts or [] on failure.
         """
         if not self.jwt:
             logger.error("Client inactive — cannot fetch accounts")
             return []
 
-        url = f"{self.base}/api/v3/brokerage/accounts"
-        headers = {"Authorization": f"Bearer {self.jwt}", "CB-VERSION": "2025-11-09"}
+        # Try multiple endpoints
+        endpoints = [
+            "/api/v3/brokerage/accounts",  # Advanced API
+            "/accounts",                   # Legacy fallback
+        ]
 
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            # v3 returns {"accounts": [...]} or {"data": [...]}
-            for key in ("accounts", "data"):
-                if key in data and isinstance(data[key], list):
-                    return data[key]
-            # single account dict fallback
-            if "currency" in data and ("balance" in data or "available" in data):
-                return [data]
-            return []
-        except requests.HTTPError as e:
-            logger.error(f"API endpoint error (HTTP): {e} | status={getattr(resp, 'status_code', None)} | url={url}")
-        except Exception as e:
-            logger.error(f"Unexpected error fetching accounts: {e}")
+        for path in endpoints:
+            url = self.base.rstrip("/") + path
+            try:
+                resp = requests.get(url, headers=self._get_headers(), timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
+                # Normalize shape
+                for key in ("accounts", "data"):
+                    if key in data and isinstance(data[key], list):
+                        return data[key]
+                if "currency" in data and ("balance" in data or "available" in data):
+                    return [data]
+            except requests.HTTPError as e:
+                if resp.status_code == 404:
+                    logger.warning(f"Endpoint not found (404): {url}, trying next fallback")
+                else:
+                    logger.error(f"HTTP error fetching {url}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error fetching {url}: {e}")
+
+        logger.error("All endpoints failed — no accounts fetched")
         return []
 
     def get_balances(self):
         """
         Returns dict: {currency: balance}.
-        If USD is zero, will return all other available currencies.
+        Falls back to all currencies if USD is zero.
         """
         accounts = self.fetch_accounts()
         out = {}
@@ -80,7 +92,6 @@ class CoinbaseClient:
                 out[cur] = float(amt)
             except Exception:
                 out[cur] = 0.0
-        # Fallback: if USD missing or zero, pick first non-zero currency
         if out.get("USD", 0) <= 0:
             non_zero = {k: v for k, v in out.items() if v > 0}
             if non_zero:
