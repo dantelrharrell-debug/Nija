@@ -1,102 +1,75 @@
-# nija_bot.py
-from nija_client import CoinbaseClient
+import os
 import time
-import logging
-import pandas as pd
-import numpy as np
+import requests
+from loguru import logger
+import jwt  # PyJWT required
 
-# --- Optional: your custom trading modules ---
-# from trading_logic import place_order
-# from indicators import calculate_indicators
+# Load environment variables
+API_KEY = os.getenv("COINBASE_API_KEY")          # Classic API key (optional fallback)
+API_SECRET = os.getenv("COINBASE_API_SECRET")    # Classic API secret
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # For JWT
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija.bot")
+# Coinbase Advanced base URL (correct per docs)
+BASE_ADV = "https://api.coinbase.com"
 
-# --- Initialize Coinbase Client ---
-client = CoinbaseClient(
-    pem_file="/path/to/NijaBotWalletKeyAdvanced.pem",  # <- Replace with your PEM path
-    key_id="YOUR_KEY_ID_HERE",                        # <- Replace with your Key ID
-    passphrase="YOUR_PASSPHRASE_HERE"                # <- Replace with your Passphrase
-)
+class NijaClient:
+    def __init__(self):
+        self.jwt = None
+        self._init_jwt()
 
-# --- Bot settings ---
-TRADING_PAIRS = ["BTC-USD", "ETH-USD", "XRP-USD", "ADA-USD", "LTC-USD", "SOL-USD", "BNB-USD"]
-TRADE_TYPE = "Spot"
-TRADE_AMOUNT = 0.001  # Small test amount per trade
-TRADE_INTERVAL = 5    # Seconds between market checks
+    def _init_jwt(self):
+        if not COINBASE_PEM_CONTENT:
+            logger.warning("No PEM content found, skipping JWT setup")
+            return
 
-# --- Example placeholder functions ---
+        # Generate ephemeral JWT (mirror Coinbase docs)
+        payload = {
+            "sub": "YOUR_CLIENT_ID_OR_EMAIL",  # replace with your client id/email if required
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 60,  # 1 minute expiration
+        }
+        self.jwt = jwt.encode(payload, COINBASE_PEM_CONTENT, algorithm="ES256")
+        logger.info("Generated ephemeral JWT")
 
-def fetch_market_data(symbol):
-    """
-    Fetch market data for a symbol.
-    This is a dummy function for testing signals.
-    Replace with real Coinbase API data if desired.
-    """
-    now = pd.Timestamp.now()
-    data = {
-        "open": [100 + np.random.rand() for _ in range(10)],
-        "high": [101 + np.random.rand() for _ in range(10)],
-        "low": [99 + np.random.rand() for _ in range(10)],
-        "close": [100 + np.random.rand() for _ in range(10)],
-        "volume": [10 + np.random.rand() for _ in range(10)],
-        "timestamp": [now - pd.Timedelta(seconds=i*60) for i in range(10)]
-    }
-    df = pd.DataFrame(data)
-    df.set_index("timestamp", inplace=True)
-    return df
+    def _headers(self):
+        return {
+            "Authorization": f"Bearer {self.jwt}",
+            "CB-VERSION": "2025-11-09",  # Current API version
+            "Content-Type": "application/json",
+        }
 
-def calculate_indicators(df):
-    """
-    Dummy indicator calculation.
-    Replace with your real strategy.
-    """
-    # Example: simple random buy/sell signal
-    return {"buy_signal": np.random.choice([True, False])}
+    def fetch_accounts(self):
+        if not self.jwt:
+            logger.error("JWT not set — cannot fetch Advanced API accounts")
+            return []
 
-def place_order(symbol, trade_type, side, amount):
-    """
-    Places a market order using the Coinbase client.
-    """
-    try:
-        order = client.create_trade(
-            product_id=symbol,
-            side=side,
-            size=str(amount),
-            type="market"
-        )
-        return order
-    except Exception as e:
-        logger.error(f"[NIJA] Error placing order for {symbol}: {e}")
-        return None
-
-# --- Main Trading Loop ---
-def run_trading_bot():
-    logger.info("[NIJA] Trading bot started. Live mode: %s", bool(client))
-    while True:
+        url = f"{BASE_ADV}/api/v3/brokerage/accounts"
         try:
-            for symbol in TRADING_PAIRS:
-                # Fetch market data
-                df = fetch_market_data(symbol)
-                df = df.apply(pd.to_numeric, errors='coerce').ffill()
-
-                # Calculate indicators
-                signals = calculate_indicators(df)
-                side = "buy" if signals.get("buy_signal") else "sell"
-
-                # Place order
-                response = place_order(symbol, TRADE_TYPE, side, TRADE_AMOUNT)
-                logger.info("[NIJA] %s order response: %s", symbol, response)
-
-            time.sleep(TRADE_INTERVAL)
-
-        except KeyboardInterrupt:
-            logger.info("[NIJA] Bot stopped manually")
-            break
+            resp = requests.get(url, headers=self._headers(), timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info("Fetched accounts successfully via Advanced API")
+                return data.get("accounts", [])
+            else:
+                logger.error(f"Advanced API returned {resp.status_code}: {resp.text}")
         except Exception as e:
-            logger.error(f"[NIJA] Unexpected error in main loop: {e}")
-            time.sleep(TRADE_INTERVAL)
+            logger.error(f"Exception fetching accounts: {e}")
+        return []
 
-# --- Run bot ---
 if __name__ == "__main__":
-    run_trading_bot()
+    logger.info("Starting Nija bot — LIVE mode")
+    client = NijaClient()
+
+    attempts = 3
+    for i in range(attempts):
+        accounts = client.fetch_accounts()
+        if accounts:
+            for acc in accounts:
+                logger.info(f"Account: {acc}")
+            break
+        else:
+            sleep_time = 2 ** i
+            logger.info(f"Retrying in {sleep_time} seconds (attempt {i+1}/{attempts})")
+            time.sleep(sleep_time)
+    else:
+        logger.error("All retries failed — no accounts fetched")
