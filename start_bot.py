@@ -1,67 +1,70 @@
 #!/usr/bin/env python3
-# start_bot.py - robust loader that imports CoinbaseClient from app/nija_client.py by file path
-import os
 import sys
+import traceback
 from loguru import logger
-from pathlib import Path
-import importlib.util
-
 logger.remove()
-logger.add(sys.stdout, level=os.getenv("LOG_LEVEL", "INFO"))
+logger.add(lambda msg: print(msg, end=""), level="INFO")
 
-ROOT = Path(__file__).resolve().parent
-APP_MODULE_PATH = ROOT / "app" / "nija_client.py"
+def load_from_app():
+    try:
+        # preferred import (when running from project root and app is a package)
+        from app.nija_client import CoinbaseClient
+        logger.info("Imported CoinbaseClient from app.nija_client")
+        return CoinbaseClient
+    except Exception:
+        logger.warning("Could not import from app.nija_client:\n" + traceback.format_exc())
+        return None
 
-def load_coinbaseclient_from_path(path: Path):
-    if not path.exists():
-        raise FileNotFoundError(f"{path} not found (expected app/nija_client.py)")
-    spec = importlib.util.spec_from_file_location("app_nija_client", str(path))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)  # may raise; we'll catch in caller
-    if not hasattr(module, "CoinbaseClient"):
-        raise ImportError("CoinbaseClient class not found in app/nija_client.py")
-    return getattr(module, "CoinbaseClient")
+def load_from_root():
+    try:
+        from nija_client import CoinbaseClient
+        logger.info("Imported CoinbaseClient from root nija_client.py")
+        return CoinbaseClient
+    except Exception:
+        logger.warning("Could not import from root nija_client.py:\n" + traceback.format_exc())
+        return None
 
 def main():
-    logger.info("Starting Nija HMAC/Advanced startup (robust loader).")
-    try:
-        # Prefer to load the app module directly by path (robust in any deploy layout)
-        CoinbaseClient = load_coinbaseclient_from_path(APP_MODULE_PATH)
-    except Exception as e:
-        logger.exception("Failed to load CoinbaseClient from app/nija_client.py. Trying root nija_client.py as fallback.")
-        # Fallback: try nija_client.py in repo root
-        try:
-            root_path = ROOT / "nija_client.py"
-            CoinbaseClient = load_coinbaseclient_from_path(root_path)
-        except Exception as e2:
-            logger.exception("Fallback import failed. Cannot continue without CoinbaseClient.")
-            return
+    logger.info("Starting Nija loader (robust).")
 
-    # Initialize client and check accounts
+    # 1) try app package import
+    CoinbaseClient = load_from_app()
+    # 2) fallback to root nija_client.py
+    if CoinbaseClient is None:
+        CoinbaseClient = load_from_root()
+
+    if CoinbaseClient is None:
+        logger.error("FATAL: Cannot import CoinbaseClient from either app.nija_client nor nija_client.")
+        logger.error("Check: 1) app/__init__.py exists, 2) app/nija_client.py exists, 3) you're running from project root.")
+        sys.exit(1)
+
+    # instantiate and run a quick accounts check
     try:
         client = CoinbaseClient(advanced=True)
-    except Exception as e:
-        logger.exception("Failed to initialize CoinbaseClient (JWT generation / env variables).")
-        logger.error("Ensure COINBASE_ISS and COINBASE_PEM_CONTENT are set in your environment (and COINBASE_BASE if needed).")
-        return
-
-    try:
-        accounts = client.fetch_advanced_accounts()
-    except Exception:
-        logger.exception("fetch_advanced_accounts() raised an exception.")
         accounts = []
+        if hasattr(client, "fetch_advanced_accounts"):
+            accounts = client.fetch_advanced_accounts()
+        else:
+            # attempt a generic request if class uses different API
+            try:
+                status, data = client.request("GET", "/v3/accounts")
+                if status == 200 and data:
+                    accounts = data.get("data", []) if isinstance(data, dict) else []
+            except Exception:
+                accounts = []
 
-    if not accounts:
-        logger.error("No HMAC/Advanced accounts found. Verify key permissions and COINBASE_BASE/COINBASE_ISS/PEM.")
-        return
+        if not accounts:
+            logger.error("No accounts returned. Verify COINBASE env vars, key permissions, and COINBASE_BASE.")
+            sys.exit(1)
 
-    logger.info("Accounts:")
-    for a in accounts:
-        name = a.get("name") or a.get("id") or "<unknown>"
-        bal = a.get("balance") or a.get("available") or {}
-        logger.info(f" - {name} : {bal}")
+        logger.info("Accounts:")
+        for a in accounts:
+            logger.info(f" - {a.get('name', a.get('id', '<unknown>'))}")
+        logger.info("✅ HMAC/Advanced account check passed. Ready to start trading loop (not included here).")
 
-    logger.info("✅ HMAC/Advanced account check complete. Bot ready to start trading loop (implement next).")
+    except Exception as e:
+        logger.exception(f"Error during client init / account check: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
