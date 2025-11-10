@@ -7,65 +7,69 @@ from loguru import logger
 
 class CoinbaseClient:
     """
-    Minimal Coinbase Client for Nija Bot.
-    Supports ephemeral JWT and basic account/balance placeholders.
+    Simple Coinbase Client for Nija Bot.
+    Handles JWT auth and fetching account balances.
     """
 
-    def __init__(self, base=None, jwt_token=None):
-        self.base = base or "https://api.cdp.coinbase.com"
-        self.jwt = jwt_token
-        self.headers = {}
-        if self.jwt:
-            self.headers["Authorization"] = f"Bearer {self.jwt}"
-        logger.info(f"CoinbaseClient initialized: base={self.base}, jwt_set={self.jwt is not None}")
+    def __init__(self, base_url=None, pem_content=None, issuer=None):
+        self.base_url = base_url or "https://api.cdp.coinbase.com"
+        self.pem_content = pem_content or os.getenv("COINBASE_PEM_CONTENT")
+        self.issuer = issuer or os.getenv("COINBASE_ISS")
+        self.jwt_token = None
 
-    @staticmethod
-    def generate_ephemeral_jwt(pem_content=None, iss=None):
-        """
-        Generate ephemeral JWT from PEM content (for Advanced API)
-        """
-        pem_content = pem_content or os.getenv("COINBASE_PEM_CONTENT")
-        iss = iss or os.getenv("COINBASE_ISS")
-        if not pem_content or not iss:
-            raise ValueError("Missing PEM content or ISS for JWT generation")
+        if not self.pem_content:
+            raise ValueError("PEM content required for CoinbaseClient")
 
+        self._generate_jwt()
+        logger.info(f"NIJA-CLIENT-READY: base={self.base_url} jwt_set={self.jwt_token is not None}")
+
+    def _generate_jwt(self):
         payload = {
-            "iss": iss,
             "iat": int(time.time()),
-            "exp": int(time.time()) + 30,  # 30s expiry
+            "exp": int(time.time()) + 300,
+            "iss": self.issuer
         }
-        token = jwt.encode(payload, pem_content, algorithm="ES256")
-        return token
+        try:
+            self.jwt_token = jwt.encode(payload, self.pem_content, algorithm="ES256")
+            logger.info("Generated ephemeral JWT from COINBASE_PEM_CONTENT")
+        except Exception as e:
+            logger.error(f"Failed to generate JWT: {e}")
+            self.jwt_token = None
 
     def get_accounts(self):
         """
-        Placeholder for fetching accounts.
-        Replace with actual API calls when ready.
+        Fetch accounts from Coinbase Advanced API.
         """
-        logger.info("[CoinbaseClient] get_accounts() called")
-        # Example structure
-        return [
-            {"id": "acct_1", "currency": "USD", "balance": 1000},
-            {"id": "acct_2", "currency": "BTC", "balance": 0.05}
-        ]
+        headers = {"Authorization": f"Bearer {self.jwt_token}"}
+        try:
+            response = requests.get(f"{self.base_url}/api/v3/brokerage/accounts", headers=headers)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(f"Advanced API returned {response.status_code}: {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching accounts: {e}")
+            return None
 
-    def get_balance(self):
+    def get_classic_accounts(self):
         """
-        Calculate total balance across accounts (placeholder logic)
+        Fetch accounts from Classic Coinbase API as fallback.
         """
-        accounts = self.get_accounts()
-        total_balance = sum(a["balance"] for a in accounts)
-        logger.info(f"[CoinbaseClient] Total balance calculated: {total_balance}")
-        return total_balance
+        api_key = os.getenv("COINBASE_API_KEY")
+        api_secret = os.getenv("COINBASE_API_SECRET")
+        if not api_key or not api_secret:
+            logger.warning("Classic API credentials missing")
+            return None
 
-# Quick test when running directly
-if __name__ == "__main__":
-    try:
-        client = CoinbaseClient(jwt_token="TEST_JWT")
-        accounts = client.get_accounts()
-        balance = client.get_balance()
-        print("CoinbaseClient initialized and test run successful!")
-        print("Accounts:", accounts)
-        print("Total balance:", balance)
-    except Exception as e:
-        print("Error testing CoinbaseClient:", e)
+        headers = {"Authorization": f"Bearer {api_key}"}
+        try:
+            response = requests.get("https://api.coinbase.com/v2/accounts", headers=headers)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(f"Classic API returned {response.status_code}: {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching classic accounts: {e}")
+            return None
