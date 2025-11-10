@@ -1,3 +1,25 @@
+import os
+from loguru import logger
+
+class CoinbaseClient:
+    def __init__(self, advanced=None):
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+
+        # Auto-detect account type if not explicitly set
+        if advanced is None:
+            self.base = "https://api.cdp.coinbase.com"  # default Advanced
+            if not os.getenv("COINBASE_API_KEY_ADVANCED"):  # fallback to regular
+                self.base = "https://api.coinbase.com"
+                advanced = False
+            else:
+                advanced = True
+        else:
+            self.base = "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com"
+
+        self.advanced = advanced
+        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base}")
+
 import os, json
 import requests
 from loguru import logger
