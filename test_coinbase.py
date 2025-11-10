@@ -1,37 +1,51 @@
+#!/usr/bin/env python3
 import os
 import time
-import jwt
 import requests
+import jwt as pyjwt
+from loguru import logger
 
-# Load your keys from environment
-API_KEY = os.getenv("organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5")
-API_SECRET = os.getenv("nMHcCAQEEIC4EDrIQiByWHS5qIrHsMI6SZb0sYSqx744G2kvqr+PCoAoGCCqGSM49\nAwEHoUQDQgAE3gkuCL8xUOM81/alCSOLqEtyUmY7A09z7QEAoN/cfCtbAslo6pXR\nqONKAu6GS9PS/W3BTFyB6ZJBRzxMZeNzBg")
-PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")
+logger.info("=== Nija Coinbase Advanced API Test ===")
 
-if not all([API_KEY, API_SECRET]):
-    raise SystemExit("❌ Missing API key or secret")
+# Load environment variables
+pem = os.getenv("COINBASE_PEM_CONTENT")
+iss = os.getenv("COINBASE_ISS")
+base = os.getenv("COINBASE_BASE")  # Example: https://api.cdp.coinbase.com
 
-# Coinbase Advanced JWT payload
-timestamp = int(time.time())
-payload = {
-    "iat": timestamp,
-    "exp": timestamp + 300,  # token valid 5 minutes
-    "sub": API_KEY,
-}
+if not pem or not iss or not base:
+    logger.error("❌ Missing COINBASE_PEM_CONTENT, COINBASE_ISS, or COINBASE_BASE")
+    exit(1)
 
-token = jwt.encode(payload, API_SECRET, algorithm="HS256")
+# Generate ephemeral JWT (valid 5 minutes)
+try:
+    now = int(time.time())
+    payload = {"iat": now, "exp": now + 300, "iss": iss}
+    token = pyjwt.encode(payload, pem, algorithm="ES256")
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    logger.info("✅ JWT generated successfully")
+except Exception as e:
+    logger.error("❌ Failed to generate JWT:", e)
+    exit(1)
 
-headers = {
-    "CB-ACCESS-KEY": API_KEY,
-    "CB-ACCESS-SIGN": token,
-    "CB-ACCESS-PASSPHRASE": PASSPHRASE,
-    "Content-Type": "application/json",
-}
+# Endpoints to test
+endpoints = [
+    "/api/v3/brokerage/accounts",  # Advanced API
+    "/accounts",                   # Standard fallback
+]
 
-# Test endpoint: get accounts
-url = "https://api.coinbase.com/v2/accounts"
+for path in endpoints:
+    url = base.rstrip("/") + path
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        logger.info(f"Request to {url} returned status {r.status_code}")
+        try:
+            data = r.json()
+            logger.info("Response JSON:", data)
+        except Exception:
+            logger.info("Response text:", r.text)
+    except requests.RequestException as e:
+        logger.error(f"Request failed for {url}:", e)
 
-response = requests.get(url, headers=headers)
-
-print("Status code:", response.status_code)
-print("Response:", response.text)
+logger.info("✅ Test complete. If 200 OK, your keys and JWT are valid.")
