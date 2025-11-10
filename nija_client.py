@@ -1,38 +1,31 @@
 import os
-from loguru import logger
-
-class CoinbaseClient:
-    def __init__(self, advanced=None):
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-
-        # Auto-detect account type if not explicitly set
-        if advanced is None:
-            self.base = "https://api.cdp.coinbase.com"  # default Advanced
-            if not os.getenv("COINBASE_API_KEY_ADVANCED"):  # fallback to regular
-                self.base = "https://api.coinbase.com"
-                advanced = False
-            else:
-                advanced = True
-        else:
-            self.base = "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com"
-
-        self.advanced = advanced
-        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base}")
-
-import os, json
+import json
 import requests
 from loguru import logger
 
+# Simple logging to stdout
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level="INFO")
 
 class CoinbaseClient:
-    def __init__(self, advanced=True):
+    def __init__(self, advanced=None):
+        # Load API keys from environment
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.base = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com")
+
+        # Auto-detect API type if not explicitly set
+        if advanced is None:
+            if os.getenv("COINBASE_API_KEY_ADVANCED"):  # Use advanced if key exists
+                advanced = True
+            else:
+                advanced = False
+
         self.advanced = advanced
+        # Set base URL
+        self.base = "https://api.cdp.coinbase.com" if self.advanced else "https://api.coinbase.com"
+        # Override from env var if provided
+        self.base = os.getenv("COINBASE_BASE", self.base)
+
         logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base}")
 
     def request(self, method, path):
