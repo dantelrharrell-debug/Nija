@@ -1,4 +1,4 @@
-# nija_client.py
+# app/nija_client.py or root/nija_client.py
 import os
 import time
 import requests
@@ -7,23 +7,26 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 import jwt
 
-# Logger
+# Setup logger
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
 
 class CoinbaseClient:
     """
     Coinbase Advanced Service Key client (JWT ES256).
-    Requires env:
+    Expects env:
       - COINBASE_ISS
       - COINBASE_PEM_CONTENT
-      - optional: COINBASE_BASE (defaults to Advanced API)
+      - optional: COINBASE_BASE (defaults to CDP advanced)
     """
     def __init__(self, advanced=True):
         self.advanced = advanced
         self.iss = os.getenv("COINBASE_ISS")
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
-        self.base_url = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
+        self.base_url = os.getenv(
+            "COINBASE_BASE",
+            "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com/v2"
+        )
 
         if not self.iss or not self.pem_content:
             raise ValueError("COINBASE_ISS or COINBASE_PEM_CONTENT missing in environment")
@@ -65,13 +68,23 @@ class CoinbaseClient:
             return None, None
 
     def fetch_advanced_accounts(self):
-        status, body = self.request("GET", "/v3/accounts")
-        if status == 404:
-            logger.warning("/v3/accounts returned 404; endpoint not available.")
-            return []
-        if status != 200 or not body:
-            logger.error(f"Failed to fetch accounts. status={status} body={body}")
-            return []
-        accounts = body.get("data", []) if isinstance(body, dict) else []
-        logger.info(f"Fetched {len(accounts)} account(s).")
-        return accounts
+        """
+        Try multiple endpoints to fetch accounts. Fallback /v3 -> /v2.
+        """
+        paths = ["/v3/accounts", "/v2/accounts"]
+        for path in paths:
+            status, body = self.request("GET", path)
+            if status == 200 and body:
+                accounts = body.get("data", []) if isinstance(body, dict) else []
+                logger.info(f"Fetched {len(accounts)} accounts from {path}")
+                return accounts
+            elif status == 404:
+                logger.warning(f"{path} returned 404; trying next endpoint.")
+        logger.error("Failed to fetch accounts. No endpoint succeeded.")
+        return []
+
+# Optional helper if you want
+if __name__ == "__main__":
+    client = CoinbaseClient(advanced=True)
+    accounts = client.fetch_advanced_accounts()
+    print(accounts)
