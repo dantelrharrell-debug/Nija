@@ -1,9 +1,8 @@
-from app.nija_client import CoinbaseClient
+from nija_client import CoinbaseClient
 
 if __name__ == "__main__":
     client = CoinbaseClient()
     accounts = client.fetch_advanced_accounts()
-
     if not accounts:
         print("No accounts returned. Check key permissions or IP allowlist ❌")
     else:
