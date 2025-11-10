@@ -1,49 +1,58 @@
 # start_bot.py
-import os
 import time
 from loguru import logger
-
-# Import our minimal Coinbase client
 from nija_client import CoinbaseClient
 
 logger.info("Starting Nija bot — LIVE mode")
 
-# Initialize the client
 try:
-    client = CoinbaseClient(
-        base=os.getenv("COINBASE_BASE"),
-        jwt=os.getenv("COINBASE_JWT")  # optional for now
-    )
+    client = CoinbaseClient()
 except Exception as e:
     logger.error(f"Failed to initialize CoinbaseClient: {e}")
-    raise SystemExit(1)
+    raise SystemExit("Cannot start bot without client.")
 
-# Main loop stub — avoids crashing
-def main_loop():
-    tick = 0
+def fetch_balances():
+    """
+    Attempt to fetch accounts via Advanced API first,
+    fallback to Classic API if Advanced fails.
+    """
+    accounts = client.get_accounts()
+    if accounts:
+        logger.info(f"[NIJA-BALANCE] Advanced API accounts: {accounts}")
+        return accounts
+
+    logger.warning("[NIJA-BALANCE] Advanced API failed, trying Classic API")
+    accounts = client.get_classic_accounts()
+    if accounts:
+        logger.info(f"[NIJA-BALANCE] Classic API accounts: {accounts}")
+        return accounts
+
+    logger.warning("[NIJA-BALANCE] No accounts returned from either API")
+    return None
+
+def main_loop(poll_interval=10):
+    """
+    Main bot loop. Polls balances every `poll_interval` seconds.
+    """
     while True:
-        tick += 1
-        logger.info(f"[Tick {tick}] Checking accounts/balance...")
+        logger.info("Fetching balances...")
+        balances = fetch_balances()
+        if balances:
+            for acc in balances.get("data", []):
+                # Example: adjust this if Advanced vs Classic structure differs
+                name = acc.get("name", "Unknown")
+                balance = acc.get("balance", {}).get("amount", "0")
+                currency = acc.get("balance", {}).get("currency", "USD")
+                logger.info(f"Account: {name} — Balance: {balance} {currency}")
+        else:
+            logger.info("No balances fetched this tick.")
 
-        try:
-            accounts = client.get_accounts()
-            if not accounts:
-                logger.warning("[NIJA-BALANCE] No accounts returned (stub mode)")
-            else:
-                logger.info(f"Fetched {len(accounts)} accounts")
-        except Exception as e:
-            logger.error(f"Error fetching accounts: {e}")
-
-        try:
-            balance = client.get_balance()
-            logger.info(f"[NIJA-BALANCE] Total balance: {balance}")
-        except Exception as e:
-            logger.error(f"Error fetching balance: {e}")
-
-        time.sleep(5)  # 5s between ticks; adjust as needed
+        time.sleep(poll_interval)
 
 if __name__ == "__main__":
     try:
         main_loop()
     except KeyboardInterrupt:
-        logger.info("Nija bot stopped manually.")
+        logger.info("Nija bot stopped by user.")
+    except Exception as e:
+        logger.exception(f"Unhandled exception in main loop: {e}")
