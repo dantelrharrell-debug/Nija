@@ -1,5 +1,7 @@
 root/
-  __main__.py
+  .env
+  start_bot.py
+  check_account.py
   app/
-    __init__.py        <-- empty file
-    nija_client.py     <-- contains the CoinbaseClient class
+    __init__.py
+    nija_client.py
