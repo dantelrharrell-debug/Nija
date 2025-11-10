@@ -1,7 +1,6 @@
-/app (root folder on your host)
-├── start_bot.py            # Entry point
-├── nija_client.py          # Root shim for backward compatibility
-├── app/                    # Folder for main app code
-│   ├── __init__.py        # Marks `app` as a Python package
-│   └── nija_client.py      # Robust Coinbase client class
-├── .env                    # Environment variables
+/repo-root
+    start_bot.py
+    nija_client.py        <- root shim
+    /app
+        __init__.py       <- empty file
+        nija_client.py    <- full CoinbaseClient code
