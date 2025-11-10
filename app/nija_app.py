@@ -1,57 +1,139 @@
-# nija_app.py
 import os
-import sys
+import time
+import requests
 from loguru import logger
-from decimal import Decimal
-from coinbase_advanced_py import CoinbaseAdvancedClient
+import jwt  # PyJWT required
 
-# ----------------------------
-# Environment / Config
-# ----------------------------
-PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
-COINBASE_ISS = os.getenv("COINBASE_ISS")
-COINBASE_API_BASE = os.getenv("COINBASE_API_BASE", "https://api.cdp.coinbase.com")
+# ─────────────────────────────────────────────
+# 🔐 Environment variables
+# ─────────────────────────────────────────────
+API_KEY = os.getenv("COINBASE_API_KEY")          # Classic API key (optional fallback)
+API_SECRET = os.getenv("COINBASE_API_SECRET")    # Classic API secret
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # For JWT signing
 
-if not PEM_CONTENT or not COINBASE_ISS:
-    logger.error("Missing Coinbase Advanced credentials (COINBASE_PEM_CONTENT or COINBASE_ISS)")
-    sys.exit(1)
+# ─────────────────────────────────────────────
+# 🌐 Base URLs
+# ─────────────────────────────────────────────
+BASE_ADV = "https://api.coinbase.com"            # Advanced API
+BASE_CLASSIC = "https://api.cdp.coinbase.com"    # Classic (legacy) API
 
-# ----------------------------
-# Initialize client
-# ----------------------------
-try:
-    client = CoinbaseAdvancedClient(
-        pem_content=PEM_CONTENT,
-        iss=COINBASE_ISS,
-        base_url=COINBASE_API_BASE,
-        debug=True  # set to False in production
-    )
-    logger.info("✅ Coinbase Advanced client initialized successfully.")
-except Exception as e:
-    logger.exception(f"Failed to initialize Coinbase Advanced client: {e}")
-    sys.exit(1)
+# ─────────────────────────────────────────────
+# ⚙️ NIJA CLIENT
+# ─────────────────────────────────────────────
+class NijaClient:
+    def __init__(self):
+        self.jwt = None
+        self._init_jwt()
 
-# ----------------------------
-# Helper: fetch USD balance
-# ----------------------------
-def get_usd_balance(client) -> Decimal:
-    try:
-        balances = client.get_spot_account_balances()
-        usd = balances.get("USD") or balances.get("USDC") or 0
-        return Decimal(str(usd))
-    except Exception as e:
-        logger.exception(f"Failed to fetch USD balance: {e}")
-        return Decimal("0")
+    # 🔸 Initialize JWT (Advanced API)
+    def _init_jwt(self):
+        if not COINBASE_PEM_CONTENT:
+            logger.warning("No PEM content found — skipping JWT setup")
+            return
 
-# ----------------------------
-# Main diagnostics / test
-# ----------------------------
+        payload = {
+            "sub": "YOUR_CLIENT_ID_OR_EMAIL",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 60,
+        }
+
+        try:
+            self.jwt = jwt.encode(payload, COINBASE_PEM_CONTENT, algorithm="ES256")
+            logger.info("✅ Generated ephemeral JWT for Advanced API")
+        except Exception as e:
+            logger.error(f"❌ Failed to generate JWT: {e}")
+            self.jwt = None
+
+    # 🔸 Headers for Advanced API
+    def _headers_advanced(self):
+        return {
+            "Authorization": f"Bearer {self.jwt}",
+            "CB-VERSION": "2025-11-09",
+            "Content-Type": "application/json",
+        }
+
+    # 🔸 Headers for Classic API
+    def _headers_classic(self):
+        return {
+            "CB-ACCESS-KEY": API_KEY,
+            "CB-ACCESS-SIGN": API_SECRET,  # simplified placeholder
+            "CB-VERSION": "2025-11-09",
+            "Content-Type": "application/json",
+        }
+
+    # 🔸 Fetch accounts (tries Advanced, then Classic)
+    def fetch_accounts(self):
+        # 1️⃣ Advanced API first
+        if self.jwt:
+            try:
+                url_adv = f"{BASE_ADV.rstrip('/')}/api/v3/brokerage/accounts"
+                resp = requests.get(url_adv, headers=self._headers_advanced(), timeout=10)
+                if resp.status_code == 200:
+                    logger.info("✅ Fetched accounts via Advanced API")
+                    return resp.json().get("accounts", resp.json().get("data", []))
+                else:
+                    logger.warning(f"⚠️ Advanced API failed ({resp.status_code}): {resp.text}")
+            except Exception as e:
+                logger.warning(f"⚠️ Advanced API exception: {e}")
+
+        # 2️⃣ Classic fallback
+        if API_KEY and API_SECRET:
+            for attempt in range(3):
+                try:
+                    url_classic = f"{BASE_CLASSIC.rstrip('/')}/v2/accounts"
+                    resp = requests.get(url_classic, headers=self._headers_classic(), timeout=10)
+                    if resp.status_code == 200:
+                        logger.info("✅ Fetched accounts via Classic API")
+                        return resp.json().get("data", [])
+                    else:
+                        logger.warning(f"⚠️ Classic API attempt {attempt+1} failed: {resp.status_code}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Classic API attempt {attempt+1} exception: {e}")
+                time.sleep(2 ** attempt)
+
+        logger.error("❌ No accounts fetched — both Advanced & Classic failed")
+        return []
+
+    # 🔸 Get balances (non-zero only)
+    def get_balances(self):
+        accounts = self.fetch_accounts()
+        balances = []
+        for acc in accounts:
+            bal = float(acc.get("balance", {}).get("amount", 0))
+            if bal > 0:
+                balances.append({
+                    "id": acc.get("id"),
+                    "currency": acc.get("balance", {}).get("currency"),
+                    "balance": bal
+                })
+        if not balances:
+            logger.warning("⚠️ No non-zero balances found")
+        return balances
+
+
+# ─────────────────────────────────────────────
+# 🧠 Test run
+# ─────────────────────────────────────────────
 if __name__ == "__main__":
-    usd_balance = get_usd_balance(client)
-    logger.info(f"USD Balance: {usd_balance}")
+    logger.info("🚀 Starting NIJA client test (LIVE mode)")
+    client = NijaClient()
 
-    try:
-        trades = client.get_recent_trades(limit=5)
-        logger.info(f"Recent Trades: {trades}")
-    except Exception as e:
-        logger.warning(f"Failed to fetch recent trades: {e}")
+    # Try fetching accounts with retries
+    attempts = 3
+    for i in range(attempts):
+        accounts = client.fetch_accounts()
+        if accounts:
+            for acc in accounts:
+                logger.info(f"Account: {acc}")
+            break
+        else:
+            sleep_time = 2 ** i
+            logger.info(f"⏳ Retrying in {sleep_time} seconds (attempt {i+1}/{attempts})")
+            time.sleep(sleep_time)
+    else:
+        logger.error("❌ All retries failed — no accounts fetched")
+
+    # Optional: print balances
+    balances = client.get_balances()
+    for b in balances:
+        logger.info(f"💰 Balance: {b}")
