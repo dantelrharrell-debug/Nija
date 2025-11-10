@@ -1,109 +1,92 @@
 import os
 import time
 import requests
-import jwt
+import jwt as pyjwt
 from loguru import logger
-import threading
 
-class NijaClient:
-    POSSIBLE_ENDPOINTS = [
-        "/api/v3/brokerage/accounts",
-        "/accounts",
-        "/brokerage/accounts"
-    ]
-
+class NijaCoinbaseClient:
     def __init__(self):
-        self.base = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
-        self.pem = os.getenv("COINBASE_PEM_CONTENT")
-        self.iss = os.getenv("COINBASE_ISS")
-        if not all([self.base, self.pem, self.iss]):
-            logger.error("Missing COINBASE_BASE, COINBASE_PEM_CONTENT, or COINBASE_ISS")
-            raise SystemExit(1)
+        # Base URLs
+        self.base_advanced = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
+        self.base_classic = "https://api.coinbase.com"
 
-        self.jwt_token = None
-        self.active_endpoint = None  # Will store working endpoint
-        self._generate_jwt()
-        self._start_jwt_refresh()
-        logger.info(f"NIJA-CLIENT-READY: base={self.base} jwt_set={self.jwt_token is not None}")
-
-    def _generate_jwt(self):
-        now = int(time.time())
-        payload = {"iat": now, "exp": now + 300, "iss": self.iss}
-        try:
-            token = jwt.encode(payload, self.pem, algorithm="ES256")
-            if isinstance(token, bytes):
-                token = token.decode("utf-8")
-            self.jwt_token = token
-            logger.info("✅ JWT generated successfully")
-        except Exception as e:
-            logger.error(f"Failed to generate JWT: {e}")
-            raise
-
-    def _start_jwt_refresh(self):
-        def refresh_loop():
-            while True:
-                time.sleep(240)
-                self._generate_jwt()
-        threading.Thread(target=refresh_loop, daemon=True).start()
-
-    def _detect_endpoint(self):
-        """Try endpoints one by one until one works."""
-        headers = {"Authorization": f"Bearer {self.jwt_token}"}
-        for path in self.POSSIBLE_ENDPOINTS:
-            url = f"{self.base.rstrip('/')}{path}"
+        # Advanced JWT
+        self.jwt = None
+        pem = os.getenv("COINBASE_PEM_CONTENT")
+        iss = os.getenv("COINBASE_ISS")
+        if pem and iss:
             try:
-                r = requests.get(url, headers=headers, timeout=10)
-                if r.status_code == 200:
-                    logger.info(f"✅ Working endpoint found: {url}")
-                    self.active_endpoint = path
-                    return True
-            except requests.RequestException:
-                continue
-        logger.error("❌ No valid endpoint found for Coinbase Advanced accounts")
-        return False
+                now = int(time.time())
+                payload = {"iat": now, "exp": now + 300, "iss": iss}
+                token = pyjwt.encode(payload, pem, algorithm="ES256")
+                if isinstance(token, bytes):
+                    token = token.decode("utf-8")
+                self.jwt = token
+                logger.info("✅ Generated ephemeral JWT from COINBASE_PEM_CONTENT")
+            except Exception as e:
+                logger.error(f"JWT generation failed: {e}")
+
+        # Classic API keys
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+
+        logger.info(f"NIJA-CLIENT-READY: advanced_jwt_set={bool(self.jwt)} classic_keys_set={bool(self.api_key and self.api_secret)}")
+
+    def _headers_advanced(self):
+        return {"Authorization": f"Bearer {self.jwt}", "Content-Type": "application/json"} if self.jwt else {}
+
+    def _headers_classic(self):
+        return {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": self.api_secret,  # NOTE: Proper HMAC required for live trading
+            "CB-ACCESS-TIMESTAMP": str(int(time.time())),
+            "Content-Type": "application/json"
+        }
 
     def fetch_accounts(self):
-        if not self.jwt_token:
-            logger.warning("JWT not set, cannot fetch accounts")
-            return []
-
-        # Detect endpoint if not already known
-        if not self.active_endpoint:
-            if not self._detect_endpoint():
-                return []
-
-        url = f"{self.base.rstrip('/')}{self.active_endpoint}"
-        headers = {"Authorization": f"Bearer {self.jwt_token}"}
-        try:
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                # Attempt to normalize response
-                if "data" in data:
-                    return data["data"]
-                elif "accounts" in data:
-                    return data["accounts"]
+        # --- Try Advanced first ---
+        if self.jwt:
+            try:
+                url_adv = f"{self.base_advanced.rstrip('/')}/api/v3/brokerage/accounts"
+                resp = requests.get(url_adv, headers=self._headers_advanced(), timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Returns list of accounts
+                    for key in ("accounts", "data"):
+                        if key in data and isinstance(data[key], list):
+                            logger.info("✅ Fetched accounts from Advanced API")
+                            return data[key]
                 else:
-                    return [data]
-            else:
-                logger.error(f"Fetch accounts failed: {r.status_code} {r.text}")
-                return []
-        except requests.RequestException as e:
-            logger.error(f"Request failed: {e}")
-            return []
+                    logger.warning(f"Advanced API returned {resp.status_code}, falling back")
+            except Exception as e:
+                logger.warning(f"Advanced API fetch failed: {e}, falling back")
+
+        # --- Fallback to Classic API ---
+        if self.api_key and self.api_secret:
+            try:
+                url_classic = f"{self.base_classic.rstrip('/')}/v2/accounts"
+                resp = requests.get(url_classic, headers=self._headers_classic(), timeout=10)
+                if resp.status_code == 200:
+                    logger.info("✅ Fetched accounts from Classic API")
+                    return resp.json().get("data", [])
+                else:
+                    logger.error(f"Classic API fetch failed: {resp.status_code} {resp.text}")
+            except Exception as e:
+                logger.error(f"Classic API request failed: {e}")
+
+        logger.error("No accounts fetched — both Advanced and Classic failed")
+        return []
 
     def get_balances(self):
         accounts = self.fetch_accounts()
-        if not accounts:
-            logger.warning("No accounts fetched")
-            return {}
-
         balances = {}
         for acc in accounts:
             cur = acc.get("currency") or acc.get("asset")
             amt = None
+            # Advanced structure
             if isinstance(acc.get("balance"), dict):
                 amt = acc["balance"].get("amount") or acc["balance"].get("value")
+            # Classic structure
             if amt is None:
                 amt = acc.get("available_balance") or acc.get("available") or acc.get("balance")
             try:
