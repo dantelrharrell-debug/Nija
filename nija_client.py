@@ -7,14 +7,17 @@ logger.remove()
 logger.add(lambda msg: print(msg, end=""), level="INFO")
 
 class CoinbaseClient:
-    def __init__(self, advanced=None):
-        # Auto-detect advanced vs spot
+    def __init__(self, advanced=None, debug=False):
+        # Debug mode flag
+        self.debug = debug
+
+        # API credentials
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")  # optional for advanced
+        self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")  # optional
 
+        # Determine API type
         if advanced is None:
-            # If advanced keys exist, use Advanced API
             if os.getenv("COINBASE_API_KEY_ADVANCED"):
                 self.base = "https://api.cdp.coinbase.com"
                 self.advanced = True
@@ -25,7 +28,7 @@ class CoinbaseClient:
             self.advanced = advanced
             self.base = "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com"
 
-        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base}")
+        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base} debug={self.debug}")
 
     def request(self, method, path):
         url = self.base + path
@@ -40,10 +43,12 @@ class CoinbaseClient:
             try:
                 body = r.json()
             except Exception:
-                body = None
+                body = r.text
+            if self.debug:
+                logger.info(f"[DEBUG] {method} {url} | Status: {r.status_code} | Body: {body}")
             return r.status_code, body
         except Exception as e:
-            logger.error(f"Request failed for {url}: {e}")
+            logger.error(f"[DEBUG] Request failed for {url}: {e}")
             return None, None
 
     def fetch_advanced_accounts(self):
