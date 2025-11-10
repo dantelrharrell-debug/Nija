@@ -1,76 +1,65 @@
-# nija_client.py
 import os
-import json
+import time
 import requests
+import jwt
 from loguru import logger
-from jwt import encode
-from time import time
 
 class CoinbaseClient:
-    def __init__(self, advanced=True, debug=False):
-        self.debug = debug
+    def __init__(self, advanced=True, base=None):
         self.advanced = advanced
-        self.base_url = os.getenv("COINBASE_ADVANCED_BASE") if advanced else os.getenv("COINBASE_BASE")
-        self.iss = os.getenv("COINBASE_ISS")
-        self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
+        self.base = base or os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
+        self.iss = os.getenv("COINBASE_ISS")  # key identifier
+        self.pem_content = os.getenv("COINBASE_PEM_CONTENT", "").replace("\\n", "\n")
+        self.token = None
 
-        if not self.base_url or not self.iss or not self.pem_content:
-            raise ValueError(
-                "Missing COINBASE env vars (COINBASE_ISS, COINBASE_PEM_CONTENT, COINBASE_ADVANCED_BASE)"
-            )
+        if not self.pem_content or not self.iss:
+            raise ValueError("Missing COINBASE_ISS or COINBASE_PEM_CONTENT env vars")
 
-        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base_url}")
+        self._generate_jwt()
+        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base}")
 
-    def _jwt_headers(self):
-        """Generate JWT headers using the PEM content"""
+    def _generate_jwt(self):
+        """Generate JWT for authentication"""
         payload = {
             "iss": self.iss,
-            "iat": int(time()),
-            "exp": int(time()) + 30
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 300
         }
-
-        # Fix literal '\n' in env variable
-        pem_bytes = self.pem_content.replace("\\n", "\n")
-
-        token = encode(payload, pem_bytes, algorithm="ES256")
-        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    def _request(self, method, path, **kwargs):
-        url = self.base_url.rstrip("/") + path
-        headers = self._jwt_headers()
         try:
-            if method.upper() == "GET":
-                r = requests.get(url, headers=headers, **kwargs)
-            else:
-                r = requests.request(method, url, headers=headers, **kwargs)
-            if self.debug:
-                logger.debug(f"[DEBUG] {method} {url} -> {r.status_code}")
+            self.token = jwt.encode(payload, self.pem_content, algorithm="ES256")
+        except Exception as e:
+            logger.error(f"Failed to generate JWT: {e}")
+            raise
+
+    def _request(self, method, endpoint, **kwargs):
+        url = self.base.rstrip("/") + endpoint
+        headers = {"Authorization": f"Bearer {self.token}"}
+        try:
+            r = requests.request(method, url, headers=headers, **kwargs)
+            if r.status_code == 404:
+                logger.warning(f"HTTP request failed for {url}: 404 Not Found")
+                return None
             r.raise_for_status()
-            return r.status_code, r.json()
-        except requests.HTTPError as e:
+            return r.json()
+        except requests.RequestException as e:
             logger.warning(f"HTTP request failed for {url}: {e}")
-            return None, None
-        except json.JSONDecodeError:
-            logger.warning(f"HTTP request returned invalid JSON for {url}")
-            return None, None
+            return None
 
     def fetch_advanced_accounts(self):
-        """Try multiple endpoints until one returns data"""
-        endpoints = [
-            "/v2/accounts",
-            "/v2/brokerage/accounts",
-            "/accounts",
-            "/api/v3/trading/accounts",
-            "/api/v3/portfolios"
-        ]
-
+        """Try valid Advanced API endpoints only"""
+        endpoints = ["/accounts", "/orders", "/positions"]
         for ep in endpoints:
-            status, data = self._request("GET", ep)
-            if status and data:
-                logger.info(f"✅ Found working endpoint: {ep}")
-                return data.get("data", data)
-            else:
-                logger.warning(f"{ep} returned no data or failed")
-        
+            data = self._request("GET", ep)
+            if data:
+                return data
         logger.error("Failed to fetch accounts from all candidate endpoints")
-        return []
+        return None
+
+    def validate_key(self):
+        """Quick test to see if the key works"""
+        data = self._request("GET", "/accounts")
+        if data is None:
+            logger.error("API key invalid or base URL incorrect. Check permissions.")
+            return False
+        logger.info("API key validated successfully.")
+        return True
