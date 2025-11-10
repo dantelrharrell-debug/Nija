@@ -1,10 +1,10 @@
 import sys
 import os
 
-# Add app folder to path (optional helpers)
+# Optional: include app folder in path if you have helpers there
 sys.path.append(os.path.join(os.path.dirname(__file__), "app"))
 
-from nija_client import CoinbaseClient
+from nija_client import CoinbaseClient  # Import the robust client from root
 
 def main():
     client = CoinbaseClient(advanced=True, debug=True)
