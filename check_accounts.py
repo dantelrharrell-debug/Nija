@@ -1,14 +1,14 @@
-from app.nija_client import CoinbaseClient  # use 'app' package
+from app.nija_client import CoinbaseClient
 
-# Initialize client
-client = CoinbaseClient()
+if __name__ == "__main__":
+    client = CoinbaseClient()
+    accounts = client.fetch_advanced_accounts()
 
-# Fetch accounts
-try:
-    accounts = client.fetch_advanced_accounts()  # current method
-    for acc in accounts:
-        print(f"{acc.get('name', acc.get('id', '<unknown>'))}: "
-              f"{acc.get('balance', {}).get('currency', '')} "
-              f"{acc.get('balance', {}).get('amount', '')}")
-except Exception as e:
-    print("Error fetching accounts:", e)
+    if not accounts:
+        print("No accounts returned. Check key permissions or IP allowlist ❌")
+    else:
+        print("Connected accounts:")
+        for a in accounts:
+            name = a.get("name", "<unknown>")
+            bal = a.get("balance", {})
+            print(f"{name}: {bal.get('amount', '0')} {bal.get('currency', '?')}")
