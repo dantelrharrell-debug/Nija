@@ -3,10 +3,10 @@ import os
 import requests
 from loguru import logger
 
+# CoinbaseClient MUST be top-level, no other imports from your app
 class CoinbaseClient:
     """
     Minimal Coinbase API client for Nija bot.
-    Uses REST API key/secret from environment variables.
     """
 
     def __init__(self):
@@ -21,7 +21,7 @@ class CoinbaseClient:
         logger.info("CoinbaseClient initialized")
 
     def get_account(self):
-        """Example method to test connectivity"""
+        """Test connectivity"""
         url = f"{self.base_url}/v2/accounts"
         headers = {
             "CB-ACCESS-KEY": self.api_key,
