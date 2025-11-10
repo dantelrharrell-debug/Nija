@@ -12,21 +12,9 @@ except Exception as e:
 
 def main():
     logger.info("Starting Nija loader (robust).")
-
     try:
         client = CoinbaseClient(advanced=True)
-        accounts = []
-        if hasattr(client, "fetch_advanced_accounts"):
-            accounts = client.fetch_advanced_accounts()
-        else:
-            # attempt a generic request path if needed
-            try:
-                status, data = client.request("GET", "/v3/accounts")
-                if status == 200 and data:
-                    accounts = data.get("data", []) if isinstance(data, dict) else []
-            except Exception:
-                accounts = []
-
+        accounts = client.fetch_advanced_accounts() if hasattr(client, "fetch_advanced_accounts") else []
         if not accounts:
             logger.error("No accounts returned. Verify COINBASE env vars, key permissions, and COINBASE_BASE.")
             sys.exit(1)
@@ -34,8 +22,7 @@ def main():
         logger.info("Accounts:")
         for a in accounts:
             logger.info(f" - {a.get('name', a.get('id', '<unknown>'))}")
-        logger.info("✅ HMAC/Advanced account check passed. Ready to start trading loop (not included here).")
-
+        logger.info("✅ Coinbase connection verified.")
     except Exception as e:
         logger.exception(f"Error during client init / account check: {e}")
         sys.exit(1)
