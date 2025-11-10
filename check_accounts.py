@@ -1,28 +1,31 @@
-from nija_client import CoinbaseClient
+import sys
 from loguru import logger
+
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level="INFO")
+
+try:
+    from nija_client import CoinbaseClient
+except ImportError as e:
+    logger.error(f"Cannot import CoinbaseClient: {e}")
+    sys.exit(1)
 
 def main():
     logger.info("Checking Coinbase accounts...")
 
     client = CoinbaseClient(advanced=True)
     accounts = client.fetch_advanced_accounts()
-
     if not accounts:
-        logger.warning("Advanced API failed; trying Spot API.")
-        client = CoinbaseClient(advanced=False)
-        accounts = client.get_accounts()
-
+        logger.warning("Advanced API failed; falling back to Spot API.")
+        accounts = client.fetch_spot_accounts()
     if not accounts:
-        logger.error("No accounts found. Check API key and permissions.")
-        return
+        logger.error("No accounts returned. Check COINBASE env vars and key permissions.")
+        sys.exit(1)
 
-    logger.info("Accounts:")
     for a in accounts:
         name = a.get("name", "<unknown>")
         bal = a.get("balance", {})
-        logger.info(f" - {name}: {bal.get('amount', '0')} {bal.get('currency', '?')}")
+        logger.info(f"Account: {name} Balance: {bal.get('amount','0')} {bal.get('currency','?')}")
 
 if __name__ == "__main__":
     main()
