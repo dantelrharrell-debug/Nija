@@ -68,7 +68,8 @@ class CoinbaseClient:
 
     def get_balances(self):
         """
-        Returns dict: {currency: balance}
+        Returns dict: {currency: balance}.
+        If USD is zero, will return all other available currencies.
         """
         accounts = self.fetch_accounts()
         out = {}
@@ -79,6 +80,13 @@ class CoinbaseClient:
                 out[cur] = float(amt)
             except Exception:
                 out[cur] = 0.0
+        # Fallback: if USD missing or zero, pick first non-zero currency
+        if out.get("USD", 0) <= 0:
+            non_zero = {k: v for k, v in out.items() if v > 0}
+            if non_zero:
+                logger.info(f"USD balance zero — using other currencies: {non_zero}")
+            else:
+                logger.warning("No non-zero balances found")
         return out
 
 # Alias
@@ -94,11 +102,15 @@ while True:
     try:
         balances = client.get_balances()
         usd_balance = balances.get("USD", 0)
-        logger.info(f"[NIJA-BALANCE] USD: {usd_balance}")
+        if usd_balance > 0:
+            logger.info(f"[NIJA-BALANCE] USD: {usd_balance}")
+        else:
+            for cur, amt in balances.items():
+                logger.info(f"[NIJA-BALANCE] {cur}: {amt}")
 
         # ----> PLACE YOUR TRADING LOGIC HERE <----
         # Example: execute_trade(signal)
 
-        time.sleep(5)  # poll every 5 seconds
+        time.sleep(5)  # poll interval
     except Exception as e:
         logger.error(f"Unhandled error in main loop: {e}")
