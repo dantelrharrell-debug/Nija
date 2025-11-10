@@ -1,3 +1,3 @@
 # app/__init__.py
-# mark 'app' as a package
+# keep minimal — makes 'app' importable
 __all__ = ["nija_client"]
