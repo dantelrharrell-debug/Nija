@@ -1,5 +1,6 @@
 # app/nija_client.py
 import os
+import time
 import requests
 from loguru import logger
 
@@ -7,26 +8,17 @@ logger.remove()
 logger.add(lambda msg: print(msg, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
 
 class CoinbaseClient:
-    """
-    Robust Coinbase client for Advanced (CDP) and Classic (spot) APIs.
-    Avoids AttributeError crashes and probes endpoint availability.
-    """
     def __init__(self, advanced=True, debug=False):
         self.debug = debug
-
-        # API credentials
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
         self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")
-        self.iss = os.getenv("COINBASE_ISS")           # Advanced service key ID (optional)
-        self.pem_content = os.getenv("COINBASE_PEM_CONTENT")  # Advanced PEM (optional)
-
-        # API base
+        self.iss = os.getenv("COINBASE_ISS")
+        self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
         self.base_url = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com")
         self.advanced = advanced
 
-        # Initialize attributes before any method calls
-        self.failed_endpoints = set()
+        self.failed_endpoints = set()        # ✅ Initialize early
         self.detected_permissions = {}
         self.token = None
 
@@ -35,9 +27,9 @@ class CoinbaseClient:
         try:
             self.detect_api_permissions()
         except Exception as e:
-            logger.warning(f"detect_api_permissions exception (non-fatal): {e}")
+            logger.warning(f"detect_api_permissions raised an exception (non-fatal): {e}")
 
-    # ---------------- HTTP request helper ----------------
+    # HTTP request helper
     def request(self, method="GET", path="/", headers=None, json_body=None, timeout=10):
         url = self.base_url.rstrip("/") + path
         hdrs = headers or {}
@@ -55,19 +47,22 @@ class CoinbaseClient:
             logger.warning(f"HTTP request failed for {url}: {e}")
             return None, None
 
-    # ---------------- Detect endpoints ----------------
+    # Detect endpoints
     def detect_api_permissions(self):
         candidate_paths = ["/v3/accounts", "/v2/accounts", "/v2/brokerage/accounts", "/accounts"]
         for p in candidate_paths:
-            status, _ = self.request("GET", p)
-            if status is None or status >= 400:
+            status, body = self.request("GET", p)
+            if status is None:
                 self.failed_endpoints.add(p)
+                continue
             if status == 200:
                 self.detected_permissions["accounts_path"] = p
                 return
+            if status >= 400:
+                self.failed_endpoints.add(p)
         logger.info("detect_api_permissions: no accounts endpoint succeeded during probe")
 
-    # ---------------- Fetch accounts ----------------
+    # Fetch advanced accounts
     def fetch_advanced_accounts(self):
         paths = ["/v3/accounts", "/v2/accounts", "/v2/brokerage/accounts", "/accounts"]
         for path in paths:
@@ -81,13 +76,10 @@ class CoinbaseClient:
                     accounts = body.get("accounts", [])
                 else:
                     accounts = body if isinstance(body, list) else []
-                logger.info(f"Fetched {len(accounts)} accounts from {path}")
                 return accounts
-            else:
-                self.failed_endpoints.add(path)
-        logger.error("Failed to fetch advanced accounts. No endpoint succeeded.")
         return []
 
+    # Fetch spot accounts
     def fetch_spot_accounts(self):
         paths = ["/v2/accounts", "/accounts"]
         for path in paths:
@@ -99,6 +91,5 @@ class CoinbaseClient:
                     accounts = body.get("data", [])
                 else:
                     accounts = body if isinstance(body, list) else []
-                logger.info(f"Fetched {len(accounts)} spot accounts from {path}")
                 return accounts
-        logger.error("Failed to
+        return []
