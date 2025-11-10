@@ -1,80 +1,73 @@
 import os
 import time
-import jwt
+import json
 import requests
+import jwt
 from loguru import logger
+from datetime import datetime, timedelta
 
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
 
 class CoinbaseClient:
-    """
-    Coinbase Advanced API client (JWT / Service Key) for Nija Trading Bot
-    """
-    def __init__(self, debug=True):
+    def __init__(self, advanced=True, debug=False):
         self.debug = debug
-
-        # Load credentials from environment
+        self.advanced = advanced
+        self.base_url = os.getenv("COINBASE_ADVANCED_BASE" if advanced else "COINBASE_BASE")
         self.iss = os.getenv("COINBASE_ISS")
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
-        self.base_url = os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
+        self.token = None
+        self.failed_endpoints = set()
 
-        if not self.iss or not self.pem_content:
-            raise ValueError("COINBASE_ISS or COINBASE_PEM_CONTENT missing in .env")
+        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base_url} debug={self.debug}")
 
-        logger.info(f"CoinbaseClient initialized. base={self.base_url} debug={self.debug}")
-
-    def _generate_jwt(self, method="GET", path="/", body=None):
-        """
-        Generate signed JWT for Advanced API
-        """
-        iat = int(time.time())
+    def _get_jwt(self, method="GET", path="/v2/accounts"):
+        now = int(time.time())
         payload = {
-            "iat": iat,
-            "exp": iat + 60,
+            "iat": now,
+            "exp": now + 30,
             "sub": self.iss,
             "path": path,
             "method": method,
-            "body": body or ""
+            "body": ""
         }
-        token = jwt.encode(payload, self.pem_content, algorithm="ES256")
+        key = self.pem_content
+        token = jwt.encode(payload, key, algorithm="ES256")
+        if isinstance(token, bytes):
+            token = token.decode()
         return token
 
-    def request(self, method="GET", path="/v3/accounts", json_body=None):
-        """
-        Make request to Coinbase Advanced API
-        """
+    def _request(self, method="GET", path="/v2/accounts"):
         url = self.base_url.rstrip("/") + path
-        token = self._generate_jwt(method, path, body=json_body or "")
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "CB-VERSION": "2025-11-10",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
+        headers = {}
+        if self.advanced:
+            token = self._get_jwt(method, path)
+            headers["CB-ACCESS-JWT"] = token
+        headers["Accept"] = "application/json"
         try:
-            r = requests.request(method, url, headers=headers, json=json_body, timeout=10)
-            data = r.json() if r.content else None
+            r = requests.request(method, url, headers=headers, timeout=10)
             if self.debug:
-                logger.info(f"[DEBUG] {method} {url} -> {r.status_code} body={data}")
+                logger.info(f"[DEBUG] {method} {url} -> {r.status_code} {r.text}")
+            data = r.json() if r.content else None
             return r.status_code, data
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON decode error for {url}: {e}")
+            return None, r.text
         except Exception as e:
             logger.warning(f"HTTP request failed for {url}: {e}")
             return None, None
 
     def fetch_accounts(self):
-        """
-        Fetch all accounts from Coinbase Advanced API
-        """
-        status, data = self.request("GET", "/v3/accounts")
-        if status == 200 and data:
-            return data.get("data", data)
-        else:
-            logger.warning(f"Failed to fetch accounts, status={status}, data={data}")
-            return []
+        # Try Advanced endpoint first
+        for path in ["/v2/accounts"]:
+            status, data = self._request("GET", path)
+            if status == 200:
+                return data.get("data", data)
+            self.failed_endpoints.add(path)
+        logger.warning("Failed to fetch accounts from all endpoints.")
+        return []
 
-# Simple test when running standalone
 if __name__ == "__main__":
-    client = CoinbaseClient(debug=True)
+    client = CoinbaseClient(advanced=True, debug=True)
     accounts = client.fetch_accounts()
     print("Fetched accounts:", accounts)
