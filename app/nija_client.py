@@ -1,4 +1,4 @@
-# # __main__.py (root)
+# __main__.py (root)
 
 import os
 from loguru import logger
