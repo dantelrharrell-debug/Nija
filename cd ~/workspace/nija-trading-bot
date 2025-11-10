@@ -1,4 +1,5 @@
-/app
- ├─ main.py              # your bot entrypoint
- ├─ nija_client.py       # CoinbaseClient class lives here
- └─ .env                 # environment variables
+root/
+  __main__.py
+  app/
+    __init__.py        <-- empty file
+    nija_client.py     <-- contains the CoinbaseClient class
