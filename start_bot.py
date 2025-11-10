@@ -7,15 +7,19 @@ import requests
 from loguru import logger
 import jwt as pyjwt
 import random
+import threading
 
 # -------------------------
 # Initialize Nija Client
 # -------------------------
 class CoinbaseClient:
-    def __init__(self):
+    def __init__(self, refresh_interval=240):
         self.base = os.getenv("COINBASE_BASE", "https://api.coinbase.com")
         self.jwt = None
+        self.jwt_lock = threading.Lock()
+        self.refresh_interval = refresh_interval  # seconds
         self._init_jwt()
+        self._start_jwt_refresh()
         logger.info(f"nija_client init: base={self.base} advanced=True jwt_set={bool(self.jwt)}")
         print(f"NIJA-CLIENT-READY: base={self.base} jwt_set={bool(self.jwt)}")
 
@@ -29,23 +33,30 @@ class CoinbaseClient:
                 token = pyjwt.encode(payload, pem, algorithm="ES256")
                 if isinstance(token, bytes):
                     token = token.decode("utf-8")
-                self.jwt = token
+                with self.jwt_lock:
+                    self.jwt = token
                 logger.info("Generated ephemeral JWT from COINBASE_PEM_CONTENT")
             except Exception as e:
                 logger.error(f"Failed to generate JWT: {e}")
         else:
             logger.warning("COINBASE_PEM_CONTENT or COINBASE_ISS missing")
 
+    def _start_jwt_refresh(self):
+        def refresh_loop():
+            while True:
+                time.sleep(self.refresh_interval)
+                self._init_jwt()
+        threading.Thread(target=refresh_loop, daemon=True).start()
+        logger.info(f"JWT auto-refresh started: every {self.refresh_interval} seconds")
+
     def _get_headers(self):
-        if self.jwt:
-            return {"Authorization": f"Bearer {self.jwt}", "CB-VERSION": "2025-11-09"}
+        with self.jwt_lock:
+            token = self.jwt
+        if token:
+            return {"Authorization": f"Bearer {token}", "CB-VERSION": "2025-11-09"}
         return {}
 
     def fetch_accounts(self, retries=3):
-        """
-        Fetch all Coinbase Advanced account balances with retry/backoff.
-        Returns list of account dicts or [] on failure.
-        """
         if not self.jwt:
             logger.error("Client inactive — cannot fetch accounts")
             return []
@@ -75,7 +86,6 @@ class CoinbaseClient:
                 except Exception as e:
                     logger.error(f"Unexpected error fetching {url}: {e}")
 
-            # Exponential backoff before next attempt
             delay = (2 ** attempt) + random.uniform(0, 1)
             logger.info(f"Retrying fetch_accounts in {delay:.2f}s (attempt {attempt}/{retries})")
             time.sleep(delay)
@@ -108,7 +118,7 @@ NijaCoinbaseClient = CoinbaseClient
 # Start Live Bot
 # -------------------------
 logger.info("Starting Nija bot — LIVE mode")
-client = NijaCoinbaseClient()
+client = NijaCoinbaseClient(refresh_interval=240)  # refresh JWT every 4 minutes
 
 while True:
     try:
@@ -126,4 +136,4 @@ while True:
         time.sleep(5)
     except Exception as e:
         logger.error(f"Unhandled error in main loop: {e}")
-        time.sleep(5)  # slight pause before retrying main loop
+        time.sleep(5)
