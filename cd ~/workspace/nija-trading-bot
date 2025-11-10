@@ -1,10 +1,6 @@
-root/
-│
-├── .env
-├── start_bot.py
-├── check_account.py
-├── nija_balance_helper.py
-│
-└── app/
-    ├── __init__.py
-    └── nija_client.py
+/root
+  .env
+  start_bot.py
+  check_account.py
+  nija_balance_helper.py
+  nija_client.py
