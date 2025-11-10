@@ -1,6 +1,4 @@
 /app
-│
-├─ start_nija_advanced_safe.py    # Your main bot script
-├─ nija_client.py                 # CoinbaseClient class here
-├─ requirements.txt
-└─ .env                           # Your COINBASE_ISS and COINBASE_PEM_CONTENT
+ ├─ main.py              # your bot entrypoint
+ ├─ nija_client.py       # CoinbaseClient class lives here
+ └─ .env                 # environment variables
