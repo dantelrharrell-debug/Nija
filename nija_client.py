@@ -1,3 +1,4 @@
+# nija_client.py
 import os
 import time
 import requests
@@ -6,7 +7,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 import jwt
 
-# Logger
+# Logger setup
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
 
@@ -16,9 +17,10 @@ class CoinbaseClient:
     Expects env:
       - COINBASE_ISS
       - COINBASE_PEM_CONTENT
-      - optional: COINBASE_BASE
+      - optional: COINBASE_BASE (defaults to CDP Advanced endpoint)
     """
-    def __init__(self):
+    def __init__(self, advanced=True):
+        self.advanced = advanced
         self.iss = os.getenv("COINBASE_ISS")
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
         self.base_url = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
@@ -27,21 +29,29 @@ class CoinbaseClient:
             raise ValueError("COINBASE_ISS or COINBASE_PEM_CONTENT missing in environment")
 
         self.token = self._generate_jwt()
-        logger.info(f"CoinbaseClient initialized. base={self.base_url}")
+        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base_url}")
 
     def _generate_jwt(self):
-        private_key = serialization.load_pem_private_key(
-            self.pem_content.encode(),
-            password=None,
-            backend=default_backend()
-        )
-        payload = {"iss": self.iss, "iat": int(time.time()), "exp": int(time.time()) + 300}
-        token = jwt.encode(payload, private_key, algorithm="ES256")
-        if isinstance(token, bytes):
-            token = token.decode()
-        return token
+        try:
+            private_key = serialization.load_pem_private_key(
+                self.pem_content.encode(),
+                password=None,
+                backend=default_backend()
+            )
+            payload = {
+                "iss": self.iss,
+                "iat": int(time.time()),
+                "exp": int(time.time()) + 300  # 5 minutes expiry
+            }
+            token = jwt.encode(payload, private_key, algorithm="ES256")
+            if isinstance(token, bytes):
+                token = token.decode()
+            return token
+        except Exception as e:
+            logger.exception("JWT generation failed")
+            raise
 
-    def request(self, method="GET", path="/v3/accounts", json_body=None):
+    def request(self, method="GET", path="/v3/brokerage/accounts", json_body=None):
         url = self.base_url.rstrip("/") + path
         headers = {
             "Authorization": f"Bearer {self.token}",
@@ -59,7 +69,11 @@ class CoinbaseClient:
             return None, None
 
     def fetch_advanced_accounts(self):
-        status, body = self.request("GET", "/v3/accounts")
+        # Use correct Advanced endpoint
+        status, body = self.request("GET", "/v3/brokerage/accounts")
+        if status == 404:
+            logger.warning("/v3/brokerage/accounts returned 404; endpoint not available.")
+            return []
         if status != 200 or not body:
             logger.error(f"Failed to fetch accounts. status={status} body={body}")
             return []
