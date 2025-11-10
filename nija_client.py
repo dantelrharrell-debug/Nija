@@ -1,103 +1,133 @@
 import os
 import time
 import requests
-import jwt as pyjwt
+import jwt
 from loguru import logger
+import threading
+import hmac
+import hashlib
 
 class NijaCoinbaseClient:
+    """
+    Coinbase client supporting:
+    - Advanced (CDP) mode via JWT
+    - Standard API fallback via API key/secret/passphrase
+    """
     def __init__(self):
-        # Detect which API mode to use
-        self.base = os.getenv("COINBASE_BASE")
+        # Base URLs
+        self.base_advanced = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
+        self.base_standard = "https://api.coinbase.com"
+
+        # Advanced (CDP) JWT credentials
         self.pem = os.getenv("COINBASE_PEM_CONTENT")
         self.iss = os.getenv("COINBASE_ISS")
+        self.jwt = None
+
+        # Standard API credentials
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
         self.passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")
 
-        self.advanced_mode = False
-        self.jwt_token = None
-
-        if self.pem and self.iss:
-            self.advanced_mode = True
-            self.base = self.base or "https://api.cdp.coinbase.com"
-            self._init_jwt()
-            logger.info("Using Coinbase Advanced (CDP) mode")
-        elif self.api_key and self.api_secret:
-            self.advanced_mode = False
-            self.base = self.base or "https://api.coinbase.com"
-            logger.info("Using Standard Coinbase API mode")
-        else:
-            logger.error("No valid Coinbase credentials found")
+        if not ((self.pem and self.iss) or (self.api_key and self.api_secret)):
+            logger.error("Missing credentials: need either Advanced JWT or Standard API keys")
             raise SystemExit(1)
 
-        logger.info(f"NIJA-CLIENT-READY: base={self.base} advanced={self.advanced_mode}")
+        self.advanced_mode = bool(self.pem and self.iss)
+        if self.advanced_mode:
+            self._init_jwt()
+            self._start_jwt_refresh()
+        logger.info(f"NIJA-CLIENT-READY: advanced={self.advanced_mode}, jwt_set={bool(self.jwt)}")
 
-    # -------------------- Advanced JWT --------------------
+    # ---------------- Advanced JWT ----------------
     def _init_jwt(self):
+        now = int(time.time())
+        payload = {"iat": now, "exp": now + 300, "iss": self.iss}
         try:
-            now = int(time.time())
-            payload = {"iat": now, "exp": now + 300, "iss": self.iss}
-            token = pyjwt.encode(payload, self.pem, algorithm="ES256")
+            token = jwt.encode(payload, self.pem, algorithm="ES256")
             if isinstance(token, bytes):
                 token = token.decode("utf-8")
-            self.jwt_token = token
+            self.jwt = token
             logger.info("✅ JWT generated successfully")
         except Exception as e:
-            logger.error(f"JWT generation failed: {e}")
-            raise
+            logger.error(f"Failed to generate JWT: {e}")
+            self.jwt = None
+            self.advanced_mode = False
 
-    def _refresh_jwt_loop(self):
-        import threading
-        def refresh():
+    def _start_jwt_refresh(self):
+        def refresh_loop():
             while True:
                 time.sleep(240)
                 self._init_jwt()
-        threading.Thread(target=refresh, daemon=True).start()
+        threading.Thread(target=refresh_loop, daemon=True).start()
 
-    def _headers(self):
-        if self.advanced_mode:
-            return {"Authorization": f"Bearer {self.jwt_token}", "Content-Type": "application/json"}
-        else:
-            return {
-                "CB-ACCESS-KEY": self.api_key,
-                "CB-ACCESS-SIGN": self.api_secret,
-                "CB-ACCESS-PASSPHRASE": self.passphrase,
-                "Content-Type": "application/json"
-            }
+    def _advanced_headers(self):
+        if self.jwt:
+            return {"Authorization": f"Bearer {self.jwt}", "Content-Type": "application/json"}
+        return {}
 
-    # -------------------- Fetch Accounts --------------------
+    # ---------------- Standard API ----------------
+    def _standard_headers(self, method="GET", path="/v2/accounts", body=""):
+        timestamp = str(int(time.time()))
+        message = timestamp + method + path + body
+        signature = hmac.new(
+            self.api_secret.encode(), message.encode(), hashlib.sha256
+        ).hexdigest()
+        return {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": signature,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+            "CB-ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json"
+        }
+
+    # ---------------- Fetch Accounts ----------------
     def fetch_accounts(self):
-        if self.advanced_mode:
-            url = f"{self.base.rstrip('/')}/api/v3/brokerage/accounts"
-        else:
-            url = f"{self.base.rstrip('/')}/v2/accounts"
+        # Try Advanced first
+        if self.advanced_mode and self.jwt:
+            urls = [
+                f"{self.base_advanced.rstrip('/')}/api/v3/brokerage/accounts",
+                f"{self.base_advanced.rstrip('/')}/accounts"
+            ]
+            for url in urls:
+                try:
+                    r = requests.get(url, headers=self._advanced_headers(), timeout=15)
+                    if r.status_code == 200:
+                        data = r.json()
+                        return data.get("data") or data.get("accounts") or []
+                except Exception as e:
+                    logger.warning(f"Advanced fetch failed for {url}: {e}")
+            logger.warning("Advanced endpoints failed — falling back to Standard API")
+            self.advanced_mode = False
 
+        # Standard API fallback
+        url = f"{self.base_standard}/v2/accounts"
         try:
-            r = requests.get(url, headers=self._headers(), timeout=15)
+            r = requests.get(url, headers=self._standard_headers(), timeout=15)
             r.raise_for_status()
             data = r.json()
-            # Advanced API returns 'data' or 'accounts'
-            if self.advanced_mode:
-                return data.get("data") or data.get("accounts") or []
-            else:
-                return data.get("data") or []
+            return data.get("data") or []
         except Exception as e:
-            logger.error(f"Error fetching accounts: {e} | status={getattr(r, 'status_code', None)} | url={url}")
+            logger.error(f"Standard API fetch failed: {e}")
             return []
 
-    # -------------------- Get Balances --------------------
+    # ---------------- Get Balances ----------------
     def get_balances(self):
         accounts = self.fetch_accounts()
-        out = {}
+        balances = {}
         for a in accounts:
             cur = a.get("currency") or a.get("asset")
             amt = None
+            # Advanced format
             if isinstance(a.get("balance"), dict):
                 amt = a["balance"].get("amount") or a["balance"].get("value")
+            # Standard format
             if amt is None:
                 amt = a.get("available_balance") or a.get("available") or a.get("balance")
             try:
-                out[cur] = float(amt or 0)
+                balances[cur] = float(amt or 0)
             except:
-                out[cur] = 0.0
-        return out
+                balances[cur] = 0.0
+        return balances
+
+# Alias for consistency
+__all__ = ["NijaCoinbaseClient"]
