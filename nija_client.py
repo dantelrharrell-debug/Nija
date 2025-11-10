@@ -1,70 +1,67 @@
-# nija_client.py (root) - JWT / Advanced Service Key client (root-only)
+# nija_client.py
 import os
-import time
+import json
 import requests
 from loguru import logger
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
-import jwt
-
-logger.remove()
-logger.add(lambda msg: print(msg, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
+from jwt import encode
+from time import time
 
 class CoinbaseClient:
-    """
-    Coinbase Advanced Service Key client (JWT ES256).
-    Requires COINBASE_ISS and COINBASE_PEM_CONTENT in env.
-    """
-    def __init__(self, advanced=True):
+    def __init__(self, advanced=True, debug=False):
+        self.debug = debug
         self.advanced = advanced
+        self.base_url = os.getenv("COINBASE_ADVANCED_BASE") if advanced else os.getenv("COINBASE_BASE")
         self.iss = os.getenv("COINBASE_ISS")
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
-        self.base_url = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com/v2")
 
-        if not self.iss or not self.pem_content:
-            raise ValueError("COINBASE_ISS or COINBASE_PEM_CONTENT missing in environment")
+        if not self.base_url or not self.iss or not self.pem_content:
+            raise ValueError("Missing COINBASE env vars (COINBASE_ISS, COINBASE_PEM_CONTENT, COINBASE_ADVANCED_BASE)")
 
-        self.token = self._generate_jwt()
         logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base_url}")
 
-    def _generate_jwt(self):
-        try:
-            private_key = serialization.load_pem_private_key(
-                self.pem_content.encode(),
-                password=None,
-                backend=default_backend()
-            )
-            payload = {"iss": self.iss, "iat": int(time.time()), "exp": int(time.time()) + 300}
-            token = jwt.encode(payload, private_key, algorithm="ES256")
-            if isinstance(token, bytes):
-                token = token.decode()
-            return token
-        except Exception:
-            logger.exception("JWT generation failed")
-            raise
+    def _jwt_headers(self):
+        payload = {
+            "iss": self.iss,
+            "iat": int(time()),
+            "exp": int(time()) + 30
+        }
+        token = encode(payload, self.pem_content, algorithm="ES256")
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    def request(self, method="GET", path="/v3/accounts", json_body=None):
+    def _request(self, method, path, **kwargs):
         url = self.base_url.rstrip("/") + path
-        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/json"}
+        headers = self._jwt_headers()
         try:
-            r = requests.request(method, url, headers=headers, json=json_body, timeout=10)
-            try:
-                body = r.json()
-            except Exception:
-                body = r.text
-            return r.status_code, body
-        except Exception:
-            logger.exception("HTTP request failed")
+            if method.upper() == "GET":
+                r = requests.get(url, headers=headers, **kwargs)
+            else:
+                r = requests.request(method, url, headers=headers, **kwargs)
+            if self.debug:
+                logger.debug(f"[DEBUG] {method} {url} -> {r.status_code}")
+            r.raise_for_status()
+            return r.status_code, r.json()
+        except requests.HTTPError as e:
+            logger.warning(f"HTTP request failed for {url}: {e}")
+            return None, None
+        except json.JSONDecodeError:
+            logger.warning(f"HTTP request returned invalid JSON for {url}")
             return None, None
 
     def fetch_advanced_accounts(self):
-        status, body = self.request("GET", "/v3/accounts")
-        if status == 404:
-            logger.warning("/v3/accounts returned 404; endpoint not available.")
-            return []
-        if status != 200 or not body:
-            logger.error(f"Failed to fetch accounts. status={status} body={body}")
-            return []
-        accounts = body.get("data", []) if isinstance(body, dict) else []
-        logger.info(f"Fetched {len(accounts)} account(s).")
-        return accounts
+        # Candidate endpoints
+        endpoints = [
+            "/v2/accounts",
+            "/v2/brokerage/accounts",
+            "/accounts",  # old paths if still supported
+            "/api/v3/trading/accounts",
+            "/api/v3/portfolios"
+        ]
+        for ep in endpoints:
+            status, data = self._request("GET", ep)
+            if status and data:
+                logger.info(f"✅ Found working endpoint: {ep}")
+                return data.get("data", data)  # return data list if available
+            else:
+                logger.warning(f"{ep} returned no data or failed")
+        logger.error("Failed to fetch accounts from all candidate endpoints")
+        return []
