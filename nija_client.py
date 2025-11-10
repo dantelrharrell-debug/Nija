@@ -3,28 +3,27 @@ import json
 import requests
 from loguru import logger
 
-# Simple logging to stdout
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level="INFO")
 
 class CoinbaseClient:
     def __init__(self, advanced=None):
-        # Load API keys from environment
+        # Auto-detect advanced vs spot
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
+        self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")  # optional for advanced
 
-        # Auto-detect API type if not explicitly set
         if advanced is None:
-            if os.getenv("COINBASE_API_KEY_ADVANCED"):  # Use advanced if key exists
-                advanced = True
+            # If advanced keys exist, use Advanced API
+            if os.getenv("COINBASE_API_KEY_ADVANCED"):
+                self.base = "https://api.cdp.coinbase.com"
+                self.advanced = True
             else:
-                advanced = False
-
-        self.advanced = advanced
-        # Set base URL
-        self.base = "https://api.cdp.coinbase.com" if self.advanced else "https://api.coinbase.com"
-        # Override from env var if provided
-        self.base = os.getenv("COINBASE_BASE", self.base)
+                self.base = "https://api.coinbase.com"
+                self.advanced = False
+        else:
+            self.advanced = advanced
+            self.base = "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com"
 
         logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base}")
 
@@ -33,6 +32,7 @@ class CoinbaseClient:
         headers = {
             "CB-ACCESS-KEY": self.api_key,
             "CB-ACCESS-SIGN": self.api_secret,
+            "CB-ACCESS-PASSPHRASE": self.api_passphrase,
             "Content-Type": "application/json"
         }
         try:
