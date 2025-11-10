@@ -1,4 +1,4 @@
-# nija_client.py
+# app/nija_client.py
 import os
 import time
 import requests
@@ -8,22 +8,26 @@ from cryptography.hazmat.backends import default_backend
 import jwt
 
 class CoinbaseClient:
-    """
-    Coinbase Advanced Client (JWT Service Key)
-    """
     def __init__(self, advanced=True):
+        """
+        Initialize the CoinbaseClient.
+        advanced=True uses Service Key (Advanced) API.
+        """
         self.advanced = advanced
         self.iss = os.getenv("COINBASE_ISS")
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
+        self.base_url = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
+
         if not self.iss or not self.pem_content:
             raise ValueError("COINBASE_ISS or COINBASE_PEM_CONTENT missing in environment")
+
+        # Generate JWT token for authentication
         self.token = self._generate_jwt()
-        self.base_url = "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com/v2"
         logger.info(f"HMAC CoinbaseClient initialized. Advanced={self.advanced}")
 
     def _generate_jwt(self):
         """
-        Generates JWT token for Coinbase Advanced API
+        Generate a JWT token from the Service Key PEM and ISS.
         """
         try:
             private_key = serialization.load_pem_private_key(
@@ -34,7 +38,7 @@ class CoinbaseClient:
             payload = {
                 "iss": self.iss,
                 "iat": int(time.time()),
-                "exp": int(time.time()) + 300
+                "exp": int(time.time()) + 300  # token valid for 5 minutes
             }
             token = jwt.encode(payload, private_key, algorithm="ES256")
             return token
@@ -44,10 +48,11 @@ class CoinbaseClient:
 
     def request(self, method="GET", path="/accounts"):
         """
-        Make a request to Coinbase Advanced API
+        Make a request to the Coinbase Advanced API.
         """
         url = f"{self.base_url}{path}"
         headers = {"Authorization": f"Bearer {self.token}"}
+
         try:
             response = requests.request(method, url, headers=headers)
             try:
@@ -61,7 +66,7 @@ class CoinbaseClient:
 
     def fetch_advanced_accounts(self):
         """
-        Fetch all accounts from Coinbase Advanced API
+        Fetch accounts from the Coinbase Advanced API.
         """
         try:
             status, data = self.request("/accounts")
