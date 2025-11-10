@@ -1,129 +1,133 @@
+# app/nija_client.py
 import os
-import json
+import time
 import requests
 from loguru import logger
 
 logger.remove()
-logger.add(lambda msg: print(msg, end=""), level="INFO")
+logger.add(lambda msg: print(msg, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
 
 class CoinbaseClient:
-    def __init__(self, advanced=None, debug=False):
+    """
+    Robust Coinbase client shim for both Advanced (service-key/CDP) and Classic (spot/HMAC) APIs.
+    - Use COINBASE_BASE to override endpoint.
+    - This file focuses on robust startup and avoids AttributeError crashes.
+    """
+    def __init__(self, advanced=True, debug=False):
         self.debug = debug
-
-        # API credentials
+        # basic env creds (optional)
         self.api_key = os.getenv("COINBASE_API_KEY")
         self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")  # optional
+        self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")
+        self.iss = os.getenv("COINBASE_ISS")  # advanced service key id (optional)
+        self.pem_content = os.getenv("COINBASE_PEM_CONTENT")  # advanced PEM (optional)
+        self.base_url = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com")
+        self.advanced = advanced
 
-        # Validate keys early
-        missing_keys = []
-        if not self.api_key:
-            missing_keys.append("COINBASE_API_KEY")
-        if not self.api_secret:
-            missing_keys.append("COINBASE_API_SECRET")
-        if advanced and not self.api_passphrase:
-            missing_keys.append("COINBASE_API_PASSPHRASE (required for advanced API)")
-
-        if missing_keys:
-            raise ValueError(f"Missing required environment variables: {', '.join(missing_keys)}")
-
-        # Determine API type
-        if advanced is None:
-            if os.getenv("COINBASE_API_KEY_ADVANCED"):
-                self.base = "https://api.cdp.coinbase.com"
-                self.advanced = True
-            else:
-                self.base = "https://api.coinbase.com"
-                self.advanced = False
-        else:
-            self.advanced = advanced
-            self.base = "https://api.cdp.coinbase.com" if advanced else "https://api.coinbase.com"
-
-        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base} debug={self.debug}")
-
-        # Auto-check which API works
-        self.detect_api_permissions()
-
-        # Keep track of inaccessible endpoints to skip them
+        # *** IMPORTANT: initialize attributes used by helpers BEFORE calling them ***
         self.failed_endpoints = set()
+        self.detected_permissions = {}
+        self.token = None  # reserved for JWT if you later add it
 
-    def request(self, method, path):
-        url = self.base + path
-        headers = {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": self.api_secret,
-            "CB-ACCESS-PASSPHRASE": self.api_passphrase,
-            "Content-Type": "application/json"
-        }
+        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base_url} debug={self.debug}")
+
+        # run a light probe to mark endpoints that fail early (non-fatal)
         try:
-            r = requests.request(method, url, headers=headers, timeout=10)
-            try:
-                body = r.json()
-            except Exception:
-                body = r.text
-            if self.debug:
-                logger.info(f"[DEBUG] {method} {url} | Status: {r.status_code} | Body: {body}")
-            return r.status_code, body
+            self.detect_api_permissions()
         except Exception as e:
-            logger.error(f"[DEBUG] Request failed for {url}: {e}")
+            logger.warning(f"detect_api_permissions raised an exception (non-fatal): {e}")
+
+    # ---------------- helper: HTTP request ----------------
+    def request(self, method="GET", path="/", headers=None, json_body=None, timeout=10):
+        url = self.base_url.rstrip("/") + path
+        hdrs = headers or {}
+        # default headers (won't break if HMAC/JWT not configured)
+        hdrs.setdefault("Accept", "application/json")
+        try:
+            r = requests.request(method, url, headers=hdrs, json=json_body, timeout=timeout)
+            try:
+                data = r.json()
+            except Exception:
+                data = None
+            if self.debug:
+                logger.info(f"[DEBUG] {method} {url} -> {r.status_code} body={data}")
+            return r.status_code, data
+        except Exception as e:
+            logger.warning(f"HTTP request failed for {url}: {e}")
             return None, None
 
+    # ---------------- detect what endpoints respond ----------------
     def detect_api_permissions(self):
         """
-        Checks which API is accessible and updates self.advanced/base.
+        Lightweight probe to see which common account endpoints are available and record failures.
+        This will not raise on 404s; it just records failed endpoints in self.failed_endpoints.
         """
-        # Try Advanced API
-        adv_base = "https://api.cdp.coinbase.com"
-        self.base = adv_base
-        status, _ = self.request("GET", "/v2/accounts")
-        if status == 200:
-            self.advanced = True
-            logger.info("Advanced API is accessible with current keys.")
-            return
-        else:
-            self.failed_endpoints.add("/v2/accounts")
+        candidate_paths = ["/v3/accounts", "/v2/accounts", "/v2/brokerage/accounts", "/accounts"]
+        for p in candidate_paths:
+            status, body = self.request("GET", p)
+            if status is None:
+                # network error — record and continue
+                logger.debug(f"Probe {p} -> network error")
+                self.failed_endpoints.add(p)
+                continue
+            if status == 200:
+                logger.info(f"Probe {p} succeeded")
+                self.detected_permissions["accounts_path"] = p
+                return
+            if status == 404 or status == 403 or status >= 400:
+                logger.debug(f"Probe {p} returned {status}")
+                self.failed_endpoints.add(p)
+        logger.info("detect_api_permissions: no accounts endpoint succeeded during probe")
 
-        # Fallback to Spot API
-        spot_base = "https://api.coinbase.com"
-        self.base = spot_base
-        status, _ = self.request("GET", "/v2/accounts")
-        if status == 200:
-            self.advanced = False
-            logger.info("Spot API is accessible with current keys.")
-        else:
-            self.failed_endpoints.add("/v2/accounts")
-            logger.warning("Neither Advanced nor Spot API is accessible. Check API key permissions.")
-
+    # ---------------- fetch accounts (tries known endpoints) ----------------
     def fetch_advanced_accounts(self):
-        paths = ["/v3/accounts", "/v2/accounts"]
+        """
+        Try several advanced endpoints and return list of accounts or empty list.
+        """
+        paths = ["/v3/accounts", "/v2/accounts", "/v2/brokerage/accounts", "/accounts"]
         for path in paths:
             if path in self.failed_endpoints:
                 logger.debug(f"Skipping previously failed endpoint {path}")
                 continue
             status, body = self.request("GET", path)
             if status == 200 and body:
-                accounts = body.get("data", []) if isinstance(body, dict) else []
+                # prefer common JSON shapes
+                if isinstance(body, dict) and "data" in body:
+                    accounts = body.get("data", [])
+                elif isinstance(body, dict) and "accounts" in body:
+                    accounts = body.get("accounts", [])
+                else:
+                    # fallback: body may already be a list
+                    accounts = body if isinstance(body, list) else []
                 logger.info(f"Fetched {len(accounts)} accounts from {path}")
                 return accounts
-            elif status == 404:
-                logger.warning(f"{path} returned 404; trying next endpoint.")
+            if status == 404:
+                logger.warning(f"{path} returned 404; marking as failed")
                 self.failed_endpoints.add(path)
+            elif status is None:
+                logger.warning(f"{path} returned network error; marking as failed")
+                self.failed_endpoints.add(path)
+            else:
+                logger.debug(f"{path} returned {status}; continuing")
         logger.error("Failed to fetch accounts. No endpoint succeeded.")
         return []
 
     def fetch_spot_accounts(self):
-        paths = ["/v2/accounts"]
+        """
+        Try classic spot accounts endpoint(s).
+        """
+        paths = ["/v2/accounts", "/accounts"]
         for path in paths:
             if path in self.failed_endpoints:
-                logger.debug(f"Skipping previously failed endpoint {path}")
                 continue
             status, body = self.request("GET", path)
             if status == 200 and body:
-                accounts = body.get("data", []) if isinstance(body, dict) else []
+                if isinstance(body, dict) and "data" in body:
+                    accounts = body.get("data", [])
+                else:
+                    accounts = body if isinstance(body, list) else []
                 logger.info(f"Fetched {len(accounts)} spot accounts from {path}")
                 return accounts
-            else:
-                logger.warning(f"{path} returned {status}; cannot fetch spot accounts.")
-                self.failed_endpoints.add(path)
+            logger.debug(f"Spot accounts {path} returned {status}")
         logger.error("Failed to fetch spot accounts.")
         return []
