@@ -3,24 +3,26 @@
 
 import os
 import time
+import threading
 import requests
 from loguru import logger
 import jwt as pyjwt  # Ensure PyJWT is installed
+
+logger.info("Starting Nija bot — LIVE mode")
 
 # -------------------------
 # Coinbase Advanced Client
 # -------------------------
 class CoinbaseClient:
-    """
-    Fully Advanced Coinbase client using JWT from PEM/ISS
-    Fetches account balances from v3 brokerage endpoint
-    """
     def __init__(self):
         self.base = os.getenv("COINBASE_BASE", "https://api.coinbase.com")
         self.jwt = None
+        self.active = False
         self._init_jwt()
-        logger.info(f"nija_client init: base={self.base} advanced=True jwt_set={bool(self.jwt)}")
-        print(f"NIJA-CLIENT-READY: CoinbaseClient (base={self.base} advanced=True jwt={bool(self.jwt)})")
+        # Start background thread to refresh JWT
+        threading.Thread(target=self._refresh_jwt_loop, daemon=True).start()
+        logger.info(f"Client initialized: base={self.base} jwt_set={bool(self.jwt)}")
+        print(f"NIJA-CLIENT-READY: base={self.base} jwt_set={bool(self.jwt)}")
 
     def _init_jwt(self):
         pem = os.getenv("COINBASE_PEM_CONTENT")
@@ -28,24 +30,34 @@ class CoinbaseClient:
         if pem and iss:
             try:
                 now = int(time.time())
-                payload = {"iat": now, "exp": now + 300, "iss": iss}
+                payload = {"iat": now, "exp": now + 300, "iss": iss}  # 5 min expiry
                 token = pyjwt.encode(payload, pem, algorithm="ES256")
                 if isinstance(token, bytes):
                     token = token.decode("utf-8")
                 self.jwt = token
-                logger.info("Generated ephemeral JWT from COINBASE_PEM_CONTENT")
+                self.active = True
+                logger.info("Generated ephemeral JWT from PEM")
             except Exception as e:
                 logger.error(f"Failed to generate JWT: {e}")
+                self.active = False
         else:
-            logger.error("COINBASE_PEM_CONTENT or COINBASE_ISS missing")
+            logger.error("Missing COINBASE_PEM_CONTENT or COINBASE_ISS")
+            self.active = False
+
+    def _refresh_jwt_loop(self):
+        """Refresh JWT every 4 minutes to avoid expiration"""
+        while True:
+            time.sleep(240)  # 4 minutes
+            try:
+                self._init_jwt()
+                logger.info("JWT refreshed automatically")
+            except Exception as e:
+                logger.error(f"Error refreshing JWT: {e}")
+                self.active = False
 
     def fetch_accounts(self):
-        """
-        Fetch all Coinbase Advanced account balances
-        Returns list of account dicts or [] on failure
-        """
-        if not self.jwt:
-            logger.error("JWT missing — cannot fetch Advanced accounts")
+        if not self.active:
+            logger.warning("Client inactive — cannot fetch accounts")
             return []
 
         url = f"{self.base}/api/v3/brokerage/accounts"
@@ -53,26 +65,27 @@ class CoinbaseClient:
 
         try:
             resp = requests.get(url, headers=headers, timeout=15)
+            if resp.status_code == 404:
+                logger.error("API endpoint not found (404). Check your base URL and service key.")
+                self.active = False
+                return []
             resp.raise_for_status()
             data = resp.json()
-            # Normalize: v3 returns {"accounts": [...] } or {"data": [...] }
             for key in ("accounts", "data"):
                 if key in data and isinstance(data[key], list):
                     return data[key]
-            # Single account fallback
             if "currency" in data and ("balance" in data or "available" in data):
                 return [data]
             return []
         except requests.HTTPError as e:
-            logger.error(f"HTTPError fetching accounts: {e} | status={resp.status_code} | url={url}")
+            logger.error(f"HTTPError fetching accounts: {e} | status={getattr(resp,'status_code', None)}")
+            self.active = False
         except Exception as e:
             logger.error(f"Unexpected error fetching accounts: {e}")
+            self.active = False
         return []
 
     def get_balances(self):
-        """
-        Returns dict of balances: {currency: balance}
-        """
         accounts = self.fetch_accounts()
         out = {}
         for a in accounts:
@@ -86,23 +99,29 @@ class CoinbaseClient:
 
 
 # -------------------------
-# Main Live Bot
+# Initialize client
 # -------------------------
-logger.info("Starting Nija bot — LIVE mode")
-
 client = CoinbaseClient()
+if not client.active:
+    logger.error("Bot cannot start — JWT or API misconfigured. Exiting.")
+    exit(1)
 
+# -------------------------
+# Main live loop
+# -------------------------
 while True:
     try:
         balances = client.get_balances()
-        usd_balance = balances.get("USD", 0)
-        logger.info(f"[NIJA-BALANCE] USD: {usd_balance}")
+        usd = balances.get("USD", 0)
+        logger.info(f"[NIJA-BALANCE] USD: {usd}")
 
-        # ----> PLACE YOUR LIVE TRADING LOGIC HERE <----
-        # Example:
-        # signal = get_trading_signal()
-        # execute_trade(signal)
+        # ----> PLACE YOUR TRADING LOGIC HERE <----
+        # Example: execute_trade(signal)
 
-        time.sleep(5)  # Polling interval; adjust if needed
+        time.sleep(5)
+    except KeyboardInterrupt:
+        logger.info("Bot stopped manually")
+        break
     except Exception as e:
-        logger.error(f"Unhandled error in main loop: {e}")
+        logger.error(f"Unhandled error in live loop: {e}")
+        time.sleep(5)
