@@ -1,7 +1,5 @@
-# main.py (or __main__.py)
-import os
+from nija_client import CoinbaseClient
 from loguru import logger
-from nija_client import CoinbaseClient  # Ensure your cleaned class is in nija_client.py
 
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level="INFO")
@@ -9,8 +7,7 @@ logger.add(lambda msg: print(msg, end=""), level="INFO")
 def main():
     logger.info("Starting Nija loader (robust).")
 
-    # Initialize client (auto-detects advanced vs spot)
-    client = CoinbaseClient()
+    client = CoinbaseClient()  # auto-detects advanced vs spot
 
     # Try Advanced API first
     accounts = client.fetch_advanced_accounts()
@@ -23,9 +20,9 @@ def main():
         return
 
     logger.info(f"Successfully fetched {len(accounts)} accounts.")
-    # Print account details
     for acct in accounts:
-        logger.info(f"Account ID: {acct.get('id')} | Currency: {acct.get('currency')} | Balance: {acct.get('balance', {}).get('amount')}")
+        balance = acct.get("balance", {}).get("amount") if acct.get("balance") else "N/A"
+        logger.info(f"Account ID: {acct.get('id')} | Currency: {acct.get('currency')} | Balance: {balance}")
 
 if __name__ == "__main__":
     main()
