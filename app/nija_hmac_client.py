@@ -1,147 +1,86 @@
-# nija_hmac_client.py
-import os
 import time
 import json
-import logging
 import base64
 import hmac
 import hashlib
+from loguru import logger
 import requests
-
-logger = logging.getLogger("nija_hmac_client")
-logging.basicConfig(level=logging.INFO)
-
-COINBASE_API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
-# Advanced / CDP variables (JWT)
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # full PEM string
-COINBASE_ISS = os.getenv("COINBASE_ISS")  # API key id (issuer)
-COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")  # optional
-# Retail/HMAC vars
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
-
-# Utility: safe json parse
-def safe_json(resp):
-    try:
-        return resp.json()
-    except Exception:
-        # return text if it's not valid JSON
-        return resp.text
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+import os
 
 class CoinbaseClient:
-    def __init__(self):
-        self.base = COINBASE_API_BASE.rstrip("")
-        self.advanced = bool(COINBASE_PEM_CONTENT and COINBASE_ISS)
-        if self.advanced:
-            logger.info("Using Coinbase Advanced (v3) mode (JWT).")
-        else:
-            logger.info("Using Coinbase Retail HMAC mode.")
-        # basic checks
-        if self.advanced:
-            if not COINBASE_PEM_CONTENT or not COINBASE_ISS:
-                raise ValueError("Advanced keys not fully set (COINBASE_PEM_CONTENT/COINBASE_ISS).")
-        else:
-            if not (COINBASE_API_KEY and COINBASE_API_SECRET):
-                logger.warning("Retail HMAC keys missing; calls will fail unless you set them.")
+    def __init__(self, advanced=True):
+        self.advanced = advanced
+        self.iss = os.getenv("COINBASE_ISS")
+        self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
+        if not self.iss or not self.pem_content:
+            raise ValueError("COINBASE_ISS or COINBASE_PEM_CONTENT not set in environment.")
+        self.base_url = "https://api.coinbase.com"
+        self.session = requests.Session()
+        logger.info(f"HMAC CoinbaseClient initialized. Advanced={self.advanced}")
 
-    # --- Advanced JWT builder (minimal ES256 using PyJWT if available) ---
-    def _build_jwt(self, method, path):
-        """
-        Build a short-lived JWT for the Advanced (CDP) endpoints.
-        This code tries to use PyJWT if installed. If not available, raises.
-        """
+    def _get_jwt(self):
         try:
-            import jwt  # PyJWT
+            private_key = serialization.load_pem_private_key(
+                self.pem_content.encode(),
+                password=None,
+                backend=default_backend()
+            )
         except Exception as e:
-            raise RuntimeError("PyJWT required for Advanced JWT generation. Install pyjwt or use Retail HMAC.") from e
+            logger.exception(f"Failed to load PEM key: {e}")
+            return None
 
-        # Ensure path is full API path format for JWT signing per Coinbase docs:
-        # e.g. "GET api.coinbase.com/api/v3/brokerage/accounts"
-        # note: jwt.payload 'iss' is the API key id
-        now = int(time.time())
+        header = {"alg": "ES256", "typ": "JWT"}
         payload = {
-            "iss": COINBASE_ISS,
-            "iat": now,
-            "exp": now + 60  # short lived token
+            "iss": self.iss,
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 30
         }
-        if COINBASE_ORG_ID:
-            payload["org_id"] = COINBASE_ORG_ID
 
-        # Format the "uri" as required by some libraries: method + ' ' + host + path
-        # but coinbase examples often sign using path like: "GET api.coinbase.com/api/v3/brokerage/accounts"
-        host = self.base.replace("https://", "").replace("http://", "")
-        uri = f"{method.upper()} {host}{path}"
-        # put uri in header or claim if your library requires it. Some implementations require the exact formatting.
-        headers = {"typ": "JWT"}
-        # use the PEM string to sign
-        private_key = COINBASE_PEM_CONTENT
-        token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
-        return token
+        # Base64 encode
+        def b64encode(obj):
+            return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=")
 
-    # --- Retail HMAC signature (CB-ACCESS-SIGN style) ---
-    def _hmac_headers(self, method, path, body=""):
-        ts = str(int(time.time()))
-        method_up = method.upper()
-        prehash = ts + method_up + path + (body or "")
-        signature = base64.b64encode(hmac.new(COINBASE_API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()).decode()
-        headers = {
-            "CB-ACCESS-KEY": COINBASE_API_KEY,
-            "CB-ACCESS-SIGN": signature,
-            "CB-ACCESS-TIMESTAMP": ts,
-            "CB-ACCESS-PASSPHRASE": COINBASE_API_PASSPHRASE or "",
-            "Content-Type": "application/json"
-        }
-        return headers
-
-    def request(self, method="GET", path="/api/v3/brokerage/accounts", data=None, timeout=15):
-        """
-        Generic request. Returns (status_code, parsed_or_text)
-        - For Advanced mode: creates a JWT and sets Authorization Bearer header.
-        - For retail: uses HMAC headers.
-        """
-        # Normalize path: allow callers to pass e.g. "/v3/accounts" or "/api/v3/brokerage/accounts"
-        if path.startswith("/v3/") or path.startswith("/v2/"):
-            # convert common variants to canonical brokerage path if needed
-            if path.startswith("/v3/") and "brokerage" not in path:
-                # common mistake: /v3/accounts -> correct: /api/v3/brokerage/accounts
-                logger.debug("Rewriting incoming path to /api/v3/brokerage/accounts")
-                path = "/api/v3/brokerage/accounts"
-        if not path.startswith("/"):
-            path = "/" + path
-
-        url = self.base + path
-        body = json.dumps(data) if data else ""
+        signing_input = b64encode(header) + b"." + b64encode(payload)
 
         try:
-            if self.advanced:
-                try:
-                    token = self._build_jwt(method, path)
-                except Exception as e:
-                    logger.exception("Advanced JWT generation failed: %s", e)
-                    return 500, f"Advanced JWT generation failed: {e}"
-                headers = {
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json"
-                }
-                resp = requests.request(method, url, headers=headers, data=body if body else None, timeout=timeout)
-            else:
-                if not (COINBASE_API_KEY and COINBASE_API_SECRET):
-                    logger.error("HMAC keys not configured (COINBASE_API_KEY / COINBASE_API_SECRET).")
-                    return 500, "HMAC keys missing"
-                headers = self._hmac_headers(method, path, body)
-                resp = requests.request(method, url, headers=headers, data=body if body else None, timeout=timeout)
+            signature = private_key.sign(
+                signing_input,
+                ec.ECDSA(hashlib.sha256())
+            )
+            jwt_token = signing_input.decode() + "." + base64.urlsafe_b64encode(signature).decode().rstrip("=")
+            return jwt_token
+        except Exception as e:
+            logger.exception(f"Failed to sign JWT: {e}")
+            return None
 
-            # parse safely
-            status = resp.status_code
+    def request(self, method="GET", path="", params=None):
+        url = self.base_url + path
+        headers = {}
+        if self.advanced:
+            jwt_token = self._get_jwt()
+            if not jwt_token:
+                return None, None
+            headers["Authorization"] = f"Bearer {jwt_token}"
+
+        try:
+            resp = self.session.request(method, url, headers=headers, params=params, timeout=10)
             try:
-                parsed = resp.json()
-                return status, parsed
-            except Exception:
-                # log raw body for diagnostics
-                text = resp.text
-                logger.warning("⚠️ JSON decode failed. Status: %s, Body: %s", status, (text[:400] + '...') if len(text) > 400 else text)
-                return status, text
+                data = resp.json()
+            except json.JSONDecodeError:
+                logger.warning(f"⚠️ JSON decode failed. Status: {resp.status_code}, Body: {resp.text}")
+                return resp.status_code, None
+            return resp.status_code, data
         except requests.RequestException as e:
-            logger.exception("HTTP request failed: %s", e)
-            return 500, str(e)
+            logger.exception(f"HTTP request failed: {e}")
+            return None, None
+
+    def fetch_advanced_accounts(self):
+        status, data = self.request("GET", "/v3/accounts")
+        if status != 200 or not data:
+            logger.error(f"❌ Failed to fetch accounts. Status: {status}")
+            return []
+        accounts = data.get("data", [])
+        logger.info(f"✅ Fetched {len(accounts)} accounts.")
+        return accounts
