@@ -6,6 +6,7 @@ import time
 import requests
 from loguru import logger
 import jwt as pyjwt
+import random
 
 # -------------------------
 # Initialize Nija Client
@@ -40,49 +41,49 @@ class CoinbaseClient:
             return {"Authorization": f"Bearer {self.jwt}", "CB-VERSION": "2025-11-09"}
         return {}
 
-    def fetch_accounts(self):
+    def fetch_accounts(self, retries=3):
         """
-        Fetch all Coinbase Advanced account balances using multiple endpoint fallbacks.
+        Fetch all Coinbase Advanced account balances with retry/backoff.
         Returns list of account dicts or [] on failure.
         """
         if not self.jwt:
             logger.error("Client inactive — cannot fetch accounts")
             return []
 
-        # Try multiple endpoints
         endpoints = [
-            "/api/v3/brokerage/accounts",  # Advanced API
-            "/accounts",                   # Legacy fallback
+            "/api/v3/brokerage/accounts",
+            "/accounts",
         ]
 
-        for path in endpoints:
-            url = self.base.rstrip("/") + path
-            try:
-                resp = requests.get(url, headers=self._get_headers(), timeout=15)
-                resp.raise_for_status()
-                data = resp.json()
-                # Normalize shape
-                for key in ("accounts", "data"):
-                    if key in data and isinstance(data[key], list):
-                        return data[key]
-                if "currency" in data and ("balance" in data or "available" in data):
-                    return [data]
-            except requests.HTTPError as e:
-                if resp.status_code == 404:
-                    logger.warning(f"Endpoint not found (404): {url}, trying next fallback")
-                else:
-                    logger.error(f"HTTP error fetching {url}: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error fetching {url}: {e}")
+        for attempt in range(1, retries + 1):
+            for path in endpoints:
+                url = self.base.rstrip("/") + path
+                try:
+                    resp = requests.get(url, headers=self._get_headers(), timeout=15)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    for key in ("accounts", "data"):
+                        if key in data and isinstance(data[key], list):
+                            return data[key]
+                    if "currency" in data and ("balance" in data or "available" in data):
+                        return [data]
+                except requests.HTTPError as e:
+                    if resp.status_code == 404:
+                        logger.warning(f"Endpoint not found (404): {url}, trying next fallback")
+                    else:
+                        logger.error(f"HTTP error fetching {url}: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error fetching {url}: {e}")
 
-        logger.error("All endpoints failed — no accounts fetched")
+            # Exponential backoff before next attempt
+            delay = (2 ** attempt) + random.uniform(0, 1)
+            logger.info(f"Retrying fetch_accounts in {delay:.2f}s (attempt {attempt}/{retries})")
+            time.sleep(delay)
+
+        logger.error("All retries failed — no accounts fetched")
         return []
 
     def get_balances(self):
-        """
-        Returns dict: {currency: balance}.
-        Falls back to all currencies if USD is zero.
-        """
         accounts = self.fetch_accounts()
         out = {}
         for a in accounts:
@@ -122,6 +123,7 @@ while True:
         # ----> PLACE YOUR TRADING LOGIC HERE <----
         # Example: execute_trade(signal)
 
-        time.sleep(5)  # poll interval
+        time.sleep(5)
     except Exception as e:
         logger.error(f"Unhandled error in main loop: {e}")
+        time.sleep(5)  # slight pause before retrying main loop
