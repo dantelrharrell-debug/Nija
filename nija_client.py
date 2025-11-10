@@ -7,17 +7,17 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 import jwt
 
-# Logger setup
+# Logger
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
 
 class CoinbaseClient:
     """
-    Coinbase Advanced Service Key client (JWT ES256)
-    Expects env:
+    Coinbase Advanced Service Key client (JWT ES256).
+    Requires env:
       - COINBASE_ISS
       - COINBASE_PEM_CONTENT
-      - optional: COINBASE_BASE (defaults to CDP Advanced endpoint)
+      - optional: COINBASE_BASE (defaults to Advanced API)
     """
     def __init__(self, advanced=True):
         self.advanced = advanced
@@ -38,11 +38,7 @@ class CoinbaseClient:
                 password=None,
                 backend=default_backend()
             )
-            payload = {
-                "iss": self.iss,
-                "iat": int(time.time()),
-                "exp": int(time.time()) + 300  # 5 minutes expiry
-            }
+            payload = {"iss": self.iss, "iat": int(time.time()), "exp": int(time.time()) + 300}
             token = jwt.encode(payload, private_key, algorithm="ES256")
             if isinstance(token, bytes):
                 token = token.decode()
@@ -51,7 +47,7 @@ class CoinbaseClient:
             logger.exception("JWT generation failed")
             raise
 
-    def request(self, method="GET", path="/v3/brokerage/accounts", json_body=None):
+    def request(self, method="GET", path="/v3/accounts", json_body=None):
         url = self.base_url.rstrip("/") + path
         headers = {
             "Authorization": f"Bearer {self.token}",
@@ -69,10 +65,9 @@ class CoinbaseClient:
             return None, None
 
     def fetch_advanced_accounts(self):
-        # Use correct Advanced endpoint
-        status, body = self.request("GET", "/v3/brokerage/accounts")
+        status, body = self.request("GET", "/v3/accounts")
         if status == 404:
-            logger.warning("/v3/brokerage/accounts returned 404; endpoint not available.")
+            logger.warning("/v3/accounts returned 404; endpoint not available.")
             return []
         if status != 200 or not body:
             logger.error(f"Failed to fetch accounts. status={status} body={body}")
