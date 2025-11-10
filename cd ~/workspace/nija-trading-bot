@@ -1,7 +1,6 @@
-/your-repo
-├── start_nija_live_hmac.py       ← ENTRY POINT (must be here)
-├── nija_client.py
-├── nija_balance_helper.py
-├── requirements.txt
-├── .env                           ← your COINBASE_* secrets
-└── README.md
+/app
+│
+├─ start_nija_advanced_safe.py    # Your main bot script
+├─ nija_client.py                 # CoinbaseClient class here
+├─ requirements.txt
+└─ .env                           # Your COINBASE_ISS and COINBASE_PEM_CONTENT
