@@ -1,4 +1,3 @@
-# app/nija_client.py
 import os
 import time
 import requests
@@ -7,7 +6,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 import jwt
 
-# Use LOG_LEVEL env if present
 logger.remove()
 logger.add(lambda msg: print(msg, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
 
@@ -17,7 +15,7 @@ class CoinbaseClient:
     Expects env:
       - COINBASE_ISS
       - COINBASE_PEM_CONTENT
-      - optional: COINBASE_BASE (defaults to CDP advanced)
+      - optional: COINBASE_BASE
     """
     def __init__(self, advanced=True):
         self.advanced = advanced
@@ -40,7 +38,6 @@ class CoinbaseClient:
             )
             payload = {"iss": self.iss, "iat": int(time.time()), "exp": int(time.time()) + 300}
             token = jwt.encode(payload, private_key, algorithm="ES256")
-            # pyjwt may return bytes on some versions
             if isinstance(token, bytes):
                 token = token.decode()
             return token
@@ -50,10 +47,7 @@ class CoinbaseClient:
 
     def request(self, method="GET", path="/v3/accounts", json_body=None):
         url = self.base_url.rstrip("/") + path
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Accept": "application/json",
-        }
+        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/json"}
         try:
             r = requests.request(method, url, headers=headers, json=json_body, timeout=10)
             try:
