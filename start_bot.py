@@ -2,8 +2,12 @@
 import os
 from loguru import logger
 
-# import from app package
-from app.nija_client import CoinbaseClient
+# Prefer app.nija_client, but fall back to root nija_client if needed
+try:
+    from app.nija_client import CoinbaseClient
+except ModuleNotFoundError:
+    # fallback for repos that keep nija_client.py in project root
+    from nija_client import CoinbaseClient
 
 def main():
     logger.info("Starting Nija HMAC/Advanced startup (root entrypoint).")
