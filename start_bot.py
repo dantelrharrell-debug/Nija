@@ -3,7 +3,7 @@
 import time
 from loguru import logger
 
-# Try to import from app.nija_client if available, otherwise fall back to nija_client at project root
+# Prefer app.nija_client if you later add an app package, but fall back to root nija_client
 try:
     from app.nija_client import CoinbaseClient
 except Exception:
@@ -18,15 +18,15 @@ logger.info("Starting Nija bot — LIVE mode")
 
 client = CoinbaseClient()
 
-# quick one-off fetch for immediate debug
+# Single fetch to verify
 balances = client.get_balances()
 if not balances:
-    logger.warning("[NIJA-BALANCE] No balances returned (check service key scopes, COINBASE_BASE, COINBASE_ISS)")
+    logger.warning("[NIJA-BALANCE] No balances returned (check service key scopes, COINBASE_BASE, COINBASE_ISS, and API credentials)")
 else:
     for k, v in balances.items():
         logger.info(f"[NIJA-BALANCE] {k}: {v}")
 
-# main loop
+# Main loop (replace with trading logic)
 try:
     while True:
         balances = client.get_balances()
