@@ -3,7 +3,7 @@ import os
 import requests
 from loguru import logger
 
-# CoinbaseClient MUST be top-level, no other imports from your app
+# CoinbaseClient MUST be top-level, no other app imports
 class CoinbaseClient:
     """
     Minimal Coinbase API client for Nija bot.
