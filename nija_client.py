@@ -3,98 +3,119 @@ import time
 import requests
 import jwt
 from loguru import logger
-import threading
 
-class NijaCoinbaseClient:
-    """
-    Coinbase client with Advanced (CDP) JWT support and automatic fallback to Standard API.
-    """
+class NijaClient:
     def __init__(self):
-        self.base = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
+        # Base URLs
+        self.advanced_base = os.getenv("COINBASE_BASE", "https://api.cdp.coinbase.com")
+        self.standard_base = "https://api.coinbase.com"
+
+        # Advanced JWT
         self.pem = os.getenv("COINBASE_PEM_CONTENT")
         self.iss = os.getenv("COINBASE_ISS")
-        self.jwt = None
-        self.advanced_mode = bool(self.pem and self.iss)
+        self.jwt_token = None
+        self._init_jwt()
 
-        if self.advanced_mode:
-            self._generate_jwt()
+        # Standard API credentials
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+
+        # Start JWT refresh loop if advanced mode is available
+        if self.jwt_token:
             self._start_jwt_refresh()
-            logger.info("✅ Advanced JWT mode enabled")
-        else:
-            logger.info("ℹ️ Falling back to Standard API mode")
 
-        logger.info(f"NIJA-CLIENT-READY: base={self.base} advanced={self.advanced_mode} jwt_set={bool(self.jwt)}")
+        logger.info(f"NIJA-CLIENT-READY: Advanced JWT set={self.jwt_token is not None}")
 
-    def _generate_jwt(self):
-        now = int(time.time())
-        payload = {"iat": now, "exp": now + 300, "iss": self.iss}
-        try:
-            token = jwt.encode(payload, self.pem, algorithm="ES256")
-            if isinstance(token, bytes):
-                token = token.decode("utf-8")
-            self.jwt = token
-            logger.info("✅ JWT generated successfully")
-        except Exception as e:
-            logger.error(f"Failed to generate JWT: {e}")
-            self.jwt = None
+    # ------------------- JWT Methods -------------------
+    def _init_jwt(self):
+        if self.pem and self.iss:
+            try:
+                now = int(time.time())
+                payload = {"iat": now, "exp": now + 300, "iss": self.iss}
+                token = jwt.encode(payload, self.pem, algorithm="ES256")
+                if isinstance(token, bytes):
+                    token = token.decode("utf-8")
+                self.jwt_token = token
+                logger.info("✅ Generated ephemeral JWT for Advanced API")
+            except Exception as e:
+                logger.error(f"Failed to generate JWT: {e}")
 
     def _start_jwt_refresh(self):
+        import threading
         def refresh_loop():
             while True:
                 time.sleep(240)
-                self._generate_jwt()
+                self._init_jwt()
         threading.Thread(target=refresh_loop, daemon=True).start()
 
-    def _headers(self):
-        if self.jwt:
-            return {"Authorization": f"Bearer {self.jwt}", "Content-Type": "application/json"}
-        return {"Content-Type": "application/json"}
-
+    # ------------------- Fetch Accounts -------------------
     def fetch_accounts(self):
-        """
-        Try Advanced first, then fallback to Standard API.
-        Returns list of account dicts or empty list.
-        """
-        urls = []
-        if self.advanced_mode:
-            urls.append(f"{self.base.rstrip('/')}/api/v3/brokerage/accounts")
-        urls.append("https://api.coinbase.com/v2/accounts")  # standard fallback
-
-        for url in urls:
+        # Try Advanced endpoint first
+        if self.jwt_token:
+            url = f"{self.advanced_base}/api/v3/brokerage/accounts"
+            headers = {"Authorization": f"Bearer {self.jwt_token}"}
             try:
-                resp = requests.get(url, headers=self._headers(), timeout=15)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # Detect account list keys
-                    for key in ("accounts", "data", "account"):
-                        if key in data and isinstance(data[key], list):
-                            return data[key]
-                    # If structure is different, wrap single dict
-                    if "currency" in data and ("balance" in data or "available" in data):
-                        return [data]
-                    return []
-                else:
-                    logger.warning(f"Endpoint {url} returned {resp.status_code}")
-            except Exception as e:
-                logger.error(f"Request to {url} failed: {e}")
-        logger.error("All endpoints failed — no accounts fetched")
+                r = requests.get(url, headers=headers, timeout=10)
+                logger.info(f"Advanced API status: {r.status_code}")
+                if r.status_code == 200:
+                    return r.json().get("data", [])
+                logger.warning(f"Advanced API failed: {r.status_code} {r.text}")
+            except requests.RequestException as e:
+                logger.error(f"Advanced API request failed: {e}")
+
+        # Fallback to Standard API if Advanced fails
+        if self.api_key and self.api_secret:
+            url = f"{self.standard_base}/v2/accounts"
+            headers = {"CB-ACCESS-KEY": self.api_key, "Content-Type": "application/json"}
+            try:
+                r = requests.get(url, headers=headers, timeout=10)
+                logger.info(f"Standard API status: {r.status_code}")
+                if r.status_code == 200:
+                    return r.json().get("data", [])
+                logger.warning(f"Standard API failed: {r.status_code} {r.text}")
+            except requests.RequestException as e:
+                logger.error(f"Standard API request failed: {e}")
+
+        logger.warning("No accounts fetched from either API.")
         return []
 
+    # ------------------- Get Balances -------------------
     def get_balances(self):
-        """
-        Returns dict: {currency: balance}
-        """
         accounts = self.fetch_accounts()
-        out = {}
+        balances = {}
         for a in accounts:
-            cur = a.get("currency") or a.get("asset")
+            currency = a.get("currency") or a.get("asset")
             amt = None
+            # Advanced API structure
             if isinstance(a.get("balance"), dict):
                 amt = a["balance"].get("amount") or a["balance"].get("value")
+            # Standard API structure
             if amt is None:
                 amt = a.get("available_balance") or a.get("available") or a.get("balance")
             try:
-                out[cur] = float(amt or 0)
+                balances[currency] = float(amt or 0)
             except:
-                out[cur] = 0.0
-        return out
+                balances[currency] = 0.0
+        return balances
+
+
+# ------------------- Direct JWT Test -------------------
+if __name__ == "__main__":
+    pem = os.getenv("COINBASE_PEM_CONTENT")
+    iss = os.getenv("COINBASE_ISS")
+    base = "https://api.cdp.coinbase.com"
+
+    if pem and iss:
+        payload = {"iat": int(time.time()), "exp": int(time.time()) + 300, "iss": iss}
+        token = jwt.encode(payload, pem, algorithm="ES256")
+        if isinstance(token, bytes):
+            token = token.decode("utf-8")
+
+        url = f"{base}/api/v3/brokerage/accounts"
+        headers = {"Authorization": f"Bearer {token}"}
+
+        r = requests.get(url, headers=headers)
+        print("JWT Test Status:", r.status_code)
+        print("Response:", r.text)
+    else:
+        print("Missing COINBASE_PEM_CONTENT or COINBASE_ISS")
