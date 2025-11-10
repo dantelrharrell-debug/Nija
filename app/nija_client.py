@@ -46,20 +46,32 @@ class CoinbaseClient:
             return None
 
     def fetch_advanced_accounts(self):
-        """Try valid Advanced API endpoints only"""
-        endpoints = ["/accounts", "/orders", "/positions"]
+        """
+        Fetch accounts using only verified Advanced API endpoints.
+        Stops at the first endpoint that returns valid data.
+        """
+        endpoints = [
+            "/accounts",         # main account info
+            "/brokerage/accounts" # optional, if your key has brokerage access
+        ]
+
         for ep in endpoints:
             data = self._request("GET", ep)
             if data:
+                logger.info(f"Accounts fetched successfully from endpoint: {ep}")
                 return data
-        logger.error("Failed to fetch accounts from all candidate endpoints")
+
+        logger.error(
+            "Failed to fetch accounts from all candidate endpoints. "
+            "Check COINBASE_ADVANCED_BASE, API key permissions, and endpoint paths."
+        )
         return None
 
     def validate_key(self):
         """Quick test to see if the key works"""
-        data = self._request("GET", "/accounts")
+        data = self.fetch_advanced_accounts()
         if data is None:
-            logger.error("API key invalid or base URL incorrect. Check permissions.")
+            logger.error("API key invalid or base URL incorrect.")
             return False
         logger.info("API key validated successfully.")
         return True
