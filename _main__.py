@@ -5,11 +5,10 @@ logger.remove()
 logger.add(lambda msg: print(msg, end=""), level="INFO")
 
 def main():
-    logger.info("Starting Nija loader (robust).")
+    logger.info("Starting Nija loader (robust + debug).")
 
-    client = CoinbaseClient()  # auto-detects advanced vs spot
+    client = CoinbaseClient(debug=True)  # debug=True prints full request info
 
-    # Try Advanced API first
     accounts = client.fetch_advanced_accounts()
     if not accounts:
         logger.warning("Advanced API failed; falling back to Spot API.")
