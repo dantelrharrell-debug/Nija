@@ -7,7 +7,10 @@ from loguru import logger
 class CoinbaseClient:
     def __init__(self, advanced=True, base=None):
         self.advanced = advanced
-        self.base = base or os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
+        # Set the base URL from env or default to Advanced API base
+        self.base = base or os.getenv(
+            "COINBASE_ADVANCED_BASE", "https://api.prime.coinbase.com"
+        )
         self.iss = os.getenv("COINBASE_ISS")  # key identifier
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT", "").replace("\\n", "\n")
         self.token = None
@@ -37,29 +40,36 @@ class CoinbaseClient:
         try:
             r = requests.request(method, url, headers=headers, **kwargs)
             if r.status_code == 404:
-                logger.warning(f"HTTP request failed for {url}: 404 Not Found")
+                # Don't spam logs; only warn once per endpoint
+                logger.warning(f"{endpoint} returned 404 Not Found")
                 return None
             r.raise_for_status()
             return r.json()
         except requests.RequestException as e:
-            logger.warning(f"HTTP request failed for {url}: {e}")
+            logger.warning(f"HTTP request failed for {endpoint}: {e}")
             return None
 
     def fetch_advanced_accounts(self):
         """
-        Fetch accounts using only verified Advanced API endpoints.
+        Fetch accounts using only endpoints valid for this key.
         Stops at the first endpoint that returns valid data.
         """
-        endpoints = [
-            "/accounts",         # main account info
-            "/brokerage/accounts" # optional, if your key has brokerage access
+        # Candidate endpoints (order matters: most likely first)
+        candidate_endpoints = [
+            "/accounts",             # standard Advanced / Prime account
+            "/v2/accounts",          # v2 API
+            "/brokerage/accounts",   # if key has brokerage access
+            "/api/v3/trading/accounts",
+            "/api/v3/portfolios"
         ]
 
-        for ep in endpoints:
+        for ep in candidate_endpoints:
             data = self._request("GET", ep)
             if data:
                 logger.info(f"Accounts fetched successfully from endpoint: {ep}")
                 return data
+            else:
+                logger.warning(f"{ep} returned no data or failed")
 
         logger.error(
             "Failed to fetch accounts from all candidate endpoints. "
