@@ -1,6 +1,8 @@
-/root
-  .env
-  start_bot.py
-  check_account.py
-  nija_balance_helper.py
-  nija_client.py
+nija-bot/
+│
+├─ .env                  # Your environment variables
+├─ main.py               # Entry point (script I just gave you)
+├─ nija_client.py        # CoinbaseClient class (with debug, fetch accounts)
+├─ requirements.txt      # Python dependencies (requests, loguru, python-dotenv)
+├─ README.md             # Instructions for running the bot
+└─ logs/                 # Optional folder if you want to store logs
