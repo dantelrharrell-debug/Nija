@@ -7,13 +7,11 @@ from loguru import logger
 class CoinbaseClient:
     def __init__(self, advanced=True, base=None):
         self.advanced = advanced
-        # Set the base URL from env or default to Advanced API base
-        self.base = base or os.getenv(
-            "COINBASE_ADVANCED_BASE", "https://api.prime.coinbase.com"
-        )
+        self.base = base or os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
         self.iss = os.getenv("COINBASE_ISS")  # key identifier
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT", "").replace("\\n", "\n")
         self.token = None
+        self._working_endpoint = None  # cache working endpoint
 
         if not self.pem_content or not self.iss:
             raise ValueError("Missing COINBASE_ISS or COINBASE_PEM_CONTENT env vars")
@@ -35,35 +33,49 @@ class CoinbaseClient:
             raise
 
     def _request(self, method, endpoint, **kwargs):
-        url = self.base.rstrip("/") + endpoint
+        url_base = self.base.rstrip("/")
+        # Use cached working endpoint if available
+        if self._working_endpoint:
+            url = url_base + self._working_endpoint
+        else:
+            url = url_base + endpoint
+
         headers = {"Authorization": f"Bearer {self.token}"}
         try:
             r = requests.request(method, url, headers=headers, **kwargs)
             if r.status_code == 404:
-                # Don't spam logs; only warn once per endpoint
-                logger.warning(f"{endpoint} returned 404 Not Found")
+                logger.warning(f"HTTP request failed for {url}: 404 Not Found")
                 return None
             r.raise_for_status()
+            if not self._working_endpoint:
+                # cache the endpoint that works
+                self._working_endpoint = endpoint
             return r.json()
         except requests.RequestException as e:
-            logger.warning(f"HTTP request failed for {endpoint}: {e}")
+            logger.warning(f"HTTP request failed for {url}: {e}")
             return None
 
     def fetch_advanced_accounts(self):
         """
-        Fetch accounts using only endpoints valid for this key.
+        Fetch accounts using verified Advanced API endpoints.
         Stops at the first endpoint that returns valid data.
         """
-        # Candidate endpoints (order matters: most likely first)
-        candidate_endpoints = [
-            "/accounts",             # standard Advanced / Prime account
-            "/v2/accounts",          # v2 API
-            "/brokerage/accounts",   # if key has brokerage access
-            "/api/v3/trading/accounts",
-            "/api/v3/portfolios"
+        endpoints = [
+            "/accounts",           # main account info
+            "/v2/accounts",        # alternative v2 endpoint
+            "/v2/brokerage/accounts",  # optional, if your key has brokerage access
+            "/api/v3/trading/accounts", # optional v3 trading
+            "/api/v3/portfolios"       # optional portfolios
         ]
 
-        for ep in candidate_endpoints:
+        # Try cached endpoint first
+        if self._working_endpoint:
+            data = self._request("GET", self._working_endpoint)
+            if data:
+                logger.info(f"Accounts fetched successfully from cached endpoint: {self._working_endpoint}")
+                return data
+
+        for ep in endpoints:
             data = self._request("GET", ep)
             if data:
                 logger.info(f"Accounts fetched successfully from endpoint: {ep}")
