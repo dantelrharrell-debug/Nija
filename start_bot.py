@@ -11,15 +11,15 @@ def main():
         client = CoinbaseClient()
         logger.info("CoinbaseClient initialized successfully.")
 
-        # Test connection
-        logger.info("Testing Coinbase connection...")
-        status, resp = client.test_connection()
-        if status != "ok" or resp is None:
-            logger.error("❌ Connection test failed! Check API keys and endpoint.")
+        # Test connection by fetching accounts
+        logger.info("Testing Coinbase connection via get_accounts()...")
+        accounts = client.get_accounts()
+        if not accounts:
+            logger.error("❌ Connection test failed! /accounts returned no data.")
             sys.exit(1)
 
         logger.info("✅ Connection test succeeded!")
-        logger.debug(f"Response (truncated): {repr(resp)[:300]}")
+        logger.debug(f"Accounts (truncated): {repr(accounts)[:300]}")
 
         # Bot ready to continue
         logger.info("Nija loader ready to trade...")
