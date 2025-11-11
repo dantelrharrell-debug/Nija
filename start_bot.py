@@ -1,6 +1,6 @@
 # start_bot.py
-from loguru import logger
 from nija_client import CoinbaseClient
+from loguru import logger
 import sys, time
 
 def main():
