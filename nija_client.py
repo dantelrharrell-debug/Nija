@@ -1,55 +1,46 @@
+# nija_client.py
+import os
 import requests
 from loguru import logger
 
 class CoinbaseClient:
-    def __init__(self, api_key=None, api_secret=None, advanced=True):
-        self.advanced = advanced
-        self.api_key = api_key
-        self.api_secret = api_secret
+    def __init__(self, api_key=None, api_secret=None, api_passphrase=None):
+        self.api_key = api_key or os.getenv("COINBASE_API_KEY")
+        self.api_secret = api_secret or os.getenv("COINBASE_API_SECRET")
+        self.api_passphrase = api_passphrase or os.getenv("COINBASE_API_PASSPHRASE")
+        self.base = "https://api.coinbase.com/v2"
+        logger.info(f"CoinbaseClient initialized. base={self.base}")
 
-        # Try recommended base URLs
-        candidate_bases = [
-            "https://api.coinbase.com",       # Live Advanced Trade
-            "https://api-public.sandbox.pro.coinbase.com",  # Sandbox
-            "https://api.cdp.coinbase.com"    # Business API (legacy)
-        ]
-
-        self.base = None
-        for url in candidate_bases:
-            if self._test_base(url):
-                self.base = url
-                logger.info(f"✅ Using Coinbase API base: {self.base}")
-                break
-
-        if not self.base:
-            raise RuntimeError("❌ Could not find a working Coinbase API base URL.")
-
-    def _test_base(self, url):
-        """Test if base URL responds to /accounts"""
+    def _request(self, endpoint, method="GET", params=None):
+        url = f"{self.base}{endpoint}"
+        headers = {
+            "CB-VERSION": "2025-11-11",  # use a recent version
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
         try:
-            resp = requests.get(f"{url}/accounts", timeout=5)
-            if resp.status_code == 200:
-                return True
-        except Exception as e:
-            logger.debug(f"Base test failed for {url}: {e}")
-        return False
+            response = requests.request(method, url, headers=headers, params=params)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"HTTP request failed for {url}: {e}")
+            return None
 
-    def fetch_accounts(self):
-        """Fetch accounts dynamically based on available endpoints"""
-        endpoints = [
-            "/accounts",
-            "/brokerage/accounts",
-            "/api/v3/trading/accounts",
-            "/api/v3/portfolios"
-        ]
-        for ep in endpoints:
-            try:
-                resp = requests.get(f"{self.base}{ep}", timeout=5)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    logger.info(f"✅ Accounts fetched from {ep}")
-                    return data
-            except Exception as e:
-                logger.warning(f"Failed {ep}: {e}")
-        logger.error("❌ Failed to fetch accounts from all candidate endpoints")
-        return []
+    def get_accounts(self):
+        """
+        Fetch your Coinbase accounts (wallets) using v2 API.
+        """
+        data = self._request("/accounts")
+        if not data or "data" not in data:
+            logger.warning("/accounts returned no data or failed")
+            return []
+        return data["data"]
+
+# Quick test
+if __name__ == "__main__":
+    client = CoinbaseClient()
+    accounts = client.get_accounts()
+    if accounts:
+        logger.info(f"Found {len(accounts)} accounts.")
+    else:
+        logger.warning("No accounts found.")
