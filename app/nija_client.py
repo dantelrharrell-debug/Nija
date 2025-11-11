@@ -1,125 +1,114 @@
-# app/nija_client.py
-import os
-import time
-import requests
+# nija_client.py  -- put this in the project root (same folder as start_bot.py)
+import os, time, hmac, hashlib, requests
 import jwt
 from loguru import logger
 
-logger.remove()
-logger.add(lambda msg: print(msg, end=""), level="INFO")
-
 class CoinbaseClient:
     """
-    Coinbase Advanced client used by the Nija bot.
-    Compatible signature: CoinbaseClient(advanced=True, debug=True)
+    Canonical Coinbase client for the Nija bot.
+    Usage:
+      client = CoinbaseClient(advanced=True)  # advanced -> JWT (CDP)
+      client = CoinbaseClient(advanced=False) # standard HMAC API
+      client = CoinbaseClient(advanced=True, base="https://api.cdp.coinbase.com")
     """
 
-    def __init__(self, advanced=True, debug=False, base=None):
-        self.advanced = advanced
-        self.debug = debug
-        # Base URL: prefer explicit param, then env, then default advanced URL
-        self.base = base or os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
-        # 'iss' is the key identifier per Coinbase Advanced JWT docs (e.g. organizations/.../apiKeys/...)
-        self.iss = os.getenv("COINBASE_ISS")
-        # Accept PEM sent with literal \n or with real newlines
-        raw_pem = os.getenv("COINBASE_PEM_CONTENT", "")
-        # Normalize common formats: if user pasted with literal "\n" replace with actual newlines
-        self.pem_content = raw_pem.replace("\\n", "\n")
-        self.token = None
+    def __init__(self, advanced=False, base=None, debug=False):
+        self.advanced = bool(advanced)
+        self.debug = bool(debug)
 
-        if not self.pem_content or not self.iss:
-            raise ValueError("Missing COINBASE env vars (COINBASE_ISS, COINBASE_PEM_CONTENT)")
+        if self.advanced:
+            # Advanced (JWT) mode
+            self.base = base or os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
+            self.iss = os.getenv("COINBASE_ISS", "")  # expected to be key id (UUID)
+            # Support PEM saved with literal "\n" or real newlines
+            self.pem = os.getenv("COINBASE_PEM_CONTENT", "").replace("\\n", "\n")
+            if not self.iss or not self.pem:
+                logger.warning("Missing COINBASE_ISS or COINBASE_PEM_CONTENT. JWT calls will fail.")
+            else:
+                try:
+                    self._generate_jwt()
+                except Exception as e:
+                    logger.error("JWT creation failed: %s", e)
+        else:
+            # Standard HMAC mode
+            self.base = base or os.getenv("COINBASE_API_BASE", "https://api.coinbase.com/v2")
+            self.api_key = os.getenv("COINBASE_API_KEY", "")
+            self.api_secret = os.getenv("COINBASE_API_SECRET", "").strip()
+            if not self.api_key or not self.api_secret:
+                logger.warning("Missing COINBASE_API_KEY or COINBASE_API_SECRET. HMAC calls will fail.")
 
-        # Pre-generate token (will refresh on demand)
-        self._generate_jwt()
-        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base}")
+        logger.info("CoinbaseClient initialized. advanced=%s base=%s", self.advanced, self.base)
 
     def _generate_jwt(self):
-        payload = {
-            "iss": self.iss,
-            "iat": int(time.time()),
-            # short-lived token is OK; set to 300s (5m)
-            "exp": int(time.time()) + 300
-        }
-        try:
-            # jwt.encode returns str in pyjwt >= 2.x
-            self.token = jwt.encode(payload, self.pem_content, algorithm="ES256")
-            if isinstance(self.token, bytes):
-                self.token = self.token.decode("utf-8")
-        except Exception as e:
-            logger.exception(f"Failed to generate JWT: {e}")
-            # surface the error up so start_bot can log & exit
-            raise
+        payload = {"iss": self.iss, "iat": int(time.time()), "exp": int(time.time()) + 300}
+        # jwt.encode returns str for PyJWT>=2; handle potential bytes
+        token = jwt.encode(payload, self.pem, algorithm="ES256")
+        if isinstance(token, bytes):
+            token = token.decode("utf-8")
+        self.token = token
+        logger.info("JWT generated (len=%d)", len(token))
 
-    def _request(self, method: str, endpoint: str, **kwargs):
-        """
-        Generic request helper. Returns (status_code, json_data) or (None, None) on failure.
-        """
-        url = self.base.rstrip("/") + endpoint
+    def _hmac_headers(self, method, request_path, body=""):
+        ts = str(int(time.time()))
+        message = ts + method.upper() + request_path + (body or "")
+        sig = hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
         headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json"
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": sig,
+            "CB-ACCESS-TIMESTAMP": ts,
+            "CB-VERSION": os.getenv("CB_VERSION", "2025-11-11"),
         }
+        return headers
+
+    def _request(self, method, endpoint, body=None, timeout=10):
+        url = self.base.rstrip("/") + endpoint
+        headers = {}
+        if self.advanced:
+            if not hasattr(self, "token"):
+                logger.warning("No JWT token present.")
+            headers["Authorization"] = f"Bearer {getattr(self, 'token', '')}"
+        else:
+            # HMAC sign for standard API (v2 endpoints)
+            headers = self._hmac_headers(method, endpoint, body or "")
+
         try:
-            r = requests.request(method.upper(), url, headers=headers, timeout=10, **kwargs)
-            if self.debug:
-                logger.debug(f"[DEBUG] {method.upper()} {url} -> {r.status_code}")
-            if r.status_code == 401:
-                # token might have expired — regenerate once and retry
-                logger.warning("401 from Coinbase; regenerating JWT and retrying once.")
-                self._generate_jwt()
-                headers["Authorization"] = f"Bearer {self.token}"
-                r = requests.request(method.upper(), url, headers=headers, timeout=10, **kwargs)
-                if self.debug:
-                    logger.debug(f"[DEBUG retry] {method.upper()} {url} -> {r.status_code}")
-
-            # handle 404 explicitly in logs
-            if r.status_code == 404:
-                logger.warning(f"HTTP request failed for {url}: 404 Not Found")
-                return None, None
-
-            r.raise_for_status()
-            try:
-                return r.status_code, r.json()
-            except ValueError:
-                logger.warning(f"HTTP request returned invalid JSON for {url}")
-                return r.status_code, None
-        except requests.RequestException as e:
-            logger.warning(f"HTTP request failed for {url}: {e}")
+            r = requests.request(method, url, headers=headers, data=body, timeout=timeout)
+        except Exception as e:
+            logger.warning("Request to %s failed: %s", url, e)
             return None, None
 
-    def fetch_advanced_accounts(self):
-        """
-        Try verified Advanced API endpoints. Stops at first successful endpoint.
-        Returns list/dict from API or [] on failure.
-        """
-        endpoints = [
-            "/accounts",               # expected for many Advanced/Prime customers
-            "/brokerage/accounts",     # other possible path
-            "/api/v3/trading/accounts",# sometimes present behind a base path
-            "/api/v3/portfolios"
-        ]
+        # Return both status and text/json for debugging
+        text = None
+        try:
+            text = r.text
+        except Exception:
+            text = "<no text>"
 
-        for ep in endpoints:
+        if r.status_code >= 400:
+            logger.warning("HTTP %s for %s: %s", r.status_code, url, text[:400])
+            return r.status_code, text
+
+        # Try json, fallback to text
+        try:
+            return r.status_code, r.json()
+        except Exception:
+            return r.status_code, text
+
+    def get_accounts(self):
+        """
+        Try several candidate endpoints (some return 404 depending on base and account).
+        Returns (status, data) or (None, None) on network failure.
+        """
+        candidates = ["/accounts", "/v2/accounts", "/v2/brokerage/accounts", "/api/v3/trading/accounts", "/api/v3/portfolios"]
+        for ep in candidates:
             status, data = self._request("GET", ep)
-            if status and data:
-                logger.info(f"✅ Found working endpoint: {ep}")
-                # many Coinbase responses wrap data in {"data": [...]}
-                if isinstance(data, dict) and "data" in data:
-                    return data["data"]
-                return data
-            else:
-                logger.warning(f"{ep} returned no data or failed")
-        logger.error("Failed to fetch accounts from all candidate endpoints")
-        return []
-
-    def validate_key(self):
-        """
-        Quick boolean check for a working key/base.
-        """
-        status, data = self._request("GET", "/accounts")
-        if status is None:
-            logger.error("API key invalid or base URL incorrect. Check permissions and COINBASE_ADVANCED_BASE.")
-            return False
-        logger.info("API key validated successfully.")
-        return True
+            if status is None:
+                # network error; try next
+                continue
+            if status == 200:
+                logger.info("Fetched accounts from %s", ep)
+                return status, data
+            # keep trying until we find a successful endpoint
+            logger.debug("Endpoint %s returned %s", ep, status)
+        logger.error("Failed to fetch accounts from any candidate endpoint.")
+        return None, None
