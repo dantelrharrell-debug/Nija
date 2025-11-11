@@ -1,23 +1,24 @@
-# nija_client.py (root shim)
+# nija_client.py  (repo root shim - safe)
+"""
+Shim so code can `from nija_client import CoinbaseClient`.
+Prefer implementation at app/nija_client.py.
+This shim tries to import app.nija_client first; if that fails it will load the file
+directly from disk (without importing the current module name), avoiding circular imports.
+"""
+
 try:
-    # prefer package import so user code can do `from app.nija_client import CoinbaseClient`
+    # preferred: package import
     from app.nija_client import CoinbaseClient  # type: ignore
 except Exception:
-    # fallback to local file if present
-    from importlib import import_module
-    try:
-        _mod = import_module("nija_client")  # if root module replaced by older file, this prevents circular import
-        CoinbaseClient = getattr(_mod, "CoinbaseClient")
-    except Exception:
-        # last-resort: load file from app/nija_client.py path
-        import importlib.util
-        from pathlib import Path
-        APP_FILE = Path(__file__).resolve().parent / "app" / "nija_client.py"
-        if APP_FILE.exists():
-            spec = importlib.util.spec_from_file_location("app_nija_client", str(APP_FILE))
-            m = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(m)  # type: ignore
-            CoinbaseClient = getattr(m, "CoinbaseClient")
-        else:
-            raise
+    import importlib.util
+    from pathlib import Path
+    APP_FILE = Path(__file__).resolve().parent / "app" / "nija_client.py"
+    if APP_FILE.exists():
+        spec = importlib.util.spec_from_file_location("app_nija_client", str(APP_FILE))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)  # type: ignore
+        CoinbaseClient = getattr(module, "CoinbaseClient")
+    else:
+        # re-raise the original import error so the process fails visibly
+        raise
 __all__ = ["CoinbaseClient"]
