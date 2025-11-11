@@ -1,2 +1,2 @@
-# mark app as a package (keep simple)
-__all__ = ["nija_client"]
+# app/__init__.py
+# marks 'app' as a package
