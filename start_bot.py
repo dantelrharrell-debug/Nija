@@ -1,19 +1,30 @@
+# start_bot.py
+import os
 import sys
 from loguru import logger
 from nija_client import CoinbaseClient
+from dotenv import load_dotenv
+
+# Load local .env in development only
+load_dotenv()
 
 def main():
     logger.info("Starting Nija loader (robust)...")
 
     try:
-        client = CoinbaseClient(
-            jwt_iss="YOUR_JWT_ISS_HERE",
-            jwt_pem="""-----BEGIN EC PRIVATE KEY-----
-YOUR_JWT_PEM_HERE
------END EC PRIVATE KEY-----"""
-        )
-        logger.info("CoinbaseClient initialized successfully (Advanced/JWT).")
+        # Read JWT credentials from environment
+        jwt_iss = os.getenv("COINBASE_JWT_ISS")
+        jwt_pem = os.getenv("COINBASE_JWT_PEM")
 
+        if not jwt_iss or not jwt_pem:
+            logger.error("❌ Environment variables COINBASE_JWT_ISS or COINBASE_JWT_PEM not set.")
+            sys.exit(1)
+
+        # Initialize CoinbaseClient (no extra arguments)
+        client = CoinbaseClient()  # Your nija_client.py reads from env internally
+        logger.info("CoinbaseClient initialized successfully.")
+
+        # Test connection
         accounts = client.get_accounts()
         if not accounts:
             logger.error("❌ Connection test failed! /accounts returned no data.")
