@@ -1,2 +1,6 @@
-# app/__init__.py
-# Marks 'app' as a package so `from app.nija_client import ...` works.
+Nija/
+├─ app/
+│  ├─ __init__.py        # empty is fine
+│  └─ nija_client.py     # full CoinbaseClient implementation here
+├─ start_bot.py          # uses: from nija_client import CoinbaseClient
+├─ nija_client.py        # optional shim: from app.nija_client import CoinbaseClient
