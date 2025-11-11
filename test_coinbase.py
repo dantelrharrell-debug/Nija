@@ -1,28 +1,45 @@
-from dotenv import load_dotenv
-import os, requests, time, hmac, hashlib
+import os
+import requests
+from requests.auth import AuthBase
+import hmac
+import hashlib
+import time
+import base64
 
-load_dotenv()  # loads keys from your .env file
-
+# Load from environment variables
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-BASE_URL = os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # if required by your client
 
-if not API_KEY or not API_SECRET:
-    raise Exception("API_KEY or API_SECRET not set")
+BASE_URL = "https://api.coinbase.com/v2"
 
-endpoint = "/v2/accounts"
-url = BASE_URL + endpoint
+def get_accounts():
+    timestamp = str(int(time.time()))
+    method = "GET"
+    request_path = "/accounts"
+    body = ""
 
-timestamp = str(int(time.time()))
-message = timestamp + 'GET' + endpoint
-signature = hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
-headers = {
-    "CB-ACCESS-KEY": API_KEY,
-    "CB-ACCESS-SIGN": signature,
-    "CB-ACCESS-TIMESTAMP": timestamp,
-}
+    message = timestamp + method + request_path + body
+    signature = hmac.new(
+        API_SECRET.encode(),
+        message.encode(),
+        hashlib.sha256
+    ).hexdigest()
 
-response = requests.get(url, headers=headers)
+    headers = {
+        "CB-ACCESS-KEY": API_KEY,
+        "CB-ACCESS-SIGN": signature,
+        "CB-ACCESS-TIMESTAMP": timestamp,
+        "CB-VERSION": "2025-11-11",  # can set current date
+    }
 
-print("Status Code:", response.status_code)
-print("Response Body:", response.text)
+    if API_PASSPHRASE:
+        headers["CB-ACCESS-PASSPHRASE"] = API_PASSPHRASE
+
+    response = requests.get(BASE_URL + request_path, headers=headers)
+    return response.status_code, response.text
+
+if __name__ == "__main__":
+    status, data = get_accounts()
+    print("Status Code:", status)
+    print("Response:", data)
