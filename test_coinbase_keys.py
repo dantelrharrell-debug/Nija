@@ -1,47 +1,43 @@
-# test_coinbase_keys.py
 import os
+import requests
 import time
 import hmac
 import hashlib
-import requests
 
+# Load API credentials from environment
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-BASE_URL = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional
 
-if not API_KEY or not API_SECRET:
-    raise ValueError("COINBASE_API_KEY or COINBASE_API_SECRET not set in environment")
+BASE_URL = "https://api.coinbase.com/v2"
 
-def get_headers(method, path, body=""):
+def test_accounts():
     timestamp = str(int(time.time()))
-    message = f"{timestamp}{method}{path}{body}"
+    method = "GET"
+    request_path = "/accounts"
+    body = ""
+
+    # Create Coinbase signature
+    message = timestamp + method + request_path + body
     signature = hmac.new(
         API_SECRET.encode(),
         message.encode(),
         hashlib.sha256
     ).hexdigest()
 
-    return {
+    headers = {
         "CB-ACCESS-KEY": API_KEY,
         "CB-ACCESS-SIGN": signature,
         "CB-ACCESS-TIMESTAMP": timestamp,
-        "Content-Type": "application/json"
+        "CB-VERSION": "2025-11-11"
     }
 
-def test_accounts():
-    url = f"{BASE_URL}/v2/accounts"
-    headers = get_headers("GET", "/v2/accounts")
-    try:
-        resp = requests.get(url, headers=headers)
-        if resp.status_code == 200:
-            print("✅ API keys are valid! Accounts fetched:")
-            print(resp.json())
-        elif resp.status_code in (401, 403):
-            print("❌ Unauthorized! Check API key/secret. Passphrase not needed for Advanced API.")
-        else:
-            print(f"❌ Unexpected status {resp.status_code}: {resp.text}")
-    except Exception as e:
-        print(f"❌ Error connecting to Coinbase: {e}")
+    if API_PASSPHRASE:
+        headers["CB-ACCESS-PASSPHRASE"] = API_PASSPHRASE
+
+    response = requests.get(BASE_URL + request_path, headers=headers)
+    print("Status Code:", response.status_code)
+    print("Response:", response.text)
 
 if __name__ == "__main__":
     test_accounts()
