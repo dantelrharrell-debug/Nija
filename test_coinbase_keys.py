@@ -1,43 +1,39 @@
 import os
-import requests
 import time
-import hmac
-import hashlib
+import jwt
+import requests
 
-# Load API credentials from environment
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional
+# Load keys from environment
+ISS = os.getenv("COINBASE_ISS")
+PEM = os.getenv("COINBASE_PEM_CONTENT")
+BASE_URL = "https://api.coinbase.com"
 
-BASE_URL = "https://api.coinbase.com/v2"
+if not ISS or not PEM:
+    print("❌ Missing ISS or PEM content in environment variables")
+    exit()
 
-def test_accounts():
-    timestamp = str(int(time.time()))
-    method = "GET"
-    request_path = "/accounts"
-    body = ""
+# Create JWT for authentication
+timestamp = int(time.time())
+payload = {
+    "iss": ISS,
+    "iat": timestamp,
+    "exp": timestamp + 300
+}
 
-    # Create Coinbase signature
-    message = timestamp + method + request_path + body
-    signature = hmac.new(
-        API_SECRET.encode(),
-        message.encode(),
-        hashlib.sha256
-    ).hexdigest()
+try:
+    token = jwt.encode(payload, PEM, algorithm="ES256")
+except Exception as e:
+    print("❌ JWT encode failed:", e)
+    exit()
 
-    headers = {
-        "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": signature,
-        "CB-ACCESS-TIMESTAMP": timestamp,
-        "CB-VERSION": "2025-11-11"
-    }
+headers = {
+    "Authorization": f"Bearer {token}"
+}
 
-    if API_PASSPHRASE:
-        headers["CB-ACCESS-PASSPHRASE"] = API_PASSPHRASE
-
-    response = requests.get(BASE_URL + request_path, headers=headers)
-    print("Status Code:", response.status_code)
-    print("Response:", response.text)
-
-if __name__ == "__main__":
-    test_accounts()
+# Test /accounts endpoint
+try:
+    r = requests.get(f"{BASE_URL}/v2/accounts", headers=headers)
+    print("Status Code:", r.status_code)
+    print("Response:", r.text)
+except Exception as e:
+    print("❌ Request failed:", e)
