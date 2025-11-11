@@ -1,6 +1,9 @@
-Nija/
-├─ app/
-│  ├─ __init__.py        # empty is fine
-│  └─ nija_client.py     # full CoinbaseClient implementation here
-├─ start_bot.py          # uses: from nija_client import CoinbaseClient
-├─ nija_client.py        # optional shim: from app.nija_client import CoinbaseClient
+/nija-bot
+│
+├── .env                  # Your environment variables (Coinbase JWT info, etc.)
+├── requirements.txt      # Python dependencies: loguru, python-dotenv, requests, etc.
+├── start_bot.py          # Root-level entry point for Railway
+├── nija_client.py        # Your CoinbaseClient wrapper / helper
+└── app                   # Optional folder for organizing extra code
+    ├── __init__.py       # Makes `app` a Python package
+    └── start_bot_module.py  # The main bot logic (optional)
