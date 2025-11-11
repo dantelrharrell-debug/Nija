@@ -1,149 +1,117 @@
 # app/nija_client.py
 import os
 import time
-import json
 import requests
 import jwt
 from loguru import logger
 
 logger.remove()
-logger.add(lambda m: print(m, end=""), level=os.getenv("LOG_LEVEL", "INFO"))
+logger.add(lambda msg: print(msg, end=""), level="INFO")
 
 class CoinbaseClient:
     """
-    Robust Coinbase client supporting:
-      - Advanced (JWT/service key) via COINBASE_ISS + COINBASE_PEM_CONTENT + COINBASE_ADVANCED_BASE
-      - Classic (HMAC) via COINBASE_API_KEY + COINBASE_API_SECRET (+ optional COINBASE_API_PASSPHRASE)
-    Accepts advanced=True/False and debug flag.
+    Minimal Coinbase "Advanced" (JWT/service key) client.
+    Accepts the kwargs your start_bot uses: advanced and debug.
+    Expects these env vars (for advanced JWT mode):
+      - COINBASE_ISS
+      - COINBASE_PEM_CONTENT  (PEM text; can contain literal \n, we normalize)
+      - COINBASE_ADVANCED_BASE (optional; default https://api.cdp.coinbase.com)
     """
+
     def __init__(self, advanced=True, debug=False, base=None):
         self.debug = bool(debug)
-        self.advanced_requested = bool(advanced)
-        # allow override of base via env or constructor
-        self.base = base or (os.getenv("COINBASE_ADVANCED_BASE") if advanced else os.getenv("COINBASE_BASE"))
-        # standard creds
-        self.std_key = os.getenv("COINBASE_API_KEY")
-        self.std_secret = os.getenv("COINBASE_API_SECRET")
-        self.std_pass = os.getenv("COINBASE_API_PASSPHRASE", "")
-        # advanced creds
-        self.iss = os.getenv("COINBASE_ISS")
-        # allow either raw pem with newlines or escaped \n sequences
-        pem_raw = os.getenv("COINBASE_PEM_CONTENT", "")
-        self.pem_content = pem_raw.replace("\\n", "\n") if pem_raw else ""
-        # backward-compatible base default
-        if not self.base:
-            # choose reasonable default for advanced path
-            self.base = "https://api.cdp.coinbase.com" if self.advanced_requested else "https://api.coinbase.com"
+        self.advanced = bool(advanced)
+        # allow explicit base override (for testing) else use env or default
+        self.base = base or os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
+        # key identifier and pem content
+        self.iss = os.getenv("COINBASE_ISS", "").strip()
+        # Allow PEM stored with literal '\n' sequences; normalize to real newlines
+        self.pem_content = os.getenv("COINBASE_PEM_CONTENT", "")
+        # if someone pasted the PEM with escaped newlines, fix that
+        if "\\n" in self.pem_content:
+            self.pem_content = self.pem_content.replace("\\n", "\n")
+        self.pem_content = self.pem_content.strip()
 
-        # internal
+        # token placeholder
         self.token = None
 
-        logger.info(f"CoinbaseClient init. advanced_requested={self.advanced_requested} base={self.base} debug={self.debug}")
+        # validate required env for advanced mode
+        if self.advanced:
+            if not self.iss or not self.pem_content:
+                raise ValueError("Missing COINBASE env vars: COINBASE_ISS and/or COINBASE_PEM_CONTENT")
 
-        # pick auth mode
-        if self.advanced_requested and self.iss and self.pem_content:
-            # try advanced (JWT)
-            try:
-                self._generate_jwt()
-                self.auth_mode = "advanced"
-                logger.info("Auth mode: advanced (JWT/service key).")
-            except Exception as e:
-                logger.warning(f"Advanced JWT generation failed: {e}")
-                self.auth_mode = None
-        elif self.std_key and self.std_secret:
-            self.auth_mode = "standard"
-            logger.info("Auth mode: standard (HMAC).")
-        else:
-            self.auth_mode = None
-            raise ValueError("No valid Coinbase API found. Check your keys (COINBASE_ISS+COINBASE_PEM_CONTENT or COINBASE_API_KEY+COINBASE_API_SECRET).")
+            # try generate JWT immediately (fail fast if key invalid)
+            self._generate_jwt()
+
+        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base} debug={self.debug}")
 
     def _generate_jwt(self):
-        payload = {"iss": self.iss, "iat": int(time.time()), "exp": int(time.time()) + 300}
+        """Generate short-lived JWT for Coinbase Advanced API"""
+        payload = {
+            "iss": self.iss,
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 300  # short expiry
+        }
         try:
             # jwt.encode returns str in PyJWT
             self.token = jwt.encode(payload, self.pem_content, algorithm="ES256")
+            logger.info("JWT generated successfully.")
         except Exception as e:
-            # give a clearer error when PEM invalid
-            raise ValueError(f"Unable to generate JWT from PEM content: {e}")
+            logger.error(f"Failed to generate JWT: {e}")
+            # raise so caller (start_bot) will exit and show message in logs
+            raise
 
-    def _headers(self, extra=None):
-        hdr = {"Accept": "application/json"}
-        if self.auth_mode == "advanced":
-            hdr["Authorization"] = f"Bearer {self.token}"
-            hdr["Content-Type"] = "application/json"
-        elif self.auth_mode == "standard":
-            # standard HMAC path normally requires signing per endpoint.
-            # For simple account listing endpoint we can still try using API key header
-            hdr["CB-ACCESS-KEY"] = self.std_key
-            if self.std_pass:
-                hdr["CB-ACCESS-PASSPHRASE"] = self.std_pass
-        if extra:
-            hdr.update(extra)
-        return hdr
+    def _request(self, method, endpoint, **kwargs):
+        """Low-level request; returns parsed json or None on error"""
+        if not endpoint.startswith("/"):
+            endpoint = "/" + endpoint
+        url = self.base.rstrip("/") + endpoint
+        headers = {"Authorization": f"Bearer {self.token}"}
 
-    def _request(self, method, path, **kwargs):
-        url = self.base.rstrip("/") + path
-        headers = self._headers(kwargs.pop("headers", None))
+        # optional debug header printed to logs
         try:
             r = requests.request(method, url, headers=headers, timeout=10, **kwargs)
             if self.debug:
-                logger.info(f"[DEBUG] {method} {url} -> {r.status_code}")
-            # If non-JSON body, attempt to show it safely in debug
+                logger.info(f"[DEBUG] {method.upper()} {url} -> {r.status_code}")
+            # handle 404 specially (we probe multiple endpoints)
+            if r.status_code == 404:
+                logger.warning(f"HTTP request failed for {url}: 404 Not Found")
+                return None
+            r.raise_for_status()
+            # attempt to parse json
             try:
-                data = r.json() if r.content else None
-            except Exception:
-                data = r.text[:400] if r.text else None
-                if self.debug:
-                    logger.info(f"[DEBUG] Non-JSON response: {data}")
-            # Let caller inspect status code by returning (status, data)
-            return r.status_code, data
+                return r.json()
+            except ValueError:
+                logger.warning(f"HTTP request returned non-JSON for {url}")
+                return None
         except requests.RequestException as e:
             logger.warning(f"HTTP request failed for {url}: {e}")
-            return None, None
+            return None
 
-    # Candidate endpoints for advanced account info (CDP docs vary by account type)
     def fetch_advanced_accounts(self):
-        candidates = ["/v3/accounts", "/v2/accounts", "/v2/brokerage/accounts", "/accounts", "/api/v3/trading/accounts", "/api/v3/portfolios"]
-        for p in candidates:
-            status, data = self._request("GET", p)
-            if status == 200 and data:
-                logger.info(f"Found working endpoint: {p}")
-                # normalize: many responses wrap in {"data": [...]}
-                if isinstance(data, dict) and "data" in data:
-                    return data["data"]
+        """
+        Probe a small set of likely Advanced endpoints and return the first that returns data.
+        Returns dict (parsed JSON) or None.
+        """
+        endpoints = [
+            "/accounts",            # primary
+            "/brokerage/accounts",  # if brokerage access exists
+        ]
+        for ep in endpoints:
+            data = self._request("GET", ep)
+            if data:
+                logger.info(f"Accounts fetched successfully from endpoint: {ep}")
                 return data
-            elif status is not None:
-                logger.warning(f"{p} -> {status}")
-        logger.error("No advanced endpoint returned 200. Check COINBASE_ADVANCED_BASE, key permissions, and paths.")
-        return []
-
-    def fetch_standard_accounts(self):
-        # Try the standard account paths for classic API
-        candidates = ["/v2/accounts", "/accounts"]
-        for p in candidates:
-            status, data = self._request("GET", p)
-            if status == 200 and data:
-                if isinstance(data, dict) and "data" in data:
-                    return data["data"]
-                return data
-            elif status is not None:
-                logger.warning(f"{p} -> {status}")
-        logger.error("No standard account endpoint returned 200. Check COINBASE_BASE, API key permissions.")
-        return []
-
-    def get_accounts(self):
-        if self.auth_mode == "advanced":
-            return self.fetch_advanced_accounts()
-        elif self.auth_mode == "standard":
-            return self.fetch_standard_accounts()
-        else:
-            raise ValueError("No auth mode configured")
+            else:
+                logger.warning(f"{ep} returned no data or failed")
+        logger.error("Failed to fetch accounts from all candidate endpoints")
+        return None
 
     def validate_key(self):
-        """Return True if any account endpoint returned data."""
-        accounts = self.get_accounts()
-        if accounts:
-            logger.info("API key validated: accounts returned.")
-            return True
-        logger.error("API key validation failed: no accounts returned.")
-        return False
+        """Simple health check wrapper"""
+        data = self.fetch_advanced_accounts()
+        if data is None:
+            logger.error("API key invalid or base URL incorrect. Check COINBASE env and key permissions.")
+            return False
+        logger.info("API key validated successfully.")
+        return True
