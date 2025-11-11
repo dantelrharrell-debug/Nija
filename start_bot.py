@@ -1,3 +1,8 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # loads .env automatically
+
 # start_bot.py
 import sys
 from loguru import logger
