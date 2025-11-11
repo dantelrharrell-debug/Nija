@@ -1,42 +1,32 @@
-# test_advanced_coinbase.py
-import os
-import time
-import jwt
-import requests
-
-# Configure
+# test_advanced_coinbase.py  (put in project root)
+import os, time, jwt, requests
 BASE = os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
-COINBASE_ISS = os.getenv("COINBASE_ISS")
+COINBASE_ISS = os.getenv("COINBASE_ISS", "")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT", "").replace("\\n", "\n")
 
-def test_advanced_keys():
-    print("Base URL:", BASE)
+def run_tests():
+    print("Base:", BASE)
     if not COINBASE_ISS or not COINBASE_PEM_CONTENT:
-        print("❌ Missing COINBASE_ISS or COINBASE_PEM_CONTENT")
+        print("Missing COINBASE_ISS or COINBASE_PEM_CONTENT")
         return
-
     ts = int(time.time())
     payload = {"iss": COINBASE_ISS, "iat": ts, "exp": ts + 300}
-
     try:
         token = jwt.encode(payload, COINBASE_PEM_CONTENT, algorithm="ES256")
+        if isinstance(token, bytes):
+            token = token.decode("utf-8")
     except Exception as e:
-        print("❌ JWT creation failed:", e)
+        print("JWT generation failed:", e)
         return
-
     headers = {"Authorization": f"Bearer {token}"}
-
-    # Try a couple of endpoints and print full request info
-    endpoints = ["/accounts", "/v2/accounts", "/v2/brokerage/accounts", "/api/v3/trading/accounts"]
+    endpoints = ["/accounts", "/v2/accounts", "/v2/brokerage/accounts", "/api/v3/trading/accounts", "/api/v3/portfolios"]
     for ep in endpoints:
         url = BASE.rstrip("/") + ep
-        print("\n→ Testing", url)
         try:
-            r = requests.get(url, headers=headers, timeout=10)
-            print("Status:", r.status_code)
-            print("Response (first 600 chars):", r.text[:600])
+            r = requests.get(url, headers=headers, timeout=8)
+            print(ep, "→", r.status_code, r.text[:400])
         except Exception as e:
-            print("Request failed:", e)
+            print(ep, "request failed:", e)
 
 if __name__ == "__main__":
-    test_advanced_keys()
+    run_tests()
