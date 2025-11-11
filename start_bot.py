@@ -1,30 +1,34 @@
 # start_bot.py
 import os
 from dotenv import load_dotenv
-
-load_dotenv()  # loads .env in the project root
-
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
-
 from nija_client import CoinbaseClient
 from loguru import logger
 
+# Load environment variables from .env
+load_dotenv()
+
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # optional, only if required
+
 def main():
     logger.info("Starting Nija loader (robust).")
-    
-    # Initialize Coinbase client (no base argument)
-    client = CoinbaseClient()
-    logger.info("✅ CoinbaseClient initialized successfully.")
 
+    # Initialize CoinbaseClient with CDP (advanced mode)
     try:
-        # Use the updated method to fetch accounts
-        accounts = client.get_accounts()
-        if accounts:
-            logger.info(f"Fetched {len(accounts)} account(s): {accounts}")
-        else:
+        client = CoinbaseClient(advanced=True)
+        logger.info("✅ CoinbaseClient initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to init CoinbaseClient: {e}")
+        return
+
+    # Fetch accounts
+    try:
+        accounts = client.fetch_advanced_accounts()
+        if not accounts:
             logger.warning("No accounts found.")
+        else:
+            logger.info(f"Accounts fetched: {accounts}")
     except Exception as e:
         logger.error(f"Failed to fetch accounts: {e}")
 
