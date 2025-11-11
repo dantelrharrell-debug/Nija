@@ -1,5 +1,4 @@
 # start_bot.py
-import os
 import sys
 from loguru import logger
 from nija_client import CoinbaseClient
@@ -7,42 +6,22 @@ from nija_client import CoinbaseClient
 def main():
     logger.info("Starting Nija loader (robust)...")
 
-    # Detect mode automatically
-    use_jwt = all([
-        os.getenv("COINBASE_ISS"),
-        os.getenv("COINBASE_PEM_CONTENT"),
-        os.getenv("COINBASE_ADVANCED_BASE")
-    ])
-
     try:
-        if use_jwt:
-            logger.info("Detected Coinbase Advanced (JWT) mode.")
-            client = CoinbaseClient(
-                iss=os.getenv("COINBASE_ISS"),
-                pem=os.getenv("COINBASE_PEM_CONTENT"),
-                base_url=os.getenv("COINBASE_ADVANCED_BASE")
-            )
-        else:
-            logger.info("Using standard HMAC Coinbase API mode.")
-            client = CoinbaseClient(
-                api_key=os.getenv("COINBASE_API_KEY"),
-                api_secret=os.getenv("COINBASE_API_SECRET"),
-                passphrase=os.getenv("COINBASE_API_PASSPHRASE"),
-                base_url=os.getenv("COINBASE_API_BASE")
-            )
+        # Instantiate client (auto-detects JWT vs HMAC from env)
+        client = CoinbaseClient()
+        logger.info("CoinbaseClient initialized successfully.")
 
         # Test connection
         logger.info("Testing Coinbase connection...")
         status, resp = client.test_connection()
-        if status != "ok" or not resp:
+        if status != "ok" or resp is None:
             logger.error("❌ Connection test failed! Check API keys and endpoint.")
             sys.exit(1)
 
         logger.info("✅ Connection test succeeded!")
-        logger.debug(f"Response: {repr(resp)[:300]}")  # truncate output
+        logger.debug(f"Response (truncated): {repr(resp)[:300]}")
 
-        # Continue with main bot logic here
-        # client.run() or loader.start(), etc.
+        # Bot ready to continue
         logger.info("Nija loader ready to trade...")
 
     except Exception as e:
