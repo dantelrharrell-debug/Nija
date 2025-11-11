@@ -1,4 +1,13 @@
 # start_bot.py
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # loads .env in the project root
+
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
+
 from nija_client import CoinbaseClient
 from loguru import logger
 
