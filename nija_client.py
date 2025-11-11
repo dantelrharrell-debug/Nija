@@ -1,24 +1,17 @@
-# nija_client.py  (repo root shim - safe)
-"""
-Shim so code can `from nija_client import CoinbaseClient`.
-Prefer implementation at app/nija_client.py.
-This shim tries to import app.nija_client first; if that fails it will load the file
-directly from disk (without importing the current module name), avoiding circular imports.
-"""
+# nija_client.py  (root shim)
+from pathlib import Path
+import importlib.util
+import sys
 
-try:
-    # preferred: package import
-    from app.nija_client import CoinbaseClient  # type: ignore
-except Exception:
-    import importlib.util
-    from pathlib import Path
-    APP_FILE = Path(__file__).resolve().parent / "app" / "nija_client.py"
-    if APP_FILE.exists():
-        spec = importlib.util.spec_from_file_location("app_nija_client", str(APP_FILE))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)  # type: ignore
-        CoinbaseClient = getattr(module, "CoinbaseClient")
-    else:
-        # re-raise the original import error so the process fails visibly
-        raise
+ROOT = Path(__file__).resolve().parent
+IMPL = ROOT / "app" / "nija_client.py"
+
+if IMPL.exists():
+    spec = importlib.util.spec_from_file_location("app_nija_client", str(IMPL))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore
+    CoinbaseClient = getattr(module, "CoinbaseClient")
+else:
+    raise ImportError(f"Cannot find implementation at {IMPL}. Ensure app/nija_client.py exists and is committed.")
+
 __all__ = ["CoinbaseClient"]
