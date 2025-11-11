@@ -1,2 +1,2 @@
 # app/__init__.py
-# marks 'app' as a package
+# Marks 'app' as a package so `from app.nija_client import ...` works.
