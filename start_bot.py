@@ -1,23 +1,25 @@
+# start_bot.py
 import sys
 from loguru import logger
 from nija_client import CoinbaseClient
-import os
 
 def main():
     logger.info("Starting Nija loader (robust)...")
 
     try:
-        # Load from environment variables
-        iss = os.getenv("COINBASE_ISS")
-        pem_content = os.getenv("COINBASE_PEM")
-
+        # Initialize CoinbaseClient using correct JWT parameters
         client = CoinbaseClient(
-            advanced_base="https://api.cdp.coinbase.com",
-            iss=iss,
-            pem_content=pem_content
+            base="https://api.cdp.coinbase.com",  # Advanced API base
+            jwt_iss="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
+            jwt_pem="""-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIB7MOrFbx1Kfc/DxXZZ3Gz4Y2hVY9SbcfUHPiuQmLSPxoAoGCCqGSM49
+AwEHoUQDQgAEiFR+zABGG0DB0HFgjo69cg3tY1Wt41T1gtQp3xrMnvWwio96ifmk
+Ah1eXfBIuinsVEJya4G9DZ01hzaF/edTIw==
+-----END EC PRIVATE KEY-----"""
         )
         logger.info("CoinbaseClient initialized successfully (Advanced/JWT).")
 
+        # Test connection
         accounts = client.get_accounts()
         if not accounts:
             logger.error("❌ Connection test failed! /accounts returned no data.")
