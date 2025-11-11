@@ -1,76 +1,41 @@
-import os
-import time
 import requests
-import jwt
 from loguru import logger
 
-logger.remove()
-logger.add(lambda msg: print(msg, end=""), level="INFO")
-
 class CoinbaseClient:
-    """
-    Coinbase Advanced client used by the Nija bot.
-    Compatible signature: CoinbaseClient(advanced=True, debug=True)
-    """
-
-    def __init__(self, advanced=True, debug=False, base=None):
+    def __init__(self, api_key=None, api_secret=None, advanced=True):
         self.advanced = advanced
-        self.debug = debug
-        self.base = base or os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
-        self.iss = os.getenv("COINBASE_ISS")
-        raw_pem = os.getenv("COINBASE_PEM_CONTENT", "")
-        self.pem_content = raw_pem.replace("\\n", "\n")
-        self.token = None
+        self.api_key = api_key
+        self.api_secret = api_secret
 
-        if not self.iss or not self.pem_content:
-            raise ValueError("Missing COINBASE env vars (COINBASE_ISS, COINBASE_PEM_CONTENT)")
+        # Try recommended base URLs
+        candidate_bases = [
+            "https://api.coinbase.com",       # Live Advanced Trade
+            "https://api-public.sandbox.pro.coinbase.com",  # Sandbox
+            "https://api.cdp.coinbase.com"    # Business API (legacy)
+        ]
 
-        self._generate_jwt()
-        logger.info(f"CoinbaseClient initialized. advanced={self.advanced} base={self.base}")
+        self.base = None
+        for url in candidate_bases:
+            if self._test_base(url):
+                self.base = url
+                logger.info(f"✅ Using Coinbase API base: {self.base}")
+                break
 
-    def _generate_jwt(self):
-        payload = {
-            "iss": self.iss,
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 300
-        }
+        if not self.base:
+            raise RuntimeError("❌ Could not find a working Coinbase API base URL.")
+
+    def _test_base(self, url):
+        """Test if base URL responds to /accounts"""
         try:
-            self.token = jwt.encode(payload, self.pem_content, algorithm="ES256")
-            if isinstance(self.token, bytes):
-                self.token = self.token.decode("utf-8")
+            resp = requests.get(f"{url}/accounts", timeout=5)
+            if resp.status_code == 200:
+                return True
         except Exception as e:
-            logger.exception(f"Failed to generate JWT: {e}")
-            raise
+            logger.debug(f"Base test failed for {url}: {e}")
+        return False
 
-    def _request(self, method: str, endpoint: str, **kwargs):
-        url = self.base.rstrip("/") + endpoint
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json"
-        }
-        try:
-            r = requests.request(method.upper(), url, headers=headers, timeout=10, **kwargs)
-            if self.debug:
-                logger.debug(f"[DEBUG] {method.upper()} {url} -> {r.status_code}")
-            if r.status_code == 401:
-                logger.warning("401 from Coinbase; regenerating JWT and retrying once.")
-                self._generate_jwt()
-                headers["Authorization"] = f"Bearer {self.token}"
-                r = requests.request(method.upper(), url, headers=headers, timeout=10, **kwargs)
-            if r.status_code == 404:
-                logger.warning(f"HTTP request failed for {url}: 404 Not Found")
-                return None, None
-            r.raise_for_status()
-            try:
-                return r.status_code, r.json()
-            except ValueError:
-                logger.warning(f"HTTP request returned invalid JSON for {url}")
-                return r.status_code, None
-        except requests.RequestException as e:
-            logger.warning(f"HTTP request failed for {url}: {e}")
-            return None, None
-
-    def fetch_advanced_accounts(self):
+    def fetch_accounts(self):
+        """Fetch accounts dynamically based on available endpoints"""
         endpoints = [
             "/accounts",
             "/brokerage/accounts",
@@ -78,21 +43,13 @@ class CoinbaseClient:
             "/api/v3/portfolios"
         ]
         for ep in endpoints:
-            status, data = self._request("GET", ep)
-            if status and data:
-                logger.info(f"✅ Found working endpoint: {ep}")
-                if isinstance(data, dict) and "data" in data:
-                    return data["data"]
-                return data
-            else:
-                logger.warning(f"{ep} returned no data or failed")
-        logger.error("Failed to fetch accounts from all candidate endpoints")
+            try:
+                resp = requests.get(f"{self.base}{ep}", timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    logger.info(f"✅ Accounts fetched from {ep}")
+                    return data
+            except Exception as e:
+                logger.warning(f"Failed {ep}: {e}")
+        logger.error("❌ Failed to fetch accounts from all candidate endpoints")
         return []
-
-    def validate_key(self):
-        status, data = self._request("GET", "/accounts")
-        if status is None:
-            logger.error("API key invalid or base URL incorrect. Check permissions and COINBASE_ADVANCED_BASE.")
-            return False
-        logger.info("API key validated successfully.")
-        return True
