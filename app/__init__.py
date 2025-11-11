@@ -1,3 +1,4 @@
-# app/__init__.py
-# package marker for app/
-__all__ = []
+from app.start_bot_module import main  # if you use app folder
+
+if __name__ == "__main__":
+    main()
