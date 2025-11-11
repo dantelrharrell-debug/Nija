@@ -1,29 +1,43 @@
-# test_hmac_coinbase.py  (put in project root)
-import os, time, hmac, hashlib, requests
-BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
-API_KEY = os.getenv("COINBASE_API_KEY", "")
-API_SECRET = os.getenv("COINBASE_API_SECRET", "")
+# test_coinbase_hmac.py
+import os
+import requests
+import hmac
+import hashlib
+import time
 
-def run_hmac():
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")
+BASE_URL = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+
+def test_hmac_accounts():
     if not API_KEY or not API_SECRET:
-        print("Missing HMAC keys")
+        print("❌ Missing COINBASE_API_KEY or COINBASE_API_SECRET")
         return
-    ts = str(int(time.time()))
+
+    timestamp = str(int(time.time()))
     method = "GET"
-    path = "/v2/accounts"
-    message = ts + method + path + ""
-    sig = hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+    request_path = "/v2/accounts"   # standard Coinbase accounts path
+    body = ""
+
+    message = timestamp + method + request_path + body
+    signature = hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+
     headers = {
         "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": sig,
-        "CB-ACCESS-TIMESTAMP": ts,
+        "CB-ACCESS-SIGN": signature,
+        "CB-ACCESS-TIMESTAMP": timestamp,
         "CB-VERSION": "2025-11-11",
     }
-    url = BASE.rstrip("/") + path
-    print("URL:", url)
-    r = requests.get(url, headers=headers, timeout=8)
-    print("Status:", r.status_code)
-    print("Body:", r.text[:800])
+    if API_PASSPHRASE:
+        headers["CB-ACCESS-PASSPHRASE"] = API_PASSPHRASE
+
+    try:
+        r = requests.get(BASE_URL + request_path, headers=headers, timeout=10)
+        print("Status Code:", r.status_code)
+        print("Response:", r.text)
+    except Exception as e:
+        print("Exception:", e)
 
 if __name__ == "__main__":
-    run_hmac()
+    test_hmac_accounts()
