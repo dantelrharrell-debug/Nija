@@ -5,12 +5,12 @@ from loguru import logger
 def main():
     logger.info("Starting Nija loader (robust).")
     
-    # Initialize Coinbase client
-    client = CoinbaseClient(base="https://api.coinbase.com/v2")
+    # Initialize Coinbase client (no base argument)
+    client = CoinbaseClient()
     logger.info("✅ CoinbaseClient initialized successfully.")
 
     try:
-        # Fetch accounts using the updated method
+        # Use the updated method to fetch accounts
         accounts = client.get_accounts()
         if accounts:
             logger.info(f"Fetched {len(accounts)} account(s): {accounts}")
