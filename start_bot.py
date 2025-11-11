@@ -2,41 +2,51 @@
 import os
 import sys
 from loguru import logger
-from nija_client import CoinbaseClient, CoinbaseClientError
+from nija_client import CoinbaseClient
 
 def main():
-    # Determine mode: Advanced (JWT) if COINBASE_ISS and COINBASE_PEM_CONTENT are set
-    use_advanced = bool(os.getenv("COINBASE_ISS") and os.getenv("COINBASE_PEM_CONTENT"))
-    mode = "advanced" if use_advanced else "hmac"
-    
-    logger.info("Starting Nija loader (robust).")
-    logger.info("Detected Coinbase mode: {}", mode)
+    logger.info("Starting Nija loader (robust)...")
+
+    # Detect mode automatically
+    use_jwt = all([
+        os.getenv("COINBASE_ISS"),
+        os.getenv("COINBASE_PEM_CONTENT"),
+        os.getenv("COINBASE_ADVANCED_BASE")
+    ])
 
     try:
-        client_kwargs = {}
-        if mode == "advanced":
-            client_kwargs["mode"] = "advanced"
-            client_kwargs["base_url"] = os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
+        if use_jwt:
+            logger.info("Detected Coinbase Advanced (JWT) mode.")
+            client = CoinbaseClient(
+                iss=os.getenv("COINBASE_ISS"),
+                pem=os.getenv("COINBASE_PEM_CONTENT"),
+                base_url=os.getenv("COINBASE_ADVANCED_BASE")
+            )
         else:
-            # HMAC mode uses default API_BASE or https://api.coinbase.com
-            client_kwargs["base_url"] = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
-
-        # Initialize client
-        client = CoinbaseClient(**client_kwargs)
-        logger.info("CoinbaseClient initialized. Base URL: {}", client.base)
+            logger.info("Using standard HMAC Coinbase API mode.")
+            client = CoinbaseClient(
+                api_key=os.getenv("COINBASE_API_KEY"),
+                api_secret=os.getenv("COINBASE_API_SECRET"),
+                passphrase=os.getenv("COINBASE_API_PASSPHRASE"),
+                base_url=os.getenv("COINBASE_API_BASE")
+            )
 
         # Test connection
+        logger.info("Testing Coinbase connection...")
         status, resp = client.test_connection()
-        if status == 200:
-            logger.success("✅ Connection test succeeded.")
-        else:
-            logger.error("❌ Connection test failed. Status: {} Response: {}", status, resp)
+        if status != "ok" or not resp:
+            logger.error("❌ Connection test failed! Check API keys and endpoint.")
+            sys.exit(1)
 
-    except CoinbaseClientError as e:
-        logger.error("❌ CoinbaseClient error: {}", e)
-        sys.exit(1)
+        logger.info("✅ Connection test succeeded!")
+        logger.debug(f"Response: {repr(resp)[:300]}")  # truncate output
+
+        # Continue with main bot logic here
+        # client.run() or loader.start(), etc.
+        logger.info("Nija loader ready to trade...")
+
     except Exception as e:
-        logger.exception("❌ Unexpected error: {}", e)
+        logger.exception("❌ Failed to initialize CoinbaseClient or connect.")
         sys.exit(1)
 
 if __name__ == "__main__":
