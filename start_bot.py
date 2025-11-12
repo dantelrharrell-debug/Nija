@@ -1,9 +1,5 @@
-import sys
-import os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app"))
-
-from start_bot_main import main
+# start_bot.py (at root)
+from app.start_bot_main import main  # <-- add 'app.'
 
 if __name__ == "__main__":
     main()
