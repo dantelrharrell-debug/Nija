@@ -4,7 +4,7 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Copy everything in app folder
+# Copy the entire app folder
 COPY app/ ./app
 
 # Copy requirements
