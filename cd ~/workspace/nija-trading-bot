@@ -1,9 +1,11 @@
-/app/                  <-- root of container
+Nija/
 │
-├─ start_bot.py        <-- entry point for Railway
+├─ app/
+│   ├─ __init__.py
+│   ├─ start_bot_main.py   <-- main bot logic
+│   └─ nija_client.py     <-- Coinbase client
+│
+├─ start_bot.py            <-- Railway launcher (currently failing)
 ├─ requirements.txt
 ├─ .env
-└─ app/                <-- Python package
-    ├─ __init__.py     <-- empty file, marks as package
-    ├─ start_bot_main.py
-    └─ nija_client.py
+└─ README.md
