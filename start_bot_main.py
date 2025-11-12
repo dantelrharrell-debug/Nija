@@ -1,22 +1,17 @@
 from loguru import logger
-from nija_client import CoinbaseClient
+from app.nija_client import CoinbaseClient
+from app.app.webhook import start_webhook_server   # <-- fixed path
 
 def main():
-    logger.info("Starting Nija loader (robust)...")
+    logger.info("Starting Nija Bot...")
+    
+    # Start webhook server (non-blocking)
+    start_webhook_server()
+
+    # Initialize Coinbase client
     client = CoinbaseClient()
+    logger.info("Coinbase client initialized. Ready to trade.")
 
-    try:
-        accounts = client.get_accounts()
-        logger.info(f"Fetched accounts: {accounts}")
-
-        positions = client.get_positions()
-        logger.info(f"Fetched positions: {positions}")
-
-        orders = client.get_orders()
-        logger.info(f"Fetched orders: {orders}")
-
-    except Exception as e:
-        logger.error(f"Bot failed: {e}")
-
-if __name__ == "__main__":
-    main()
+    # Add your trading logic here
+    # Example:
+    # client.place_order(...)
