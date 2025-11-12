@@ -1,27 +1,32 @@
-from app.nija_client import CoinbaseClient
-from loguru import logger
 import os
+import sys
+from loguru import logger
+from app.nija_client import CoinbaseClient  # must exist
 
 def main():
     logger.info("Starting Nija loader (robust)...")
 
-    # Coinbase client
-    client = CoinbaseClient(
-        base_url=os.getenv("COINBASE_BASE", "https://api.coinbase.com/v2"),
-        auth_mode=os.getenv("COINBASE_AUTH_MODE", "advanced"),  # must exist in Railway
-        api_key=os.getenv("COINBASE_API_KEY"),
-        key_id=os.getenv("COINBASE_KEY_ID"),
-        jwt_iss=os.getenv("COINBASE_JWT_ISS"),
-        pem_content=os.getenv("COINBASE_JWT_PEM"),
-        org_id=os.getenv("COINBASE_ORG_ID"),
-    )
+    # Diagnostic: show env presence
+    logger.info("ENV DIAGNOSTIC: COINBASE_AUTH_MODE=%s", os.getenv("COINBASE_AUTH_MODE"))
+    logger.info("ENV DIAGNOSTIC: COINBASE_API_KEY=%s", "<present>" if os.getenv("COINBASE_API_KEY") else "<missing>")
+    logger.info("ENV DIAGNOSTIC: COINBASE_PEM_CONTENT=%s", "<present>" if os.getenv("COINBASE_PEM_CONTENT") else "<missing>")
 
-    logger.info("CoinbaseClient initialized. base=%s", client.base_url)
+    try:
+        client = CoinbaseClient()  # automatically reads env
+        logger.info("CoinbaseClient initialized.")
 
-    # Test connection
-    accounts = client.get_accounts()
-    if not accounts:
-        logger.error("❌ Connection test failed! /accounts returned no data.")
-        return
+        accounts = client.get_accounts()
+        if not accounts:
+            logger.error("❌ Connection test failed! /accounts returned no data.")
+            sys.exit(1)
 
-    logger.info("✅ Connection test succeeded! Accounts: %s", accounts)
+        logger.info("✅ Connection test succeeded!")
+        logger.debug("Accounts (truncated): %s", repr(accounts)[:400])
+        logger.info("Nija loader ready to trade...")
+
+    except Exception:
+        logger.exception("❌ Failed to initialize CoinbaseClient or connect.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
