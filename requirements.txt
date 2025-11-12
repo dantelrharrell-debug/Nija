@@ -25,3 +25,8 @@ requests>=2.31.0
 pyjwt>=2.8.0
 # optional, preferred:
 coinbase-advanced-py>=0.0.1
+requests
+PyJWT
+cryptography
+loguru
+python-dotenv
