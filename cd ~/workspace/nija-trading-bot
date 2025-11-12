@@ -1,6 +1,12 @@
 Nija/
-├─ start_bot.py          # entry point (Railway)
-├─ start_bot_main.py     # move this from app/ to root
-├─ nija_client.py        # optional, can stay in app/ or move too
-├─ requirements.txt
-└─ .env
+│
+├─ start_bot.py              # Entry point for Railway
+├─ start_bot_main.py         # Main bot logic (see content I provided)
+├─ nija_client.py            # Your CoinbaseClient class
+├─ requirements.txt          # Dependencies
+├─ .env                      # Environment variables
+└─ README.md                 # Project documentation
+
+/app/                        # Optional helper package folder
+├─ __init__.py               # Marks 'app' as a package
+└─ (any helper modules you need)
