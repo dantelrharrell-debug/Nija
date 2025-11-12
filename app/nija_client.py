@@ -1,116 +1,58 @@
-# app/nija_client.py
-import os
-import time
-import requests
-import jwt
-from loguru import logger
+# inside app/nija_client.py — replace or augment PEM normalization in __init__
 
-class CoinbaseClient:
-    def __init__(self):
-        # Base API URL
-        self.base_url = os.getenv("COINBASE_BASE", "https://api.coinbase.com/v2")
+import base64
 
-        # Auth mode: 'advanced' or something else
-        self.auth_mode = os.getenv("COINBASE_AUTH_MODE", "advanced").lower()
+# ... inside __init__ after reading raw envs:
+self.pem_content_raw = os.getenv("COINBASE_JWT_PEM")
+pem_b64 = os.getenv("COINBASE_JWT_PEM_B64")  # new optional env
 
-        # Standard key auth (not used for advanced)
-        self.api_key = os.getenv("COINBASE_API_KEY")
+self.pem_content = None
 
-        # Advanced (JWT) auth pieces - coerce to strings and strip whitespace
-        raw_key_id = os.getenv("COINBASE_KEY_ID")
-        self.key_id = str(raw_key_id).strip() if raw_key_id is not None else None
+def _clean_candidate(s: str) -> str:
+    if not s:
+        return s
+    s = s.strip()
+    # remove surrounding quotes if someone pasted them
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1].strip()
+    # convert literal \n sequences into real newlines (common UI paste)
+    if "\\n" in s and "\n" not in s:
+        s = s.replace("\\n", "\n")
+    return s
 
-        self.jwt_iss = os.getenv("COINBASE_JWT_ISS")
-        # store raw PEM exactly as provided (preserve newlines)
-        self.pem_content = os.getenv("COINBASE_JWT_PEM")
-        self.org_id = os.getenv("COINBASE_ORG_ID")
+# 1) if we have a direct PEM env, clean and use it
+if self.pem_content_raw:
+    cleaned = _clean_candidate(self.pem_content_raw)
+    # quick sanity check for PEM framing
+    if cleaned.startswith("-----BEGIN") and "PRIVATE KEY-----" in cleaned:
+        self.pem_content = cleaned
+    else:
+        # not obviously a valid PEM — keep cleaned but will try further below
+        self.pem_content = cleaned
 
-        # Basic checks & diagnostics
-        if self.auth_mode == "advanced":
-            missing = []
-            if not self.key_id:
-                missing.append("COINBASE_KEY_ID")
-            if not self.jwt_iss:
-                missing.append("COINBASE_JWT_ISS")
-            if not self.pem_content:
-                missing.append("COINBASE_JWT_PEM")
-            if not self.org_id:
-                missing.append("COINBASE_ORG_ID")
-
-            if missing:
-                logger.warning(
-                    "Advanced auth enabled but missing env vars: %s. "
-                    "Key ID must be a simple string (e.g. 'd3c4f66b-...').",
-                    missing
-                )
+# 2) fallback: if not PEM but there is a base64 env, decode it
+if not self.pem_content and pem_b64:
+    cleaned_b64 = _clean_candidate(pem_b64)
+    try:
+        decoded = base64.b64decode(cleaned_b64)
+        # decoded is bytes; convert to str
+        decoded_str = decoded.decode("utf-8", errors="ignore")
+        if decoded_str.startswith("-----BEGIN") and "PRIVATE KEY-----" in decoded_str:
+            self.pem_content = decoded_str
+            logger.debug("Loaded PEM from COINBASE_JWT_PEM_B64 (decoded).")
         else:
-            if not self.api_key:
-                logger.warning("Standard API auth selected but COINBASE_API_KEY is missing.")
+            logger.warning("COINBASE_JWT_PEM_B64 decoded but does not contain PEM framing.")
+    except Exception as e:
+        logger.exception("Failed to decode COINBASE_JWT_PEM_B64: %s", e)
 
-        logger.info("CoinbaseClient initialized. base=%s auth_mode=%s", self.base_url, self.auth_mode)
+# 3) last-ditch: if pem_content contains literal / escaped \\n, normalize
+if self.pem_content and "\\n" in self.pem_content and "\n" not in self.pem_content:
+    self.pem_content = self.pem_content.replace("\\n", "\n")
+    logger.debug("Normalized PEM by replacing literal \\n with newlines.")
 
-    def _get_jwt(self):
-        """Generate JWT for Advanced Auth — safe guards included."""
-        # confirm required pieces
-        if not (self.key_id and self.pem_content and self.jwt_iss and self.org_id):
-            logger.error("Cannot build JWT: missing key_id/pem/jwt_iss/org_id")
-            return None
-
-        try:
-            iat = int(time.time())
-            payload = {
-                "iss": self.jwt_iss,
-                "iat": iat,
-                "exp": iat + 60,  # short-lived
-                "sub": self.org_id,
-            }
-            # Build headers only if key_id is a valid non-empty string
-            headers = {}
-            if isinstance(self.key_id, str) and self.key_id:
-                headers["kid"] = self.key_id
-            else:
-                logger.error("Invalid COINBASE_KEY_ID: must be a non-empty string.")
-                return None
-
-            token = jwt.encode(payload, self.pem_content, algorithm="ES256", headers=headers)
-            # PyJWT returns str in v2+, but ensure string
-            if isinstance(token, bytes):
-                token = token.decode("utf-8")
-            return token
-        except Exception as e:
-            logger.exception("Failed to generate JWT: %s", e)
-            return None
-
-    def _headers(self):
-        if self.auth_mode == "advanced":
-            token = self._get_jwt()
-            if not token:
-                logger.error("Advanced auth enabled but JWT generation failed.")
-                return {}
-            return {"Authorization": f"Bearer {token}"}
-        elif self.api_key:
-            return {"Authorization": f"Bearer {self.api_key}"}
-        else:
-            logger.error("No authentication method available: set COINBASE_API_KEY or advanced vars.")
-            return {}
-
-    def _request(self, method, path, **kwargs):
-        url = f"{self.base_url}{path}"
-        headers = kwargs.pop("headers", {})
-        headers.update(self._headers())
-        try:
-            r = requests.request(method, url, headers=headers, **kwargs)
-            r.raise_for_status()
-            return r.json()
-        except requests.exceptions.HTTPError as e:
-            logger.warning("HTTP request failed for %s: %s", url, e)
-            return None
-        except Exception as e:
-            logger.exception("Request error for %s: %s", url, e)
-            return None
-
-    def get_accounts(self):
-        data = self._request("GET", "/accounts")
-        if data:
-            return data.get("data", [])
-        return None
+# 4) final sanity: ensure PEM contains BEGIN/END
+if self.pem_content:
+    if not (self.pem_content.startswith("-----BEGIN") and "END" in self.pem_content):
+        logger.warning("PEM present but does not look well-formed (missing BEGIN/END).")
+else:
+    logger.debug("No PEM content available from COINBASE_JWT_PEM or COINBASE_JWT_PEM_B64.")
