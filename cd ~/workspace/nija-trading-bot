@@ -1,9 +1,8 @@
-nija-bot/
+/project-root
 │
 ├─ Dockerfile
-├─ requirements.txt
 ├─ start_bot.py
 ├─ start_bot_main.py
 ├─ nija_client.py
 ├─ nija_balance_helper.py
-└─ .env (optional, for local dev)
+└─ requirements.txt
