@@ -1,9 +1,11 @@
-/nija-bot
+/ (project root)
 │
-├── .env                  # Your environment variables (Coinbase JWT info, etc.)
-├── requirements.txt      # Python dependencies: loguru, python-dotenv, requests, etc.
-├── start_bot.py          # Root-level entry point for Railway
-├── nija_client.py        # Your CoinbaseClient wrapper / helper
-└── app                   # Optional folder for organizing extra code
-    ├── __init__.py       # Makes `app` a Python package
-    └── start_bot_module.py  # The main bot logic (optional
+├── start_bot.py        ✅ ← place the code here
+├── Procfile            ✅ (Railway runs this entry)
+├── requirements.txt
+├── nija_client.py
+├── app/                (your internal logic folder)
+│   ├── __init__.py
+│   ├── start_bot.py    (the internal loader file)
+│   └── ...
+└── ...
