@@ -1,4 +1,3 @@
-# nija_client.py
 import os
 import time
 import jwt
@@ -7,10 +6,8 @@ from loguru import logger
 
 class CoinbaseClient:
     def __init__(self):
-        # Advanced Trade API base
         self.base_url = "https://api.exchange.coinbase.com"
 
-        # JWT Auth
         self.pkey = os.getenv("COINBASE_JWT_PEM")
         self.kid = os.getenv("COINBASE_JWT_KID")
         self.issuer = os.getenv("COINBASE_JWT_ISSUER")
@@ -20,18 +17,11 @@ class CoinbaseClient:
 
         logger.info("Advanced JWT auth enabled (PEM validated).")
 
-        # Session
         self.session = requests.Session()
-        self.session.headers.update({
-            "Content-Type": "application/json",
-        })
+        self.session.headers.update({"Content-Type": "application/json"})
 
     def _get_jwt(self):
-        payload = {
-            "iss": self.issuer,
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 300,
-        }
+        payload = {"iss": self.issuer, "iat": int(time.time()), "exp": int(time.time()) + 300}
         token = jwt.encode(payload, self.pkey, algorithm="ES256", headers={"kid": self.kid})
         return token
 
