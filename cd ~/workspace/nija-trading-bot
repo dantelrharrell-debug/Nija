@@ -1,8 +1,8 @@
-/project-root
-│
-├─ Dockerfile
-└─ app/
-   ├─ start_bot.py
-   ├─ start_bot_main.py
-   ├─ nija_client.py
-   └─ nija_balance_helper.py
+project-root/
+├─ app/
+│  ├─ start_bot.py
+│  ├─ start_bot_main.py
+│  ├─ nija_client.py
+│  └─ nija_balance_helper.py
+├─ requirements.txt
+└─ Dockerfile
