@@ -1,56 +1,88 @@
-# start_bot_main.py
+# nija_client.py
 
 import os
 import time
+import requests
+import jwt
 from loguru import logger
-from nija_client import CoinbaseClient
+from cryptography.hazmat.primitives import serialization
 
-def main():
-    logger.info("Starting Nija loader (robust)...")
+class CoinbaseClient:
+    def __init__(self):
+        self.org_id = os.getenv("COINBASE_ORG_ID")
+        if not self.org_id:
+            raise ValueError("COINBASE_ORG_ID not set")
 
-    try:
-        client = CoinbaseClient()
-    except Exception as e:
-        logger.error(f"Failed to initialize CoinbaseClient: {e}")
-        return
+        # Advanced Trade API base URL
+        self.base = f"https://api.coinbase.com/api/v3/brokerage/organizations/{self.org_id}"
+        self._load_and_validate_pem()
+        logger.info(f"CoinbaseClient initialized with org_id={self.org_id}")
 
-    try:
-        # --- Get accounts ---
-        accounts = client.get_accounts()
-        logger.info(f"Accounts fetched: {accounts}")
+    def _load_and_validate_pem(self):
+        pem_content = os.getenv("COINBASE_JWT_PEM")
+        if not pem_content:
+            raise ValueError("COINBASE_JWT_PEM not found")
 
-        # Grab first account ID for demo trades
-        if not accounts or len(accounts) == 0:
-            logger.error("No accounts found, cannot continue")
-            return
+        try:
+            self._private_key = serialization.load_pem_private_key(
+                pem_content.encode("utf-8"),
+                password=None
+            )
+            logger.debug("PEM validation succeeded")
+        except Exception as e:
+            logger.error(f"Failed to load PEM: {e}")
+            raise
 
-        account_id = accounts[0]["id"]
-        logger.info(f"Using account_id={account_id}")
+        self.kid = os.getenv("COINBASE_KEY_ID")
+        self.issuer = os.getenv("COINBASE_ISSUER")
+        if not self.kid or not self.issuer:
+            raise ValueError("COINBASE_KEY_ID or COINBASE_ISSUER not set")
 
-        # --- Get positions ---
-        positions = client.get_positions()
-        logger.info(f"Positions fetched: {positions}")
+    def _jwt_headers(self):
+        now = int(time.time())
+        payload = {
+            "iat": now,
+            "exp": now + 300,
+            "iss": self.issuer,
+        }
+        token = jwt.encode(payload, self._private_key, algorithm="ES256", headers={"kid": self.kid})
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-        # --- Demo: Place a market order ---
-        # Example: Buy 0.001 BTC-USD (update size/product_id as needed)
-        side = "buy"
-        product_id = "BTC-USD"
-        size = "0.001"
+    def _request(self, method, path, data=None, params=None):
+        url = f"{self.base}{path}"
+        headers = self._jwt_headers()
+        try:
+            if method.upper() == "GET":
+                r = requests.get(url, headers=headers, params=params)
+            elif method.upper() == "POST":
+                r = requests.post(url, headers=headers, json=data)
+            else:
+                raise ValueError("Unsupported HTTP method")
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.HTTPError as e:
+            logger.warning(f"HTTP request failed for {url}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Request exception for {url}: {e}")
+            raise
 
-        logger.info(f"Placing order: {side} {size} {product_id}")
-        order = client.place_order(account_id, side, product_id, size)
-        logger.info(f"Order response: {order}")
+    # --- Advanced Trade API methods ---
+    def get_accounts(self):
+        return self._request("GET", "/accounts")
 
-        # --- Fetch the order status ---
-        order_id = order.get("id")
-        if order_id:
-            status = client.get_order(order_id)
-            logger.info(f"Order status: {status}")
-        else:
-            logger.warning("No order ID returned, cannot fetch status")
+    def get_positions(self):
+        return self._request("GET", "/positions")
 
-    except Exception as e:
-        logger.error(f"Error during bot run: {e}")
+    def place_order(self, account_id, side, product_id, size, order_type="market"):
+        data = {
+            "account_id": account_id,
+            "side": side,        # "buy" or "sell"
+            "product_id": product_id,
+            "size": size,
+            "type": order_type
+        }
+        return self._request("POST", "/orders", data=data)
 
-if __name__ == "__main__":
-    main()
+    def get_order(self, order_id):
+        return self._request("GET", f"/orders/{order_id}")
