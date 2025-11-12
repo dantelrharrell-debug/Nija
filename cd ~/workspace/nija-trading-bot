@@ -1,7 +1,7 @@
 project-root/
 ├─ app/
-│  ├─ start_bot.py
-│  ├─ start_bot_main.py
+│  ├─ start_bot.py        <-- entry point
+│  ├─ start_bot_main.py   <-- contains main()
 │  ├─ nija_client.py
 │  └─ nija_balance_helper.py
 ├─ requirements.txt
