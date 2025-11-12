@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy the app folder into the container
+# Copy everything from the app folder
 COPY app/ ./app
 
 # Copy requirements
