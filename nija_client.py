@@ -1,100 +1,85 @@
-import time
-import jwt
+# nija_client.py
+import os
 import requests
+import json
 from loguru import logger
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+import jwt
+import time
 
 class CoinbaseClient:
-    def __init__(self, 
-                 base="https://api.coinbase.com", 
-                 auth_mode="jwt", 
-                 jwt_pem=None, 
-                 jwt_kid=None, 
-                 jwt_issuer=None, 
-                 org_id=None):
-        self.base = base
-        self.auth_mode = auth_mode
-        self.jwt_pem = jwt_pem
-        self.jwt_kid = jwt_kid
-        self.jwt_issuer = jwt_issuer
-        self.org_id = org_id
+    def __init__(self):
+        # Load environment variables
+        self.auth_mode = os.getenv("COINBASE_AUTH_MODE", "jwt")
+        self.base = os.getenv("COINBASE_ADVANCED_BASE")
+        self.kid = os.getenv("COINBASE_JWT_KID")
+        self.issuer = os.getenv("COINBASE_JWT_ISSUER")
+        self.pem = os.getenv("COINBASE_JWT_PEM")
+        self.org_id = os.getenv("COINBASE_ORG_ID")
 
-        if self.auth_mode == "jwt":
+        # Validate PEM
+        if self.pem:
             self._load_and_validate_pem()
-            logger.info(f"Advanced JWT auth enabled (PEM validated). kid={self.jwt_kid} issuer={self.jwt_issuer}")
-
-        logger.info(f"CoinbaseClient initialized. base={self.base}")
+            logger.info(f"Advanced JWT auth enabled (PEM validated). kid={self.kid} issuer={self.issuer}")
+        else:
+            logger.error("COINBASE_JWT_PEM missing, cannot use JWT auth")
+            raise ValueError("COINBASE_JWT_PEM missing")
 
     def _load_and_validate_pem(self):
-        if not self.jwt_pem:
-            raise ValueError("COINBASE_JWT_PEM is required for JWT auth")
-        self._private_key = serialization.load_pem_private_key(
-            self.jwt_pem.encode(),
-            password=None,
-            backend=default_backend()
-        )
-        logger.debug(f"PEM validation via cryptography succeeded.")
+        try:
+            self.private_key = serialization.load_pem_private_key(
+                self.pem.encode(),
+                password=None,
+                backend=default_backend()
+            )
+            logger.debug(f"PEM validation via cryptography succeeded.")
+        except Exception as e:
+            logger.error(f"PEM validation failed: {e}")
+            raise e
 
-    def _jwt_token(self):
-        """Generate a JWT token for advanced API"""
-        now = int(time.time())
+    def _generate_jwt(self):
+        iat = int(time.time())
+        exp = iat + 60  # short-lived token
         payload = {
-            "iat": now,
-            "exp": now + 300,  # 5 minutes expiry
-            "iss": self.jwt_issuer,
+            "iat": iat,
+            "exp": exp,
+            "iss": self.issuer
         }
-        token = jwt.encode(payload, self._private_key, algorithm="ES256", headers={"kid": self.jwt_kid})
+        token = jwt.encode(payload, self.private_key, algorithm="ES256", headers={"kid": self.kid})
         return token
 
-    def _request(self, method, endpoint, **kwargs):
-        """
-        Internal request handler. Automatically prepends /v2 for JWT (advanced) mode.
-        """
+    def _request(self, method, endpoint, data=None):
+        url = f"{self.base}{endpoint}"  # base already includes /v2/organizations/<ORG_ID>
+        headers = {}
         if self.auth_mode == "jwt":
-            # Prepend /v2 if not already present
-            if not endpoint.startswith("/v2"):
-                endpoint = f"/v2{endpoint}"
-            url = f"{self.base}{endpoint}"
-        else:
-            url = f"{self.base}{endpoint}"
-
-        headers = kwargs.pop("headers", {})
-        if self.auth_mode == "jwt":
-            headers.update({"Authorization": f"Bearer {self._jwt_token()}"})
-
-        r = requests.request(method, url, headers=headers, **kwargs)
+            headers["Authorization"] = f"Bearer {self._generate_jwt()}"
+            headers["Content-Type"] = "application/json"
         try:
+            if method.upper() == "GET":
+                r = requests.get(url, headers=headers)
+            elif method.upper() == "POST":
+                r = requests.post(url, headers=headers, json=data)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
             r.raise_for_status()
+            return r.json()
         except requests.exceptions.HTTPError as e:
             logger.warning(f"HTTP request failed for {url}: {e}")
-            raise
-        return r.json()
+            raise e
+        except Exception as e:
+            logger.error(f"Request error for {url}: {e}")
+            raise e
 
-    # === Public API Methods ===
-
+    # ===========================
+    # Public API methods
+    # ===========================
     def get_accounts(self):
-        """Fetch account list from Coinbase"""
         return self._request("GET", "/accounts")
 
-    # You can add more methods here, e.g., get_prices(), place_order(), etc.
-    # Make sure endpoints for JWT mode start with /v2
+    def get_account(self, account_id):
+        return self._request("GET", f"/accounts/{account_id}")
 
-# === Example usage ===
-if __name__ == "__main__":
-    import os
-
-    client = CoinbaseClient(
-        base=os.getenv("COINBASE_ADVANCED_BASE", "https://api.coinbase.com"),
-        auth_mode=os.getenv("COINBASE_AUTH_MODE", "jwt"),
-        jwt_pem=os.getenv("COINBASE_JWT_PEM"),
-        jwt_kid=os.getenv("COINBASE_JWT_KID"),
-        jwt_issuer=os.getenv("COINBASE_JWT_ISSUER"),
-        org_id=os.getenv("COINBASE_ORG_ID")
-    )
-
-    try:
-        accounts = client.get_accounts()
-        logger.info(f"Accounts fetched: {accounts}")
-    except Exception as e:
-        logger.error(f"Failed to fetch accounts: {e}")
+    def create_transaction(self, account_id, tx_data):
+        return self._request("POST", f"/accounts/{account_id}/transactions", data=tx_data)
