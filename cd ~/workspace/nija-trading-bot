@@ -1,8 +1,7 @@
-/project-root
-│ Dockerfile
-│ requirements.txt
-└───app
-    │ start_bot.py
-    │ start_bot_main.py
-    │ nija_client.py
-    │ nija_balance_helper.py
+/app
+ ├─ .env                 <-- your environment variables go here
+ ├─ start_bot.py
+ ├─ app/
+ │    ├─ nija_client.py
+ │    └─ start_bot_main.py
+ └─ coinbase.pem         <-- optional if you want to use a file instead of inline
