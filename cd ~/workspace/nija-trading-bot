@@ -1,11 +1,11 @@
 Nija/
 │
 ├─ app/
-│   ├─ __init__.py
-│   ├─ start_bot_main.py   <-- main bot logic
-│   └─ nija_client.py     <-- Coinbase client
+│   ├─ __init__.py       # must exist, can be empty
+│   ├─ start_bot_main.py
+│   └─ nija_client.py
 │
-├─ start_bot.py            <-- Railway launcher (currently failing)
+├─ start_bot.py          # Railway entry point
 ├─ requirements.txt
 ├─ .env
 └─ README.md
