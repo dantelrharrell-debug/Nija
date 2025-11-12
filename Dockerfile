@@ -1,11 +1,13 @@
 # Base image
 FROM python:3.11-slim
 
-# Set workdir
+# Set working directory
 WORKDIR /app
 
-# Copy everything from app folder
+# Copy everything in app folder
 COPY app/ ./app
+
+# Copy requirements
 COPY requirements.txt .
 
 # Install dependencies
