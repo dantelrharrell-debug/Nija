@@ -1,5 +1,4 @@
-# start_bot.py (at root)
-from app.start_bot_main import main  # <-- add 'app.'
+from app.start_bot_main import main  # import from the app package
 
 if __name__ == "__main__":
     main()
