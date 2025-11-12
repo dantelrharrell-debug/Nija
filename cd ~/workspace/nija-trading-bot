@@ -1,7 +1,10 @@
-/app
-  ├─ __init__.py
-  ├─ nija_client.py
-  ├─ start_bot_main.py
-  └─ webhook.py
-start_bot.py   # in repo root
-requirements.txt
+Nija/
+├─ app/
+│  ├─ __init__.py           # required for Python package
+│  ├─ start_bot_main.py
+│  ├─ nija_client.py
+│  └─ app/                  # nested app folder
+│     └─ webhook.py         # only this file
+├─ start_bot.py
+├─ requirements.txt
+└─ README.md
