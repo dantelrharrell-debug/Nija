@@ -1,16 +1,29 @@
-# Dockerfile - build image that copies app/ into /app
+# Dockerfile
 FROM python:3.11-slim
 
-# workdir inside image
+# Create app directory
 WORKDIR /app
 
-# Copy the app package and launcher
-COPY app/ ./app/
-COPY start_bot.py ./
-COPY requirements.txt ./
+# Install system deps for cryptography build wheels (minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy requirements and install
+COPY requirements.txt /app/requirements.txt
+RUN pip install --upgrade pip
+RUN pip install -r /app/requirements.txt
 
-# Run the launcher
-CMD ["python3", "start_bot.py"]
+# Copy app
+COPY . /app
+
+# Expose webhook port
+EXPOSE 8000
+
+# Use environment variable PORT if present else default
+ENV PORT=8000
+
+# Entrypoint
+CMD ["python", "start_bot.py"]
