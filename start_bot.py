@@ -1,4 +1,4 @@
-from app.start_bot_main import main  # rename app/start_bot.py to start_bot_main.py
+from app.start_bot_main import main
 
 if __name__ == "__main__":
     main()
