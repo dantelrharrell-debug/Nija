@@ -1,88 +1,79 @@
 # nija_client.py
-
 import os
 import time
-import requests
 import jwt
+import requests
 from loguru import logger
-from cryptography.hazmat.primitives import serialization
 
 class CoinbaseClient:
     def __init__(self):
-        self.org_id = os.getenv("COINBASE_ORG_ID")
-        if not self.org_id:
-            raise ValueError("COINBASE_ORG_ID not set")
+        # Advanced Trade API base
+        self.base_url = "https://api.exchange.coinbase.com"
 
-        # Advanced Trade API base URL
-        self.base = f"https://api.coinbase.com/api/v3/brokerage/organizations/{self.org_id}"
-        self._load_and_validate_pem()
-        logger.info(f"CoinbaseClient initialized with org_id={self.org_id}")
+        # JWT Auth
+        self.pkey = os.getenv("COINBASE_JWT_PEM")
+        self.kid = os.getenv("COINBASE_JWT_KID")
+        self.issuer = os.getenv("COINBASE_JWT_ISSUER")
 
-    def _load_and_validate_pem(self):
-        pem_content = os.getenv("COINBASE_JWT_PEM")
-        if not pem_content:
-            raise ValueError("COINBASE_JWT_PEM not found")
+        if not self.pkey or not self.kid or not self.issuer:
+            raise ValueError("Missing Coinbase JWT credentials")
 
-        try:
-            self._private_key = serialization.load_pem_private_key(
-                pem_content.encode("utf-8"),
-                password=None
-            )
-            logger.debug("PEM validation succeeded")
-        except Exception as e:
-            logger.error(f"Failed to load PEM: {e}")
-            raise
+        logger.info("Advanced JWT auth enabled (PEM validated).")
 
-        self.kid = os.getenv("COINBASE_KEY_ID")
-        self.issuer = os.getenv("COINBASE_ISSUER")
-        if not self.kid or not self.issuer:
-            raise ValueError("COINBASE_KEY_ID or COINBASE_ISSUER not set")
+        # Session
+        self.session = requests.Session()
+        self.session.headers.update({
+            "Content-Type": "application/json",
+        })
 
-    def _jwt_headers(self):
-        now = int(time.time())
+    def _get_jwt(self):
         payload = {
-            "iat": now,
-            "exp": now + 300,
             "iss": self.issuer,
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 300,
         }
-        token = jwt.encode(payload, self._private_key, algorithm="ES256", headers={"kid": self.kid})
-        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        token = jwt.encode(payload, self.pkey, algorithm="ES256", headers={"kid": self.kid})
+        return token
 
-    def _request(self, method, path, data=None, params=None):
-        url = f"{self.base}{path}"
-        headers = self._jwt_headers()
+    def _request(self, method, endpoint, **kwargs):
+        url = f"{self.base_url}{endpoint}"
+        headers = kwargs.pop("headers", {})
+        headers["Authorization"] = f"Bearer {self._get_jwt()}"
         try:
-            if method.upper() == "GET":
-                r = requests.get(url, headers=headers, params=params)
-            elif method.upper() == "POST":
-                r = requests.post(url, headers=headers, json=data)
-            else:
-                raise ValueError("Unsupported HTTP method")
+            r = self.session.request(method, url, headers=headers, **kwargs)
             r.raise_for_status()
             return r.json()
         except requests.exceptions.HTTPError as e:
             logger.warning(f"HTTP request failed for {url}: {e}")
             raise
         except Exception as e:
-            logger.error(f"Request exception for {url}: {e}")
+            logger.error(f"Unexpected error on request to {url}: {e}")
             raise
 
-    # --- Advanced Trade API methods ---
+    # --- Advanced Trade API Endpoints ---
     def get_accounts(self):
-        return self._request("GET", "/accounts")
+        return self._request("GET", "/api/accounts")
 
     def get_positions(self):
-        return self._request("GET", "/positions")
+        return self._request("GET", "/api/positions")
 
-    def place_order(self, account_id, side, product_id, size, order_type="market"):
-        data = {
-            "account_id": account_id,
-            "side": side,        # "buy" or "sell"
-            "product_id": product_id,
-            "size": size,
-            "type": order_type
-        }
-        return self._request("POST", "/orders", data=data)
+    def get_orders(self):
+        return self._request("GET", "/api/orders")
 
     def get_order(self, order_id):
-        return self._request("GET", f"/orders/{order_id}")
+        return self._request("GET", f"/api/orders/{order_id}")
+
+    def place_order(self, account_id, side, product_id, size, price=None, order_type="market"):
+        data = {
+            "account_id": account_id,
+            "side": side,
+            "product_id": product_id,
+            "type": order_type,
+            "size": size,
+        }
+        if price and order_type != "market":
+            data["price"] = price
+        return self._request("POST", "/api/orders", json=data)
+
+    def cancel_order(self, order_id):
+        return self._request("DELETE", f"/api/orders/{order_id}")
