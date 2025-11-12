@@ -1,3 +1,22 @@
+import os
+from loguru import logger
+from app.nija_client import CoinbaseClient
+
+def main():
+    logger.info("Starting Nija Bot...")
+
+    try:
+        client = CoinbaseClient()
+        logger.info("Coinbase client initialized successfully.")
+        # Start webhook server or bot logic here
+        logger.info("Webhook server started successfully.")
+        logger.info("Nija Bot is running...")
+    except RuntimeError as e:
+        logger.error(f"Cannot initialize Coinbase client: {e}")
+
+if __name__ == "__main__":
+    main()
+
 # ==============================
 # app/start_bot_main.py
 # ==============================
