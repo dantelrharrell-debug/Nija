@@ -1,7 +1,7 @@
 Nija/
 │
 ├─ app/
-│   ├─ __init__.py       # must exist, can be empty
+│   ├─ __init__.py       # must exist
 │   ├─ start_bot_main.py
 │   └─ nija_client.py
 │
