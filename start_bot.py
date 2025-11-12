@@ -1,10 +1,4 @@
-import sys
-import os
-
-# Add the app folder to the Python module search path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app"))
-
-from start_bot_main import main  # now Python can find start_bot_main.py
+from start_bot_main import main  # now it’s in the same folder
 
 if __name__ == "__main__":
     main()
