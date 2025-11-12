@@ -1,16 +1,14 @@
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Copy everything from app folder into /app
+# Copy the app folder into the container
 COPY app/ ./app
 
-# Copy requirements file
+# Copy requirements
 COPY requirements.txt .
 
-# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run bot
+# Run the bot
 CMD ["python3", "app/start_bot.py"]
