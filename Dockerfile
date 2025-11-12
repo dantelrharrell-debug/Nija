@@ -1,14 +1,16 @@
-# Dockerfile
+# Dockerfile - build image that copies app/ into /app
 FROM python:3.11-slim
 
+# workdir inside image
 WORKDIR /app
 
-# Copy entire app directory (preserves your current layout)
+# Copy the app package and launcher
 COPY app/ ./app/
+COPY start_bot.py ./
 COPY requirements.txt ./
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run the package module (safe relative import as package)
-CMD ["python3", "-m", "app.start_bot_main"]
+# Run the launcher
+CMD ["python3", "start_bot.py"]
