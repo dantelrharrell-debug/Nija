@@ -1,7 +1,7 @@
 /app
- ├─ .env                 <-- your environment variables go here
- ├─ start_bot.py
- ├─ app/
- │    ├─ nija_client.py
- │    └─ start_bot_main.py
- └─ coinbase.pem         <-- optional if you want to use a file instead of inline
+  ├─ __init__.py
+  ├─ nija_client.py
+  ├─ start_bot_main.py
+  └─ webhook.py
+start_bot.py   # in repo root
+requirements.txt
