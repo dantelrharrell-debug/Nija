@@ -1,11 +1,9 @@
-Nija/
-│
-├─ app/
+Nija/                 <-- project root
+├─ start_bot.py       <-- entry point, Railway runs this
+├─ app/               <-- package with main code
 │   ├─ __init__.py
-│   ├─ start_bot_main.py      # renamed from start_bot.py
+│   ├─ start_bot_main.py
 │   └─ nija_client.py
-│
-├─ start_bot.py              # entry point for Railway
 ├─ requirements.txt
 ├─ .env
 └─ README.md
