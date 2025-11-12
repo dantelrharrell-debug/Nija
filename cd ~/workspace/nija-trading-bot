@@ -1,11 +1,6 @@
 Nija/
-│
-├─ app/
-│   ├─ __init__.py       # must exist
-│   ├─ start_bot_main.py
-│   └─ nija_client.py
-│
-├─ start_bot.py          # Railway entry point
+├─ start_bot.py          # entry point (Railway)
+├─ start_bot_main.py     # move this from app/ to root
+├─ nija_client.py        # optional, can stay in app/ or move too
 ├─ requirements.txt
-├─ .env
-└─ README.md
+└─ .env
