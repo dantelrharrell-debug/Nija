@@ -1,7 +1,8 @@
-app/
-  start_bot.py
-  start_bot_main.py
-  nija_client.py
-  nija_balance_helper.py
-requirements.txt
-Dockerfile
+/project-root
+│ Dockerfile
+│ requirements.txt
+└───app
+    │ start_bot.py
+    │ start_bot_main.py
+    │ nija_client.py
+    │ nija_balance_helper.py
