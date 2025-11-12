@@ -1,8 +1,12 @@
-# app/start_bot_main.py
-
 from loguru import logger
 from app.nija_client import CoinbaseClient
-from app.webhook import start_webhook_server
+
+# Import webhook correctly from nested app
+try:
+    from app.app.webhook import start_webhook_server
+except ImportError as e:
+    logger.error("Critical error: Could not import webhook module: {}", e)
+    raise SystemExit("Bot cannot start without webhook")
 
 FUND_THRESHOLD = 1.0  # Minimum balance required to be considered "funded"
 
