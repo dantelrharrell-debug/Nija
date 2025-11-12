@@ -1,5 +1,5 @@
-# start_bot.py in root folder
-from app.start_bot_main import main  # <-- uses app package
+#!/usr/bin/env python3
+from app.start_bot_main import main
 
 if __name__ == "__main__":
     main()
