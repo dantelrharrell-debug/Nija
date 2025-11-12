@@ -6,7 +6,6 @@ from loguru import logger
 
 class CoinbaseClient:
     def __init__(self):
-        # Base API URL
         self.base_url = os.getenv("COINBASE_BASE", "https://api.coinbase.com/v2")
         self.auth_mode = os.getenv("COINBASE_AUTH_MODE", "advanced").lower()
         self.api_key = os.getenv("COINBASE_API_KEY")
@@ -15,23 +14,22 @@ class CoinbaseClient:
         self.pem_content = os.getenv("COINBASE_JWT_PEM")
         self.org_id = os.getenv("COINBASE_ORG_ID")
 
-        if self.auth_mode != "advanced":
-            logger.warning("Using standard API key auth; advanced auth recommended for live trading.")
-        else:
+        if self.auth_mode == "advanced":
             missing = [v for v in ["COINBASE_KEY_ID", "COINBASE_JWT_ISS", "COINBASE_JWT_PEM", "COINBASE_ORG_ID"]
                        if not os.getenv(v)]
             if missing:
                 logger.warning("Advanced auth enabled but missing env vars: %s", missing)
+        else:
+            logger.warning("Using standard API key auth; advanced auth recommended for live trading.")
 
         logger.info("CoinbaseClient initialized. base=%s auth_mode=%s", self.base_url, self.auth_mode)
 
     def _get_jwt(self):
-        """Generate JWT for Advanced Auth"""
         iat = int(time.time())
         payload = {
             "iss": self.jwt_iss,
             "iat": iat,
-            "exp": iat + 60,  # token valid for 60 seconds
+            "exp": iat + 60,
             "sub": self.org_id,
         }
         token = jwt.encode(payload, self.pem_content, algorithm="ES256", headers={"kid": self.key_id})
@@ -51,7 +49,6 @@ class CoinbaseClient:
         url = f"{self.base_url}{path}"
         headers = kwargs.pop("headers", {})
         headers.update(self._headers())
-
         try:
             r = requests.request(method, url, headers=headers, **kwargs)
             r.raise_for_status()
@@ -64,7 +61,6 @@ class CoinbaseClient:
             return None
 
     def get_accounts(self):
-        """Return list of Coinbase accounts"""
         data = self._request("GET", "/accounts")
         if data:
             return data.get("data", [])
