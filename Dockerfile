@@ -2,14 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy the app folder into the container
-COPY app/ ./app
+# Copy all your app files into the container
+COPY app/ ./app   # assuming start_bot.py is inside app/
 
-# Copy requirements
+# Copy requirements and install
 COPY requirements.txt .
-
-# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run the bot
+# Run bot
 CMD ["python3", "app/start_bot.py"]
