@@ -1,7 +1,5 @@
-# start_bot.py - launcher at repo root
-# Keeps Railway happy when it tries to run /app/start_bot.py
-
-from app.start_bot_main import main  # import from the app package
+# start_bot.py  <-- must be at repo root so Docker COPY can find it
+from app.start_bot_main import main
 
 if __name__ == "__main__":
     main()
