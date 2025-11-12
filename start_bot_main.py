@@ -1,33 +1,20 @@
-# start_bot_main.py
-import os
-import time
-from loguru import logger
 from nija_client import CoinbaseClient
+from loguru import logger
 
 def main():
-    logger.info("Starting NIJA trading bot...")
-
-    # Initialize Coinbase client
+    logger.info("Starting Nija loader (robust)...")
     client = CoinbaseClient()
 
-    # Get accounts
-    accounts = client.get_accounts()
-    if not accounts:
-        logger.error("No accounts found or failed to fetch accounts.")
+    try:
+        accounts = client.get_accounts()
+        logger.info("Accounts loaded successfully: %s", accounts)
+    except Exception as e:
+        logger.error("Failed to fetch accounts: %s", e)
         return
 
-    logger.info("Accounts fetched: %s", [a.get("name") for a in accounts])
-
-    # Example: main loop (replace with your trading logic)
-    try:
-        while True:
-            # Here you would poll signals, check balances, and place trades
-            logger.info("Bot running... waiting 10 seconds before next check")
-            time.sleep(10)
-    except KeyboardInterrupt:
-        logger.info("Bot stopped manually.")
-    except Exception as e:
-        logger.exception("Bot crashed: %s", e)
+    # Example trading logic placeholder
+    # You can replace this with your actual signal-based trade logic
+    logger.info("Bot initialized. Ready for trading signals.")
 
 if __name__ == "__main__":
     main()
