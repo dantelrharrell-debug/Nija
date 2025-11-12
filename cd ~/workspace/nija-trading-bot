@@ -1,12 +1,9 @@
-Nija/
+nija-bot/
 │
-├─ start_bot.py              # Entry point for Railway
-├─ start_bot_main.py         # Main bot logic (see content I provided)
-├─ nija_client.py            # Your CoinbaseClient class
-├─ requirements.txt          # Dependencies
-├─ .env                      # Environment variables
-└─ README.md                 # Project documentation
-
-/app/                        # Optional helper package folder
-├─ __init__.py               # Marks 'app' as a package
-└─ (any helper modules you need)
+├─ Dockerfile
+├─ requirements.txt
+├─ start_bot.py
+├─ start_bot_main.py
+├─ nija_client.py
+├─ nija_balance_helper.py
+└─ .env (optional, for local dev)
