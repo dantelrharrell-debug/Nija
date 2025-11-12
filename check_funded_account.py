@@ -1,34 +1,35 @@
-#!/usr/bin/env python3
-from nija_client import CoinbaseClient
+# check_funded_account.py
+import sys
+from loguru import logger
+
+# Import your Coinbase client from nija_client
+try:
+    from app.nija_client import CoinbaseClient
+except ImportError:
+    logger.error("Cannot import CoinbaseClient. Check your path.")
+    sys.exit(1)
 
 def main():
-    client = CoinbaseClient()
+    logger.info("Initializing Coinbase client for account check...")
+    client = CoinbaseClient()  # uses your current .env keys
 
+    logger.info("Fetching accounts...")
     try:
-        accounts = client.get_all_accounts()
+        accounts = client.get_accounts()  # replace with your actual method
     except Exception as e:
-        print(f"❌ Failed to fetch accounts: {e}")
-        return
+        logger.error(f"Failed to fetch accounts: {e}")
+        sys.exit(1)
 
-    funded_accounts = [
-        acc for acc in accounts
-        if float(acc.get('balance', {}).get('amount', 0)) > 0
-    ]
+    funded_accounts = []
+    for acct in accounts:
+        logger.info(f"Account: {acct.id}, Currency: {acct.currency}, Balance: {acct.balance}")
+        if float(acct.balance) > 0:
+            funded_accounts.append(acct)
 
-    if not funded_accounts:
-        print("⚠️ No funded accounts found. Fund your Coinbase account.")
-        return
-
-    print("✅ Funded accounts visible to this API key:")
-    for acc in funded_accounts:
-        currency = acc['currency']
-        balance = acc['balance']['amount']
-        account_type = acc.get('type', 'unknown')
-        print(f"- {currency}: {balance} ({account_type})")
-
-    # Pick the first funded account as default for Nija
-    main_account = funded_accounts[0]
-    print(f"\n🎯 Nija will trade from: {main_account['currency']} with balance {main_account['balance']['amount']}")
+    if funded_accounts:
+        logger.info("Funded account(s) detected!")
+    else:
+        logger.warning("No funded accounts detected.")
 
 if __name__ == "__main__":
     main()
