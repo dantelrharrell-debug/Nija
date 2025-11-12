@@ -9,3 +9,4 @@ Nija/
 ├─ start_bot.py
 ├─ requirements.txt
 └─ README.md
+└─ .env   <--- MUST be here
