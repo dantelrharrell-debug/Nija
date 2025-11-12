@@ -1,7 +1,11 @@
-/app                    # Project root (Railway root)
+Nija/
 │
-├─ start_bot.py         # Root entrypoint, Railway runs this
-├─ bot.py               # Main bot logic
-├─ nija_client.py       # Coinbase client wrapper
+├─ app/
+│   ├─ __init__.py
+│   ├─ start_bot_main.py      # renamed from start_bot.py
+│   └─ nija_client.py
+│
+├─ start_bot.py              # entry point for Railway
 ├─ requirements.txt
-├─ .env                 # Only for local dev
+├─ .env
+└─ README.md
