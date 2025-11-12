@@ -1,11 +1,7 @@
-/ (project root)
+/app                    # Project root (Railway root)
 │
-├── start_bot.py        ✅ ← place the code here
-├── Procfile            ✅ (Railway runs this entry)
-├── requirements.txt
-├── nija_client.py
-├── app/                (your internal logic folder)
-│   ├── __init__.py
-│   ├── start_bot.py    (the internal loader file)
-│   └── ...
-└── ...
+├─ start_bot.py         # Root entrypoint, Railway runs this
+├─ bot.py               # Main bot logic
+├─ nija_client.py       # Coinbase client wrapper
+├─ requirements.txt
+├─ .env                 # Only for local dev
