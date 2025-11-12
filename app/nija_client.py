@@ -154,3 +154,4 @@ class CoinbaseClient:
 
     def cancel_order(self, order_id):
         return self._request("DELETE", f"/orders/{order_id}")
+
