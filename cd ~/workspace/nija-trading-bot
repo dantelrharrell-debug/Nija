@@ -1,6 +1,9 @@
-Nija/                 <-- root
-├─ start_bot.py       <-- entry point
-├─ app/               <-- package
-│   ├─ __init__.py
-│   ├─ start_bot_main.py
-│   └─ nija_client.py
+/app/                  <-- root of container
+│
+├─ start_bot.py        <-- entry point for Railway
+├─ requirements.txt
+├─ .env
+└─ app/                <-- Python package
+    ├─ __init__.py     <-- empty file, marks as package
+    ├─ start_bot_main.py
+    └─ nija_client.py
