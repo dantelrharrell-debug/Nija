@@ -1,10 +1,11 @@
 Nija/
 ├─ app/
-│  ├─ __init__.py           # required for Python package
-│  ├─ start_bot_main.py
-│  ├─ nija_client.py
-│  └─ app/                  # nested app folder
-│     └─ webhook.py         # only this file
-├─ start_bot.py
+│  ├─ __init__.py             # empty
+│  ├─ start_bot_main.py       # main bot logic
+│  ├─ nija_client.py          # Coinbase client wrapper
+│  └─ app/                    # inner folder
+│     ├─ __init__.py          # empty
+│     └─ webhook.py           # webhook server
+├─ start_bot.py               # entry point
 ├─ requirements.txt
 └─ README.md
