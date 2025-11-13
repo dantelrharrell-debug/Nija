@@ -1,93 +1,48 @@
-import os
-from loguru import logger
-from app.nija_client import CoinbaseClient
-
-def main():
-    logger.info("Starting Nija Bot...")
-
-    try:
-        client = CoinbaseClient()
-        logger.info("Coinbase client initialized successfully.")
-        # Start webhook server or bot logic here
-        logger.info("Webhook server started successfully.")
-        logger.info("Nija Bot is running...")
-    except RuntimeError as e:
-        logger.error(f"Cannot initialize Coinbase client: {e}")
-
-if __name__ == "__main__":
-    main()
-
-# ==============================
 # app/start_bot_main.py
-# ==============================
 import os
 from loguru import logger
+from nija_client import CoinbaseClient
 
-# Load .env file
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
+# --- Load env variables ---
+from dotenv import load_dotenv
+
+env_file = ".env"
+if os.path.exists(env_file):
+    load_dotenv(env_file)
     logger.info(".env loaded successfully")
-except Exception as e:
-    logger.warning("Failed to load .env: {}", e)
+else:
+    logger.warning(".env file not found, using system env vars")
 
-# Import Coinbase client
-from app.nija_client import CoinbaseClient
+# --- Verify required env vars ---
+required_vars = ["COINBASE_API_KEY_ID", "COINBASE_PEM", "COINBASE_ORG_ID"]
+missing = [v for v in required_vars if not os.getenv(v)]
+if missing:
+    logger.error("Missing required env vars: %s", ", ".join(missing))
+    raise RuntimeError("Cannot start bot without Coinbase credentials")
 
-# Import webhook safely from nested app folder
+# --- Initialize Coinbase client ---
 try:
-    from app.app.webhook import start_webhook_server
-except ImportError as e:
-    logger.error("Critical error: Could not import webhook module: {}", e)
-    raise SystemExit("Bot cannot start without webhook module")
+    client = CoinbaseClient()
+    logger.info("Coinbase client initialized successfully.")
+except Exception as e:
+    logger.error("Cannot initialize Coinbase client: %s", e)
+    raise
 
-# Minimum account balance to trade
-FUND_THRESHOLD = 1.0  # Adjust as needed
+# --- Test accounts ---
+try:
+    accounts_resp = client.get_accounts()
+    accounts = accounts_resp.get("data") if isinstance(accounts_resp, dict) else None
+    if not accounts:
+        logger.error("❌ Connection test failed! /accounts returned no data.")
+        raise RuntimeError("Cannot continue without account info")
 
-def main():
-    logger.info("Starting Nija Bot...")
+    logger.info("✅ Connected to Coinbase! Retrieved %d accounts.", len(accounts))
+    for a in accounts[:5]:
+        bal = a.get("balance", {})
+        logger.info(" - %s: %s %s", a.get("name") or a.get("currency"), bal.get("amount"), bal.get("currency"))
 
-    # Initialize Coinbase client
-    try:
-        client = CoinbaseClient()
-        logger.info("Coinbase client initialized successfully.")
-    except Exception as e:
-        logger.error("Cannot initialize Coinbase client: {}", e)
-        raise SystemExit("Missing Coinbase credentials or org ID!")
+except Exception as e:
+    logger.error("Failed to fetch accounts: %s", e)
+    raise RuntimeError("Cannot continue without account info")
 
-    # Check for funded accounts
-    try:
-        accounts = client.get_accounts()
-    except Exception as e:
-        logger.error("Failed to fetch accounts: {}", e)
-        raise SystemExit("Cannot continue without account info")
-
-    funded_accounts = []
-    for acct in accounts:
-        name = acct.get("name", "Unnamed")
-        balance_info = acct.get("balance", {})
-        amount = float(balance_info.get("amount", 0))
-        currency = balance_info.get("currency", "USD")
-        if amount >= FUND_THRESHOLD:
-            funded_accounts.append((name, amount, currency))
-
-    if not funded_accounts:
-        logger.warning("No funded accounts detected. Bot will not trade!")
-        return
-    else:
-        logger.info("Funded accounts detected:")
-        for name, amount, currency in funded_accounts:
-            logger.info(f" - {name}: {amount} {currency}")
-
-    # Start webhook server
-    try:
-        start_webhook_server(client)
-        logger.info("Webhook server started successfully.")
-    except Exception as e:
-        logger.error("Failed to start webhook server: {}", e)
-        return
-
-    logger.info("Nija Bot is running... Ready to trade!")
-
-if __name__ == "__main__":
-    main()
+logger.info("Bot initialized and ready to accept TradingView alerts or start trading.")
