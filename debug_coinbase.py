@@ -8,7 +8,9 @@ ORG_ID = os.environ["COINBASE_ORG_ID"]
 
 private_key = serialization.load_pem_private_key(PEM.encode(), password=None, backend=default_backend())
 
-path = f"/api/v3/brokerage/organizations/{ORG_ID}/accounts"
+# Correct path for JWT
+path = f"/brokerage/organizations/{ORG_ID}/accounts"
+
 iat = int(time.time())
 payload = {
     "iat": iat,
@@ -20,6 +22,6 @@ payload = {
 headers = {"alg":"ES256","kid":API_KEY_ID}
 token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
 
-url = f"https://api.coinbase.com{path}"
+url = f"https://api.coinbase.com/api/v3{path}"  # actual HTTP request URL
 resp = requests.get(url, headers={"Authorization": f"Bearer {token}", "CB-VERSION": "2025-11-12"})
 print(resp.status_code, resp.text)
