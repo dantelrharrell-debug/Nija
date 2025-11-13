@@ -1,5 +1,7 @@
 import os
 import requests
+import jwt
+import base64
 from loguru import logger
 from app.nija_client import CoinbaseClient
 
@@ -8,21 +10,29 @@ os.environ["DEBUG_JWT"] = "1"
 
 def debug_coinbase_jwt():
     try:
+        # Initialize Coinbase client
         client = CoinbaseClient()
 
-        # Use the full API path as required by Coinbase JWT auth
+        # Build request path and URL
         path = f"/api/v3/brokerage/organizations/{client.org_id}/accounts"
         url = client.base_url + path
 
-        # Generate JWT using full path
+        # Generate JWT
         jwt_token = client._generate_jwt("GET", path)
+
+        # Decode JWT for inspection
+        header_b64, payload_b64, signature_b64 = jwt_token.split('.')
+        header_json = base64.urlsafe_b64decode(header_b64 + "==").decode()
+        payload_json = base64.urlsafe_b64decode(payload_b64 + "==").decode()
 
         # Print debug info
         print("JWT:", jwt_token)
+        print("JWT Header:", header_json)
+        print("JWT Payload:", payload_json)
         print("Request path:", path)
         print("Request URL:", url)
 
-        # Make the GET request with JWT
+        # Make the request
         resp = requests.get(url, headers={
             "Authorization": f"Bearer {jwt_token}",
             "CB-VERSION": "2025-11-12"
