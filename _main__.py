@@ -1,5 +1,5 @@
-# main.py — minimal guaranteed visible process for Railway
-import time, sys, os
+# main.py — guaranteed visible process for Railway
+import time, os, sys
 from datetime import datetime
 
 def log(msg):
@@ -7,18 +7,18 @@ def log(msg):
     line = f"{ts} | {msg}"
     print(line, flush=True)
 
-log("MAIN: starting debug main.py")
+log("MAIN: debug starter beginning")
 log(f"MAIN: cwd={os.getcwd()} pid={os.getpid()}")
 
-# quick filesystem check
-for p in [".", "/app", "/workspace", "/tmp"]:
+# list some directories so we can see what's inside the container
+for p in [".", "/app", "/tmp", "/workspace", "/home"]:
     try:
         items = os.listdir(p)
-        log(f"LS {p}: {items[:8]}")
+        log(f"LS {p}: {items[:10]}")
     except Exception as e:
         log(f"LS {p} failed: {e}")
 
-# write a small file to /tmp so you can verify container executed code
+# write indicator file to /tmp
 try:
     with open("/tmp/nija_started.ok", "a") as f:
         f.write(datetime.utcnow().isoformat() + " started\n")
@@ -26,7 +26,8 @@ try:
 except Exception as e:
     log(f"WRITE FAILED: {e}")
 
-# heartbeat — prints every 5s so logs appear quickly
+# heartbeat so Railway logs show activity quickly
+log("Entering HEARTBEAT loop (every 5s). You should see output immediately.")
 while True:
-    log("HEARTBEAT - container is alive")
+    log("HEARTBEAT - container alive")
     time.sleep(5)
