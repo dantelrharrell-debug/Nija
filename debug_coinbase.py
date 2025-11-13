@@ -10,11 +10,11 @@ def debug_coinbase_jwt():
     try:
         client = CoinbaseClient()
 
-        # Build request path and URL
-        path = f"/organizations/{client.org_id}/accounts"
+        # Use the full API path as required by Coinbase JWT auth
+        path = f"/api/v3/brokerage/organizations/{client.org_id}/accounts"
         url = client.base_url + path
 
-        # Generate JWT
+        # Generate JWT using full path
         jwt_token = client._generate_jwt("GET", path)
 
         # Print debug info
@@ -22,7 +22,7 @@ def debug_coinbase_jwt():
         print("Request path:", path)
         print("Request URL:", url)
 
-        # Make the request
+        # Make the GET request with JWT
         resp = requests.get(url, headers={
             "Authorization": f"Bearer {jwt_token}",
             "CB-VERSION": "2025-11-12"
