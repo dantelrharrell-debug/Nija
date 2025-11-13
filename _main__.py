@@ -1,14 +1,31 @@
+# main.py
 import time
-from loguru import logger
 import sys
+from loguru import logger
 
-# Ensure logs go to stdout
+# Import your bot startup
+from app.start_bot_main import main as start_bot_main
+
+# Configure loguru to log to stdout (so Render can see it)
 logger.remove()
-logger.add(sys.stdout, level="INFO")
+logger.add(sys.stdout, level="INFO", enqueue=True, backtrace=True, diagnose=True)
 
-logger.info("Container started and main.py is running...")
+if __name__ == "__main__":
+    logger.info("🔹 Nija Bot container starting...")
 
-# Keep container alive
-while True:
-    logger.info("Heartbeat: container is alive")
-    time.sleep(60)
+    try:
+        # Start your bot
+        logger.info("🔹 Initializing Nija Bot...")
+        start_bot_main()
+        logger.info("✅ Nija Bot started successfully.")
+    except Exception as e:
+        logger.exception(f"❌ Bot failed to start: {e}")
+        # Keep container alive so you can see logs
+        while True:
+            logger.error("Bot failed to start. Container alive for debugging.")
+            time.sleep(60)
+
+    # Keep container alive with heartbeat logs
+    while True:
+        logger.info("💓 Heartbeat: container is alive")
+        time.sleep(60)
