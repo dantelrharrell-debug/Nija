@@ -36,18 +36,44 @@ class CoinbaseClient:
         token = jwt.encode(payload, self.private_key, algorithm="ES256")
         return token
 
-    # --- Accounts ---
+    # --- Accounts (debuggable) ---
     def get_accounts(self):
+        """
+        Fetch /organizations/<org>/accounts with optional debug logging controlled
+        by the DEBUG_JWT environment variable (set to "1" to enable).
+        """
         path = f"/organizations/{self.org_id}/accounts"
         url = self.base_url + path
+        token = self._generate_jwt("GET", path)
         headers = {
-            "Authorization": f"Bearer {self._generate_jwt('GET', path)}",
+            "Authorization": f"Bearer {token}",
             "CB-VERSION": "2025-11-12"
         }
+
+        # Optional debug (enable by setting Railway env DEBUG_JWT = "1")
+        if os.getenv("DEBUG_JWT") == "1":
+            # Small safe preview - DO NOT SHARE publicly
+            try:
+                preview = token[:200] + "..." if token else "<no-token>"
+            except Exception:
+                preview = "<token-preview-failed>"
+            logger.info("DEBUG_JWT: token_preview=%s", preview)
+            logger.info("DEBUG_JWT: requesting URL: %s", url)
+
         resp = requests.get(url, headers=headers)
+
+        # Log response when debug enabled
+        if os.getenv("DEBUG_JWT") == "1":
+            try:
+                # Only log a slice to avoid huge dumps; do not expose logs publicly.
+                logger.info("DEBUG_JWT: HTTP %s response_text(500)=%s", resp.status_code, resp.text[:500])
+            except Exception:
+                logger.exception("DEBUG_JWT: could not read/print response")
+
         if resp.status_code != 200:
             logger.error("HTTP %s: %s", resp.status_code, resp.text)
             resp.raise_for_status()
+
         return resp.json()
 
     # --- Historic market data ---
