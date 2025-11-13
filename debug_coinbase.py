@@ -4,91 +4,50 @@ import jwt
 import requests
 from loguru import logger
 
-class CoinbaseClientPEMFix:
-    def __init__(self):
-        self.org_id = os.environ.get("COINBASE_ORG_ID")
-        self.pem_raw = os.environ.get("COINBASE_PEM_CONTENT")
-        self.api_key = os.environ.get("COINBASE_API_KEY")  # used as JWT 'kid'
-        self.api_url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{self.org_id}/accounts"
+# ---------------------------
+# CONFIG - make sure these are EXACT
+# ---------------------------
+ORG_ID = os.environ.get("COINBASE_ORG_ID")          # Your Coinbase org ID
+PEM_CONTENT = os.environ.get("COINBASE_PEM_CONTENT")  # Your EC private key
+API_KEY_ID = os.environ.get("COINBASE_API_KEY")       # Your API key ID (kid)
 
-        logger.info("Initializing CoinbaseClientPEMFix...")
-        logger.info("Org ID: {}", self.org_id)
-        logger.info("API Key (kid): {}", self.api_key)
-        if self.pem_raw:
-            logger.info("Raw PEM length: {}", len(self.pem_raw))
-            self.pem = self._fix_pem(self.pem_raw)
-        else:
-            logger.error("PEM content missing")
-            self.pem = None
+if not ORG_ID or not PEM_CONTENT or not API_KEY_ID:
+    logger.error("Missing one of the required env variables: ORG_ID, PEM_CONTENT, API_KEY_ID")
+    exit(1)
 
-    def _fix_pem(self, pem_content):
-        """Ensure proper BEGIN/END lines and line breaks."""
-        pem_content = pem_content.strip()
-        if not pem_content.startswith("-----BEGIN EC PRIVATE KEY-----"):
-            pem_content = "-----BEGIN EC PRIVATE KEY-----\n" + pem_content
-        if not pem_content.endswith("-----END EC PRIVATE KEY-----"):
-            pem_content = pem_content + "\n-----END EC PRIVATE KEY-----"
-        # Replace any escaped \n with actual newlines
-        pem_content = pem_content.replace("\\n", "\n")
-        logger.info("Fixed PEM length: {}", len(pem_content))
-        return pem_content
+# ---------------------------
+# Generate JWT
+# ---------------------------
+now = int(time.time())
+payload = {
+    "iat": now,
+    "exp": now + 300,   # 5 minutes
+    "sub": ORG_ID
+}
 
-    def _generate_jwt(self):
-        if not self.pem or not self.api_key or not self.org_id:
-            logger.error("Missing PEM, API key, or org ID!")
-            return None
+headers = {
+    "kid": API_KEY_ID
+}
 
-        now = int(time.time())
-        payload = {
-            "iat": now,
-            "exp": now + 300,  # 5 minutes
-            "sub": self.org_id
-        }
-        headers = {"kid": self.api_key}
+try:
+    token = jwt.encode(payload, PEM_CONTENT, algorithm="ES256", headers=headers)
+    logger.info(f"Generated JWT preview: {token[:50]}...")
+except Exception as e:
+    logger.error(f"Failed to generate JWT: {e}")
+    exit(1)
 
-        try:
-            token = jwt.encode(payload, self.pem, algorithm="ES256", headers=headers)
-            logger.info("Generated JWT (first 50 chars): {}", token[:50])
-            return token
-        except Exception as e:
-            logger.exception("JWT generation failed: {}", e)
-            return None
+# ---------------------------
+# Test request to Coinbase
+# ---------------------------
+url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{ORG_ID}/accounts"
+headers_req = {
+    "Authorization": f"Bearer {token}",
+    "CB-VERSION": "2023-11-13"
+}
 
-    def get_accounts(self):
-        token = self._generate_jwt()
-        if not token:
-            logger.error("Cannot fetch accounts: JWT generation failed")
-            return None
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "CB-VERSION": "2025-11-01"
-        }
-
-        try:
-            resp = requests.get(self.api_url, headers=headers)
-            logger.info("HTTP Status Code: {}", resp.status_code)
-            logger.info("Response Body: {}", resp.text)
-            resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.HTTPError as e:
-            if resp.status_code == 401:
-                logger.error("Unauthorized (401). Possible causes:")
-                logger.error("- Invalid PEM format (fixed automatically in this version)")
-                logger.error("- Wrong API key or kid")
-                logger.error("- Org ID mismatch")
-                logger.error("- Expired or malformed JWT")
-            else:
-                logger.error("HTTPError: {}", e)
-        except Exception as e:
-            logger.exception("Unexpected error fetching accounts: {}", e)
-        return None
-
-
-if __name__ == "__main__":
-    client = CoinbaseClientPEMFix()
-    accounts = client.get_accounts()
-    if accounts:
-        logger.info("Accounts fetched successfully!")
-    else:
-        logger.error("Failed to fetch accounts.")
+try:
+    resp = requests.get(url, headers=headers_req)
+    logger.info(f"Status Code: {resp.status_code}")
+    logger.info(f"Response Body: {resp.text}")
+except Exception as e:
+    logger.error(f"Failed to make request: {e}")
