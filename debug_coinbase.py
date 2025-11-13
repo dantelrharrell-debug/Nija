@@ -1,6 +1,8 @@
 import os
 import requests
 from loguru import logger
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 from app.nija_client import CoinbaseClient
 
 # Optional: enable detailed JWT debug
@@ -8,23 +10,28 @@ os.environ["DEBUG_JWT"] = "1"
 
 def debug_coinbase_client():
     try:
+        # Fix PEM formatting from env
+        pem_content = os.environ.get("COINBASE_PEM", "").replace("\\n", "\n")
+        private_key = serialization.load_pem_private_key(
+            pem_content.encode(), password=None, backend=default_backend()
+        )
+
         # Initialize Coinbase client
         client = CoinbaseClient()
 
-        # Show JWT preview
+        # Generate JWT for accounts endpoint
         jwt_token = client._generate_jwt("GET", f"/organizations/{client.org_id}/accounts")
         print("JWT preview:", jwt_token[:200])
-        print("Request URL:", f"{client.base_url}/organizations/{client.org_id}/accounts")
+        url = f"{client.base_url}/organizations/{client.org_id}/accounts"
+        print("Request URL:", url)
 
-        # Test request to accounts endpoint
-        path = f"/organizations/{client.org_id}/accounts"
-        url = client.base_url + path
+        # Make request to Coinbase API
         headers = {
             "Authorization": f"Bearer {jwt_token}",
             "CB-VERSION": "2025-11-12"
         }
-
         resp = requests.get(url, headers=headers)
+
         print("HTTP status code:", resp.status_code)
         print("Response text:", resp.text[:500])  # truncate for safety
 
