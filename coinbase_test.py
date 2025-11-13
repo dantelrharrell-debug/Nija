@@ -1,33 +1,54 @@
 import os
 import time
-import base64
+import jwt
 import requests
-from ecdsa import SigningKey, NIST256p
-import logging
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("coinbase_test")
+# --- Load environment variables ---
+ORG_ID = os.environ.get("COINBASE_ORG_ID")
+PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT")
+API_KEY_ID = os.environ.get("COINBASE_API_KEY")  # This is the key ID (kid)
 
-# Load your Advanced API credentials from environment variables
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-PASSPHRASE = ""  # leave blank
-BASE_URL = "https://api.coinbase.com"
+if not ORG_ID or not PEM_RAW or not API_KEY_ID:
+    raise Exception("Missing COINBASE_ORG_ID, COINBASE_PEM_CONTENT, or COINBASE_API_KEY")
 
-if not API_KEY or not API_SECRET:
-    log.error("Missing Coinbase API key or secret")
-    raise SystemExit(1)
-
-# Convert single-line PEM into real PEM
-API_SECRET_PEM = API_SECRET.replace("\\n", "\n")
-
-# Load signing key
+# --- Prepare PEM key ---
 try:
-    sk = SigningKey.from_pem(API_SECRET_PEM)
-    log.info("ECDSA Private key loaded successfully")
+    pem_bytes = PEM_RAW.encode()  # ensure bytes
+    private_key = serialization.load_pem_private_key(
+        pem_bytes,
+        password=None,
+        backend=default_backend()
+    )
 except Exception as e:
-    log.exception("Failed to load private key: %s", e)
-    raise SystemExit(1)
+    raise Exception(f"Failed to load PEM key: {e}")
+
+# --- Generate JWT ---
+now = int(time.time())
+payload = {
+    "iat": now,
+    "exp": now + 300,   # 5 minutes expiration
+    "sub": ORG_ID
+}
+headers = {
+    "kid": API_KEY_ID,
+    "alg": "ES256"
+}
+
+try:
+    token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
+    print("JWT generated successfully:", token[:50], "...")
+except Exception as e:
+    raise Exception(f"Failed to generate JWT: {e}")
+
+# --- Test API call ---
+url = f"https://api.coinbase.com/brokerage/organizations/{ORG_ID}/accounts"
+headers = {"Authorization": f"Bearer {token}"}
+
+response = requests.get(url, headers=headers)
+print("Status Code:", response.status_code)
+print("Response Body:", response.text)
 
 
 def sign_request(method, path, body=""):
