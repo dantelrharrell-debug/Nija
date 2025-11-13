@@ -1,4 +1,4 @@
-# Use official Python 3.11 slim image
+# Use slim Python image
 FROM python:3.11-slim
 
 # Set working directory
@@ -11,16 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python packages
+# Copy requirements first (cached layer)
 COPY requirements.txt /app/requirements.txt
+
+# Upgrade pip and install dependencies
 RUN pip install --upgrade pip
 RUN pip install -r /app/requirements.txt
 
-# Copy the app code
+# Copy the rest of the app
 COPY . /app
 
-# Expose default Flask port (if needed)
-EXPOSE 5000
+# Expose port if needed (optional, for HTTP endpoints)
+EXPOSE 8000
 
-# Start the bot
-CMD ["python", "nija_app.py"]
+# Run the bot in the foreground
+CMD ["python", "-u", "main.py"]
