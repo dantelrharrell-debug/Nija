@@ -39,7 +39,6 @@ class CoinbaseClient:
             "exp": int(time.time()) + 300,  # 5 min expiry
             "kid": self.api_key
         }
-
         token = jwt.encode(payload, self.private_key, algorithm="ES256")
         return token
 
