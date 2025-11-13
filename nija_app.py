@@ -1,50 +1,29 @@
 # nija_app.py
+import asyncio
+import logging
 from nija_client import CoinbaseClient
-from loguru import logger
+from nija_trade_logic import main_loop
 
-# Position sizing rules
-MIN_POSITION = 0.02  # 2% of account equity
-MAX_POSITION = 0.10  # 10% of account equity
+logger = logging.getLogger("nija.bot.pro")
+logging.basicConfig(level=logging.INFO)
 
 def main():
-    # Initialize Coinbase client
+    logger.info("Starting Nija Bot (Live Mode)...")
     try:
         client = CoinbaseClient()
-    except ValueError:
-        exit("Cannot start bot without valid Coinbase credentials")
+    except Exception as e:
+        logger.error("Client init failed: %s", str(e))
+        raise
 
     # Test connection
-    try:
-        accounts = client.get_accounts()
-        if not accounts.get("data"):
-            logger.error("❌ Connection test failed! /accounts returned no data.")
-            return
-        logger.info("✅ Connected to Coinbase! Accounts retrieved.")
-    except Exception as e:
-        logger.error(f"❌ Connection test failed: {e}")
+    accounts = client.get_accounts()
+    if not accounts:
+        logger.error("No accounts returned. Check credentials and permissions.")
         return
+    logger.info("✅ Connected! %d accounts detected.", len(accounts))
 
-    # Main trading loop (placeholder for TradingView integration)
-    logger.info("Starting live trading loop...")
-    while True:
-        # Example: listen for alerts (replace with actual TradingView integration)
-        # alert = get_tradingview_alert()
-        # if alert:
-        #     size = calculate_position(alert["equity"], MIN_POSITION, MAX_POSITION)
-        #     execute_trade(client, alert, size)
-        break  # remove in production
-
-# Optional helper for position sizing
-def calculate_position(account_equity, min_pct, max_pct):
-    position = account_equity * min_pct
-    if position > account_equity * max_pct:
-        position = account_equity * max_pct
-    return position
-
-# Placeholder for executing a trade
-def execute_trade(client, alert, size):
-    logger.info(f"Executing trade: {alert}, size: {size}")
-    # Implement buy/sell logic here
+    # Start live trading loop
+    asyncio.run(main_loop())
 
 if __name__ == "__main__":
     main()
