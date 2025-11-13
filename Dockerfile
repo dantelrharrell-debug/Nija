@@ -1,10 +1,10 @@
-# Use Python 3.11 slim image
+# Base Python image
 FROM python:3.11-slim
 
-# Set working directory inside container
+# Set working directory
 WORKDIR /app
 
-# Copy all files into /app
+# Copy all project files into /app
 COPY . /app
 
 # Install system dependencies
@@ -18,5 +18,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
-# Make sure container keeps running and logs appear
+# Start main.py unbuffered
 CMD ["python", "-u", "main.py"]
