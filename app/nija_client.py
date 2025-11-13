@@ -1,54 +1,65 @@
 # app/nija_client.py
 
 import os
+import time
 import jwt
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
 import requests
 from loguru import logger
-import time
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
 class CoinbaseClient:
     def __init__(self):
+        # --- Load environment variables ---
         self.org_id = os.environ.get("COINBASE_ORG_ID")
-        self.api_key_id = os.environ.get("COINBASE_API_KEY_ID")
-        self.pem_content = os.environ.get("COINBASE_PEM", "")
-        self.base_url = "https://api.coinbase.com/api/v3/brokerage"
+        self.api_key = os.environ.get("COINBASE_API_KEY")
+        self.pem_raw = os.environ.get("COINBASE_PEM_CONTENT")
 
-        # Fix escaped newlines in PEM
-        pem_clean = self.pem_content.replace("\\n", "\n")
+        # Optional debug
+        logger.info(f"COINBASE_ORG_ID length: {len(self.org_id) if self.org_id else 'None'}")
+        logger.info(f"COINBASE_API_KEY length: {len(self.api_key) if self.api_key else 'None'}")
+        logger.info(f"COINBASE_PEM_CONTENT length: {len(self.pem_raw) if self.pem_raw else 'None'}")
+
+        if not all([self.org_id, self.api_key, self.pem_raw]):
+            raise ValueError("Missing Coinbase credentials in environment variables!")
+
+        # --- Fix PEM formatting ---
+        self.pem_fixed = self.pem_raw.replace("\\n", "\n").strip()
+
+        # Debug PEM head/tail
+        logger.info(f"PEM head: {self.pem_fixed.splitlines()[0]}")
+        logger.info(f"PEM tail: {self.pem_fixed.splitlines()[-1]}")
+
+        # --- Load private key ---
         self.private_key = serialization.load_pem_private_key(
-            pem_clean.encode(), password=None, backend=default_backend()
+            self.pem_fixed.encode(),
+            password=None,
+            backend=default_backend()
         )
 
-        logger.info("CoinbaseClient initialized with org ID %s", self.org_id)
-
-    def _generate_jwt(self, method: str, path: str):
+    def generate_jwt(self):
+        """Generates JWT for Coinbase Advanced API"""
         iat = int(time.time())
         payload = {
+            "sub": self.org_id,
             "iat": iat,
-            "exp": iat + 120,                   # expires in 2 minutes
-            "sub": self.api_key_id,             # must be key id
-            "request_path": path,
-            "method": method,
+            "exp": iat + 300  # Token valid for 5 minutes
         }
-        headers = {"alg": "ES256", "kid": self.api_key_id}
-        token = jwt.encode(payload, self.private_key, algorithm="ES256", headers=headers)
 
-        if os.environ.get("DEBUG_JWT"):
-            logger.info("DEBUG_JWT: token_preview=%s", token[:200])
+        token = jwt.encode(
+            payload,
+            self.private_key,
+            algorithm="ES256",
+            headers={"kid": self.api_key}
+        )
+
+        # Debug JWT preview (first 50 chars)
+        logger.info(f"Generated JWT preview: {str(token)[:50]}")
         return token
 
-    def get_accounts(self):
-        path = f"/organizations/{self.org_id}/accounts"
-        url = self.base_url + path
-        headers = {
-            "Authorization": f"Bearer {self._generate_jwt('GET', path)}",
-            "CB-VERSION": "2025-11-12"
-        }
-
-        resp = requests.get(url, headers=headers)
-        if resp.status_code != 200:
-            logger.error("HTTP %s: %s", resp.status_code, resp.text)
-        resp.raise_for_status()
-        return resp.json()
+    def request(self, method, url, **kwargs):
+        """Example: use generated JWT for an API request"""
+        headers = kwargs.pop("headers", {})
+        headers["Authorization"] = f"Bearer {self.generate_jwt()}"
+        headers["Content-Type"] = "application/json"
+        return requests.request(method, url, headers=headers, **kwargs)
