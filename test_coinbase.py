@@ -1,17 +1,33 @@
 # test_coinbase.py
 import os
-from app.nija_client import CoinbaseClient
+import requests
 from loguru import logger
+from app.nija_client import CoinbaseClient
 
+logger.remove()
 logger.add(lambda msg: print(msg, end=""), level="INFO")
 
-# Make sure these env vars are set in your terminal/session:
-# COINBASE_API_KEY_ID, COINBASE_PEM, COINBASE_ORG_ID
-# For Railway, you can set them in the environment variables panel.
-
 try:
+    logger.info("Initializing CoinbaseClient...")
     client = CoinbaseClient()
-    accounts = client.get_accounts()
-    logger.info("Accounts fetched successfully: {}", accounts)
+    logger.info("Client initialized with org ID: {}", client.org_id)
+
+    # --- JWT preview ---
+    jwt_token = client._generate_jwt("GET", f"/organizations/{client.org_id}/accounts")
+    logger.info("JWT preview (first 200 chars): {}", jwt_token[:200])
+
+    # --- Test API request ---
+    path = f"/organizations/{client.org_id}/accounts"
+    url = client.base_url + path
+    headers = {
+        "Authorization": f"Bearer {client._generate_jwt('GET', path)}",
+        "CB-VERSION": "2025-11-12"
+    }
+
+    logger.info("Sending GET request to Coinbase /accounts...")
+    resp = requests.get(url, headers=headers)
+    logger.info("HTTP status code: {}", resp.status_code)
+    logger.info("Response text (first 500 chars): {}", resp.text[:500])
+
 except Exception as e:
-    logger.exception("Failed to fetch accounts: {}", e)
+    logger.exception("Error during test:")
