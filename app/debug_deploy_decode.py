@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # debug_deploy_decode.py
-import os, time, base64, json
+import os, time, json
 import jwt, requests
 from loguru import logger
 logger.remove()
@@ -29,10 +29,9 @@ def generate_jwt(pem, kid, org_id):
 
 def decode_no_verify(token):
     try:
-        # Use PyJWT to decode without verifying signature to inspect contents
-        decoded = jwt.decode(token, options={"verify_signature": False})
         header = jwt.get_unverified_header(token)
-        return header, decoded
+        payload = jwt.decode(token, options={"verify_signature": False})
+        return header, payload
     except Exception as e:
         print("Decode error:", repr(e))
         return None, None
@@ -42,7 +41,7 @@ def main():
     org = os.environ.get("COINBASE_ORG_ID")
     kid = os.environ.get("COINBASE_API_KEY")
     pem_raw = os.environ.get("COINBASE_PEM_CONTENT")
-    print("Env lengths:", "ORG", len(org) if org else "<MISSING>", "KID", len(kid) if kid else "<MISSING>", "PEM", len(pem_raw) if pem_raw else "<MISSING>")
+    print("Env lengths -> ORG:", len(org) if org else "<MISSING>", "KID:", len(kid) if kid else "<MISSING>", "PEM:", len(pem_raw) if pem_raw else "<MISSING>")
 
     pem = fix_pem(pem_raw)
     token = generate_jwt(pem, kid, org)
@@ -52,30 +51,24 @@ def main():
 
     print("\nJWT preview (first 200 chars):", token[:200])
     header, payload = decode_no_verify(token)
-    print("\n--- JWT HEADER ---")
+    print("\n--- JWT HEADER (paste this) ---")
     print(json.dumps(header, indent=2))
-    print("\n--- JWT PAYLOAD ---")
+    print("\n--- JWT PAYLOAD (paste this) ---")
     print(json.dumps(payload, indent=2))
-    # Show human readable iat/exp and local time
+
+    # Also show iat/exp drift
     now = int(time.time())
     iat = payload.get("iat")
-    exp = payload.get("exp")
-    sub = payload.get("sub")
-    print("\nTime check:")
-    print("  now (unix):", now)
-    print("  iat:", iat, " (", time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(iat)) if iat else None, ")")
-    print("  exp:", exp, " (", time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(exp)) if exp else None, ")")
-    print("  sub:", sub)
-    print("  local clock drift (sec):", now - iat if iat else "N/A")
+    print("\nTime check -> now:", now, "iat:", iat, "drift (sec):", now - iat if iat else "N/A")
 
-    # Optionally attempt the accounts call (you can skip by removing this)
+    # Try accounts call (optional)
     url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{org}/accounts"
     headers = {"Authorization": f"Bearer {token}", "CB-VERSION": "2025-11-01"}
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         print("\nCoinbase call status:", resp.status_code)
-        print("Coinbase response body (first 1000 chars):")
-        print(resp.text[:1000])
+        print("Coinbase response body (first 500 chars):")
+        print(resp.text[:500])
     except Exception as e:
         print("HTTP exception:", repr(e))
 
