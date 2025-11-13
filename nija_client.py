@@ -49,7 +49,6 @@ class CoinbaseClient:
 
         try:
             token = jwt.encode(payload, self.pem, algorithm="ES256", headers=headers)
-            # Print JWT preview for immediate verification
             print("DEBUG_JWT (first 50 chars):", token[:50])
             logger.info("JWT generated successfully")
             return token
@@ -73,6 +72,7 @@ class CoinbaseClient:
             logger.info("HTTP Status Code: {}", resp.status_code)
             logger.info("Response Body: {}", resp.text)
             resp.raise_for_status()
+            logger.info("Accounts fetched successfully!")
             return resp.json()
         except requests.exceptions.HTTPError as e:
             if resp.status_code == 401:
@@ -87,11 +87,17 @@ class CoinbaseClient:
             logger.exception("Unexpected error fetching accounts: {}", e)
         return None
 
-# --- TEST SCRIPT ---
+
+# -----------------------
+# Standalone Test Script
+# -----------------------
 if __name__ == "__main__":
+    logger.info("Starting CoinbaseClient test script...")
     client = CoinbaseClient()
     accounts = client.get_accounts()
+
     if accounts:
-        logger.info("Accounts fetched successfully!")
+        logger.info("Fetched accounts JSON:")
+        logger.info(accounts)
     else:
-        logger.error("Failed to fetch accounts.")
+        logger.error("Failed to fetch accounts. Check logs above for 401 details.")
