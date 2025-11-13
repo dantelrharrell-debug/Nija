@@ -1,7 +1,7 @@
-# Use slim Python image
+# Base image
 FROM python:3.11-slim
 
-# Set working directory
+# Working directory
 WORKDIR /app
 
 # Install system dependencies
@@ -11,18 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (cached layer)
+# Copy requirements first to leverage Docker cache
 COPY requirements.txt /app/requirements.txt
 
 # Upgrade pip and install dependencies
 RUN pip install --upgrade pip
 RUN pip install -r /app/requirements.txt
 
-# Copy the rest of the app
+# Copy app code
 COPY . /app
 
-# Expose port if needed (optional, for HTTP endpoints)
+# Expose port (optional if using Flask API)
 EXPOSE 8000
 
-# Run the bot in the foreground
+# Run the bot in foreground with unbuffered logs
 CMD ["python", "-u", "main.py"]
