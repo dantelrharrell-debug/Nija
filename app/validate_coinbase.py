@@ -1,70 +1,50 @@
-# file: validate_coinbase.py
-
 import os
-import time
 import jwt
+import time
 import requests
 from loguru import logger
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
 
 logger.add(lambda msg: print(msg, end=''))
 
-def load_env():
+def validate_coinbase():
     org_id = os.environ.get("COINBASE_ORG_ID")
     api_key = os.environ.get("COINBASE_API_KEY")
-    pem_content = os.environ.get("COINBASE_PEM_CONTENT")
+    pem_raw = os.environ.get("COINBASE_PEM_CONTENT")
 
-    if not org_id or not api_key or not pem_content:
-        logger.error("Missing one or more environment variables!")
-        return None, None, None
-    return org_id, api_key, pem_content
+    if not org_id or not api_key or not pem_raw:
+        logger.error("❌ One or more Coinbase env vars are missing.")
+        return False
 
-def generate_jwt(org_id, api_key, pem_raw):
     try:
-        private_key = serialization.load_pem_private_key(
-            pem_raw.encode(),
-            password=None,
-            backend=default_backend()
-        )
-
-        iat = int(time.time())
-        exp = iat + 300  # 5 min expiration
-
+        # Format PEM properly
+        pem = pem_raw.replace("\\n", "\n").strip()
         payload = {
             "sub": org_id,
-            "iat": iat,
-            "exp": exp,
-            "kid": api_key
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 30
+        }
+        token = jwt.encode(payload, pem, algorithm="ES256")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "CB-ACCESS-KEY": api_key
         }
 
-        token = jwt.encode(
-            payload,
-            private_key,
-            algorithm="ES256"
-        )
-
-        return token
-    except Exception as e:
-        logger.error(f"Failed to generate JWT: {e}")
-        return None
-
-def test_auth(jwt_token):
-    url = "https://advanced-api.coinbase.com/v1/organizations"
-    headers = {"Authorization": f"Bearer {jwt_token}"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            logger.success("✅ Coinbase Advanced API authentication SUCCESSFUL!")
+        r = requests.get("https://api.coinbase.com/v2/accounts", headers=headers, timeout=5)
+        if r.status_code == 200:
+            logger.success("✅ Coinbase credentials validated successfully!")
+            return True
         else:
-            logger.error(f"❌ Authentication failed: {resp.status_code} {resp.text}")
+            logger.error(f"❌ Coinbase responded with {r.status_code}: {r.text}")
+            return False
+
     except Exception as e:
-        logger.error(f"Request error: {e}")
+        logger.error(f"❌ Exception during validation: {e}")
+        return False
+
 
 if __name__ == "__main__":
-    org_id, api_key, pem_content = load_env()
-    if org_id and api_key and pem_content:
-        token = generate_jwt(org_id, api_key, pem_content)
-        if token:
-            logger.info(f"Generated JWT preview (first 50 chars): {token[:50]}")
-            test_auth(token)
+    if not validate_coinbase():
+        logger.error("Aborting startup: Coinbase credentials invalid.")
+        exit(1)
+    else:
+        logger.success("Pre-flight check passed. You can start the bot now.")
