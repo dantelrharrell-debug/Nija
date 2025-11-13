@@ -1,4 +1,4 @@
-from app.start_bot_main import main
+from dotenv import load_dotenv
+import os
 
-if __name__ == "__main__":
-    main()
+load_dotenv()  # MUST run before importing CoinbaseClient
