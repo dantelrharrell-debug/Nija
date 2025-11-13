@@ -1,103 +1,136 @@
-import os
-import time
-import jwt
-import requests
+#!/usr/bin/env python3
+# debug_deploy.py
+# Run this in your deployed container to verify which code & env are active.
+
+import os, time, hashlib
+import jwt, requests
 from loguru import logger
+logger.remove()
+logger.add(lambda msg: print(msg, end=""))
 
-logger.info("Starting CoinbaseClient test script...")
+def show_file_head(path, n=200):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = f.read()
+        h = hashlib.sha256(data.encode("utf-8")).hexdigest()
+        print(f"\n--- FILE: {path} ---")
+        print(f"SHA256: {h}")
+        print("HEAD (first %d chars):" % n)
+        print(data[:n].replace("\n", "\\n"))
+        print("--- END FILE HEAD ---\n")
+    except Exception as e:
+        print(f"Could not read {path}: {e}")
 
-class CoinbaseClient:
-    def __init__(self):
-        # Load environment variables
-        self.org_id = os.environ.get("COINBASE_ORG_ID")
-        self.pem_raw = os.environ.get("COINBASE_PEM_CONTENT")
-        self.api_key = os.environ.get("COINBASE_API_KEY")  # JWT 'kid'
-        self.api_url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{self.org_id}/accounts"
+def safe_len(name, val):
+    if val is None:
+        return f"{name}=<MISSING>"
+    return f"{name}=len({len(val)})"
 
-        logger.info("Initializing CoinbaseClient...")
-        logger.info("Org ID: {}", self.org_id)
-        logger.info("API Key (kid): {}", self.api_key)
+def fix_pem(pem_raw):
+    if pem_raw is None:
+        return None
+    pem = pem_raw.strip()
+    pem = pem.replace("\\n", "\n")
+    if not pem.startswith("-----BEGIN EC PRIVATE KEY-----"):
+        pem = "-----BEGIN EC PRIVATE KEY-----\n" + pem
+    if not pem.strip().endswith("-----END EC PRIVATE KEY-----"):
+        pem = pem + "\n-----END EC PRIVATE KEY-----"
+    return pem
 
-        if self.pem_raw:
-            logger.info("Raw PEM length: {}", len(self.pem_raw))
-            self.pem = self._fix_pem(self.pem_raw)
-        else:
-            logger.error("PEM content missing!")
-            self.pem = None
-
-    def _fix_pem(self, pem_content):
-        """Auto-fix PEM formatting and line breaks."""
-        pem_content = pem_content.strip()
-        pem_content = pem_content.replace("\\n", "\n")
-        if not pem_content.startswith("-----BEGIN EC PRIVATE KEY-----"):
-            pem_content = "-----BEGIN EC PRIVATE KEY-----\n" + pem_content
-        if not pem_content.endswith("-----END EC PRIVATE KEY-----"):
-            pem_content += "\n-----END EC PRIVATE KEY-----"
-        logger.info("Fixed PEM length: {}", len(pem_content))
-        return pem_content
-
-    def _generate_jwt(self):
-        if not self.pem or not self.api_key or not self.org_id:
-            logger.error("Cannot generate JWT: missing PEM, API key, or Org ID")
-            return None
-
-        now = int(time.time())
-        payload = {
-            "iat": now,
-            "exp": now + 300,  # 5 minutes expiry
-            "sub": self.org_id
-        }
-        headers = {"kid": self.api_key}
-
-        try:
-            token = jwt.encode(payload, self.pem, algorithm="ES256", headers=headers)
-            logger.info("DEBUG_JWT (first 50 chars): {}", token[:50])
-            return token
-        except Exception as e:
-            logger.exception("JWT generation failed: {}", e)
-            return None
-
-    def get_accounts(self):
-        token = self._generate_jwt()
-        if not token:
-            logger.error("Cannot fetch accounts: JWT generation failed")
-            return None
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "CB-VERSION": "2025-11-01"
-        }
-
-        try:
-            resp = requests.get(self.api_url, headers=headers)
-            logger.info("HTTP Status Code: {}", resp.status_code)
-            logger.info("Response Body: {}", resp.text)
-            resp.raise_for_status()
-            logger.info("Accounts fetched successfully!")
-            return resp.json()
-        except requests.exceptions.HTTPError as e:
-            if resp.status_code == 401:
-                logger.error("Unauthorized (401). Possible causes:")
-                logger.error("- Invalid PEM format")
-                logger.error("- Wrong API key / kid")
-                logger.error("- Org ID mismatch")
-                logger.error("- Expired or malformed JWT")
-            else:
-                logger.error("HTTPError: {}", e)
-        except Exception as e:
-            logger.exception("Unexpected error fetching accounts: {}", e)
+def generate_jwt(pem, kid, org_id):
+    if not pem or not kid or not org_id:
+        print("Cannot generate JWT: missing pem/kid/org_id")
+        return None
+    now = int(time.time())
+    payload = {"iat": now, "exp": now + 300, "sub": org_id}
+    headers = {"kid": kid}
+    try:
+        token = jwt.encode(payload, pem, algorithm="ES256", headers=headers)
+        return token
+    except Exception as e:
+        print("JWT generation exception:", repr(e))
         return None
 
+def main():
+    print("\n=== DEBUG DEPLOY START ===\n")
 
-# -----------------------
-# Run Test
-# -----------------------
-if __name__ == "__main__":
-    client = CoinbaseClient()
-    accounts = client.get_accounts()
+    # 1) Show which file is running
+    candidate_paths = [
+        "/app/app/nija_client.py",
+        "/opt/render/project/src/app/nija_client.py",
+        "/app/nija_client.py",
+        "./app/nija_client.py"
+    ]
+    for p in candidate_paths:
+        show_file_head(p, n=300)
 
-    if accounts:
-        logger.info("Fetched accounts JSON:")
-        logger.info(accounts)
+    # 2) Print environment var presence & lengths (do NOT print secrets)
+    env_names = ["COINBASE_ORG_ID", "COINBASE_PEM_CONTENT", "COINBASE_API_KEY"]
+    print("--- Environment var lengths ---")
+    for name in env_names:
+        val = os.environ.get(name)
+        print(safe_len(name, val))
+    print("-------------------------------\n")
+
+    # 3) Show first/last lines of raw PEM (header/footer) without printing body
+    raw = os.environ.get("COINBASE_PEM_CONTENT")
+    if raw:
+        raw_preview = raw.replace("\\n", "\n")
+        lines = raw_preview.strip().splitlines()
+        head = lines[0] if lines else "<no-lines>"
+        tail = lines[-1] if len(lines) > 1 else "<no-lines>"
+        print("Raw PEM preview (first line, last line):")
+        print("  HEAD:", head)
+        print("  TAIL:", tail)
     else:
-        logger.error("Failed to fetch accounts. Check above logs for details.")
+        print("COINBASE_PEM_CONTENT is missing")
+
+    # 4) Auto-fix PEM and show header/footer + length (still not printing secret body)
+    fixed = fix_pem(raw)
+    if fixed:
+        lines = fixed.strip().splitlines()
+        print("\nFixed PEM:")
+        print("  HEAD:", lines[0])
+        print("  TAIL:", lines[-1])
+        print("  LENGTH:", len(fixed))
+    else:
+        print("\nFixed PEM: <none>\n")
+
+    # 5) Generate JWT (preview)
+    org = os.environ.get("COINBASE_ORG_ID")
+    kid = os.environ.get("COINBASE_API_KEY")
+    token = generate_jwt(fixed, kid, org)
+    if token:
+        preview = token[:50]
+        print("\nGenerated JWT preview (first 50 chars):", preview)
+    else:
+        print("\nNo JWT generated.")
+
+    # 6) If JWT generated, call Coinbase accounts endpoint and print response details
+    if token:
+        url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{org}/accounts"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "CB-VERSION": "2025-11-01",
+            "User-Agent": "nija-debug/1.0"
+        }
+        try:
+            resp = requests.get(url, headers=headers, timeout=15)
+            print("\n--- Coinbase Response ---")
+            print("Status Code:", resp.status_code)
+            print("Response Headers:")
+            for k, v in resp.headers.items():
+                print(f"  {k}: {v}")
+            print("Response Body (truncated 2000 chars):")
+            body = resp.text
+            print(body[:2000])
+            print("\n--- END Coinbase Response ---\n")
+        except Exception as e:
+            print("HTTP request exception:", repr(e))
+    else:
+        print("Skipping Coinbase API call because JWT generation failed.")
+
+    print("\n=== DEBUG DEPLOY END ===\n")
+
+if __name__ == "__main__":
+    main()
