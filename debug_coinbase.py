@@ -1,71 +1,72 @@
 import os
+import time
 import requests
+import jwt
 from loguru import logger
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
-import jwt, base64
-from app.nija_client import CoinbaseClient
 
-# Optional: enable detailed JWT debug
-os.environ["DEBUG_JWT"] = "1"
+# Load Coinbase credentials from environment variables
+API_KEY_ID = os.environ.get("COINBASE_API_KEY")
+PEM_CONTENT = os.environ.get("COINBASE_PEM", "").replace("\\n", "\n")
 
-def debug_coinbase_jwt():
-    try:
-        # Initialize client
-        client = CoinbaseClient()
+if not API_KEY_ID:
+    logger.error("COINBASE_API_KEY not set!")
+if not PEM_CONTENT:
+    logger.error("COINBASE_PEM not set or empty!")
 
-        # Load API key and PEM explicitly (for logging/debug)
-        api_key_id = os.environ.get("COINBASE_API_KEY")
-        pem_content = os.environ.get("COINBASE_PEM", "").replace("\\n", "\n")
+try:
+    private_key = serialization.load_pem_private_key(
+        PEM_CONTENT.encode(), password=None, backend=default_backend()
+    )
+    logger.info("Private key loaded successfully")
+except Exception as e:
+    logger.exception("Failed to load private key: %s", e)
+    raise
 
-        if not api_key_id:
-            logger.error("COINBASE_API_KEY not set!")
-        if not pem_content:
-            logger.error("COINBASE_PEM not set or empty!")
+def generate_jwt(method: str, request_path: str) -> str:
+    iat = int(time.time())
+    payload = {
+        "iat": iat,
+        "exp": iat + 120,           # expires in 2 minutes
+        "sub": API_KEY_ID,           # must be API key ID
+        "request_path": request_path,
+        "method": method.upper()
+    }
+    headers = {
+        "alg": "ES256",
+        "kid": API_KEY_ID
+    }
+    token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
 
-        try:
-            private_key = serialization.load_pem_private_key(
-                pem_content.encode(), password=None, backend=default_backend()
-            )
-            logger.info("Private key loaded successfully")
-        except Exception as e:
-            logger.exception("Failed to load private key: %s", e)
+    # Debug header/payload
+    import base64
+    header_b64, payload_b64, _ = token.split(".")
+    logger.info("DEBUG_JWT: token_preview=%s", token[:200])
+    logger.info("DEBUG_JWT: header=%s", base64.urlsafe_b64decode(header_b64 + "==").decode())
+    logger.info("DEBUG_JWT: payload=%s", base64.urlsafe_b64decode(payload_b64 + "==").decode())
 
-        # Build request path and URL
-        path = f"/api/v3/brokerage/organizations/{client.org_id}/accounts"
-        url = client.base_url + path
+    return token
 
-        # Generate JWT
-        jwt_token = client._generate_jwt("GET", path)
+def test_accounts():
+    org_id = os.environ.get("COINBASE_ORG_ID")  # make sure this is set
+    path = f"/api/v3/brokerage/organizations/{org_id}/accounts"
+    url = f"https://api.coinbase.com{path}"
+    token = generate_jwt("GET", path)
 
-        # Print JWT and request info
-        print("JWT:", jwt_token)
-        print("Request path:", path)
-        print("Request URL:", url)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "CB-VERSION": "2025-11-12"
+    }
 
-        # Decode JWT to inspect header and payload
-        header_b64, payload_b64, signature_b64 = jwt_token.split('.')
-        header_json = base64.urlsafe_b64decode(header_b64 + "==").decode()
-        payload_json = base64.urlsafe_b64decode(payload_b64 + "==").decode()
-        logger.info("JWT Header: %s", header_json)
-        logger.info("JWT Payload: %s", payload_json)
+    resp = requests.get(url, headers=headers)
+    logger.info("HTTP status code: %s", resp.status_code)
+    logger.info("Response text: %s", resp.text[:500])
 
-        # Make the request
-        resp = requests.get(url, headers={
-            "Authorization": f"Bearer {jwt_token}",
-            "CB-VERSION": "2025-11-12"
-        })
-
-        print("HTTP status code:", resp.status_code)
-        print("Response text:", resp.text[:500])  # truncate for safety
-
-        if resp.status_code != 200:
-            logger.error("Failed to fetch accounts. HTTP %s: %s", resp.status_code, resp.text)
-        else:
-            print("Accounts fetched successfully:", resp.json())
-
-    except Exception as e:
-        logger.exception("Error in debug_coinbase_jwt: %s", e)
+    if resp.status_code != 200:
+        logger.error("Failed to fetch accounts. HTTP %s: %s", resp.status_code, resp.text)
+    else:
+        logger.info("Accounts fetched successfully: %s", resp.json())
 
 if __name__ == "__main__":
-    debug_coinbase_jwt()
+    test_accounts()
