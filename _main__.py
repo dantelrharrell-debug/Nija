@@ -1,70 +1,32 @@
-# main.py — aggressive Railway debug (replace current file)
-import time, sys, os, traceback
+# main.py — minimal guaranteed visible process for Railway
+import time, sys, os
 from datetime import datetime
 
-def write_tmp(msg):
-    try:
-        with open("/tmp/nija_debug.log", "a") as f:
-            f.write(msg + "\n")
-    except Exception:
-        pass
-
-def log(msg, level="INFO"):
+def log(msg):
     ts = datetime.utcnow().isoformat() + "Z"
-    out = f"{ts} [{level}] {msg}"
-    print(out, flush=True)
-    write_tmp(out)
+    line = f"{ts} | {msg}"
+    print(line, flush=True)
 
-log("== DEBUG STARTUP ==")
+log("MAIN: starting debug main.py")
+log(f"MAIN: cwd={os.getcwd()} pid={os.getpid()}")
 
-# Print basic process info immediately
-log(f"PID={os.getpid()} PWD={os.getcwd()} PYTHONPATH={sys.path[0]}")
-
-# Show existence of files
-for p in ["/app", "/workspace", "/home", "/tmp"]:
+# quick filesystem check
+for p in [".", "/app", "/workspace", "/tmp"]:
     try:
-        log(f"LS {p}: " + ", ".join(os.listdir(p)[:10]))
+        items = os.listdir(p)
+        log(f"LS {p}: {items[:8]}")
     except Exception as e:
-        log(f"LS {p} failed: {e}", "ERROR")
+        log(f"LS {p} failed: {e}")
 
-# Env snapshot (masked)
-keys = ["COINBASE_API_KEY_ID", "COINBASE_PEM", "COINBASE_ORG_ID"]
-for k in keys:
-    v = os.getenv(k)
-    if v:
-        log(f"{k}=<SET length={len(v)}>")
-    else:
-        log(f"{k}=<MISSING>")
-
-# Try importing app package modules (catch full tracebacks)
+# write a small file to /tmp so you can verify container executed code
 try:
-    import importlib
-    importlib.invalidate_caches()
-    try:
-        from app.start_bot_main import start_bot_main
-        log("Imported app.start_bot_main OK")
-    except Exception as e:
-        log(f"Import start_bot_main failed: {e}", "ERROR")
-        log(traceback.format_exc(), "ERROR")
-
-    try:
-        from app.nija_client import CoinbaseClient
-        log("Imported app.nija_client CoinbaseClient OK")
-    except Exception as e:
-        log(f"Import nija_client failed: {e}", "ERROR")
-        log(traceback.format_exc(), "ERROR")
+    with open("/tmp/nija_started.ok", "a") as f:
+        f.write(datetime.utcnow().isoformat() + " started\n")
+    log("WROTE /tmp/nija_started.ok")
 except Exception as e:
-    log(f"Import checks failed: {e}", "ERROR")
-    log(traceback.format_exc(), "ERROR")
+    log(f"WRITE FAILED: {e}")
 
-# Touch a file to indicate the process reached this point
-try:
-    open("/tmp/nija_started.ok", "w").write(datetime.utcnow().isoformat() + "\n")
-    log("Wrote /tmp/nija_started.ok")
-except Exception as e:
-    log(f"Failed writing /tmp file: {e}", "ERROR")
-
-log("Entering heartbeat (every 5s). You should see these logs quickly.")
+# heartbeat — prints every 5s so logs appear quickly
 while True:
-    log("HEARTBEAT")
+    log("HEARTBEAT - container is alive")
     time.sleep(5)
