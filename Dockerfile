@@ -1,29 +1,26 @@
-# Dockerfile
+# Use lightweight Python 3.11
 FROM python:3.11-slim
 
-# Create app directory
+# Set working directory
 WORKDIR /app
 
-# Install system deps for cryptography build wheels (minimal)
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libssl-dev \
     libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# Copy and install Python dependencies
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip
 RUN pip install -r /app/requirements.txt
 
-# Copy app
+# Copy bot source code
 COPY . /app
 
-# Expose webhook port
-EXPOSE 8000
+# Expose a port (optional, for logs API)
+EXPOSE 8080
 
-# Use environment variable PORT if present else default
-ENV PORT=8000
-
-# Entrypoint
-CMD ["python", "start_bot.py"]
+# Run the bot
+CMD ["python", "nija_app.py"]
