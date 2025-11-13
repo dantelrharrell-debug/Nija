@@ -9,24 +9,24 @@ class CoinbaseClient:
         # Load environment variables
         self.org_id = os.environ.get("COINBASE_ORG_ID")
         self.pem_raw = os.environ.get("COINBASE_PEM_CONTENT")
-        self.api_key = os.environ.get("COINBASE_API_KEY")  # used as JWT 'kid'
+        self.api_key = os.environ.get("COINBASE_API_KEY")  # JWT 'kid'
         self.api_url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{self.org_id}/accounts"
 
         logger.info("Initializing CoinbaseClient...")
         logger.info("Org ID: {}", self.org_id)
         logger.info("API Key (kid): {}", self.api_key)
+
         if self.pem_raw:
             logger.info("Raw PEM length: {}", len(self.pem_raw))
             self.pem = self._fix_pem(self.pem_raw)
         else:
-            logger.error("PEM content missing")
+            logger.error("PEM content missing!")
             self.pem = None
 
     def _fix_pem(self, pem_content):
-        """Ensure proper PEM formatting with line breaks."""
+        """Auto-fix PEM formatting and line breaks."""
         pem_content = pem_content.strip()
-        # Replace escaped newlines with actual newlines
-        pem_content = pem_content.replace("\\n", "\n")
+        pem_content = pem_content.replace("\\n", "\n")  # convert escaped newlines
         if not pem_content.startswith("-----BEGIN EC PRIVATE KEY-----"):
             pem_content = "-----BEGIN EC PRIVATE KEY-----\n" + pem_content
         if not pem_content.endswith("-----END EC PRIVATE KEY-----"):
@@ -49,7 +49,9 @@ class CoinbaseClient:
 
         try:
             token = jwt.encode(payload, self.pem, algorithm="ES256", headers=headers)
-            print("DEBUG_JWT (first 50 chars):", token[:50])  # Print directly for verification
+            # Print JWT preview for immediate verification
+            print("DEBUG_JWT (first 50 chars):", token[:50])
+            logger.info("JWT generated successfully")
             return token
         except Exception as e:
             logger.exception("JWT generation failed: {}", e)
