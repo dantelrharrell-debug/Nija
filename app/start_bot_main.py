@@ -1,27 +1,40 @@
+# app/start_bot_main.py
+
 import time
-from app.start_bot_main import main as start_bot_main
-from app.nija_client import CoinbaseClient
 from loguru import logger
+from coinbase_advanced_py import CoinbaseClient  # adjust if your client import differs
 
-def run_bot():
+logger.info("start_bot_main.py loaded")
+
+def start_bot_main():
+    logger.info("Bot logic starting...")
+
     try:
-        logger.info("Starting Nija Bot...")
-        
         # Initialize Coinbase client
-        client = CoinbaseClient()  # reads from .env
-        logger.info(f"CoinbaseClient initialized with org ID {client.org_id}")
+        client = CoinbaseClient(
+            api_key="YOUR_API_KEY",
+            api_secret="YOUR_API_SECRET",
+            api_passphrase="YOUR_PASSPHRASE",
+            base_url="https://api.pro.coinbase.com"  # or advanced API base
+        )
+        logger.info("Coinbase client initialized")
 
-        # Start bot logic
-        start_bot_main(client)
-        logger.info("Nija bot started successfully.")
+        # Example: check account balance
+        balances = client.get_accounts()
+        logger.info("Accounts retrieved: {}", balances)
+
+        # Main trading loop
+        while True:
+            # Here: get signals from TradingView or your strategy
+            # signal = get_signal()  # your custom function
+            # if signal == "BUY":
+            #     client.place_order(...)
+            # elif signal == "SELL":
+            #     client.place_order(...)
+
+            logger.info("Bot heartbeat - ready to trade")
+            time.sleep(60)
 
     except Exception as e:
-        logger.error(f"Fatal error starting bot: {e}")
-
-if __name__ == "__main__":
-    run_bot()
-    logger.info("Nija bot is now running and container will stay alive.")
-
-    # Keep container alive indefinitely
-    while True:
-        time.sleep(60)
+        logger.exception("Error in start_bot_main: {}", e)
+        raise
