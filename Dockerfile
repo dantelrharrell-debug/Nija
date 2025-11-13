@@ -1,25 +1,19 @@
-# --- Base image ---
 FROM python:3.11-slim
 
-# --- Set working directory ---
-WORKDIR /app
-
-# --- Install system dependencies ---
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libssl-dev \
-    libffi-dev \
+    build-essential libssl-dev libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Copy project files ---
+# Copy everything to /app
 COPY . /app
 
-# --- Upgrade pip ---
+# Upgrade pip and install dependencies
 RUN pip install --upgrade pip
-
-# --- Install Python dependencies ---
 RUN pip install -r /app/requirements.txt
 
-# --- Set default command ---
-# This checks both /app and root for main.py and keeps container alive
-CMD ["sh", "-c", "ls -la /app; ls -la .; python -u /app/main.py || python -u main.py || tail -f /tmp/nija_started.ok"]
+# Use root as WORKDIR (so main.py in root is found)
+WORKDIR /
+
+# Run main.py
+CMD ["sh", "-c", "ls -la /; python -u main.py || tail -f /tmp/nija_started.ok"]
