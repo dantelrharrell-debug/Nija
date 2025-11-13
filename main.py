@@ -1,21 +1,24 @@
 import time, sys
 from loguru import logger
 
-# Setup logger for Railway
 logger.remove()
 logger.add(sys.stdout, level="INFO", enqueue=True)
 
-logger.info("Nija bot starting...")
+logger.info("Nija bot starting... (main.py)")
 
 try:
     from app.start_bot_main import start_bot_main
     logger.info("Imported start_bot_main OK")
-    # Start your bot logic
-    start_bot_main()
 except Exception as e:
     logger.exception("Failed to import/start bot: %s", e)
 
-# Heartbeat to show container is alive
+# Start bot
+try:
+    start_bot_main()
+except Exception as e:
+    logger.exception("Bot crashed: {}", e)
+
+# Keep container alive if bot crashes
 while True:
     logger.info("heartbeat")
     sys.stdout.flush()
