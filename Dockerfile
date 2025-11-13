@@ -1,5 +1,10 @@
 # --- rest of Dockerfile above ---
-CMD ["sh", "-lc", "ls -la /app || true; python -u main.py || python -u app/main.py || tail -f /tmp/nija_started.ok"]
 
+# Set working directory
 WORKDIR /app
+
+# Copy all files to /app
 COPY . /app
+
+# Start command
+CMD ["sh", "-lc", "ls -la /app || true; python -u main.py || python -u app/main.py || tail -f /tmp/nija_started.ok"]
