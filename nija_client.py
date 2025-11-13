@@ -6,64 +6,90 @@ from loguru import logger
 
 class CoinbaseClient:
     def __init__(self):
-        self.base_url = "https://api.exchange.coinbase.com"
+        # Load environment variables
+        self.org_id = os.environ.get("COINBASE_ORG_ID")
+        self.pem_raw = os.environ.get("COINBASE_PEM_CONTENT")
+        self.api_key = os.environ.get("COINBASE_API_KEY")  # used as JWT 'kid'
+        self.api_url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{self.org_id}/accounts"
 
-        self.pkey = os.getenv("COINBASE_JWT_PEM")
-        self.kid = os.getenv("COINBASE_JWT_KID")
-        self.issuer = os.getenv("COINBASE_JWT_ISSUER")
+        logger.info("Initializing CoinbaseClient...")
+        logger.info("Org ID: {}", self.org_id)
+        logger.info("API Key (kid): {}", self.api_key)
+        if self.pem_raw:
+            logger.info("Raw PEM length: {}", len(self.pem_raw))
+            self.pem = self._fix_pem(self.pem_raw)
+        else:
+            logger.error("PEM content missing")
+            self.pem = None
 
-        if not self.pkey or not self.kid or not self.issuer:
-            raise ValueError("Missing Coinbase JWT credentials")
+    def _fix_pem(self, pem_content):
+        """Ensure proper PEM formatting with line breaks."""
+        pem_content = pem_content.strip()
+        # Replace escaped newlines with actual newlines
+        pem_content = pem_content.replace("\\n", "\n")
+        if not pem_content.startswith("-----BEGIN EC PRIVATE KEY-----"):
+            pem_content = "-----BEGIN EC PRIVATE KEY-----\n" + pem_content
+        if not pem_content.endswith("-----END EC PRIVATE KEY-----"):
+            pem_content += "\n-----END EC PRIVATE KEY-----"
+        logger.info("Fixed PEM length: {}", len(pem_content))
+        return pem_content
 
-        logger.info("Advanced JWT auth enabled (PEM validated).")
+    def _generate_jwt(self):
+        if not self.pem or not self.api_key or not self.org_id:
+            logger.error("Cannot generate JWT: missing PEM, API key, or Org ID")
+            return None
 
-        self.session = requests.Session()
-        self.session.headers.update({"Content-Type": "application/json"})
-
-    def _get_jwt(self):
-        payload = {"iss": self.issuer, "iat": int(time.time()), "exp": int(time.time()) + 300}
-        token = jwt.encode(payload, self.pkey, algorithm="ES256", headers={"kid": self.kid})
-        return token
-
-    def _request(self, method, endpoint, **kwargs):
-        url = f"{self.base_url}{endpoint}"
-        headers = kwargs.pop("headers", {})
-        headers["Authorization"] = f"Bearer {self._get_jwt()}"
-        try:
-            r = self.session.request(method, url, headers=headers, **kwargs)
-            r.raise_for_status()
-            return r.json()
-        except requests.exceptions.HTTPError as e:
-            logger.warning(f"HTTP request failed for {url}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error on request to {url}: {e}")
-            raise
-
-    # --- Advanced Trade API Endpoints ---
-    def get_accounts(self):
-        return self._request("GET", "/api/accounts")
-
-    def get_positions(self):
-        return self._request("GET", "/api/positions")
-
-    def get_orders(self):
-        return self._request("GET", "/api/orders")
-
-    def get_order(self, order_id):
-        return self._request("GET", f"/api/orders/{order_id}")
-
-    def place_order(self, account_id, side, product_id, size, price=None, order_type="market"):
-        data = {
-            "account_id": account_id,
-            "side": side,
-            "product_id": product_id,
-            "type": order_type,
-            "size": size,
+        now = int(time.time())
+        payload = {
+            "iat": now,
+            "exp": now + 300,  # 5 minutes expiry
+            "sub": self.org_id
         }
-        if price and order_type != "market":
-            data["price"] = price
-        return self._request("POST", "/api/orders", json=data)
+        headers = {"kid": self.api_key}
 
-    def cancel_order(self, order_id):
-        return self._request("DELETE", f"/api/orders/{order_id}")
+        try:
+            token = jwt.encode(payload, self.pem, algorithm="ES256", headers=headers)
+            print("DEBUG_JWT (first 50 chars):", token[:50])  # Print directly for verification
+            return token
+        except Exception as e:
+            logger.exception("JWT generation failed: {}", e)
+            return None
+
+    def get_accounts(self):
+        token = self._generate_jwt()
+        if not token:
+            logger.error("Cannot fetch accounts: JWT generation failed")
+            return None
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "CB-VERSION": "2025-11-01"
+        }
+
+        try:
+            resp = requests.get(self.api_url, headers=headers)
+            logger.info("HTTP Status Code: {}", resp.status_code)
+            logger.info("Response Body: {}", resp.text)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.HTTPError as e:
+            if resp.status_code == 401:
+                logger.error("Unauthorized (401). Possible causes:")
+                logger.error("- Invalid PEM format (fixed automatically)")
+                logger.error("- Wrong API key / kid")
+                logger.error("- Org ID mismatch")
+                logger.error("- Expired or malformed JWT")
+            else:
+                logger.error("HTTPError: {}", e)
+        except Exception as e:
+            logger.exception("Unexpected error fetching accounts: {}", e)
+        return None
+
+# --- TEST SCRIPT ---
+if __name__ == "__main__":
+    client = CoinbaseClient()
+    accounts = client.get_accounts()
+    if accounts:
+        logger.info("Accounts fetched successfully!")
+    else:
+        logger.error("Failed to fetch accounts.")
