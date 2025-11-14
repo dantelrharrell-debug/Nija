@@ -1,3 +1,4 @@
-project-root/
-└─ app/
-   └─ nija_client.py  ← THIS ONE
+/app
+├── nija_client.py      # Coinbase client + JWT handling
+├── webhook.py          # Webhook listener
+├── start_bot.py        # Main bot runner (imports client, starts webhook/trading)
