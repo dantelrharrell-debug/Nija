@@ -1,118 +1,86 @@
-# /app/nija_client.py
-import os, time, base64
-import jwt
-import requests
+# app/nija_client.py
+import os
+import base64
+import logging
 from loguru import logger
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
 
 logger.remove()
 logger.add(lambda m: print(m, end=""))
 
-API_KEY = os.environ.get("COINBASE_API_KEY", "")
+# env vars
 ORG_ID = os.environ.get("COINBASE_ORG_ID", "")
-# Prefer base64 env to avoid newline issues in providers
-PEM_B64 = os.environ.get("COINBASE_PEM_B64", "").strip()
-PEM_CONTENT = os.environ.get("COINBASE_PEM_CONTENT", "").strip()
+API_KEY = os.environ.get("COINBASE_API_KEY", "")
+PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT", "")   # raw PEM with newlines
+PEM_B64 = os.environ.get("COINBASE_PEM_B64", "")       # base64 single-line
 
-def try_load_private_key_from_bytes(b: bytes):
+# 1) obtain a sane PEM string (BEGIN..END with \n lines)
+def get_pem():
+    # prefer raw PEM if it looks valid
+    if PEM_RAW and "-----BEGIN" in PEM_RAW:
+        pem = PEM_RAW
+    elif PEM_B64:
+        try:
+            decoded = base64.b64decode(PEM_B64.encode())
+            pem = decoded.decode()
+        except Exception as e:
+            logger.error(f"Failed to base64-decode COINBASE_PEM_B64: {e}")
+            pem = ""
+    else:
+        pem = ""
+
+    # if railway/UI placed literal "\n" sequences, convert them
+    if pem and "\\n" in pem:
+        pem = pem.replace("\\n", "\n")
+
+    # ensure trailing newline for some loaders
+    if pem and not pem.endswith("\n"):
+        pem = pem + "\n"
+
+    return pem
+
+PEM = get_pem()
+logger.info(f"PEM length: {len(PEM) if PEM else 'MISSING'}")
+
+# 2) build full API key resource path if necessary
+if API_KEY and "organizations/" in API_KEY:
+    API_KEY_FULL = API_KEY
+else:
+    if ORG_ID and API_KEY:
+        API_KEY_FULL = f"organizations/{ORG_ID}/apiKeys/{API_KEY}"
+    else:
+        API_KEY_FULL = API_KEY  # leave as-is (maybe already full path or empty)
+
+logger.info(f"API_KEY length: {len(API_KEY_FULL)} (use full path?)")
+
+# 3) init Coinbase REST client (if sdk present)
+try:
+    from coinbase.rest import RESTClient  # Coinbase Advanced SDK
+    SDK_OK = True
+except Exception as e:
+    RESTClient = None
+    SDK_OK = False
+    logger.warning("Coinbase REST SDK not available in container: " + str(e))
+
+client = None
+if SDK_OK and PEM and API_KEY_FULL:
     try:
-        priv = serialization.load_pem_private_key(b, password=None, backend=default_backend())
-        logger.info("✅ loaded PEM private key (bytes).")
-        return priv
+        client = RESTClient(api_key=API_KEY_FULL, api_secret=PEM)
+        logger.info("RESTClient created (attempting accounts test...)")
     except Exception as e:
-        logger.debug(f"load_pem_private_key bytes failed: {type(e).__name__}: {e}")
-        return None
+        logger.error("Failed to create RESTClient: " + str(e))
 
-def try_load_private_key_from_text(text: str):
-    # Normalize escaped newlines if someone stored literal "\n"
-    if "\\n" in text:
-        text = text.replace("\\n", "\n")
-    b = text.encode()
-    return try_load_private_key_from_bytes(b)
+# 4) test fetch accounts
+def test_accounts():
+    if not client:
+        logger.error("No REST client available; check SDK and env vars.")
+        return
+    try:
+        accounts = client.get_accounts()
+        logger.success("✅ Accounts fetched; count: " + str(len(getattr(accounts, "data", []))))
+        for a in accounts.data:
+            logger.info(f"- {a.id} | {getattr(a, 'name', 'no-name')} | {getattr(a, 'balance', '')}")
+    except Exception as e:
+        logger.error("❌ Coinbase API call failed: " + str(e))
 
-def load_private_key():
-    # 1) try base64 (preferred)
-    if PEM_B64:
-        try:
-            logger.info("Attempting to decode COINBASE_PEM_B64...")
-            b = base64.b64decode(PEM_B64)
-            k = try_load_private_key_from_bytes(b)
-            if k:
-                return k
-            # sometimes the b64 encoded string was of the textual PEM (i.e. contains \n escapes)
-            try:
-                txt = b.decode(errors="ignore")
-                return try_load_private_key_from_text(txt)
-            except Exception:
-                pass
-        except Exception as e:
-            logger.debug(f"COINBASE_PEM_B64 decode failed: {e}")
-
-    # 2) try raw content stored in COINBASE_PEM_CONTENT
-    if PEM_CONTENT:
-        logger.info("Attempting to load COINBASE_PEM_CONTENT...")
-        k = try_load_private_key_from_text(PEM_CONTENT)
-        if k:
-            return k
-
-    # 3) try environment variable where newlines preserved (rare)
-    env_direct = os.environ.get("COINBASE_PEM", "")
-    if env_direct:
-        logger.info("Attempting to load COINBASE_PEM (fallback)...")
-        k = try_load_private_key_from_text(env_direct)
-        if k:
-            return k
-
-    raise ValueError("No valid PEM loaded. Provide COINBASE_PEM_B64 or COINBASE_PEM_CONTENT correctly.")
-
-class CoinbaseClient:
-    def __init__(self):
-        self.api_key = API_KEY
-        self.org_id = ORG_ID
-        self.base_url = "https://api.coinbase.com"
-        if not self.api_key or not self.org_id:
-            logger.warning("COINBASE_API_KEY or COINBASE_ORG_ID missing - make sure API key is full resource path or set ORG_ID.")
-        # load private key
-        self.priv = load_private_key()
-
-    def generate_jwt(self):
-        now = int(time.time())
-        payload = {"iat": now, "exp": now + 300, "sub": self.api_key, "org_id": self.org_id}
-        try:
-            token = jwt.encode(payload, self.priv, algorithm="ES256")
-            return token
-        except Exception as e:
-            logger.error(f"JWT generation failed: {type(e).__name__}: {e}")
-            return None
-
-    def make_request(self, method, endpoint, **kwargs):
-        token = self.generate_jwt()
-        if not token:
-            logger.error("No JWT - aborting request.")
-            return None
-        headers = kwargs.pop("headers", {})
-        headers.update({"Authorization": f"Bearer {token}", "CB-VERSION": "2025-11-14"})
-        url = f"{self.base_url}{endpoint}"
-        try:
-            r = requests.request(method, url, headers=headers, **kwargs)
-            if r.status_code >= 400:
-                logger.error(f"Coinbase API returned {r.status_code}: {r.text}")
-            return r
-        except Exception as e:
-            logger.error(f"HTTP request failed: {e}")
-            return None
-
-# quick test when run directly (logs visible in Render)
 if __name__ == "__main__":
-    try:
-        c = CoinbaseClient()
-        resp = c.make_request("GET", "/v2/accounts")
-        if resp:
-            logger.info("Response status: " + str(resp.status_code))
-            try:
-                logger.info(resp.json())
-            except Exception:
-                logger.info(resp.text)
-    except Exception as e:
-        logger.error(f"Startup failed: {type(e).__name__}: {e}")
+    test_accounts()
