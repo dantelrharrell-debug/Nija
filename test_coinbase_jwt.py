@@ -1,33 +1,49 @@
-# test_coinbase_jwt.py
+# test_jwt_coinbase.py
 import os
 import time
-import jwt
+import jwt  # pyjwt
 import requests
+from loguru import logger
 
-COINBASE_ISS = os.getenv("COINBASE_ISS")                 # API key id (uuid)
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT") # PEM private key (full content)
-BASE_URL = os.getenv("COINBASE_ADVANCED_BASE", "https://api.cdp.coinbase.com")
+logger.remove()
+logger.add(lambda m: print(m, end=""))
 
-def test_advanced():
-    if not COINBASE_ISS or not COINBASE_PEM_CONTENT:
-        print("❌ Missing COINBASE_ISS or COINBASE_PEM_CONTENT")
-        return
+# Load environment
+ORG_ID = os.environ.get("COINBASE_ORG_ID")
+API_KEY = os.environ.get("COINBASE_API_KEY")
+PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT", "")
 
-    iat = int(time.time())
-    payload = {"iss": COINBASE_ISS, "iat": iat, "exp": iat + 300}
-    try:
-        token = jwt.encode(payload, COINBASE_PEM_CONTENT, algorithm="ES256")
-    except Exception as e:
-        print("❌ JWT creation failed:", e)
-        return
+# Fix escaped newlines
+PEM = PEM_RAW.replace("\\n", "\n") if "\\n" in PEM_RAW else PEM_RAW
 
-    headers = {"Authorization": f"Bearer {token}"}
-    try:
-        r = requests.get(f"{BASE_URL}/accounts", headers=headers, timeout=10)
-        print("Status Code:", r.status_code)
-        print("Response:", r.text)
-    except Exception as e:
-        print("❌ Request failed:", e)
+# Detect if API_KEY is full path
+if "organizations/" in API_KEY:
+    sub = API_KEY
+else:
+    sub = f"organizations/{ORG_ID}/apiKeys/{API_KEY}"
 
-if __name__ == "__main__":
-    test_advanced()
+logger.info(f"ORG_ID: {ORG_ID}")
+logger.info(f"API_KEY (first 10 chars): {API_KEY[:10]}...")
+logger.info(f"JWT sub claim: {sub}")
+logger.info(f"PEM preview: {PEM[:30]}...{PEM[-30:]}")
+
+# Generate JWT
+payload = {
+    "sub": sub,
+    "iat": int(time.time()),
+    "exp": int(time.time()) + 300  # 5 min
+}
+token = jwt.encode(payload, PEM, algorithm="ES256")
+
+logger.info(f"JWT preview (first 50 chars): {token[:50]}")
+
+# Minimal test request: list accounts
+url = "https://api.coinbase.com/v2/accounts"
+headers = {
+    "Authorization": f"Bearer {token}",
+    "CB-VERSION": "2025-11-13"
+}
+
+response = requests.get(url, headers=headers)
+logger.info(f"Status Code: {response.status_code}")
+logger.info(f"Response Body: {response.text[:500]}")  # first 500 chars
