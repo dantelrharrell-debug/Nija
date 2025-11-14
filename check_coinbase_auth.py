@@ -3,56 +3,60 @@ import os
 import time
 import jwt
 import requests
-from loguru import logger
+from dotenv import load_dotenv
 
-# 1️⃣ Load environment variables
-ORG_ID = os.environ.get("COINBASE_ORG_ID")
-API_KEY = os.environ.get("COINBASE_API_KEY")
-PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT")
+# Load .env
+if os.path.exists(".env"):
+    load_dotenv()
 
-if not ORG_ID or not API_KEY or not PEM_RAW:
-    logger.error("❌ Missing one or more Coinbase environment variables.")
-    exit(1)
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
+COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")
 
-# 2️⃣ Fix PEM newlines if cloud env replaced them
-PEM_RAW = PEM_RAW.replace("\\n", "\n")
-logger.info(f"PEM length after fix: {len(PEM_RAW)}")
+def generate_jwt(api_key, pem_content):
+    # JWT payload
+    iat = int(time.time())
+    payload = {
+        "sub": api_key,
+        "iat": iat,
+        "exp": iat + 300  # 5 min expiration
+    }
 
-# 3️⃣ Generate JWT for Coinbase Advanced REST API
-def generate_jwt():
+    # Create JWT
     try:
-        iat = int(time.time())
-        payload = {
-            "sub": ORG_ID,
-            "iat": iat,
-            "exp": iat + 30,
-            "jti": str(iat),
-        }
-        token = jwt.encode(payload, PEM_RAW, algorithm="ES256")
+        token = jwt.encode(payload, pem_content, algorithm="ES256")
         return token
     except Exception as e:
-        logger.error(f"❌ JWT generation failed: {e}")
+        print(f"❌ Failed to generate JWT: {e}")
         return None
 
-jwt_token = generate_jwt()
-if not jwt_token:
-    exit(1)
+def test_coinbase_auth():
+    print("🔹 Generating JWT...")
+    token = generate_jwt(COINBASE_API_KEY, COINBASE_PEM_CONTENT)
+    if not token:
+        print("❌ JWT generation failed. Check your PEM format.")
+        return
 
-logger.success("✅ JWT generated successfully:")
-logger.info(jwt_token[:50] + "...")
+    print(f"✅ JWT generated (first 50 chars): {token[:50]}...")
 
-# 4️⃣ Test Coinbase endpoint with generated JWT
-headers = {"Authorization": f"Bearer {jwt_token}", "CB-VERSION": "2025-11-13"}
-url = "https://api.coinbase.com/v2/accounts"
+    url = "https://api.coinbase.com/advanced/accounts"
+    headers = {
+        "CB-VERSION": "2025-11-14",
+        "Authorization": f"Bearer {token}",
+    }
 
-try:
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        logger.success("✅ Coinbase authentication successful!")
-        accounts = response.json().get("data", [])
-        for acc in accounts:
-            logger.info(f"- {acc['id']} | {acc['name']} | Balance: {acc['balance']['amount']} {acc['balance']['currency']}")
-    else:
-        logger.error(f"❌ Coinbase auth failed. Status: {response.status_code}, Body: {response.text}")
-except Exception as e:
-    logger.error(f"❌ Error connecting to Coinbase: {e}")
+    print("🔹 Testing Coinbase /accounts endpoint...")
+    try:
+        resp = requests.get(url, headers=headers)
+        if resp.status_code == 200:
+            print("✅ Authentication successful! Your key is valid.")
+        elif resp.status_code == 401:
+            print("❌ Unauthorized (401). Check your key, org ID, or permissions.")
+        else:
+            print(f"⚠️ Unexpected response {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"❌ Request failed: {e}")
+
+if __name__ == "__main__":
+    test_coinbase_auth()
