@@ -13,13 +13,16 @@ if "\\n" in pem_raw:
 else:
     pem = pem_raw
 
-try:
-    priv = serialization.load_pem_private_key(pem.encode(), password=None, backend=default_backend())
-    pub = priv.public_key()
-    pem_pub = pub.public_bytes(encoding=serialization.Encoding.PEM,
-                               format=serialization.PublicFormat.SubjectPublicKeyInfo)
-    logger.info("✅ Private key loaded. Public key preview:")
-    for line in pem_pub.decode().splitlines()[:3]:
-        logger.info(line)
-except Exception as e:
-    logger.error(f"Failed to load PEM: {type(e).__name__}: {e}")
+if not pem:
+    logger.error("COINBASE_PEM_CONTENT missing; try COINBASE_PEM_B64 instead.")
+else:
+    try:
+        priv = serialization.load_pem_private_key(pem.encode(), password=None, backend=default_backend())
+        pub = priv.public_key()
+        pem_pub = pub.public_bytes(encoding=serialization.Encoding.PEM,
+                                   format=serialization.PublicFormat.SubjectPublicKeyInfo)
+        logger.info("✅ Private key loaded. Public key preview:")
+        for ln in pem_pub.decode().splitlines()[:6]:
+            logger.info(ln)
+    except Exception as e:
+        logger.error(f"Failed to load PEM: {type(e).__name__}: {e}")
