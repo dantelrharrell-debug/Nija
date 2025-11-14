@@ -1,12 +1,3 @@
-Nija/
-├─ app/
-│  ├─ __init__.py
-│  ├─ start_bot_main.py
-│  ├─ nija_client.py
-│  ├─ app/                   # keep your nested app folder
-│  │  ├─ __init__.py         # MUST exist
-│  │  └─ webhook.py
-├─ start_bot.py
-├─ requirements.txt
-└─ README.md
-└─ .env   <--- MUST be here
+project-root/
+└─ app/
+   └─ nija_client.py  ← THIS ONE
