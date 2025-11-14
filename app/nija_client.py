@@ -13,7 +13,7 @@ PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT")
 if PEM_RAW and "\\n" in PEM_RAW:
     PEM_RAW = PEM_RAW.replace("\\n", "\n")
 
-# Optional: log for debugging (remove in production)
+# Optional: log PEM length for debugging
 logger.info(f"PEM length: {len(PEM_RAW) if PEM_RAW else 'None'}")
 
 # 3️⃣ Initialize Coinbase REST client
@@ -26,12 +26,11 @@ client = RESTClient(
 def test_accounts():
     try:
         accounts = client.get_accounts()
-        print("✅ Accounts fetched successfully:")
+        logger.success("✅ Coinbase accounts fetched successfully:")
         for a in accounts.data:
-            print(f"- {a.id} | {a.name} | Balance: {a.balance.amount} {a.balance.currency}")
+            logger.info(f"- {a.id} | {a.name} | Balance: {a.balance.amount} {a.balance.currency}")
     except Exception as e:
-        print("❌ Coinbase auth failed:", e)
-        logger.error(e)
+        logger.error(f"❌ Coinbase auth failed: {e}")
 
 # 5️⃣ Allow script to be run directly
 if __name__ == "__main__":
