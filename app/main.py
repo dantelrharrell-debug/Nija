@@ -1,3 +1,5 @@
+import app.debug_pem_analyzer
+
 # main.py — guaranteed visible process for Railway
 import time, os, sys
 from datetime import datetime
