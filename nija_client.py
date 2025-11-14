@@ -1,4 +1,4 @@
-# app/nija_client.py
+# nija_client.py
 import os, base64
 from loguru import logger
 
