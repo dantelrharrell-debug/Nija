@@ -1,5 +1,8 @@
 # nija_client.py
-import os, time, jwt, requests
+import os
+import time
+import jwt
+import requests
 from loguru import logger
 
 logger.remove()
@@ -7,43 +10,53 @@ logger.add(lambda m: print(m, end=""))
 
 class CoinbaseClient:
     def __init__(self):
+        # Load environment variables
         self.org_id = os.environ.get("COINBASE_ORG_ID")
+        self.api_key = os.environ.get("COINBASE_API_KEY")
         self.pem_raw = os.environ.get("COINBASE_PEM_CONTENT", "")
-        self.api_key = os.environ.get("COINBASE_API_KEY", "")
 
-        if not all([self.org_id, self.pem_raw, self.api_key]):
-            raise ValueError("Missing Coinbase credentials")
+        if not self.api_key or not self.pem_raw:
+            raise ValueError("API_KEY or PEM_CONTENT missing!")
 
-        self.pem_fixed = self.pem_raw.replace("\\n", "\n")
+        # Clean PEM formatting
+        self.pem = self.pem_raw.replace("\\n", "\n") if "\\n" in self.pem_raw else self.pem_raw
 
-        # Determine sub variants
-        self.sub_variants = []
-        if "organizations/" in self.api_key:
-            self.sub_variants.append(self.api_key)
+        # Base URL for Coinbase Advanced API
+        self.base_url = "https://api.coinbase.com"
+
+        # Test connection immediately
+        self.test_connection()
+
+    def generate_jwt(self):
+        now = int(time.time())
+        payload = {
+            "iat": now,
+            "exp": now + 60,  # 60 seconds validity
+            "sub": f"organizations/{self.org_id}/apiKeys/{self.api_key}"
+        }
+        token = jwt.encode(payload, self.pem, algorithm="ES256")
+        return token
+
+    def request(self, method, path, data=None):
+        url = f"{self.base_url}{path}"
+        token = self.generate_jwt()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        response = requests.request(method, url, headers=headers, json=data)
+        if response.status_code == 401:
+            logger.error("Unauthorized: JWT or API key invalid!")
+        return response
+
+    def test_connection(self):
+        # Simple endpoint to verify JWT works
+        response = self.request("GET", "/v3/brokerage/accounts")
+        if response.status_code == 200:
+            logger.info("✅ Coinbase connection OK, ready to trade.")
         else:
-            self.sub_variants.append(f"organizations/{self.org_id}/apiKeys/{self.api_key}")
-            self.sub_variants.append(self.api_key)  # try raw key as fallback
+            logger.error(f"❌ Coinbase connection failed: {response.status_code} {response.text}")
 
-    def generate_jwt(self, sub):
-        payload = {"sub": sub, "iat": int(time.time()), "exp": int(time.time()) + 60}
-        return jwt.encode(payload, self.pem_fixed, algorithm="ES256")
-
-    def test_auth(self):
-        url = "https://api.coinbase.com/v2/accounts"
-        for sub in self.sub_variants:
-            token = self.generate_jwt(sub)
-            headers = {"Authorization": f"Bearer {token}"}
-            r = requests.get(url, headers=headers)
-            logger.info(f"Trying sub: {sub}")
-            logger.info(f"Status: {r.status_code}")
-            if r.status_code == 200:
-                logger.success("✅ Auth successful!")
-                return r.json()
-            else:
-                logger.error(f"Response: {r.text}")
-        logger.error("All sub variants failed!")
-        return None
-
+# Example usage
 if __name__ == "__main__":
     client = CoinbaseClient()
-    client.test_auth()
