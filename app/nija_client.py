@@ -11,66 +11,70 @@ API_KEY = os.environ.get("COINBASE_API_KEY", "")
 PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT", "")
 PEM_B64 = os.environ.get("COINBASE_PEM_B64", "")
 
-def get_pem():
-    # prefer raw PEM if looks valid
+def load_pem():
+    pem = ""
+
+    # Priority 1 — raw PEM
     if PEM_RAW and "-----BEGIN" in PEM_RAW:
         pem = PEM_RAW
+
+    # Priority 2 — base64 PEM
     elif PEM_B64:
         try:
-            pem = base64.b64decode(PEM_B64.encode()).decode()
+            pem = base64.b64decode(PEM_B64).decode()
         except Exception as e:
-            logger.error("Failed to base64-decode COINBASE_PEM_B64: " + str(e))
-            pem = PEM_RAW or ""
-    else:
-        pem = PEM_RAW or ""
+            logger.error(f"Failed to decode PEM_B64: {e}")
 
-    # fix literal "\n" sequences
-    if "\\n" in pem:
-        pem = pem.replace("\\n", "\n")
+    # Fix encoded newlines
+    pem = pem.replace("\\n", "\n")
 
+    # Guarantee ending newline
     if pem and not pem.endswith("\n"):
-        pem = pem + "\n"
+        pem += "\n"
+
     return pem
 
-PEM = get_pem()
-logger.info(f"PEM length: {len(PEM) if PEM else 'MISSING'}")
+PEM = load_pem()
+logger.info(f"PEM length: {len(PEM) if PEM else 0}")
 
-# build full API key resource path if needed
-if API_KEY and "organizations/" in API_KEY:
+# Build full API key path
+if API_KEY.startswith("organizations/"):
     API_KEY_FULL = API_KEY
 else:
-    API_KEY_FULL = f"organizations/{ORG_ID}/apiKeys/{API_KEY}" if ORG_ID and API_KEY else API_KEY
+    API_KEY_FULL = f"organizations/{ORG_ID}/apiKeys/{API_KEY}"
 
-logger.info(f"API key length: {len(API_KEY_FULL) if API_KEY_FULL else 'MISSING'}")
+logger.info(f"API key length: {len(API_KEY_FULL)}")
 
-# Attempt to import Coinbase SDK
+# Import Coinbase
 try:
     from coinbase.rest import RESTClient
     SDK_OK = True
 except Exception as e:
-    RESTClient = None
+    logger.error(f"Coinbase SDK import failed: {e}")
     SDK_OK = False
-    logger.warning("Coinbase SDK not available: " + str(e))
+    RESTClient = None
 
 client = None
+
 if SDK_OK and PEM and API_KEY_FULL:
     try:
         client = RESTClient(api_key=API_KEY_FULL, api_secret=PEM)
-        logger.info("RESTClient instantiated.")
+        logger.info("RESTClient created successfully.")
     except Exception as e:
-        logger.error("Failed to instantiate RESTClient: " + str(e))
+        logger.error(f"RESTClient creation failed: {e}")
+else:
+    logger.error("Missing PEM or API key — cannot create RESTClient.")
 
 def test_accounts():
     if not client:
-        logger.error("No Coinbase client available; check SDK and env vars.")
+        logger.error("No client available.")
         return
+
     try:
-        accounts = client.get_accounts()
-        logger.success("✅ Accounts fetched; count: " + str(len(getattr(accounts, "data", []))))
-        for a in accounts.data:
-            logger.info(f"- {getattr(a, 'id', '')} | {getattr(a, 'name', 'no-name')} | {getattr(a, 'balance', '')}")
+        acc = client.get_accounts()
+        logger.success(f"Fetched accounts: {len(acc.data)}")
     except Exception as e:
-        logger.error("❌ Coinbase API call failed: " + str(e))
+        logger.error(f"Account test failed: {e}")
 
 if __name__ == "__main__":
     test_accounts()
