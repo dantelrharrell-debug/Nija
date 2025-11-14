@@ -36,3 +36,4 @@ try:
     logger.info(f"JWT preview: {token[:60]}...")  # just preview
 except Exception as e:
     logger.error(f"Failed to generate JWT: {type(e).__name__}: {e}")
+    
