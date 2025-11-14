@@ -1,59 +1,45 @@
+# app/nija_client.py
+
 import os
-import time
-import jwt
-import requests
+from coinbase.rest import RESTClient  # Coinbase SDK
 from loguru import logger
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
 
-class CoinbaseClient:
-    def __init__(self):
-        # Load environment variables
-        self.org_id = os.environ.get("COINBASE_ORG_ID")
-        self.api_key = os.environ.get("COINBASE_API_KEY")
-        self.pem_raw = os.environ.get("COINBASE_PEM_CONTENT")
+# 1️⃣ Load environment variables
+ORG_ID = os.environ.get("COINBASE_ORG_ID")
+API_KEY = os.environ.get("COINBASE_API_KEY")
+PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT")
 
-        if not all([self.org_id, self.api_key, self.pem_raw]):
-            raise ValueError("Missing Coinbase environment variables!")
+# 2️⃣ Fix PEM newlines if Railway converted them to literal \n
+if PEM_RAW and "\\n" in PEM_RAW:
+    PEM_RAW = PEM_RAW.replace("\\n", "\n")
 
-        # Fix PEM formatting
-        self.pem = self.pem_raw.replace("\\n", "\n")
+# 3️⃣ Initialize Coinbase REST client
+try:
+    client = RESTClient(
+        api_key=API_KEY,
+        api_secret=PEM_RAW,
+    )
+    logger.info("✅ Coinbase REST client initialized successfully.")
+except Exception as e:
+    logger.error(f"❌ Failed to initialize Coinbase client: {e}")
+    client = None
 
-        # Load key
-        try:
-            self.private_key = serialization.load_pem_private_key(
-                self.pem.encode(),
-                password=None,
-                backend=default_backend()
-            )
-        except Exception as e:
-            logger.error(f"Failed to load PEM key: {e}")
-            raise
+# 4️⃣ Test function to list accounts
+def test_accounts():
+    if not client:
+        logger.error("Coinbase client not initialized.")
+        return None
+    try:
+        accounts = client.get_accounts()
+        logger.info("✅ Accounts fetched successfully.")
+        return accounts.data
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch accounts: {e}")
+        return None
 
-        logger.info("CoinbaseClient initialized successfully.")
-
-    def _generate_jwt(self):
-        payload = {
-            "sub": self.api_key,
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 300,  # 5 min expiry
-            "kid": self.api_key
-        }
-        token = jwt.encode(payload, self.private_key, algorithm="ES256")
-        return token
-
-    def validate_coinbase(self):
-        jwt_token = self._generate_jwt()
-        headers = {
-            "CB-VERSION": "2025-01-01",
-            "Authorization": f"Bearer {jwt_token}"
-        }
-        url = f"https://api.coinbase.com/v2/accounts"
-        try:
-            resp = requests.get(url, headers=headers)
-            if resp.status_code == 200:
-                logger.success("Coinbase authentication successful!")
-            else:
-                logger.error(f"Coinbase auth failed ({resp.status_code}): {resp.text}")
-        except Exception as e:
-            logger.error(f"Request error: {e}")
+# Optional: run test on startup
+if __name__ == "__main__":
+    accounts = test_accounts()
+    if accounts:
+        for a in accounts:
+            print(a)
