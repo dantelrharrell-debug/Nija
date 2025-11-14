@@ -1,80 +1,90 @@
 # app/nija_client.py
-import os, base64
+import os
+import base64
+import logging
 from loguru import logger
 
 logger.remove()
 logger.add(lambda m: print(m, end=""))
 
-# env vars
+# env
 ORG_ID = os.environ.get("COINBASE_ORG_ID", "")
-API_KEY = os.environ.get("COINBASE_API_KEY", "")
-PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT", "")
-PEM_B64 = os.environ.get("COINBASE_PEM_B64", "")
+API_KEY = os.environ.get("COINBASE_API_KEY", "")   # could be "organizations/.../apiKeys/..."
+PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT", "")   # optional, may contain literal "\n"
+PEM_B64 = os.environ.get("COINBASE_PEM_B64", "")      # optional: single-line base64 of PEM
+LIVE_TRADING = os.environ.get("LIVE_TRADING", "0")
 
-def load_pem():
-    pem = ""
-
-    # Priority 1 — raw PEM
-    if PEM_RAW and "-----BEGIN" in PEM_RAW:
-        pem = PEM_RAW
-
-    # Priority 2 — base64 PEM
-    elif PEM_B64:
+# 1) Resolve PEM: prefer COINBASE_PEM_CONTENT, else decode PEM_B64
+def resolve_pem():
+    if PEM_RAW:
+        # fix literal \n -> real newlines
+        if "\\n" in PEM_RAW:
+            logger.info("Fixing escaped newlines in COINBASE_PEM_CONTENT")
+            return PEM_RAW.replace("\\n", "\n")
+        return PEM_RAW
+    if PEM_B64:
         try:
-            pem = base64.b64decode(PEM_B64).decode()
+            raw = base64.b64decode(PEM_B64)
+            return raw.decode("utf-8")
         except Exception as e:
-            logger.error(f"Failed to decode PEM_B64: {e}")
+            logger.error(f"Failed to decode COINBASE_PEM_B64: {e}")
+            return None
+    return None
 
-    # Fix encoded newlines
-    pem = pem.replace("\\n", "\n")
+PEM = resolve_pem()
 
-    # Guarantee ending newline
-    if pem and not pem.endswith("\n"):
-        pem += "\n"
+# 2) Validate presence
+if not ORG_ID:
+    logger.error("COINBASE_ORG_ID is missing")
+if not API_KEY:
+    logger.error("COINBASE_API_KEY is missing")
+if not PEM:
+    logger.error("No PEM available (COINBASE_PEM_CONTENT or COINBASE_PEM_B64 required)")
 
-    return pem
-
-PEM = load_pem()
-logger.info(f"PEM length: {len(PEM) if PEM else 0}")
-
-# Build full API key path
-if API_KEY.startswith("organizations/"):
-    API_KEY_FULL = API_KEY
+# 3) Normalize API_KEY to full resource path
+if API_KEY and "organizations/" in API_KEY:
+    API_KEY_PATH = API_KEY
 else:
-    API_KEY_FULL = f"organizations/{ORG_ID}/apiKeys/{API_KEY}"
+    API_KEY_PATH = f"organizations/{ORG_ID}/apiKeys/{API_KEY}" if ORG_ID and API_KEY else API_KEY
 
-logger.info(f"API key length: {len(API_KEY_FULL)}")
+logger.info(f"Using API key path: {API_KEY_PATH if API_KEY_PATH else '<missing>'}")
+logger.info(f"PEM length: {len(PEM) if PEM else 'None'}")
+logger.info(f"LIVE_TRADING={LIVE_TRADING}")
 
-# Import Coinbase
+# 4) Try to construct a client using Coinbase SDK (if installed)
 try:
     from coinbase.rest import RESTClient
     SDK_OK = True
-except Exception as e:
-    logger.error(f"Coinbase SDK import failed: {e}")
-    SDK_OK = False
+except Exception:
     RESTClient = None
+    SDK_OK = False
+    logger.warning("coinbase.rest RESTClient not available in this container (pip package missing?)")
 
 client = None
-
-if SDK_OK and PEM and API_KEY_FULL:
+if SDK_OK and API_KEY_PATH and PEM:
     try:
-        client = RESTClient(api_key=API_KEY_FULL, api_secret=PEM)
-        logger.info("RESTClient created successfully.")
+        client = RESTClient(api_key=API_KEY_PATH, api_secret=PEM)
     except Exception as e:
-        logger.error(f"RESTClient creation failed: {e}")
-else:
-    logger.error("Missing PEM or API key — cannot create RESTClient.")
+        logger.error(f"Failed to instantiate RESTClient: {type(e).__name__}: {e}")
 
+# 5) Test connection
 def test_accounts():
     if not client:
-        logger.error("No client available.")
-        return
-
+        logger.error("No client available, skipping test_accounts()")
+        return False
     try:
-        acc = client.get_accounts()
-        logger.success(f"Fetched accounts: {len(acc.data)}")
+        accounts = client.get_accounts()
+        logger.success("✅ Coinbase accounts fetched (preview):")
+        for a in accounts.data[:5]:
+            logger.info(f"- {a.id}  balance={getattr(a,'balance',None)} name={getattr(a,'name',None)}")
+        return True
     except Exception as e:
-        logger.error(f"Account test failed: {e}")
+        logger.error(f"Coinbase API test failed: {type(e).__name__}: {e}")
+        return False
 
 if __name__ == "__main__":
-    test_accounts()
+    ok = test_accounts()
+    if ok:
+        logger.info("AUTH OK — bot would be allowed to trade (check LIVE_TRADING).")
+    else:
+        logger.info("AUTH FAILED — fix env keys / PEM and redeploy.")
