@@ -1,63 +1,80 @@
-# nija_client.py
-import os
-import time
-import jwt
-import requests
+# app/nija_client.py
+import os, base64
 from loguru import logger
 
 logger.remove()
 logger.add(lambda m: print(m, end=""))
 
-class CoinbaseClient:
-    def __init__(self):
-        self.org_id = os.environ.get("COINBASE_ORG_ID")
-        self.api_key = os.environ.get("COINBASE_API_KEY")
-        self.pem_raw = os.environ.get("COINBASE_PEM_CONTENT", "")
-        self.base_url = "https://api.coinbase.com"  # Advanced API base
-        self.jwt_token = None
+# env vars
+ORG_ID = os.environ.get("COINBASE_ORG_ID", "")
+API_KEY = os.environ.get("COINBASE_API_KEY", "")
+PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT", "")
+PEM_B64 = os.environ.get("COINBASE_PEM_B64", "")
 
-        if not all([self.org_id, self.api_key, self.pem_raw]):
-            logger.error("Missing one or more required env vars: COINBASE_ORG_ID, COINBASE_API_KEY, COINBASE_PEM_CONTENT")
-            raise Exception("Missing Coinbase credentials")
-        
-        self.connect()
+def load_pem():
+    pem = ""
 
-    def generate_jwt(self, sub_override=None):
-        now = int(time.time())
-        sub_claim = sub_override or f"organizations/{self.org_id}/apiKeys/{self.api_key}"
-        payload = {
-            "iat": now,
-            "exp": now + 300,  # 5 min expiry
-            "sub": sub_claim
-        }
+    # Priority 1 — raw PEM
+    if PEM_RAW and "-----BEGIN" in PEM_RAW:
+        pem = PEM_RAW
 
+    # Priority 2 — base64 PEM
+    elif PEM_B64:
         try:
-            token = jwt.encode(payload, self.pem_raw, algorithm="ES256")
+            pem = base64.b64decode(PEM_B64).decode()
         except Exception as e:
-            logger.error(f"Failed to generate JWT: {e}")
-            raise
+            logger.error(f"Failed to decode PEM_B64: {e}")
 
-        return token
+    # Fix encoded newlines
+    pem = pem.replace("\\n", "\n")
 
-    def connect(self):
-        # Try with standard sub format first
-        self.jwt_token = self.generate_jwt()
-        headers = {"Authorization": f"Bearer {self.jwt_token}"}
+    # Guarantee ending newline
+    if pem and not pem.endswith("\n"):
+        pem += "\n"
 
-        resp = requests.get(f"{self.base_url}/v2/accounts", headers=headers)
-        if resp.status_code == 401:
-            logger.warning("401 Unauthorized with full sub format. Trying short sub format...")
-            # Try simple sub claim
-            self.jwt_token = self.generate_jwt(sub_override=self.api_key)
-            headers = {"Authorization": f"Bearer {self.jwt_token}"}
-            resp = requests.get(f"{self.base_url}/v2/accounts", headers=headers)
-        
-        logger.info(f"Coinbase /accounts response: {resp.status_code} {resp.text}")
-        if resp.status_code != 200:
-            raise Exception("Failed to connect to Coinbase API: check keys, org_id, and PEM format")
+    return pem
 
-        logger.info("Coinbase connection successful!")
+PEM = load_pem()
+logger.info(f"PEM length: {len(PEM) if PEM else 0}")
 
-# For testing
+# Build full API key path
+if API_KEY.startswith("organizations/"):
+    API_KEY_FULL = API_KEY
+else:
+    API_KEY_FULL = f"organizations/{ORG_ID}/apiKeys/{API_KEY}"
+
+logger.info(f"API key length: {len(API_KEY_FULL)}")
+
+# Import Coinbase
+try:
+    from coinbase.rest import RESTClient
+    SDK_OK = True
+except Exception as e:
+    logger.error(f"Coinbase SDK import failed: {e}")
+    SDK_OK = False
+    RESTClient = None
+
+client = None
+
+if SDK_OK and PEM and API_KEY_FULL:
+    try:
+        client = RESTClient(api_key=API_KEY_FULL, api_secret=PEM)
+        logger.info("RESTClient created successfully.")
+    except Exception as e:
+        logger.error(f"RESTClient creation failed: {e}")
+else:
+    logger.error("Missing PEM or API key — cannot create RESTClient.")
+
+def test_accounts():
+    if not client:
+        logger.error("No client available.")
+        return
+
+    try:
+        acc = client.get_accounts()
+        logger.success(f"Fetched accounts: {len(acc.data)}")
+    except Exception as e:
+        logger.error(f"Account test failed: {e}")
+
 if __name__ == "__main__":
-    client = CoinbaseClient()
+    test_accounts()
