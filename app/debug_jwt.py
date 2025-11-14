@@ -1,45 +1,63 @@
+# debug_jwt.py
 import os
-import jwt
 import time
+import jwt  # pyjwt
+from loguru import logger
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
-# Load your environment variables
+logger.remove()
+logger.add(lambda m: print(m, end=""))
+
+# Load env vars
 ORG_ID = os.environ.get("COINBASE_ORG_ID")
-PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT")
-API_KEY = os.environ.get("COINBASE_API_KEY")  # optional, not used for JWT
+API_KEY_RAW = os.environ.get("COINBASE_API_KEY")
+PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT", "")
 
-if not ORG_ID or not PEM_RAW:
-    raise ValueError("Missing COINBASE_ORG_ID or COINBASE_PEM_CONTENT")
+# Fix escaped newlines
+if "\\n" in PEM_RAW:
+    PEM = PEM_RAW.replace("\\n", "\n")
+else:
+    PEM = PEM_RAW
 
-# Fix PEM formatting if necessary
-pem = PEM_RAW.replace("\\n", "\n").encode("utf-8")
+# Detect if API_KEY is already full path
+if "organizations/" in API_KEY_RAW:
+    sub = API_KEY_RAW  # full path
+else:
+    sub = f"organizations/{ORG_ID}/apiKeys/{API_KEY_RAW}"
 
-# Load EC private key
-private_key = serialization.load_pem_private_key(pem, password=None, backend=default_backend())
+logger.info(f"✅ Sub claim: {sub}")
+logger.info(f"✅ PEM first 50 chars: {PEM[:50]}")
 
-# JWT claims
+# Load private key
+try:
+    priv = serialization.load_pem_private_key(
+        PEM.encode(), password=None, backend=default_backend()
+    )
+    pub = priv.public_key()
+    pem_pub = pub.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    logger.info("✅ Private key loaded successfully.")
+    logger.info("Public key preview:\n" + "\n".join(pem_pub.decode().splitlines()[:3]))
+except Exception as e:
+    logger.error(f"❌ Failed to load PEM: {type(e).__name__}: {e}")
+    raise
+
+# JWT payload
 iat = int(time.time())
-exp = iat + 300  # 5 minutes
-claims = {
-    "sub": ORG_ID,
+exp = iat + 30  # short expiration for debug
+payload = {
+    "sub": sub,
     "iat": iat,
-    "exp": exp,
-    "kid": ORG_ID,  # Coinbase sometimes expects 'kid' = org_id
-}
-
-# JWT header
-headers = {
-    "alg": "ES256",
-    "typ": "JWT",
-    "kid": ORG_ID
+    "exp": exp
 }
 
 # Encode JWT
-token = jwt.encode(claims, private_key, algorithm="ES256", headers=headers)
-
-print("=== JWT DEBUG ===")
-print("Org ID:", ORG_ID)
-print("JWT length:", len(token))
-print("JWT preview:", token[:80], "...")
-print("Full JWT:", token)
+try:
+    token = jwt.encode(payload, priv, algorithm="ES256")
+    logger.info(f"✅ JWT successfully generated. First 50 chars:\n{token[:50]}")
+except Exception as e:
+    logger.error(f"❌ JWT encode failed: {type(e).__name__}: {e}")
+    raise
