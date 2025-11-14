@@ -10,53 +10,54 @@ logger.add(lambda m: print(m, end=""))
 
 class CoinbaseClient:
     def __init__(self):
-        # Load environment variables
         self.org_id = os.environ.get("COINBASE_ORG_ID")
         self.api_key = os.environ.get("COINBASE_API_KEY")
         self.pem_raw = os.environ.get("COINBASE_PEM_CONTENT", "")
+        self.base_url = "https://api.coinbase.com"  # Advanced API base
+        self.jwt_token = None
 
-        if not self.api_key or not self.pem_raw:
-            raise ValueError("API_KEY or PEM_CONTENT missing!")
+        if not all([self.org_id, self.api_key, self.pem_raw]):
+            logger.error("Missing one or more required env vars: COINBASE_ORG_ID, COINBASE_API_KEY, COINBASE_PEM_CONTENT")
+            raise Exception("Missing Coinbase credentials")
+        
+        self.connect()
 
-        # Clean PEM formatting
-        self.pem = self.pem_raw.replace("\\n", "\n") if "\\n" in self.pem_raw else self.pem_raw
-
-        # Base URL for Coinbase Advanced API
-        self.base_url = "https://api.coinbase.com"
-
-        # Test connection immediately
-        self.test_connection()
-
-    def generate_jwt(self):
+    def generate_jwt(self, sub_override=None):
         now = int(time.time())
+        sub_claim = sub_override or f"organizations/{self.org_id}/apiKeys/{self.api_key}"
         payload = {
             "iat": now,
-            "exp": now + 60,  # 60 seconds validity
-            "sub": f"organizations/{self.org_id}/apiKeys/{self.api_key}"
+            "exp": now + 300,  # 5 min expiry
+            "sub": sub_claim
         }
-        token = jwt.encode(payload, self.pem, algorithm="ES256")
+
+        try:
+            token = jwt.encode(payload, self.pem_raw, algorithm="ES256")
+        except Exception as e:
+            logger.error(f"Failed to generate JWT: {e}")
+            raise
+
         return token
 
-    def request(self, method, path, data=None):
-        url = f"{self.base_url}{path}"
-        token = self.generate_jwt()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        response = requests.request(method, url, headers=headers, json=data)
-        if response.status_code == 401:
-            logger.error("Unauthorized: JWT or API key invalid!")
-        return response
+    def connect(self):
+        # Try with standard sub format first
+        self.jwt_token = self.generate_jwt()
+        headers = {"Authorization": f"Bearer {self.jwt_token}"}
 
-    def test_connection(self):
-        # Simple endpoint to verify JWT works
-        response = self.request("GET", "/v3/brokerage/accounts")
-        if response.status_code == 200:
-            logger.info("✅ Coinbase connection OK, ready to trade.")
-        else:
-            logger.error(f"❌ Coinbase connection failed: {response.status_code} {response.text}")
+        resp = requests.get(f"{self.base_url}/v2/accounts", headers=headers)
+        if resp.status_code == 401:
+            logger.warning("401 Unauthorized with full sub format. Trying short sub format...")
+            # Try simple sub claim
+            self.jwt_token = self.generate_jwt(sub_override=self.api_key)
+            headers = {"Authorization": f"Bearer {self.jwt_token}"}
+            resp = requests.get(f"{self.base_url}/v2/accounts", headers=headers)
+        
+        logger.info(f"Coinbase /accounts response: {resp.status_code} {resp.text}")
+        if resp.status_code != 200:
+            raise Exception("Failed to connect to Coinbase API: check keys, org_id, and PEM format")
 
-# Example usage
+        logger.info("Coinbase connection successful!")
+
+# For testing
 if __name__ == "__main__":
     client = CoinbaseClient()
