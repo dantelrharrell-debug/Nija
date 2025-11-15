@@ -1,5 +1,3 @@
-# ./app/nija_client.py
-
 import os
 import time
 import datetime
@@ -14,14 +12,19 @@ from cryptography.hazmat.backends import default_backend
 # -----------------------
 # Logger setup
 logger.remove()
-logger.add(lambda msg: print(msg, end=""), level="INFO")
+logger.add(lambda m: print(m, end=""), level="INFO")
 
 # -----------------------
-# Environment variables (Sandbox)
-API_KEY = os.getenv("COINBASE_API_KEY")          # Sandbox key e.g., "organizations/{org_id}/apiKeys/{key_id}"
-PRIVATE_PEM = os.getenv("COINBASE_PEM_CONTENT") # PEM string with BEGIN/END lines
-KEY_ID = os.getenv("COINBASE_JWT_KID")          # The key ID from Coinbase dashboard
-BASE_URL = "https://api-public.sandbox.pro.coinbase.com"  # Sandbox endpoint
+# Environment variables
+API_KEY = os.getenv("COINBASE_API_KEY")          # e.g., "organizations/{org_id}/apiKeys/{key_id}"
+PRIVATE_PEM = os.getenv("COINBASE_PEM_CONTENT") # full PEM string including BEGIN/END
+KEY_ID = os.getenv("COINBASE_JWT_KID")          # key id (UUID or full path depending on Coinbase)
+
+# -----------------------
+# Debug: print env vars lengths to check they are loaded
+logger.info(f"COINBASE_API_KEY length: {len(API_KEY) if API_KEY else 'None'}")
+logger.info(f"COINBASE_PEM_CONTENT length: {len(PRIVATE_PEM) if PRIVATE_PEM else 'None'}")
+logger.info(f"COINBASE_JWT_KID: {KEY_ID}")
 
 # -----------------------
 # Load private key
@@ -32,59 +35,52 @@ private_key = serialization.load_pem_private_key(
 )
 
 # -----------------------
-# JWT generation
-def generate_jwt():
-    now = int(time.time())
-    payload = {
-        "sub": API_KEY,
-        "iat": now,
-        "exp": now + 300  # expires in 5 minutes
-    }
-    headers = {
-        "alg": "ES256",
-        "kid": KEY_ID
-    }
-    token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
-    return token
+# Build JWT claims
+now = int(time.time())
+payload = {
+    "sub": API_KEY,
+    "iat": now,
+    "exp": now + 300  # expire in 5 mins
+}
 
 # -----------------------
-# JWT verification (for logging)
+# JWT headers
+headers_jwt = {
+    "alg": "ES256",
+    "kid": KEY_ID
+}
+
+# Encode JWT
+token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers_jwt)
+logger.info(f"Generated JWT: {token}")
+
+# -----------------------
+# Verify JWT structure
 def verify_jwt_struct(token):
-    header_b64, payload_b64, _ = token.split(".")
-    header = json.loads(base64.urlsafe_b64decode(header_b64 + "=="))
-    payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=="))
-    return header, payload
+    try:
+        header_b64, payload_b64, _ = token.split(".")
+        header = json.loads(base64.urlsafe_b64decode(header_b64 + "=="))
+        payload_decoded = json.loads(base64.urlsafe_b64decode(payload_b64 + "=="))
+        return header, payload_decoded
+    except Exception as e:
+        logger.error(f"JWT decode failed: {e}")
+        return {}, {}
+
+header, payload_decoded = verify_jwt_struct(token)
+logger.info("JWT header.kid: " + str(header.get("kid")))
+logger.info("JWT payload.sub: " + str(payload_decoded.get("sub")))
+logger.info("Server UTC time: " + datetime.datetime.utcnow().isoformat())
 
 # -----------------------
-# Make request
-def c_request(method, endpoint, data=None):
-    token = generate_jwt()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
+# Test sandbox API
+BASE = "https://api-public.sandbox.pro.coinbase.com"
+headers_req = {"Authorization": f"Bearer {token}"}
 
-    # Log JWT info
-    header, payload = verify_jwt_struct(token)
-    logger.info(f"JWT header.kid: {header.get('kid')}")
-    logger.info(f"JWT payload.sub: {payload.get('sub')}")
-    logger.info(f"Server UTC time: {datetime.datetime.utcnow().isoformat()}")
-
-    url = f"{BASE_URL}{endpoint}"
-    if method.lower() == "get":
-        r = requests.get(url, headers=headers)
-    elif method.lower() == "post":
-        r = requests.post(url, json=data, headers=headers)
-    else:
-        raise ValueError("Method must be 'get' or 'post'")
-
-    logger.info(f"Request URL: {url}")
-    logger.info(f"Status Code: {r.status_code}")
-    logger.info(f"Response: {r.text[:1000]}")  # first 1000 chars
-    return r
+logger.info("Sending request to sandbox /accounts endpoint...")
+r = requests.get(f"{BASE}/accounts", headers=headers_req)
+logger.info(f"Sandbox /accounts response: {r.status_code} {r.text}")
 
 # -----------------------
-# Example usage
-if __name__ == "__main__":
-    # Test connectivity
-    response = c_request("get", "/accounts")  # Sandbox /accounts endpoint
+# Extra debug: print headers and token payload
+logger.info(f"Request headers: {headers_req}")
+logger.info(f"Payload sent in JWT: {payload}")
