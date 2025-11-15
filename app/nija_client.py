@@ -32,19 +32,21 @@ def load_private_key(pem_path):
 # -------------------------------
 # Build JWT
 # -------------------------------
-def build_jwt(key, org_id, kid):
-    now = int(time.time())
+def build_jwt(key, org_id, kid, offset_seconds=0):
+    now = int(time.time()) + offset_seconds
     payload = {
         "sub": org_id,
         "iat": now,
         "exp": now + 300  # max 5 minutes
     }
-    headers = {"kid": kid}
+    headers = {
+        "kid": kid
+    }
     token = jwt.encode(payload, key, algorithm="ES256", headers=headers)
     return token
 
 # -------------------------------
-# Verify JWT structure locally
+# Verify JWT locally
 # -------------------------------
 def verify_jwt(token):
     try:
@@ -53,15 +55,27 @@ def verify_jwt(token):
         logger.info("✅ JWT structure is valid")
         logger.info("JWT header: " + str(header))
         logger.info("JWT payload: " + str(payload))
-        print("Header:", header)
-        print("Payload:", payload)
     except Exception as e:
         logger.exception("❌ JWT verification failed: " + str(e))
         return False
     return True
 
 # -------------------------------
-# Full startup test
+# Test Coinbase API with retry for clock skew
+# -------------------------------
+def test_coinbase_api(token):
+    url = "https://api.exchange.coinbase.com/accounts"
+    try:
+        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=12)
+        logger.info("Status code: " + str(resp.status_code))
+        logger.info("Response body (truncated): " + resp.text[:2000])
+        return resp.status_code
+    except Exception as e:
+        logger.exception(f"Coinbase request failed: {e}")
+        return None
+
+# -------------------------------
+# Full startup test with clock skew handling
 # -------------------------------
 def startup_test():
     logger.info("=== Nija Coinbase JWT startup test ===")
@@ -78,29 +92,23 @@ def startup_test():
         logger.error("Missing PEM_PATH, ORG_ID, or KID; cannot proceed with JWT generation.")
         return
 
-    # Load private key
     key = load_private_key(pem_path)
 
-    # Build JWT
-    token = build_jwt(key, org_id, kid)
-    logger.info("Generated JWT (preview): " + token[:200])
+    # Try offsets -2, -1, 0, +1, +2 seconds
+    offsets = [-2, -1, 0, 1, 2]
+    for offset in offsets:
+        logger.info(f"Trying JWT with offset {offset} seconds...")
+        token = build_jwt(key, org_id, kid, offset_seconds=offset)
+        if not verify_jwt(token):
+            logger.error("JWT invalid, skipping this offset.")
+            continue
 
-    # Verify JWT locally
-    if not verify_jwt(token):
-        logger.error("JWT is invalid. Stop before sending request.")
-        return
-
-    # Test Coinbase Advanced Trade API
-    try:
-        resp = requests.get(
-            "https://api.exchange.coinbase.com/accounts",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=12
-        )
-        logger.info("Status code: " + str(resp.status_code))
-        logger.info("Response body (truncated): " + resp.text[:2000])
-    except Exception as e:
-        logger.exception(f"Coinbase request failed: {e}")
+        status = test_coinbase_api(token)
+        if status == 200:
+            logger.info(f"✅ Success with offset {offset} seconds!")
+            break
+        else:
+            logger.warning(f"Failed with offset {offset}, status: {status}")
 
 # -------------------------------
 # Run test
