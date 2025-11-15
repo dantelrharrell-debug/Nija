@@ -19,7 +19,7 @@ def write_pem_from_env():
     pem_path = "/app/coinbase.pem"
     with open(pem_path, "w", newline="\n") as f:
         f.write(pem_content.replace("\\n", "\n"))
-    logger.info(f"PEM written to {pem_path}")
+    logger.info(f"✅ PEM written to {pem_path}")
     return pem_path
 
 def load_private_key(pem_path):
@@ -30,18 +30,16 @@ def load_private_key(pem_path):
     return key
 
 # -------------------------------
-# Build JWT (with optional time correction)
+# Build JWT
 # -------------------------------
 def build_jwt(key, org_id, kid, time_offset=0):
-    now = int(time.time()) + int(time_offset)
+    now = int(time.time()) + time_offset
     payload = {
         "sub": org_id,
         "iat": now,
         "exp": now + 300  # max 5 minutes
     }
-    headers = {
-        "kid": kid
-    }
+    headers = {"kid": kid}
     token = jwt.encode(payload, key, algorithm="ES256", headers=headers)
     return token
 
@@ -61,17 +59,21 @@ def verify_jwt(token):
     return True
 
 # -------------------------------
-# Fetch Coinbase UTC time
+# Fetch Coinbase server time
 # -------------------------------
 def fetch_coinbase_time():
     try:
-        resp = requests.get("https://api.exchange.coinbase.com/time", timeout=10)
-        resp.raise_for_status()
-        coinbase_time = resp.json().get("epoch")
-        logger.info("Coinbase UTC epoch: " + str(coinbase_time))
-        return coinbase_time
+        resp = requests.get("https://api.exchange.coinbase.com/time", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            coinbase_epoch = int(data['epoch'])
+            logger.info(f"Coinbase server UTC epoch: {coinbase_epoch}")
+            return coinbase_epoch
+        else:
+            logger.warning(f"Failed to fetch Coinbase time. Status: {resp.status_code}")
+            return None
     except Exception as e:
-        logger.exception("Failed to fetch Coinbase time: " + str(e))
+        logger.exception(f"Error fetching Coinbase time: {e}")
         return None
 
 # -------------------------------
@@ -95,17 +97,20 @@ def startup_test():
     # Load private key
     key = load_private_key(pem_path)
 
-    # Check Coinbase time for offset
+    # Fetch Coinbase server time and calculate skew
     coinbase_epoch = fetch_coinbase_time()
     server_epoch = int(time.time())
     time_offset = 0
+    logger.info(f"Local server UTC epoch: {server_epoch}")
     if coinbase_epoch:
-        time_offset = coinbase_epoch - server_epoch
-        if abs(time_offset) > 5:
-            logger.warning(f"Time offset detected! Adjusting JWT by {time_offset} seconds.")
+        offset = coinbase_epoch - server_epoch
+        logger.info(f"Time offset (Coinbase - Server) in seconds: {offset}")
+        if abs(offset) > 300:
+            logger.warning("Time skew > 5 minutes detected. Adjusting JWT iat/exp by offset.")
+            time_offset = offset
 
-    # Build JWT with corrected time
-    token = build_jwt(key, org_id, kid, time_offset)
+    # Build JWT
+    token = build_jwt(key, org_id, kid, time_offset=time_offset)
     logger.info("Generated JWT (preview): " + token[:200])
 
     # Verify JWT locally
@@ -122,6 +127,8 @@ def startup_test():
         )
         logger.info("Status code: " + str(resp.status_code))
         logger.info("Response body (truncated): " + resp.text[:2000])
+        if resp.status_code == 401:
+            logger.error("❌ Unauthorized. Check KID, ORG_ID, PEM, and server time.")
     except Exception as e:
         logger.exception(f"Coinbase request failed: {e}")
 
