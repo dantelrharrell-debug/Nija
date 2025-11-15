@@ -1,3 +1,80 @@
+    # --- replace these methods in your CoinbaseClient class ---
+
+    def request_jwt(self, method: str, url: str, **kwargs):
+        token = self._build_jwt()
+        headers = kwargs.pop("headers", {})
+        headers["Authorization"] = f"Bearer {token}"
+        return requests.request(method, url, headers=headers, **kwargs)
+
+    def request_rest(self, method: str, url: str, **kwargs):
+        body = ""
+        if "json" in kwargs:
+            body = json.dumps(kwargs.get("json"))
+            kwargs.pop("json", None)
+            kwargs["data"] = body
+        elif "data" in kwargs:
+            body = kwargs.get("data", "")
+
+        headers = kwargs.pop("headers", {})
+
+        # improved error message listing all env names we check
+        if not all([self.rest_key, self.rest_secret, self.rest_passphrase]):
+            msg = (
+                "REST API credentials missing. Set one of these environment variable sets:\n"
+                " - COINBASE_REST_KEY, COINBASE_REST_SECRET, COINBASE_REST_PASSPHRASE\n"
+                " - OR COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_API_PASSPHRASE\n"
+                "You can add them in Railway/Render project settings."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
+
+        try:
+            h = self._build_rest_headers(method, url, body)
+        except Exception as e:
+            logger.exception("Failed to create REST headers")
+            raise
+        headers.update(h)
+        return requests.request(method, url, headers=headers, data=body, **kwargs)
+
+    def request_auto(self, method: str, url: str, **kwargs):
+        """
+        Auto-selects auth method:
+          - If host contains 'api.coinbase.com' or 'pro.coinbase.com' -> REST HMAC
+          - If host contains 'cdp' or 'advanced-trade' -> JWT
+          - Otherwise prefer JWT if PEM present, else REST.
+        """
+        parsed = requests.utils.urlparse(url)
+        host = parsed.netloc.lower()
+        path = parsed.path.lower()
+
+        # explicit host checks first
+        if "api.coinbase.com" in host or "pro.coinbase.com" in host or path.startswith("/v2") or path.startswith("/accounts"):
+            # attempt REST HMAC if creds exist, else raise clear error
+            if all([self.rest_key, self.rest_secret, self.rest_passphrase]):
+                return self.request_rest(method, url, **kwargs)
+            # fall back to JWT if available (some endpoints may accept JWT in your flow)
+            if self._private_key:
+                logger.warning("REST creds missing but PEM available — falling back to JWT for this host.")
+                return self.request_jwt(method, url, **kwargs)
+            raise RuntimeError("REST credentials missing and no PEM for JWT fallback.")
+
+        if "cdp" in host or "advanced-trade" in host:
+            return self.request_jwt(method, url, **kwargs)
+
+        # default: prefer JWT if possible
+        if self._private_key:
+            return self.request_jwt(method, url, **kwargs)
+        return self.request_rest(method, url, **kwargs)
+
+    # convenience alias so existing callers using client.request(...) work
+    def request(self, method: str, url: str, **kwargs):
+        return self.request_auto(method, url, **kwargs)
+
+    # safer sandbox helper — uses request_auto so it respects which auth is available
+    def sandbox_accounts(self):
+        base = "https://api-public.sandbox.pro.coinbase.com"
+        return self.request_auto("GET", f"{base}/accounts")
+
 # app/nija_client.py
 # Requires: pyjwt, cryptography, requests, loguru
 
