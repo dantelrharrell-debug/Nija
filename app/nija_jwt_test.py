@@ -39,11 +39,9 @@ def build_jwt(key, org_id, kid):
         "iat": now,
         "exp": now + 300  # max 5 minutes
     }
-    headers = {
-        "kid": kid
-    }
+    headers = {"kid": kid}
     token = jwt.encode(payload, key, algorithm="ES256", headers=headers)
-    return token
+    return token, payload
 
 # -------------------------------
 # Verify JWT structure locally
@@ -72,7 +70,8 @@ def startup_test():
     logger.info(f"PEM_PATH: {pem_path}")
     logger.info(f"ORG_ID : {org_id}")
     logger.info(f"KID    : {kid}")
-    logger.info("Server UTC time: " + datetime.datetime.utcnow().isoformat())
+    server_utc = datetime.datetime.utcnow()
+    logger.info("Server UTC time: " + server_utc.isoformat())
 
     if not pem_path or not org_id or not kid:
         logger.error("Missing PEM_PATH, ORG_ID, or KID; cannot proceed with JWT generation.")
@@ -82,13 +81,19 @@ def startup_test():
     key = load_private_key(pem_path)
 
     # Build JWT
-    token = build_jwt(key, org_id, kid)
+    token, payload = build_jwt(key, org_id, kid)
     logger.info("Generated JWT (preview): " + token[:200])
 
     # Verify JWT locally
     if not verify_jwt(token):
         logger.error("JWT is invalid. Stop before sending request.")
         return
+
+    # Print iat/exp in UTC to check time skew
+    iat = payload["iat"]
+    exp = payload["exp"]
+    logger.info(f"JWT iat (timestamp): {iat}, UTC: {datetime.datetime.utcfromtimestamp(iat)}")
+    logger.info(f"JWT exp (timestamp): {exp}, UTC: {datetime.datetime.utcfromtimestamp(exp)}")
 
     # Test Coinbase Advanced Trade API
     try:
