@@ -1,7 +1,9 @@
 /app
-  ├─ main.py
-  ├─ requirements.txt
-  ├─ .env
-  └─ app/
-       ├─ __init__.py        # can be empty
-       └─ nija_client.py
+│
+├─ main.py                 # entry point
+├─ start_bot_main.py       # initialization logic
+├─ nija_client.py          # Coinbase client
+├─ __init__.py             # makes /app a package
+├─ requirements.txt        # dependencies
+├─ Dockerfile
+└─ .env
