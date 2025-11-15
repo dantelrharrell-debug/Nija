@@ -1,3 +1,17 @@
+import os
+from app.nija_client import CoinbaseClient
+
+# Initialize client
+client = CoinbaseClient(
+    api_key=os.environ["COINBASE_API_KEY"],
+    org_id=os.environ["COINBASE_ORG_ID"],
+    pem=os.environ["COINBASE_PEM_CONTENT"]
+)
+
+# Test request (replace with any Coinbase endpoint)
+response = client.request("GET", "https://api.coinbase.com/v2/accounts")
+print(response.status_code, response.text)
+
 import time, sys
 from loguru import logger
 
