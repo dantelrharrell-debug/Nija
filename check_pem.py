@@ -2,7 +2,7 @@
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
-path = "coinbase.pem"
+path = "coinbase.pem"   # the file you downloaded
 with open(path, "rb") as f:
     data = f.read()
 print("PEM byte length:", len(data))
