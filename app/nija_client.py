@@ -11,40 +11,56 @@ logger.remove()
 logger.add(lambda m: print(m, end=""))
 
 # --- Load Coinbase PEM from file ---
-try:
-    with open(os.environ["COINBASE_PEM_PATH"], "rb") as pem_file:
-        pem_data = pem_file.read()
-        private_key = serialization.load_pem_private_key(
-            pem_data,
-            password=None,
-            backend=default_backend()
-        )
-    logger.info("Coinbase PEM loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load PEM: {e}")
-    raise e
+PEM_PATH = os.environ.get("COINBASE_PEM_PATH")
+if not PEM_PATH:
+    logger.error("COINBASE_PEM_PATH not set")
+    raise ValueError("COINBASE_PEM_PATH environment variable missing")
 
-# --- Generate JWT for Coinbase Advanced API ---
-def generate_jwt():
-    try:
-        payload = {
-            "sub": os.environ["COINBASE_ORG_ID"],
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 300  # 5 minutes expiry
-        }
-        token = jwt.encode(
-            payload,
-            private_key,
-            algorithm="ES256",
-            headers={"kid": os.environ["COINBASE_API_KEY"]}
-        )
-        return token
-    except Exception as e:
-        logger.error(f"Failed to generate JWT: {e}")
-        return None
+with open(PEM_PATH, "rb") as pem_file:
+    pem_data = pem_file.read()
+    private_key = serialization.load_pem_private_key(
+        pem_data,
+        password=None,
+        backend=default_backend()
+    )
 
-jwt_token = generate_jwt()
-if jwt_token:
-    logger.info(f"Generated JWT preview: {jwt_token[:50]}")
+# --- Environment variables ---
+COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
+COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")
+
+if not COINBASE_API_KEY or not COINBASE_ORG_ID:
+    logger.error("Missing Coinbase API Key or Org ID")
+    raise ValueError("Missing Coinbase API Key or Org ID")
+
+# --- Generate JWT ---
+current_ts = int(time.time())
+payload = {
+    "sub": COINBASE_ORG_ID,          # Your organization ID
+    "iat": current_ts,               # Issued at timestamp
+    "exp": current_ts + 300          # Expires in 5 minutes
+}
+
+headers = {
+    "alg": "ES256",
+    "kid": COINBASE_API_KEY
+}
+
+jwt_token = jwt.encode(
+    payload,
+    private_key,
+    algorithm="ES256",
+    headers=headers
+)
+
+logger.info(f"Generated JWT: {jwt_token[:50]}...")
+
+# --- Test Coinbase API call ---
+url = "https://api.coinbase.com/v2/accounts"
+response = requests.get(url, headers={"Authorization": f"Bearer {jwt_token}"})
+
+if response.status_code == 200:
+    logger.success("✅ Coinbase connection successful!")
+    logger.info(response.json())
 else:
-    logger.error("JWT generation failed. Coinbase API calls will not work.")
+    logger.error(f"❌ Coinbase connection failed: {response.status_code}")
+    logger.error(response.text)
