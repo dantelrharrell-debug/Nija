@@ -1,4 +1,4 @@
-# Use official slim Python image
+# Base Python image
 FROM python:3.11-slim
 
 # Set working directory
@@ -7,7 +7,7 @@ WORKDIR /app
 # Copy project files
 COPY . /app
 
-# Install system dependencies for cryptography
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libssl-dev \
@@ -18,5 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run main.py unbuffered
-CMD ["python", "-u", "main.py"]
+# Use unbuffered stdout
+ENV PYTHONUNBUFFERED=1
+
+# Start bot
+CMD ["python", "main.py"]
