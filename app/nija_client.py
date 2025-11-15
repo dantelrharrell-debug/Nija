@@ -46,7 +46,7 @@ def generate_jwt():
     )
     return token
 
-# --- Prepare headers for Coinbase Advanced API ---
+# --- Prepare headers ---
 def get_headers():
     token = generate_jwt()
     headers = {
@@ -55,7 +55,7 @@ def get_headers():
     }
     return headers
 
-# --- Make API call with automatic retry on 401 ---
+# --- Generic GET request with retries ---
 def coinbase_get(url, retries=3, delay=1):
     for attempt in range(retries):
         headers = get_headers()
@@ -70,13 +70,51 @@ def coinbase_get(url, retries=3, delay=1):
     logger.error("Failed to authenticate after multiple attempts")
     return None
 
-# --- Example API call ---
+# --- Generic POST request with retries ---
+def coinbase_post(url, data, retries=3, delay=1):
+    for attempt in range(retries):
+        headers = get_headers()
+        response = requests.post(url, json=data, headers=headers)
+        if response.status_code == 401:
+            logger.warning(f"Unauthorized (401). Regenerating JWT and retrying... Attempt {attempt+1}/{retries}")
+            time.sleep(delay)
+            continue
+        elif response.status_code not in (200, 201):
+            logger.error(f"Coinbase API Error: {response.status_code} {response.text}")
+        return response.json()
+    logger.error("Failed to authenticate after multiple attempts")
+    return None
+
+# --- Specific API endpoints ---
 def get_accounts():
     url = "https://api.coinbase.com/v2/accounts"
     return coinbase_get(url)
+
+def place_order(account_id, side, size, product_id):
+    """
+    Example POST order payload:
+    side = 'buy' or 'sell'
+    size = amount to trade
+    product_id = trading pair, e.g., 'BTC-USD'
+    """
+    url = f"https://api.coinbase.com/v2/accounts/{account_id}/orders"
+    data = {
+        "type": "market",
+        "side": side,
+        "size": size,
+        "product_id": product_id
+    }
+    return coinbase_post(url, data)
 
 # --- For testing ---
 if __name__ == "__main__":
     logger.info("Testing Coinbase API connection...")
     accounts = get_accounts()
     logger.info(accounts)
+
+    # Example: place a test order
+    if accounts and len(accounts.get("data", [])) > 0:
+        first_account_id = accounts["data"][0]["id"]
+        logger.info(f"Placing test order on account {first_account_id}...")
+        result = place_order(first_account_id, "buy", "0.001", "BTC-USD")
+        logger.info(result)
