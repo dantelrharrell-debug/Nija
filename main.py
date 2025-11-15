@@ -1,72 +1,46 @@
-# main.py  (entry file)
-import os
-import sys
-import time
+# main.py (replace the relevant parts)
+import os, sys, time
 from loguru import logger
 from datetime import datetime
 from app.nija_client import CoinbaseClient
 
 logger.remove()
 logger.add(sys.stdout, level="INFO", enqueue=True)
-logger.info("Nija bot starting...")
+logger.info("Nija bot starting... (main.py)")
 
-def log(msg):
-    ts = datetime.utcnow().isoformat() + "Z"
-    logger.info(f"{ts} | {msg}")
+# load env values used below
+api_key = os.environ.get("COINBASE_API_KEY")
+org_id = os.environ.get("COINBASE_ORG_ID")
+pem = os.environ.get("COINBASE_PEM_CONTENT")  # or COINBASE_PEM_B64 base64
+kid = os.environ.get("COINBASE_JWT_KID")     # the key id (UUID) from Coinbase
+sandbox = os.environ.get("SANDBOX", "false").lower() in ("1", "true", "yes")
 
-log(f"MAIN: cwd={os.getcwd()} pid={os.getpid()}")
-
-# list directories for container debug (keeps Railway logs informative)
-for p in [".", "/app", "/tmp", "/workspace", "/home"]:
-    try:
-        items = os.listdir(p)
-        log(f"LS {p}: {items[:10]}")
-    except Exception as e:
-        log(f"LS {p} failed: {e}")
-
-# Build CoinbaseClient from env
-api_key = os.getenv("COINBASE_API_KEY")
-org_id = os.getenv("COINBASE_ORG_ID")
-pem = os.getenv("COINBASE_PEM_CONTENT") or os.getenv("COINBASE_PEM_B64")
-kid = os.getenv("COINBASE_JWT_KID")
-
-client = None
 try:
-    client = CoinbaseClient(api_key=api_key, org_id=org_id, pem=pem, kid=kid, sandbox=True)
-    log("CoinbaseClient initialized")
+    # NOTE: pass jwt_kid= not kid=
+    client = CoinbaseClient(api_key=api_key, org_id=org_id, pem=pem, jwt_kid=kid)
+    logger.info("CoinbaseClient initialized")
 except Exception as e:
     logger.exception("Failed to init CoinbaseClient")
-    # fatal: stop here so we don't continue in broken auth state
+    # if client cannot initialize, exit (so you can see the error and fix env)
     sys.exit(1)
 
-# Test that JWT-based auth is appropriate for the endpoint you're hitting.
-# IMPORTANT: if you want to talk to REST v2 endpoints (api.coinbase.com/v2/*) you must use the REST key/HMAC scheme,
-# not JWT bearer. This test will show whether the JWT-auth call to the sandbox accounts endpoint succeeds.
+# optional quick test against sandbox or API
 try:
-    resp = client.sandbox_accounts()
-    log(f"Coinbase API test status: {resp.status_code}")
-    log(f"API response: {resp.text[:1000]}")
-    if resp.status_code == 401:
-        log("Received 401. Check: (1) are you calling an endpoint that expects JWT bearer tokens or HMAC API key headers? (2) PEM/kid/sub correctness.")
+    # if you want sandbox test: client.sandbox_accounts()
+    resp = client.sandbox_accounts() if sandbox else client.request("GET", "https://api.coinbase.com/v2/accounts")
+    logger.info(f"Coinbase API test status: {resp.status_code}")
+    logger.info(f"API response (truncated): {resp.text[:400]}")
 except Exception as e:
     logger.exception("Coinbase test request failed")
 
-# Now import and run main bot function (assuming it accepts client)
+# Import and pass client into starter (start_bot_main expects client param)
 try:
     from app.start_bot_main import start_bot_main
-    log("Imported start_bot_main OK")
-    # Many earlier logs showed start_bot_main requires client parameter — pass it:
-    start_bot_main(client)
-except TypeError:
-    # fallback: some versions expect no args — try both
-    try:
-        start_bot_main()
-    except Exception:
-        logger.exception("start_bot_main failed in both calling styles")
-except Exception:
-    logger.exception("Bot crashed")
-
-# heartbeat so Railway logs show activity quickly.
-while True:
-    log("HEARTBEAT - container alive")
-    time.sleep(5)
+    logger.info("Imported start_bot_main OK")
+    start_bot_main(client)   # <--- pass the client instance
+except Exception as e:
+    logger.exception("Bot crashed during start")
+    # keep process alive for debugging, or exit if you prefer
+    while True:
+        logger.info("heartbeat")
+        time.sleep(60)
