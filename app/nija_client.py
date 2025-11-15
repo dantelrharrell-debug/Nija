@@ -1,4 +1,4 @@
-# ./app/nija_client.py
+# ./app/nija_client.py  (drop this file into your repo - overwrite existing)
 import os
 import sys
 import time
@@ -9,29 +9,30 @@ from loguru import logger
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
+# Basic logging to container stdout (so Railway/Render logs show it)
 logger.remove()
-logger.add(lambda m: print(m, end=""), level=os.environ.get("LOG_LEVEL", "INFO"))
+logger.add(lambda m: print(m, end=""))
 
-# --- Config / paths ---
+# Constants
 PEM_FILE_PATH = os.environ.get("COINBASE_PEM_PATH", "/app/coinbase.pem")
-MIN_PEM_BYTES = 200
-CB_API_VERSION = os.environ.get("CB_API_VERSION", "2025-01-01")
+MIN_PEM_LENGTH = 200  # sanity check
 
 def write_pem_from_env():
-    s = os.environ.get("COINBASE_PEM_CONTENT")
-    if not s:
+    pem_env = os.environ.get("COINBASE_PEM_CONTENT")
+    if not pem_env:
         logger.warning("COINBASE_PEM_CONTENT not set in environment. Skipping PEM write.")
         return None
-    # Convert literal "\n" into newlines if necessary
-    if "\\n" in s and "\n" not in s:
-        s = s.replace("\\n", "\n")
-    s = s.strip().strip('"').strip("'")
-    if not s.endswith("\n"):
-        s += "\n"
+    # If literal "\n" present, convert to actual newlines
+    pem_text = pem_env.replace("\\n", "\n") if "\\n" in pem_env and "\n" not in pem_env else pem_env
+    pem_text = pem_text.strip().strip('"').strip("'")
+    if not pem_text.endswith("\n"):
+        pem_text += "\n"
     try:
         with open(PEM_FILE_PATH, "w", newline="\n") as f:
-            f.write(s)
-        logger.info(f"Wrote PEM to {PEM_FILE_PATH} ({len(s)} bytes)")
+            f.write(pem_text)
+        logger.info(f"Wrote PEM to {PEM_FILE_PATH} ({len(pem_text)} bytes)")
+        if len(pem_text) < MIN_PEM_LENGTH:
+            logger.warning("COINBASE_PEM_CONTENT looks very short (<200 bytes). This is likely truncated.")
         return PEM_FILE_PATH
     except Exception as e:
         logger.exception("Failed to write PEM file: " + str(e))
@@ -39,28 +40,20 @@ def write_pem_from_env():
 
 def load_private_key(path):
     if not os.path.exists(path):
-        logger.error(f"PEM file not found at {path}")
-        raise FileNotFoundError(path)
-    data = open(path, "rb").read()
-    if len(data) < MIN_PEM_BYTES:
-        logger.warning(f"PEM file is small ({len(data)} bytes). It may be truncated.")
+        logger.error(f"PEM file not found at {path}. Make sure you uploaded the full PEM.")
+        sys.exit(1)
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < MIN_PEM_LENGTH:
+        logger.error(f"PEM file too short ({len(data)} bytes). Cannot generate JWT.")
+        sys.exit(1)
     try:
         key = serialization.load_pem_private_key(data, password=None, backend=default_backend())
-        logger.info("Private key loaded OK.")
+        logger.info("Private key loaded successfully.")
         return key
     except Exception as e:
         logger.exception("Could not deserialize PEM private key: " + str(e))
-        raise
-
-def normalize_kid(maybe_kid):
-    """If user put full path (organizations/.../apiKeys/<uuid>), extract the uuid."""
-    if not maybe_kid:
-        return None
-    if "/" in maybe_kid:
-        uuid = maybe_kid.split("/")[-1]
-        logger.info(f"COINBASE_JWT_KID appears to be a path; using last segment as kid: {uuid}")
-        return uuid
-    return maybe_kid
+        sys.exit(1)
 
 def build_jwt(private_key, org_id, kid):
     now = int(time.time())
@@ -69,7 +62,7 @@ def build_jwt(private_key, org_id, kid):
     token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
     return token
 
-def verify_jwt_structure(token):
+def verify_jwt_struct(token):
     try:
         header = jwt.get_unverified_header(token)
         payload = jwt.decode(token, options={"verify_signature": False})
@@ -80,66 +73,53 @@ def verify_jwt_structure(token):
         logger.exception("Failed to decode JWT locally: " + str(e))
         return None, None
 
-def call_endpoints(token):
-    headers_v2 = {"Authorization": f"Bearer {token}", "CB-VERSION": CB_API_VERSION}
-    headers_exchange = {"Authorization": f"Bearer {token}", "CB-VERSION": CB_API_VERSION}
-    # Try Coinbase REST (v2) and Advanced Exchange endpoints (both show 401 differently sometimes)
-    urls = [
-        ("v2_accounts", "https://api.coinbase.com/v2/accounts", headers_v2),
-        ("exchange_accounts", "https://api.exchange.coinbase.com/accounts", headers_exchange),
-    ]
-    for name, url, h in urls:
-        try:
-            resp = requests.get(url, headers=h, timeout=12)
-            logger.info(f"[{name}] {url} -> status {resp.status_code}")
-            logger.info(f"[{name}] body (truncated): {resp.text[:2000]}")
-        except Exception as e:
-            logger.exception(f"[{name}] request failed: {e}")
-
-def check_time_skew(payload):
-    now = int(time.time())
-    iat = payload.get("iat")
-    exp = payload.get("exp")
-    if iat:
-        diff = now - int(iat)
-        logger.info(f"Now: {now}  iat: {iat}  exp: {exp}  (now - iat = {diff} seconds)")
-        if abs(diff) > 60:
-            logger.warning("Time skew detected: server time and token iat differ by > 60s. Coinbase may reject the token.")
-    else:
-        logger.warning("iat not present in payload to check time skew.")
+def test_coinbase_accounts(token, endpoint="https://api.exchange.coinbase.com/accounts"):
+    headers = {"Authorization": f"Bearer {token}", "CB-VERSION": os.environ.get("CB_API_VERSION", "2025-01-01")}
+    try:
+        resp = requests.get(endpoint, headers=headers, timeout=12)
+        logger.info(f"Coinbase response status: {resp.status_code}")
+        logger.info("Coinbase response body (truncated):\n" + (resp.text[:2000] if resp.text else ""))
+        return resp
+    except Exception as e:
+        logger.exception("Coinbase request failed: " + str(e))
+        return None
 
 def startup_test():
     logger.info("=== Nija Coinbase JWT startup test ===")
-    # write PEM if content env was set
     pem_path = os.environ.get("COINBASE_PEM_PATH") or write_pem_from_env()
-    logger.info(f"PEM_PATH: {pem_path}")
     org_id = os.environ.get("COINBASE_ORG_ID")
-    kid_env = os.environ.get("COINBASE_JWT_KID") or os.environ.get("COINBASE_API_KEY")
-    kid = normalize_kid(kid_env)
+    kid = os.environ.get("COINBASE_JWT_KID")  # should be API key UUID only (no 'organizations/...')
+    logger.info(f"PEM_PATH: {pem_path}")
     logger.info(f"ORG_ID : {org_id}")
-    logger.info(f"KID    : {kid} (from env: {kid_env})")
+    logger.info(f"KID    : {kid}")
     logger.info("Server UTC time: " + datetime.datetime.utcnow().isoformat())
 
     if not pem_path or not org_id or not kid:
-        logger.error("Missing PEM_PATH or ORG_ID or KID. Please set COINBASE_PEM_CONTENT/COINBASE_PEM_PATH, COINBASE_ORG_ID, and COINBASE_JWT_KID (UUID).")
+        logger.error("Missing PEM_PATH, ORG_ID, or KID; cannot proceed with JWT generation.")
         return
 
-    try:
-        key = load_private_key(pem_path)
-    except Exception:
-        logger.error("Private key load failed; aborting startup test.")
-        return
-
+    key = load_private_key(pem_path)
     token = build_jwt(key, org_id, kid)
-    preview = token if len(token) < 500 else token[:200] + "..."
-    logger.info("Generated JWT preview: " + preview)
+    logger.info("Generated JWT (preview): " + (token[:200] if token else ""))
 
-    header, payload = verify_jwt_structure(token)  # prints header/payload
-    if payload:
-        check_time_skew(payload)
+    verify_jwt_struct(token)
 
-    # call both endpoints
-    call_endpoints(token)
+    # Test Coinbase Advanced Trade API endpoint
+    resp = test_coinbase_accounts(token, endpoint=os.environ.get("COINBASE_TEST_ENDPOINT", "https://api.exchange.coinbase.com/accounts"))
+    if resp is None:
+        logger.error("No response from Coinbase (exception).")
+    elif resp.status_code == 401:
+        logger.error("Coinbase returned 401 Unauthorized. Likely kid, sub, or time skew issue.")
+    else:
+        logger.info("Coinbase call succeeded or returned non-401 code.")
+
+def get_coinbase_headers():
+    pem_path = os.environ.get("COINBASE_PEM_PATH") or PEM_FILE_PATH
+    org_id = os.environ.get("COINBASE_ORG_ID")
+    kid = os.environ.get("COINBASE_JWT_KID")
+    key = load_private_key(pem_path)
+    token = build_jwt(key, org_id, kid)
+    return {"Authorization": f"Bearer {token}", "CB-VERSION": os.environ.get("CB_API_VERSION", "2025-01-01")}
 
 if __name__ == "__main__":
     startup_test()
