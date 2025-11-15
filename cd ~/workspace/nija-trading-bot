@@ -1,4 +1,6 @@
 /app
-├── nija_client.py      # Coinbase client + JWT handling
-├── webhook.py          # Webhook listener
-├── start_bot.py        # Main bot runner (imports client, starts webhook/trading)
+  /app
+    __init__.py
+    nija_client.py
+    start_bot_main.py
+main.py
