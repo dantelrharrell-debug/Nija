@@ -1,4 +1,4 @@
-# ./app/nija_client.py
+# app/nija_client.py
 # Python 3.9+ recommended. Requires: pyjwt, cryptography, requests, loguru
 
 import os
@@ -6,84 +6,81 @@ import time
 import datetime
 import jwt
 import requests
-import base64
-import json
 from loguru import logger
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
-# -----------------------
-# Logger setup
-logger.remove()
-logger.add(lambda m: print(m, end=""), level="INFO")
+class CoinbaseClient:
+    def __init__(self):
+        # Load env vars
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.org_id = os.getenv("COINBASE_ORG_ID")
+        self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
 
-# -----------------------
-# Environment variables
-API_KEY = os.getenv("COINBASE_API_KEY")          # e.g., "organizations/{org_id}/apiKeys/{key_id}"
-PRIVATE_PEM = os.getenv("COINBASE_PEM_CONTENT") # full PEM string including BEGIN/END
-KEY_ID = os.getenv("COINBASE_JWT_KID")          # key id
-ORG_ID = os.getenv("COINBASE_ORG_ID")           # org id
-SANDBOX = os.getenv("SANDBOX", "1")             # "1" for sandbox, "0" for live
+        if not all([self.api_key, self.org_id, self.pem_content]):
+            logger.error("Missing Coinbase credentials in environment variables!")
+            raise ValueError("Coinbase API key, Org ID, or PEM missing")
 
-# -----------------------
-# Sanity checks
-if not all([API_KEY, PRIVATE_PEM, KEY_ID, ORG_ID]):
-    logger.error("One or more Coinbase env vars are missing! Please check COINBASE_API_KEY, COINBASE_PEM_CONTENT, COINBASE_JWT_KID, COINBASE_ORG_ID")
-    raise SystemExit
+        self.session = requests.Session()
+        self.session.headers.update({"Content-Type": "application/json"})
 
-# -----------------------
-# Load private key
-private_key = serialization.load_pem_private_key(
-    PRIVATE_PEM.encode("utf-8"),
-    password=None,
-    backend=default_backend()
-)
+        # Load PEM key
+        self._load_pem()
 
-# -----------------------
-# Detect server clock skew
-server_utc = datetime.datetime.utcnow()
-logger.info(f"Server UTC time: {server_utc.isoformat()}")
+    def _load_pem(self):
+        try:
+            # Fix PEM formatting if stored with \n instead of newlines
+            pem_fixed = self.pem_content.replace("\\n", "\n")
+            self.private_key = serialization.load_pem_private_key(
+                pem_fixed.encode("utf-8"),
+                password=None,
+                backend=default_backend()
+            )
+            logger.info("PEM loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load PEM: {e}")
+            raise e
 
-# Build claims
-now = int(time.time())
-# Add skew correction if needed (Coinbase allows ±5 sec safely)
-CLOCK_SKEW = int(os.getenv("COINBASE_CLOCK_SKEW", 0))
-payload = {
-    "sub": API_KEY,
-    "iat": now + CLOCK_SKEW,
-    "exp": now + 300 + CLOCK_SKEW  # expire in 5 mins
-}
+    def _generate_jwt(self):
+        iat = int(time.time())
+        exp = iat + 300  # JWT valid for 5 minutes
+        payload = {
+            "iat": iat,
+            "exp": exp,
+            "sub": self.org_id
+        }
 
-# Build headers
-headers_jwt = {
-    "alg": "ES256",
-    "kid": KEY_ID
-}
+        try:
+            token = jwt.encode(
+                payload,
+                self.private_key,
+                algorithm="ES256",
+                headers={"kid": self.api_key}  # Coinbase API key as KID
+            )
+            return token
+        except Exception as e:
+            logger.error(f"JWT generation failed: {e}")
+            raise e
 
-# Encode JWT
-token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers_jwt)
-logger.info(f"Generated JWT: {token[:50]}...")
+    def get_accounts(self):
+        token = self._generate_jwt()
+        headers = {"Authorization": f"Bearer {token}"}
+        url = "https://api.coinbase.com/v2/accounts"
+        try:
+            resp = self.session.get(url, headers=headers)
+            if resp.status_code != 200:
+                logger.error(f"Coinbase API Error {resp.status_code}: {resp.text}")
+                return None
+            return resp.json()
+        except Exception as e:
+            logger.error(f"Request failed: {e}")
+            return None
 
-# -----------------------
-# Verify JWT structure
-def verify_jwt_struct(token):
-    header_b64, payload_b64, _ = token.split(".")
-    header = json.loads(base64.urlsafe_b64decode(header_b64 + "=="))
-    payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=="))
-    return header, payload
-
-header, payload_decoded = verify_jwt_struct(token)
-logger.info("JWT header.kid: " + str(header.get("kid")))
-logger.info("JWT payload.sub: " + str(payload_decoded.get("sub")))
-logger.info("JWT iat: " + str(payload_decoded.get("iat")))
-logger.info("JWT exp: " + str(payload_decoded.get("exp")))
-
-# -----------------------
-# Coinbase endpoint
-BASE = "https://api-public.sandbox.pro.coinbase.com" if SANDBOX == "1" else "https://api.pro.coinbase.com"
-headers_req = {"Authorization": f"Bearer {token}"}
-
-# -----------------------
-# Test /accounts
-r = requests.get(f"{BASE}/accounts", headers=headers_req)
-logger.info(f"Sandbox /accounts response: {r.status_code} {r.text[:200]}...")
+# Quick test
+if __name__ == "__main__":
+    client = CoinbaseClient()
+    accounts = client.get_accounts()
+    if accounts:
+        logger.info(accounts)
+    else:
+        logger.warning("No accounts returned. Check credentials.")
