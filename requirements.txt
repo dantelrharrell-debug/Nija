@@ -38,3 +38,8 @@ backoff==2.2.1
 
 # Environment
 python-dotenv==1.2.1
+
+requests
+PyJWT
+cryptography
+loguru
