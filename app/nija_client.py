@@ -15,26 +15,42 @@ class CoinbaseClient:
         self._private_key_pem = pem or os.getenv("COINBASE_PEM_CONTENT")
 
         if not all([self.api_key, self.org_id, self._kid, self._private_key_pem]):
-            raise ValueError("Missing Coinbase credentials or PEM")
+            raise ValueError("CoinbaseClient missing required credentials or PEM content")
 
         self._private_key = self._load_private_key()
         logger.info(f"CoinbaseClient initialized with kid: {self._kid}")
 
     def _load_private_key(self):
-        return serialization.load_pem_private_key(
-            self._private_key_pem.encode(), password=None, backend=default_backend()
-        )
+        try:
+            key = serialization.load_pem_private_key(
+                self._private_key_pem.encode(),
+                password=None,
+                backend=default_backend()
+            )
+            return key
+        except Exception as e:
+            logger.error(f"Failed to load PEM key: {e}")
+            raise
 
     def _build_jwt(self):
-        now = int(time.time())
-        payload = {
-            "sub": f"organizations/{self.org_id}/apiKeys/{self.api_key}",
-            "iat": now,
-            "exp": now + 300
-        }
-        headers = {"kid": self._kid, "alg": "ES256", "typ": "JWT"}
-        token = jwt.encode(payload, self._private_key, algorithm="ES256", headers=headers)
-        return token
+        try:
+            now = int(time.time())
+            payload = {
+                "sub": f"organizations/{self.org_id}/apiKeys/{self.api_key}",
+                "iat": now,
+                "exp": now + 300
+            }
+            headers = {
+                "kid": self._kid,
+                "alg": "ES256",
+                "typ": "JWT"
+            }
+            token = jwt.encode(payload, self._private_key, algorithm="ES256", headers=headers)
+            logger.info(f"JWT built successfully with kid: {self._kid}, length: {len(token)}")
+            return token
+        except Exception as e:
+            logger.error(f"Failed to build JWT: {e}")
+            raise
 
     def request_auto(self, method, endpoint, data=None):
         url = f"https://api.coinbase.com{endpoint}"
@@ -43,14 +59,18 @@ class CoinbaseClient:
             "CB-VERSION": "2025-01-01",
             "Content-Type": "application/json"
         }
+
         try:
             response = requests.request(method.upper(), url, headers=headers, json=data)
             if response.status_code == 200:
                 return response.status_code, response.json()
-            content = {}
-            try: content = response.json()
-            except: content = {"error": response.text}
-            return response.status_code, content
+            else:
+                try:
+                    content = response.json() if response.content else {}
+                except json.JSONDecodeError:
+                    content = {"error": response.text}
+                logger.error(f"API response: {response.status_code} - {content}")
+                return response.status_code, content
         except Exception as e:
             logger.error(f"Request failed: {e}")
             return None, {}
