@@ -10,7 +10,6 @@ MHcCAQEEIKrWQ2OeX7kqTob0aXR6A238b698ePPLutcEP1qq4gfLoAoGCCqGSM49
 AwEHoUQDQgAEuQAqrVE522Hz...
 -----END EC PRIVATE KEY-----"""
 
-    # You can pass credentials directly OR rely on env vars
     client = CoinbaseClient(api_key=api_key, org_id=org_id, pem=pem, kid=kid)
 
     status, resp = client.request_auto("GET", "/v2/accounts")
