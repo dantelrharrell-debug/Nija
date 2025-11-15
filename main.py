@@ -7,17 +7,21 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from dotenv import load_dotenv
 
-# ==========================
-# Load environment variables
-# ==========================
-load_dotenv()  # loads .env file if present
+# Load .env for local/dev
+load_dotenv()
 
+# ==========================
+# Environment variables
+# ==========================
 API_KEY_ID = os.environ.get("COINBASE_API_KEY")
 PEM = os.environ.get("COINBASE_PEM", "").replace("\\n", "\n")
 ORG_ID = os.environ.get("COINBASE_ORG_ID")
 
 if not API_KEY_ID or not PEM or not ORG_ID:
-    logger.error("Missing one or more required environment variables: COINBASE_API_KEY, COINBASE_PEM, COINBASE_ORG_ID")
+    logger.error(
+        "Missing one or more required environment variables: "
+        "COINBASE_API_KEY, COINBASE_PEM, COINBASE_ORG_ID"
+    )
     exit(1)
 
 # ==========================
@@ -29,7 +33,7 @@ try:
     )
     logger.info("Private key loaded successfully")
 except Exception as e:
-    logger.exception("Failed to load private key: %s", e)
+    logger.exception(f"Failed to load private key: {e}")
     exit(1)
 
 # ==========================
@@ -78,7 +82,6 @@ class CoinbaseClient:
 def start_bot_main():
     logger.info("Nija bot starting...")
     client = CoinbaseClient(API_KEY_ID, ORG_ID, private_key)
-
     while True:
         accounts_resp = client.get_accounts()
         if accounts_resp:
