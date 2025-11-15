@@ -1,3 +1,5 @@
+# app/nija_client.py
+
 import os
 import time
 import jwt
@@ -10,13 +12,18 @@ from cryptography.hazmat.backends import default_backend
 logger.remove()
 logger.add(lambda m: print(m, end=""))
 
-# --- Load Coinbase PEM from file ---
-PEM_PATH = os.environ.get("COINBASE_PEM_PATH")
-if not PEM_PATH:
-    logger.error("COINBASE_PEM_PATH not set")
-    raise ValueError("COINBASE_PEM_PATH environment variable missing")
+# --- Load Coinbase credentials from environment ---
+COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")
+COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
+COINBASE_PEM_PATH = os.environ.get("COINBASE_PEM_PATH")
+LIVE_TRADING = os.environ.get("LIVE_TRADING", "0") == "1"
 
-with open(PEM_PATH, "rb") as pem_file:
+if not (COINBASE_ORG_ID and COINBASE_API_KEY and COINBASE_PEM_PATH):
+    logger.error("Missing Coinbase credentials in environment variables.")
+    raise ValueError("Missing Coinbase credentials")
+
+# --- Load private key from PEM file ---
+with open(COINBASE_PEM_PATH, "rb") as pem_file:
     pem_data = pem_file.read()
     private_key = serialization.load_pem_private_key(
         pem_data,
@@ -24,43 +31,39 @@ with open(PEM_PATH, "rb") as pem_file:
         backend=default_backend()
     )
 
-# --- Environment variables ---
-COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
-COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")
+# --- Generate JWT token ---
+def generate_jwt():
+    current_time = int(time.time())
+    payload = {
+        "sub": COINBASE_ORG_ID,
+        "iat": current_time,
+        "exp": current_time + 300  # 5 minutes expiration
+    }
 
-if not COINBASE_API_KEY or not COINBASE_ORG_ID:
-    logger.error("Missing Coinbase API Key or Org ID")
-    raise ValueError("Missing Coinbase API Key or Org ID")
+    headers = {
+        "alg": "ES256",
+        "kid": COINBASE_API_KEY
+    }
 
-# --- Generate JWT ---
-current_ts = int(time.time())
-payload = {
-    "sub": COINBASE_ORG_ID,          # Your organization ID
-    "iat": current_ts,               # Issued at timestamp
-    "exp": current_ts + 300          # Expires in 5 minutes
-}
+    token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
+    return token
 
-headers = {
-    "alg": "ES256",
-    "kid": COINBASE_API_KEY
-}
+# --- Make test API request ---
+def test_coinbase_connection():
+    token = generate_jwt()
+    headers = {"Authorization": f"Bearer {token}"}
+    url = "https://api.coinbase.com/v2/accounts"
 
-jwt_token = jwt.encode(
-    payload,
-    private_key,
-    algorithm="ES256",
-    headers=headers
-)
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            logger.info("✅ Coinbase API connection successful")
+            logger.info(response.json())
+        else:
+            logger.error(f"❌ Coinbase API error: {response.status_code} {response.text}")
+    except Exception as e:
+        logger.error(f"Exception during Coinbase API call: {e}")
 
-logger.info(f"Generated JWT: {jwt_token[:50]}...")
-
-# --- Test Coinbase API call ---
-url = "https://api.coinbase.com/v2/accounts"
-response = requests.get(url, headers={"Authorization": f"Bearer {jwt_token}"})
-
-if response.status_code == 200:
-    logger.success("✅ Coinbase connection successful!")
-    logger.info(response.json())
-else:
-    logger.error(f"❌ Coinbase connection failed: {response.status_code}")
-    logger.error(response.text)
+# --- Run test if script is executed ---
+if __name__ == "__main__":
+    test_coinbase_connection()
