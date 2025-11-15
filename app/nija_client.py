@@ -12,15 +12,14 @@ from cryptography.hazmat.backends import default_backend
 logger.remove()
 logger.add(lambda m: print(m, end=""))
 
-# --- Load Coinbase credentials from environment ---
+# --- Load environment variables ---
 COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
 COINBASE_PEM_PATH = os.environ.get("COINBASE_PEM_PATH")
-LIVE_TRADING = os.environ.get("LIVE_TRADING", "0") == "1"
 
-if not (COINBASE_ORG_ID and COINBASE_API_KEY and COINBASE_PEM_PATH):
-    logger.error("Missing Coinbase credentials in environment variables.")
-    raise ValueError("Missing Coinbase credentials")
+if not all([COINBASE_ORG_ID, COINBASE_API_KEY, COINBASE_PEM_PATH]):
+    logger.error("Missing Coinbase credentials in environment variables")
+    raise ValueError("COINBASE_ORG_ID, COINBASE_API_KEY, or COINBASE_PEM_PATH missing")
 
 # --- Load private key from PEM file ---
 with open(COINBASE_PEM_PATH, "rb") as pem_file:
@@ -31,39 +30,53 @@ with open(COINBASE_PEM_PATH, "rb") as pem_file:
         backend=default_backend()
     )
 
-# --- Generate JWT token ---
+# --- Generate JWT ---
 def generate_jwt():
-    current_time = int(time.time())
+    now = int(time.time())
     payload = {
         "sub": COINBASE_ORG_ID,
-        "iat": current_time,
-        "exp": current_time + 300  # 5 minutes expiration
+        "iat": now,
+        "exp": now + 300  # 5 minutes expiration
     }
-
-    headers = {
-        "alg": "ES256",
-        "kid": COINBASE_API_KEY
-    }
-
-    token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
+    token = jwt.encode(
+        payload,
+        private_key,
+        algorithm="ES256",
+        headers={"kid": COINBASE_API_KEY}
+    )
     return token
 
-# --- Make test API request ---
-def test_coinbase_connection():
+# --- Prepare headers for Coinbase Advanced API ---
+def get_headers():
     token = generate_jwt()
-    headers = {"Authorization": f"Bearer {token}"}
-    url = "https://api.coinbase.com/v2/accounts"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    return headers
 
-    try:
+# --- Make API call with automatic retry on 401 ---
+def coinbase_get(url, retries=3, delay=1):
+    for attempt in range(retries):
+        headers = get_headers()
         response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            logger.info("✅ Coinbase API connection successful")
-            logger.info(response.json())
-        else:
-            logger.error(f"❌ Coinbase API error: {response.status_code} {response.text}")
-    except Exception as e:
-        logger.error(f"Exception during Coinbase API call: {e}")
+        if response.status_code == 401:
+            logger.warning(f"Unauthorized (401). Regenerating JWT and retrying... Attempt {attempt+1}/{retries}")
+            time.sleep(delay)
+            continue
+        elif response.status_code != 200:
+            logger.error(f"Coinbase API Error: {response.status_code} {response.text}")
+        return response.json()
+    logger.error("Failed to authenticate after multiple attempts")
+    return None
 
-# --- Run test if script is executed ---
+# --- Example API call ---
+def get_accounts():
+    url = "https://api.coinbase.com/v2/accounts"
+    return coinbase_get(url)
+
+# --- For testing ---
 if __name__ == "__main__":
-    test_coinbase_connection()
+    logger.info("Testing Coinbase API connection...")
+    accounts = get_accounts()
+    logger.info(accounts)
