@@ -1,78 +1,85 @@
-import requests
 import time
-import jwt
+import json
+import requests
+import jwt  # pip install PyJWT
 from loguru import logger
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+import os
+
 
 class CoinbaseClient:
     def __init__(self, api_key, org_id, pem, kid):
-        self.api_key = api_key
-        self.org_id = org_id
+        self.api_key = str(api_key)
+        self.org_id = str(org_id)
+        self._kid = str(kid)
         self._private_key_pem = pem
-        self._kid = str(kid)  # ✅ must be string
         self._private_key = self._load_private_key()
-        logger.info("CoinbaseClient initialized with kid: %s", self._kid)
+        logger.info(f"CoinbaseClient initialized with kid: {self._kid}")
 
     def _load_private_key(self):
         try:
-            private_key = serialization.load_pem_private_key(
+            key = serialization.load_pem_private_key(
                 self._private_key_pem.encode(),
                 password=None,
                 backend=default_backend()
             )
-            return private_key
+            return key
         except Exception as e:
-            logger.exception("Failed to load private key: %s", e)
+            logger.error(f"Failed to load PEM key: {e}")
             raise
 
     def _build_jwt(self):
-        iat = int(time.time())
-        payload = {
-            "sub": f"organizations/{self.org_id}/apiKeys/{self.api_key}",
-            "iat": iat,
-            "exp": iat + 300  # 5 min expiry
-        }
-        headers = {"kid": self._kid}
+        """Build JWT for Coinbase Advanced API auth."""
         try:
-            token = jwt.encode(
-                payload,
-                self._private_key,
-                algorithm="ES256",
-                headers=headers
-            )
-            logger.info("JWT built successfully with kid: %s", self._kid)
+            now = int(time.time())
+            payload = {
+                "sub": f"organizations/{self.org_id}/apiKeys/{self.api_key}",
+                "iat": now,
+                "exp": now + 300  # 5 minutes expiry
+            }
+            headers = {
+                "kid": self._kid,
+                "alg": "ES256",
+                "typ": "JWT"
+            }
+            token = jwt.encode(payload, self._private_key, algorithm="ES256", headers=headers)
+            logger.info(f"JWT built successfully with kid: {self._kid}, length: {len(token)}")
             return token
         except Exception as e:
-            logger.exception("Failed to build JWT: %s", e)
+            logger.error(f"Failed to build JWT: {e}")
             raise
 
-    def request_auto(self, method, path, **kwargs):
-        url = f"https://api.coinbase.com{path}"
+    def request_auto(self, method, endpoint, data=None):
+        """Make Coinbase API requests with JWT auth."""
+        url = f"https://api.coinbase.com{endpoint}"
         headers = {
             "Authorization": f"Bearer {self._build_jwt()}",
-            "CB-VERSION": "2025-11-15",
+            "CB-VERSION": "2025-01-01",
             "Content-Type": "application/json"
         }
 
         try:
-            response = requests.request(method, url, headers=headers, **kwargs)
-            
-            if not response.content:
-                logger.error("API response empty")
-                return response.status_code, {}
+            if method.upper() == "GET":
+                response = requests.get(url, headers=headers)
+            elif method.upper() == "POST":
+                response = requests.post(url, headers=headers, json=data)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
 
-            try:
-                data = response.json()
-            except requests.exceptions.JSONDecodeError:
-                logger.error("API returned non-JSON: %s", response.text)
-                return response.status_code, {"raw_response": response.text}
+            if response.status_code == 200:
+                return response.status_code, response.json()
+            else:
+                # Handle empty or unauthorized responses safely
+                content = {}
+                try:
+                    if response.content:
+                        content = response.json()
+                except json.JSONDecodeError:
+                    content = {"error": response.text}
+                logger.error(f"API response: {response.status_code} - {content}")
+                return response.status_code, content
 
-            if response.status_code >= 400:
-                logger.error("API error %s: %s", response.status_code, data)
-
-            return response.status_code, data
-
-        except requests.exceptions.RequestException as e:
-            logger.exception("Request failed: %s", e)
-            return None, {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Request failed: {e}")
+            return None, {}
