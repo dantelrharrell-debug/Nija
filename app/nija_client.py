@@ -1,3 +1,20 @@
+# snippet to include at top of nija_client.py (only if you must use COINBASE_PEM_CONTENT)
+def write_pem_from_env(pem_path="/app/coinbase.pem", min_len=200):
+    s = os.environ.get("COINBASE_PEM_CONTENT")
+    if not s:
+        return None
+    # convert literal \n into actual newlines if necessary
+    if "\\n" in s and "\n" not in s:
+        s = s.replace("\\n", "\n")
+    s = s.strip().strip('"').strip("'")
+    if not s.endswith("\n"):
+        s += "\n"
+    with open(pem_path, "w", newline="\n") as f:
+        f.write(s)
+    if len(s) < min_len:
+        print("WARNING: PEM looks short:", len(s))
+    return pem_path
+
 # app/nija_client.py
 import os
 import time
