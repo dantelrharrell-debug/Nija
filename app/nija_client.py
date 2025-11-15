@@ -1,120 +1,54 @@
-# app/nija_client.py
+# --- Load bot configuration ---
+LIVE_TRADING = int(os.environ.get("LIVE_TRADING", 0))
+MIN_TRADE_PERCENT = float(os.environ.get("MIN_TRADE_PERCENT", 2)) / 100
+MAX_TRADE_PERCENT = float(os.environ.get("MAX_TRADE_PERCENT", 10)) / 100
+BOT_SECRET_KEY = os.environ.get("BOT_SECRET_KEY")
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
-import os
-import time
-import jwt
-import requests
-from loguru import logger
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
-
-# --- Setup logger ---
-logger.remove()
-logger.add(lambda m: print(m, end=""))
-
-# --- Load environment variables ---
-COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")
-COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
-COINBASE_PEM_PATH = os.environ.get("COINBASE_PEM_PATH")
-
-if not all([COINBASE_ORG_ID, COINBASE_API_KEY, COINBASE_PEM_PATH]):
-    logger.error("Missing Coinbase credentials in environment variables")
-    raise ValueError("COINBASE_ORG_ID, COINBASE_API_KEY, or COINBASE_PEM_PATH missing")
-
-# --- Load private key from PEM file ---
-with open(COINBASE_PEM_PATH, "rb") as pem_file:
-    pem_data = pem_file.read()
-    private_key = serialization.load_pem_private_key(
-        pem_data,
-        password=None,
-        backend=default_backend()
-    )
-
-# --- Generate JWT ---
-def generate_jwt():
-    now = int(time.time())
-    payload = {
-        "sub": COINBASE_ORG_ID,
-        "iat": now,
-        "exp": now + 300  # 5 minutes expiration
-    }
-    token = jwt.encode(
-        payload,
-        private_key,
-        algorithm="ES256",
-        headers={"kid": COINBASE_API_KEY}
-    )
-    return token
-
-# --- Prepare headers ---
-def get_headers():
-    token = generate_jwt()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    return headers
-
-# --- Generic GET request with retries ---
-def coinbase_get(url, retries=3, delay=1):
-    for attempt in range(retries):
-        headers = get_headers()
-        response = requests.get(url, headers=headers)
-        if response.status_code == 401:
-            logger.warning(f"Unauthorized (401). Regenerating JWT and retrying... Attempt {attempt+1}/{retries}")
-            time.sleep(delay)
-            continue
-        elif response.status_code != 200:
-            logger.error(f"Coinbase API Error: {response.status_code} {response.text}")
-        return response.json()
-    logger.error("Failed to authenticate after multiple attempts")
-    return None
-
-# --- Generic POST request with retries ---
-def coinbase_post(url, data, retries=3, delay=1):
-    for attempt in range(retries):
-        headers = get_headers()
-        response = requests.post(url, json=data, headers=headers)
-        if response.status_code == 401:
-            logger.warning(f"Unauthorized (401). Regenerating JWT and retrying... Attempt {attempt+1}/{retries}")
-            time.sleep(delay)
-            continue
-        elif response.status_code not in (200, 201):
-            logger.error(f"Coinbase API Error: {response.status_code} {response.text}")
-        return response.json()
-    logger.error("Failed to authenticate after multiple attempts")
-    return None
-
-# --- Specific API endpoints ---
-def get_accounts():
-    url = "https://api.coinbase.com/v2/accounts"
-    return coinbase_get(url)
-
-def place_order(account_id, side, size, product_id):
+# --- Utility: Calculate dynamic trade size ---
+def calculate_trade_size(account_balance, risk_percent=None):
     """
-    Example POST order payload:
-    side = 'buy' or 'sell'
-    size = amount to trade
-    product_id = trading pair, e.g., 'BTC-USD'
+    account_balance: float, total funds in account
+    risk_percent: optional, override default min/max percent
+    Returns: trade size (float)
     """
-    url = f"https://api.coinbase.com/v2/accounts/{account_id}/orders"
-    data = {
-        "type": "market",
-        "side": side,
-        "size": size,
-        "product_id": product_id
-    }
-    return coinbase_post(url, data)
+    if risk_percent:
+        trade_percent = max(MIN_TRADE_PERCENT, min(MAX_TRADE_PERCENT, risk_percent))
+    else:
+        trade_percent = MAX_TRADE_PERCENT  # default to max percent
+    size = account_balance * trade_percent
+    return round(size, 8)  # round to 8 decimals for crypto
 
-# --- For testing ---
+# --- Example usage in place_order ---
+def place_dynamic_order(account_id, side, product_id, balance=None, risk_percent=None):
+    """
+    Places a market order based on dynamic position sizing.
+    balance: account balance in USD (or quote currency)
+    risk_percent: optional override for trade percent
+    """
+    if balance is None:
+        accounts = get_accounts()
+        if accounts and "data" in accounts:
+            for acc in accounts["data"]:
+                if acc["id"] == account_id:
+                    balance = float(acc["balance"]["amount"])
+                    break
+        if balance is None:
+            logger.error(f"Could not retrieve balance for account {account_id}")
+            return None
+
+    trade_size = calculate_trade_size(balance, risk_percent)
+    logger.info(f"Placing {side} order of size {trade_size} on {product_id}")
+    return place_order(account_id, side, str(trade_size), product_id)
+
+# --- Example testing ---
 if __name__ == "__main__":
-    logger.info("Testing Coinbase API connection...")
     accounts = get_accounts()
-    logger.info(accounts)
-
-    # Example: place a test order
     if accounts and len(accounts.get("data", [])) > 0:
         first_account_id = accounts["data"][0]["id"]
-        logger.info(f"Placing test order on account {first_account_id}...")
-        result = place_order(first_account_id, "buy", "0.001", "BTC-USD")
+        balance = float(accounts["data"][0]["balance"]["amount"])
+        logger.info(f"Account balance: {balance}")
+
+        # Place a dynamic BTC-USD buy order
+        result = place_dynamic_order(first_account_id, "buy", "BTC-USD", balance)
         logger.info(result)
