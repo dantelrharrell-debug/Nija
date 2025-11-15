@@ -1,5 +1,7 @@
 /app
   ├─ main.py
-  ├─ nija_client.py
   ├─ requirements.txt
-  └─ .env
+  ├─ .env
+  └─ app/
+       ├─ __init__.py        # can be empty
+       └─ nija_client.py
