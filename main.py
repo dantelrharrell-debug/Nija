@@ -1,46 +1,54 @@
-# main.py (replace the relevant parts)
-import os, sys, time
+import os
+import datetime
 from loguru import logger
-from datetime import datetime
 from app.nija_client import CoinbaseClient
 
-logger.remove()
-logger.add(sys.stdout, level="INFO", enqueue=True)
+# --- Config / Credentials ---
+api_key = os.getenv("COINBASE_API_KEY")  # or just paste your key
+org_id  = os.getenv("COINBASE_ORG_ID")
+pem     = os.getenv("COINBASE_PEM_CONTENT")  # multiline private key
+kid     = os.getenv("COINBASE_KID")         # Key ID from Coinbase
+
 logger.info("Nija bot starting... (main.py)")
 
-# load env values used below
-api_key = os.environ.get("COINBASE_API_KEY")
-org_id = os.environ.get("COINBASE_ORG_ID")
-pem = os.environ.get("COINBASE_PEM_CONTENT")  # or COINBASE_PEM_B64 base64
-kid = os.environ.get("COINBASE_JWT_KID")     # the key id (UUID) from Coinbase
-sandbox = os.environ.get("SANDBOX", "false").lower() in ("1", "true", "yes")
-
+# --- Initialize CoinbaseClient ---
 try:
-    # NOTE: pass jwt_kid= not kid=
-    client = CoinbaseClient(api_key=api_key, org_id=org_id, pem=pem, jwt_kid=kid)
+    client = CoinbaseClient(api_key=api_key, org_id=org_id, pem=pem, kid=kid)
     logger.info("CoinbaseClient initialized")
 except Exception as e:
-    logger.exception("Failed to init CoinbaseClient")
-    # if client cannot initialize, exit (so you can see the error and fix env)
-    sys.exit(1)
+    logger.exception("Failed to init CoinbaseClient: {}", e)
+    raise
 
-# optional quick test against sandbox or API
+# --- JWT verification helper ---
+def verify_jwt_struct(token):
+    import base64, json
+    h_b64, p_b64, _ = token.split(".")
+    def b64fix(s):
+        return s + "=" * ((4 - len(s) % 4) % 4)
+    header = json.loads(base64.urlsafe_b64decode(b64fix(h_b64)))
+    payload = json.loads(base64.urlsafe_b64decode(b64fix(p_b64)))
+    return header, payload
+
+# --- Log actual JWT values ---
 try:
-    # if you want sandbox test: client.sandbox_accounts()
-    resp = client.sandbox_accounts() if sandbox else client.request("GET", "https://api.coinbase.com/v2/accounts")
-    logger.info(f"Coinbase API test status: {resp.status_code}")
-    logger.info(f"API response (truncated): {resp.text[:400]}")
+    token = client._build_jwt()  # Make sure _build_jwt exists in your client
+    header, payload = verify_jwt_struct(token)
+    logger.info(f"_build_jwt: JWT header.kid: {header.get('kid')}")
+    logger.info(f"_build_jwt: JWT payload.sub: {payload.get('sub')}")
+    logger.info(f"_build_jwt: Server UTC time: {datetime.datetime.utcnow().isoformat()}")
 except Exception as e:
-    logger.exception("Coinbase test request failed")
+    logger.exception("Failed to decode/log JWT contents: {}", e)
 
-# Import and pass client into starter (start_bot_main expects client param)
+# --- Simple API test ---
+try:
+    status, resp = client.request_auto("GET", "/v2/accounts")
+    logger.info(f"Coinbase API test status: {status}")
+except Exception as e:
+    logger.exception("Coinbase API test failed: {}", e)
+
+# --- Start bot main ---
 try:
     from app.start_bot_main import start_bot_main
-    logger.info("Imported start_bot_main OK")
-    start_bot_main(client)   # <--- pass the client instance
+    start_bot_main()
 except Exception as e:
-    logger.exception("Bot crashed during start")
-    # keep process alive for debugging, or exit if you prefer
-    while True:
-        logger.info("heartbeat")
-        time.sleep(60)
+    logger.exception("Failed to start bot main: {}", e)
