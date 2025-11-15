@@ -1,73 +1,76 @@
 # validate_coinbase_credentials.py
+# Python 3.9+ recommended. Requires: pyjwt, requests, loguru, cryptography
+
 import os
-import time
 import jwt
+import time
 import requests
 from loguru import logger
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
 logger.remove()
 logger.add(lambda msg: print(msg, end=''))
 
-# Load env vars (or set manually here for testing)
+# ----------------------
+# Load Environment Variables
+# ----------------------
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # raw PEM string
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # Raw PEM as string
 COINBASE_JWT_KID = os.getenv("COINBASE_JWT_KID")
-SANDBOX = os.getenv("SANDBOX", "1")  # 1 = sandbox, 0 = live
+COINBASE_BASE_URL = os.getenv("SANDBOX") == "1" and "https://api-public.sandbox.pro.coinbase.com" or "https://api.pro.coinbase.com"
 
-BASE_URL = "https://api-public.sandbox.pro.coinbase.com" if SANDBOX == "1" else "https://api.pro.coinbase.com"
+if not all([COINBASE_API_KEY, COINBASE_ORG_ID, COINBASE_PEM_CONTENT, COINBASE_JWT_KID]):
+    logger.error("Missing one or more Coinbase credentials in environment variables.")
+    exit(1)
 
-def generate_jwt():
-    try:
-        import cryptography.hazmat.primitives.serialization as serialization
-        from cryptography.hazmat.backends import default_backend
-    except ImportError:
-        logger.error("cryptography module is missing. Install via `pip install cryptography`")
-        return None
+# ----------------------
+# Prepare PEM
+# ----------------------
+try:
+    private_key = serialization.load_pem_private_key(
+        COINBASE_PEM_CONTENT.encode("utf-8"),
+        password=None,
+        backend=default_backend()
+    )
+    logger.info("PEM loaded successfully.")
+except Exception as e:
+    logger.error(f"Failed to load PEM: {e}")
+    exit(1)
 
-    try:
-        key = serialization.load_pem_private_key(
-            COINBASE_PEM_CONTENT.encode(),
-            password=None,
-            backend=default_backend()
-        )
-    except Exception as e:
-        logger.error(f"Failed to load PEM: {e}")
-        return None
-
+# ----------------------
+# Generate JWT
+# ----------------------
+try:
+    iat = int(time.time())
+    exp = iat + 300  # 5 minutes
     payload = {
-        "iat": int(time.time()),
-        "exp": int(time.time()) + 300,
-        "jti": str(time.time())
+        "iss": COINBASE_ORG_ID,
+        "iat": iat,
+        "exp": exp
     }
+    jwt_token = jwt.encode(payload, private_key, algorithm="ES256", headers={"kid": COINBASE_JWT_KID})
+    logger.info(f"JWT generated successfully: {jwt_token[:50]}...")
+except Exception as e:
+    logger.error(f"Failed to generate JWT: {e}")
+    exit(1)
 
-    try:
-        token = jwt.encode(payload, key, algorithm="ES256", headers={"kid": COINBASE_JWT_KID, "alg": "ES256"})
-        return token
-    except Exception as e:
-        logger.error(f"JWT generation failed: {e}")
-        return None
-
-def test_connection():
-    token = generate_jwt()
-    if not token:
-        return
-
+# ----------------------
+# Test Coinbase API
+# ----------------------
+try:
     headers = {
-        "Authorization": f"Bearer {token}",
-        "CB-ACCESS-KEY": COINBASE_API_KEY,
-        "CB-ACCESS-ORG": COINBASE_ORG_ID
+        "Authorization": f"Bearer {jwt_token}",
+        "CB-VERSION": "2025-11-15"  # adjust if needed
     }
-
-    try:
-        r = requests.get(f"{BASE_URL}/accounts", headers=headers)
-        if r.status_code == 200:
-            logger.success("✅ Coinbase credentials are valid!")
-            logger.info(r.json())
-        else:
-            logger.error(f"❌ Coinbase returned {r.status_code}: {r.text}")
-    except Exception as e:
-        logger.error(f"Request failed: {e}")
-
-if __name__ == "__main__":
-    test_connection()
+    url = f"{COINBASE_BASE_URL}/accounts"
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        logger.success("✅ Credentials are valid! Coinbase API accessible.")
+        logger.info(response.json())
+    else:
+        logger.error(f"❌ Unauthorized or invalid credentials! Status: {response.status_code}")
+        logger.error(response.text)
+except Exception as e:
+    logger.error(f"API request failed: {e}")
