@@ -1,40 +1,60 @@
 # debug_coinbase_jwt.py
-import os
-import time
-import jwt  # pyjwt
+import os, time, datetime, json, base64
 import requests
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+import jwt
 
-# Load env vars
+def ensure_pem(pem_str):
+    # convert literal \n to real newlines if needed
+    if "\\n" in pem_str:
+        pem_str = pem_str.replace("\\n", "\n")
+    return pem_str
+
 API_KEY = os.environ.get("COINBASE_API_KEY")
-ORG_ID = os.environ.get("COINBASE_ORG_ID")
-PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT", "")
+PEM_CONTENT = os.environ.get("COINBASE_PEM_CONTENT") or os.environ.get("COINBASE_PEM_B64")
+KID = os.environ.get("COINBASE_JWT_KID")
+SANDBOX = os.environ.get("SANDBOX", "true").lower() in ("1","true","yes")
 
-# Ensure PEM line breaks
-PEM_FIXED = PEM_RAW.replace("\\n", "\n") if "\\n" in PEM_RAW else PEM_RAW
-
-# Try both sub formats
-subs = [
-    f"organizations/{ORG_ID}/apiKeys/{API_KEY}",
-    API_KEY
-]
-
-url = "https://api.coinbase.com/v2/accounts"
-
-for sub in subs:
-    payload = {
-        "sub": sub,
-        "iat": int(time.time()),
-        "exp": int(time.time()) + 60,  # 1 min expiry
-        "jti": str(int(time.time()*1000)),
-    }
-
-    token = jwt.encode(payload, PEM_FIXED, algorithm="ES256")
-    headers = {"Authorization": f"Bearer {token}"}
-
-    print(f"Testing sub: {sub}")
+if PEM_CONTENT and not PEM_CONTENT.startswith("-----BEGIN"):
+    # assume base64
     try:
-        resp = requests.get(url, headers=headers)
-        print(f"Status Code: {resp.status_code}")
-        print(f"Response: {resp.text}\n")
-    except Exception as e:
-        print(f"Error: {e}\n")
+        PEM_CONTENT = base64.b64decode(PEM_CONTENT).decode("utf-8")
+    except Exception:
+        # maybe it's already raw but contains \n escapes
+        PEM_CONTENT = PEM_CONTENT.replace("\\n", "\n")
+
+PEM_CONTENT = ensure_pem(PEM_CONTENT)
+
+print("DEBUG: API_KEY:", API_KEY)
+print("DEBUG: KID:", KID)
+print("DEBUG: PEM snippet (head):", PEM_CONTENT.splitlines()[0] if PEM_CONTENT else "MISSING")
+
+# build JWT
+now = int(time.time())
+payload = {"sub": API_KEY, "iat": now, "exp": now + 300}
+headers = {"alg": "ES256", "kid": KID}
+
+private_key = serialization.load_pem_private_key(PEM_CONTENT.encode("utf-8"), password=None, backend=default_backend())
+token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
+print("\n=== JWT ===\n")
+print(token)
+print("\n=== decoded header & payload ===\n")
+h_b64, p_b64, s = token.split(".")
+# safe decode
+def b64d(s):
+    s += "=" * ((4 - len(s) % 4) % 4)
+    return base64.urlsafe_b64decode(s).decode("utf-8")
+
+print("header:", json.loads(b64d(h_b64)))
+print("payload:", json.loads(b64d(p_b64)))
+print("\nServer UTC:", datetime.datetime.utcnow().isoformat())
+
+# make a sandbox test (Bearer)
+BASE = "https://api-public.sandbox.pro.coinbase.com" if SANDBOX else "https://api.coinbase.com"
+headers_req = {"Authorization": f"Bearer {token}"}
+try:
+    r = requests.get(f"{BASE}/accounts", headers=headers_req, timeout=10)
+    print("\nSandbox /accounts response:", r.status_code, r.text[:800])
+except Exception as e:
+    print("\nSandbox request failed:", e)
