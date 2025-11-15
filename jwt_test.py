@@ -1,22 +1,19 @@
-import os, jwt, time, base64
+import os, time, jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+import requests
 
-pem_content = os.environ.get("COINBASE_PEM_CONTENT")
-org_id = os.environ.get("COINBASE_ORG_ID")
-api_key = os.environ.get("COINBASE_API_KEY")
+key_path = "/opt/railway/secrets/coinbase.pem"
+org_id = "ce77e4ea-ecca-42ec-912a-b6b4455ab9d0"  # your Org ID
 
-# Load PEM
-private_key = serialization.load_pem_private_key(
-    pem_content.encode(), password=None, backend=default_backend()
-)
+with open(key_path, "rb") as f:
+    key = serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
 
-# Build JWT
-payload = {
-    "iat": int(time.time()),
-    "exp": int(time.time()) + 300,
-    "jti": "test123456"
-}
+iat = int(time.time())
+payload = {"sub": org_id, "iat": iat, "exp": iat+300}
+token = jwt.encode(payload, key, algorithm="ES256")
+print("JWT:", token)
 
-jwt_token = jwt.encode(payload, private_key, algorithm="ES256", headers={"kid": api_key})
-print("JWT Generated Successfully:", jwt_token)
+headers = {"Authorization": f"Bearer {token}", "CB-VERSION": "2025-01-01"}
+resp = requests.get("https://api.coinbase.com/v2/accounts", headers=headers)
+print(resp.status_code, resp.text)
