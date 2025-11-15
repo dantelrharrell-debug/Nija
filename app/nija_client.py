@@ -1,19 +1,32 @@
+# nija_client.py
+import os
 import time
 import json
 import requests
-import jwt  # pip install PyJWT
+import jwt
 from loguru import logger
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
-import os
-
 
 class CoinbaseClient:
-    def __init__(self, api_key, org_id, pem, kid):
-        self.api_key = str(api_key)
-        self.org_id = str(org_id)
-        self._kid = str(kid)
-        self._private_key_pem = pem
+    def __init__(self):
+        # Load credentials from environment variables
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.org_id = os.getenv("COINBASE_ORG_ID")
+        self._kid = os.getenv("COINBASE_KID")
+        self._private_key_pem = os.getenv("COINBASE_PEM_CONTENT")
+
+        # Validate all credentials
+        missing = [k for k, v in {
+            "API_KEY": self.api_key,
+            "ORG_ID": self.org_id,
+            "KID": self._kid,
+            "PEM": self._private_key_pem
+        }.items() if not v]
+        if missing:
+            raise ValueError(f"Missing Coinbase credentials: {', '.join(missing)}")
+
+        # Load private key
         self._private_key = self._load_private_key()
         logger.info(f"CoinbaseClient initialized with kid: {self._kid}")
 
@@ -31,18 +44,18 @@ class CoinbaseClient:
 
     def _build_jwt(self):
         """Build JWT for Coinbase Advanced API auth."""
+        now = int(time.time())
+        payload = {
+            "sub": f"organizations/{self.org_id}/apiKeys/{self.api_key}",
+            "iat": now,
+            "exp": now + 300  # 5 min expiration
+        }
+        headers = {
+            "kid": self._kid,
+            "alg": "ES256",
+            "typ": "JWT"
+        }
         try:
-            now = int(time.time())
-            payload = {
-                "sub": f"organizations/{self.org_id}/apiKeys/{self.api_key}",
-                "iat": now,
-                "exp": now + 300  # 5 minutes expiry
-            }
-            headers = {
-                "kid": self._kid,
-                "alg": "ES256",
-                "typ": "JWT"
-            }
             token = jwt.encode(payload, self._private_key, algorithm="ES256", headers=headers)
             logger.info(f"JWT built successfully with kid: {self._kid}, length: {len(token)}")
             return token
@@ -51,7 +64,7 @@ class CoinbaseClient:
             raise
 
     def request_auto(self, method, endpoint, data=None):
-        """Make Coinbase API requests with JWT auth."""
+        """Make a Coinbase API request with JWT auth."""
         url = f"https://api.coinbase.com{endpoint}"
         headers = {
             "Authorization": f"Bearer {self._build_jwt()}",
@@ -70,7 +83,6 @@ class CoinbaseClient:
             if response.status_code == 200:
                 return response.status_code, response.json()
             else:
-                # Handle empty or unauthorized responses safely
                 content = {}
                 try:
                     if response.content:
@@ -83,3 +95,12 @@ class CoinbaseClient:
         except Exception as e:
             logger.error(f"Request failed: {e}")
             return None, {}
+
+# ------------------------
+# USAGE EXAMPLE
+# ------------------------
+if __name__ == "__main__":
+    client = CoinbaseClient()
+    status, resp = client.request_auto("GET", "/v2/accounts")
+    logger.info(f"API test status: {status}")
+    logger.info(f"API response: {resp}")
