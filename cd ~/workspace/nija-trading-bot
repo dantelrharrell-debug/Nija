@@ -1,6 +1,5 @@
 /app
-│
-├── main.py          # Your entry point
-├── nija_client.py   # Contains CoinbaseClient class
-├── requirements.txt # Packages: requests, PyJWT, cryptography, loguru
-└── .env             # Optional for local dev environment variables
+  ├─ main.py
+  ├─ nija_client.py
+  ├─ requirements.txt
+  └─ .env
