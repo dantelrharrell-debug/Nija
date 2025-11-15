@@ -1,221 +1,201 @@
-    # --- replace these methods in your CoinbaseClient class ---
-
-    def request_jwt(self, method: str, url: str, **kwargs):
-        token = self._build_jwt()
-        headers = kwargs.pop("headers", {})
-        headers["Authorization"] = f"Bearer {token}"
-        return requests.request(method, url, headers=headers, **kwargs)
-
-    def request_rest(self, method: str, url: str, **kwargs):
-        body = ""
-        if "json" in kwargs:
-            body = json.dumps(kwargs.get("json"))
-            kwargs.pop("json", None)
-            kwargs["data"] = body
-        elif "data" in kwargs:
-            body = kwargs.get("data", "")
-
-        headers = kwargs.pop("headers", {})
-
-        # improved error message listing all env names we check
-        if not all([self.rest_key, self.rest_secret, self.rest_passphrase]):
-            msg = (
-                "REST API credentials missing. Set one of these environment variable sets:\n"
-                " - COINBASE_REST_KEY, COINBASE_REST_SECRET, COINBASE_REST_PASSPHRASE\n"
-                " - OR COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_API_PASSPHRASE\n"
-                "You can add them in Railway/Render project settings."
-            )
-            logger.error(msg)
-            raise RuntimeError(msg)
-
-        try:
-            h = self._build_rest_headers(method, url, body)
-        except Exception as e:
-            logger.exception("Failed to create REST headers")
-            raise
-        headers.update(h)
-        return requests.request(method, url, headers=headers, data=body, **kwargs)
-
-    def request_auto(self, method: str, url: str, **kwargs):
-        """
-        Auto-selects auth method:
-          - If host contains 'api.coinbase.com' or 'pro.coinbase.com' -> REST HMAC
-          - If host contains 'cdp' or 'advanced-trade' -> JWT
-          - Otherwise prefer JWT if PEM present, else REST.
-        """
-        parsed = requests.utils.urlparse(url)
-        host = parsed.netloc.lower()
-        path = parsed.path.lower()
-
-        # explicit host checks first
-        if "api.coinbase.com" in host or "pro.coinbase.com" in host or path.startswith("/v2") or path.startswith("/accounts"):
-            # attempt REST HMAC if creds exist, else raise clear error
-            if all([self.rest_key, self.rest_secret, self.rest_passphrase]):
-                return self.request_rest(method, url, **kwargs)
-            # fall back to JWT if available (some endpoints may accept JWT in your flow)
-            if self._private_key:
-                logger.warning("REST creds missing but PEM available — falling back to JWT for this host.")
-                return self.request_jwt(method, url, **kwargs)
-            raise RuntimeError("REST credentials missing and no PEM for JWT fallback.")
-
-        if "cdp" in host or "advanced-trade" in host:
-            return self.request_jwt(method, url, **kwargs)
-
-        # default: prefer JWT if possible
-        if self._private_key:
-            return self.request_jwt(method, url, **kwargs)
-        return self.request_rest(method, url, **kwargs)
-
-    # convenience alias so existing callers using client.request(...) work
-    def request(self, method: str, url: str, **kwargs):
-        return self.request_auto(method, url, **kwargs)
-
-    # safer sandbox helper — uses request_auto so it respects which auth is available
-    def sandbox_accounts(self):
-        base = "https://api-public.sandbox.pro.coinbase.com"
-        return self.request_auto("GET", f"{base}/accounts")
-
 # app/nija_client.py
-# Requires: pyjwt, cryptography, requests, loguru
+# Python 3.9+ recommended. Requires: pyjwt, cryptography, requests, loguru
+"""
+CoinbaseClient
+- Creates JWTs from an EC private key (PEM) and calls JWT-auth endpoints.
+- Builds CB-ACCESS-* headers for REST API calls (HMAC-SHA256).
+- request_auto() inspects the URL and chooses REST vs JWT as appropriate.
+- Exposes sandbox_accounts() convenience call.
+Environment variables used (can also pass to constructor):
+- COINBASE_API_KEY or api_key (sub for JWT 'sub', typically organizations/{org_id}/apiKeys/{key_id})
+- COINBASE_PEM_CONTENT or COINBASE_PEM_B64 or pem (PEM string or base64-encoded PEM)
+- COINBASE_JWT_KID or jwt_kid (key id to place in JWT header)
+- COINBASE_REST_KEY / COINBASE_REST_SECRET / COINBASE_REST_PASSPHRASE (for REST HMAC)
+- SANDBOX boolean-ish variable not required here but used elsewhere if you choose
+"""
 
 import os
 import time
-import json
-import base64
-import hmac
-import hashlib
 import datetime
-from loguru import logger
 import jwt
 import requests
+import base64
+import json
+import hmac
+import hashlib
+from urllib.parse import urlparse
+from typing import Optional, Tuple
+
+from loguru import logger
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
+# Setup basic logger if user hasn't
 logger.remove()
-logger.add(lambda m: print(m, end=""), level="INFO")
+logger.add(lambda m: print(m, end=""), level="INFO")  # simple console logging
 
 
 class CoinbaseClient:
-    """
-    Dual-mode Coinbase client:
-      - JWT bearer (ES256) for CDP/AdvancedTrade endpoints (signed with PEM)
-      - HMAC REST v2 / Pro style (CB-ACCESS-KEY, SIGN, TIMESTAMP) for api.coinbase.com / pro endpoints
-    It will attach JWT when calling request_jwt(), or HMAC when calling request_rest().
-    A convenience method .request_auto() will select HMAC for api.coinbase.com/* or JWT for CDP if desired.
-    """
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        org_id: Optional[str] = None,
+        pem: Optional[str] = None,
+        jwt_kid: Optional[str] = None,
+        rest_key: Optional[str] = None,
+        rest_secret: Optional[str] = None,
+        rest_passphrase: Optional[str] = None,
+    ):
+        """
+        Provide credentials either via constructor or environment variables.
 
-    def __init__(self, api_key: str = None, org_id: str = None, pem: str = None,
-                 kid: str = None, rest_key: str = None, rest_secret: str = None, rest_passphrase: str = None,
-                 sandbox: bool = True):
-        # JWT-related
+        api_key: The 'sub' claim for JWT (often "organizations/{org_id}/apiKeys/{key_id}")
+        pem: full PEM string (-----BEGIN ...). If not raw PEM, the code will check for base64 env var.
+        jwt_kid: key id to set in JWT header (kid)
+        rest_key/rest_secret/rest_passphrase: for REST HMAC authentication
+        """
+        # Prefer constructor args, fallback to environment variables
         self.api_key = api_key or os.getenv("COINBASE_API_KEY")
-        self.org_id = org_id or os.getenv("COINBASE_ORG_ID")
-        self.kid = kid or os.getenv("COINBASE_JWT_KID")
-        pem_raw = pem or os.getenv("COINBASE_PEM_CONTENT") or os.getenv("COINBASE_PEM_B64")
+        self.jwt_kid = jwt_kid or os.getenv("COINBASE_JWT_KID") or os.getenv("COINBASE_KEY_ID")
+        self.rest_key = rest_key or os.getenv("COINBASE_REST_KEY") or os.getenv("COINBASE_API_KEY")
+        self.rest_secret = rest_secret or os.getenv("COINBASE_REST_SECRET") or os.getenv("COINBASE_API_SECRET")
+        self.rest_passphrase = rest_passphrase or os.getenv("COINBASE_REST_PASSPHRASE") or os.getenv("COINBASE_API_PASSPHRASE")
+
+        # PEM handling: accept direct PEM or base64 encoded
+        pem_env_raw = pem or os.getenv("COINBASE_PEM_CONTENT")
+        pem_b64_env = os.getenv("COINBASE_PEM_B64")
         self._private_key = None
-        if pem_raw:
-            self._private_key = self._load_pem_from_env(pem_raw)
-
-        # REST HMAC-related
-        self.rest_key = rest_key or os.getenv("COINBASE_API_KEY") or os.getenv("COINBASE_REST_KEY")
-        self.rest_secret = rest_secret or os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_REST_SECRET")
-        self.rest_passphrase = rest_passphrase or os.getenv("COINBASE_API_PASSPHRASE") or os.getenv("COINBASE_REST_PASSPHRASE")
-
-        self.sandbox = bool(int(os.getenv("SANDBOX", "1"))) if sandbox is None else sandbox
+        if pem_env_raw:
+            try:
+                # Accept if user included "\n" literal sequences
+                pem_clean = pem_env_raw.replace("\\n", "\n")
+                self._private_key = serialization.load_pem_private_key(
+                    pem_clean.encode("utf-8"), password=None, backend=default_backend()
+                )
+            except Exception:
+                # try base64 decode fallback
+                try:
+                    pem_decoded = base64.b64decode(pem_env_raw)
+                    self._private_key = serialization.load_pem_private_key(
+                        pem_decoded, password=None, backend=default_backend()
+                    )
+                except Exception as e:
+                    logger.warning("Failed to load PEM from COINBASE_PEM_CONTENT: %s", e)
+                    self._private_key = None
+        elif pem_b64_env:
+            try:
+                pem_decoded = base64.b64decode(pem_b64_env)
+                self._private_key = serialization.load_pem_private_key(
+                    pem_decoded, password=None, backend=default_backend()
+                )
+            except Exception as e:
+                logger.warning("Failed to load PEM from COINBASE_PEM_B64: %s", e)
+                self._private_key = None
 
         logger.info("app.nija_client:__init__: CoinbaseClient initialized.")
-
-    # --------------------
-    # PEM loader + JWT build
-    # --------------------
-    def _load_pem_from_env(self, pem_raw: str):
-        pem = pem_raw.strip()
-        if "-----BEGIN" not in pem:
-            # probably base64
+        if self._private_key:
+            # attempt one jwt build to log kid + sub (non-sensitive)
             try:
-                pem = base64.b64decode(pem).decode("utf-8")
-                logger.info("Decoded base64 PEM")
-            except Exception as e:
-                logger.exception("PEM base64 decode failed")
-                raise
-        pem = pem.replace("\\n", "\n")
-        if "-----BEGIN" not in pem or "-----END" not in pem:
-            raise ValueError("PEM missing BEGIN/END after normalization")
-        private_key = serialization.load_pem_private_key(
-            pem.encode("utf-8"),
-            password=None,
-            backend=default_backend()
-        )
-        return private_key
+                header, payload = self._build_jwt_struct_preview()
+                logger.info("_build_jwt: JWT header.kid: %s", header.get("kid"))
+                logger.info("_build_jwt: JWT payload.sub: %s", payload.get("sub"))
+                logger.info("_build_jwt: Server UTC time: %s", datetime.datetime.utcnow().isoformat())
+            except Exception:
+                # ignore preview failures
+                pass
 
-    def _build_jwt(self, expiry_seconds: int = 300):
+    # -----------------------
+    # JWT helpers
+    # -----------------------
+    def _build_jwt(self, expire_seconds: int = 300) -> str:
+        """
+        Build and return a JWT (ES256) signed with the PEM private key.
+        Requires: self._private_key and self.api_key/sub present.
+        """
         if not self._private_key:
-            raise RuntimeError("No private key available for JWT signing.")
+            raise RuntimeError("No PEM private key available for JWT generation.")
+
+        sub = self.api_key or os.getenv("COINBASE_API_KEY")
+        if not sub:
+            raise RuntimeError("COINBASE_API_KEY (JWT subject) missing.")
+
         now = int(time.time())
-        payload = {"sub": self.api_key, "iat": now, "exp": now + expiry_seconds}
+        payload = {"sub": sub, "iat": now, "exp": now + expire_seconds}
         headers = {"alg": "ES256"}
-        if self.kid:
-            headers["kid"] = self.kid
+        if self.jwt_kid:
+            headers["kid"] = self.jwt_kid
+
+        # pyjwt accepts private key object from cryptography
         token = jwt.encode(payload, self._private_key, algorithm="ES256", headers=headers)
+        # pyjwt returns str in modern versions
         if isinstance(token, bytes):
             token = token.decode("utf-8")
-        # log header & payload for quick debugging
-        try:
-            hdr = jwt.get_unverified_header(token)
-            pl = jwt.decode(token, options={"verify_signature": False})
-            logger.info(f"JWT header.kid: {hdr.get('kid')}")
-            logger.info(f"JWT payload.sub: {pl.get('sub')}")
-            logger.info("Server UTC time: " + datetime.datetime.utcnow().isoformat())
-        except Exception:
-            logger.exception("JWT debug decode failed (non-fatal)")
         return token
 
-    # --------------------
-    # REST HMAC signing for api.coinbase.com / Pro endpoints
-    # --------------------
-    def _build_rest_headers(self, method: str, url: str, body: str = ""):
+    def _build_jwt_struct_preview(self) -> Tuple[dict, dict]:
         """
-        Build CB-ACCESS-* headers for REST v2 / Pro style endpoints.
-        Expects self.rest_key and self.rest_secret (base64 or raw).
+        Build a short JWT and return header, payload (decoded) for logging/debugging.
+        Doesn't verify expiration.
+        """
+        token = self._build_jwt()
+        return verify_jwt_struct(token)
+
+    # -----------------------
+    # REST HMAC helper (CB-ACCESS-*)
+    # -----------------------
+    def _build_rest_headers(self, method: str, url: str, body: str = "") -> dict:
+        """
+        Build Coinbase REST headers CB-ACCESS-KEY, CB-ACCESS-SIGN, CB-ACCESS-TIMESTAMP, CB-ACCESS-PASSPHRASE.
+        rest_secret may be base64-encoded; Coinbase's secret is usually a raw base64 string.
         """
         if not all([self.rest_key, self.rest_secret, self.rest_passphrase]):
             raise RuntimeError("REST API credentials missing (rest_key/rest_secret/rest_passphrase).")
 
-        # coinbase expects timestamp + method + request_path + body
-        parsed = requests.utils.urlparse(url)
-        request_path = parsed.path or "/"
+        # Coinbase expects timestamp + method + requestPath + body (body empty string if no body)
+        ts = str(int(time.time()))
+        parsed = urlparse(url)
+        request_path = parsed.path
         if parsed.query:
             request_path += "?" + parsed.query
 
-        timestamp = str(int(time.time()))
-        message = timestamp + method.upper() + request_path + (body or "")
-        # rest_secret may be base64 or plain raw secret - Coinbase Pro uses plain secret (not base64)
-        secret = self.rest_secret
-        if isinstance(secret, str):
-            secret_bytes = secret.encode("utf-8")
-        else:
-            secret_bytes = secret
+        prehash = ts + method.upper() + request_path + (body or "")
+        # rest_secret is typically base64-encoded string from Coinbase UI
+        secret_bytes = None
+        try:
+            # try base64 decode (Coinbase gives base64 string)
+            secret_bytes = base64.b64decode(self.rest_secret)
+        except Exception:
+            # if not base64, use as-is bytes
+            secret_bytes = self.rest_secret.encode("utf-8")
 
-        signature = hmac.new(secret_bytes, message.encode("utf-8"), hashlib.sha256).hexdigest()
+        signature = base64.b64encode(hmac.new(secret_bytes, prehash.encode("utf-8"), hashlib.sha256).digest()).decode()
+
         headers = {
             "CB-ACCESS-KEY": self.rest_key,
             "CB-ACCESS-SIGN": signature,
-            "CB-ACCESS-TIMESTAMP": timestamp,
+            "CB-ACCESS-TIMESTAMP": ts,
             "CB-ACCESS-PASSPHRASE": self.rest_passphrase,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         return headers
 
-    # --------------------
-    # Request helpers
-    # --------------------
+    # -----------------------
+    # Request wrappers
+    # -----------------------
     def request_jwt(self, method: str, url: str, **kwargs):
+        """
+        Perform HTTP request using JWT in Authorization: Bearer <token>.
+        """
         token = self._build_jwt()
-        headers = kwargs.pop("headers", {})
+        headers = kwargs.pop("headers", {}) or {}
         headers["Authorization"] = f"Bearer {token}"
         return requests.request(method, url, headers=headers, **kwargs)
 
     def request_rest(self, method: str, url: str, **kwargs):
+        """
+        Perform HTTP request using REST HMAC headers.
+        Accepts json= or data= in kwargs. If json= provided, it is serialized to data.
+        """
         body = ""
         if "json" in kwargs:
             body = json.dumps(kwargs.get("json"))
@@ -224,40 +204,95 @@ class CoinbaseClient:
         elif "data" in kwargs:
             body = kwargs.get("data", "")
 
-        headers = kwargs.pop("headers", {})
-        try:
-            h = self._build_rest_headers(method, url, body)
-        except Exception as e:
-            logger.exception("Failed to create REST headers")
-            raise
+        headers = kwargs.pop("headers", {}) or {}
+
+        if not all([self.rest_key, self.rest_secret, self.rest_passphrase]):
+            msg = (
+                "REST API credentials missing. Set these vars:\n"
+                "COINBASE_REST_KEY, COINBASE_REST_SECRET, COINBASE_REST_PASSPHRASE"
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
+
+        h = self._build_rest_headers(method, url, body)
         headers.update(h)
+
         return requests.request(method, url, headers=headers, data=body, **kwargs)
 
     def request_auto(self, method: str, url: str, **kwargs):
         """
-        Auto-selects auth method:
-          - If host contains 'coinbase.com' and path is /v2 or pro, use REST HMAC
-          - If host contains 'cdp' or sandbox CDP endpoint, use JWT
-        You can override by calling request_jwt() or request_rest() directly.
+        Automatically choose JWT or REST depending on the hostname and credentials available.
+        - If host is api.coinbase.com or pro.coinbase.com => prefer REST when REST creds available
+          (Coinbase Pro/public endpoints often want CB-ACCESS-*). If REST creds missing but PEM exists,
+          will fall back to JWT.
+        - If host includes 'cdp' or 'advanced-trade' => use JWT
+        - Otherwise: prefer JWT if PEM present, else REST.
         """
-        parsed = requests.utils.urlparse(url)
+        parsed = urlparse(url)
         host = parsed.netloc.lower()
-        path = parsed.path.lower()
-
-        # heuristic: api.coinbase.com / api.pro.coinbase.com -> REST HMAC
-        if "api.coinbase.com" in host or "pro.coinbase.com" in host or path.startswith("/v2") or path.startswith("/accounts"):
-            return self.request_rest(method, url, **kwargs)
-
-        # heuristic: cdp/advanced trade endpoints -> JWT
-        if "cdp.coinbase.com" in host or "cdp" in host or "advanced-trade" in host or "sandbox" in host and "cdp" in host:
+        # Use path to detect pro endpoints
+        if "api.coinbase.com" in host or "pro.coinbase.com" in host or "api-public.sandbox.pro.coinbase.com" in host:
+            if all([self.rest_key, self.rest_secret, self.rest_passphrase]):
+                return self.request_rest(method, url, **kwargs)
+            if self._private_key:
+                logger.warning("REST creds missing — falling back to JWT")
+                return self.request_jwt(method, url, **kwargs)
+            raise RuntimeError("No REST creds and no PEM available.")
+        if "cdp" in host or "advanced-trade" in host:
+            # CDP / advanced trade use JWT auth
             return self.request_jwt(method, url, **kwargs)
 
-        # default to JWT if available else REST
+        # default: use JWT if available
         if self._private_key:
             return self.request_jwt(method, url, **kwargs)
+        # fallback to REST
         return self.request_rest(method, url, **kwargs)
 
-    # convenience
+    def request(self, method: str, url: str, **kwargs):
+        """
+        Public alias for request_auto
+        """
+        return self.request_auto(method, url, **kwargs)
+
+    # -----------------------
+    # Convenience / examples
+    # -----------------------
     def sandbox_accounts(self):
+        """
+        Convenience helper for sandbox accounts endpoint (Coinbase Pro sandbox)
+        """
         base = "https://api-public.sandbox.pro.coinbase.com"
-        return self.request_rest("GET", f"{base}/accounts")
+        return self.request_auto("GET", f"{base}/accounts")
+
+
+# -----------------------
+# Utility: inspect JWT structure (safe, local decoding)
+# -----------------------
+def verify_jwt_struct(token: str) -> Tuple[dict, dict]:
+    """
+    Return (header, payload) decoded from the JWT without verifying signature.
+    Useful for logging kid and sub claims.
+    """
+    import base64 as _b64mod
+    import json as _json
+
+    header_b64, payload_b64, _ = token.split(".")
+    # pad base64 as needed
+    def _b64pad(s: str):
+        return s + "=" * (-len(s) % 4)
+
+    header = _json.loads(_b64mod.urlsafe_b64decode(_b64pad(header_b64)))
+    payload = _json.loads(_b64mod.urlsafe_b64decode(_b64pad(payload_b64)))
+    return header, payload
+
+
+# -----------------------
+# Example usage (commented)
+# -----------------------
+# if __name__ == "__main__":
+#     c = CoinbaseClient()
+#     try:
+#         r = c.sandbox_accounts()
+#         print("status", r.status_code, r.text[:400])
+#     except Exception as e:
+#         print("error:", e)
