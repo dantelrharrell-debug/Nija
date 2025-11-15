@@ -1,48 +1,75 @@
 import os
-import jwt
+import sys
 import time
-import requests
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
 from loguru import logger
+from datetime import datetime
+from app.nija_client import CoinbaseClient
 
+# Setup logger
 logger.remove()
-logger.add(lambda msg: print(msg, flush=True), level="INFO")
+logger.add(sys.stdout, level="INFO", enqueue=True)
+logger.info("Nija bot starting...")
 
-# Load env variables
-API_KEY = os.environ.get("COINBASE_API_KEY")
-ORG_ID = os.environ.get("COINBASE_ORG_ID")
-PEM = os.environ.get("COINBASE_PEM_CONTENT")
+# Helper log with timestamp
+def log(msg):
+    ts = datetime.utcnow().isoformat() + "Z"
+    logger.info(f"{ts} | {msg}")
 
-# Check lengths
-logger.info(f"API_KEY len: {len(API_KEY) if API_KEY else 'MISSING'}")
-logger.info(f"ORG_ID len: {len(ORG_ID) if ORG_ID else 'MISSING'}")
-logger.info(f"PEM len: {len(PEM) if PEM else 'MISSING'}")
+log(f"MAIN: cwd={os.getcwd()} pid={os.getpid()}")
 
-# Clean PEM if needed
-PEM_clean = PEM.replace("\\n", "\n") if PEM else None
+# List directories for debug
+for p in [".", "/app", "/tmp", "/workspace", "/home"]:
+    try:
+        items = os.listdir(p)
+        log(f"LS {p}: {items[:10]}")
+    except Exception as e:
+        log(f"LS {p} failed: {e}")
 
-# Generate JWT
+# Write indicator file
 try:
-    private_key = serialization.load_pem_private_key(
-        PEM_clean.encode(), password=None, backend=default_backend()
-    )
-    payload = {
-        "iat": int(time.time()),
-        "exp": int(time.time()) + 300,
-        "sub": ORG_ID,
-    }
-    token = jwt.encode(payload, private_key, algorithm="ES256", headers={"kid": ORG_ID})
-    logger.info(f"JWT generated successfully: {token[:50]}...")
+    with open("/tmp/nija_started.ok", "a") as f:
+        f.write(datetime.utcnow().isoformat() + " started\n")
+    log("WROTE /tmp/nija_started.ok")
 except Exception as e:
-    logger.exception("Failed to generate JWT")
+    log(f"WRITE FAILED: {e}")
 
-# Test Coinbase API
+# --- Initialize Coinbase client safely ---
 try:
-    headers = {"Authorization": f"Bearer {token}", "CB-VERSION": "2025-11-15"}
-    response = requests.get("https://api.coinbase.com/v2/accounts", headers=headers)
-    logger.info(f"Coinbase test status: {response.status_code}")
-    if response.status_code != 200:
-        logger.error(f"API response: {response.text}")
+    pem_raw = os.environ.get("COINBASE_PEM_CONTENT")
+    if not pem_raw:
+        raise ValueError("COINBASE_PEM_CONTENT missing in environment")
+
+    pem_clean = pem_raw.replace("\\n", "\n")  # fix newline issues
+    api_key = os.environ.get("COINBASE_API_KEY")
+    org_id = os.environ.get("COINBASE_ORG_ID")
+
+    if not api_key or not org_id:
+        raise ValueError("COINBASE_API_KEY or COINBASE_ORG_ID missing")
+
+    client = CoinbaseClient(api_key=api_key, org_id=org_id, pem=pem_clean)
+    log("CoinbaseClient initialized")
+
+    # Optional: test API connection immediately
+    resp = client.request("GET", "https://api.coinbase.com/v2/accounts")
+    log(f"Coinbase API test status: {resp.status_code}")
+    if resp.status_code != 200:
+        log(f"API response: {resp.text}")
+        raise ValueError("Coinbase API unauthorized. Check key, PEM, org, and permissions.")
+
 except Exception as e:
-    logger.exception("Coinbase API request failed")
+    logger.exception("Failed to initialize CoinbaseClient. Bot will not start.")
+    sys.exit(1)  # stop container if credentials are bad
+
+# --- Start bot ---
+try:
+    from app.start_bot_main import start_bot_main
+    log("Imported start_bot_main OK")
+    start_bot_main(client)  # pass client to bot
+except Exception as e:
+    logger.exception("Bot crashed during start")
+
+# Heartbeat loop so container stays alive
+log("Entering HEARTBEAT loop (every 5s)")
+while True:
+    log("HEARTBEAT - container alive")
+    time.sleep(5)
