@@ -1,9 +1,11 @@
-/app
+nija-bot/
 │
-├─ main.py                 # entry point
-├─ start_bot_main.py       # initialization logic
-├─ nija_client.py          # Coinbase client
-├─ __init__.py             # makes /app a package
-├─ requirements.txt        # dependencies
 ├─ Dockerfile
-└─ .env
+├─ requirements.txt
+├─ .env
+├─ main.py
+├─ nija_client.py
+├─ start_bot_main.py
+└─ app/
+   ├─ __init__.py
+   └─ (any other modules like helpers, balance checks, etc.)
