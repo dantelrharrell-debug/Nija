@@ -10,71 +10,58 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # -----------------------------
-# Logging
+# Logging setup
 # -----------------------------
 logger.remove()
 logger.add(lambda m: print(m, end=""), level=os.environ.get("LOG_LEVEL", "INFO"))
 
 # -----------------------------
-# Env / Paths
+# PEM & JWT helpers
 # -----------------------------
 PEM_FILE_PATH = os.environ.get("COINBASE_PEM_PATH", "/app/coinbase.pem")
-MIN_PEM_LENGTH = 200
+MIN_PEM_LENGTH = 200  # Coinbase PEMs are usually >200 bytes
 
-COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")
-COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
-COINBASE_JWT_KID = os.environ.get("COINBASE_JWT_KID")  # Must match UUID of API Key
-
-if not all([COINBASE_ORG_ID, COINBASE_API_KEY, COINBASE_JWT_KID]):
-    logger.error("Missing required env vars: COINBASE_ORG_ID, COINBASE_API_KEY, COINBASE_JWT_KID")
-    sys.exit(1)
-
-# -----------------------------
-# PEM Handling
-# -----------------------------
 def write_pem_from_env():
+    """Write PEM from COINBASE_PEM_CONTENT to PEM_FILE_PATH"""
     pem_env = os.environ.get("COINBASE_PEM_CONTENT")
     if not pem_env:
-        logger.error("COINBASE_PEM_CONTENT not set")
-        sys.exit(1)
-    # convert literal \n into real newlines if necessary
-    pem_text = pem_env.replace("\\n", "\n") if "\\n" in pem_env else pem_env
+        logger.warning("COINBASE_PEM_CONTENT not set. Skipping PEM write.")
+        return None
+    pem_text = pem_env.replace("\\n", "\n") if "\\n" in pem_env and "\n" not in pem_env else pem_env
     pem_text = pem_text.strip().strip('"').strip("'")
     if not pem_text.endswith("\n"):
         pem_text += "\n"
-
     if len(pem_text) < MIN_PEM_LENGTH:
-        logger.warning(f"COINBASE_PEM_CONTENT looks very short ({len(pem_text)} bytes)")
-
-    with open(PEM_FILE_PATH, "w", newline="\n") as f:
-        f.write(pem_text)
-    logger.info(f"Wrote PEM to {PEM_FILE_PATH} ({len(pem_text)} bytes)")
-    return PEM_FILE_PATH
+        logger.warning(f"COINBASE_PEM_CONTENT looks short ({len(pem_text)} bytes).")
+    try:
+        with open(PEM_FILE_PATH, "w", newline="\n") as f:
+            f.write(pem_text)
+        logger.info(f"Wrote PEM to {PEM_FILE_PATH} ({len(pem_text)} bytes)")
+        return PEM_FILE_PATH
+    except Exception as e:
+        logger.exception(f"Failed to write PEM file: {e}")
+        return None
 
 def load_private_key(path):
+    """Load PEM private key from file"""
     if not os.path.exists(path):
         logger.error(f"PEM file not found at {path}")
         sys.exit(1)
-
     with open(path, "rb") as f:
         data = f.read()
-
     if len(data) < MIN_PEM_LENGTH:
         logger.error(f"PEM file too short ({len(data)} bytes)")
         sys.exit(1)
-
     try:
         key = serialization.load_pem_private_key(data, password=None, backend=default_backend())
-        logger.info(f"Private key loaded successfully. Key type: {type(key)}")
+        logger.info("Private key loaded successfully.")
         return key
     except Exception as e:
-        logger.exception(f"Failed to deserialize PEM: {e}")
+        logger.exception(f"Failed to deserialize PEM private key: {e}")
         sys.exit(1)
 
-# -----------------------------
-# JWT Generation
-# -----------------------------
-def build_jwt(private_key, org_id, kid):
+def build_jwt(private_key, org_id, kid=None):
+    """Generate Coinbase JWT"""
     iat = int(time.time())
     payload = {"sub": org_id, "iat": iat, "exp": iat + 300}  # 5 min expiry
     headers = {"kid": kid} if kid else {}
@@ -82,62 +69,41 @@ def build_jwt(private_key, org_id, kid):
     return token
 
 # -----------------------------
-# Coinbase Test Call
-# -----------------------------
-def test_coinbase(token):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "CB-VERSION": os.environ.get("CB_API_VERSION", "2025-01-01")
-    }
-    try:
-        resp = requests.get("https://api.coinbase.com/v2/accounts", headers=headers, timeout=12)
-        return resp
-    except Exception as e:
-        logger.exception(f"Coinbase request failed: {e}")
-        return None
-
-# -----------------------------
-# Startup Test
+# Startup test
 # -----------------------------
 def startup_test():
+    """Full startup test: write/load PEM, generate JWT, call Coinbase Advanced Trade API"""
     logger.info("=== Nija Coinbase JWT startup test ===")
-    pem_path = PEM_FILE_PATH if os.path.exists(PEM_FILE_PATH) else write_pem_from_env()
-    key = load_private_key(pem_path)
-    token = build_jwt(key, COINBASE_ORG_ID, COINBASE_JWT_KID)
-    logger.info(f"Generated JWT (preview): {token[:50]}...")
+    pem_path = os.environ.get("COINBASE_PEM_PATH") or write_pem_from_env()
+    org_id = os.environ.get("COINBASE_ORG_ID")
+    kid = os.environ.get("COINBASE_JWT_KID")  # API Key ID
 
-    # Decode locally for verification
-    try:
-        header = jwt.get_unverified_header(token)
-        payload = jwt.decode(token, options={"verify_signature": False})
-        logger.info(f"JWT header: {header}")
-        logger.info(f"JWT payload: {payload}")
-    except Exception as e:
-        logger.warning(f"Failed local JWT decode: {e}")
+    logger.info(f"PEM_PATH: {pem_path}")
+    logger.info(f"ORG_ID : {org_id}")
+    logger.info(f"KID    : {kid}")
+    logger.info("Server UTC time: " + datetime.datetime.utcnow().isoformat())
 
-    # Coinbase API call
-    resp = test_coinbase(token)
-    if resp is None:
-        logger.error("No response from Coinbase")
+    if not pem_path or not org_id or not kid:
+        logger.error("Missing PEM_PATH, ORG_ID, or KID; cannot proceed with JWT generation.")
         return
-    logger.info(f"Coinbase response: {resp.status_code}")
-    if resp.status_code != 200:
-        logger.error(f"Unauthorized or error: {resp.text[:500]}")
 
-# -----------------------------
-# Helper to get headers for API calls
-# -----------------------------
-def get_coinbase_headers():
-    pem_path = PEM_FILE_PATH
     key = load_private_key(pem_path)
-    token = build_jwt(key, COINBASE_ORG_ID, COINBASE_JWT_KID)
-    return {
-        "Authorization": f"Bearer {token}",
-        "CB-VERSION": os.environ.get("CB_API_VERSION", "2025-01-01")
-    }
+    token = build_jwt(key, org_id, kid)
+    logger.info("Generated JWT (preview): " + (token[:200] if token else ""))
+
+    # ✅ Test Coinbase Advanced Trade API
+    try:
+        resp = requests.get(
+            "https://api.exchange.coinbase.com/accounts",
+            headers={"Authorization": f"Bearer {token}"}, timeout=12
+        )
+        logger.info("Status code: " + str(resp.status_code))
+        logger.info("Response (truncated 2000 chars):\n" + (resp.text[:2000] if resp.text else ""))
+    except Exception as e:
+        logger.exception(f"Coinbase request failed: {e}")
 
 # -----------------------------
-# Run test if called directly
+# Main entry
 # -----------------------------
 if __name__ == "__main__":
     startup_test()
