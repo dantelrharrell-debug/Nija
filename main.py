@@ -1,4 +1,4 @@
-# ✅ main.py - Nija Trading Bot (full JWT + Coinbase API ready)
+# ✅ main.py - Nija Trading Bot (Live Trading Ready)
 import os
 import time
 import jwt
@@ -21,8 +21,12 @@ COINBASE_API_KID = os.getenv("COINBASE_API_KID") or COINBASE_API_KEY_ID
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
 
+# Trading parameters
+MIN_ALLOCATION = 0.02  # 2% of account balance
+MAX_ALLOCATION = 0.10  # 10% of account balance
+
 if not COINBASE_ORG_ID or not COINBASE_API_KEY_ID or not (COINBASE_API_SUB or COINBASE_API_KID):
-    logger.error("❌ Missing required Coinbase env vars. Check ORG_ID, API_KEY_ID, API_SUB/KID.")
+    logger.error("❌ Missing required Coinbase env vars.")
     raise SystemExit(1)
 
 # ----------------------------
@@ -37,7 +41,7 @@ elif COINBASE_PEM_PATH:
     with open(COINBASE_PEM_PATH, "r", encoding="utf-8") as f:
         pem_text = f.read().replace("\r", "").strip()
 else:
-    logger.error("❌ No PEM provided. Set COINBASE_PEM_CONTENT or COINBASE_PEM_PATH.")
+    logger.error("❌ No PEM provided.")
     raise SystemExit(1)
 
 try:
@@ -65,7 +69,7 @@ def generate_jwt(sub, kid, request_path="/api/v3/brokerage/organizations/{org}/a
     return jwt.encode(payload, private_key, algorithm="ES256", headers=headers_jwt)
 
 # ----------------------------
-# Coinbase API Call (safe)
+# Coinbase API Call (safe, with retries)
 # ----------------------------
 def call_coinbase(path, token, method="GET", data=None, retries=3):
     url = f"https://api.coinbase.com{path}"
@@ -105,9 +109,7 @@ working_sub = None
 for candidate_sub in subs_to_try:
     token = generate_jwt(candidate_sub, COINBASE_API_KID)
     resp = call_coinbase(f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts", token)
-    status = resp.get("status", "ERR") if resp else "ERR"
-    logger.info(f"Testing sub: {candidate_sub} -> status {status}")
-    if resp:
+    if resp and "data" in resp:
         working_sub = candidate_sub
         logger.success(f"✅ Working sub detected: {working_sub}")
         break
@@ -130,21 +132,58 @@ def fetch_funded_accounts():
         return None
     data = resp.get("data", [])
     funded = [a for a in data if float(a.get("balance", {}).get("amount", 0)) > 0]
-    logger.success(f"✅ Fetched {len(funded)} funded accounts")
     return funded
 
 # ----------------------------
-# Main
+# Place an order
+# ----------------------------
+def place_order(account_id, symbol, side, usd_amount):
+    path = f"/api/v3/brokerage/accounts/{account_id}/orders"
+    data = {
+        "symbol": symbol,
+        "side": side,           # "buy" or "sell"
+        "type": "market",
+        "funds": str(usd_amount)  # USD amount
+    }
+    token = generate_jwt(sub, kid, path, method="POST")
+    resp = call_coinbase(path, token, method="POST", data=data)
+    if resp:
+        logger.success(f"✅ {side.upper()} order placed for {symbol}: {usd_amount} USD")
+        return resp
+    logger.error(f"❌ Failed to place {side} order for {symbol}")
+    return None
+
+# ----------------------------
+# Calculate position size
+# ----------------------------
+def calculate_allocation(balance):
+    amt = balance * MAX_ALLOCATION
+    if amt < balance * MIN_ALLOCATION:
+        amt = balance * MIN_ALLOCATION
+    return round(amt, 2)
+
+# ----------------------------
+# Main loop
 # ----------------------------
 def main():
-    logger.info("Starting Nija Trading Bot...")
+    logger.info("Starting Nija Trading Bot (Live Trading Mode)...")
     accounts = fetch_funded_accounts()
     if not accounts:
-        logger.error("No accounts available. Exiting.")
+        logger.error("No funded accounts available. Exiting.")
         return
-    for acc in accounts[:5]:
-        bal = acc.get("balance", {})
-        logger.info(f"- {acc.get('id')} -> {bal.get('amount')} {bal.get('currency')}")
+
+    # Example: trade BTC-USD in first funded account
+    account = accounts[0]
+    balance = float(account.get("balance", {}).get("amount", 0))
+    allocation = calculate_allocation(balance)
+    logger.info(f"Account {account['id']} balance: {balance} USD, allocation: {allocation} USD")
+
+    # Place a BUY order for BTC-USD
+    place_order(account["id"], "BTC-USD", "buy", allocation)
+
+    # Optional: place a SELL after 10% price increase or any strategy
+    # Here just an example placeholder
+    # place_order(account["id"], "BTC-USD", "sell", allocation)
 
 if __name__ == "__main__":
     main()
