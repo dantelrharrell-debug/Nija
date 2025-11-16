@@ -1,13 +1,14 @@
-# check_coinbase_env.py
+# check_coinbase_env_auto_sync.py
 import os, time, requests, jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+import subprocess
 
 # -----------------------------
 # Load environment variables
 # -----------------------------
-COINBASE_API_KEY_FULL = os.getenv("COINBASE_API_KEY_FULL")  # organizations/.../apiKeys/<id>
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")            # short id
+COINBASE_API_KEY_FULL = os.getenv("COINBASE_API_KEY_FULL")
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
 COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
@@ -59,13 +60,33 @@ print("Using API_KEY_ID (sub):", api_key_id)
 print("Using kid header value:", kid)
 
 # -----------------------------
+# Auto-sync container time with Coinbase server
+# -----------------------------
+try:
+    server_time_resp = requests.get("https://api.coinbase.com/v2/time")
+    server_time = int(server_time_resp.json()['data']['epoch'])
+    local_time = int(time.time())
+    skew = server_time - local_time
+    print(f"⏱ Local time: {local_time}, Coinbase server time: {server_time}, skew: {skew}s")
+    
+    # Auto-adjust container time (Linux only, requires privileges)
+    if abs(skew) > 2:
+        print("🔧 Syncing container time...")
+        subprocess.run(["date", "-s", f"@{server_time}"], check=False)
+        print("✅ Time synced to Coinbase server")
+    else:
+        print("✅ Time in sync (within 2s)")
+except Exception as e:
+    print(f"⚠️ Could not sync time automatically: {e}")
+
+# -----------------------------
 # Build JWT
 # -----------------------------
 path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
 iat = int(time.time())
 payload = {
     "iat": iat,
-    "exp": iat + 120,  # 2 minutes expiration
+    "exp": iat + 120,
     "sub": api_key_id,
     "request_path": path,
     "method": "GET"
@@ -88,6 +109,6 @@ print("Response text:", resp.text)
 if resp.status_code == 200:
     print("🎯 Coinbase API connection OK! You can trade now.")
 elif resp.status_code == 401:
-    print("❌ Unauthorized. Check PEM, API key, or key permissions.")
+    print("❌ Unauthorized. Check PEM, API key, key permissions, or container time.")
 else:
-    print("⚠️ Unexpected response. Check your key and network.")
+    print("⚠️ Unexpected response. Check your key, PEM, and network.")
