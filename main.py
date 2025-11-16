@@ -1,25 +1,32 @@
-# main.py
-# Nija Trading Bot — Flask + Coinbase Advanced API (live /accounts endpoint)
+#!/usr/bin/env python3
+# main.py -- Nija Trading Bot + DEBUG JWT snippet
 import os
 import time
 import requests
 import jwt
 import datetime
-from threading import Thread
-from flask import Flask, jsonify, request
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from loguru import logger
+from flask import Flask, jsonify, request
+from threading import Thread
 
+logger.remove()
 logger.add(lambda msg: print(msg, end=''))  # container-friendly stdout
 
 # ----------------------------
-# CONFIG
+# CONFIG / SAFETY SWITCHES
 # ----------------------------
-LOCAL_BOT_URL = "http://127.0.0.1:5000"  # used for internal calls in test mode
+SEND_TEST_TRADE = False   # set True only when you want the script to POST a test trade on startup
+DEBUG_JWT_TEST = True     # keep True to run the debug JWT -> /accounts call at startup
+
+LOCAL_HOST = "127.0.0.1"
+LOCAL_PORT = 5000
+LOCAL_BOT_URL = f"http://{LOCAL_HOST}:{LOCAL_PORT}"
 WEBHOOK_ENDPOINT = f"{LOCAL_BOT_URL}/webhook"
 ACCOUNTS_ENDPOINT = f"{LOCAL_BOT_URL}/accounts"
 
+# Example test trade payload (not sent unless SEND_TEST_TRADE True)
 TEST_ORDER = True
 TRADE_PAYLOAD = {
     "symbol": "BTC-USD",
@@ -33,18 +40,26 @@ TRADE_PAYLOAD = {
 # Env vars
 # ----------------------------
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
-COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")       # short UUID
-COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")            # full path
+COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")            # uuid only
+COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")                 # full path
 COINBASE_API_KID = os.getenv("COINBASE_API_KID") or COINBASE_API_SUB
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
 
-if not COINBASE_ORG_ID or not (COINBASE_API_KEY_ID or COINBASE_API_SUB):
-    logger.error("Missing required Coinbase env vars: COINBASE_ORG_ID and COINBASE_API_KEY_ID or COINBASE_API_SUB")
+# Quick env debug
+logger.info("🔹 Verifying Coinbase env variables...\n")
+logger.info("COINBASE_ORG_ID: %s\n" % (COINBASE_ORG_ID))
+logger.info("COINBASE_API_KEY_ID (short UUID): %s\n" % (COINBASE_API_KEY_ID))
+logger.info("COINBASE_API_SUB (full path): %s\n" % (COINBASE_API_SUB))
+logger.info("COINBASE_PEM_CONTENT length: %s\n" % (len(COINBASE_PEM_CONTENT or "")))
+
+# Basic required check
+if not COINBASE_ORG_ID or not COINBASE_API_KEY_ID or not COINBASE_API_SUB:
+    logger.error("Missing required Coinbase env vars. Set COINBASE_ORG_ID, COINBASE_API_KEY_ID, COINBASE_API_SUB\n")
     raise SystemExit(1)
 
 # ----------------------------
-# Load PEM (support literal \n)
+# Load PEM
 # ----------------------------
 if COINBASE_PEM_CONTENT:
     pem_text = COINBASE_PEM_CONTENT.replace("\\n", "\n").replace("\r", "").strip().strip('"').strip("'")
@@ -62,211 +77,162 @@ try:
     private_key = serialization.load_pem_private_key(
         pem_text.encode(), password=None, backend=default_backend()
     )
-    logger.success("✅ PEM loaded successfully")
+    logger.success("✅ PEM loaded successfully\n")
 except Exception as e:
-    logger.error(f"❌ Failed to load PEM: {e}")
+    logger.error(f"❌ Failed to load PEM: {e}\n")
     raise SystemExit(1)
 
 # ----------------------------
-# Helper: make a signed JWT (using provided sub and kid)
+# JWT helpers
 # ----------------------------
-def make_jwt_for(sub: str, kid: str, request_path: str, method: str = "GET", expire_seconds: int = 120):
+def make_jwt(sub: str, kid: str, request_path: str = "/", method: str = "GET", expiry_sec: int = 120):
     iat = int(time.time())
     payload = {
         "iat": iat,
-        "exp": iat + expire_seconds,
+        "exp": iat + expiry_sec,
         "sub": sub,
         "request_path": request_path,
-        "method": method
+        "method": method,
+        "jti": f"dbg-{iat}"
     }
     headers_jwt = {"alg": "ES256", "kid": kid}
     token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers_jwt)
     return token
 
 # ----------------------------
-# Call Coinbase with auto-sub fallback
-# - tries short API key id as sub first, then full path sub
-# - returns requests.Response or None
+# Local bot HTTP helpers
 # ----------------------------
-def call_coinbase_with_auto_sub(path: str, method: str = "GET", json_data=None, retries: int = 3):
-    base_url = "https://api.coinbase.com"
-    url = base_url + path
-
-    # order to try: short id (if provided), then full path
-    subs_to_try = []
-    if COINBASE_API_KEY_ID:
-        subs_to_try.append(COINBASE_API_KEY_ID)
-    if COINBASE_API_SUB:
-        subs_to_try.append(COINBASE_API_SUB)
-
-    last_resp = None
-    for sub_candidate in subs_to_try:
-        for attempt in range(1, retries + 1):
-            try:
-                token = make_jwt_for(sub_candidate, COINBASE_API_KID or sub_candidate, request_path=path, method=method)
-                headers = {
-                    "Authorization": f"Bearer {token}",
-                    "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
-                    "Content-Type": "application/json"
-                }
-                logger.info(f"[Coinbase] Trying sub='{sub_candidate}' attempt {attempt} -> {method} {path}")
-                if method.upper() == "GET":
-                    resp = requests.get(url, headers=headers, timeout=10)
-                else:
-                    resp = requests.post(url, headers=headers, json=json_data, timeout=10)
-
-                logger.info(f"[Coinbase] HTTP {resp.status_code}")
-                # if success, return resp
-                if resp.status_code in (200, 201):
-                    return resp
-                # 401 indicates JWT/sub/kid issue — try regenerating token (retry loop) then next sub
-                if resp.status_code == 401:
-                    logger.warning(f"⚠️ 401 for sub '{sub_candidate}', resp: {resp.text}")
-                    last_resp = resp
-                    time.sleep(1)
-                    continue
-                # other failures: return response (caller can log)
-                last_resp = resp
-                break
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Request exception: {e}")
-                last_resp = None
-                time.sleep(1)
-                continue
-        # if we reached here and got a 200 we already returned; otherwise try next sub_candidate
-    # all subs/attempts exhausted
-    return last_resp
-
-# ----------------------------
-# Fetch funded accounts from Coinbase
-# ----------------------------
-def fetch_funded_accounts():
-    path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
-    resp = call_coinbase_with_auto_sub(path, method="GET", retries=3)
-    if resp is None:
-        logger.error("No response from Coinbase (network or exception).")
-        return None
-    if resp.status_code == 200:
-        try:
-            accounts = resp.json()
-            # Coinbase returns list or object depending on endpoint; preserve as-is but try to normalize
-            # If it's list-like under 'data', return that; otherwise return what we received.
-            if isinstance(accounts, dict) and "data" in accounts:
-                data = accounts["data"]
-            else:
-                data = accounts
-            # Filter funded accounts (balance.amount > 0) if structure matches expected
-            funded = []
-            for a in data if isinstance(data, list) else []:
-                try:
-                    bal_amt = float(a.get("balance", {}).get("amount", 0) or 0)
-                except Exception:
-                    bal_amt = 0
-                if bal_amt > 0:
-                    funded.append(a)
-            # If filter found items, return funded; else return raw data
-            return {"data": funded if funded else data}
-        except ValueError:
-            logger.error("Failed to parse JSON from Coinbase response")
-            return None
-    else:
-        logger.warning(f"Coinbase returned {resp.status_code}: {resp.text}")
-        return None
-
-# ----------------------------
-# Internal "call bot" helper (used for local demo/test calls)
-# ----------------------------
-def call_bot(endpoint, method="GET", data=None, retries=2):
+def call_bot(endpoint, method="GET", data=None, retries=3):
     for attempt in range(1, retries + 1):
         try:
             if method.upper() == "GET":
                 resp = requests.get(endpoint, timeout=10)
             else:
                 resp = requests.post(endpoint, json=data, timeout=10)
-            logger.info(f"[Attempt {attempt}] {method} {endpoint} -> HTTP {resp.status_code}")
-            if resp.status_code in (200, 201):
-                return resp.json()
+            status = resp.status_code
+            logger.info(f"[Attempt {attempt}] {method} {endpoint} -> HTTP {status}\n")
+            if status in (200, 201):
+                try:
+                    return resp.json()
+                except Exception:
+                    return resp.text
             else:
-                logger.warning(f"⚠️ {method} failed: {resp.status_code} | {resp.text}")
+                logger.warning(f"⚠️ {method} failed: {status} | {resp.text}\n")
                 time.sleep(1)
         except Exception as e:
-            logger.error(f"Request exception: {e}")
+            logger.error(f"Request exception: {e}\n")
             time.sleep(1)
-    logger.error(f"All retries failed for {endpoint}")
+    logger.error(f"All retries failed for {endpoint}\n")
     return None
 
-# ----------------------------
-# Send trade to webhook (internal test)
-# ----------------------------
-def send_trade(payload):
-    logger.info("🔹 Sending trade webhook...")
-    response = call_bot(WEBHOOK_ENDPOINT, method="POST", data=payload)
-    if response:
-        logger.success("✅ Webhook sent successfully!")
-        logger.info(f"Bot response: {response}")
-    else:
-        logger.error("❌ Webhook failed")
-    return response
+def send_test_webhook(payload):
+    logger.info("🔹 Sending test trade webhook to local /webhook...\n")
+    return call_bot(WEBHOOK_ENDPOINT, method="POST", data=payload)
+
+def fetch_local_accounts():
+    logger.info("🔹 Fetching accounts from local /accounts...\n")
+    return call_bot(ACCOUNTS_ENDPOINT, method="GET")
 
 # ----------------------------
-# Fetch accounts wrapper used by /accounts route
+# Flask app (webhook + accounts)
 # ----------------------------
-def fetch_accounts_for_route():
-    result = fetch_funded_accounts()
-    if not result:
-        return {"data": []}
-    return result
-
-# =============================
-# Flask Web Server (routes)
-# =============================
 app = Flask(__name__)
 
 @app.route("/accounts", methods=["GET"])
-def get_accounts_route():
-    """
-    Returns Coinbase accounts (funded accounts preferred).
-    Response format: { "data": [ ... ] }
-    """
-    logger.info("HTTP /accounts requested")
-    accounts = fetch_accounts_for_route()
-    return jsonify(accounts), 200
+def get_accounts():
+    # Replace with real Coinbase fetching logic once JWT succeeds
+    demo = [
+        {"id": "1", "currency": "USD", "balance": {"amount": "150.00"}},
+        {"id": "2", "currency": "BTC", "balance": {"amount": "0.002"}}
+    ]
+    return jsonify({"data": demo})
 
 @app.route("/webhook", methods=["POST"])
-def webhook_route():
-    data = request.json
-    logger.info(f"📩 Webhook received: {data}")
-    # Here you could validate the webhook payload, signature, or call process_trading_signal
-    # For safety this demo only acknowledges receipt.
-    return jsonify({"status": "success", "received": data}), 200
+def webhook():
+    payload = request.json
+    logger.info(f"📩 Webhook received: {payload}\n")
+    # Placeholder: real trading logic would go here (use Coinbase calls when JWT works)
+    return jsonify({"status": "success", "received": payload})
 
 # ----------------------------
-# Demo: fetch /accounts (used by main)
+# DEBUG: generate a JWT with full-path sub/kid, print it, and call Coinbase /accounts
 # ----------------------------
-def fetch_accounts_and_log():
-    logger.info("🔹 Fetching Coinbase account balances (demo)...")
-    result = fetch_funded_accounts()
-    if not result:
-        logger.warning("⚠️ No accounts returned.")
+def debug_coinbase_jwt_test():
+    if not DEBUG_JWT_TEST:
+        logger.info("DEBUG_JWT_TEST disabled; skipping JWT test.\n")
         return
-    logger.success(f"✅ Fetched accounts: {len(result.get('data', [])) if isinstance(result.get('data'), list) else 'unknown'}")
-    logger.info(result)
 
-# ----------------------------
-# Main startup
-# ----------------------------
-def main():
-    # internal demo: send test trade to local webhook (only if webhook listener is reachable)
+    logger.info("=== DEBUG: generating JWT and calling Coinbase /accounts ===\n")
+    full_sub = COINBASE_API_SUB            # organizations/<org>/apiKeys/<id>
+    full_kid = COINBASE_API_KID or COINBASE_API_SUB
+    coinbase_path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+
+    # Make token (explicit)
+    iat = int(time.time())
+    payload = {
+        "iat": iat,
+        "exp": iat + 120,
+        "sub": full_sub,
+        "request_path": coinbase_path,
+        "method": "GET",
+        "jti": f"dbg-{iat}"
+    }
+    headers_jwt = {"alg": "ES256", "kid": full_kid}
+    token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers_jwt)
+
+    logger.info("DEBUG JWT (preview): %s\n" % token[:200])
+
+    # Test call
+    url = "https://api.coinbase.com" + coinbase_path
     try:
-        send_trade(TRADE_PAYLOAD)
+        resp = requests.get(url, headers={
+            "Authorization": f"Bearer {token}",
+            "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+            "Content-Type": "application/json"
+        }, timeout=10)
+        logger.info("DEBUG /accounts status: %s\n" % resp.status_code)
+        logger.info("DEBUG /accounts body: %s\n" % resp.text)
     except Exception as e:
-        logger.error(f"Error sending internal trade: {e}")
+        logger.error("DEBUG /accounts request exception: %s\n" % str(e))
 
-    # wait and fetch accounts
-    time.sleep(2)
-    fetch_accounts_and_log()
+    logger.info("=== DEBUG complete ===\n")
+
+# ----------------------------
+# Main orchestrator
+# ----------------------------
+def main_logic():
+    # Optionally send a test webhook to the running local Flask app
+    if SEND_TEST_TRADE:
+        resp = send_test_webhook(TRADE_PAYLOAD)
+        logger.info("Test webhook response: %s\n" % resp)
+    else:
+        logger.info("SEND_TEST_TRADE is False — not sending test trade on startup.\n")
+
+    # Give the webhook a moment
+    time.sleep(1)
+
+    # Try fetching local accounts
+    local_accounts = fetch_local_accounts()
+    logger.info("Local /accounts returned: %s\n" % (local_accounts or "None"))
+
+    # Run debug JWT test against Coinbase
+    debug_coinbase_jwt_test()
+
+# ----------------------------
+# Start Flask + run main logic
+# ----------------------------
+def start():
+    # Launch Flask in a background thread, then run main logic in main thread
+    server_thread = Thread(target=lambda: app.run(host="0.0.0.0", port=LOCAL_PORT, debug=False, use_reloader=False))
+    server_thread.daemon = True
+    server_thread.start()
+
+    # Wait briefly for server to bind
+    time.sleep(0.8)
+    try:
+        main_logic()
+    except Exception as e:
+        logger.error(f"Main logic exception: {e}\n")
 
 if __name__ == "__main__":
-    # run Flask in a background thread, then execute main logic
-    Thread(target=lambda: app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)).start()
-    main()
+    start()
