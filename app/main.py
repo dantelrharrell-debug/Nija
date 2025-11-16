@@ -1,79 +1,16 @@
-import os
-import sys
-import time
-from datetime import datetime
-from loguru import logger
 from app.nija_client import CoinbaseClient
-from app.start_bot_main import start_bot_main
+from loguru import logger
 
-# ------------------------
-# Setup logger
-# ------------------------
-logger.remove()
-logger.add(sys.stdout, level="INFO", enqueue=True)
-logger.info("Nija bot starting... (main.py)")
+if __name__ == "__main__":
+    api_key = "d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5"
+    kid = "9e33d60c-c9d7-4318-a2d5-24e1e53d2206"
+    org_id = "ce77e4ea-ecca-42ec-912a-b6b4455ab9d0"
+    pem = """-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIKrWQ2OeX7kqTob0aXR6A238b698ePPLutcEP1qq4gfLoAoGCCqGSM49
+AwEHoUQDQgAEuQAqrVE522Hz...
+-----END EC PRIVATE KEY-----"""
 
-# ------------------------
-# Debug starter
-# ------------------------
-def log(msg):
-    ts = datetime.utcnow().isoformat() + "Z"
-    logger.info(f"{ts} | {msg}")
-
-log(f"MAIN: cwd={os.getcwd()} pid={os.getpid()}")
-
-# List directories for container debug
-for p in [".", "/app", "/tmp", "/workspace", "/home"]:
-    try:
-        items = os.listdir(p)
-        log(f"LS {p}: {items[:10]}")
-    except Exception as e:
-        log(f"LS {p} failed: {e}")
-
-# Write indicator file
-try:
-    with open("/tmp/nija_started.ok", "a") as f:
-        f.write(datetime.utcnow().isoformat() + " started\n")
-    log("WROTE /tmp/nija_started.ok")
-except Exception as e:
-    log(f"WRITE FAILED: {e}")
-
-# ------------------------
-# Initialize Coinbase client
-# ------------------------
-try:
-    pem_clean = os.environ["COINBASE_PEM_CONTENT"]
-    client = CoinbaseClient(
-        api_key=os.environ["COINBASE_API_KEY"],
-        org_id=os.environ["COINBASE_ORG_ID"],
-        pem=pem_clean
-    )
-    log("CoinbaseClient initialized")
-except Exception as e:
-    logger.exception("Failed to initialize CoinbaseClient")
-    sys.exit(1)
-
-# Optional: test API connection
-try:
-    response = client.request("GET", "https://api.coinbase.com/v2/accounts")
-    log(f"Coinbase API test status: {response.status_code}")
-    if response.status_code != 200:
-        log(f"API response: {response.text}")
-except Exception as e:
-    logger.exception("Coinbase test request failed")
-
-# ------------------------
-# Start bot
-# ------------------------
-try:
-    start_bot_main(client)
-except Exception as e:
-    logger.exception("Bot crashed")
-
-# ------------------------
-# HEARTBEAT loop
-# ------------------------
-log("Entering HEARTBEAT loop (every 5s)")
-while True:
-    log("HEARTBEAT - container alive")
-    time.sleep(5)
+    client = CoinbaseClient(api_key=api_key, org_id=org_id, pem=pem, kid=kid)
+    status, resp = client.request_auto("GET", "/v2/accounts")
+    logger.info(f"API test status: {status}")
+    logger.info(f"API response: {resp}")
