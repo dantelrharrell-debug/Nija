@@ -1,4 +1,3 @@
-# app/main.py
 import os
 import time
 import datetime
@@ -8,16 +7,16 @@ import logging
 from flask import Flask, request, jsonify
 
 # --- CONFIG ---
-SEND_LIVE_TRADES = False  
-RETRY_COUNT = 3  
-RETRY_DELAY = 1  
-CACHE_TTL = 30  
+SEND_LIVE_TRADES = False
+RETRY_COUNT = 3
+RETRY_DELAY = 1
+CACHE_TTL = 30
 LOG_FILE = "nija_trading.log"
 
-# --- Logging setup ---
+# --- Logging ---
 logging.basicConfig(
     filename=LOG_FILE,
-    level=logging.DEBUG,  # DEBUG so we can see JWT previews
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
@@ -27,23 +26,29 @@ formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 console.setFormatter(formatter)
 logging.getLogger("").addHandler(console)
 
-# --- Load Coinbase environment variables ---
+# --- Coinbase env vars ---
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
 COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-# --- Coinbase Advanced sub (must be exact) ---
+# --- Coinbase Advanced sub ---
 COINBASE_API_SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
-
-# --- Private key ---
 private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n").encode("utf-8")
 
-# --- Flask app setup ---
+# --- Flask ---
 app = Flask(__name__)
-
-# --- Cache for accounts ---
 last_accounts = None
 last_accounts_ts = 0
+
+# --- System clock check ---
+def check_system_clock():
+    utc_now = datetime.datetime.utcnow()
+    local_now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    delta = abs((utc_now - local_now).total_seconds())
+    if delta > 60:
+        logging.warning(f"⚠️ System clock off by {delta:.2f} seconds. Adjust clock to avoid 401s.")
+    else:
+        logging.info(f"✅ System clock OK. UTC={utc_now.isoformat()} Local={local_now.isoformat()} Delta={delta:.2f}s")
 
 # --- Generate JWT ---
 def generate_jwt(request_path: str, method: str = "GET") -> str:
@@ -58,13 +63,11 @@ def generate_jwt(request_path: str, method: str = "GET") -> str:
     }
     headers = {"alg": "ES256", "kid": COINBASE_API_KEY_ID}
     token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
-    logging.debug(f"DEBUG_JWT: {token[:80]}...")  # preview only
-    logging.debug(f"DEBUG_SUB: {payload['sub']}")
-    logging.debug(f"DEBUG_PATH: {payload['request_path']}")
-    logging.debug(f"DEBUG_TIMESTAMP: {datetime.datetime.utcnow().isoformat()}Z")
+    logging.debug(f"DEBUG_JWT preview={token[:80]}...")
+    logging.debug(f"DEBUG_SUB={payload['sub']} REQUEST_PATH={payload['request_path']} TIMESTAMP={datetime.datetime.utcnow().isoformat()}Z")
     return token
 
-# --- Fetch accounts (with detailed debug) ---
+# --- Fetch accounts ---
 def fetch_accounts():
     global last_accounts, last_accounts_ts
     request_path = "/api/v3/brokerage/accounts"
@@ -76,20 +79,16 @@ def fetch_accounts():
     for attempt in range(1, RETRY_COUNT + 1):
         try:
             token = generate_jwt(request_path, "GET")
-            resp = requests.get(
-                url,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
-                    "Content-Type": "application/json"
-                },
-                timeout=10
-            )
+            resp = requests.get(url, headers={
+                "Authorization": f"Bearer {token}",
+                "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+                "Content-Type": "application/json"
+            }, timeout=10)
             logging.debug(f"[Attempt {attempt}] HTTP {resp.status_code}: {resp.text[:500]}")
             if resp.status_code == 200:
                 last_accounts = resp.json()
                 last_accounts_ts = time.time()
-                logging.info(f"✅ Fetched accounts successfully")
+                logging.info("✅ Fetched accounts successfully")
                 return last_accounts
         except Exception as e:
             logging.error(f"[Attempt {attempt}] Exception fetching accounts: {e}")
@@ -125,11 +124,12 @@ def send_trade(symbol: str, side: str, size: float):
     logging.error("❌ Failed to send trade after retries")
     return None
 
-# --- Test Coinbase connection with auto-debug ---
+# --- Test Coinbase connection ---
 def test_coinbase_connection():
+    check_system_clock()
     try:
         accounts = fetch_accounts()
-        if accounts is not None:
+        if accounts:
             logging.info("✅ Coinbase connection verified!")
             return True
         else:
@@ -174,5 +174,5 @@ if __name__ == "__main__":
     if test_coinbase_connection():
         logging.info("🎯 Ready to trade!")
     else:
-        logging.error("❌ Coinbase connection not verified — check key, PEM, sub, clock, or permissions.")
+        logging.error("❌ Coinbase connection not verified — check key, PEM, sub, or clock.")
     app.run(host="0.0.0.0", port=5000)
