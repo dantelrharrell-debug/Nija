@@ -1,3 +1,105 @@
+# 1️⃣ Standard library & external imports
+import os
+import datetime
+import jwt  # PyJWT library
+import time
+import requests
+
+# 2️⃣ Verify environment variables
+print("🔹 Verifying Coinbase env variables:")
+
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")  # short UUID
+COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")        # full path
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # PEM block
+
+print("COINBASE_ORG_ID:", COINBASE_ORG_ID)
+print("COINBASE_API_KEY_ID (short UUID):", COINBASE_API_KEY_ID)
+print("COINBASE_API_SUB (full path):", COINBASE_API_SUB)
+print("COINBASE_PEM_CONTENT length:", len(COINBASE_PEM_CONTENT or ""))
+
+# 3️⃣ Check for missing env vars
+missing = []
+for name, val in [
+    ("COINBASE_ORG_ID", COINBASE_ORG_ID),
+    ("COINBASE_API_KEY_ID", COINBASE_API_KEY_ID),
+    ("COINBASE_API_SUB", COINBASE_API_SUB),
+    ("COINBASE_PEM_CONTENT", COINBASE_PEM_CONTENT)
+]:
+    if not val:
+        missing.append(name)
+
+if missing:
+    raise SystemExit(f"❌ Missing env vars: {missing}")
+
+# === Fix PEM line breaks if stored with literal \n ===
+COINBASE_PEM_CONTENT = COINBASE_PEM_CONTENT.replace("\\n", "\n").strip()
+
+# Check PEM formatting
+pem_lines = COINBASE_PEM_CONTENT.split("\n")
+if not COINBASE_PEM_CONTENT.startswith("-----BEGIN EC PRIVATE KEY-----") or not COINBASE_PEM_CONTENT.endswith("-----END EC PRIVATE KEY-----"):
+    print("⚠️ Warning: PEM does not have correct BEGIN/END headers")
+
+if any(len(line.strip()) == 0 for line in pem_lines[1:-1]):
+    print("⚠️ Warning: Empty line inside PEM block (may cause load errors)")
+
+# Check container UTC time
+utc_now = datetime.datetime.utcnow()
+print("Container UTC time:", utc_now.isoformat())
+
+# Optional: Check Coinbase server time for drift
+try:
+    resp = requests.get("https://api.coinbase.com/v2/time", timeout=5)
+    resp.raise_for_status()
+    coinbase_time = datetime.datetime.strptime(resp.json()['data']['iso'], "%Y-%m-%dT%H:%M:%SZ")
+    drift = abs((coinbase_time - utc_now).total_seconds())
+    print("Coinbase UTC time:", coinbase_time.isoformat())
+    print(f"Time drift: {drift} seconds")
+    if drift > 30:
+        print("⚠️ Warning: Significant time drift (>30s) detected. JWTs may fail!")
+except Exception as e:
+    print("⚠️ Could not check Coinbase server time:", e)
+
+print("✅ Env variable verification complete. You can now generate JWT.")
+
+# 4️⃣ JWT generation function
+def generate_jwt(sub: str, pem: str, expiry_sec: int = 60):
+    now_ts = int(time.time())
+    payload = {
+        "sub": sub,
+        "iat": now_ts,
+        "exp": now_ts + expiry_sec,
+        "jti": f"test-{now_ts}"
+    }
+    try:
+        token = jwt.encode(payload, pem, algorithm="ES256")
+        print("✅ JWT generated successfully!")
+        print("JWT preview (first 100 chars):", token[:100])
+        decoded = jwt.decode(token, options={"verify_signature": False})
+        print("Decoded JWT payload:", decoded)
+        return token
+    except Exception as e:
+        print("❌ Failed to generate JWT:", e)
+        return None
+
+# 5️⃣ Dry-run JWT Test
+jwt_token = generate_jwt(COINBASE_API_SUB, COINBASE_PEM_CONTENT)
+
+# 6️⃣ Optional: test Coinbase API access
+if jwt_token:
+    try:
+        headers = {"Authorization": f"Bearer {jwt_token}"}
+        response = requests.get("https://api.coinbase.com/v2/accounts", headers=headers, timeout=10)
+        if response.status_code == 200:
+            accounts = response.json().get("data", [])
+            print(f"✅ Successfully fetched {len(accounts)} accounts from Coinbase.")
+            for acc in accounts[:5]:  # preview first 5
+                print(f"- {acc['id']}: {acc['balance']['amount']} {acc['balance']['currency']}")
+        else:
+            print(f"❌ Coinbase API call failed with status {response.status_code}: {response.text}")
+    except Exception as e:
+        print("❌ Failed to fetch Coinbase accounts:", e)
+
 import os
 import time
 import requests
