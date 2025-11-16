@@ -1,11 +1,7 @@
-nija-bot/
-│
-├─ Dockerfile
-├─ requirements.txt
-├─ .env
-├─ main.py
-├─ nija_client.py
-├─ start_bot_main.py
-└─ app/
-   ├─ __init__.py
-   └─ (any other modules like helpers, balance checks, etc.)
+/app
+  ├─ main.py
+  ├─ requirements.txt
+  ├─ .env
+  └─ app/
+       ├─ __init__.py        # can be empty
+       └─ nija_client.py
