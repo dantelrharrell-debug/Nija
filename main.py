@@ -1,3 +1,4 @@
+# main.py
 import os
 import time
 import requests
@@ -6,33 +7,43 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from loguru import logger
 
-# ----------------------------
-# Container-friendly logging
-# ----------------------------
-logger.add(lambda msg: print(msg, end=''))
+logger.add(lambda msg: print(msg, end=''))  # container-friendly stdout
 
 # ----------------------------
-# Load environment variables
+# Required env variables (set these in Railway / container env)
 # ----------------------------
+# COINBASE_ORG_ID          = ce77e4ea-ecca-...
+# COINBASE_API_KEY_ID      = 9e33d60c-c9d7-...   (UUID only)
+# COINBASE_API_SUB         = organizations/<org_id>/apiKeys/<api_key_id>  (FULL path)
+# COINBASE_API_KID         = same as COINBASE_API_SUB (recommended)
+# COINBASE_PEM_CONTENT     = the raw PEM text (full block) OR set COINBASE_PEM_PATH
+# COINBASE_PEM_PATH        = optional path to PEM file inside container
+
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
-COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")
+COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")            # uuid only
+COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")                 # full path (recommended)
 COINBASE_API_KID = os.getenv("COINBASE_API_KID") or COINBASE_API_SUB
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
 
-if not COINBASE_ORG_ID or not COINBASE_API_SUB:
-    raise SystemExit("❌ Missing COINBASE_ORG_ID or COINBASE_API_SUB in env")
+if not COINBASE_ORG_ID or not COINBASE_API_KEY_ID or not COINBASE_API_SUB:
+    logger.error("Missing required Coinbase env vars. See README in message.")
+    raise SystemExit(1)
 
 # ----------------------------
-# Load PEM safely
+# Load PEM (prefer content then path)
 # ----------------------------
 if COINBASE_PEM_CONTENT:
-    pem_text = COINBASE_PEM_CONTENT.replace("\\n", "\n").replace('\r', '').strip().strip('"').strip("'")
+    pem_text = COINBASE_PEM_CONTENT.replace("\\n", "\n").replace("\r", "").strip().strip('"').strip("'")
 elif COINBASE_PEM_PATH:
+    if not os.path.exists(COINBASE_PEM_PATH):
+        logger.error(f"PEM path not found: {COINBASE_PEM_PATH}")
+        raise SystemExit(1)
     with open(COINBASE_PEM_PATH, "r", encoding="utf-8") as f:
-        pem_text = f.read().replace('\r', '').strip()
+        pem_text = f.read().replace("\r", "").strip()
 else:
-    raise SystemExit("❌ No PEM provided. Set COINBASE_PEM_CONTENT or COINBASE_PEM_PATH in env.")
+    logger.error("No PEM provided. Set COINBASE_PEM_CONTENT or COINBASE_PEM_PATH.")
+    raise SystemExit(1)
 
 try:
     private_key = serialization.load_pem_private_key(
@@ -40,23 +51,25 @@ try:
     )
     logger.success("✅ PEM loaded successfully")
 except Exception as e:
-    raise SystemExit(f"❌ Failed to load PEM: {e}")
+    logger.error(f"❌ Failed to load PEM: {e}")
+    raise SystemExit(1)
 
-sub = COINBASE_API_SUB
-kid = COINBASE_API_KID
+sub = COINBASE_API_KEY_ID         # sub MUST be the short UUID (API key id)
+kid = COINBASE_API_KID           # kid header SHOULD be the FULL path organizations/.../apiKeys/...
+
 logger.info(f"JWT sub: {sub}")
 logger.info(f"JWT kid: {kid}")
 
 # ----------------------------
 # JWT generator
 # ----------------------------
-def generate_jwt(path, method="GET"):
+def generate_jwt(request_path, method="GET"):
     iat = int(time.time())
     payload = {
         "iat": iat,
-        "exp": iat + 120,
+        "exp": iat + 120,  # short-lived
         "sub": sub,
-        "request_path": path,
+        "request_path": request_path,
         "method": method
     }
     headers_jwt = {"alg": "ES256", "kid": kid}
@@ -64,117 +77,67 @@ def generate_jwt(path, method="GET"):
     return token
 
 # ----------------------------
-# Safe request with retries
+# Safe GET (with logging and simple retries)
 # ----------------------------
-def safe_request(path, method="GET", data=None, max_retries=5, retry_delay=2):
-    for attempt in range(1, max_retries + 1):
+def call_coinbase(path, method="GET", data=None, retries=3):
+    for attempt in range(1, retries + 1):
+        token = generate_jwt(path, method=method)
+        url = f"https://api.coinbase.com{path}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "CB-VERSION": "2025-11-16",           # use today's date / API version
+            "Content-Type": "application/json"
+        }
         try:
-            token = generate_jwt(path, method)
-            url = f"https://api.coinbase.com{path}"
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "CB-VERSION": "2025-11-12",
-                "Content-Type": "application/json"
-            }
-
-            resp = requests.get(url, headers=headers, timeout=10) if method.upper() == "GET" else requests.post(url, headers=headers, json=data, timeout=10)
-            logger.info(f"[Attempt {attempt}] HTTP Status: {resp.status_code}")
-
-            if resp.status_code in [200, 201]:
-                logger.success("✅ Request successful")
-                return resp.json()
-            elif resp.status_code == 401:
-                logger.warning("⚠️ 401 Unauthorized. Regenerating JWT...")
-                time.sleep(retry_delay)
+            if method.upper() == "GET":
+                resp = requests.get(url, headers=headers, timeout=10)
             else:
-                logger.error(f"⚠️ Request failed: {resp.text}")
-                break
-        except requests.exceptions.RequestException as e:
-            logger.error(f"⚠️ Request exception: {e}")
-            time.sleep(retry_delay)
-    logger.error("❌ All retries failed. Check API key, PEM, permissions, or container clock.")
+                resp = requests.post(url, headers=headers, json=data, timeout=10)
+        except Exception as e:
+            logger.error(f"Request exception: {e}")
+            resp = None
+
+        status = resp.status_code if resp is not None else "ERR"
+        logger.info(f"[Attempt {attempt}] {method} {path} -> HTTP {status}")
+
+        if resp is None:
+            time.sleep(1)
+            continue
+
+        if resp.status_code in (200, 201):
+            return resp.json()
+        if resp.status_code == 401:
+            logger.warning("⚠️ 401 Unauthorized (JWT rejected).")
+            # short delay then retry (new JWT each attempt)
+            time.sleep(1)
+            continue
+        else:
+            logger.error(f"Request failed: {resp.status_code} {resp.text}")
+            break
+
+    logger.error("All retries failed. Check API key, PEM, permissions, and clock.")
     return None
 
 # ----------------------------
-# Fetch funded accounts with balance
+# Fetch funded accounts
 # ----------------------------
 def fetch_funded_accounts():
     path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
-    accounts = safe_request(path, method="GET")
+    accounts = call_coinbase(path, method="GET", retries=5)
     if not accounts:
         return None
-    # Filter accounts with USD balance > 0
-    funded = [a for a in accounts if float(a.get("balance", {}).get("amount", 0)) > 0]
+    # Coinbase returns list of accounts. Filter balances > 0
+    funded = [a for a in accounts if float(a.get("balance", {}).get("amount", 0) or 0) > 0]
     return funded
 
-# ----------------------------
-# Calculate position size
-# ----------------------------
-def calculate_size(account, percent=0.05, product_price=50000):
-    """Example: 5% of account balance"""
-    usd_balance = float(account.get("balance", {}).get("amount", 0))
-    amount_to_spend = usd_balance * percent
-    size = round(amount_to_spend / product_price, 6)
-    return str(size)
-
-# ----------------------------
-# Place an order
-# ----------------------------
-def place_order(account_id, side, product_id, size):
-    path = f"/api/v3/brokerage/accounts/{account_id}/orders"
-    data = {
-        "side": side.upper(),
-        "product_id": product_id,
-        "size": size,
-        "type": "market"
-    }
-    response = safe_request(path, method="POST", data=data)
-    if response:
-        logger.success(f"✅ Order placed: {side} {size} {product_id}")
-        logger.info(response)
-    else:
-        logger.error("❌ Failed to place order")
-
-# ----------------------------
-# Process trading signals
-# ----------------------------
-def process_trading_signal(signal, accounts):
-    logger.info(f"📡 Received trading signal: {signal}")
-    if not accounts:
-        logger.error("No funded accounts available")
-        return
-    # Pick account with highest USD balance
-    account = max(accounts, key=lambda a: float(a.get("balance", {}).get("amount", 0)))
-    # Example: product price hardcoded, replace with live price if available
-    price = 50000 if signal["product"] == "BTC-USD" else 1
-    size = calculate_size(account, percent=0.05, product_price=price)
-    place_order(account["id"], signal["side"], signal["product"], size)
-
-# ----------------------------
-# Main bot logic
-# ----------------------------
 def main():
-    logger.info("Starting Nija Trading Bot...")
-
+    logger.info("Starting Nija Trading Bot (test connection)...")
     accounts = fetch_funded_accounts()
-    if not accounts:
-        logger.error("Cannot fetch Coinbase accounts. Stopping bot.")
+    if accounts is None:
+        logger.error("Cannot fetch Coinbase accounts. Exiting.")
         return
-
-    logger.info("Bot connected! Accounts fetched successfully.")
+    logger.success("✅ Accounts fetched:")
     logger.info(accounts)
-
-    # Demo signals (replace with TradingView/websocket signals)
-    demo_signals = [
-        {"side": "BUY", "product": "BTC-USD"},
-        {"side": "SELL", "product": "BTC-USD"}
-    ]
-
-    for signal in demo_signals:
-        process_trading_signal(signal, accounts)
-        time.sleep(1)
-
-    logger.info("Bot run complete. Ready for live signals.")
 
 if __name__ == "__main__":
     main()
