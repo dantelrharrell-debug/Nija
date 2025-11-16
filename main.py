@@ -10,10 +10,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # --- CONFIG ---
-SEND_LIVE_TRADES = False  # Set True to enable real trades
+SEND_LIVE_TRADES = False  # True = real trades, False = test only
 RETRY_COUNT = 3
 RETRY_DELAY = 1  # seconds
-CACHE_TTL = 30  # seconds for accounts cache
+CACHE_TTL = 30
 LOG_FILE = "nija_trading.log"
 
 # --- Setup logging ---
@@ -29,13 +29,12 @@ formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 console.setFormatter(formatter)
 logging.getLogger("").addHandler(console)
 
-# --- Load Coinbase env vars ---
+# --- Load Coinbase Advanced env vars ---
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
 COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
-
-# --- Prepare JWT ---
 SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
+
 private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n").encode("utf-8")
 private_key_obj = serialization.load_pem_private_key(private_key, password=None, backend=default_backend())
 
@@ -61,11 +60,11 @@ def generate_jwt(path: str, method: str = "GET") -> str:
     token = jwt.encode(payload, private_key_obj, algorithm="ES256", headers=headers)
     return token
 
-# --- Helper: check API key permissions ---
-def check_key_permissions():
+# --- Helper: test JWT & key permissions ---
+def test_key():
     path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/key_permissions"
     url = "https://api.coinbase.com" + path
-    token = generate_jwt(path, "GET")
+    token = generate_jwt(path)
 
     for attempt in range(RETRY_COUNT):
         try:
@@ -77,23 +76,19 @@ def check_key_permissions():
 
             if resp.status_code == 200:
                 perms = resp.json()
-                logging.info(f"✅ Key permissions: {perms}")
-                if not perms.get("can_view", False):
-                    logging.error("❌ Key missing 'view' permission.")
-                if not perms.get("can_trade", False):
-                    logging.warning("⚠️ Key missing 'trade' permission.")
+                logging.info(f"✅ Key permissions fetched successfully: {perms}")
                 return perms
             else:
-                logging.warning(f"[Attempt {attempt+1}] Failed to fetch key permissions: {resp.status_code} {resp.text}")
+                logging.warning(f"[Attempt {attempt+1}] Failed: {resp.status_code} {resp.text}")
         except Exception as e:
-            logging.error(f"[Attempt {attempt+1}] Exception fetching key permissions: {e}")
+            logging.error(f"[Attempt {attempt+1}] Exception: {e}")
         time.sleep(RETRY_DELAY)
     return None
 
 # --- Helper: fetch accounts ---
 def fetch_accounts():
     global last_accounts, last_accounts_ts
-    path = f"/api/v3/brokerage/accounts"
+    path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
 
     if last_accounts and (time.time() - last_accounts_ts < CACHE_TTL):
         return last_accounts
@@ -119,16 +114,15 @@ def fetch_accounts():
             logging.error(f"[Attempt {attempt+1}] Exception fetching accounts: {e}")
         time.sleep(RETRY_DELAY)
 
-    raise RuntimeError("Failed to fetch Coinbase accounts after retries.")
+    raise RuntimeError("❌ Failed to fetch Coinbase accounts after retries.")
 
 # --- Helper: send trade ---
 def send_trade(symbol: str, side: str, size: float):
     if not SEND_LIVE_TRADES:
         logging.info(f"⚠️ Test trade not sent: {side} {size} {symbol}")
         return
-
     path = "/api/v3/brokerage/orders"
-    token = generate_jwt(path, "POST")
+    token = generate_jwt(path)
     url = "https://api.coinbase.com" + path
 
     payload = {"symbol": symbol, "side": side.lower(), "type": "market", "quantity": str(size)}
@@ -150,13 +144,13 @@ def send_trade(symbol: str, side: str, size: float):
         except Exception as e:
             logging.error(f"[Attempt {attempt+1}] Exception sending trade: {e}")
         time.sleep(RETRY_DELAY)
-    logging.error(f"❌ Failed to send trade after {RETRY_COUNT} attempts: {side} {size} {symbol}")
+    logging.error(f"❌ Failed to send trade: {side} {size} {symbol}")
     return None
 
-# --- Flask Routes ---
+# --- Flask routes ---
 @app.route("/debug_jwt")
 def debug_jwt_route():
-    perms = check_key_permissions()
+    perms = test_key()
     accounts = fetch_accounts() if perms and perms.get("can_view", False) else None
     return jsonify({"status": "ok", "permissions": perms, "accounts": accounts})
 
@@ -186,17 +180,17 @@ def webhook():
 if __name__ == "__main__":
     logging.info("🔥 Nija Trading Bot starting...")
 
-    perms = check_key_permissions()
+    perms = test_key()
     if not perms:
-        logging.error("❌ Cannot verify API key permissions. Exiting.")
+        logging.error("❌ Cannot verify API key. Exiting.")
         exit(1)
 
     if not perms.get("can_view", False):
-        logging.error("❌ Key does not have 'view' permission. Exiting.")
+        logging.error("❌ Key missing 'view' permission. Exiting.")
         exit(1)
 
     if not perms.get("can_trade", False):
-        logging.warning("⚠️ Key does not have 'trade' permission. Live trades will not work.")
+        logging.warning("⚠️ Key missing 'trade' permission. Live trades will not work.")
 
     try:
         fetch_accounts()
