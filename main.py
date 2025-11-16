@@ -1,3 +1,4 @@
+# app/main.py
 import os
 import time
 import datetime
@@ -29,19 +30,20 @@ logging.getLogger("").addHandler(console)
 # --- Load Coinbase env vars ---
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
 COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")  # short UUID
-COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")        # full path
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
+# ✅ Updated: Full sub for Advanced API
+COINBASE_API_SUB = f"organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
+
+# --- Private key ---
 private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n")
 
 # --- Flask app ---
 app = Flask(__name__)
 
 # --- Cache for accounts ---
-last_accounts_spot = None
-last_accounts_adv = None
-last_accounts_ts_spot = 0
-last_accounts_ts_adv = 0
+last_accounts = None
+last_accounts_ts = 0
 
 # --- Helper: generate JWT ---
 def generate_jwt(path: str, method: str = "GET") -> str:
@@ -62,48 +64,40 @@ def generate_jwt(path: str, method: str = "GET") -> str:
     token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
     return token
 
-# --- Helper: fetch accounts with caching ---
-def fetch_accounts(advanced=False):
-    global last_accounts_spot, last_accounts_adv, last_accounts_ts_spot, last_accounts_ts_adv
+# --- Helper: fetch accounts ---
+def fetch_accounts():
+    global last_accounts, last_accounts_ts
+    request_path = "/api/v3/brokerage/accounts"  # ✅ Correct path
+    url = "https://api.coinbase.com" + request_path
 
-    coinbase_path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
-    cache = last_accounts_adv if advanced else last_accounts_spot
-    ts_cache = last_accounts_ts_adv if advanced else last_accounts_ts_spot
-
-    if cache and (time.time() - ts_cache < CACHE_TTL):
-        return cache
+    if last_accounts and (time.time() - last_accounts_ts < CACHE_TTL):
+        return last_accounts
 
     for attempt in range(RETRY_COUNT):
         try:
-            token = generate_jwt(coinbase_path, "GET")
-            url = "https://api.coinbase.com" + coinbase_path
+            token = generate_jwt(request_path, "GET")
             resp = requests.get(url, headers={
                 "Authorization": f"Bearer {token}",
                 "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
                 "Content-Type": "application/json"
             }, timeout=10)
             if resp.status_code == 200:
-                accounts = resp.json()
-                if advanced:
-                    last_accounts_adv = accounts
-                    last_accounts_ts_adv = time.time()
-                else:
-                    last_accounts_spot = accounts
-                    last_accounts_ts_spot = time.time()
-                logging.info(f"Fetched {'Advanced' if advanced else 'Spot'} accounts: {accounts}")
-                return accounts
+                last_accounts = resp.json()
+                last_accounts_ts = time.time()
+                logging.info(f"Fetched Coinbase accounts: {last_accounts}")
+                return last_accounts
             else:
-                logging.warning(f"[Attempt {attempt+1}] Failed to fetch {'Advanced' if advanced else 'Spot'} accounts: {resp.status_code} {resp.text}")
+                logging.warning(f"[Attempt {attempt+1}] Failed to fetch accounts: {resp.status_code} {resp.text}")
         except Exception as e:
-            logging.error(f"[Attempt {attempt+1}] Exception fetching {'Advanced' if advanced else 'Spot'} accounts: {e}")
+            logging.error(f"[Attempt {attempt+1}] Exception fetching accounts: {e}")
         time.sleep(RETRY_DELAY)
 
-    raise RuntimeError(f"Failed to fetch {'Advanced' if advanced else 'Spot'} Coinbase accounts after retries.")
+    raise RuntimeError("Failed to fetch Coinbase accounts after retries.")
 
 # --- Helper: send trade ---
-def send_trade(symbol: str, side: str, size: float, advanced: bool = False):
+def send_trade(symbol: str, side: str, size: float):
     if not SEND_LIVE_TRADES:
-        logging.info(f"⚠️ Test trade not sent: {side} {size} {symbol} (advanced={advanced})")
+        logging.info(f"⚠️ Test trade not sent: {side} {size} {symbol}")
         return
 
     path = "/api/v3/brokerage/orders"
@@ -126,7 +120,7 @@ def send_trade(symbol: str, side: str, size: float, advanced: bool = False):
             }, json=payload, timeout=10)
 
             if resp.status_code in [200, 201]:
-                logging.info(f"✅ Trade executed: {side} {size} {symbol} (advanced={advanced})")
+                logging.info(f"✅ Trade executed: {side} {size} {symbol}")
                 logging.info(resp.json())
                 return resp.json()
             else:
@@ -140,39 +134,26 @@ def send_trade(symbol: str, side: str, size: float, advanced: bool = False):
 
 # --- Helper: test Coinbase connection ---
 def test_coinbase_connection():
-    success_spot = success_adv = False
     try:
-        fetch_accounts(advanced=False)
-        logging.info("✅ Coinbase Spot connection verified.")
-        success_spot = True
+        fetch_accounts()
+        logging.info("✅ Coinbase connection verified!")
+        return True
     except Exception as e:
-        logging.error(f"❌ Coinbase Spot connection failed: {e}")
+        logging.error(f"❌ Coinbase connection failed: {e}")
+        return False
 
-    try:
-        fetch_accounts(advanced=True)
-        logging.info("✅ Coinbase Advanced connection verified.")
-        success_adv = True
-    except Exception as e:
-        logging.error(f"❌ Coinbase Advanced connection failed: {e}")
-
-    if not (success_spot and success_adv):
-        logging.warning(f"Spot success={success_spot}, Advanced success={success_adv}")
-    return success_spot and success_adv
-
-# --- Routes ---
+# --- Flask routes ---
 @app.route("/debug_jwt")
 def debug_jwt_route():
     try:
-        accounts_spot = fetch_accounts(advanced=False)
-        accounts_adv = fetch_accounts(advanced=True)
-        return jsonify({"status": "ok", "accounts_spot": accounts_spot, "accounts_advanced": accounts_adv})
+        accounts = fetch_accounts()
+        return jsonify({"status": "ok", "accounts": accounts})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/test_trade")
 def test_trade_route():
-    send_trade("BTC-USD", "buy", 0.001, advanced=False)
-    send_trade("BTC-USD", "buy", 0.001, advanced=True)
+    send_trade("BTC-USD", "buy", 0.001)
     return "Check logs for trade output."
 
 @app.route("/webhook", methods=["POST"])
@@ -182,12 +163,11 @@ def webhook():
         symbol = data.get("symbol")
         side = data.get("side")
         size = float(data.get("size", 0))
-        advanced = data.get("advanced", False)
 
         if not symbol or not side or size <= 0:
             return jsonify({"status": "error", "message": "Invalid payload"}), 400
 
-        send_trade(symbol, side, size, advanced)
+        send_trade(symbol, side, size)
         return jsonify({"status": "ok"})
     except Exception as e:
         logging.error(f"❌ Webhook error: {e}")
@@ -197,8 +177,11 @@ def webhook():
 if __name__ == "__main__":
     logging.info("🔥 Nija Trading Bot starting...")
 
-    # Test Coinbase connection at startup
-    test_coinbase_connection()
+    # ✅ Test Coinbase connection at startup
+    if test_coinbase_connection():
+        logging.info("🎯 Ready to trade!")
+    else:
+        logging.error("❌ Check API keys or permissions before trading.")
 
-    # Start Flask server
+    # Start Flask
     app.run(host="0.0.0.0", port=5000)
