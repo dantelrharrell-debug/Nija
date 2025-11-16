@@ -65,7 +65,7 @@ def generate_jwt(path: str, method: str = "GET") -> str:
 def check_key_permissions():
     path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/key_permissions"
     url = "https://api.coinbase.com" + path
-    token = generate_jwt(path)
+    token = generate_jwt(path, "GET")
 
     for attempt in range(RETRY_COUNT):
         try:
@@ -93,7 +93,7 @@ def check_key_permissions():
 # --- Helper: fetch accounts ---
 def fetch_accounts():
     global last_accounts, last_accounts_ts
-    path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+    path = f"/api/v3/brokerage/accounts"
 
     if last_accounts and (time.time() - last_accounts_ts < CACHE_TTL):
         return last_accounts
@@ -128,7 +128,7 @@ def send_trade(symbol: str, side: str, size: float):
         return
 
     path = "/api/v3/brokerage/orders"
-    token = generate_jwt(path)
+    token = generate_jwt(path, "POST")
     url = "https://api.coinbase.com" + path
 
     payload = {"symbol": symbol, "side": side.lower(), "type": "market", "quantity": str(size)}
