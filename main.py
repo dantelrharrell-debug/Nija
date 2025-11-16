@@ -1,145 +1,133 @@
-#!/usr/bin/env python3
-"""
-main.py
-
-Single-file debug + JWT generator + accounts test for Coinbase Advanced (CDP) JWT auth.
-
-Usage:
-  - Put this file in your project root and run: python main.py
-  - Make sure environment variables are set:
-      COINBASE_ORG_ID
-      COINBASE_API_KEY            (either full path or key id)
-      COINBASE_PEM_CONTENT       (PEM private key; keep literal "\n" in env value)
-      CB_API_HOST (optional; default api.coinbase.com)
-"""
-
-import os
-import time
-import base64
-import json
-import requests
-import jwt  # PyJWT
+# main.py
+import os, time, requests, jwt, json
+from loguru import logger
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+from flask import Flask, request, abort
 
-# --------- Config / env ----------
+# -----------------------------
+# Flask Webhook Setup
+# -----------------------------
+app = Flask(__name__)
+TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET")
+TV_WEBHOOK_URL = os.getenv("TV_WEBHOOK_URL")
+
+# -----------------------------
+# Coinbase Environment
+# -----------------------------
+COINBASE_API_KEY_FULL = os.getenv("COINBASE_API_KEY_FULL")
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")  # can be "organizations/.../apiKeys/<ID>" or "<ID>"
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT", "")  # keep literal \n in the env value
-CB_API_HOST = os.getenv("CB_API_HOST", "api.coinbase.com")  # override if necessary
+COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
+LIVE_TRADING = os.getenv("LIVE_TRADING", "0") == "1"
+MAX_TRADE_PERCENT = float(os.getenv("MAX_TRADE_PERCENT", 10))
+MIN_TRADE_PERCENT = float(os.getenv("MIN_TRADE_PERCENT", 2))
 
-# minimal validation
-missing = []
-if not COINBASE_ORG_ID:
-    missing.append("COINBASE_ORG_ID")
-if not COINBASE_API_KEY:
-    missing.append("COINBASE_API_KEY")
-if not COINBASE_PEM_CONTENT:
-    missing.append("COINBASE_PEM_CONTENT")
+logger.info("Starting Nija Trading Bot...")
 
-if missing:
-    print("❌ Missing environment variables:", ", ".join(missing))
-    print("Please set them and restart the service.")
-    raise SystemExit(1)
+# -----------------------------
+# Load PEM
+# -----------------------------
+pem_text = None
+if COINBASE_PEM_CONTENT:
+    pem_text = COINBASE_PEM_CONTENT.replace("\\n", "\n").strip().strip('"').strip("'")
+elif COINBASE_PEM_PATH:
+    if not os.path.exists(COINBASE_PEM_PATH):
+        raise SystemExit(f"PEM path not found: {COINBASE_PEM_PATH}")
+    with open(COINBASE_PEM_PATH, "r", encoding="utf-8") as f:
+        pem_text = f.read()
+else:
+    raise SystemExit("No PEM provided. Set COINBASE_PEM_CONTENT or COINBASE_PEM_PATH in env.")
 
-# Extract API key id (last part) if user passed full path
-API_KEY_ID = COINBASE_API_KEY.split("/")[-1]
-
-# Convert literal "\n" sequences into real newlines (Railway/Render often stores multiline secrets like this)
-pem_corrected = COINBASE_PEM_CONTENT.replace("\\n", "\n")
-
-# Attempt to load PEM private key
 try:
-    private_key = serialization.load_pem_private_key(
-        pem_corrected.encode("utf-8"),
-        password=None,
-        backend=default_backend(),
-    )
-    print("✅ PEM private key loaded successfully")
+    private_key = serialization.load_pem_private_key(pem_text.encode(), password=None, backend=default_backend())
+    logger.success("✅ PEM loaded successfully")
 except Exception as e:
-    print("❌ Failed to load PEM key:", e)
-    # extra debug hints
-    print("  - Ensure COINBASE_PEM_CONTENT contains the exact PEM with BEGIN/END lines.")
-    print("  - If you pasted the PEM directly into .env, keep literal \\n instead of newlines.")
-    print("  - Visit https://cryptography.io/en/latest/faq/#why-can-t-i-import-my-pem-file for PEM issues.")
-    raise
+    raise SystemExit(f"❌ Failed to load PEM: {e}")
 
-# Build JWT claims (Coinbase examples include request_path + method in payload)
-def generate_jwt_for_path(path: str, method: str = "GET", expires_in: int = 120) -> str:
+# -----------------------------
+# Normalize API Key / kid
+# -----------------------------
+if COINBASE_API_KEY_FULL:
+    kid = COINBASE_API_KEY_FULL
+    api_key_id = COINBASE_API_KEY_FULL.split("/")[-1]
+elif COINBASE_API_KEY:
+    api_key_id = COINBASE_API_KEY
+    kid = api_key_id
+else:
+    raise SystemExit("No API key provided. Set COINBASE_API_KEY_FULL or COINBASE_API_KEY in env.")
+
+logger.info(f"Using API_KEY_ID (sub): {api_key_id}")
+logger.info(f"Using kid header value: {kid}")
+
+# -----------------------------
+# Build JWT
+# -----------------------------
+def build_jwt(path: str) -> str:
     iat = int(time.time())
     payload = {
         "iat": iat,
-        "exp": iat + int(expires_in),
-        "sub": API_KEY_ID,          # must be the API key id
-        "request_path": path,       # exactly match the API path you will call
-        "method": method.upper(),   # uppercase HTTP method
+        "exp": iat + 120,
+        "sub": api_key_id,
+        "request_path": path,
+        "method": "GET"
     }
-    headers = {
-        "alg": "ES256",
-        "kid": API_KEY_ID           # kid must match key id used in Coinbase portal
-    }
-
-    token = jwt.encode(
-        payload,
-        private_key,
-        algorithm="ES256",
-        headers=headers
-    )
-
+    token = jwt.encode(payload, private_key, algorithm="ES256", headers={"alg": "ES256", "kid": kid})
     return token
 
-# Debug helper to print token header & payload (no signature verification)
-def decode_no_verify(token: str):
-    try:
-        header = jwt.get_unverified_header(token)
-        payload = jwt.decode(token, options={"verify_signature": False})
-        return header, payload
-    except Exception as e:
-        return None, None
-
-# Call Accounts endpoint to verify auth
-def test_get_accounts():
-    # IMPORTANT: request_path must match the path included in the JWT payload exactly
+# -----------------------------
+# Fetch funded accounts
+# -----------------------------
+def fetch_funded_accounts():
     path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
-    url = f"https://{CB_API_HOST}{path}"
-
-    token = generate_jwt_for_path(path, method="GET", expires_in=120)
-    header, payload = decode_no_verify(token)
-
-    print()
-    print("JWT preview (first 80 chars):", token[:80])
-    print("JWT header (unverified):", json.dumps(header, indent=2))
-    print("JWT payload (unverified):", json.dumps(payload, indent=2))
-    print("Request Path used in JWT:", path)
-    print("Request URL:", url)
-
-    # Extra debug: show curl command you can paste locally (token is short-lived)
-    print("\n--- Example curl (paste locally) ---")
-    print(f'curl -s -D - -H "Authorization: Bearer {token}" -H "CB-VERSION: 2025-11-12" "{url}"')
-    print("-----------------------------------\n")
-
-    # Make the request
-    resp = requests.get(url, headers={
-        "Authorization": f"Bearer {token}",
-        "CB-VERSION": "2025-11-12",
-        "Accept": "application/json"
-    }, timeout=10)
-
-    print("HTTP status:", resp.status_code)
-    try:
-        print("Response JSON / text:", resp.text)
-    except Exception:
-        print("Response (non-text)")
-
-    if resp.status_code == 200:
-        print("✅ Accounts fetched - AUTH successful")
+    token = build_jwt(path)
+    url = f"https://api.coinbase.com{path}"
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}", "CB-VERSION": "2025-11-12"})
+    if resp.status_code != 200:
+        logger.error(f"⚠️ Failed to fetch accounts. Status: {resp.status_code} | Response: {resp.text}")
+        raise SystemExit("Cannot fetch Coinbase accounts. Check API key, PEM, and permissions.")
+    accounts = resp.json().get("data", [])
+    funded = [a for a in accounts if float(a.get("balance", {}).get("amount", 0)) > 0]
+    if not funded:
+        logger.warning("No funded accounts found. Bot will not trade.")
     else:
-        print("⚠️ Failed to fetch accounts. See above response and checklist.")
+        logger.success(f"✅ Found {len(funded)} funded account(s). Ready to trade!")
+    return funded
 
-# Run the quick test once (not looped)
+funded_accounts = fetch_funded_accounts()
+
+# -----------------------------
+# Trading logic
+# -----------------------------
+def execute_trade(account, signal):
+    # Example: trade size calculation
+    balance = float(account.get("balance", {}).get("amount", 0))
+    trade_amount = balance * (MAX_TRADE_PERCENT / 100)
+    trade_amount = max(trade_amount, balance * (MIN_TRADE_PERCENT / 100))
+    logger.info(f"Executing trade on account {account['id']}: {signal} | Amount: {trade_amount}")
+    # Here you would call Coinbase API to create the order (buy/sell)
+    # Placeholder:
+    logger.info("⚡ Trade executed (simulated)")
+
+# -----------------------------
+# TradingView webhook endpoint
+# -----------------------------
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    if not request.headers.get("Authorization") == TV_WEBHOOK_SECRET:
+        logger.warning("Unauthorized webhook attempt")
+        abort(401)
+    data = request.json
+    logger.info(f"Received TradingView signal: {json.dumps(data)}")
+    if LIVE_TRADING and funded_accounts:
+        for account in funded_accounts:
+            execute_trade(account, data.get("signal"))
+    return {"status": "ok"}, 200
+
+# -----------------------------
+# Run Flask
+# -----------------------------
 if __name__ == "__main__":
-    print("🌟 Running Coinbase JWT test")
-    print("  API_KEY_ID:", API_KEY_ID)
-    print("  COINBASE_ORG_ID:", COINBASE_ORG_ID)
-    print("  CB_API_HOST:", CB_API_HOST)
-    test_get_accounts()
+    logger.info("🌟 Nija bot is live and waiting for TradingView signals...")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
