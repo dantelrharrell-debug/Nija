@@ -17,12 +17,12 @@ LOG_FILE = "nija_trading.log"
 # --- Logging setup ---
 logging.basicConfig(
     filename=LOG_FILE,
-    level=logging.INFO,
+    level=logging.DEBUG,  # DEBUG so we can see JWT previews
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 console = logging.StreamHandler()
-console.setLevel(logging.INFO)
+console.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 console.setFormatter(formatter)
 logging.getLogger("").addHandler(console)
@@ -32,28 +32,25 @@ COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
 COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-# --- Build `sub` exactly as required by docs / examples ---
-# From Coinbase Advanced API: `sub` should be like "organizations/{org_id}/apiKeys/{key_id}"
-# Verified via SDK docs: coinbase-advanced-py uses this format.  [oai_citation:0‡GitHub](https://github.com/coinbase/coinbase-advanced-py?utm_source=chatgpt.com)
+# --- Coinbase Advanced sub (must be exact) ---
 COINBASE_API_SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
 
-# --- Private key setup ---  
-# Must preserve newlines. Use .replace("\\n", "\n") then encode to bytes.  
+# --- Private key ---
 private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n").encode("utf-8")
 
 # --- Flask app setup ---
 app = Flask(__name__)
 
-# --- Cache for accounts (to reduce repeated loads) ---
+# --- Cache for accounts ---
 last_accounts = None
 last_accounts_ts = 0
 
-# --- Helper: Generate JWT for REST calls ---
+# --- Generate JWT ---
 def generate_jwt(request_path: str, method: str = "GET") -> str:
     iat = int(time.time())
     payload = {
         "iat": iat,
-        "exp": iat + 120,  # Token valid for 2 minutes
+        "exp": iat + 120,
         "sub": COINBASE_API_SUB,
         "request_path": request_path,
         "method": method.upper(),
@@ -61,17 +58,18 @@ def generate_jwt(request_path: str, method: str = "GET") -> str:
     }
     headers = {"alg": "ES256", "kid": COINBASE_API_KEY_ID}
     token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
-    # Debug preview of JWT (not secret): log first part
-    logging.debug(f"DEBUG_JWT: {token[:80]}...")
+    logging.debug(f"DEBUG_JWT: {token[:80]}...")  # preview only
+    logging.debug(f"DEBUG_SUB: {payload['sub']}")
+    logging.debug(f"DEBUG_PATH: {payload['request_path']}")
+    logging.debug(f"DEBUG_TIMESTAMP: {datetime.datetime.utcnow().isoformat()}Z")
     return token
 
-# --- Helper: Fetch Coinbase Advanced accounts ---
+# --- Fetch accounts (with detailed debug) ---
 def fetch_accounts():
     global last_accounts, last_accounts_ts
-    request_path = "/api/v3/brokerage/accounts"  # Must match Coinbase docs exactly  [oai_citation:1‡Coinbase Developer Docs](https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/rest-api?utm_source=chatgpt.com)
+    request_path = "/api/v3/brokerage/accounts"
     url = "https://api.coinbase.com" + request_path
 
-    # Use cache if recent
     if last_accounts and (time.time() - last_accounts_ts < CACHE_TTL):
         return last_accounts
 
@@ -87,21 +85,19 @@ def fetch_accounts():
                 },
                 timeout=10
             )
+            logging.debug(f"[Attempt {attempt}] HTTP {resp.status_code}: {resp.text[:500]}")
             if resp.status_code == 200:
                 last_accounts = resp.json()
                 last_accounts_ts = time.time()
-                logging.info(f"✅ Fetched accounts: {last_accounts}")
+                logging.info(f"✅ Fetched accounts successfully")
                 return last_accounts
-            else:
-                logging.warning(f"[Attempt {attempt}] Failed to fetch accounts: {resp.status_code} {resp.text}")
         except Exception as e:
             logging.error(f"[Attempt {attempt}] Exception fetching accounts: {e}")
         time.sleep(RETRY_DELAY)
 
-    # If we get here, all retries failed
     raise RuntimeError("Failed to fetch Coinbase accounts after retries")
 
-# --- Helper: Send Trade (market) ---
+# --- Send trade ---
 def send_trade(symbol: str, side: str, size: float):
     if not SEND_LIVE_TRADES:
         logging.info(f"⚠️ Test trade (not live): {side} {size} {symbol}")
@@ -110,40 +106,26 @@ def send_trade(symbol: str, side: str, size: float):
     path = "/api/v3/brokerage/orders"
     token = generate_jwt(path, "POST")
     url = "https://api.coinbase.com" + path
-
-    payload = {
-        "symbol": symbol,
-        "side": side.lower(),
-        "type": "market",
-        "quantity": str(size)
-    }
+    payload = {"symbol": symbol, "side": side.lower(), "type": "market", "quantity": str(size)}
 
     for attempt in range(1, RETRY_COUNT + 1):
         try:
-            resp = requests.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
-                    "Content-Type": "application/json"
-                },
-                json=payload,
-                timeout=10
-            )
+            resp = requests.post(url, headers={
+                "Authorization": f"Bearer {token}",
+                "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+                "Content-Type": "application/json"
+            }, json=payload, timeout=10)
+            logging.debug(f"[Attempt {attempt}] Trade HTTP {resp.status_code}: {resp.text[:500]}")
             if resp.status_code in (200, 201):
                 logging.info(f"✅ Trade executed: {side} {size} {symbol}")
-                logging.info(resp.json())
                 return resp.json()
-            else:
-                logging.warning(f"[Attempt {attempt}] Trade failed: {resp.status_code} {resp.text}")
         except Exception as e:
             logging.error(f"[Attempt {attempt}] Exception sending trade: {e}")
         time.sleep(RETRY_DELAY)
-
     logging.error("❌ Failed to send trade after retries")
     return None
 
-# --- Helper: Test Coinbase connection on startup ---
+# --- Test Coinbase connection with auto-debug ---
 def test_coinbase_connection():
     try:
         accounts = fetch_accounts()
@@ -157,7 +139,7 @@ def test_coinbase_connection():
         logging.error(f"❌ Coinbase connection failed: {e}")
         return False
 
-# --- Flask Endpoints ---
+# --- Flask routes ---
 @app.route("/debug_jwt")
 def debug_jwt_route():
     try:
@@ -178,23 +160,19 @@ def webhook():
         symbol = data.get("symbol")
         side = data.get("side")
         size = float(data.get("size", 0))
-
         if not symbol or not side or size <= 0:
             return jsonify({"status": "error", "message": "Invalid payload"}), 400
-
         result = send_trade(symbol, side, size)
         return jsonify({"status": "ok", "result": result})
     except Exception as e:
         logging.error(f"❌ Webhook error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- Main Execution ---
+# --- Main ---
 if __name__ == "__main__":
     logging.info("🔥 Nija Trading Bot starting...")
-
     if test_coinbase_connection():
         logging.info("🎯 Ready to trade!")
     else:
-        logging.error("❌ Coinbase connection not verified — check key, PEM, or permissions.")
-
+        logging.error("❌ Coinbase connection not verified — check key, PEM, sub, clock, or permissions.")
     app.run(host="0.0.0.0", port=5000)
