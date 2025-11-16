@@ -1,3 +1,8 @@
+print("🌟 Script is running. Env vars:")
+print("COINBASE_ORG_ID:", os.getenv("COINBASE_ORG_ID"))
+print("COINBASE_API_KEY:", os.getenv("COINBASE_API_KEY")[:6] + "...")  # partial for security
+print("COINBASE_PEM_CONTENT length:", len(os.getenv("COINBASE_PEM_CONTENT") or ""))
+
 import os
 import time
 import requests
