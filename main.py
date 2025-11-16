@@ -1,14 +1,3 @@
-if __name__ == "__main__":
-    from nija_client import CoinbaseClient
-
-    client = CoinbaseClient()  # or however you initialize your client
-    connected = test_coinbase_connection(client)
-
-    if connected:
-        print("🎯 Ready to trade!")
-    else:
-        print("⚠️ Check your API keys or permissions.")
-
 import os
 import time
 import datetime
@@ -139,8 +128,7 @@ def send_trade(symbol: str, side: str, size: float, advanced: bool = False):
     logging.error(f"❌ Failed to send trade after {RETRY_COUNT} attempts: {side} {size} {symbol}")
     return None
 
-# --- Routes ---
-
+# --- Flask routes ---
 @app.route("/debug_jwt")
 def debug_jwt_route():
     try:
@@ -175,4 +163,22 @@ def webhook():
 # --- Main ---
 if __name__ == "__main__":
     logging.info("🔥 Nija Trading Bot starting...")
+
+    # --- Test Coinbase connection ---
+    def test_coinbase_connection():
+        try:
+            accounts = fetch_accounts()
+            logging.info(f"✅ Coinbase connection verified. Accounts fetched: {accounts}")
+            return True
+        except Exception as e:
+            logging.error(f"❌ Coinbase connection failed: {e}")
+            return False
+
+    connected = test_coinbase_connection()
+    if connected:
+        logging.info("🎯 Ready to trade!")
+    else:
+        logging.warning("⚠️ Check your API keys or permissions.")
+
+    # --- Start Flask server ---
     app.run(host="0.0.0.0", port=5000)
