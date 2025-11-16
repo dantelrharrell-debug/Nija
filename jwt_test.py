@@ -1,19 +1,46 @@
-import os, time, jwt
+import os
+import time
+import datetime
+import requests
+import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
-import requests
 
-key_path = "/opt/railway/secrets/coinbase.pem"
-org_id = "ce77e4ea-ecca-42ec-912a-b6b4455ab9d0"  # your Org ID
+# --- Load env vars ---
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
+SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
 
-with open(key_path, "rb") as f:
-    key = serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
+# --- Prepare private key ---
+private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n").encode("utf-8")
+private_key_obj = serialization.load_pem_private_key(private_key, password=None, backend=default_backend())
 
-iat = int(time.time())
-payload = {"sub": org_id, "iat": iat, "exp": iat+300}
-token = jwt.encode(payload, key, algorithm="ES256")
-print("JWT:", token)
+# --- Generate JWT ---
+def generate_jwt(path, method="GET"):
+    iat = int(time.time())
+    payload = {
+        "iat": iat,
+        "exp": iat + 120,
+        "sub": SUB,
+        "request_path": path,
+        "method": method.upper(),
+        "jti": f"jwt-test-{iat}"
+    }
+    headers = {"alg": "ES256", "kid": COINBASE_API_KEY_ID}
+    token = jwt.encode(payload, private_key_obj, algorithm="ES256", headers=headers)
+    return token
 
-headers = {"Authorization": f"Bearer {token}", "CB-VERSION": "2025-01-01"}
-resp = requests.get("https://api.coinbase.com/v2/accounts", headers=headers)
-print(resp.status_code, resp.text)
+# --- Test JWT against Coinbase API ---
+path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+url = "https://api.coinbase.com" + path
+token = generate_jwt(path)
+
+resp = requests.get(url, headers={
+    "Authorization": f"Bearer {token}",
+    "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+    "Content-Type": "application/json"
+}, timeout=10)
+
+print("HTTP Status:", resp.status_code)
+print("Response:", resp.text)
