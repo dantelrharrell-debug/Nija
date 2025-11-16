@@ -1,56 +1,59 @@
+import os
 import time
 import requests
-import jwt  # PyJWT
+import jwt
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
-# -------------------------------
-# CONFIGURATION (replace these)
-# -------------------------------
-API_KEY = "YOUR_API_KEY_ID"          # Coinbase API key ID
-ORG_ID = "YOUR_ORG_ID"               # Coinbase Organization ID
-PEM_PATH = "path/to/your_key.pem"   # Path to your private key PEM file
+# 🔹 Load your env variables
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")  # full path or ID
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-# -------------------------------
-# Load PEM private key
-# -------------------------------
-with open(PEM_PATH, "rb") as f:
-    private_key_data = f.read()
+# 🔹 Extract only API key ID if full path is provided
+API_KEY_ID = COINBASE_API_KEY.split('/')[-1]
 
-private_key = serialization.load_pem_private_key(
-    private_key_data,
-    password=None
-)
+# 🔹 Convert literal \n to real newlines
+pem_corrected = COINBASE_PEM_CONTENT.replace("\\n", "\n")
 
-print("✅ PEM loaded successfully.")
+# 🔹 Load private key safely
+try:
+    private_key = serialization.load_pem_private_key(
+        pem_corrected.encode(),
+        password=None,
+        backend=default_backend()
+    )
+    print("✅ PEM private key loaded successfully")
+except Exception as e:
+    print(f"❌ Failed to load PEM key: {e}")
+    raise e
 
-# -------------------------------
-# Generate JWT
-# -------------------------------
+# 🔹 Generate JWT
 payload = {
-    "sub": API_KEY,
     "iat": int(time.time()),
-    "exp": int(time.time()) + 300  # 5 minutes expiry
+    "exp": int(time.time()) + 300,  # 5 minutes validity
+    "sub": API_KEY_ID
 }
 
-token = jwt.encode(
-    payload,
-    private_key,
-    algorithm="ES256"
-)
+try:
+    token = jwt.encode(payload, private_key, algorithm="ES256")
+    print("✅ JWT generated successfully")
+    print("JWT preview (first 50 chars):", token[:50])
+except Exception as e:
+    print(f"❌ Failed to generate JWT: {e}")
+    raise e
 
-print("✅ JWT generated successfully.")
+# 🔹 Test fetching accounts
+url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+headers = {"Authorization": f"Bearer {token}"}
 
-# -------------------------------
-# Test /accounts endpoint
-# -------------------------------
-url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{ORG_ID}/accounts"
-headers = {
-    "Authorization": f"Bearer {token}",
-    "CB-VERSION": "2025-11-15"  # latest version date
-}
-
-response = requests.get(url, headers=headers)
-
-print(f"HTTP Status Code: {response.status_code}")
-print("Response:")
-print(response.text)
+try:
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        print("✅ Accounts fetched successfully!")
+        print(response.json())
+    else:
+        print(f"⚠️ Failed to fetch accounts. Status: {response.status_code}")
+        print(response.text)
+except Exception as e:
+    print(f"❌ Request error: {e}")
