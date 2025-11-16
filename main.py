@@ -1,3 +1,9 @@
+import os
+import time
+import datetime
+import requests
+import jwt  # PyJWT
+
 #!/usr/bin/env python3
 # main.py -- Nija Trading Bot + DEBUG JWT snippet
 import os
