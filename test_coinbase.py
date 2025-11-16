@@ -1,69 +1,47 @@
-#!/usr/bin/env python3
-import os
 import time
-import jwt
+import jwt  # PyJWT library
 import requests
-from loguru import logger
+from cryptography.hazmat.primitives import serialization
 
-logger.remove()
-logger.add(lambda msg: print(msg, end=""))
+# --------------------------
+# Your Coinbase credentials
+# --------------------------
+COINBASE_API_KEY = "your_api_key_here"      # API Key ID
+COINBASE_ORG_ID = "ce77e4ea-ecca-42ec-912a-b6b4455ab9d0"
+COINBASE_PEM_PATH = "/path/to/coinbase.pem"  # Local path or Railway secret path
 
-# Load environment variables
-ORG_ID = os.environ.get("COINBASE_ORG_ID")
-API_KEY = os.environ.get("COINBASE_API_KEY")
-PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT")
+# --------------------------
+# Load PEM private key
+# --------------------------
+with open(COINBASE_PEM_PATH, "rb") as f:
+    private_key = serialization.load_pem_private_key(
+        f.read(),
+        password=None
+    )
 
-def fix_pem(pem_raw):
-    if not pem_raw:
-        return None
-    pem = pem_raw.strip().replace("\\n", "\n")
-    if not pem.startswith("-----BEGIN EC PRIVATE KEY-----"):
-        pem = "-----BEGIN EC PRIVATE KEY-----\n" + pem
-    if not pem.strip().endswith("-----END EC PRIVATE KEY-----"):
-        pem = pem + "\n-----END EC PRIVATE KEY-----"
-    return pem
+# --------------------------
+# Create JWT
+# --------------------------
+iat = int(time.time())
+exp = iat + 300  # expires in 5 minutes
+payload = {
+    "iat": iat,
+    "exp": exp,
+    "sub": COINBASE_API_KEY
+}
 
-def generate_jwt(pem, kid, org_id):
-    if not pem or not kid or not org_id:
-        logger.error("Missing PEM, KID, or ORG_ID for JWT generation")
-        return None
-    now = int(time.time())
-    payload = {"iat": now, "exp": now + 300, "sub": org_id}
-    headers = {"kid": kid}
-    try:
-        token = jwt.encode(payload, pem, algorithm="ES256", headers=headers)
-        logger.info("JWT generated: %s", token[:60])
-        return token
-    except Exception as e:
-        logger.error("JWT generation failed: %s", e)
-        return None
+jwt_token = jwt.encode(payload, private_key, algorithm="ES256")
+print("Generated JWT:", jwt_token)
 
-def test_coinbase_api(token, org_id):
-    url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{org_id}/accounts"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "CB-VERSION": "2025-11-01",
-        "User-Agent": "nija-test/1.0"
-    }
-    try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        logger.info("Status Code: %s", resp.status_code)
-        logger.info("Response Body (truncated 500 chars):\n%s", resp.text[:500])
-    except Exception as e:
-        logger.error("HTTP request failed: %s", e)
+# --------------------------
+# Test Coinbase accounts endpoint
+# --------------------------
+url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+headers = {
+    "Authorization": f"Bearer {jwt_token}",
+    "CB-VERSION": "2025-11-15"
+}
 
-def main():
-    logger.info("Starting Coinbase test...")
-    fixed_pem = fix_pem(PEM_RAW)
-    if not fixed_pem:
-        logger.error("PEM is missing or invalid")
-        return
-    jwt_token = generate_jwt(fixed_pem, API_KEY, ORG_ID)
-    if not jwt_token:
-        logger.error("Cannot generate JWT")
-        return
-    test_coinbase_api(jwt_token, ORG_ID)
-    logger.info("Test complete")
-
-if __name__ == "__main__":
-    main()
+response = requests.get(url, headers=headers)
+print("HTTP Status:", response.status_code)
+print("Response:", response.text)
