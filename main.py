@@ -6,28 +6,19 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # -------------------------
-# Load environment variables
+# Environment variables (your keys directly)
 # -------------------------
-COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
-COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
-COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")  # full path: organizations/.../apiKeys/...
-COINBASE_API_KID = os.getenv("COINBASE_API_KID")  # optional, can be same as SUB
-
-if not COINBASE_ORG_ID or not COINBASE_API_SUB:
-    raise SystemExit("❌ Missing required environment variables: COINBASE_ORG_ID or COINBASE_API_SUB")
+COINBASE_ORG_ID = "ce77e4ea-ecca-42ec-912a-b6b4455ab9d0"
+COINBASE_API_SUB = "organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206"
+COINBASE_API_KID = COINBASE_API_SUB  # using same path for kid
+COINBASE_PEM_CONTENT = """-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEI...YOUR FULL PEM HERE...oUoQ==
+-----END EC PRIVATE KEY-----"""
 
 # -------------------------
 # Load PEM key
 # -------------------------
-if COINBASE_PEM_CONTENT:
-    pem_text = COINBASE_PEM_CONTENT.replace("\\n", "\n").strip().strip('"').strip("'")
-elif COINBASE_PEM_PATH:
-    with open(COINBASE_PEM_PATH, "r", encoding="utf-8") as f:
-        pem_text = f.read()
-else:
-    raise SystemExit("❌ No PEM provided. Set COINBASE_PEM_CONTENT or COINBASE_PEM_PATH in env.")
-
+pem_text = COINBASE_PEM_CONTENT.replace("\\n", "\n").strip()
 try:
     private_key = serialization.load_pem_private_key(
         pem_text.encode(), password=None, backend=default_backend()
@@ -39,46 +30,50 @@ except Exception as e:
 # -------------------------
 # JWT sub & kid
 # -------------------------
-sub = COINBASE_API_SUB  # must be full path: organizations/.../apiKeys/...
-kid = COINBASE_API_KID or sub
-
+sub = COINBASE_API_SUB
+kid = COINBASE_API_KID
 print("JWT sub (full path):", sub)
 print("JWT kid:", kid)
 
 # -------------------------
-# Build JWT
+# Function to fetch accounts with retry
 # -------------------------
-path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
-iat = int(time.time())
-payload = {
-    "iat": iat,
-    "exp": iat + 120,
-    "sub": sub,
-    "request_path": path,
-    "method": "GET"
-}
-headers = {"alg": "ES256", "kid": kid}
+def fetch_accounts(retries=3):
+    for attempt in range(1, retries + 1):
+        iat = int(time.time())
+        path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+        payload = {
+            "iat": iat,
+            "exp": iat + 120,
+            "sub": sub,
+            "request_path": path,
+            "method": "GET"
+        }
+        headers_jwt = {"alg": "ES256", "kid": kid}
+        token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers_jwt)
 
-token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
-print("JWT preview (first 80 chars):", token[:80])
+        url = f"https://api.coinbase.com{path}"
+        response = requests.get(url, headers={"Authorization": f"Bearer {token}", "CB-VERSION": "2025-11-12"})
+
+        print(f"Attempt {attempt} | HTTP Status: {response.status_code}")
+        if response.status_code == 200:
+            print("✅ Successfully fetched Coinbase accounts!")
+            print(response.json())
+            return response.json()
+        elif response.status_code == 401:
+            print("⚠️ 401 Unauthorized - retrying in 2 seconds")
+            time.sleep(2)
+        else:
+            print(response.text)
+            break
+    raise SystemExit("❌ Cannot fetch Coinbase accounts after retries")
 
 # -------------------------
-# Test Coinbase API call
+# Run NijaBot fetch
 # -------------------------
-url = f"https://api.coinbase.com{path}"
-response = requests.get(url, headers={"Authorization": f"Bearer {token}", "CB-VERSION": "2025-11-12"})
-print("HTTP Status:", response.status_code)
-print(response.text)
-
-if response.status_code == 401:
-    print("⚠️ 401 Unauthorized")
-    print("- Check API Key matches Org ID")
-    print("- Check API Key has 'view accounts' permission")
-    print("- Check container/server clock is correct")
-    raise SystemExit("❌ Cannot fetch Coinbase accounts")
-
-print("✅ Successfully fetched Coinbase accounts!")
+accounts = fetch_accounts()
 
 # -------------------------
-# Continue with NijaBot trading logic here
+# Continue with your trading bot logic here
 # -------------------------
+print("💹 NijaBot ready to trade.")
