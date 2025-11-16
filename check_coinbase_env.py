@@ -86,13 +86,32 @@ req_headers = {
 }
 
 resp = requests.get(url, headers=req_headers)
-print("HTTP Status:", resp.status_code)
+print("\nHTTP Status:", resp.status_code)
 print(resp.text)
 
+# -----------------------------
+# Check for 401 Unauthorized
+# -----------------------------
 if resp.status_code == 401:
-    print("⚠️ 401 Unauthorized")
+    print("\n⚠️ 401 Unauthorized")
     print("- Check API Key matches Org ID")
     print("- Check API Key has 'view accounts' permissions")
-    print("- Check container clock is correct")
+    
+    # -----------------------------
+    # Check container/system clock
+    # -----------------------------
+    try:
+        server_time_resp = requests.get("https://api.coinbase.com/v2/time")
+        server_time = server_time_resp.json()["data"]["epoch"]
+        local_time = int(time.time())
+        skew = abs(local_time - server_time)
+        print(f"- Container clock skew: {skew} seconds")
+        if skew > 5:
+            print("❌ Clock skew too high. Sync container/system clock to UTC.")
+        else:
+            print("✅ Clock looks OK.")
+    except Exception as e:
+        print("⚠️ Failed to check server time:", e)
+
 elif resp.status_code == 200:
-    print("✅ Coinbase accounts fetched successfully!")
+    print("\n✅ Coinbase accounts fetched successfully!")
