@@ -1,34 +1,51 @@
-# ✅ main.py - Nija Trading Bot with TradingView Webhook Listener
+# ==============================
+# Nija Trading Bot – Live Script
+# ==============================
 import os
 import time
+import requests
 import jwt
 import datetime
-import requests
-from flask import Flask, request, jsonify
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from loguru import logger
+from flask import Flask, jsonify, request
 
-logger.remove()
-logger.add(lambda msg: print(msg, end=''))
+# ---------------------------
+# Flask app
+# ---------------------------
+app = Flask(__name__)
+logger.add(lambda msg: print(msg, end=''))  # Container-friendly stdout
 
 # ----------------------------
-# Environment variables
+# CONFIG
+# ----------------------------
+RAILWAY_APP_URL = "https://f8276a50-c18a-44e9-8c33-fe3de57ebd57.up.railway.app"  # Your live Railway URL
+WEBHOOK_ENDPOINT = f"{RAILWAY_APP_URL}/webhook"
+ACCOUNTS_ENDPOINT = f"{RAILWAY_APP_URL}/accounts"
+
+# Optional: Test trade
+TEST_ORDER = True
+TRADE_PAYLOAD = {
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "size": 0.001,
+    "type": "market",
+    "test": TEST_ORDER
+}
+
+# ----------------------------
+# Coinbase Env Vars
 # ----------------------------
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
-COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")        
-COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")              
-COINBASE_API_KID = os.getenv("COINBASE_API_KID") or COINBASE_API_KEY_ID
+COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
+COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")
+COINBASE_API_KID = os.getenv("COINBASE_API_KID") or COINBASE_API_SUB
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "supersecret")  # TradingView sends this in the alert
 
-# Trading parameters
-MIN_ALLOCATION = 0.02  # 2% of balance
-MAX_ALLOCATION = 0.10  # 10% of balance
-
-if not COINBASE_ORG_ID or not COINBASE_API_KEY_ID:
-    logger.error("❌ Missing required Coinbase env vars.")
+if not COINBASE_ORG_ID or not COINBASE_API_KEY_ID or not COINBASE_API_SUB:
+    logger.error("Missing required Coinbase environment variables!")
     raise SystemExit(1)
 
 # ----------------------------
@@ -38,137 +55,120 @@ if COINBASE_PEM_CONTENT:
     pem_text = COINBASE_PEM_CONTENT.replace("\\n", "\n").replace("\r", "").strip().strip('"').strip("'")
 elif COINBASE_PEM_PATH:
     if not os.path.exists(COINBASE_PEM_PATH):
-        logger.error(f"❌ PEM path not found: {COINBASE_PEM_PATH}")
+        logger.error(f"PEM path not found: {COINBASE_PEM_PATH}")
         raise SystemExit(1)
     with open(COINBASE_PEM_PATH, "r", encoding="utf-8") as f:
         pem_text = f.read().replace("\r", "").strip()
 else:
-    logger.error("❌ No PEM provided.")
+    logger.error("No PEM provided. Set COINBASE_PEM_CONTENT or COINBASE_PEM_PATH.")
     raise SystemExit(1)
 
-private_key = serialization.load_pem_private_key(
-    pem_text.encode(), password=None, backend=default_backend()
-)
-logger.success("✅ PEM loaded successfully")
+try:
+    private_key = serialization.load_pem_private_key(
+        pem_text.encode(), password=None, backend=default_backend()
+    )
+    logger.success("✅ PEM loaded successfully")
+except Exception as e:
+    logger.error(f"❌ Failed to load PEM: {e}")
+    raise SystemExit(1)
 
 # ----------------------------
-# JWT Generation
+# JWT Generator
 # ----------------------------
-def generate_jwt(sub, kid, request_path, method="GET", expiry_sec=120):
+def generate_jwt(request_path, method="GET", sub=COINBASE_API_SUB, kid=COINBASE_API_KID):
     iat = int(time.time())
     payload = {
         "iat": iat,
-        "exp": iat + expiry_sec,
+        "exp": iat + 120,
         "sub": sub,
         "request_path": request_path,
         "method": method
     }
     headers_jwt = {"alg": "ES256", "kid": kid}
-    return jwt.encode(payload, private_key, algorithm="ES256", headers=headers_jwt)
+    token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers_jwt)
+    return token
 
 # ----------------------------
-# Coinbase API call
+# Safe GET/POST to bot
 # ----------------------------
-def call_coinbase(path, token, method="GET", data=None, retries=3):
-    url = f"https://api.coinbase.com{path}"
-    for attempt in range(1, retries+1):
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "CB-VERSION": "2025-11-16",
-            "Content-Type": "application/json"
-        }
+def call_bot(endpoint, method="GET", data=None, retries=3):
+    for attempt in range(1, retries + 1):
         try:
-            r = requests.get(url, headers=headers, timeout=10) if method.upper() == "GET" else requests.post(url, headers=headers, json=data, timeout=10)
+            if method.upper() == "GET":
+                resp = requests.get(endpoint, timeout=10)
+            else:
+                resp = requests.post(endpoint, json=data, timeout=10)
+            status = resp.status_code
+            logger.info(f"[Attempt {attempt}] {method} {endpoint} -> HTTP {status}")
+            if status in (200, 201):
+                return resp.json()
+            else:
+                logger.warning(f"⚠️ {method} failed: {status} | {resp.text}")
+                time.sleep(1)
         except Exception as e:
-            logger.error(f"Attempt {attempt}: Request exception: {e}")
+            logger.error(f"Request exception: {e}")
             time.sleep(1)
-            continue
-
-        if r.status_code in (200, 201):
-            return r.json()
-        if r.status_code == 401:
-            logger.warning(f"Attempt {attempt}: 401 Unauthorized. JWT rejected.")
-            time.sleep(1)
-            continue
-        logger.error(f"Attempt {attempt}: Failed {r.status_code} -> {r.text}")
-        time.sleep(1)
+    logger.error(f"All retries failed for {endpoint}")
     return None
 
 # ----------------------------
-# Fetch funded accounts
+# Send Trade Webhook
 # ----------------------------
-def fetch_funded_accounts():
-    token = generate_jwt(COINBASE_API_SUB, COINBASE_API_KID, f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts")
-    resp = call_coinbase(f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts", token)
-    if not resp:
-        logger.error("❌ Failed to fetch accounts")
-        return None
-    funded = [a for a in resp.get("data", []) if float(a.get("balance", {}).get("amount", 0)) > 0]
-    return funded
-
-# ----------------------------
-# Calculate allocation
-# ----------------------------
-def calculate_allocation(balance):
-    amt = balance * MAX_ALLOCATION
-    if amt < balance * MIN_ALLOCATION:
-        amt = balance * MIN_ALLOCATION
-    return round(amt, 2)
+def send_trade(payload):
+    logger.info("🔹 Sending trade webhook...")
+    response = call_bot(WEBHOOK_ENDPOINT, method="POST", data=payload)
+    if response:
+        logger.success("✅ Webhook sent successfully!")
+        logger.info(f"Bot response: {response}")
+    else:
+        logger.error("❌ Webhook failed")
+    return response
 
 # ----------------------------
-# Place order
+# Fetch Account Balances
 # ----------------------------
-def place_order(account_id, symbol, side, usd_amount):
-    path = f"/api/v3/brokerage/accounts/{account_id}/orders"
-    data = {
-        "symbol": symbol,
-        "side": side,
-        "type": "market",
-        "funds": str(usd_amount)
-    }
-    token = generate_jwt(COINBASE_API_SUB, COINBASE_API_KID, path, method="POST")
-    resp = call_coinbase(path, token, method="POST", data=data)
-    if resp:
-        logger.success(f"✅ {side.upper()} order executed for {symbol}: {usd_amount} USD")
-        return resp
-    logger.error(f"❌ Failed to execute {side} order for {symbol}")
-    return None
+def fetch_accounts():
+    logger.info("🔹 Fetching Coinbase account balances...")
+    response = call_bot(ACCOUNTS_ENDPOINT, method="GET")
+    if not response or "data" not in response:
+        logger.warning("⚠️ No accounts returned. Check your bot's /accounts endpoint.")
+        return []
+    accounts = response["data"]
+    logger.success(f"✅ Fetched {len(accounts)} accounts")
+    for acc in accounts[:10]:
+        balance = acc.get("balance", {})
+        logger.info(f"- {acc['id']} | {acc.get('currency')} | {balance.get('amount')}")
+    return accounts
 
 # ----------------------------
-# Flask Webhook Listener
+# Flask /accounts route
 # ----------------------------
-app = Flask(__name__)
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    data = request.json
-    if not data:
-        return jsonify({"error": "No JSON payload"}), 400
-
-    # Verify secret
-    if data.get("secret") != WEBHOOK_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    symbol = data.get("symbol")
-    side = data.get("side")  # "buy" or "sell"
-    if not symbol or not side:
-        return jsonify({"error": "Missing symbol or side"}), 400
-
-    accounts = fetch_funded_accounts()
-    if not accounts:
-        return jsonify({"error": "No funded accounts"}), 400
-
-    account = accounts[0]
-    balance = float(account.get("balance", {}).get("amount", 0))
-    allocation = calculate_allocation(balance)
-    logger.info(f"Trading signal received: {side.upper()} {symbol} | Allocation: {allocation} USD")
-
-    order_resp = place_order(account["id"], symbol, side, allocation)
-    return jsonify({"status": "success", "order": order_resp})
+@app.route("/accounts", methods=["GET"])
+def get_accounts():
+    # Replace with real bot logic: fetch balances from Coinbase API
+    accounts_data = [
+        {"id": "1", "currency": "USD", "balance": {"amount": "150.00"}},
+        {"id": "2", "currency": "BTC", "balance": {"amount": "0.002"}}
+    ]
+    return jsonify({"data": accounts_data})
 
 # ----------------------------
-# Run Flask app
+# Main
 # ----------------------------
+def main():
+    # Send test trade
+    send_trade(TRADE_PAYLOAD)
+
+    # Wait a few seconds
+    logger.info("\n⏳ Waiting 3 seconds for bot to process trade...")
+    time.sleep(3)
+
+    # Fetch account balances
+    fetch_accounts()
+
 if __name__ == "__main__":
-    logger.info("Starting Nija Trading Bot Webhook listener on port 5000...")
+    # Run bot logic in background if needed
+    main()
+
+    # Start Flask server
     app.run(host="0.0.0.0", port=5000)
