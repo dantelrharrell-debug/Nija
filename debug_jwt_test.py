@@ -1,62 +1,62 @@
-# debug_jwt_test.py
 import os
 import time
-import base64
-import json
+import datetime
 import requests
-from loguru import logger
-import jwt  # pyjwt
+import jwt  # PyJWT
 
-logger.remove()
-logger.add(lambda m: print(m, end=""))
+# =========================
+# Coinbase API environment
+# =========================
+COINBASE_ORG_ID = os.environ["COINBASE_ORG_ID"]
+COINBASE_API_SUB = os.environ["COINBASE_API_SUB"]  # full path e.g. organizations/<org>/apiKeys/<apiKeyId>
+COINBASE_API_KID = os.environ.get("COINBASE_API_KID") or COINBASE_API_SUB
+COINBASE_PEM_CONTENT = os.environ["COINBASE_PEM_CONTENT"].replace("\\n", "\n")  # multi-line key
 
-# Load environment variables
-ORG_ID = os.environ.get("COINBASE_ORG_ID", "")
-API_KEY = os.environ.get("COINBASE_API_KEY", "")
-PEM_RAW = os.environ.get("COINBASE_PEM_CONTENT", "")
+# Load private key
+private_key = COINBASE_PEM_CONTENT
 
-# Fix escaped newlines if needed
-if "\\n" in PEM_RAW:
-    PEM = PEM_RAW.replace("\\n", "\n")
-else:
-    PEM = PEM_RAW
+# =========================
+# Build request info
+# =========================
+coinbase_path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+method = "GET"
 
-# Detect if COINBASE_API_KEY is full path
-if "organizations/" in API_KEY:
-    sub = API_KEY  # full path
-else:
-    sub = f"organizations/{ORG_ID}/apiKeys/{API_KEY}"
-
-logger.info(f"Using sub for JWT: {sub}")
-
-# JWT payload
+# =========================
+# Build JWT payload
+# =========================
 iat = int(time.time())
-exp = iat + 300  # 5 min expiry
 payload = {
-    "sub": sub,
     "iat": iat,
-    "exp": exp,
-    "jti": str(iat)
+    "exp": iat + 120,               # expires in 2 minutes
+    "sub": COINBASE_API_SUB,
+    "request_path": coinbase_path,
+    "method": method,
+    "jti": f"dbg-{iat}"
 }
 
-# Generate JWT
-try:
-    token = jwt.encode(payload, PEM, algorithm="ES256")
-    logger.info(f"✅ JWT generated successfully. Preview (first 100 chars): {token[:100]}")
-except Exception as e:
-    logger.error(f"Failed to generate JWT: {type(e).__name__}: {e}")
-    raise SystemExit(1)
+# JWT headers
+headers_jwt = {
+    "alg": "ES256",
+    "kid": COINBASE_API_KID,
+    "typ": "JWT"
+}
 
-# Test Coinbase API
-url = "https://api.coinbase.com/api/v3/brokerage/accounts"
+# =========================
+# Encode JWT
+# =========================
+token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers_jwt)
+print("DEBUG JWT (first 200 chars):", token[:200])
+
+# =========================
+# Make API request
+# =========================
+url = "https://api.coinbase.com" + coinbase_path
 headers = {
     "Authorization": f"Bearer {token}",
-    "CB-VERSION": "2025-11-13"
+    "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+    "Content-Type": "application/json"
 }
 
-try:
-    resp = requests.get(url, headers=headers)
-    logger.info(f"Coinbase API status: {resp.status_code}")
-    logger.info(f"Response body (first 500 chars):\n{resp.text[:500]}")
-except Exception as e:
-    logger.error(f"Failed to call Coinbase API: {type(e).__name__}: {e}")
+response = requests.get(url, headers=headers, timeout=10)
+print("Response status:", response.status_code)
+print("Response body:", response.text)
