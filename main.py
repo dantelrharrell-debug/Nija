@@ -1,3 +1,48 @@
+# main.py (simplified)
+import os, time, requests, jwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+
+# --- Coinbase JWT setup ---
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
+COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
+COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")
+COINBASE_API_KID = os.getenv("COINBASE_API_KID")
+
+# Load PEM
+if COINBASE_PEM_CONTENT:
+    pem_text = COINBASE_PEM_CONTENT.replace("\\n", "\n").strip().strip('"').strip("'")
+elif COINBASE_PEM_PATH:
+    with open(COINBASE_PEM_PATH, "r", encoding="utf-8") as f:
+        pem_text = f.read()
+else:
+    raise SystemExit("No PEM provided. Set COINBASE_PEM_CONTENT or COINBASE_PEM_PATH in env.")
+
+private_key = serialization.load_pem_private_key(
+    pem_text.encode(), password=None, backend=default_backend()
+)
+
+# Build JWT
+sub = COINBASE_API_SUB
+kid = COINBASE_API_KID or sub
+path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+iat = int(time.time())
+payload = {"iat": iat, "exp": iat + 120, "sub": sub, "request_path": path, "method": "GET"}
+headers = {"alg": "ES256", "kid": kid}
+token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
+
+# Test request (optional)
+url = f"https://api.coinbase.com{path}"
+resp = requests.get(url, headers={"Authorization": f"Bearer {token}", "CB-VERSION": "2025-11-12"})
+print("HTTP Status:", resp.status_code)
+print(resp.text)
+
+# --- Then continue with your NijaBot startup ---
+from nija_client import CoinbaseClient
+bot = CoinbaseClient(token=token, org_id=COINBASE_ORG_ID)
+bot.start_trading()
+
 # main.py
 import os, time, requests, jwt, json
 from loguru import logger
