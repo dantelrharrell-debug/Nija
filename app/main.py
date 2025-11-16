@@ -1,61 +1,75 @@
 import os
 import time
 import requests
-import jwt
+import jwt  # PyJWT library
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
 
-# ------------------------------
-# CONFIG - Replace with your values
-# ------------------------------
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")       # API Key ID
-COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")       # Organization ID
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # Raw PEM string
-API_URL = f"https://api.coinbase.com/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+# ========================
+# 1️⃣ Load environment variables
+# ========================
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")  # Full path or just ID
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-# ------------------------------
-# Load private key
-# ------------------------------
-try:
-    private_key = serialization.load_pem_private_key(
-        COINBASE_PEM_CONTENT.encode(),
-        password=None,
-        backend=default_backend()
-    )
-    print("✅ PEM private key loaded successfully")
-except Exception as e:
-    print("❌ Failed to load PEM key:", e)
-    exit(1)
+if not all([COINBASE_ORG_ID, COINBASE_API_KEY, COINBASE_PEM_CONTENT]):
+    raise ValueError("Missing Coinbase environment variables!")
 
-# ------------------------------
-# Generate JWT
-# ------------------------------
+# Extract API Key ID
+API_KEY_ID = COINBASE_API_KEY.split('/')[-1]
+
+# ========================
+# 2️⃣ Load PEM private key
+# ========================
+private_key = serialization.load_pem_private_key(
+    COINBASE_PEM_CONTENT.encode(),
+    password=None
+)
+
+# ========================
+# 3️⃣ Function to generate JWT
+# ========================
 def generate_jwt():
     payload = {
         "iat": int(time.time()),
-        "exp": int(time.time()) + 300,  # 5 minutes max
-        "sub": COINBASE_API_KEY
+        "exp": int(time.time()) + 300,  # 5 min expiration
+        "sub": API_KEY_ID
     }
     token = jwt.encode(payload, private_key, algorithm="ES256")
     return token
 
-jwt_token = generate_jwt()
-print("✅ JWT generated")
+# ========================
+# 4️⃣ Function to fetch accounts
+# ========================
+def get_accounts():
+    token = generate_jwt()
+    url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
+    headers = {"Authorization": f"Bearer {token}"}
 
-# ------------------------------
-# Test fetching accounts
-# ------------------------------
-headers = {
-    "Authorization": f"Bearer {jwt_token}",
-    "CB-VERSION": "2025-11-15"
-}
-
-try:
-    response = requests.get(API_URL, headers=headers)
+    response = requests.get(url, headers=headers)
     if response.status_code == 200:
-        print("✅ Accounts fetched successfully:")
-        print(response.json())
+        print("✅ Accounts fetched successfully!")
+        return response.json()
     else:
-        print(f"❌ HTTP {response.status_code}: {response.text}")
-except Exception as e:
-    print("❌ Request failed:", e)
+        print(f"❌ Failed to fetch accounts: {response.status_code}")
+        print(response.text)
+        return None
+
+# ========================
+# 5️⃣ Main bot loop
+# ========================
+def main_loop():
+    print("🚀 Nija bot starting...")
+    while True:
+        accounts = get_accounts()
+        # Example: just print balances for now
+        if accounts:
+            for acct in accounts.get("data", []):
+                print(f"{acct['name']}: {acct['balance']['amount']} {acct['balance']['currency']}")
+        # Wait before next poll
+        time.sleep(10)
+
+# ========================
+# 6️⃣ Entry point
+# ========================
+if __name__ == "__main__":
+    main_loop()
