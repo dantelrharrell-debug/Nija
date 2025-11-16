@@ -1,3 +1,17 @@
+# --- Add this helper ---
+def test_coinbase_connection(client):
+    """
+    Test if the Coinbase client can fetch accounts.
+    Returns True if successful, False otherwise.
+    """
+    try:
+        accounts = client.get_accounts()  # or your fetch_accounts() method
+        print(f"✅ Coinbase connection verified. Accounts fetched: {accounts}")
+        return True
+    except Exception as e:
+        print(f"❌ Coinbase connection failed: {e}")
+        return False
+
 import os
 import time
 import datetime
