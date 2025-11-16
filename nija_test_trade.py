@@ -12,13 +12,13 @@ TEST_ORDER = True  # True = simulate, False = real trade
 TRADE_PAYLOAD = {
     "symbol": "BTC-USD",
     "side": "buy",       # "buy" or "sell"
-    "size": 0.001,       # very small, safe size
+    "size": 0.001,       # small safe size
     "type": "market",
     "test": TEST_ORDER
 }
 
 # Coinbase API endpoint for accounts (via your bot)
-COINBASE_ACCOUNTS_ENDPOINT = "http://127.0.0.1:5000/accounts"
+COINBASE_ACCOUNTS_ENDPOINT = "http://127.0.0.1:5000/accounts"  # Bot should expose this for safe balance check
 
 # ----------------------------
 # STEP 1: SEND WEBHOOK
@@ -53,7 +53,7 @@ try:
             print("⚠️ No accounts returned. Check your bot's /accounts endpoint.")
         else:
             print("✅ Coinbase accounts fetched:")
-            for acc in accounts[:10]:  # show first 10 for readability
+            for acc in accounts[:10]:  # Show first 10 for readability
                 balance = acc.get("balance", {})
                 print(f"- {acc['id']} | {acc.get('currency')} | {balance.get('amount')}")
     else:
