@@ -11,18 +11,14 @@ from cryptography.hazmat.backends import default_backend
 from loguru import logger
 from flask import Flask, jsonify, request
 
-# ---------------------------
-# Flask app
-# ---------------------------
-app = Flask(__name__)
 logger.add(lambda msg: print(msg, end=''))  # Container-friendly stdout
 
 # ----------------------------
 # CONFIG
 # ----------------------------
-RAILWAY_APP_URL = "https://f8276a50-c18a-44e9-8c33-fe3de57ebd57.up.railway.app"  # Your live Railway URL
-WEBHOOK_ENDPOINT = f"{RAILWAY_APP_URL}/webhook"
-ACCOUNTS_ENDPOINT = f"{RAILWAY_APP_URL}/accounts"
+LOCAL_BOT_URL = "http://127.0.0.1:5000"  # Local container URL for internal calls
+WEBHOOK_ENDPOINT = f"{LOCAL_BOT_URL}/webhook"
+ACCOUNTS_ENDPOINT = f"{LOCAL_BOT_URL}/accounts"
 
 # Optional: Test trade
 TEST_ORDER = True
@@ -140,17 +136,26 @@ def fetch_accounts():
         logger.info(f"- {acc['id']} | {acc.get('currency')} | {balance.get('amount')}")
     return accounts
 
-# ----------------------------
-# Flask /accounts route
-# ----------------------------
+# =============================
+# Flask Web Server
+# =============================
+app = Flask(__name__)
+
 @app.route("/accounts", methods=["GET"])
 def get_accounts():
-    # Replace with real bot logic: fetch balances from Coinbase API
+    # TODO: Replace this with real Coinbase account fetching logic
     accounts_data = [
         {"id": "1", "currency": "USD", "balance": {"amount": "150.00"}},
         {"id": "2", "currency": "BTC", "balance": {"amount": "0.002"}}
     ]
     return jsonify({"data": accounts_data})
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.json
+    logger.info(f"📩 Webhook received: {data}")
+    # Here you could integrate real trade logic with Coinbase
+    return jsonify({"status": "success", "received": data})
 
 # ----------------------------
 # Main
@@ -167,8 +172,8 @@ def main():
     fetch_accounts()
 
 if __name__ == "__main__":
-    # Run bot logic in background if needed
+    # Run Flask in non-debug mode (production-like)
+    from threading import Thread
+    Thread(target=lambda: app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)).start()
+    # Run main logic
     main()
-
-    # Start Flask server
-    app.run(host="0.0.0.0", port=5000)
