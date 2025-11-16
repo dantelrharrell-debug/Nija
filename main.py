@@ -29,45 +29,43 @@ logging.getLogger("").addHandler(console)
 
 # --- Load Coinbase env vars ---
 COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
-COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")  # short UUID
+COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-# ✅ Updated: Full sub for Advanced API
-COINBASE_API_SUB = f"organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
+# ✅ Correct Advanced API sub with leading slash
+COINBASE_API_SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
 
-# --- Private key ---
-private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n")
+# --- Encode PEM properly ---
+private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n").encode("utf-8")
 
 # --- Flask app ---
 app = Flask(__name__)
 
-# --- Cache for accounts ---
+# --- Cache ---
 last_accounts = None
 last_accounts_ts = 0
 
 # --- Helper: generate JWT ---
-def generate_jwt(path: str, method: str = "GET") -> str:
+def generate_jwt(request_path: str, method: str = "GET") -> str:
     iat = int(time.time())
     payload = {
         "iat": iat,
         "exp": iat + 120,
         "sub": COINBASE_API_SUB,
-        "request_path": path,
-        "method": method,
+        "request_path": request_path,
+        "method": method.upper(),
         "jti": f"nija-{iat}"
     }
-    headers = {
-        "alg": "ES256",
-        "kid": COINBASE_API_KEY_ID,
-        "typ": "JWT"
-    }
+    headers = {"alg": "ES256", "kid": COINBASE_API_KEY_ID}
+
     token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
+    logging.debug(f"DEBUG_JWT preview: {token[:50]}...")  # safe preview
     return token
 
 # --- Helper: fetch accounts ---
 def fetch_accounts():
     global last_accounts, last_accounts_ts
-    request_path = "/api/v3/brokerage/accounts"  # ✅ Correct path
+    request_path = "/api/v3/brokerage/accounts"
     url = "https://api.coinbase.com" + request_path
 
     if last_accounts and (time.time() - last_accounts_ts < CACHE_TTL):
@@ -177,11 +175,9 @@ def webhook():
 if __name__ == "__main__":
     logging.info("🔥 Nija Trading Bot starting...")
 
-    # ✅ Test Coinbase connection at startup
     if test_coinbase_connection():
         logging.info("🎯 Ready to trade!")
     else:
         logging.error("❌ Check API keys or permissions before trading.")
 
-    # Start Flask
     app.run(host="0.0.0.0", port=5000)
