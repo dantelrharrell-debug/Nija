@@ -1,3 +1,14 @@
+if __name__ == "__main__":
+    from nija_client import CoinbaseClient
+
+    client = CoinbaseClient()  # or however you initialize your client
+    connected = test_coinbase_connection(client)
+
+    if connected:
+        print("🎯 Ready to trade!")
+    else:
+        print("⚠️ Check your API keys or permissions.")
+
 import os
 import time
 import datetime
