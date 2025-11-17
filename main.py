@@ -1,3 +1,33 @@
+import os, logging
+
+logging.basicConfig(level=logging.INFO)
+PEM = os.getenv("COINBASE_PEM_CONTENT")
+API_KEY = os.getenv("COINBASE_API_KEY_ID")
+if PEM and API_KEY:
+    logging.info("✅ PEM loaded and API key present")
+else:
+    logging.error("❌ Check PEM formatting and API key")
+
+# normalize common single-line / escaped newline cases into a real file Coinbase client can load
+pem_val = PEM or ""
+if pem_val:
+    # if the env uses literal "\n" sequences, convert them
+    if "\\n" in pem_val and "-----BEGIN" in pem_val:
+        pem_val = pem_val.replace("\\n", "\n")
+    # if the env is base64 (no BEGIN), try to detect — do NOT print the key
+    if "-----BEGIN" not in pem_val and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n" for c in pem_val.strip()):
+        try:
+            import base64
+            pem_val = base64.b64decode(pem_val).decode("utf-8")
+        except Exception:
+            pass
+    try:
+        with open("/tmp/coinbase_pem_debug.pem", "w") as f:
+            f.write(pem_val)
+        logging.info("Saved normalized PEM to /tmp/coinbase_pem_debug.pem")
+    except Exception as e:
+        logging.error(f"Could not write normalized PEM: {e}")
+
 #!/usr/bin/env python3
 """
 main.py - Coinbase Advanced diagnostic + auto-fallback validator + minimal debug API
