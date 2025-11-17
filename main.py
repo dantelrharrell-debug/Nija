@@ -1,14 +1,17 @@
+#!/usr/bin/env python3
 import os
 import time
-import logging
 import requests
+import logging
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
-# --- Load environment variables ---
+# =========================
+# CONFIG / ENV VARIABLES
+# =========================
 PRIMARY_ORG = os.environ.get("COINBASE_ORG_ID")
 PRIMARY_KID = os.environ.get("COINBASE_API_KEY_ID")
 PRIMARY_PEM = os.environ.get("COINBASE_PEM_CONTENT")
@@ -17,88 +20,100 @@ FALLBACK_ORG = os.environ.get("COINBASE_FALLBACK_ORG_ID")
 FALLBACK_KID = os.environ.get("COINBASE_FALLBACK_API_KEY_ID")
 FALLBACK_PEM = os.environ.get("COINBASE_FALLBACK_PEM_CONTENT")
 
-COINBASE_API_BASE = os.environ.get("COINBASE_BASE_URL", "https://api.coinbase.com")
+COINBASE_BASE_URL = os.environ.get("COINBASE_BASE_URL", "https://api.coinbase.com")
 
-# --- Helper: detect outbound IP ---
+# =========================
+# UTILS
+# =========================
 def get_outbound_ip():
     try:
-        ip = requests.get("https://api.ipify.org?format=json", timeout=5).json().get("ip")
+        ip = requests.get("https://api.ipify.org").text.strip()
         logging.info(f"⚡ Current outbound IP on this run: {ip} (via ipify)")
-        logging.info(f"--- Coinbase Advanced Whitelist line (paste this exact IP) ---\n{ip}\n---------------------------------------------------------------")
+        logging.info("--- Coinbase Advanced Whitelist line (paste this exact IP) ---")
+        logging.info(ip)
+        logging.info("---------------------------------------------------------------")
         return ip
     except Exception as e:
-        logging.error(f"Unable to detect outbound IP: {e}")
+        logging.error(f"Failed to detect outbound IP: {e}")
         return None
 
-# --- Helper: create JWT ---
-def make_jwt(org_id, kid, pem_content):
-    key = serialization.load_pem_private_key(
-        pem_content.encode(), password=None, backend=default_backend()
-    )
+def load_pem(pem_str):
+    try:
+        return serialization.load_pem_private_key(pem_str.encode(), password=None, backend=default_backend())
+    except Exception as e:
+        logging.error(f"Unable to load PEM file. See https://cryptography.io/en/latest/faq/#why-can-t-i-import-my-pem-file for details. {e}")
+        return None
+
+def generate_jwt(org, kid, key, method="GET", request_path="/api/v3/brokerage/organizations/{org}/key_permissions".format(org=PRIMARY_ORG)):
     iat = int(time.time())
     payload = {
         "iat": iat,
-        "exp": iat + 120,
-        "sub": f"/organizations/{org_id}/apiKeys/{kid}",
-        "request_path": f"/api/v3/brokerage/organizations/{org_id}/key_permissions",
-        "method": "GET",
-        "jti": f"check-{iat}"
+        "exp": iat+120,
+        "sub": f"/organizations/{org}/apiKeys/{kid}",
+        "request_path": request_path,
+        "method": method,
+        "jti": f"nija-{iat}"
     }
-    headers = {"alg": "ES256", "kid": kid, "typ": "JWT"}
-    token = jwt.encode(payload, key, algorithm="ES256", headers=headers)
-    return token
+    headers = {"alg":"ES256","kid":kid,"typ":"JWT"}
+    return jwt.encode(payload, key, algorithm="ES256", headers=headers)
 
-# --- Helper: test key ---
-def test_key(org_id, kid, pem_content):
+def test_key(org, kid, pem):
+    key_obj = load_pem(pem)
+    if not key_obj:
+        return False
+    token = generate_jwt(org, kid, key_obj)
+    url = f"{COINBASE_BASE_URL}/api/v3/brokerage/organizations/{org}/key_permissions"
     try:
-        token = make_jwt(org_id, kid, pem_content)
-        url = f"{COINBASE_API_BASE}/api/v3/brokerage/organizations/{org_id}/key_permissions"
-        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=5)
-        if resp.status_code == 200:
-            logging.info(f"✅ Key valid: org={org_id} kid={kid}")
+        r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+        if r.status_code == 200:
+            logging.info(f"✅ Key valid: org={org} kid={kid}")
             return True
         else:
-            logging.warning(f"❌ [{resp.status_code}] Unauthorized for org={org_id} kid={kid}")
+            logging.warning(f"❌ [{r.status_code}] Unauthorized for org={org} kid={kid}")
             return False
     except Exception as e:
-        logging.error(f"Error testing key org={org_id} kid={kid}: {e}")
+        logging.error(f"Error testing key org={org} kid={kid}: {e}")
         return False
 
-# --- Main startup ---
-def main():
-    get_outbound_ip()
-    
-    if PRIMARY_ORG and PRIMARY_KID and PRIMARY_PEM:
-        logging.info(f"Checking primary key: org={PRIMARY_ORG} kid={PRIMARY_KID}")
-        if test_key(PRIMARY_ORG, PRIMARY_KID, PRIMARY_PEM):
-            logging.info("✅ Using primary key for live trading.")
-            return
-        else:
-            logging.warning("Primary key failed.")
-    else:
-        logging.warning("Primary key not fully configured in environment.")
+def print_env_instructions():
+    logging.info("--- Railway / Render env export lines (copy & paste) ---")
+    logging.info(f"export COINBASE_ORG_ID={PRIMARY_ORG}")
+    logging.info(f"export COINBASE_API_KEY_ID={PRIMARY_KID}")
+    logging.info(f"export COINBASE_PEM_CONTENT='(paste full PEM as MULTILINE value including header/footer)'")
+    if FALLBACK_ORG and FALLBACK_KID:
+        logging.info(f"export COINBASE_FALLBACK_ORG_ID={FALLBACK_ORG}")
+        logging.info(f"export COINBASE_FALLBACK_API_KEY_ID={FALLBACK_KID}")
+        logging.info(f"export COINBASE_FALLBACK_PEM_CONTENT='(optional fallback PEM)'")
+    logging.info("------------------------------------------------------")
 
+# =========================
+# MAIN
+# =========================
+def main():
+    logging.info("🔥 Nija Trading Bot bootstrap starting...")
+    get_outbound_ip()
+
+    # Try primary key
+    logging.info(f"Checking primary key: org={PRIMARY_ORG} kid={PRIMARY_KID}")
+    if test_key(PRIMARY_ORG, PRIMARY_KID, PRIMARY_PEM):
+        logging.info("🎯 Connected with primary key!")
+        return
+
+    logging.warning("Primary key failed.")
+    # Try fallback key if present
     if FALLBACK_ORG and FALLBACK_KID and FALLBACK_PEM:
         logging.info(f"Checking fallback key: org={FALLBACK_ORG} kid={FALLBACK_KID}")
         if test_key(FALLBACK_ORG, FALLBACK_KID, FALLBACK_PEM):
-            logging.info("✅ Using fallback key for live trading.")
+            logging.info("🎯 Connected with fallback key!")
             return
         else:
             logging.warning("Fallback key failed.")
     else:
-        logging.warning("No fallback key configured.")
+        logging.info("No fallback key configured. Add COINBASE_FALLBACK_* env vars for unrestricted key.")
 
+    # If both fail
     logging.error("❌ Coinbase key validation failed. Fix the following:")
-    logging.info("\n--- Railway / Render env export lines (copy & paste) ---")
-    logging.info(f"export COINBASE_ORG_ID={PRIMARY_ORG or '<your_org>'}")
-    logging.info(f"export COINBASE_API_KEY_ID={PRIMARY_KID or '<your_kid>'}")
-    logging.info(f"export COINBASE_PEM_CONTENT='(paste full PEM as MULTILINE value including header/footer)'")
-    logging.info(f"export COINBASE_FALLBACK_ORG_ID={FALLBACK_ORG or '<optional fallback org>'}")
-    logging.info(f"export COINBASE_FALLBACK_API_KEY_ID={FALLBACK_KID or '<optional fallback kid>'}")
-    logging.info(f"export COINBASE_FALLBACK_PEM_CONTENT='(optional fallback PEM)'")
-    logging.info("------------------------------------------------------")
-    logging.info("After updating env or whitelist, restart your container.")
+    print_env_instructions()
 
 if __name__ == "__main__":
-    logging.info("🔥 Nija Trading Bot bootstrap starting...")
     main()
