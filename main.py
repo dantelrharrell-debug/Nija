@@ -1,3 +1,44 @@
+# --- Test Coinbase Advanced connection ---
+@app.route("/test_coinbase_connection")
+def test_coinbase_connection():
+    import datetime, requests, jwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.backends import default_backend
+
+    SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
+    private_key = COINBASE_PEM_CONTENT.replace("\\n","\n").encode("utf-8")
+    private_key_obj = serialization.load_pem_private_key(private_key, password=None, backend=default_backend())
+
+    def generate_jwt(path):
+        iat = int(time.time())
+        payload = {
+            "iat": iat,
+            "exp": iat + 120,
+            "sub": SUB,
+            "request_path": path,
+            "method": "GET",
+            "jti": f"test-{iat}"
+        }
+        token = jwt.encode(payload, private_key_obj, algorithm="ES256", headers={"alg":"ES256","kid":COINBASE_API_KEY_ID})
+        return token
+
+    path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/key_permissions"
+    url = f"https://api.coinbase.com{path}"
+    token = generate_jwt(path)
+
+    try:
+        resp = requests.get(url, headers={
+            "Authorization": f"Bearer {token}",
+            "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+            "Content-Type": "application/json"
+        }, timeout=10)
+        return {
+            "status_code": resp.status_code,
+            "response": resp.json() if resp.status_code == 200 else resp.text
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 # main.py
 import os
 import time
