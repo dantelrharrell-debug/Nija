@@ -1,4 +1,4 @@
-# main.py
+# --- main.py ---
 import os
 import time
 import datetime
@@ -34,10 +34,6 @@ COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
 COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-if not COINBASE_ORG_ID or not COINBASE_API_KEY_ID or not COINBASE_PEM_CONTENT:
-    logging.error("❌ Coinbase credentials missing in environment variables. Exiting.")
-    exit(1)
-
 SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
 private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n").encode("utf-8")
 private_key_obj = serialization.load_pem_private_key(private_key, password=None, backend=default_backend())
@@ -45,12 +41,12 @@ private_key_obj = serialization.load_pem_private_key(private_key, password=None,
 # --- Flask app ---
 app = Flask(__name__)
 
-# --- Cache for accounts ---
+# --- Cache ---
 last_accounts = None
 last_accounts_ts = 0
 
 # --- Helper: generate JWT ---
-def generate_jwt(path, method="GET"):
+def generate_jwt(path: str, method: str = "GET") -> str:
     iat = int(time.time())
     payload = {
         "iat": iat,
@@ -62,16 +58,17 @@ def generate_jwt(path, method="GET"):
     }
     headers = {"alg": "ES256", "kid": COINBASE_API_KEY_ID}
     token = jwt.encode(payload, private_key_obj, algorithm="ES256", headers=headers)
+    logging.debug(f"JWT payload: {payload}")
     return token
 
 # --- Helper: check API key permissions ---
 def check_key_permissions():
     path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/key_permissions"
-    url = f"https://api.coinbase.com{path}"
+    url = "https://api.coinbase.com" + path
+    token = generate_jwt(path)
 
     for attempt in range(RETRY_COUNT):
         try:
-            token = generate_jwt(path)
             resp = requests.get(url, headers={
                 "Authorization": f"Bearer {token}",
                 "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
@@ -89,7 +86,7 @@ def check_key_permissions():
         time.sleep(RETRY_DELAY)
     return None
 
-# --- Helper: fetch accounts with caching ---
+# --- Helper: fetch accounts ---
 def fetch_accounts():
     global last_accounts, last_accounts_ts
     path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
@@ -100,7 +97,7 @@ def fetch_accounts():
     for attempt in range(RETRY_COUNT):
         try:
             token = generate_jwt(path)
-            url = f"https://api.coinbase.com{path}"
+            url = "https://api.coinbase.com" + path
             resp = requests.get(url, headers={
                 "Authorization": f"Bearer {token}",
                 "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
@@ -120,15 +117,30 @@ def fetch_accounts():
 
     raise RuntimeError("Failed to fetch Coinbase accounts after retries.")
 
+# --- Flask route to test Coinbase connection ---
+@app.route("/test_coinbase_connection")
+def test_coinbase_connection():
+    try:
+        perms = check_key_permissions()
+        accounts = fetch_accounts() if perms and perms.get("can_view", False) else None
+        return jsonify({
+            "status": "ok",
+            "permissions": perms,
+            "accounts": accounts
+        })
+    except Exception as e:
+        logging.error(f"❌ Test Coinbase connection failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
 # --- Helper: send trade ---
 def send_trade(symbol: str, side: str, size: float):
     if not SEND_LIVE_TRADES:
         logging.info(f"⚠️ Test trade not sent: {side} {size} {symbol}")
-        return {"status": "test_mode"}
+        return
 
     path = "/api/v3/brokerage/orders"
     token = generate_jwt(path)
-    url = f"https://api.coinbase.com{path}"
+    url = "https://api.coinbase.com" + path
 
     payload = {"symbol": symbol, "side": side.lower(), "type": "market", "quantity": str(size)}
 
@@ -148,22 +160,16 @@ def send_trade(symbol: str, side: str, size: float):
         except Exception as e:
             logging.error(f"[Attempt {attempt+1}] Exception sending trade: {e}")
         time.sleep(RETRY_DELAY)
-
     logging.error(f"❌ Failed to send trade after {RETRY_COUNT} attempts: {side} {size} {symbol}")
     return None
 
-# --- Flask Routes ---
-@app.route("/test_coinbase_connection")
-def test_coinbase_connection():
-    perms = check_key_permissions()
-    accounts = fetch_accounts() if perms else None
-    return jsonify({"status": "ok", "permissions": perms, "accounts": accounts})
-
+# --- Flask route to test a trade ---
 @app.route("/test_trade")
 def test_trade_route():
-    result = send_trade("BTC-USD", "buy", 0.001)
-    return jsonify(result)
+    send_trade("BTC-USD", "buy", 0.001)
+    return "Check logs for trade output."
 
+# --- Webhook route ---
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -175,8 +181,8 @@ def webhook():
         if not symbol or not side or size <= 0:
             return jsonify({"status": "error", "message": "Invalid payload"}), 400
 
-        result = send_trade(symbol, side, size)
-        return jsonify({"status": "ok", "result": result})
+        send_trade(symbol, side, size)
+        return jsonify({"status": "ok"})
     except Exception as e:
         logging.error(f"❌ Webhook error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
