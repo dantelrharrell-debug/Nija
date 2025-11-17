@@ -263,7 +263,7 @@ def main():
     if FALLBACK_ORG and FALLBACK_KEY and FALLBACK_PEM_RAW:
         print("\n\nDetected fallback env values. Validating fallback key...")
         f_pem = normalize_pem(FALLBACK_PEM_RAW)
-        f_key_obj = load_private_key(f_pem)
+
         if not f_key_obj:
             print("Fallback PEM failed to parse. Please re-check COINBASE_FALLBACK_PEM_CONTENT.")
         else:
