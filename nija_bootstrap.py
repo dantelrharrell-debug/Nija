@@ -1,71 +1,75 @@
-import debug_nija_write_pem  # temporary - prints PEM info then exits
-
-# -----------------------------
-# nija_bootstrap.py
-# -----------------------------
+# --- nija_bootstrap.py ---
 import os
 import logging
-from threading import Thread
-from nija_app import nija_worker  # your worker loop
-from nija_client import init_client  # your Coinbase client init
+import hashlib
+from nija_client import CoinbaseClient  # your existing client module
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nija_bootstrap")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# -----------------------------
-# Step 1: Write PEM file correctly
-# -----------------------------
-PEM_STRING = os.getenv("COINBASE_PEM_CONTENT")
-if not PEM_STRING:
-    logger.error("[NIJA-BOOTSTRAP] COINBASE_PEM_CONTENT not set in environment!")
-    raise SystemExit(1)
+def load_and_normalize_pem():
+    pem = os.getenv("COINBASE_PEM_CONTENT", "")
+    if not pem:
+        logging.error("❌ COINBASE_PEM_CONTENT env variable is empty")
+        return None
 
-# Ensure proper line breaks
-PEM_STRING = PEM_STRING.replace("\\n", "\n").strip()
+    # Detect escaped \n
+    if "\\n" in pem and "\n" not in pem:
+        logging.info("Detected escaped-newline PEM (single-line). Converting to multiline.")
+        pem_fixed = pem.replace("\\n", "\n")
+    else:
+        pem_fixed = pem
 
-# Make sure header/footer exist
-if not PEM_STRING.startswith("-----BEGIN PRIVATE KEY-----"):
-    PEM_STRING = "-----BEGIN PRIVATE KEY-----\n" + PEM_STRING
-if not PEM_STRING.endswith("-----END PRIVATE KEY-----"):
-    PEM_STRING = PEM_STRING + "\n-----END PRIVATE KEY-----"
+    # Trim extra whitespace
+    pem_fixed = pem_fixed.strip()
 
-# Split body into 64-character lines for proper PEM formatting
-lines = PEM_STRING.splitlines()
-header = lines[0]
-footer = lines[-1]
-body = "".join(lines[1:-1]).replace("\n", "")
-formatted_body = "\n".join([body[i:i+64] for i in range(0, len(body), 64)])
-formatted_pem = "\n".join([header, formatted_body, footer])
+    # Save normalized PEM to /tmp for client use
+    with open("/tmp/coinbase_pem_debug.pem", "w") as f:
+        f.write(pem_fixed)
+    logging.info("✅ Saved normalized PEM to /tmp/coinbase_pem_debug.pem")
 
-# Write to temporary PEM file
-PEM_PATH = "/tmp/coinbase.pem"
-with open(PEM_PATH, "w") as f:
-    f.write(formatted_pem)
-os.chmod(PEM_PATH, 0o600)
+    # SHA256 fingerprint for debugging (safe)
+    fingerprint = hashlib.sha256(pem_fixed.encode("utf-8")).hexdigest()[:12]
+    logging.info(f"PEM length={len(pem_fixed)} SHA256-fingerprint={fingerprint}")
+    return pem_fixed
 
-logger.info(f"[NIJA-BOOTSTRAP] PEM written successfully to {PEM_PATH}")
+def bootstrap_nija_bot():
+    pem = load_and_normalize_pem()
+    if not pem:
+        logging.error("❌ Cannot continue without valid PEM")
+        return
 
-# -----------------------------
-# Step 2: Initialize Coinbase client
-# -----------------------------
-client = init_client(pem_path=PEM_PATH)
-logger.info("[NIJA-BOOTSTRAP] Coinbase client initialized ✅")
+    # Load Coinbase environment variables
+    org_id = os.getenv("COINBASE_ORG_ID")
+    api_key_id = os.getenv("COINBASE_API_KEY_ID")
 
-# -----------------------------
-# Step 3: Start worker in background
-# -----------------------------
-worker_thread = Thread(target=nija_worker, daemon=True)
-worker_thread.start()
-logger.info("[NIJA-BOOTSTRAP] Worker started in background ✅")
+    if not org_id or not api_key_id:
+        logging.error("❌ COINBASE_ORG_ID or COINBASE_API_KEY_ID not set in env")
+        return
 
-# -----------------------------
-# Step 4: Flask app (Gunicorn entry)
-# -----------------------------
-from flask import Flask
+    logging.info("🔥 Nija Trading Bot bootstrap starting...")
+    logging.info(f"⚡ Current outbound IP: (check via ipify or your hosting service)")
 
-app = Flask(__name__)
+    # Attempt primary client connection
+    try:
+        client = CoinbaseClient(
+            org_id=org_id,
+            api_key_id=api_key_id,
+            pem_content=pem
+        )
+        logging.info("✅ CoinbaseClient initialized successfully")
+    except Exception as e:
+        logging.error(f"❌ Primary CoinbaseClient initialization failed: {e}")
+        logging.info("Attempting fallback key (if configured)...")
+        # You can implement fallback here if you have another key
+        return
 
-@app.route("/")
-def index():
-    return "Nija is live with funds visibility"
-    
+    # Optional: test a simple API call to confirm connection
+    try:
+        accounts = client.fetch_accounts()
+        logging.info(f"✅ Coinbase connection verified. Accounts fetched: {accounts}")
+    except Exception as e:
+        logging.error(f"❌ Coinbase API call failed: {e}")
+        logging.error("Check PEM, API Key ID, Org ID, IP whitelist, and permissions.")
+
+if __name__ == "__main__":
+    bootstrap_nija_bot()
