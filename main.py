@@ -1,6 +1,8 @@
 import logging
 import requests
-import # --- Coinbase key settings from environment ---
+import os
+
+# --- Coinbase key settings from environment ---
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
 COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")
 COINBASE_PEM_CONTENT = os.environ.get("COINBASE_PEM_CONTENT")
@@ -47,14 +49,12 @@ def check_coinbase_key_permissions():
 
 # --- Placeholder for live trading ---
 def start_trading():
-    logging.info("🚀 Starting live trading..."
+    logging.info("🚀 Starting live trading...")
 
     try:
         # --- Insert your actual trading bot logic here ---
-        # For example, calling your trade execution function
         from bot_live import execute_trades  # your existing trading module
         execute_trades()  # this is where live trades will run
-
     except Exception as e:
         logging.error(f"⚠️ Error during live trading: {e}")
 
