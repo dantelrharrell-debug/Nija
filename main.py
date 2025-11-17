@@ -40,6 +40,7 @@ def check_coinbase_key_permissions():
             logging.error("Action options:")
             logging.error(f"1️⃣ Whitelist this exact IP in Coinbase Advanced: {ip}")
             logging.error("2️⃣ Remove IP restriction entirely for this key in Coinbase Advanced")
+        logging.error("⚠️ Coinbase authentication failed — live trading cannot start.")
         return False
     elif response.status_code != 200:
         logging.error(f"Unexpected Coinbase response: {response.status_code} - {response.text}")
@@ -50,11 +51,11 @@ def check_coinbase_key_permissions():
 
 # --- Live trading function ---
 def start_trading():
-    logging.info("🚀 Starting LIVE trading...")
+    logging.info("🚀 Starting live trading...")
     try:
-        # Replace this with your actual trading bot code
+        # Import your actual trading logic module
         from bot_live import execute_trades
-        execute_trades()  # live trades will run here
+        execute_trades()  # live trades run here
     except Exception as e:
         logging.error(f"⚠️ Error during live trading: {e}")
 
@@ -63,7 +64,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logging.info("🔥 Nija Trading Bot starting up...")
 
+    # Step 1: Verify Coinbase key/IP before trading
     if check_coinbase_key_permissions():
         start_trading()
     else:
-        logging.error("⚠️ Coinbase authentication failed — live trading cannot start.")
+        logging.error("⚠️ Startup halted due to Coinbase authentication failure.")
