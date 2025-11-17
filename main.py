@@ -1,4 +1,4 @@
-# --- main.py ---
+# main.py
 import os
 import time
 import datetime
@@ -10,13 +10,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # --- CONFIG ---
-SEND_LIVE_TRADES = False  # Set True to enable real trades
+SEND_LIVE_TRADES = False  # True = send real trades
 RETRY_COUNT = 3
 RETRY_DELAY = 1  # seconds
-CACHE_TTL = 30  # seconds for accounts cache
-LOG_FILE = "nija_trading.log"
+LOG_FILE = "nija_trading_debug.log"
 
-# --- Setup logging ---
+# --- Logging ---
 logging.basicConfig(
     filename=LOG_FILE,
     level=logging.INFO,
@@ -34,20 +33,35 @@ COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
 COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
+# --- Prepare PEM key ---
 private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n").encode("utf-8")
 private_key_obj = serialization.load_pem_private_key(private_key, password=None, backend=default_backend())
+
+SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
 
 # --- Flask app ---
 app = Flask(__name__)
 
-# --- Cache ---
-last_accounts = None
-last_accounts_ts = 0
+# --- Server time check ---
+def get_coinbase_time():
+    try:
+        resp = requests.get("https://api.coinbase.com/v2/time", timeout=5)
+        if resp.status_code == 200:
+            cb_time = resp.json()["data"]["epoch"]
+            local_time = int(time.time())
+            drift = local_time - cb_time
+            logging.info(f"Coinbase epoch: {cb_time}, Local epoch: {local_time}, Drift: {drift}s")
+            return drift
+        else:
+            logging.warning(f"Failed to fetch Coinbase time: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception fetching Coinbase time: {e}")
+        return None
 
-# --- Helper: generate JWT ---
-def generate_jwt(path: str, method: str = "GET") -> str:
-    iat = int(time.time())
+# --- JWT generation ---
+def generate_jwt(path, method="GET", time_offset=0):
+    iat = int(time.time()) - time_offset
     payload = {
         "iat": iat,
         "exp": iat + 120,
@@ -58,10 +72,10 @@ def generate_jwt(path: str, method: str = "GET") -> str:
     }
     headers = {"alg": "ES256", "kid": COINBASE_API_KEY_ID}
     token = jwt.encode(payload, private_key_obj, algorithm="ES256", headers=headers)
-    logging.debug(f"JWT payload: {payload}")
+    logging.info(f"JWT generated: path={path}, method={method}, iat={iat}, exp={iat+120}, sub={SUB}")
     return token
 
-# --- Helper: check API key permissions ---
+# --- Key permissions check ---
 def check_key_permissions():
     path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/key_permissions"
     url = "https://api.coinbase.com" + path
@@ -79,117 +93,33 @@ def check_key_permissions():
                 perms = resp.json()
                 logging.info(f"✅ Key permissions: {perms}")
                 return perms
+            elif resp.status_code == 401:
+                logging.error(f"❌ 401 Unauthorized! Check PEM, ORG_ID, API_KEY_ID, timestamps, IP restrictions.")
+                logging.error(f"Response: {resp.text}")
             else:
-                logging.warning(f"[Attempt {attempt+1}] Failed to fetch key permissions: {resp.status_code} {resp.text}")
+                logging.warning(f"[Attempt {attempt+1}] Failed: {resp.status_code} {resp.text}")
         except Exception as e:
-            logging.error(f"[Attempt {attempt+1}] Exception fetching key permissions: {e}")
+            logging.error(f"[Attempt {attempt+1}] Exception: {e}")
         time.sleep(RETRY_DELAY)
     return None
 
-# --- Helper: fetch accounts ---
-def fetch_accounts():
-    global last_accounts, last_accounts_ts
-    path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/accounts"
-
-    if last_accounts and (time.time() - last_accounts_ts < CACHE_TTL):
-        return last_accounts
-
-    for attempt in range(RETRY_COUNT):
-        try:
-            token = generate_jwt(path)
-            url = "https://api.coinbase.com" + path
-            resp = requests.get(url, headers={
-                "Authorization": f"Bearer {token}",
-                "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
-                "Content-Type": "application/json"
-            }, timeout=10)
-
-            if resp.status_code == 200:
-                last_accounts = resp.json()
-                last_accounts_ts = time.time()
-                logging.info(f"Fetched accounts: {last_accounts}")
-                return last_accounts
-            else:
-                logging.warning(f"[Attempt {attempt+1}] Failed to fetch accounts: {resp.status_code} {resp.text}")
-        except Exception as e:
-            logging.error(f"[Attempt {attempt+1}] Exception fetching accounts: {e}")
-        time.sleep(RETRY_DELAY)
-
-    raise RuntimeError("Failed to fetch Coinbase accounts after retries.")
-
-# --- Flask route to test Coinbase connection ---
+# --- Flask route to debug connection ---
 @app.route("/test_coinbase_connection")
 def test_coinbase_connection():
-    try:
-        perms = check_key_permissions()
-        accounts = fetch_accounts() if perms and perms.get("can_view", False) else None
-        return jsonify({
-            "status": "ok",
-            "permissions": perms,
-            "accounts": accounts
-        })
-    except Exception as e:
-        logging.error(f"❌ Test Coinbase connection failed: {e}")
-        return jsonify({"error": str(e)}), 500
+    drift = get_coinbase_time()
+    perms = check_key_permissions()
+    return jsonify({
+        "server_time_drift": drift,
+        "permissions": perms
+    })
 
-# --- Helper: send trade ---
-def send_trade(symbol: str, side: str, size: float):
-    if not SEND_LIVE_TRADES:
-        logging.info(f"⚠️ Test trade not sent: {side} {size} {symbol}")
-        return
-
-    path = "/api/v3/brokerage/orders"
-    token = generate_jwt(path)
-    url = "https://api.coinbase.com" + path
-
-    payload = {"symbol": symbol, "side": side.lower(), "type": "market", "quantity": str(size)}
-
-    for attempt in range(RETRY_COUNT):
-        try:
-            resp = requests.post(url, headers={
-                "Authorization": f"Bearer {token}",
-                "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
-                "Content-Type": "application/json"
-            }, json=payload, timeout=10)
-
-            if resp.status_code in [200, 201]:
-                logging.info(f"✅ Trade executed: {side} {size} {symbol}")
-                return resp.json()
-            else:
-                logging.warning(f"[Attempt {attempt+1}] Trade failed: {resp.status_code} {resp.text}")
-        except Exception as e:
-            logging.error(f"[Attempt {attempt+1}] Exception sending trade: {e}")
-        time.sleep(RETRY_DELAY)
-    logging.error(f"❌ Failed to send trade after {RETRY_COUNT} attempts: {side} {size} {symbol}")
-    return None
-
-# --- Flask route to test a trade ---
-@app.route("/test_trade")
-def test_trade_route():
-    send_trade("BTC-USD", "buy", 0.001)
-    return "Check logs for trade output."
-
-# --- Webhook route ---
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        data = request.json
-        symbol = data.get("symbol")
-        side = data.get("side")
-        size = float(data.get("size", 0))
-
-        if not symbol or not side or size <= 0:
-            return jsonify({"status": "error", "message": "Invalid payload"}), 400
-
-        send_trade(symbol, side, size)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        logging.error(f"❌ Webhook error: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- Main ---
+# --- Main bot startup ---
 if __name__ == "__main__":
     logging.info("🔥 Nija Trading Bot starting...")
+
+    drift = get_coinbase_time()
+    if drift is not None and abs(drift) > 10:
+        logging.warning("⚠️ Server time differs from Coinbase by >10s. Consider adjusting time offset in JWT.")
 
     perms = check_key_permissions()
     if not perms:
@@ -197,15 +127,10 @@ if __name__ == "__main__":
         exit(1)
 
     if not perms.get("can_view", False):
-        logging.error("❌ Key does not have 'view' permission. Exiting.")
+        logging.error("❌ Key missing 'view' permission. Exiting.")
         exit(1)
 
     if not perms.get("can_trade", False):
-        logging.warning("⚠️ Key does not have 'trade' permission. Live trades will not work.")
-
-    try:
-        fetch_accounts()
-    except Exception as e:
-        logging.error(f"❌ Could not fetch accounts: {e}")
+        logging.warning("⚠️ Key missing 'trade' permission. Live trades will not work.")
 
     app.run(host="0.0.0.0", port=5000)
