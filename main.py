@@ -52,8 +52,8 @@ def check_coinbase_key_permissions():
 def start_trading():
     logging.info("🚀 Starting live trading...")
     try:
-        from bot_live import execute_trades  # your existing trading module
-        execute_trades()
+        from bot_live import execute_trades  # import trading module
+        execute_trades()  # call trading function
     except Exception as e:
         logging.error(f"⚠️ Error during live trading: {e}")
 
@@ -62,7 +62,11 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logging.info("🔥 Nija Trading Bot starting up...")
 
+    # Step 1: Verify Coinbase key/IP before trading
     if check_coinbase_key_permissions():
         start_trading()
     else:
-        logging.error("⚠️ Startup halted due to Coinbase authentication failure.")
+        logging.warning("⚠️ Coinbase auth failed — running TEST mode anyway...")
+        # Run a simulation even if auth fails
+        from bot_live import execute_trades
+        execute_trades(simulate=True)
