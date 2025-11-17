@@ -11,7 +11,9 @@ COINBASE_PEM_CONTENT = os.environ.get("COINBASE_PEM_CONTENT")
 def get_outbound_ip():
     try:
         response = requests.get("https://api.ipify.org?format=json", timeout=5)
-        return response.json().get("ip")
+        ip = response.json().get("ip")
+        logging.info(f"⚡ Current outbound IP on this run: {ip}")
+        return ip
     except Exception as e:
         logging.error(f"Unable to detect outbound IP: {e}")
         return None
@@ -19,11 +21,10 @@ def get_outbound_ip():
 # --- Check Coinbase key permissions ---
 def check_coinbase_key_permissions():
     ip = get_outbound_ip()
-    logging.info(f"Outbound IP detected: {ip}")
     
     url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/key_permissions"
     headers = {"CB-ACCESS-KEY": COINBASE_API_KEY}
-    
+
     try:
         response = requests.get(url, headers=headers, timeout=5)
     except Exception as e:
@@ -35,9 +36,9 @@ def check_coinbase_key_permissions():
         logging.error("- IP restrictions active for this key")
         logging.error("- Incorrect API key / org ID / PEM")
         if ip:
-            logging.error(f"Current outbound IP: {ip}")
+            logging.error(f"Detected outbound IP: {ip}")
             logging.error("Action options:")
-            logging.error(f"1️⃣ Whitelist this IP in Coinbase Advanced: {ip}")
+            logging.error(f"1️⃣ Whitelist this exact IP in Coinbase Advanced: {ip}")
             logging.error("2️⃣ Remove IP restriction entirely for this key in Coinbase Advanced")
         return False
     elif response.status_code != 200:
@@ -50,11 +51,9 @@ def check_coinbase_key_permissions():
 # --- Placeholder for live trading ---
 def start_trading():
     logging.info("🚀 Starting live trading...")
-
     try:
-        # --- Insert your actual trading bot logic here ---
         from bot_live import execute_trades  # your existing trading module
-        execute_trades()  # this is where live trades will run
+        execute_trades()
     except Exception as e:
         logging.error(f"⚠️ Error during live trading: {e}")
 
@@ -63,13 +62,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logging.info("🔥 Nija Trading Bot starting up...")
 
-    # Step 1: Verify Coinbase key/IP before trading
     if check_coinbase_key_permissions():
         start_trading()
     else:
         logging.error("⚠️ Startup halted due to Coinbase authentication failure.")
-
-    # Optional: warn if IP changes later (future deployments)
-    current_ip = get_outbound_ip()
-    if current_ip:
-        logging.info(f"⚡ Current outbound IP on this run: {current_ip}. Keep this whitelisted in Coinbase Advanced if needed.")
