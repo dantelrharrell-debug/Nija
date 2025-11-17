@@ -1,7 +1,6 @@
 import logging
 import requests
 import os
-from time import sleep
 
 # --- Coinbase key settings from environment ---
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
@@ -48,25 +47,18 @@ def check_coinbase_key_permissions():
         logging.info("✅ Coinbase key permissions verified.")
         return True
 
-# --- Live trading logic ---
+# --- Placeholder for live trading ---
 def start_trading():
     logging.info("🚀 Starting live trading...")
 
-    # Example loop for demo purposes
-    while True:
-        try:
-            # TODO: Replace this with your actual trading logic
-            logging.info("💹 Checking for trade signals...")
-            
-            # Example placeholder action
-            # trade_signal = check_for_signal()
-            # if trade_signal:
-            #     execute_trade(trade_signal)
+    try:
+        # --- Insert your actual trading bot logic here ---
+        # For example, calling your trade execution function
+        from bot_live import execute_trades  # your existing trading module
+        execute_trades()  # this is where live trades will run
 
-            sleep(5)  # Delay between loops to simulate polling
-        except Exception as e:
-            logging.error(f"Error in trading loop: {e}")
-            sleep(5)
+    except Exception as e:
+        logging.error(f"⚠️ Error during live trading: {e}")
 
 # --- Main bot startup ---
 if __name__ == "__main__":
@@ -79,7 +71,7 @@ if __name__ == "__main__":
     else:
         logging.error("⚠️ Startup halted due to Coinbase authentication failure.")
 
-    # Optional: log current IP for reference
+    # Optional: warn if IP changes later (future deployments)
     current_ip = get_outbound_ip()
     if current_ip:
         logging.info(f"⚡ Current outbound IP on this run: {current_ip}. Keep this whitelisted in Coinbase Advanced if needed.")
