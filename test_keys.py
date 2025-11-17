@@ -1,59 +1,47 @@
 import os
-import requests
-import hmac
-import hashlib
 import time
+import datetime
+import requests
+import jwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
-# Load API keys from environment variables
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE", "")  # optional
-BASE_URLS = {
-    "Live": "https://api.coinbase.com/v2",
-    "Sandbox": "https://api-public.sandbox.coinbase.com/v2"
-}
+# --- Load env ---
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-def test_api(base_url):
-    timestamp = str(int(time.time()))
-    method = "GET"
-    request_path = "/accounts"
-    body = ""
-    
-    message = timestamp + method + request_path + body
-    signature = hmac.new(
-        API_SECRET.encode(),
-        message.encode(),
-        hashlib.sha256
-    ).hexdigest()
-    
-    headers = {
-        "CB-ACCESS-KEY": API_KEY,
-        "CB-ACCESS-SIGN": signature,
-        "CB-ACCESS-TIMESTAMP": timestamp,
-        "CB-VERSION": "2025-11-11"
+SUB = f"/organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_API_KEY_ID}"
+
+# --- Prepare private key ---
+private_key = COINBASE_PEM_CONTENT.replace("\\n", "\n").encode("utf-8")
+private_key_obj = serialization.load_pem_private_key(private_key, password=None, backend=default_backend())
+
+# --- Generate JWT ---
+def generate_jwt(path: str, method: str = "GET") -> str:
+    iat = int(time.time())
+    payload = {
+        "iat": iat,
+        "exp": iat + 120,
+        "sub": SUB,
+        "request_path": path,
+        "method": method.upper(),
+        "jti": f"test-{iat}"
     }
-    
-    if API_PASSPHRASE:
-        headers["CB-ACCESS-PASSPHRASE"] = API_PASSPHRASE
+    headers = {"alg": "ES256", "kid": COINBASE_API_KEY_ID}
+    token = jwt.encode(payload, private_key_obj, algorithm="ES256", headers=headers)
+    return token
 
-    try:
-        response = requests.get(base_url + request_path, headers=headers, timeout=10)
-        return response.status_code, response.text
-    except Exception as e:
-        return None, str(e)
+# --- Test key permissions ---
+path = f"/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/key_permissions"
+url = f"https://api.coinbase.com{path}"
 
-if __name__ == "__main__":
-    for env, url in BASE_URLS.items():
-        status, data = test_api(url)
-        print(f"\nTesting {env} API:")
-        print("Base URL:", url)
-        if status == 200:
-            print("✅ Keys are valid!")
-        elif status == 401:
-            print("❌ Unauthorized – check key, secret, passphrase, or permissions")
-        elif status == 403:
-            print("❌ Forbidden – key exists but lacks required permissions")
-        elif status is None:
-            print("❌ Request failed:", data)
-        else:
-            print(f"⚠️ Status {status}: {data}")
+token = generate_jwt(path)
+resp = requests.get(url, headers={
+    "Authorization": f"Bearer {token}",
+    "CB-VERSION": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+    "Content-Type": "application/json"
+}, timeout=10)
+
+print("HTTP Status:", resp.status_code)
+print(resp.text)
