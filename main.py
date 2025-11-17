@@ -1,6 +1,8 @@
 import logging
 import requests
 import os
+from nija_client import CoinbaseClient  # Keep your existing client import
+from bot_logic import start_trading     # Keep your trading logic import
 
 # --- Coinbase key settings from environment ---
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
@@ -21,12 +23,15 @@ def check_coinbase_key_permissions():
     ip = get_outbound_ip()
     logging.info(f"Outbound IP detected: {ip}")
     
-    # Simulate a permissions check call
     url = f"https://api.coinbase.com/api/v3/brokerage/organizations/{COINBASE_ORG_ID}/key_permissions"
     headers = {"CB-ACCESS-KEY": COINBASE_API_KEY}
     
-    response = requests.get(url, headers=headers)
-    
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+    except Exception as e:
+        logging.error(f"Error reaching Coinbase API: {e}")
+        return False
+
     if response.status_code == 401:
         logging.error("❌ Coinbase API Unauthorized (401). Possible causes:")
         logging.error("- IP restrictions active for this key")
@@ -48,9 +53,11 @@ def check_coinbase_key_permissions():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logging.info("🔥 Nija Trading Bot starting up...")
-    
+
+    # Step 1: Verify Coinbase key/IP before trading
     if check_coinbase_key_permissions():
         logging.info("🚀 Starting live trading...")
-        # Place bot start logic here
+        # Step 2: Call your existing live trading logic
+        start_trading()
     else:
         logging.error("⚠️ Startup halted due to Coinbase authentication failure.")
