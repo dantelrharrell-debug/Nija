@@ -1,8 +1,7 @@
 import logging
 import requests
 import os
-from nija_client import CoinbaseClient  # Keep your existing client import
-from bot_logic import start_trading     # Keep your trading logic import
+from bot_logic import start_trading  # Keep your trading logic import
 
 # --- Coinbase key settings from environment ---
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
