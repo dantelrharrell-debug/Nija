@@ -1,18 +1,11 @@
 import time
 import logging
-from nija_client import CoinbaseClient
 
-# Initialize Coinbase client
-coinbase_client = CoinbaseClient(
-    api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
-    api_secret_path="/opt/railway/secrets/coinbase.pem",
-    api_passphrase="",
-    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
-)
-
+# ======= LIVE TRADING CONFIG =======
 LIVE_TRADING = True
 CHECK_INTERVAL = 10  # seconds between signal checks
 
+# Placeholder trading signals
 TRADING_SIGNALS = [
     {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
     {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
@@ -20,34 +13,29 @@ TRADING_SIGNALS = [
     {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
 ]
 
+# ======= CHECK SIGNALS =======
 def check_signals():
+    """Return current trading signals."""
     return TRADING_SIGNALS
 
+# ======= PLACE ORDER =======
 def place_order(symbol: str, side: str, size: float):
-    global coinbase_client
-    if not LIVE_TRADING:
-        logging.info(f"Dry run: would place {side} order for {size} {symbol}")
-        return None
+    """
+    Safe placeholder for executing orders.
+    Once Coinbase library is installed, replace this with coinbase_client.create_order().
+    """
+    if LIVE_TRADING:
+        logging.info(f"🚀 Placing order: {side} {size} {symbol} (placeholder)")
+    else:
+        logging.info(f"Dry run: {side} {size} {symbol}")
 
-    try:
-        order = coinbase_client.create_order(
-            product_id=symbol,
-            side=side,
-            type="market",
-            size=str(size)
-        )
-        logging.info(f"✅ Order executed: {order}")
-        return order
-    except Exception as e:
-        logging.error(f"❌ Failed to place order for {symbol} ({side} {size}): {e}")
-        return None
-
+# ======= TRADING LOOP =======
 def trading_loop():
-    logging.info("🚀 Starting live trading loop...")
+    logging.info("🚀 Starting trading loop...")
     while True:
         signals = check_signals()
         if not signals:
-            logging.info("No signals found. Waiting for next check...")
+            logging.info("No signals found.")
         for signal in signals:
             symbol = signal.get("symbol")
             side = signal.get("side")
@@ -58,6 +46,7 @@ def trading_loop():
                 logging.warning(f"Incomplete signal skipped: {signal}")
         time.sleep(CHECK_INTERVAL)
 
+# ======= MAIN =======
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     trading_loop()
