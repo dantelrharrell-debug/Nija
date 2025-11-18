@@ -1,3 +1,73 @@
+# --- SAFE, NON-CRASHING COINBASE IMPORT HANDLER ---
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+COINBASE_AVAILABLE = False
+COINBASE_CLIENT = None
+
+_import_attempts = [
+    ("coinbase.rest", "from coinbase.rest import RESTClient"),
+    ("coinbase_advanced_py.rest_client", "import coinbase_advanced_py.rest_client"),
+    ("coinbase_advanced.client", "from coinbase_advanced.client import Client"),
+    ("coinbase_advanced_py.client", "import coinbase_advanced_py.client"),
+    ("coinbase.rest_client", "import coinbase.rest_client"),
+]
+
+for module_path, msg in _import_attempts:
+    try:
+        if module_path == "coinbase.rest":
+            from coinbase.rest import RESTClient as _Client
+            COINBASE_CLIENT = _Client
+
+        elif module_path == "coinbase_advanced_py.rest_client":
+            import coinbase_advanced_py.rest_client as _mod
+            COINBASE_CLIENT = getattr(_mod, "RESTClient", _mod)
+
+        elif module_path == "coinbase_advanced.client":
+            from coinbase_advanced.client import Client as _Client
+            COINBASE_CLIENT = _Client
+
+        elif module_path == "coinbase_advanced_py.client":
+            import coinbase_advanced_py.client as _mod
+            COINBASE_CLIENT = getattr(_mod, "Client", _mod)
+
+        elif module_path == "coinbase.rest_client":
+            import coinbase.rest_client as _mod
+            COINBASE_CLIENT = getattr(_mod, "RESTClient", _mod)
+
+        logger.info(f"✅ Coinbase SDK import succeeded via: {msg}")
+        COINBASE_AVAILABLE = True
+        break
+
+    except Exception:
+        logger.debug(f"Import attempt failed for {module_path}", exc_info=True)
+
+if not COINBASE_AVAILABLE:
+    logger.error(
+        "❌ Coinbase SDK import failed. Ensure 'coinbase-advanced-py' is in "
+        "requirements.txt. Running in DRY-RUN MODE — guard all Coinbase calls "
+        "with COINBASE_AVAILABLE."
+    )
+
+# --- EXAMPLE USAGE / FALLBACK ---
+def get_coinbase_client(api_key=None, api_secret=None):
+    """
+    Unified method to safely create a Coinbase client
+    or fallback to dry-run.
+    """
+    if not COINBASE_AVAILABLE:
+        logger.warning("⚠️ Coinbase unavailable — skipping live trade and using dry-run mode.")
+        return None  # or return a mock object if you want
+
+    # LIVE client
+    try:
+        return COINBASE_CLIENT(api_key=api_key, api_secret=api_secret)
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Coinbase client: {e}")
+        return None
+
 # /app/nija_client.py
 import os
 import json
