@@ -2,26 +2,21 @@
 """
 Safe Coinbase client wrapper for Nija bot.
 
-- Non-crashing import attempts for multiple possible Coinbase SDKs.
-- Returns a `LiveClient` (wrapper) when SDK present, otherwise a `MockClient`.
-- Use get_coinbase_client(api_key=..., api_secret=..., pem=..., org_id=...) to get a client.
-- Use test_coinbase_connection() for a quick check (returns True/False).
+- Robust non-crashing imports for multiple Coinbase SDKs.
+- Returns a LiveClient if SDK is installed, else a MockClient for dry-run.
 """
 
 import logging
-import time
-from typing import Any, Optional, List
-
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-# -------------------------
-# 1) Robust non-crashing import attempts
-# -------------------------
 COINBASE_AVAILABLE = False
 COINBASE_CLIENT = None
 _COINDOT_MODULE_NAME = None
 
+# -------------------------
+# Robust import attempts
+# -------------------------
 _import_attempts = [
     ("coinbase.rest", "from coinbase.rest import RESTClient"),
     ("coinbase_advanced_py.rest_client", "import coinbase_advanced_py.rest_client"),
@@ -36,22 +31,18 @@ for module_path, msg in _import_attempts:
             from coinbase.rest import RESTClient as _Client
             COINBASE_CLIENT = _Client
             _COINDOT_MODULE_NAME = "coinbase.rest"
-
         elif module_path == "coinbase_advanced_py.rest_client":
             import coinbase_advanced_py.rest_client as _mod
             COINBASE_CLIENT = getattr(_mod, "RESTClient", getattr(_mod, "Client", _mod))
             _COINDOT_MODULE_NAME = "coinbase_advanced_py.rest_client"
-
         elif module_path == "coinbase_advanced.client":
             from coinbase_advanced.client import Client as _Client
             COINBASE_CLIENT = _Client
             _COINDOT_MODULE_NAME = "coinbase_advanced.client"
-
         elif module_path == "coinbase_advanced_py.client":
             import coinbase_advanced_py.client as _mod
             COINBASE_CLIENT = getattr(_mod, "Client", _mod)
             _COINDOT_MODULE_NAME = "coinbase_advanced_py.client"
-
         elif module_path == "coinbase.rest_client":
             import coinbase.rest_client as _mod
             COINBASE_CLIENT = getattr(_mod, "RESTClient", getattr(_mod, "Client", _mod))
@@ -65,32 +56,27 @@ for module_path, msg in _import_attempts:
         logger.debug(f"Import attempt failed for {module_path}", exc_info=True)
 
 if not COINBASE_AVAILABLE:
-    logger.error(
-        "❌ Coinbase SDK import failed. Ensure 'coinbase-advanced-py' (or your expected SDK) "
-        "is present in requirements.txt. Running in DRY-RUN mode."
-    )
+    logger.error("❌ Coinbase SDK import failed. Running in DRY-RUN mode.")
+
 
 # -------------------------
-# 2) Lightweight client wrappers
+# Mock client for dry-run
 # -------------------------
 class MockClient:
-    """A simple mock client that simulates the minimal interface used by the bot."""
-    def __init__(self):
-        self.mock_accounts = [{"id": "mock-1", "currency": "USD", "balance": "1000.00"}]
+    def get_accounts(self):
+        logger.info("MockClient.get_accounts() called — returning simulated account")
+        return [{"id": "mock-1", "currency": "USD", "balance": "1000.00"}]
 
-    def get_accounts(self) -> List[dict]:
-        logger.info("MockClient.get_accounts() called — returning simulated accounts.")
-        return self.mock_accounts
-
-    def place_order(self, *args, **kwargs) -> dict:
-        logger.info("MockClient.place_order() called — returning simulated order.")
-        return {"status": "simulated", "args": args, "kwargs": kwargs}
+    def place_order(self, *args, **kwargs):
+        logger.info(f"MockClient.place_order() called with args={args}, kwargs={kwargs}")
+        return {"status": "simulated"}
 
 
+# -------------------------
+# Live client wrapper
+# -------------------------
 class LiveClient:
-    """Adapter that lazily instantiates the real SDK client and maps common methods."""
-    def __init__(self, client_cls: Any, api_key: Optional[str] = None, api_secret: Optional[str] = None,
-                 pem: Optional[str] = None, org_id: Optional[str] = None, **kwargs):
+    def __init__(self, client_cls, api_key=None, api_secret=None, pem=None, org_id=None, **kwargs):
         self.client_cls = client_cls
         self.api_key = api_key
         self.api_secret = api_secret
@@ -98,92 +84,71 @@ class LiveClient:
         self.org_id = org_id
         self.kwargs = kwargs
         self._instance = None
-        self._instantiate_attempted = False
+        self._attempted = False
 
     def _instantiate(self):
-        if self._instance is not None:
+        if self._instance or self._attempted:
             return self._instance
-        if self._instantiate_attempted:
-            return None
-        self._instantiate_attempted = True
-
-        ctor_attempts = [
-            lambda: self.client_cls(api_key=self.api_key, api_secret=self.api_secret),
-            lambda: self.client_cls(self.api_key, self.api_secret),
-            lambda: self.client_cls(key=self.api_key, secret=self.api_secret),
-            lambda: self.client_cls(pem=self.pem, org_id=self.org_id),
-            lambda: self.client_cls(),
-        ]
-
-        for attempt in ctor_attempts:
-            try:
-                inst = attempt()
-                logger.info(f"✅ Instantiated Coinbase client using pattern: {attempt}")
-                self._instance = inst
-                return inst
-            except Exception:
-                continue
-
-        logger.error("❌ All instantiation attempts for Coinbase client failed.")
-        return None
-
-    def _call(self, method_names: List[str], *args, **kwargs):
-        inst = self._instantiate()
-        if inst is None:
-            raise RuntimeError("Coinbase client is not instantiated")
-
-        for name in method_names:
-            if hasattr(inst, name):
-                return getattr(inst, name)(*args, **kwargs)
-
-        raise AttributeError(f"No supported method found on live client. Tried: {method_names}")
+        self._attempted = True
+        try:
+            self._instance = self.client_cls(
+                api_key=self.api_key,
+                api_secret=self.api_secret,
+                pem=self.pem,
+                org_id=self.org_id,
+                **self.kwargs
+            )
+            logger.info("✅ LiveClient instantiated successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to instantiate LiveClient: {e}")
+            self._instance = None
+        return self._instance
 
     def get_accounts(self):
-        return self._call(["get_accounts", "accounts", "list_accounts", "get_accounts_list"])
+        inst = self._instantiate()
+        if inst is None:
+            return MockClient().get_accounts()
+        for method_name in ["get_accounts", "accounts", "list_accounts"]:
+            if hasattr(inst, method_name):
+                return getattr(inst, method_name)()
+        raise RuntimeError("No get_accounts method on client")
 
     def place_order(self, *args, **kwargs):
-        return self._call(["place_order", "create_order", "create_trade", "trade"], *args, **kwargs)
+        inst = self._instantiate()
+        if inst is None:
+            return MockClient().place_order(*args, **kwargs)
+        for method_name in ["place_order", "create_order"]:
+            if hasattr(inst, method_name):
+                return getattr(inst, method_name)(*args, **kwargs)
+        raise RuntimeError("No place_order method on client")
 
 
 # -------------------------
-# 3) Public factory
+# Factory function
 # -------------------------
-def get_coinbase_client(api_key: Optional[str] = None, api_secret: Optional[str] = None,
-                        pem: Optional[str] = None, org_id: Optional[str] = None, **kwargs) -> Any:
+def get_coinbase_client(api_key=None, api_secret=None, pem=None, org_id=None, **kwargs):
     if not COINBASE_AVAILABLE or COINBASE_CLIENT is None:
-        logger.warning("Returning MockClient (Coinbase SDK not available).")
+        logger.warning("Returning MockClient (Coinbase SDK not available)")
         return MockClient()
-
-    logger.info(f"Creating LiveClient wrapper for SDK module: {_COINDOT_MODULE_NAME}")
-    return LiveClient(client_cls=COINBASE_CLIENT, api_key=api_key, api_secret=api_secret,
-                      pem=pem, org_id=org_id, **kwargs)
+    return LiveClient(
+        client_cls=COINBASE_CLIENT,
+        api_key=api_key,
+        api_secret=api_secret,
+        pem=pem,
+        org_id=org_id,
+        **kwargs
+    )
 
 
 # -------------------------
-# 4) Test helper
+# Quick connection test
 # -------------------------
-def test_coinbase_connection(api_key: Optional[str] = None, api_secret: Optional[str] = None,
-                             pem: Optional[str] = None, org_id: Optional[str] = None) -> bool:
-    client = get_coinbase_client(api_key=api_key, api_secret=api_secret, pem=pem, org_id=org_id)
+def test_coinbase_connection(api_key=None, api_secret=None, pem=None, org_id=None):
+    client = get_coinbase_client(api_key, api_secret, pem, org_id)
     try:
         accounts = client.get_accounts()
-        logger.info(f"✅ Coinbase connection verified. Accounts fetched: {accounts}")
+        logger.info(f"✅ Coinbase connection OK. Accounts: {accounts}")
         return True
     except Exception as e:
         logger.exception(f"❌ Coinbase connection test failed: {e}")
         return False
-
-
-# -------------------------
-# 5) Example main/test-run when executed directly
-# -------------------------
-if __name__ == "__main__":
-    import os
-    api_key = os.environ.get("COINBASE_API_KEY")
-    api_secret = os.environ.get("COINBASE_API_SECRET")
-    pem = os.environ.get("COINBASE_PEM_CONTENT")
-    org_id = os.environ.get("COINBASE_ORG_ID")
-
-    logger.info("Running local Coinbase client smoke test (dry-run safe).")
-    ok = test_coinbase_connection(api_key=api_key, api_secret=api_secret, pem=pem, org_id=org_id)
-    logger.info(f"Smoke test result: {'OK' if ok else 'FAILED'}")
