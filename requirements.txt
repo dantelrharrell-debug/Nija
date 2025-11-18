@@ -1,31 +1,32 @@
-# Web server
-gunicorn==23.0.0
-Flask==3.1.2
-
-# HTTP client
-requests==2.32.5
-
 # Coinbase Advanced API
 coinbase-advanced-py>=0.4.0
+coinbase-advanced>=0.4.0
+
+# Auth & crypto
 PyJWT==2.10.1
 cryptography==46.0.3
+pycryptodome==3.23.0
+PyNaCl==1.6.0
+ecdsa==0.19.1
+cffi>=2.0.0
+
+# Web & WSGI
+Flask==3.1.2
+gunicorn==23.0.0
+
+# HTTP client / utilities
+requests==2.32.5
+loguru==0.7.3
+backoff==2.2.1
+python-dotenv==1.2.1
 
 # Data processing
 pandas==2.3.3
 numpy==2.3.4
 
-# Logging
-loguru==0.7.3
-
-# Trading & Crypto
+# Trading & crypto analytics
 tradingview_ta==3.3.0
 fear-and-greed-crypto==0.1.0
-
-# Security & crypto
-pycryptodome==3.23.0
-PyNaCl==1.6.0
-ecdsa==0.19.1
-cffi>=2.0.0
 
 # Async / networking
 aiohttp==3.8.5
@@ -34,7 +35,3 @@ multidict==6.7.0
 frozenlist==1.8.0
 attrs==25.4.0
 aiosignal==1.4.0
-backoff==2.2.1
-
-# Environment
-python-dotenv==1.2.1
