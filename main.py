@@ -1,7 +1,7 @@
-# --- main.py ---
 import time
 import logging
 from nija_client import CoinbaseClient
+from flask import Flask, request, jsonify
 
 # --- Initialize logging ---
 logging.basicConfig(
@@ -11,39 +11,43 @@ logging.basicConfig(
 
 # --- Trading configuration ---
 LIVE_TRADING = True           # Set False for dry-run
-CHECK_INTERVAL = 10           # Seconds between signal checks
-
-# --- Trading signals ---
-TRADING_SIGNALS = [
-    {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
-    {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
-    {"symbol": "ETH-USD", "side": "buy", "size": 0.01},
-    {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
-]
+CHECK_INTERVAL = 5            # Poll interval for queued signals
 
 # --- Initialize Coinbase client ---
 try:
     coinbase_client = CoinbaseClient(
         api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
         api_secret_path="/opt/railway/secrets/coinbase.pem",
-        api_passphrase="",  # usually empty for Advanced API
+        api_passphrase="",  
         api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206"
     )
     logging.info("✅ Coinbase client ready for live trading")
-except FileNotFoundError:
-    logging.error("❌ PEM file not found! Switching to dry-run mode.")
-    LIVE_TRADING = False
-    coinbase_client = None
 except Exception as e:
     logging.error(f"❌ Failed to initialize Coinbase client: {e}")
     LIVE_TRADING = False
     coinbase_client = None
 
-# --- Functions ---
-def check_signals():
-    """Return the current trading signals."""
-    return TRADING_SIGNALS
+# --- Flask app for TradingView alerts ---
+app = Flask(__name__)
 
+# Queue for incoming signals
+signal_queue = []
+
+@app.route("/alert", methods=["POST"])
+def receive_alert():
+    data = request.json
+    symbol = data.get("symbol")
+    side = data.get("side")
+    size = data.get("size")
+    if symbol and side and size:
+        signal_queue.append({"symbol": symbol, "side": side, "size": size})
+        logging.info(f"📥 Received alert: {side} {size} {symbol}")
+        return jsonify({"status": "ok"}), 200
+    else:
+        logging.warning(f"⚠️ Invalid alert received: {data}")
+        return jsonify({"status": "error", "reason": "Invalid alert"}), 400
+
+# --- Functions ---
 def place_order(symbol: str, side: str, size: float):
     """Place a live order if possible; else log dry-run."""
     if not LIVE_TRADING or coinbase_client is None:
@@ -64,22 +68,17 @@ def place_order(symbol: str, side: str, size: float):
         return None
 
 def trading_loop():
-    """Continuously execute trading signals."""
+    """Continuously execute queued signals."""
     logging.info("🚀 Starting trading loop...")
     while True:
-        signals = check_signals()
-        if not signals:
-            logging.info("⏸ No signals found, waiting...")
-        for signal in signals:
-            symbol = signal.get("symbol")
-            side = signal.get("side")
-            size = signal.get("size")
-            if symbol and side and size:
-                place_order(symbol, side, size)
-            else:
-                logging.warning(f"⚠️ Incomplete signal skipped: {signal}")
+        while signal_queue:
+            signal = signal_queue.pop(0)
+            place_order(signal["symbol"], signal["side"], signal["size"])
         time.sleep(CHECK_INTERVAL)
 
-# --- Main entry ---
+# --- Run Flask and trading loop concurrently ---
 if __name__ == "__main__":
-    trading_loop()
+    from threading import Thread
+    t = Thread(target=trading_loop, daemon=True)
+    t.start()
+    app.run(host="0.0.0.0", port=5000)
