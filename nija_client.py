@@ -1,7 +1,8 @@
 # nija_client.py
+import os
 import logging
+from loguru import logger
 
-logger = logging.getLogger("nija_client")
 logging.basicConfig(level=logging.INFO)
 
 # -------------------------
@@ -17,32 +18,31 @@ class MockClient:
         return {"status": "simulated"}
 
 # -------------------------
-# Coinbase SDK import
+# Coinbase Advanced SDK import
 # -------------------------
 COINBASE_AVAILABLE = False
 try:
-    from coinbase.rest import RESTClient
+    from coinbase_advanced_py.client import Client as AdvancedClient
     COINBASE_AVAILABLE = True
-    logger.info("✅ Coinbase SDK import succeeded via: from coinbase.rest import RESTClient")
+    logger.info("✅ Coinbase Advanced SDK imported successfully")
 except Exception as e:
-    logger.warning(f"Coinbase SDK not available, will use MockClient: {e}")
+    logger.warning(f"Coinbase Advanced SDK not available, using MockClient: {e}")
 
 # -------------------------
-# Get Coinbase client
+# Instantiate client
 # -------------------------
-def get_coinbase_client(api_key=None, api_secret=None, pem=None, org_id=None):
+def get_coinbase_client(pem=None, org_id=None):
     """
-    Returns a live Coinbase client if available, otherwise a mock client.
-    Note: Standard RESTClient does NOT accept pem/org_id.
+    Returns AdvancedClient if available, otherwise MockClient.
     """
-    if COINBASE_AVAILABLE and api_key and api_secret:
+    if COINBASE_AVAILABLE and pem and org_id:
         try:
-            client = RESTClient(api_key=api_key, api_secret=api_secret)
-            logger.info("✅ Live Coinbase client instantiated")
+            client = AdvancedClient(pem=pem, org_id=org_id)
+            logger.info("✅ Live Coinbase Advanced client instantiated")
             return client
         except Exception as e:
-            logger.error(f"❌ Failed to instantiate LiveClient: {e}")
+            logger.error(f"❌ Failed to instantiate AdvancedClient: {e}")
             return MockClient()
     else:
-        logger.warning("⚠️ Coinbase SDK not available or missing API keys — using MockClient")
+        logger.warning("⚠️ Coinbase Advanced client unavailable, using MockClient")
         return MockClient()
