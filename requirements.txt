@@ -8,6 +8,7 @@ requests==2.32.5
 # Coinbase advanced API
 coinbase-advanced-py==1.8.2
 coinbase-advanced-python==1.0.0
+coinbase-advanced-python
 PyJWT==2.10.1
 
 # Data processing
