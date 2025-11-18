@@ -1,27 +1,32 @@
-import json
 import logging
-from coinbase_advanced_py.rest_client import RestClient  # Official REST client
+
+try:
+    from coinbase_advanced_py.rest_client import RestClient
+except ImportError as e:
+    logging.error(f"❌ Coinbase Advanced SDK not installed: {e}")
+    RestClient = None
 
 class CoinbaseClient:
-    def __init__(self, api_key, api_secret_path, api_passphrase="", api_sub=""):
+    def __init__(self, api_key, api_secret_path, api_passphrase="", api_sub=None):
+        if RestClient is None:
+            raise ImportError("Coinbase Advanced SDK not available")
+
         self.api_key = api_key
         self.api_secret_path = api_secret_path
         self.api_passphrase = api_passphrase
         self.api_sub = api_sub
-        self.client = None
-        self.load_client()
+        self.client = self._init_client()
 
-    def load_client(self):
+    def _init_client(self):
         try:
-            with open(self.api_secret_path, "r") as f:
-                pem_content = f.read()
-            self.client = RestClient(
+            client = RestClient(
                 api_key=self.api_key,
-                api_secret=pem_content,
-                api_passphrase=self.api_passphrase,
-                subaccount=self.api_sub
+                secret_path=self.api_secret_path,
+                passphrase=self.api_passphrase,
+                sub=self.api_sub
             )
-            logging.info("✅ Coinbase client initialized successfully.")
+            logging.info("✅ Coinbase client initialized")
+            return client
         except FileNotFoundError:
             logging.error(f"❌ PEM file not found: {self.api_secret_path}")
             raise
@@ -29,17 +34,10 @@ class CoinbaseClient:
             logging.error(f"❌ Failed to initialize Coinbase client: {e}")
             raise
 
-    def create_order(self, product_id, side, type="market", size="0"):
-        if not self.client:
-            raise Exception("Coinbase client not initialized.")
-        try:
-            order = self.client.create_order(
-                product_id=product_id,
-                side=side,
-                type=type,
-                size=size
-            )
-            return order
-        except Exception as e:
-            logging.error(f"❌ Coinbase order failed: {e}")
-            raise
+    def create_order(self, product_id, side, type, size):
+        return self.client.create_order(
+            product_id=product_id,
+            side=side,
+            type=type,
+            size=size
+        )
