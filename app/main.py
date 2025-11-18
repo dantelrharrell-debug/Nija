@@ -1,9 +1,8 @@
-# main.py
 import time
 import logging
 from nija_client import CoinbaseClient
 
-# --- Initialize Coinbase client ---
+# Initialize Coinbase client with your keys
 coinbase_client = CoinbaseClient(
     api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
     api_secret_path="/opt/railway/secrets/coinbase.pem",
@@ -14,21 +13,26 @@ coinbase_client = CoinbaseClient(
 LIVE_TRADING = True
 CHECK_INTERVAL = 10  # seconds between signal checks
 
-# --- Define your trading signals ---
+# Your trading signals
 TRADING_SIGNALS = [
     {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
     {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
     {"symbol": "ETH-USD", "side": "buy", "size": 0.01},
     {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
-    # Add any other pairs you want to trade here
+    # Add any other pairs you want to trade
 ]
 
 def check_signals():
-    """Return the current trading signals."""
+    """
+    Returns the current trading signals.
+    Replace this logic if you want dynamic signals.
+    """
     return TRADING_SIGNALS
 
 def place_order(symbol: str, side: str, size: float):
-    """Execute a market order on Coinbase."""
+    """
+    Executes a market order on Coinbase.
+    """
     if not LIVE_TRADING:
         logging.info(f"Dry run: would place {side} order for {size} {symbol}")
         return None
@@ -40,6 +44,7 @@ def place_order(symbol: str, side: str, size: float):
             type="market",
             size=str(size)
         )
+        logging.info(f"✅ Order executed: {order}")
         return order
     except Exception as e:
         logging.error(f"❌ Failed to place order for {symbol} ({side} {size}): {e}")
@@ -56,9 +61,7 @@ def trading_loop():
             side = signal.get("side")
             size = signal.get("size")
             if symbol and side and size:
-                order = place_order(symbol, side, size)
-                if order:
-                    logging.info(f"✅ Order placed successfully: {order}")
+                place_order(symbol, side, size)
             else:
                 logging.warning(f"Incomplete signal skipped: {signal}")
         time.sleep(CHECK_INTERVAL)
