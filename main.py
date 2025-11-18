@@ -1,46 +1,33 @@
 import time
 import logging
-from flask import Flask, request, abort
 from nija_client import CoinbaseClient
-import os
-import hmac
-import hashlib
 
-# ----------------------
-# Configuration
-# ----------------------
-TRADING_ACCOUNT_ID = "14f3af21-7544-412c-8409-98dc92cd2eec"
-LIVE_TRADING = True
-CHECK_INTERVAL = 10  # seconds for fallback checks if needed
-
-TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET")  # your TradingView webhook secret
-
-# Initialize Coinbase client
+# Initialize Coinbase client with your keys
 coinbase_client = CoinbaseClient(
-    api_key=os.getenv("COINBASE_API_KEY"),
-    api_secret_path=os.getenv("COINBASE_API_SECRET_PATH"),
-    api_passphrase=os.getenv("COINBASE_API_PASSPHRASE", ""),
-    api_sub=os.getenv("COINBASE_API_SUB"),
+    api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
+    api_secret_path="/opt/railway/secrets/coinbase.pem",
+    api_passphrase="",
+    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
 )
 
-# Flask app for webhook
-app = Flask(__name__)
+LIVE_TRADING = True
+CHECK_INTERVAL = 10  # seconds between signal checks
 
-# ----------------------
-# Functions
-# ----------------------
-def verify_webhook(request):
+# Your trading signals
+TRADING_SIGNALS = [
+    {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
+    {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
+    {"symbol": "ETH-USD", "side": "buy", "size": 0.01},
+    {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
+    # Add any other pairs you want to trade
+]
+
+def check_signals():
     """
-    Verifies TradingView webhook using HMAC secret.
+    Returns the current trading signals.
+    Replace this logic if you want dynamic signals.
     """
-    signature = request.headers.get("X-Signature")
-    if not signature:
-        return False
-
-    body = request.get_data()
-    computed_hmac = hmac.new(TV_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(computed_hmac, signature)
-
+    return TRADING_SIGNALS
 
 def place_order(symbol: str, side: str, size: float):
     """
@@ -52,7 +39,6 @@ def place_order(symbol: str, side: str, size: float):
 
     try:
         order = coinbase_client.create_order(
-            account_id=TRADING_ACCOUNT_ID,
             product_id=symbol,
             side=side,
             type="market",
@@ -64,33 +50,22 @@ def place_order(symbol: str, side: str, size: float):
         logging.error(f"❌ Failed to place order for {symbol} ({side} {size}): {e}")
         return None
 
+def trading_loop():
+    logging.info("🚀 Starting live trading loop...")
+    while True:
+        signals = check_signals()
+        if not signals:
+            logging.info("No signals found. Waiting for next check...")
+        for signal in signals:
+            symbol = signal.get("symbol")
+            side = signal.get("side")
+            size = signal.get("size")
+            if symbol and side and size:
+                place_order(symbol, side, size)
+            else:
+                logging.warning(f"Incomplete signal skipped: {signal}")
+        time.sleep(CHECK_INTERVAL)
 
-# ----------------------
-# Webhook Endpoint
-# ----------------------
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    if TV_WEBHOOK_SECRET and not verify_webhook(request):
-        logging.warning("❌ Invalid webhook signature")
-        return abort(403)
-
-    data = request.json
-    symbol = data.get("symbol")
-    side = data.get("side")
-    size = data.get("size")
-
-    if not (symbol and side and size):
-        logging.warning(f"Incomplete signal received: {data}")
-        return "Missing fields", 400
-
-    place_order(symbol, side, size)
-    return "Order received", 200
-
-
-# ----------------------
-# Main
-# ----------------------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-    logging.info("🚀 Starting Coinbase Trading Bot with TradingView Webhook")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    trading_loop()
