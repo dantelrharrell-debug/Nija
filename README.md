@@ -102,3 +102,10 @@ Status Summary
 
 This README reflects the current green-check stable version of NIJA Bot and its full capabilities.
 
+# Nija Trading Bot
+
+1. Copy `.env.example` → `.env` and fill your Coinbase PEM/ORG_ID
+2. Deploy to Railway
+3. Bot runs 24/7, trades automatically on Coinbase if SDK is available
+4. If Coinbase SDK is unavailable or PEM invalid, bot runs in **safe dry-run mode**
+
