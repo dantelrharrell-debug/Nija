@@ -1,20 +1,21 @@
 import time
 import logging
-from nija_client import CoinbaseClient  # Your stable, working client
+from nija_client import CoinbaseClient  # Your stable working client
+import requests  # Optional: if fetching signals from an API
 
-# --- Initialize Coinbase client ---
+# --- Initialize Coinbase client (LIVE) ---
 coinbase_client = CoinbaseClient(
-    api_key="YOUR_API_KEY",
+    api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
     api_secret_path="/opt/railway/secrets/coinbase.pem",
     api_passphrase="",  # usually empty for Advanced API
-    api_sub="YOUR_ACCOUNT_SUB_ID",  # must match your funded account
+    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
 )
 
 # --- Trading configuration ---
-LIVE_TRADING = True          # Set False for dry-run
-CHECK_INTERVAL = 10          # seconds between signal checks
+LIVE_TRADING = True
+CHECK_INTERVAL = 10  # seconds between signal checks
 
-# --- Trading signals ---
+# --- Default signals ---
 TRADING_SIGNALS = [
     {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
     {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
@@ -22,17 +23,23 @@ TRADING_SIGNALS = [
     {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
 ]
 
-def check_signals():
+def fetch_dynamic_signals():
     """
-    Returns current signals. Replace with dynamic logic if desired.
+    Fetch dynamic signals from an API or external source.
+    Replace this with your TradingView webhook, file, or API.
+    If unavailable, return default signals.
     """
-    return TRADING_SIGNALS
+    try:
+        # Example placeholder: replace with your real endpoint
+        # response = requests.get("https://your-signal-provider.com/signals")
+        # signals = response.json()
+        signals = TRADING_SIGNALS  # fallback to default if dynamic fetch fails
+        return signals
+    except Exception as e:
+        logging.error(f"❌ Failed to fetch dynamic signals: {e}")
+        return TRADING_SIGNALS
 
 def place_order(symbol: str, side: str, size: float):
-    if not LIVE_TRADING:
-        logging.info(f"💡 Dry run: {side} {size} {symbol}")
-        return None
-
     try:
         order = coinbase_client.create_order(
             product_id=symbol,
@@ -49,9 +56,7 @@ def place_order(symbol: str, side: str, size: float):
 def trading_loop():
     logging.info("🚀 Starting live trading loop...")
     while True:
-        signals = check_signals()
-        if not signals:
-            logging.info("⏸ No signals found, waiting...")
+        signals = fetch_dynamic_signals()
         for signal in signals:
             symbol = signal.get("symbol")
             side = signal.get("side")
