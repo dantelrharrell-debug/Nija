@@ -1,3 +1,12 @@
+try:
+    from coinbase_advanced_py.client import AdvancedClient
+    COINBASE_AVAILABLE = True
+    print("✅ Coinbase Advanced SDK installed")
+except ImportError:
+    COINBASE_AVAILABLE = False
+    print("⚠️ Coinbase Advanced SDK NOT installed, using MockClient")
+
+
 import os
 from loguru import logger
 
