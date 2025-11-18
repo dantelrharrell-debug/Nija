@@ -1,1 +1,1 @@
-web: gunicorn -w 1 -k sync -b 0.0.0.0:$PORT main:app
+web: gunicorn main:app --bind 0.0.0.0:$PORT --workers=1 --threads=2
