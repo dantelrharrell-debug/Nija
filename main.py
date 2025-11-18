@@ -2,42 +2,40 @@ import time
 import logging
 from nija_client import CoinbaseClient  # must exist in your project
 
-# ------------------------------
+# -------------------------
 # Initialize Coinbase client
-# ------------------------------
+# -------------------------
 coinbase_client = CoinbaseClient(
     api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
     api_secret_path="/opt/railway/secrets/coinbase.pem",
     api_passphrase="",
-    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
+    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/14f3af21-7544-412c-8409-98dc92cd2eec",
 )
 
-# ------------------------------
-# Config
-# ------------------------------
 LIVE_TRADING = True
 CHECK_INTERVAL = 10  # seconds between signal checks
 
-# ------------------------------
+# -------------------------
 # Trading signals
-# ------------------------------
+# -------------------------
 TRADING_SIGNALS = [
     {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
     {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
     {"symbol": "ETH-USD", "side": "buy", "size": 0.01},
     {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
-    # Add more pairs here if needed
+    # Add more pairs as needed
 ]
 
-# ------------------------------
-# Functions
-# ------------------------------
+# -------------------------
+# Signal check function
+# -------------------------
 def check_signals():
-    """Return the current trading signals."""
     return TRADING_SIGNALS
 
+# -------------------------
+# Place order function
+# -------------------------
 def place_order(symbol: str, side: str, size: float):
-    """Execute a market order on Coinbase."""
     global coinbase_client
     if not LIVE_TRADING:
         logging.info(f"Dry run: would place {side} order for {size} {symbol}")
@@ -56,6 +54,9 @@ def place_order(symbol: str, side: str, size: float):
         logging.error(f"❌ Failed to place order for {symbol} ({side} {size}): {e}")
         return None
 
+# -------------------------
+# Trading loop
+# -------------------------
 def trading_loop():
     logging.info("🚀 Starting live trading loop...")
     while True:
@@ -72,9 +73,9 @@ def trading_loop():
                 logging.warning(f"Incomplete signal skipped: {signal}")
         time.sleep(CHECK_INTERVAL)
 
-# ------------------------------
-# Entry point
-# ------------------------------
+# -------------------------
+# Main entry
+# -------------------------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     trading_loop()
