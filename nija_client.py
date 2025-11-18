@@ -1,5 +1,4 @@
 # nija_client.py
-import json
 from coinbase_advanced import Client
 
 class CoinbaseClient:
