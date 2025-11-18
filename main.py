@@ -1,15 +1,17 @@
 import os
 import time
+from flask import Flask, request, jsonify
 from loguru import logger
 
 # --------------------------------
-# Load environment variables
+# Environment
 # --------------------------------
 PEM = os.environ.get("COINBASE_PEM_CONTENT")
 ORG_ID = os.environ.get("COINBASE_ORG_ID")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")  # secure TradingView webhook key
 
 # --------------------------------
-# Coinbase Advanced SDK availability
+# Coinbase Advanced SDK
 # --------------------------------
 COINBASE_AVAILABLE = False
 try:
@@ -21,7 +23,7 @@ except ImportError:
     logger.warning("⚠️ Coinbase Advanced SDK not installed, using MockClient")
 
 # --------------------------------
-# Mock client (dry-run fallback)
+# MockClient
 # --------------------------------
 class MockClient:
     def get_accounts(self):
@@ -33,13 +35,9 @@ class MockClient:
         return {"status": "simulated"}
 
 # --------------------------------
-# Get Coinbase client
+# Coinbase client
 # --------------------------------
 def get_coinbase_client(pem=None, org_id=None):
-    """
-    Returns a live AdvancedClient if SDK is available and PEM/org_id are provided,
-    otherwise falls back to MockClient.
-    """
     if COINBASE_AVAILABLE and pem and org_id:
         try:
             client = AdvancedClient(pem=pem, org_id=org_id)
@@ -53,43 +51,45 @@ def get_coinbase_client(pem=None, org_id=None):
         return MockClient()
 
 # --------------------------------
-# Trading bot logic
+# Flask app for TradingView alerts
 # --------------------------------
-def main():
-    logger.info("🚀 Starting Nija bot...")
+app = Flask(__name__)
+client = get_coinbase_client(PEM, ORG_ID)
 
-    # Instantiate Coinbase client (live or mock)
-    client = get_coinbase_client(PEM, ORG_ID)
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.json
+    secret = data.get("secret")
+    if secret != WEBHOOK_SECRET:
+        logger.warning("❌ Unauthorized webhook call")
+        return jsonify({"error": "Unauthorized"}), 403
 
-    # Fetch accounts
-    accounts = client.get_accounts()
-    logger.info(f"Accounts fetched: {accounts}")
+    try:
+        symbol = data["symbol"]      # e.g., BTC-USD
+        side = data["side"]          # buy or sell
+        size = data["size"]          # e.g., 0.001
+        price = data.get("price")    # optional limit price
+    except KeyError:
+        logger.error("❌ Malformed webhook payload")
+        return jsonify({"error": "Malformed payload"}), 400
 
-    # Example order: Buy 0.001 BTC at $50,000
     try:
         order = client.place_order(
-            product_id="BTC-USD",
-            side="buy",
-            price="50000",
-            size="0.001"
+            product_id=symbol,
+            side=side,
+            size=size,
+            price=price
         )
-        logger.info(f"Order result: {order}")
+        logger.info(f"✅ Order executed: {order}")
+        return jsonify({"status": "success", "order": order}), 200
     except Exception as e:
         logger.error(f"❌ Failed to place order: {e}")
-
-    # Keep running 24/7
-    while True:
-        time.sleep(60)  # Check every minute
-        # Add your trading logic here (signal checks, alerts, etc.)
-        # Example: log current accounts each minute
-        try:
-            accounts = client.get_accounts()
-            logger.info(f"Accounts snapshot: {accounts}")
-        except Exception as e:
-            logger.error(f"❌ Error fetching accounts: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # --------------------------------
-# Entry point
+# Run bot & Flask server
 # --------------------------------
 if __name__ == "__main__":
-    main()
+    logger.info("🚀 Starting Nija bot with TradingView webhook...")
+    # Run Flask server on port 5000 (Railway auto-maps to your app)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
