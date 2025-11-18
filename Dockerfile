@@ -1,4 +1,4 @@
-# Use Python 3.11 slim base (required for Coinbase Advanced SDK)
+# Use Python 3.11 slim base (compatible with Coinbase Advanced SDK)
 FROM python:3.11-slim
 
 # Set working directory
