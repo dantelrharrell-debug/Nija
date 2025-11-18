@@ -2,19 +2,18 @@
 import os
 import time
 import json
-import requests
 from loguru import logger
 from nija_client import get_coinbase_client
 
 # -------------------------
-# Environment
+# Environment variables
 # -------------------------
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
-COINBASE_PEM_CONTENT = os.environ.get("COINBASE_PEM_CONTENT")
-COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")
+COINBASE_PEM_CONTENT = os.environ.get("COINBASE_PEM_CONTENT")  # unused for standard RESTClient
+COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")            # unused for standard RESTClient
 
-TRADINGVIEW_SIGNAL_URL = os.environ.get("TRADINGVIEW_SIGNAL_URL")
+TRADINGVIEW_SIGNAL_URL = os.environ.get("TRADINGVIEW_SIGNAL_URL")  # URL returning JSON signal
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", 5))  # seconds
 
 MIN_POSITION = float(os.environ.get("MIN_POSITION", 0.02))  # 2%
@@ -40,6 +39,7 @@ processed_signals = set()
 # -------------------------
 def safe_request(method, url, **kwargs):
     try:
+        import requests
         r = requests.request(method, url, timeout=10, **kwargs)
         r.raise_for_status()
         return r.json()
@@ -71,17 +71,18 @@ def calculate_order_size(account, percentage):
 # Execute trade safely
 # -------------------------
 def execute_trade(account, signal):
+    # Prevent duplicate trades
     signal_id = signal.get("id") or json.dumps(signal)
     if signal_id in processed_signals:
         logger.debug(f"Signal {signal_id} already processed")
         return
     processed_signals.add(signal_id)
 
-    side = signal.get("side")
+    side = signal.get("side")  # "buy" or "sell"
     product_id = signal.get("product_id", "BTC-USD")
     price = signal.get("price", None)
 
-    # Calculate order size dynamically (safe 2-10%)
+    # Dynamic position sizing
     percentage = float(signal.get("size_pct", 0.05))
     percentage = max(min(percentage, MAX_POSITION), MIN_POSITION)
     size = calculate_order_size(account, percentage)
@@ -108,6 +109,7 @@ def main_loop():
             # 1️⃣ Fetch TradingView signal
             signal = safe_request("GET", TRADINGVIEW_SIGNAL_URL)
             if not signal:
+                logger.debug("No signal received")
                 time.sleep(POLL_INTERVAL)
                 continue
 
@@ -125,7 +127,6 @@ def main_loop():
         except Exception as e:
             logger.error(f"Unexpected error in main loop: {e}")
 
-        # 4️⃣ Wait before next poll
         time.sleep(POLL_INTERVAL)
 
 # -------------------------
