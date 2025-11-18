@@ -1,15 +1,12 @@
 import logging
-from coinbase_advanced_py import Client
+from coinbase_advanced_py.rest_client import RestClient
 
 class CoinbaseClient:
-    """
-    Wrapper around Coinbase Advanced API for creating orders.
-    """
     def __init__(self, api_key: str, api_secret_path: str, api_passphrase: str, api_sub: str):
         try:
-            self.client = Client(
-                api_key=api_key,
-                pem_path=api_secret_path,
+            self.client = RestClient(
+                key=api_key,
+                pem_file_path=api_secret_path,
                 passphrase=api_passphrase,
                 sub=api_sub
             )
@@ -19,9 +16,6 @@ class CoinbaseClient:
             raise e
 
     def create_order(self, product_id: str, side: str, type: str, size: str):
-        """
-        Executes a market order.
-        """
         try:
             order = self.client.create_order(
                 product_id=product_id,
