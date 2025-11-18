@@ -1,30 +1,17 @@
+import json
+import requests
 import logging
-from coinbase_advanced_py import Client  # Correct import
 
 class CoinbaseClient:
-    def __init__(self, api_key: str, api_secret_path: str, api_passphrase: str, api_sub: str):
-        try:
-            self.client = Client(
-                key=api_key,
-                pem_file_path=api_secret_path,
-                passphrase=api_passphrase,
-                sub=api_sub
-            )
-            logging.info("✅ CoinbaseClient initialized successfully.")
-        except Exception as e:
-            logging.error(f"❌ Failed to initialize CoinbaseClient: {e}")
-            raise e
+    def __init__(self, api_key, api_secret_path, api_passphrase, api_sub):
+        self.api_key = api_key
+        self.api_secret_path = api_secret_path
+        self.api_passphrase = api_passphrase
+        self.api_sub = api_sub
+        # You can load PEM here if needed
+        logging.info("✅ CoinbaseClient initialized (stub)")
 
-    def create_order(self, product_id: str, side: str, type: str, size: str):
-        try:
-            order = self.client.create_order(
-                product_id=product_id,
-                side=side,
-                type=type,
-                size=size
-            )
-            logging.info(f"✅ Order created: {order}")
-            return order
-        except Exception as e:
-            logging.error(f"❌ Coinbase create_order failed for {product_id} {side} {size}: {e}")
-            raise e
+    def create_order(self, product_id, side, type, size):
+        # Stub: replace with real REST API call later
+        logging.info(f"🚀 Stub order: {side} {size} {product_id}")
+        return {"id": "stub-order-id", "product_id": product_id, "side": side, "size": size}
