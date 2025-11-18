@@ -1,3 +1,4 @@
+# nija_client.py
 from coinbase_advanced_py import Client
 
 class CoinbaseClient:
@@ -10,7 +11,9 @@ class CoinbaseClient:
         )
 
     def create_order(self, product_id, side, type, size):
-        # Execute a market order using Coinbase Advanced REST API
+        """
+        Execute a market order via Coinbase Advanced API
+        """
         return self.client.rest.place_order(
             product_id=product_id,
             side=side,
