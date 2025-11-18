@@ -1,16 +1,13 @@
 import time
 import logging
-from nija_client import CoinbaseClient
 
-# Initialize Coinbase client with your keys
-coinbase_client = CoinbaseClient(
-    api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
-    api_secret_path="/opt/railway/secrets/coinbase.pem",
-    api_passphrase="",
-    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
-)
+# Use your existing Coinbase client from the stable rollback
+# Make sure this is already initialized somewhere in your working code
+# Example from your rollback:
+# from nija_client import CoinbaseClient
+# coinbase_client = CoinbaseClient(...)
 
-LIVE_TRADING = True
+LIVE_TRADING = True  # Already set in your env
 CHECK_INTERVAL = 10  # seconds between signal checks
 
 # Your trading signals
@@ -19,7 +16,7 @@ TRADING_SIGNALS = [
     {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
     {"symbol": "ETH-USD", "side": "buy", "size": 0.01},
     {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
-    # Add any other pairs you want to trade
+    # Add all other pairs you want to trade here
 ]
 
 def check_signals():
@@ -31,7 +28,7 @@ def check_signals():
 
 def place_order(symbol: str, side: str, size: float):
     """
-    Executes a market order on Coinbase.
+    Executes a market order on Coinbase using your stable client.
     """
     if not LIVE_TRADING:
         logging.info(f"Dry run: would place {side} order for {size} {symbol}")
@@ -42,7 +39,7 @@ def place_order(symbol: str, side: str, size: float):
             product_id=symbol,
             side=side,
             type="market",
-            size=str(size)
+            size=str(size)  # Coinbase API requires strings
         )
         logging.info(f"✅ Order executed: {order}")
         return order
