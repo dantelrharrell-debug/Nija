@@ -6,7 +6,7 @@ Flask==3.1.2
 requests==2.32.5
 
 # Coinbase Advanced API (pick one, the official one is coinbase-advanced)
-coinbase-advanced==1.8.2
+coinbase-advanced-py==1.8.2
 PyJWT==2.10.1
 
 # Data processing
