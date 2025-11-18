@@ -1,13 +1,13 @@
-# Web & WSGI
-Flask==3.1.2
-gunicorn==23.0.0
-
 # Coinbase Advanced API
 coinbase-advanced-py>=0.4.0
 
 # Auth & crypto
 PyJWT==2.10.1
 cryptography==46.0.3
+
+# Web & WSGI
+Flask==3.1.2
+gunicorn==23.0.0
 
 # Utilities
 loguru==0.7.3
