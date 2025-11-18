@@ -1,27 +1,35 @@
-# nija_client.py
-from coinbase_advanced import Client
+import logging
+from coinbase_advanced_py import Client
 
 class CoinbaseClient:
     """
-    Simple wrapper around Coinbase Advanced REST API for creating orders.
+    Wrapper around Coinbase Advanced API for creating orders.
     """
+    def __init__(self, api_key: str, api_secret_path: str, api_passphrase: str, api_sub: str):
+        try:
+            self.client = Client(
+                api_key=api_key,
+                pem_path=api_secret_path,
+                passphrase=api_passphrase,
+                sub=api_sub
+            )
+            logging.info("✅ CoinbaseClient initialized successfully.")
+        except Exception as e:
+            logging.error(f"❌ Failed to initialize CoinbaseClient: {e}")
+            raise e
 
-    def __init__(self, api_key, api_secret_path, api_passphrase, api_sub):
-        self.client = Client(
-            key=api_key,
-            secret_path=api_secret_path,
-            passphrase=api_passphrase,
-            sub=api_sub
-        )
-
-    def create_order(self, product_id, side, type="market", size="0.001"):
+    def create_order(self, product_id: str, side: str, type: str, size: str):
         """
-        Places a market order on Coinbase.
+        Executes a market order.
         """
-        order = self.client.create_order(
-            product_id=product_id,
-            side=side,
-            type=type,
-            size=size
-        )
-        return order
+        try:
+            order = self.client.create_order(
+                product_id=product_id,
+                side=side,
+                type=type,
+                size=size
+            )
+            return order
+        except Exception as e:
+            logging.error(f"❌ Coinbase create_order failed for {product_id} {side} {size}: {e}")
+            raise e
