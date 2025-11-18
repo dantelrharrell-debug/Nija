@@ -1,5 +1,3 @@
-# nija_client.py
-
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,7 +15,7 @@ except ImportError:
 
 
 # --------------------------------
-# Mock client (for dry-run or missing SDK)
+# Mock client (dry-run fallback)
 # --------------------------------
 class MockClient:
     def get_accounts(self):
