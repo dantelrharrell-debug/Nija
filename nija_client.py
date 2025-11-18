@@ -23,6 +23,7 @@ class CoinbaseClient:
                 type=type,
                 size=size
             )
+            logging.info(f"✅ Order created: {order}")
             return order
         except Exception as e:
             logging.error(f"❌ Coinbase create_order failed for {product_id} {side} {size}: {e}")
