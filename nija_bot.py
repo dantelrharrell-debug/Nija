@@ -1,6 +1,7 @@
 # nija_bot.py
 import os
 import time
+import json
 import requests
 from loguru import logger
 from nija_client import get_coinbase_client
@@ -13,8 +14,11 @@ COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
 COINBASE_PEM_CONTENT = os.environ.get("COINBASE_PEM_CONTENT")
 COINBASE_ORG_ID = os.environ.get("COINBASE_ORG_ID")
 
-TRADINGVIEW_SIGNAL_URL = os.environ.get("TRADINGVIEW_SIGNAL_URL")  # Webhook or JSON URL
+TRADINGVIEW_SIGNAL_URL = os.environ.get("TRADINGVIEW_SIGNAL_URL")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", 5))  # seconds
+
+MIN_POSITION = float(os.environ.get("MIN_POSITION", 0.02))  # 2%
+MAX_POSITION = float(os.environ.get("MAX_POSITION", 0.10))  # 10%
 
 # -------------------------
 # Instantiate Coinbase client
@@ -25,6 +29,11 @@ client = get_coinbase_client(
     pem=COINBASE_PEM_CONTENT,
     org_id=COINBASE_ORG_ID
 )
+
+# -------------------------
+# Memory for processed signals
+# -------------------------
+processed_signals = set()
 
 # -------------------------
 # Safe HTTP request
@@ -51,23 +60,41 @@ def fetch_funded_accounts():
         return []
 
 # -------------------------
-# Execute trade
+# Dynamic sizing
+# -------------------------
+def calculate_order_size(account, percentage):
+    balance = float(account.get("balance", 0))
+    size = balance * percentage
+    return max(size, 0.001)  # minimum order size 0.001
+
+# -------------------------
+# Execute trade safely
 # -------------------------
 def execute_trade(account, signal):
-    try:
-        side = signal.get("side")  # "buy" or "sell"
-        product_id = signal.get("product_id", "BTC-USD")
-        size = signal.get("size", "0.001")
-        price = signal.get("price", None)
+    signal_id = signal.get("id") or json.dumps(signal)
+    if signal_id in processed_signals:
+        logger.debug(f"Signal {signal_id} already processed")
+        return
+    processed_signals.add(signal_id)
 
-        logger.info(f"Placing {side} order for {size} {product_id} at {price} on account {account['id']}")
+    side = signal.get("side")
+    product_id = signal.get("product_id", "BTC-USD")
+    price = signal.get("price", None)
+
+    # Calculate order size dynamically (safe 2-10%)
+    percentage = float(signal.get("size_pct", 0.05))
+    percentage = max(min(percentage, MAX_POSITION), MIN_POSITION)
+    size = calculate_order_size(account, percentage)
+
+    logger.info(f"Placing {side} order for {size} {product_id} at {price} on account {account['id']}")
+    try:
         order = client.place_order(
             product_id=product_id,
             side=side,
-            size=size,
+            size=str(size),
             price=price
         )
-        logger.info(f"Order response: {order}")
+        logger.info(f"Order executed: {order}")
     except Exception as e:
         logger.warning(f"Order failed or dry-run: {e}")
 
@@ -75,20 +102,19 @@ def execute_trade(account, signal):
 # Main 24/7 loop
 # -------------------------
 def main_loop():
-    logger.info("Starting Nija 24/7 bot...")
+    logger.info("Starting Nija autonomous 24/7 bot...")
     while True:
         try:
             # 1️⃣ Fetch TradingView signal
             signal = safe_request("GET", TRADINGVIEW_SIGNAL_URL)
             if not signal:
-                logger.debug("No signal received")
                 time.sleep(POLL_INTERVAL)
                 continue
 
             # 2️⃣ Fetch funded accounts
             funded_accounts = fetch_funded_accounts()
             if not funded_accounts:
-                logger.warning("No funded accounts found, skipping trade")
+                logger.warning("No funded accounts found, skipping trades")
                 time.sleep(POLL_INTERVAL)
                 continue
 
