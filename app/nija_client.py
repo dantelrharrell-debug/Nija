@@ -2,7 +2,7 @@
 """
 Safe Coinbase client wrapper for Nija bot.
 
-- Non-crashing import attempts for multiple possible coinbase SDKs.
+- Non-crashing import attempts for multiple possible Coinbase SDKs.
 - Returns a `LiveClient` (wrapper) when SDK present, otherwise a `MockClient`.
 - Use get_coinbase_client(api_key=..., api_secret=..., pem=..., org_id=...) to get a client.
 - Use test_coinbase_connection() for a quick check (returns True/False).
@@ -10,7 +10,7 @@ Safe Coinbase client wrapper for Nija bot.
 
 import logging
 import time
-from typing import Any, Optional, List, Callable
+from typing import Any, Optional, List
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,7 +39,6 @@ for module_path, msg in _import_attempts:
 
         elif module_path == "coinbase_advanced_py.rest_client":
             import coinbase_advanced_py.rest_client as _mod
-            # try common attribute names
             COINBASE_CLIENT = getattr(_mod, "RESTClient", getattr(_mod, "Client", _mod))
             _COINDOT_MODULE_NAME = "coinbase_advanced_py.rest_client"
 
@@ -83,17 +82,13 @@ class MockClient:
         logger.info("MockClient.get_accounts() called — returning simulated accounts.")
         return self.mock_accounts
 
-    # Add whichever simple methods your bot expects (e.g., place_order, fetch_price)
     def place_order(self, *args, **kwargs) -> dict:
         logger.info("MockClient.place_order() called — returning simulated order.")
         return {"status": "simulated", "args": args, "kwargs": kwargs}
 
 
 class LiveClient:
-    """
-    Adapter that lazily instantiates the real SDK client and maps common methods.
-    It tries a few constructor signatures and method names to maximize compatibility.
-    """
+    """Adapter that lazily instantiates the real SDK client and maps common methods."""
     def __init__(self, client_cls: Any, api_key: Optional[str] = None, api_secret: Optional[str] = None,
                  pem: Optional[str] = None, org_id: Optional[str] = None, **kwargs):
         self.client_cls = client_cls
@@ -113,13 +108,11 @@ class LiveClient:
         self._instantiate_attempted = True
 
         ctor_attempts = [
-            # common named args
             lambda: self.client_cls(api_key=self.api_key, api_secret=self.api_secret),
             lambda: self.client_cls(self.api_key, self.api_secret),
             lambda: self.client_cls(key=self.api_key, secret=self.api_secret),
-            # some SDKs use pem/org_id + kid; pass what we have
             lambda: self.client_cls(pem=self.pem, org_id=self.org_id),
-            lambda: self.client_cls(),  # try default constructor
+            lambda: self.client_cls(),
         ]
 
         for attempt in ctor_attempts:
@@ -128,8 +121,8 @@ class LiveClient:
                 logger.info(f"✅ Instantiated Coinbase client using pattern: {attempt}")
                 self._instance = inst
                 return inst
-            except Exception as e:
-                logger.debug("Live client instantiation attempt failed", exc_info=True)
+            except Exception:
+                continue
 
         logger.error("❌ All instantiation attempts for Coinbase client failed.")
         return None
@@ -141,20 +134,11 @@ class LiveClient:
 
         for name in method_names:
             if hasattr(inst, name):
-                try:
-                    fn = getattr(inst, name)
-                    return fn(*args, **kwargs)
-                except Exception as e:
-                    logger.exception(f"Error calling method {name} on Coinbase client: {e}")
-                    raise
+                return getattr(inst, name)(*args, **kwargs)
 
-        # If no known method exists, try common call patterns on the client object
-        # (some clients expose raw http helpers or differently-named methods)
         raise AttributeError(f"No supported method found on live client. Tried: {method_names}")
 
-    # Common adapter methods
     def get_accounts(self):
-        # try several method names commonly used across SDKs
         return self._call(["get_accounts", "accounts", "list_accounts", "get_accounts_list"])
 
     def place_order(self, *args, **kwargs):
@@ -166,32 +150,22 @@ class LiveClient:
 # -------------------------
 def get_coinbase_client(api_key: Optional[str] = None, api_secret: Optional[str] = None,
                         pem: Optional[str] = None, org_id: Optional[str] = None, **kwargs) -> Any:
-    """
-    Returns:
-      - LiveClient wrapper if a supported SDK was imported successfully.
-      - MockClient if no SDK present (dry-run).
-    """
     if not COINBASE_AVAILABLE or COINBASE_CLIENT is None:
         logger.warning("Returning MockClient (Coinbase SDK not available).")
         return MockClient()
 
-    # If COINBASE_CLIENT is a module or class, create LiveClient
     logger.info(f"Creating LiveClient wrapper for SDK module: {_COINDOT_MODULE_NAME}")
-    return LiveClient(client_cls=COINBASE_CLIENT, api_key=api_key, api_secret=api_secret, pem=pem, org_id=org_id, **kwargs)
+    return LiveClient(client_cls=COINBASE_CLIENT, api_key=api_key, api_secret=api_secret,
+                      pem=pem, org_id=org_id, **kwargs)
 
 
 # -------------------------
 # 4) Test helper
 # -------------------------
 def test_coinbase_connection(api_key: Optional[str] = None, api_secret: Optional[str] = None,
-                             pem: Optional[str] = None, org_id: Optional[str] = None, timeout: float = 6.0) -> bool:
-    """
-    Try to fetch accounts (or call a lightweight API) to verify the connection.
-    Returns True on success, False on failure or when in mock/dry-run mode.
-    """
+                             pem: Optional[str] = None, org_id: Optional[str] = None) -> bool:
     client = get_coinbase_client(api_key=api_key, api_secret=api_secret, pem=pem, org_id=org_id)
     try:
-        # If mock, it will return simulated accounts quickly.
         accounts = client.get_accounts()
         logger.info(f"✅ Coinbase connection verified. Accounts fetched: {accounts}")
         return True
@@ -201,16 +175,15 @@ def test_coinbase_connection(api_key: Optional[str] = None, api_secret: Optional
 
 
 # -------------------------
-# 5) Example main/test-run when module executed directly (safe)
+# 5) Example main/test-run when executed directly
 # -------------------------
 if __name__ == "__main__":
-    # For local testing only — DO NOT put secrets here; pass via env in production.
     import os
     api_key = os.environ.get("COINBASE_API_KEY")
     api_secret = os.environ.get("COINBASE_API_SECRET")
     pem = os.environ.get("COINBASE_PEM_CONTENT")
     org_id = os.environ.get("COINBASE_ORG_ID")
 
-    logger.info("Running local coinbase client smoke test (no real orders will be placed).")
+    logger.info("Running local Coinbase client smoke test (dry-run safe).")
     ok = test_coinbase_connection(api_key=api_key, api_secret=api_secret, pem=pem, org_id=org_id)
     logger.info(f"Smoke test result: {'OK' if ok else 'FAILED'}")
