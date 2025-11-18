@@ -1,86 +1,71 @@
-import os
-import logging
 import time
-import requests
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.backends import default_backend
+import logging
+from nija_client import CoinbaseClient
 
-# --- Logging setup ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
+# Initialize Coinbase client with your keys
+coinbase_client = CoinbaseClient(
+    api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
+    api_secret_path="/opt/railway/secrets/coinbase.pem",
+    api_passphrase="",
+    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
+)
 
-# --- Load Coinbase environment variables ---
-COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
-COINBASE_API_KEY_ID = os.getenv("COINBASE_API_KEY_ID")
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # Single-line escaped PEM
-LIVE_TRADING = os.getenv("LIVE_TRADING", "False").lower() in ["1", "true", "yes"]
-TRADING_ACCOUNT_ID = os.getenv("TRADING_ACCOUNT_ID")  # Optional: explicitly set
+LIVE_TRADING = True
+CHECK_INTERVAL = 10  # seconds between signal checks
 
-if not all([COINBASE_ORG_ID, COINBASE_API_KEY_ID, COINBASE_PEM_CONTENT]):
-    logging.error("❌ Missing Coinbase envs: COINBASE_ORG_ID, COINBASE_API_KEY_ID, or COINBASE_PEM_CONTENT")
-    exit(1)
+# Your trading signals
+TRADING_SIGNALS = [
+    {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
+    {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
+    {"symbol": "ETH-USD", "side": "buy", "size": 0.01},
+    {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
+    # Add all other pairs you want to trade here
+]
 
-# --- Normalize PEM and load key ---
-try:
-    pem_bytes = COINBASE_PEM_CONTENT.encode('utf-8')
-    private_key = serialization.load_pem_private_key(pem_bytes, password=None, backend=default_backend())
-    logging.info("✅ PEM loaded successfully and valid EC key.")
-except Exception as e:
-    logging.error(f"❌ Failed to load PEM. Check formatting and copy/paste: {e}")
-    exit(1)
-
-# --- Show IP for Coinbase Advanced whitelist ---
-try:
-    outbound_ip = requests.get("https://api.ipify.org").text
-    logging.info(f"⚡ Current outbound IP (for whitelist in Coinbase Advanced): {outbound_ip}")
-except Exception as e:
-    logging.warning(f"⚠️ Unable to fetch outbound IP: {e}")
-
-# --- Verify PEM can sign data ---
-try:
-    dummy = b"test"
-    signature = private_key.sign(dummy, ec.ECDSA(hashes.SHA256()))
-    logging.info("✅ PEM can sign data (ready for JWT).")
-except Exception as e:
-    logging.error(f"❌ PEM failed signing test: {e}")
-    exit(1)
-
-# --- Placeholder: Connect to Coinbase API ---
-def fetch_accounts():
+def check_signals():
     """
-    Replace this with actual Coinbase REST call using JWT auth.
-    For now, placeholder returns dummy account list.
+    Returns the current trading signals.
+    Replace this logic if you want dynamic signals.
     """
-    return [{"id": "dummy_account_1", "currency": "USD"}]
+    return TRADING_SIGNALS
 
-# --- Auto-select account ---
-if not TRADING_ACCOUNT_ID:
-    accounts = fetch_accounts()
-    if accounts:
-        TRADING_ACCOUNT_ID = accounts[0]["id"]
-        logging.info(f"✅ Auto-selected trading account: {TRADING_ACCOUNT_ID}")
-    else:
-        logging.warning("⚠️ No accounts found automatically. Set TRADING_ACCOUNT_ID env var.")
+def place_order(symbol: str, side: str, size: float):
+    """
+    Executes a market order on Coinbase.
+    """
+    if not LIVE_TRADING:
+        logging.info(f"Dry run: would place {side} order for {size} {symbol}")
+        return None
 
-# --- Main trading loop ---
+    try:
+        order = coinbase_client.create_order(
+            product_id=symbol,
+            side=side,
+            type="market",
+            size=str(size)
+        )
+        logging.info(f"✅ Order executed: {order}")
+        return order
+    except Exception as e:
+        logging.error(f"❌ Failed to place order for {symbol} ({side} {size}): {e}")
+        return None
+
 def trading_loop():
-    logging.info("Entering trading loop...")
+    logging.info("🚀 Starting live trading loop...")
     while True:
-        try:
-            # --- Replace this with actual trade logic ---
-            logging.info(f"Checking signals... (LIVE_TRADING={LIVE_TRADING})")
-            if LIVE_TRADING:
-                logging.info("🚀 Placing trades now (placeholder)")
+        signals = check_signals()
+        if not signals:
+            logging.info("No signals found. Waiting for next check...")
+        for signal in signals:
+            symbol = signal.get("symbol")
+            side = signal.get("side")
+            size = signal.get("size")
+            if symbol and side and size:
+                place_order(symbol, side, size)
             else:
-                logging.info("⚠️ Dry-run mode: no trades executed.")
-            time.sleep(10)
-        except KeyboardInterrupt:
-            logging.info("Trading loop stopped manually.")
-            break
-        except Exception as e:
-            logging.error(f"Error in trading loop: {e}")
-            time.sleep(5)
+                logging.warning(f"Incomplete signal skipped: {signal}")
+        time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
-    logging.info("🔥 Coinbase PEM and API key check complete. Bot ready to start trading.")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     trading_loop()
