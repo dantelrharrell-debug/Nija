@@ -1,10 +1,10 @@
 import logging
-from coinbase_advanced_py.rest_client import RestClient
+from coinbase_advanced_py import Client  # Correct import
 
 class CoinbaseClient:
     def __init__(self, api_key: str, api_secret_path: str, api_passphrase: str, api_sub: str):
         try:
-            self.client = RestClient(
+            self.client = Client(
                 key=api_key,
                 pem_file_path=api_secret_path,
                 passphrase=api_passphrase,
