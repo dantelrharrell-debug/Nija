@@ -1,20 +1,22 @@
-# Use Python 3.11 slim base (required for Coinbase Advanced SDK)
+# Use Python 3.11 slim base
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy and install requirements
+# Copy requirements
 COPY requirements.txt .
-RUN pip install --upgrade pip \
+
+# Upgrade pip and install requirements
+RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy app source
+# Copy app code
 COPY . .
 
-# Expose the port Railway provides
+# Set port from environment variable (Railway provides $PORT)
 ENV PORT=5000
 EXPOSE $PORT
 
-# Start the bot via gunicorn
+# Start app with gunicorn
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "main:app", "--workers=1", "--threads=2"]
