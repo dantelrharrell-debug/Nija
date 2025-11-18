@@ -1,22 +1,10 @@
 import time
 import logging
 
-# --- Attempt to import your Coinbase client ---
-try:
-    from nija_client import CoinbaseClient
-    COINBASE_AVAILABLE = True
-except Exception as e:
-    logging.error(f"⚠️ Coinbase client not available: {e}")
-    COINBASE_AVAILABLE = False
-
-# --- Initialize logging ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
+from nija_client import CoinbaseClient  # Your working client wrapper
 
 # --- Trading configuration ---
-LIVE_TRADING = True  # switch to False for dry-run
+LIVE_TRADING = True
 CHECK_INTERVAL = 10  # seconds between signal checks
 
 # --- Trading signals ---
@@ -27,37 +15,26 @@ TRADING_SIGNALS = [
     {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
 ]
 
-# --- Initialize Coinbase client safely with your real keys ---
-coinbase_client = None
-if COINBASE_AVAILABLE:
-    try:
-        coinbase_client = CoinbaseClient(
-            api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
-            api_secret_path="/opt/railway/secrets/coinbase.pem",
-            api_passphrase="",  # usually empty for Advanced API
-            api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
-        )
-        logging.info("✅ Coinbase client initialized successfully")
-    except FileNotFoundError:
-        logging.error("❌ PEM file not found! Running in dry-run mode.")
-        LIVE_TRADING = False
-    except Exception as e:
-        logging.error(f"❌ Failed to initialize Coinbase client: {e}")
-        LIVE_TRADING = False
-else:
-    logging.warning("⚠️ Coinbase client unavailable. Running in dry-run mode.")
+# --- Initialize Coinbase client ---
+try:
+    coinbase_client = CoinbaseClient(
+        api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
+        api_secret_path="/opt/railway/secrets/coinbase.pem",
+        api_passphrase="",  # usually empty for Advanced API
+        api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
+    )
+except Exception as e:
+    logging.error(f"❌ Coinbase client failed to initialize: {e}")
     LIVE_TRADING = False
 
 # --- Functions ---
 def check_signals():
-    """Return current trading signals"""
     return TRADING_SIGNALS
 
 def place_order(symbol: str, side: str, size: float):
     if not LIVE_TRADING or coinbase_client is None:
         logging.info(f"💡 Dry-run: {side} {size} {symbol}")
         return None
-
     try:
         order = coinbase_client.create_order(
             product_id=symbol,
@@ -75,8 +52,6 @@ def trading_loop():
     logging.info("🚀 Starting trading loop...")
     while True:
         signals = check_signals()
-        if not signals:
-            logging.info("⏸ No signals found. Waiting...")
         for signal in signals:
             symbol = signal.get("symbol")
             side = signal.get("side")
@@ -89,4 +64,8 @@ def trading_loop():
 
 # --- Main entry ---
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s"
+    )
     trading_loop()
