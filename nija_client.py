@@ -1,13 +1,21 @@
-# nija_client.py
 import os
 import logging
-from loguru import logger
 
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# -------------------------
-# Mock client for dry-run
-# -------------------------
+# --- Coinbase SDK import ---
+COINBASE_AVAILABLE = False
+AdvancedClient = None
+
+try:
+    from coinbase_advanced.client import Client as AdvancedClient
+    COINBASE_AVAILABLE = True
+    logger.info("✅ Coinbase Advanced SDK available")
+except ModuleNotFoundError:
+    logger.warning("⚠️ Coinbase Advanced SDK not available, using MockClient")
+    AdvancedClient = None
+
+# --- Mock client for dry-run ---
 class MockClient:
     def get_accounts(self):
         logger.info("MockClient.get_accounts() called — returning simulated account")
@@ -17,24 +25,9 @@ class MockClient:
         logger.info(f"MockClient.place_order() called with args={args}, kwargs={kwargs}")
         return {"status": "simulated"}
 
-# -------------------------
-# Coinbase Advanced SDK import
-# -------------------------
-COINBASE_AVAILABLE = False
-try:
-    from coinbase_advanced_py.client import Client as AdvancedClient
-    COINBASE_AVAILABLE = True
-    logger.info("✅ Coinbase Advanced SDK imported successfully")
-except Exception as e:
-    logger.warning(f"Coinbase Advanced SDK not available, using MockClient: {e}")
 
-# -------------------------
-# Instantiate client
-# -------------------------
+# --- Factory for client ---
 def get_coinbase_client(pem=None, org_id=None):
-    """
-    Returns AdvancedClient if available, otherwise MockClient.
-    """
     if COINBASE_AVAILABLE and pem and org_id:
         try:
             client = AdvancedClient(pem=pem, org_id=org_id)
