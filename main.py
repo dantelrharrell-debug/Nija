@@ -1,18 +1,18 @@
 import time
 import logging
-from nija_client import CoinbaseClient  # your stable, working client
+from nija_client import CoinbaseClient  # Must match the stable nija_client.py
 
 # --- Initialize Coinbase client (LIVE) ---
 coinbase_client = CoinbaseClient(
     api_key="YOUR_REAL_API_KEY",
     api_secret_path="/opt/railway/secrets/coinbase.pem",
-    api_passphrase="",  
-    api_sub="YOUR_REAL_ACCOUNT_SUB_ID",
+    api_passphrase="",  # usually empty for Advanced API
+    api_sub="YOUR_REAL_ACCOUNT_SUB_ID",  # make sure this matches your funded account
 )
 
 # --- Trading configuration ---
-LIVE_TRADING = True
-CHECK_INTERVAL = 10  # seconds
+LIVE_TRADING = True           # True for live trading, False for dry-run
+CHECK_INTERVAL = 10           # seconds between signal checks
 
 # --- Trading signals ---
 TRADING_SIGNALS = [
@@ -23,9 +23,16 @@ TRADING_SIGNALS = [
 ]
 
 def check_signals():
+    """
+    Returns current signals. Replace with dynamic logic if desired.
+    """
     return TRADING_SIGNALS
 
 def place_order(symbol: str, side: str, size: float):
+    if not LIVE_TRADING:
+        logging.info(f"💡 Dry run: {side} {size} {symbol}")
+        return None
+
     try:
         order = coinbase_client.create_order(
             product_id=symbol,
@@ -40,9 +47,11 @@ def place_order(symbol: str, side: str, size: float):
         return None
 
 def trading_loop():
-    logging.info("🚀 Starting fully live trading loop...")
+    logging.info("🚀 Starting live trading loop...")
     while True:
         signals = check_signals()
+        if not signals:
+            logging.info("⏸ No signals found, waiting...")
         for signal in signals:
             symbol = signal.get("symbol")
             side = signal.get("side")
