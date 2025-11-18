@@ -1,22 +1,38 @@
-# Base image
-FROM python:3.11-slim
+# Web & WSGI
+Flask==3.1.2
+gunicorn==23.0.0
 
-# Set working directory
-WORKDIR /app
+# Coinbase Advanced API
+coinbase-advanced-py>=0.4.0
 
-# Copy requirements
-COPY requirements.txt .
+# Auth & crypto
+PyJWT==2.10.1
+cryptography==46.0.3
 
-# Install dependencies
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+# Utilities
+loguru==0.7.3
+requests==2.32.5
+backoff==2.2.1
+python-dotenv==1.2.1
 
-# Copy all app files
-COPY . .
+# Data processing
+pandas==2.3.3
+numpy==2.3.4
 
-# Expose port for Railway
-ENV PORT 5000
-EXPOSE $PORT
+# Trading & Crypto
+tradingview_ta==3.3.0
+fear-and-greed-crypto==0.1.0
 
-# Start Gunicorn for production
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "main:app", "--workers=1", "--threads=2"]
+# Security & crypto
+pycryptodome==3.23.0
+PyNaCl==1.6.0
+ecdsa==0.19.1
+cffi>=2.0.0
+
+# Async / networking
+aiohttp==3.8.5
+yarl==1.22.0
+multidict==6.7.0
+frozenlist==1.8.0
+attrs==25.4.0
+aiosignal==1.4.0
