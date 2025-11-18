@@ -1,18 +1,5 @@
-import logging
-
-logger = logging.getLogger(__name__)
-
-# --------------------------------
-# Try to import Coinbase Advanced SDK
-# --------------------------------
-try:
-    from coinbase_advanced_py.client import AdvancedClient
-    COINBASE_AVAILABLE = True
-    logger.info("✅ Coinbase Advanced SDK import succeeded")
-except ImportError:
-    COINBASE_AVAILABLE = False
-    logger.warning("⚠️ Coinbase Advanced SDK not available, using MockClient")
-
+import os
+from loguru import logger
 
 # --------------------------------
 # Mock client (dry-run fallback)
@@ -26,6 +13,22 @@ class MockClient:
         logger.info(f"MockClient.place_order() called with args={args}, kwargs={kwargs}")
         return {"status": "simulated"}
 
+# --------------------------------
+# Try to import Coinbase Advanced SDK
+# --------------------------------
+COINBASE_AVAILABLE = False
+try:
+    from coinbase_advanced_py.client import AdvancedClient
+    COINBASE_AVAILABLE = True
+    logger.info("✅ Coinbase Advanced SDK import succeeded")
+except ImportError:
+    logger.warning("⚠️ Coinbase Advanced SDK not available, using MockClient")
+
+# --------------------------------
+# Load credentials from environment
+# --------------------------------
+PEM = os.environ.get("COINBASE_PEM_CONTENT")
+ORG_ID = os.environ.get("COINBASE_ORG_ID")
 
 # --------------------------------
 # Get Coinbase client
@@ -46,3 +49,8 @@ def get_coinbase_client(pem=None, org_id=None):
     else:
         logger.warning("⚠️ Coinbase Advanced client unavailable, using MockClient")
         return MockClient()
+
+# --------------------------------
+# Instantiate client for main bot
+# --------------------------------
+client = get_coinbase_client(pem=PEM, org_id=ORG_ID)
