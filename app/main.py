@@ -1,38 +1,32 @@
-# main.py
 import time
 import logging
 from nija_client import CoinbaseClient
 
-# Initialize Coinbase client with your keys
+# Initialize Coinbase client
 coinbase_client = CoinbaseClient(
-    api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
+    api_key="YOUR_API_KEY",
     api_secret_path="/opt/railway/secrets/coinbase.pem",
     api_passphrase="",
-    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
+    api_sub="YOUR_ACCOUNT_ID"
 )
 
 LIVE_TRADING = True
-CHECK_INTERVAL = 10  # seconds between signal checks
+CHECK_INTERVAL = 10
 
-# Your live trading signals
 TRADING_SIGNALS = [
     {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
     {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
     {"symbol": "ETH-USD", "side": "buy", "size": 0.01},
     {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
-    # Add other pairs you want to trade here
 ]
 
 def check_signals():
-    """Return the current trading signals."""
     return TRADING_SIGNALS
 
-def place_order(symbol: str, side: str, size: float):
-    """Executes a market order on Coinbase."""
+def place_order(symbol, side, size):
     if not LIVE_TRADING:
-        logging.info(f"Dry run: would place {side} order for {size} {symbol}")
+        logging.info(f"Dry run: {side} {size} {symbol}")
         return None
-
     try:
         order = coinbase_client.create_order(
             product_id=symbol,
@@ -43,23 +37,14 @@ def place_order(symbol: str, side: str, size: float):
         logging.info(f"✅ Order executed: {order}")
         return order
     except Exception as e:
-        logging.error(f"❌ Failed to place order for {symbol} ({side} {size}): {e}")
+        logging.error(f"❌ Failed to place order {side} {size} {symbol}: {e}")
         return None
 
 def trading_loop():
-    logging.info("🚀 Starting live trading loop...")
+    logging.info("🚀 Starting trading loop...")
     while True:
-        signals = check_signals()
-        if not signals:
-            logging.info("No signals found. Waiting for next check...")
-        for signal in signals:
-            symbol = signal.get("symbol")
-            side = signal.get("side")
-            size = signal.get("size")
-            if symbol and side and size:
-                place_order(symbol, side, size)
-            else:
-                logging.warning(f"Incomplete signal skipped: {signal}")
+        for signal in check_signals():
+            place_order(signal["symbol"], signal["side"], signal["size"])
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
