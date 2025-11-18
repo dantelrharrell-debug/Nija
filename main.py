@@ -1,19 +1,33 @@
+import os
 import time
 import logging
-from nija_client import CoinbaseClient
+import traceback
+from nija_client import CoinbaseClient  # make sure this exists
 
-# Initialize Coinbase client with your keys
+# ------------------------------
+# Load environment variables
+# ------------------------------
+LIVE_TRADING = os.getenv("LIVE_TRADING", "0") == "1"
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 10))
+
+COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
+COINBASE_KID = os.getenv("COINBASE_KID")
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+TRADING_ACCOUNT_ID = os.getenv("TRADING_ACCOUNT_ID")
+
+# ------------------------------
+# Initialize Coinbase client
+# ------------------------------
 coinbase_client = CoinbaseClient(
-    api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
-    api_secret_path="/opt/railway/secrets/coinbase.pem",
-    api_passphrase="",
-    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
+    pem_path=COINBASE_PEM_PATH,
+    kid=COINBASE_KID,
+    org_id=COINBASE_ORG_ID,
+    sub=f"organizations/{COINBASE_ORG_ID}/apiKeys/{COINBASE_KID}"
 )
 
-LIVE_TRADING = True
-CHECK_INTERVAL = 10  # seconds between signal checks
-
+# ------------------------------
 # Your trading signals
+# ------------------------------
 TRADING_SIGNALS = [
     {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
     {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
@@ -22,23 +36,20 @@ TRADING_SIGNALS = [
     # Add all other pairs you want to trade here
 ]
 
+# ------------------------------
+# Functions
+# ------------------------------
 def check_signals():
-    """
-    Returns the current trading signals.
-    Replace this logic if you want dynamic signals.
-    """
     return TRADING_SIGNALS
 
 def place_order(symbol: str, side: str, size: float):
-    """
-    Executes a market order on Coinbase.
-    """
     if not LIVE_TRADING:
         logging.info(f"Dry run: would place {side} order for {size} {symbol}")
         return None
 
     try:
         order = coinbase_client.create_order(
+            account_id=TRADING_ACCOUNT_ID,
             product_id=symbol,
             side=side,
             type="market",
@@ -48,6 +59,7 @@ def place_order(symbol: str, side: str, size: float):
         return order
     except Exception as e:
         logging.error(f"❌ Failed to place order for {symbol} ({side} {size}): {e}")
+        logging.error(traceback.format_exc())
         return None
 
 def trading_loop():
@@ -66,6 +78,9 @@ def trading_loop():
                 logging.warning(f"Incomplete signal skipped: {signal}")
         time.sleep(CHECK_INTERVAL)
 
+# ------------------------------
+# Main
+# ------------------------------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     trading_loop()
