@@ -1,47 +1,34 @@
-import os
+# main.py
 import time
 import logging
-from nija_client import CoinbaseClient  # make sure this matches your actual client file
+from nija_client import CoinbaseClient
 
-# -------------------------------
-# --- Initialize Coinbase Client
-# -------------------------------
+# --- Initialize Coinbase client ---
 coinbase_client = CoinbaseClient(
-    api_key=os.getenv("COINBASE_API_KEY"),
-    api_secret_path=os.getenv("COINBASE_API_SECRET_PATH"),
-    pem_path=os.getenv("COINBASE_PEM_PATH"),
-    org_id=os.getenv("COINBASE_ORG_ID"),
-    kid=os.getenv("COINBASE_API_KID")
+    api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
+    api_secret_path="/opt/railway/secrets/coinbase.pem",
+    api_passphrase="",
+    api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
 )
 
-# -------------------------------
-# --- Trading Config
-# -------------------------------
-LIVE_TRADING = os.getenv("LIVE_TRADING", "1") == "1"
+LIVE_TRADING = True
 CHECK_INTERVAL = 10  # seconds between signal checks
 
-# -------------------------------
-# --- Signal Function (customize)
-# -------------------------------
-def check_signals():
-    """
-    Replace this with your actual signal logic.
-    Return a list of signals like:
-    [
-        {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
-        {"symbol": "ETH-USD", "side": "sell", "size": 0.01}
-    ]
-    """
-    # TODO: Implement your signal generation
-    return []
+# --- Define your trading signals ---
+TRADING_SIGNALS = [
+    {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
+    {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
+    {"symbol": "ETH-USD", "side": "buy", "size": 0.01},
+    {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
+    # Add any other pairs you want to trade here
+]
 
-# -------------------------------
-# --- Place order
-# -------------------------------
+def check_signals():
+    """Return the current trading signals."""
+    return TRADING_SIGNALS
+
 def place_order(symbol: str, side: str, size: float):
-    """
-    Executes a market order on Coinbase.
-    """
+    """Execute a market order on Coinbase."""
     if not LIVE_TRADING:
         logging.info(f"Dry run: would place {side} order for {size} {symbol}")
         return None
@@ -51,17 +38,13 @@ def place_order(symbol: str, side: str, size: float):
             product_id=symbol,
             side=side,
             type="market",
-            size=str(size)  # Coinbase API requires string
+            size=str(size)
         )
-        logging.info(f"✅ Order executed: {order}")
         return order
     except Exception as e:
         logging.error(f"❌ Failed to place order for {symbol} ({side} {size}): {e}")
         return None
 
-# -------------------------------
-# --- Trading Loop
-# -------------------------------
 def trading_loop():
     logging.info("🚀 Starting live trading loop...")
     while True:
@@ -73,18 +56,13 @@ def trading_loop():
             side = signal.get("side")
             size = signal.get("size")
             if symbol and side and size:
-                place_order(symbol, side, size)
+                order = place_order(symbol, side, size)
+                if order:
+                    logging.info(f"✅ Order placed successfully: {order}")
             else:
                 logging.warning(f"Incomplete signal skipped: {signal}")
         time.sleep(CHECK_INTERVAL)
 
-# -------------------------------
-# --- Main
-# -------------------------------
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s"
-    )
-    logging.info("✅ Coinbase client initialized and ready.")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     trading_loop()
