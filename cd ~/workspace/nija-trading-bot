@@ -1,11 +1,6 @@
-nija_bot.py  (your main bot file)
-├─ import os, time, requests, jwt
-├─ import cryptography stuff
-├─ import loguru
-├─ Load env variables
-├─ Load PEM
-├─ JWT generator
-├─ Safe request with retries
-├─ Fetch funded accounts
-├─ Main bot logic
-└─ if __name__ == "__main__": main()
+nija_bot/
+├─ main.py
+├─ nija_client.py
+├─ requirements.txt
+├─ .env.example
+└─ README.md
