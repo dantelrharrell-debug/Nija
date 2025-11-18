@@ -1,3 +1,4 @@
+# main.py
 import time
 import logging
 from nija_client import CoinbaseClient
@@ -13,26 +14,21 @@ coinbase_client = CoinbaseClient(
 LIVE_TRADING = True
 CHECK_INTERVAL = 10  # seconds between signal checks
 
-# Your trading signals
+# Your live trading signals
 TRADING_SIGNALS = [
     {"symbol": "BTC-USD", "side": "buy", "size": 0.001},
     {"symbol": "BTC-USD", "side": "sell", "size": 0.001},
     {"symbol": "ETH-USD", "side": "buy", "size": 0.01},
     {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
-    # Add any other pairs you want to trade
+    # Add other pairs you want to trade here
 ]
 
 def check_signals():
-    """
-    Returns the current trading signals.
-    Replace this logic if you want dynamic signals.
-    """
+    """Return the current trading signals."""
     return TRADING_SIGNALS
 
 def place_order(symbol: str, side: str, size: float):
-    """
-    Executes a market order on Coinbase.
-    """
+    """Executes a market order on Coinbase."""
     if not LIVE_TRADING:
         logging.info(f"Dry run: would place {side} order for {size} {symbol}")
         return None
