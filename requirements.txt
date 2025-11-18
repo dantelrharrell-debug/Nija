@@ -1,4 +1,4 @@
-# Coinbase Advanced API
+# Coinbase Advanced SDK
 coinbase-advanced-py>=1.8.2
 
 # Auth & crypto
