@@ -27,15 +27,15 @@ TRADING_SIGNALS = [
     {"symbol": "ETH-USD", "side": "sell", "size": 0.01},
 ]
 
-# --- Initialize Coinbase client safely ---
+# --- Initialize Coinbase client safely with your real keys ---
 coinbase_client = None
 if COINBASE_AVAILABLE:
     try:
         coinbase_client = CoinbaseClient(
-            api_key="YOUR_API_KEY",
+            api_key="d3c4f66b-809e-4ce4-9d6c-1a8d31b777d5",
             api_secret_path="/opt/railway/secrets/coinbase.pem",
             api_passphrase="",  # usually empty for Advanced API
-            api_sub="YOUR_ACCOUNT_SUB_ID",
+            api_sub="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/9e33d60c-c9d7-4318-a2d5-24e1e53d2206",
         )
         logging.info("✅ Coinbase client initialized successfully")
     except FileNotFoundError:
