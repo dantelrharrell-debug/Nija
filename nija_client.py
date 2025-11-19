@@ -1,27 +1,4 @@
-"""
-nija_client.py
 
-A self-contained Coinbase client initializer used by the NIJA trading bot.
-
-Features:
-- Supports two modes:
-    * REST API Key/Secret mode (default)
-    * Advanced / JWT PEM mode (set COINBASE_API_TYPE=advanced)
-- Writes PEM content from env var to a file (if provided).
-- Validates and logs exactly which env vars are missing.
-- Provides `list_accounts()` plus backward-compatible aliases `get_accounts()` and `accounts()`.
-- Clear error messages (no secrets printed).
-"""
-
-import os
-import logging
-import tempfile
-import time
-import hmac
-import hashlib
-import base64
-import json
-from typing import Optional, Dict, Any
 
 import requests
 
