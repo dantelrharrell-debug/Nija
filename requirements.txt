@@ -6,4 +6,5 @@ python-dotenv==1.2.1
 loguru==0.7.3
 pandas==2.3.3
 numpy==2.3.4
-# add any other libs your trading logic needs, but NOT coinbase-advanced
+backoff==2.2.1
+# don't include coinbase-advanced here
