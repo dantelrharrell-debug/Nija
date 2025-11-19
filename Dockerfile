@@ -1,3 +1,10 @@
+FROM python:3.11-slim
+WORKDIR /app
+COPY . /app
+RUN python -m pip install --upgrade pip setuptools wheel
+RUN pip install -r requirements.txt
+CMD ["python", "nija_render_worker.py"]
+
 # Use official Python slim image
 FROM python:3.11-slim
 
