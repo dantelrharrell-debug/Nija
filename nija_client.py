@@ -1,12 +1,3 @@
-try:
-    from coinbase_advanced_py.client import AdvancedClient
-    COINBASE_AVAILABLE = True
-    print("✅ Coinbase Advanced SDK installed")
-except ImportError:
-    COINBASE_AVAILABLE = False
-    print("⚠️ Coinbase Advanced SDK NOT installed, using MockClient")
-
-
 import os
 from loguru import logger
 
@@ -31,7 +22,7 @@ try:
     COINBASE_AVAILABLE = True
     logger.info("✅ Coinbase Advanced SDK import succeeded")
 except ImportError:
-    logger.warning("⚠️ Coinbase Advanced SDK not available, using MockClient")
+    logger.warning("⚠️ Coinbase Advanced SDK not installed, using MockClient")
 
 # --------------------------------
 # Load credentials from environment
@@ -43,10 +34,6 @@ ORG_ID = os.environ.get("COINBASE_ORG_ID")
 # Get Coinbase client
 # --------------------------------
 def get_coinbase_client(pem=None, org_id=None):
-    """
-    Returns a live AdvancedClient if SDK is available and PEM/org_id are provided,
-    otherwise falls back to MockClient.
-    """
     if COINBASE_AVAILABLE and pem and org_id:
         try:
             client = AdvancedClient(pem=pem, org_id=org_id)
