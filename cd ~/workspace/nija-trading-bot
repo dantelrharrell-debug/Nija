@@ -1,6 +1,6 @@
-nija_bot/
-├─ main.py
-├─ nija_client.py
+/your-project-root
+│
+├─ main.py       <-- Paste the code here (replace any old main.py)
 ├─ requirements.txt
-├─ .env.example
-└─ README.md
+├─ Dockerfile
+└─ .env          <-- Make sure your keys and GITHUB_PAT are set here
