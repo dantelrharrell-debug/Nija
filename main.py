@@ -1,153 +1,106 @@
+# main.py
+import os
 import logging
-import importlib
-import importlib.util
-import traceback
-import sys
-import subprocess
+from flask import Flask, jsonify
+from nija_client import get_coinbase_client  # Your robust factory from before
 
-# Optional: use importlib.metadata if available
-try:
-    from importlib import metadata as importlib_metadata
-except ImportError:
-    import importlib_metadata
-
+# ----------------------------
+# Logging Setup
+# ----------------------------
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Coinbase diagnostic/factory ---
-def _safe_pip_freeze():
+# ----------------------------
+# Flask App Setup
+# ----------------------------
+app = Flask(__name__)
+
+@app.route("/__health__", methods=["GET"])
+def health():
+    """Health check endpoint"""
+    return jsonify({"status": "ok"}), 200
+
+@app.route("/start", methods=["POST"])
+def start_trading_endpoint():
+    """Endpoint to trigger trading"""
     try:
-        out = subprocess.check_output(
-            [sys.executable, "-m", "pip", "freeze"],
-            stderr=subprocess.STDOUT,
-            timeout=30
+        start_trading()
+        return jsonify({"status": "trading started"}), 200
+    except Exception as e:
+        logger.exception("Error starting trading: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ----------------------------
+# Coinbase Client Initialization
+# ----------------------------
+def init_coinbase_client():
+    """
+    Instantiates a real Coinbase Advanced client using environment variables.
+    Falls back to MockClient if SDK missing or misconfigured.
+    """
+    try:
+        client = get_coinbase_client(
+            api_key=os.environ.get("COINBASE_API_KEY"),
+            api_secret=os.environ.get("COINBASE_API_SECRET"),
+            pem_content=os.environ.get("COINBASE_PEM_CONTENT"),
+            org_id=os.environ.get("COINBASE_ORG_ID")
         )
-        return out.decode("utf-8", errors="replace")
+        # Quick test: list accounts to verify connectivity
+        accounts = client.list_accounts()
+        logger.info("Coinbase client initialized. Accounts: %s", accounts)
+        return client
     except Exception as e:
-        logger.debug("pip freeze failed: %s", e)
-        return None
+        logger.exception("Failed to initialize Coinbase client: %s", e)
+        return get_coinbase_client()  # fallback MockClient
 
-def _installed_coinbase_packages():
-    found = []
-    try:
-        for dist in importlib_metadata.distributions():
-            name = getattr(dist, "metadata", None) and dist.metadata.get("Name") or getattr(dist, "name", None)
-            if name and "coinbase" in name.lower():
-                found.append((name, getattr(dist, "version", "unknown")))
-    except Exception:
-        try:
-            import pkg_resources
-            for dist in pkg_resources.working_set:
-                if "coinbase" in dist.project_name.lower():
-                    found.append((dist.project_name, dist.version))
-        except Exception:
-            pass
-    return found
+# Global client instance
+client = init_coinbase_client()
 
-def _try_import(name):
-    try:
-        return importlib.import_module(name), None
-    except Exception as e:
-        return None, e
-
-def _find_spec(name):
-    try:
-        return importlib.util.find_spec(name) is not None
-    except Exception:
-        return False
-
-def get_coinbase_client(*args, **kwargs):
+# ----------------------------
+# Trading Logic
+# ----------------------------
+def start_trading():
     """
-    Attempts to import and instantiate a Coinbase client.
-    Falls back to MockClient if SDK not installed.
+    Example trading logic. Add your real trading strategy here.
     """
-    logger.info("=== Coinbase SDK diagnostic start ===")
-    logger.info("Installed coinbase packages: %s", _installed_coinbase_packages())
-    pip_freeze = _safe_pip_freeze()
-    if pip_freeze:
-        logger.info("pip freeze (truncated 50 lines):\n%s", "\n".join(pip_freeze.splitlines()[:50]))
+    if not client:
+        raise RuntimeError("Coinbase client not initialized")
 
-    # Candidate modules and client attributes
-    candidates = [
-        "coinbase_advanced", "coinbase_advanced.client", "coinbase", "coinbase.client"
-    ]
-    client_attrs = ["Client", "AdvancedClient", "CoinbaseClient", "CoinbaseAdvancedClient"]
+    # Fetch accounts
+    accounts = client.list_accounts()
+    logger.info("Accounts fetched for trading: %s", accounts)
 
-    for mod_name in candidates:
-        mod, err = _try_import(mod_name)
-        if mod:
-            for attr in client_attrs:
-                client_obj = getattr(mod, attr, None)
-                if client_obj:
-                    try:
-                        if callable(client_obj):
-                            return client_obj(*args, **kwargs)
-                        return client_obj
-                    except Exception:
-                        continue
+    # Example placeholder: print balances
+    for acct in accounts:
+        logger.info("Account: %s, Balance: %s", acct.get("id"), acct.get("balance"))
 
-    # Fallback mock client
-    class MockClient:
-        def __init__(self, *a, **k):
-            logger.warning("Using MockClient for Coinbase — SDK not installed.")
-        def list_accounts(self): return []
-        def get_accounts(self): return []
-        def accounts(self): return []
-        def close(self): return None
+    # TODO: Replace with your actual order placement logic
+    logger.info("Trading logic executed (replace with real strategy)")
 
-    return MockClient()
-
-# --- WSGI auto-exposure shim ---
+# ----------------------------
+# WSGI auto-expose for Gunicorn
+# ----------------------------
 def _expose_wsgi_app():
-    """Ensure a top-level `app` callable exists for Gunicorn."""
-    try:
-        from flask import Flask, jsonify
-    except ImportError:
-        logger.warning("Flask not installed; cannot expose WSGI app.")
-        return
+    """
+    Ensures 'app' callable is visible for Gunicorn.
+    """
+    module_globals = globals()
+    if "app" not in module_globals:
+        logger.warning("No top-level 'app' found; exposing minimal health-check app.")
+        fallback = Flask("fallback_app")
+        @fallback.route("/__health__", methods=["GET"])
+        def fallback_health():
+            return jsonify({"status": "fallback-ok"}), 200
+        module_globals["app"] = fallback
 
-    # 1) Check existing globals
-    for name in ("app", "application", "flask_app"):
-        if name in globals() and globals()[name] is not None:
-            globals()["app"] = globals()[name]
-            return
+try:
+    _expose_wsgi_app()
+except Exception as e:
+    logger.exception("Error running WSGI shim: %s", e)
 
-    # 2) Check factory functions
-    for factory_name in ("create_app", "make_app", "build_app"):
-        factory = globals().get(factory_name)
-        if callable(factory):
-            try:
-                app_instance = factory()
-                if app_instance:
-                    globals()["app"] = app_instance
-                    return
-            except Exception:
-                continue
-
-    # 3) Probe common modules
-    candidate_modules = ("wsgi", "app", "nija_app", "nija_app_main")
-    for mod_name in candidate_modules:
-        try:
-            spec = importlib.util.find_spec(mod_name)
-            if not spec:
-                continue
-            mod = importlib.import_module(mod_name)
-            for name in ("app", "application", "create_app"):
-                obj = getattr(mod, name, None)
-                if obj:
-                    if callable(obj) and name.startswith("create"):
-                        globals()["app"] = obj()
-                    else:
-                        globals()["app"] = obj
-                    return
-        except Exception:
-            continue
-
-    # 4) Last resort: tiny health-check Flask app
-    fallback = Flask("fallback_app")
-    @fallback.route("/__health__")
-    def health(): return jsonify({"status": "fallback-ok"}), 200
-    globals()["app"] = fallback
-    logger.warning("WSGI shim: using fallback Flask health-check app.")
-
-# Run shim automatically
-_expose_wsgi_app()
+# ----------------------------
+# Entry point for local testing
+# ----------------------------
+if __name__ == "__main__":
+    logger.info("Starting local Flask server on 0.0.0.0:5000")
+    app.run(host="0.0.0.0", port=5000, debug=True)
