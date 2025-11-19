@@ -1,10 +1,3 @@
-# copy a single requirements file (common)
-COPY requirements.txt /app/requirements.txt
-
-# install base Python deps (do NOT include coinbase-advanced here)
-RUN python -m pip install --upgrade pip setuptools wheel \
- && pip install --no-cache-dir -r /app/requirements.txt
-
 # Dockerfile.bot
 FROM python:3.11-slim
 
