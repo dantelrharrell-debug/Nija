@@ -1,76 +1,78 @@
 import os
 import logging
-from time import sleep
-from flask import Flask, jsonify
+import subprocess
+import sys
 
-# --- Logging setup ---
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+# --- Setup logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s'
+)
 
-# --- Coinbase Advanced SDK ---
+# --- Load environment variables ---
+COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
+COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
+COINBASE_API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")
+COINBASE_ACCOUNT_ID = os.environ.get("COINBASE_ACCOUNT_ID")  # Your funded account
+GITHUB_PAT = os.environ.get("GITHUB_PAT")
+
+# --- Validate environment variables ---
+required_vars = {
+    "COINBASE_API_KEY": COINBASE_API_KEY,
+    "COINBASE_API_SECRET": COINBASE_API_SECRET,
+    "COINBASE_API_PASSPHRASE": COINBASE_API_PASSPHRASE,
+    "COINBASE_ACCOUNT_ID": COINBASE_ACCOUNT_ID,
+    "GITHUB_PAT": GITHUB_PAT
+}
+
+missing_vars = [name for name, val in required_vars.items() if not val]
+if missing_vars:
+    logging.error(f"❌ Missing environment variables: {missing_vars}")
+    sys.exit("Set all required environment variables and redeploy.")
+
+# --- Install coinbase-advanced at runtime ---
 try:
-    from coinbase_advanced_py.client import Client
-except ImportError:
-    logging.error("❌ coinbase-advanced-py not installed. Run `pip install coinbase-advanced-py`")
-    raise
+    logging.info("⚡ Installing coinbase-advanced...")
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install",
+        f"git+https://{GITHUB_PAT}@github.com/coinbase/coinbase-advanced-python.git"
+    ])
+    logging.info("✅ coinbase-advanced installed successfully")
+except subprocess.CalledProcessError as e:
+    logging.error(f"❌ Failed to install coinbase-advanced: {e}")
+    sys.exit(e)
 
-# --- Environment variables ---
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # if required
+# --- Import after installation ---
+from coinbase_advanced.client import Client
 
-# --- Factory to get Coinbase client ---
-def get_coinbase_client():
-    if not all([COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_API_PASSPHRASE]):
-        logging.error("❌ Missing Coinbase API environment variables")
-        raise ValueError("Missing Coinbase API credentials")
-    
-    try:
-        client = Client(
-            key=COINBASE_API_KEY,
-            secret=COINBASE_API_SECRET,
-            passphrase=COINBASE_API_PASSPHRASE,
-            sandbox=False  # Set True for sandbox testing
-        )
-        logging.info("✅ Coinbase client initialized successfully")
-        return client
-    except Exception as e:
-        logging.error(f"❌ Failed to create Coinbase client: {e}")
-        raise
+# --- Initialize Coinbase Advanced Client ---
+try:
+    client = Client(
+        api_key=COINBASE_API_KEY,
+        api_secret=COINBASE_API_SECRET,
+        api_passphrase=COINBASE_API_PASSPHRASE
+    )
+    logging.info("✅ Coinbase client initialized")
+except Exception as e:
+    logging.error(f"❌ Failed to initialize Coinbase client: {e}")
+    sys.exit(e)
 
-# --- Optional test ---
-def test_coinbase_connection(client):
-    try:
-        accounts = client.get_accounts()
-        logging.info(f"✅ Coinbase connection verified. Accounts fetched: {accounts}")
-        return True
-    except Exception as e:
-        logging.error(f"❌ Coinbase connection failed: {e}")
-        return False
-
-# --- Flask app ---
-app = Flask(__name__)
-client = get_coinbase_client()
-if not test_coinbase_connection(client):
-    logging.error("Cannot start bot. Fix Coinbase connection first.")
-
-@app.route("/balances")
-def balances():
+# --- Connect to funded account ---
+try:
     accounts = client.get_accounts()
-    return jsonify(accounts)
+    funded_account = next((a for a in accounts if a["id"] == COINBASE_ACCOUNT_ID), None)
+    if funded_account:
+        logging.info(f"✅ Connected to funded account: {funded_account['currency']} | Balance: {funded_account['balance']['amount']}")
+    else:
+        logging.error("❌ Funded account ID not found")
+        sys.exit("Check COINBASE_ACCOUNT_ID")
+except Exception as e:
+    logging.error(f"❌ Coinbase connection test failed: {e}")
+    sys.exit(e)
 
-# --- Example trading loop (optional) ---
-def run_trading_bot():
-    logging.info("⚡ Starting trading bot...")
-    while True:
-        try:
-            accounts = client.get_accounts()
-            for acct in accounts:
-                logging.info(f"Account: {acct['currency']} | Balance: {acct['balance']['amount']}")
-            sleep(10)
-        except Exception as e:
-            logging.error(f"❌ Error in trading loop: {e}")
-            sleep(5)
+# --- Bot ready ---
+logging.info("⚡ Bot is ready and trading!")
 
-# Uncomment to run trading loop in main process
-# if __name__ == "__main__":
-#     run_trading_bot()
+# Example trading function
+def trade_signal_example():
+    logging.info("📈 Trading logic would execute here")
