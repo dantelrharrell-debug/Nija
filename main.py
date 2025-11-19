@@ -3,6 +3,35 @@ import subprocess
 import sys
 import logging
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
+
+GITHUB_PAT = os.environ.get("GITHUB_PAT")
+if not GITHUB_PAT:
+    raise SystemExit("❌ GITHUB_PAT environment variable is missing")
+
+# Install coinbase-advanced at runtime
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install",
+    f"git+https://{GITHUB_PAT}@github.com/coinbase/coinbase-advanced-python.git"
+])
+logging.info("✅ coinbase-advanced installed")
+
+# --- Your Coinbase client code here ---
+from coinbase_advanced.client import Client
+
+COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
+COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
+COINBASE_API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")
+COINBASE_ACCOUNT_ID = os.environ.get("COINBASE_ACCOUNT_ID")
+
+client = Client(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET, api_passphrase=COINBASE_API_PASSPHRASE)
+logging.info("✅ Coinbase client initialized")
+
+import os
+import subprocess
+import sys
+import logging
+
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 
