@@ -1,73 +1,52 @@
+# nija_client.py
 import os
 import logging
-from time import sleep
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger(__name__)
 
-# --- Import Coinbase SDK ---
-try:
-    from coinbase_advanced.client import Client
-except ImportError:
-    logging.error("❌ coinbase_advanced not installed. Install via start.sh")
-    raise
+# Export the env var name for main.py convenience
+COINBASE_ACCOUNT_ID = os.environ.get("COINBASE_ACCOUNT_ID")
 
-
-# --- Create Coinbase Client ---
 def get_coinbase_client():
-    api_key = os.getenv("COINBASE_API_KEY")
-    api_secret = os.getenv("COINBASE_API_SECRET")
-    api_org_id = os.getenv("COINBASE_ORG_ID")
-    pem_content = os.getenv("COINBASE_PEM_CONTENT")
-
-    if not api_key or not api_secret or not api_org_id:
-        raise ValueError("❌ Missing required Coinbase environment variables")
-
-    client = Client(
-        api_key=api_key,
-        api_secret=api_secret,
-        api_org_id=api_org_id,
-        pem=pem_content.encode() if pem_content else None
-    )
-
-    logging.info("✅ Coinbase client initialized")
-    return client
-
-
-# --- Test Coinbase ---
-def test_coinbase_connection(client):
+    """
+    Lazily import and return a coinbase_advanced Client instance.
+    Raises ValueError if required env vars are missing.
+    """
     try:
-        accounts = client.get_accounts()
-        logging.info(f"✅ Connection OK. Accounts: {accounts}")
-        return True
+        # import inside function to avoid ImportError at module load before runtime install
+        from coinbase_advanced.client import Client
     except Exception as e:
-        logging.error(f"❌ Connection FAILED: {e}")
-        return False
+        logger.exception("coinbase_advanced package not available")
+        raise
 
+    api_key = os.environ.get("COINBASE_API_KEY")
+    api_secret = os.environ.get("COINBASE_API_SECRET")
+    api_passphrase = os.environ.get("COINBASE_API_PASSPHRASE") or os.environ.get("COINBASE_API_PASSPHRASE")  # optional naming
+    org_id = os.environ.get("COINBASE_ORG_ID")
+    pem_content = os.environ.get("COINBASE_PEM_CONTENT")  # optional if using pem
 
-# --- Trading Bot Loop ---
-def run_trading_bot(client):
-    logging.info("⚡ Trading bot started...")
-    while True:
-        try:
-            accounts = client.get_accounts()
-            for acct in accounts:
-                logging.info(
-                    f"{acct['currency']} Balance: {acct['balance']['amount']}"
-                )
-            sleep(10)
-        except Exception as e:
-            logging.error(f"❌ Trading loop error: {e}")
-            sleep(5)
+    missing = [k for k, v in {
+        "COINBASE_API_KEY": api_key,
+        "COINBASE_API_SECRET": api_secret
+    }.items() if not v]
 
+    if missing:
+        raise ValueError(f"Missing Coinbase env vars: {missing}")
 
-# --- Main Entry ---
-if __name__ == "__main__":
-    client = get_coinbase_client()
+    # Adapt parameters to the version of the client you have.
+    client_kwargs = {
+        "api_key": api_key,
+        "api_secret": api_secret,
+    }
+    # optional params
+    if api_passphrase:
+        client_kwargs["api_passphrase"] = api_passphrase
+    if org_id:
+        client_kwargs["api_org_id"] = org_id
+    if pem_content:
+        client_kwargs["pem"] = pem_content.encode()
 
-    if test_coinbase_connection(client):
-        run_trading_bot(client)
-    else:
-        logging.error("❌ Cannot start bot. Fix Coinbase connection first.")
+    client = Client(**client_kwargs)
+    logger.info("✅ Coinbase Advanced client created")
+    return client
