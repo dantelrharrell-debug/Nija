@@ -1,6 +1,4 @@
-/your-project-root
-│
-├─ main.py       <-- Paste the code here (replace any old main.py)
-├─ requirements.txt
-├─ Dockerfile
-└─ .env          <-- Make sure your keys and GITHUB_PAT are set here
+/app
+├── Dockerfile
+├── requirements.txt
+├── main.py
