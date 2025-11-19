@@ -1,12 +1,10 @@
-/project_root
-├─ /web_service
-│   ├─ Dockerfile
-│   ├─ app.py
-│   ├─ requirements.txt
-│   └─ start.sh
-│
-├─ /bot_service
-│   ├─ Dockerfile
-│   ├─ nija_render_worker.py
-│   ├─ requirements.txt
-│   └─ start.sh
+/app
+ ├─ bot/
+ │    ├─ bot.py           # Your live trading logic
+ │    ├─ requirements.txt # bot dependencies
+ │    └─ start_bot.sh     # launches bot.py
+ ├─ web/
+ │    ├─ app.py           # Flask API (health, coinbase-status)
+ │    ├─ requirements.txt # web dependencies
+ │    └─ start_web.sh     # launches gunicorn
+ └─ docker-compose.yml    # orchestrates both containers
