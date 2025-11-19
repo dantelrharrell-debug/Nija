@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[NIJA BOT] start_bot.sh: starting"
+echo "== START_BOT.SH: Starting container =="
 
-# Fail early & clearly if env vars missing
-: "${GITHUB_PAT:?GITHUB_PAT environment variable is required (set it in Railway/Render)}"
-: "${COINBASE_API_KEY:?COINBASE_API_KEY is required}"
-: "${COINBASE_API_SECRET:?COINBASE_API_SECRET is required}"
-: "${COINBASE_ACCOUNT_ID:?COINBASE_ACCOUNT_ID is required}"
+# Check GITHUB_PAT
+if [ -z "${GITHUB_PAT:-}" ]; then
+    echo "❌ ERROR: GITHUB_PAT not set"
+    exit 1
+fi
 
-echo "[NIJA BOT] Installing coinbase-advanced from GitHub (runtime)..."
-python3 -m pip install --upgrade pip setuptools wheel
+# Install coinbase-advanced
+echo "⏳ Installing coinbase-advanced..."
 python3 -m pip install --no-cache-dir "git+https://${GITHUB_PAT}@github.com/coinbase/coinbase-advanced-python.git"
+echo "✅ coinbase-advanced installed"
 
-echo "[NIJA BOT] coinbase-advanced installed. Starting bot..."
-exec python3 -u /app/bot.py
+# Start bot and redirect output to stdout/stderr
+echo "⚡ Starting bot worker..."
+python3 bot.py >> /proc/1/fd/1 2>> /proc/1/fd/2 &
+
+# Give bot a few seconds to start
+sleep 5
+
+# Start Gunicorn
+echo "🚀 Starting Gunicorn..."
+exec gunicorn -w 1 -b 0.0.0.0:5000 main:app --log-level info
