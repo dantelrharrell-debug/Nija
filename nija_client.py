@@ -21,8 +21,10 @@ try:
     from coinbase_advanced_py.client import AdvancedClient
     COINBASE_AVAILABLE = True
     logger.info("✅ Coinbase Advanced SDK import succeeded")
-except ImportError:
-    logger.warning("⚠️ Coinbase Advanced SDK not installed, using MockClient")
+except Exception as e:
+    COINBASE_AVAILABLE = False
+    logger.warning("⚠️ Coinbase Advanced SDK not installed or import failed — using MockClient")
+    logger.debug("Import error:", e)
 
 # --------------------------------
 # Load credentials from environment
@@ -41,12 +43,13 @@ def get_coinbase_client(pem=None, org_id=None):
             return client
         except Exception as e:
             logger.error(f"❌ Failed to instantiate AdvancedClient: {e}")
+            logger.debug("AdvancedClient instantiation exception:", e)
             return MockClient()
     else:
         logger.warning("⚠️ Coinbase Advanced client unavailable, using MockClient")
         return MockClient()
 
 # --------------------------------
-# Instantiate client for main bot
+# Instantiate client for main bot (module-level)
 # --------------------------------
 client = get_coinbase_client(pem=PEM, org_id=ORG_ID)
