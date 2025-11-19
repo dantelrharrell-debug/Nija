@@ -1,1 +1,2 @@
-web: bash start.sh
+web: /app/start.sh
+worker: /app/start_worker.sh
