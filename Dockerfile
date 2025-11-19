@@ -1,3 +1,4 @@
+# Use official Python slim image
 FROM python:3.11-slim
 
 # Install system deps used by some Python packages
