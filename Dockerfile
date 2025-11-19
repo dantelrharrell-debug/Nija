@@ -1,30 +1,36 @@
-# Use official Python slim image
+# --- Base image ---
 FROM python:3.11-slim
 
-# Set working directory
-WORKDIR /app
+# --- Set environment variables ---
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    POETRY_VIRTUALENVS_CREATE=false
 
-# Install OS dependencies for building Python packages
+# --- Install system dependencies ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libssl-dev \
     libffi-dev \
     python3-dev \
-    pkg-config \
+    curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# --- Set working directory ---
+WORKDIR /app
+
+# --- Copy requirements first for caching ---
 COPY requirements.txt .
 
-# Upgrade pip, setuptools, wheel and install Python dependencies
-RUN python -m pip install --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r requirements.txt
+# --- Install Python dependencies ---
+RUN pip install --upgrade pip setuptools wheel
+RUN pip install -r requirements.txt
 
-# Copy app code
+# --- Copy all app files ---
 COPY . .
 
-# Expose port
-EXPOSE 5000
+# --- Ensure the app is executable ---
+RUN chmod +x main.py
 
-# Run with gunicorn
-CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:5000", "main:app"]
+# --- Default command to run your bot ---
+CMD ["python", "main.py"]
