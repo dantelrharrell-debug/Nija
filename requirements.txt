@@ -1,12 +1,12 @@
-# HTTP / Web
-Flask==2.3.4
+# Web framework + server
+Flask==3.1.2
 gunicorn==23.0.0
-requests==2.32.5
 
-# Coinbase Advanced API (official SDK)
+# Coinbase SDK
 coinbase-advanced==1.0.2
 
-# Auth & crypto
+# HTTP + auth
+requests==2.32.5
 PyJWT==2.10.1
 cryptography==46.0.3
 pycryptodome==3.23.0
@@ -18,11 +18,11 @@ loguru==0.7.3
 backoff==2.2.1
 python-dotenv==1.2.1
 
-# Data processing
+# Data
 pandas==2.3.3
 numpy==2.3.4
 
-# Trading & Crypto helpers
+# Trading / crypto helpers
 tradingview_ta==3.3.0
 fear-and-greed-crypto==0.1.0
 
@@ -33,8 +33,8 @@ multidict==6.7.0
 frozenlist==1.8.0
 attrs==25.4.0
 aiosignal==1.4.0
-websockets>=12.0,<14.0
-charset-normalizer>=2,<4
-idna>=2.5,<4
-urllib3>=1.21.1,<3
+websockets<14.0,>=12.0
+charset-normalizer<4,>=2
+idna<4,>=2.5
+urllib3<3,>=1.21.1
 certifi>=2017.4.17
