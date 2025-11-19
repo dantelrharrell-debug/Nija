@@ -175,3 +175,96 @@ def get_coinbase_client(*args, **kwargs):
             return None
 
     return MockClient()
+
+# --- BEGIN: WSGI entrypoint compatibility shim ---
+# Safe auto-detection/exposure of WSGI `app` callable for gunicorn.
+# Paste this at the very end of your main.py to ensure gunicorn can find `app`.
+import logging
+logger = logging.getLogger(__name__)
+
+def _expose_wsgi_app():
+    """
+    Attempt to expose a top-level `app` object for gunicorn by:
+      1) Using existing `app` / `application` / `flask_app` if present
+      2) Calling create_app() / make_app() if defined
+      3) Falling back to a minimal Flask health app (logs a warning)
+    """
+    # Avoid circular imports if Flask isn't installed
+    try:
+        from flask import Flask, jsonify
+    except Exception as e:
+        logger.debug("Flask not importable when trying to expose WSGI app: %s", e)
+        return
+
+    # 1) Already present
+    module_globals = globals()
+    for name in ("app", "application", "flask_app", "application_instance"):
+        if name in module_globals and module_globals[name] is not None:
+            logger.info("WSGI shim: using existing top-level '%s' as app callable.", name)
+            # ensure canonical name 'app' is available
+            module_globals["app"] = module_globals[name]
+            return
+
+    # 2) Factory functions
+    for factory_name in ("create_app", "make_app", "build_app", "init_app"):
+        factory = module_globals.get(factory_name)
+        if callable(factory):
+            try:
+                logger.info("WSGI shim: calling factory '%s' to create app.", factory_name)
+                created = factory()
+                if created is not None:
+                    module_globals["app"] = created
+                    return
+            except Exception as e:
+                logger.exception("WSGI shim: calling factory %s raised exception: %s", factory_name, e)
+
+    # 3) Try to import common submodules that may hold the app (non-intrusive)
+    # e.g., wsgi.py, app.py, nija_app.py, wsgi_app variable names
+    candidate_modules = ("wsgi", "app", "nija_app", "nija_app_main", "main_app")
+    import importlib, importlib.util
+    for m in candidate_modules:
+        try:
+            spec = importlib.util.find_spec(m)
+            if spec:
+                mod = importlib.import_module(m)
+                for name in ("app", "application", "create_app"):
+                    obj = getattr(mod, name, None)
+                    if obj:
+                        logger.info("WSGI shim: discovered %s.%s", m, name)
+                        if callable(obj) and name.startswith("create"):
+                            try:
+                                module_globals["app"] = obj()
+                                return
+                            except Exception as e:
+                                logger.debug("WSGI shim: factory in module %s failed: %s", m, e)
+                        else:
+                            module_globals["app"] = obj
+                            return
+        except Exception:
+            logger.debug("WSGI shim: module probe failed for %s", m)
+
+    # 4) Final fallback: create a tiny health-check Flask app so the process doesn't crash
+    logger.warning(
+        "WSGI shim: No WSGI 'app' callable found in main module. "
+        "Creating fallback health-check Flask app to keep process alive. "
+        "This is temporary — please expose your real Flask app as `app` or provide a factory `create_app()`."
+    )
+    fallback = Flask("fallback_app")
+
+    @fallback.route("/__health__", methods=["GET"])
+    def _health():
+        return jsonify({"status": "fallback-ok", "info": "No real WSGI app found; fallback active"}), 200
+
+    # expose as 'app'
+    module_globals["app"] = fallback
+
+# Run shim on import
+try:
+    _expose_wsgi_app()
+except Exception as e:
+    # Very defensive: if shim raises, log and continue (avoid masking real errors)
+    try:
+        logging.exception("Unexpected error while running WSGI shim: %s", e)
+    except Exception:
+        pass
+# --- END: WSGI entrypoint compatibility shim ---
