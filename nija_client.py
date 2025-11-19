@@ -2,28 +2,28 @@ import os
 import logging
 from time import sleep
 
-# --- Step 1: Setup logging ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
-# --- Step 2: Attempt to import Coinbase SDK ---
+# --- Import Coinbase SDK ---
 try:
     from coinbase_advanced.client import Client
 except ImportError:
-    logging.error("❌ coinbase_advanced package not installed. Run `pip install coinbase-advanced`")
+    logging.error("❌ coinbase_advanced not installed. Install via start.sh")
     raise
 
-# --- Step 3: Coinbase client factory ---
+
+# --- Create Coinbase Client ---
 def get_coinbase_client():
     api_key = os.getenv("COINBASE_API_KEY")
     api_secret = os.getenv("COINBASE_API_SECRET")
     api_org_id = os.getenv("COINBASE_ORG_ID")
     pem_content = os.getenv("COINBASE_PEM_CONTENT")
 
-    if not all([api_key, api_secret, api_org_id]):
-        raise ValueError("❌ Missing Coinbase credentials in environment variables")
+    if not api_key or not api_secret or not api_org_id:
+        raise ValueError("❌ Missing required Coinbase environment variables")
 
     client = Client(
         api_key=api_key,
@@ -31,38 +31,43 @@ def get_coinbase_client():
         api_org_id=api_org_id,
         pem=pem_content.encode() if pem_content else None
     )
-    logging.info("✅ Coinbase client initialized successfully")
+
+    logging.info("✅ Coinbase client initialized")
     return client
 
-# --- Step 4: Helper to test connection ---
+
+# --- Test Coinbase ---
 def test_coinbase_connection(client):
     try:
         accounts = client.get_accounts()
-        logging.info(f"✅ Coinbase connection verified. Accounts fetched: {accounts}")
+        logging.info(f"✅ Connection OK. Accounts: {accounts}")
         return True
     except Exception as e:
-        logging.error(f"❌ Coinbase connection failed: {e}")
+        logging.error(f"❌ Connection FAILED: {e}")
         return False
 
-# --- Step 5: Trading loop (placeholder) ---
+
+# --- Trading Bot Loop ---
 def run_trading_bot(client):
-    logging.info("⚡ Starting trading bot...")
+    logging.info("⚡ Trading bot started...")
     while True:
         try:
             accounts = client.get_accounts()
             for acct in accounts:
-                logging.info(f"Account: {acct['currency']} | Balance: {acct['balance']['amount']}")
-            
-            # TODO: Insert your trading logic here
+                logging.info(
+                    f"{acct['currency']} Balance: {acct['balance']['amount']}"
+                )
             sleep(10)
         except Exception as e:
-            logging.error(f"❌ Error in trading loop: {e}")
+            logging.error(f"❌ Trading loop error: {e}")
             sleep(5)
 
-# --- Step 6: Main entry ---
+
+# --- Main Entry ---
 if __name__ == "__main__":
     client = get_coinbase_client()
+
     if test_coinbase_connection(client):
         run_trading_bot(client)
     else:
-        logging.error("Cannot start bot. Fix Coinbase connection first.")
+        logging.error("❌ Cannot start bot. Fix Coinbase connection first.")
