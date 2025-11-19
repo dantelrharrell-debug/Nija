@@ -1,0 +1,23 @@
+version: '3.9'
+services:
+  bot:
+    build:
+      context: ./bot
+    container_name: nija_bot
+    environment:
+      COINBASE_API_KEY: ${COINBASE_API_KEY}
+      COINBASE_API_SECRET: ${COINBASE_API_SECRET}
+      COINBASE_API_PASSPHRASE: ${COINBASE_API_PASSPHRASE}
+      COINBASE_ACCOUNT_ID: ${COINBASE_ACCOUNT_ID}
+
+  web:
+    build:
+      context: ./web
+    container_name: nija_web
+    ports:
+      - "5000:5000"
+    environment:
+      COINBASE_API_KEY: ${COINBASE_API_KEY}
+      COINBASE_API_SECRET: ${COINBASE_API_SECRET}
+      COINBASE_API_PASSPHRASE: ${COINBASE_API_PASSPHRASE}
+      COINBASE_ACCOUNT_ID: ${COINBASE_ACCOUNT_ID}
