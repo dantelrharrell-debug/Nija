@@ -44,4 +44,3 @@ else
   echo "[NIJA] Starting web (gunicorn) — expecting Flask app at main:app"
   # 1 worker - change -w count if needed; add timeout etc. as required
   exec gunicorn -w 1 -b 0.0.0.0:5000 main:app --log-level info
-fi
