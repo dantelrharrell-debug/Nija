@@ -10,10 +10,10 @@ fi
 python3 -m pip install --upgrade pip
 python3 -m pip install "git+https://${GITHUB_PAT}@github.com/coinbase/coinbase-advanced-python.git"
 
-# Start bot in background
+# Start trading bot in background
 echo "[NIJA] Starting trading bot..."
 python3 nija_render_worker.py &
 
-# Start web server
+# Start Gunicorn web server
 echo "[NIJA] Starting Gunicorn..."
 exec gunicorn -w 1 -b 0.0.0.0:5000 main:app --log-level info
