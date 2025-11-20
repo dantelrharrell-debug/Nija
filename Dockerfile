@@ -1,7 +1,6 @@
-# Base image
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install build deps
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
@@ -12,17 +11,15 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy and install Python dependencies
+# Copy requirements first for caching
 COPY requirements.txt .
+
+# Upgrade pip and install dependencies
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app source code
+# Copy rest of app
 COPY . .
 
-# Expose port for Railway
-ENV PORT=5000
-EXPOSE 5000
-
-# Start the web app
-CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:5000", "main:app"]
+# Default command (can be overridden by Procfile)
+CMD ["gunicorn", "app.main:app", "--bind", "0.0.0.0:5000", "--workers", "1"]
