@@ -1,9 +1,5 @@
-# Use official Python 3.11 image
+# Base image
 FROM python:3.11-slim
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -17,18 +13,16 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first for caching
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy the rest of your app
 COPY . .
 
-# Expose the port used by Railway
-EXPOSE 5000
+# Expose the port for Railway
+ENV PORT 5000
 
-# Start the app with Gunicorn
-CMD ["gunicorn", "app.main:app", "--bind", "0.0.0.0:5000", "--workers", "1"]
+# Default command
+CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:5000", "main:app"]
