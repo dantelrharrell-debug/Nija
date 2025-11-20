@@ -3,31 +3,51 @@ set -euo pipefail
 
 LOGFILE="/tmp/start_all.log"
 echo "== START_ALL.SH: $(date -u) ==" > "$LOGFILE"
-echo "ENV CHECK: GITHUB_PAT present? ${GITHUB_PAT:+YES}" >> "$LOGFILE" 2>&1
 
+# 1) basic env check
+echo "ENV CHECK at $(date -u)" >> "$LOGFILE"
+echo "GITHUB_PAT present? ${GITHUB_PAT:+YES}" >> "$LOGFILE" 2>&1
+echo "COINBASE_API_KEY present? ${COINBASE_API_KEY:+YES}" >> "$LOGFILE" 2>&1
+echo "COINBASE_API_SECRET present? ${COINBASE_API_SECRET:+YES}" >> "$LOGFILE" 2>&1
+echo "COINBASE_PEM_CONTENT present? ${COINBASE_PEM_CONTENT:+YES}" >> "$LOGFILE" 2>&1
+
+# fail early if no GITHUB_PAT (we need it to pip-install the SDK if not included)
 if [ -z "${GITHUB_PAT:-}" ]; then
-  echo "❌ ERROR: GITHUB_PAT not set. Aborting. (Set it in Railway/Render secrets)" | tee -a "$LOGFILE"
+  echo "❌ ERROR: GITHUB_PAT not set. Set GITHUB_PAT in Railway/Render environment and redeploy." | tee -a "$LOGFILE"
+  cat "$LOGFILE" || true
   exit 1
 fi
 
-echo "⏳ Installing coinbase-advanced from GitHub..." | tee -a "$LOGFILE"
+# 2) ensure pip & core deps are present and install coinbase-advanced at runtime (if needed)
+echo "⏳ Installing coinbase-advanced from GitHub (runtime)..." | tee -a "$LOGFILE"
 python3 -m pip install --upgrade pip setuptools wheel 2>&1 | tee -a "$LOGFILE"
 
-if ! python3 -m pip install --no-cache-dir "git+https://${GITHUB_PAT}@github.com/coinbase/coinbase-advanced-python.git" 2>&1 | tee -a "$LOGFILE"; then
-  echo "❌ Failed to install coinbase-advanced. See $LOGFILE for details." | tee -a "$LOGFILE"
-  tail -n 200 "$LOGFILE" || true
-  exit 1
-fi
+# If coinbase_advanced is not installed, install it from GitHub using PAT
+python3 - <<PY | tee -a "$LOGFILE"
+import sys, subprocess, importlib
+try:
+    import coinbase_advanced
+    print("coinbase_advanced already installed")
+except Exception:
+    pkg = f"git+https://{''+('' if len('${GITHUB_PAT}')==0 else '${GITHUB_PAT}')}@github.com/coinbase/coinbase-advanced-python.git"
+    # fallback: use the environment variable above; construct command using shell interpolation
+    cmd = ["python3", "-m", "pip", "install", "--no-cache-dir", f"git+https://${GITHUB_PAT}@github.com/coinbase/coinbase-advanced-python.git"]
+    print("running:", " ".join(cmd))
+    subprocess.check_call(cmd)
+PY
+echo "✅ coinbase-advanced install step finished" | tee -a "$LOGFILE"
 
-echo "✅ coinbase-advanced installed" | tee -a "$LOGFILE"
+# 3) start the trading worker (background) and save logs
+echo "⚡ Starting trading worker (background), logs -> /tmp/worker.log" | tee -a "$LOGFILE"
+/usr/bin/env python3 nija_render_worker.py >> /tmp/worker.log 2>&1 &
 
-echo "⚡ Starting trading worker (background)..." | tee -a "$LOGFILE"
-python3 nija_render_worker.py >> /tmp/worker.log 2>&1 &
+WORKER_PID=$!
+echo "worker pid: $WORKER_PID" | tee -a "$LOGFILE"
+sleep 2
 
-sleep 1
-echo "worker pid: $!" | tee -a "$LOGFILE"
-echo "Tail of worker log:" | tee -a "$LOGFILE"
-tail -n 50 /tmp/worker.log 2>/dev/null | tee -a "$LOGFILE"
+echo "Tail of /tmp/worker.log (first check):" | tee -a "$LOGFILE"
+tail -n 200 /tmp/worker.log 2>/dev/null | tee -a "$LOGFILE"
 
-echo "🚀 Starting Gunicorn..." | tee -a "$LOGFILE"
+# 4) start gunicorn (replace shell, so container PID 1 becomes gunicorn)
+echo "🚀 Starting gunicorn..." | tee -a "$LOGFILE"
 exec gunicorn -w 1 -b 0.0.0.0:5000 main:app --log-level info
