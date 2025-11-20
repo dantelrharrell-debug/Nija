@@ -1,7 +1,6 @@
-# Use an official Python slim image
 FROM python:3.11-slim
 
-# Install system-level build deps (needed for cryptography, pandas, etc.)
+# Install system build deps needed for some packages
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
@@ -12,19 +11,18 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy requirements first for layer caching
+# Copy requirements first for caching
 COPY requirements.txt .
 
 # Upgrade pip and install Python deps
 RUN pip install --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy rest of app
+# Copy app source
 COPY . .
 
-# Set port environment variable and expose it (Railway will set $PORT at runtime)
 ENV PORT=5000
 EXPOSE 5000
 
-# Default command for container runtime (Procfile will override on Railway if present)
+# Default command (Procfile on Railway will override if present)
 CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:5000", "main:app"]
