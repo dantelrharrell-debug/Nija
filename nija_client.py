@@ -1,107 +1,85 @@
-# nija_client.py
-import os
-import base64
-from loguru import logger
+import time
+import jwt
+import requests
+import logging
+from config import (
+    COINBASE_JWT_PEM,
+    COINBASE_JWT_KID,
+    COINBASE_JWT_ISSUER,
+    COINBASE_API_BASE,
+    TRADING_ACCOUNT_ID,
+    LIVE_TRADING
+)
 
-try:
-    # you verified RESTClient imported earlier
-    from coinbase.rest import RESTClient
-except Exception:
-    logger.exception("coinbase.rest import failed - ensure coinbase-advanced-py is in requirements")
-    raise
-
-def _load_pem_from_env_or_file():
-    """
-    Return a PEM string or None.
-    Priority:
-      1) COINBASE_PEM_CONTENT (raw multi-line PEM)
-      2) COINBASE_PEM_B64 (base64-encoded PEM)
-      3) COINBASE_PEM_PATH / COINBASE_API_SECRET_PATH (read file)
-    """
-    pem = os.getenv("COINBASE_PEM_CONTENT")
-    if pem:
-        return pem
-
-    pem_b64 = os.getenv("COINBASE_PEM_B64")
-    if pem_b64:
-        try:
-            decoded = base64.b64decode(pem_b64).decode("utf-8")
-            return decoded
-        except Exception:
-            logger.exception("Failed to decode COINBASE_PEM_B64")
-            return None
-
-    # fallback to file path
-    pem_path = os.getenv("COINBASE_PEM_PATH") or os.getenv("COINBASE_API_SECRET_PATH")
-    if pem_path and os.path.exists(pem_path):
-        try:
-            with open(pem_path, "r") as f:
-                return f.read()
-        except Exception:
-            logger.exception("Failed to read PEM file from path")
-            return None
-
-    return None
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("NijaCoinbaseClient")
 
 class CoinbaseClient:
-    def __init__(self, api_version=None):
-        self.org_id = os.getenv("COINBASE_ORG_ID")
-        self.pem = _load_pem_from_env_or_file()
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE") or None
-        # optional API base override (useful for sandbox)
-        self.api_base = os.getenv("COINBASE_API_BASE") or None
-        self.api_version = api_version or os.getenv("CB_API_VERSION") or os.getenv("CB-VERSION")
+    def __init__(self):
+        self.base_url = COINBASE_API_BASE
+        self.jwt_token = self.generate_jwt()
+        self.headers = {
+            "Authorization": f"Bearer {self.jwt_token}",
+            "CB-VERSION": "2025-01-01",
+            "Content-Type": "application/json"
+        }
 
-        if self.pem and self.org_id:
-            logger.info("Using PEM/ORG auth for Coinbase RESTClient (org auth)")
-            # Most SDKs accept pem and org_id. If your installed SDK uses different params,
-            # update these constructor kwargs.
-            kwargs = {"pem": self.pem, "org_id": self.org_id}
-            if self.api_version:
-                kwargs["version"] = self.api_version
-            if self.api_base:
-                kwargs["base_url"] = self.api_base
-            self.client = RESTClient(**kwargs)
-        elif self.api_key and self.api_secret:
-            logger.info("Using API key/secret auth for Coinbase RESTClient")
-            kwargs = {
-                "api_key": self.api_key,
-                "api_secret": self.api_secret,
-                "api_passphrase": self.api_passphrase
-            }
-            if self.api_version:
-                kwargs["version"] = self.api_version
-            if self.api_base:
-                kwargs["base_url"] = self.api_base
-            self.client = RESTClient(**kwargs)
-        else:
-            raise ValueError(
-                "Missing Coinbase credentials. Set COINBASE_PEM_CONTENT+COINBASE_ORG_ID "
-                "or COINBASE_API_KEY+COINBASE_API_SECRET"
-            )
+    def generate_jwt(self):
+        """
+        Generate JWT for Coinbase Advanced API using EC private key
+        """
+        now = int(time.time())
+        payload = {
+            "iat": now,
+            "exp": now + 60,  # short-lived token, 60 seconds
+            "sub": COINBASE_JWT_ISSUER
+        }
+        token = jwt.encode(
+            payload,
+            COINBASE_JWT_PEM,
+            algorithm="ES256",
+            headers={"kid": COINBASE_JWT_KID}
+        )
+        return token
 
-    def list_accounts(self):
+    def get_accounts(self):
         """
-        Return accounts list-like object.
-        Will attempt several likely SDK methods.
+        Fetch all accounts from Coinbase Advanced
         """
+        url = f"{self.base_url}/v2/accounts"
         try:
-            # Try likely method names
-            if hasattr(self.client, "get_accounts"):
-                return self.client.get_accounts()
-            if hasattr(self.client, "accounts"):
-                acct_attr = self.client.accounts
-                if callable(acct_attr):
-                    return acct_attr()
-                # maybe .list()
-                if hasattr(acct_attr, "list"):
-                    return acct_attr.list()
-            # fallback to raw request
-            if hasattr(self.client, "request"):
-                return self.client.request("GET", "/accounts")
-            raise RuntimeError("No known accounts method on RESTClient")
-        except Exception:
-            logger.exception("list_accounts failed")
-            raise
+            resp = requests.get(url, headers=self.headers)
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info(f"Fetched {len(data.get('data', []))} accounts")
+            return data.get("data", [])
+        except Exception as e:
+            logger.error(f"Failed to fetch accounts: {e}")
+            return []
+
+    def get_account_balance(self, account_id=TRADING_ACCOUNT_ID):
+        """
+        Fetch balance for a specific account
+        """
+        url = f"{self.base_url}/v2/accounts/{account_id}"
+        try:
+            resp = requests.get(url, headers=self.headers)
+            resp.raise_for_status()
+            data = resp.json()
+            balance = data.get("data", {}).get("balance", {})
+            logger.info(f"Account {account_id} balance: {balance}")
+            return balance
+        except Exception as e:
+            logger.error(f"Failed to fetch account balance: {e}")
+            return {}
+
+# ===========================
+# Example Usage
+# ===========================
+if __name__ == "__main__":
+    client = CoinbaseClient()
+
+    if LIVE_TRADING:
+        accounts = client.get_accounts()
+        balance = client.get_account_balance()
