@@ -1,33 +1,20 @@
-# nija_client.py - factory for Coinbase Advanced client
+# nija_client.py
 import os
 import logging
-from time import sleep
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger(__name__)
-
-# Import after coinbase-advanced installed at runtime
 from coinbase_advanced.client import Client
 
+logging.basicConfig(level=logging.INFO)
+
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
+COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+COINBASE_API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
+COINBASE_ACCOUNT_ID = os.getenv("COINBASE_ACCOUNT_ID")
+
 def get_coinbase_client():
-    api_key = os.getenv("COINBASE_API_KEY")
-    api_secret = os.getenv("COINBASE_API_SECRET")
-    api_passphrase = os.getenv("COINBASE_API_PASSPHRASE")  # if used
-    org_id = os.getenv("COINBASE_ORG_ID")
-    pem_content = os.getenv("COINBASE_PEM_CONTENT")
-
-    if not api_key or not api_secret:
-        raise ValueError("Missing COINBASE_API_KEY or COINBASE_API_SECRET")
-
-    client_kwargs = dict(api_key=api_key, api_secret=api_secret)
-    if api_passphrase:
-        client_kwargs["api_passphrase"] = api_passphrase
-    if org_id:
-        client_kwargs["api_org_id"] = org_id
-    if pem_content:
-        # some libs expect bytes
-        client_kwargs["pem"] = pem_content.encode()
-
-    client = Client(**client_kwargs)
-    logger.info("✅ Coinbase client created")
+    if not all([COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_API_PASSPHRASE]):
+        raise ValueError("Missing COINBASE env vars")
+    # adapt to your installed SDK's constructor if different
+    client = Client(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET, api_passphrase=COINBASE_API_PASSPHRASE)
     return client
