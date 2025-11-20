@@ -1,6 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "== START: prepare SSH key for git (if SSH_PRIVATE_KEY set) =="
+if [ -n "${SSH_PRIVATE_KEY:-}" ]; then
+  mkdir -p /root/.ssh
+  # write the private key from the env var
+  printf "%s\n" "$SSH_PRIVATE_KEY" > /root/.ssh/id_ed25519
+  chmod 600 /root/.ssh/id_ed25519
+
+  # make sure SSH uses the file and doesn't prompt
+  ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+  echo "✅ SSH private key written to /root/.ssh/id_ed25519 and known_hosts updated"
+else
+  echo "⚠️ SSH_PRIVATE_KEY not set — runtime git+ssh will fail if repo requires SSH access"
+fi
+
+# optional: ensure git is installed (we usually install already)
+# apt-get install -y git || true
+
+# Now install the private coinbase package via SSH
+echo "⏳ Installing coinbase-advanced from GitHub via SSH..."
+python3 -m pip install --upgrade pip setuptools wheel
+python3 -m pip install --no-cache-dir "git+ssh://git@github.com/coinbase/coinbase-advanced-python.git"
+
+# Start bot and server as you were doing
+echo "⚡ Starting trading worker in background..."
+python3 nija_render_worker.py &
+
+echo "🚀 Starting Gunicorn..."
+exec gunicorn -w 1 -b 0.0.0.0:5000 main:app --log-level info
+
+#!/usr/bin/env bash
+set -euo pipefail
+
 LOGFILE="/tmp/start_all.log"
 echo "== START_ALL.SH: $(date -u) ==" > "$LOGFILE"
 
