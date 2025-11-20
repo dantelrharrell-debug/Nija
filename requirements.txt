@@ -7,4 +7,4 @@ python-dotenv==1.2.1
 loguru==0.7.3
 pandas==2.3.3
 numpy==2.3.4
-coinbase-advanced
+git+https://github.com/coinbase/coinbase-advanced-python.git@main#egg=coinbase-advanced
