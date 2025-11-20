@@ -1,20 +1,23 @@
-from flask import Flask
-from nija_client import CoinbaseClient  # from coinbase-advanced
-
+# main.py
 import os
+from flask import Flask, jsonify
+from nija_client import CoinbaseClient  # wrapper below
 
 app = Flask(__name__)
 
-# Example: load API keys from .env
-API_KEY = os.getenv("COINBASE_API_KEY")
-API_SECRET = os.getenv("COINBASE_API_SECRET")
-API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
-
-client = CoinbaseClient(api_key=API_KEY, api_secret=API_SECRET, passphrase=API_PASSPHRASE)
+# create client once (will raise on missing config)
+try:
+    client = CoinbaseClient()
+except Exception as e:
+    # log to stdout so Railway build logs / runtime logs show failure early
+    print("Failed to initialize CoinbaseClient:", e)
+    client = None
 
 @app.route("/")
-def home():
-    return "✅ Nija bot is running!"
+def index():
+    status = {"service": "NIJA Bot", "coinbase_client": "initialized" if client else "missing"}
+    return jsonify(status)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
