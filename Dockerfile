@@ -1,7 +1,7 @@
 # Dockerfile
 FROM python:3.11-slim
 
-# Install system deps used by some Python packages
+# System deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       build-essential \
@@ -14,18 +14,15 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Copy just requirements first so pip install step is cached when code changes
-COPY requirements.txt /app/requirements.txt
+# Copy the app
+COPY . /app
 
-# Install base Python deps (includes gunicorn so it's available at runtime)
+# Install base Python deps (do NOT list coinbase-advanced here)
 RUN python -m pip install --upgrade pip setuptools wheel \
  && python -m pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy application code
-COPY . /app
+# Make start script executable
+RUN chmod +x /app/start_all.sh
 
-# Make start scripts executable
-RUN chmod +x /app/start_all.sh /app/start_bot.sh || true
-
-# Entrypoint starts both bot and gunicorn
+# ENTRYPOINT will run start_all.sh which installs coinbase-advanced at container start
 ENTRYPOINT ["/app/start_all.sh"]
