@@ -1,31 +1,34 @@
-# Base Python image
+# Use official Python 3.11 image
 FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies for cryptography, numpy, pandas, git
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    git \
-    curl \
-    libffi-dev \
-    libssl-dev \
-    python3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements
+# Copy requirements first for caching
 COPY requirements.txt .
 
-# Upgrade pip and install Python deps
-RUN pip install --upgrade pip setuptools wheel
+# Install Python dependencies
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the app
+# Copy application code
 COPY . .
 
-# Expose port for Railway
-EXPOSE 8080
+# Expose the port used by Railway
+EXPOSE 5000
 
-# Run app
-CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:8080"]
+# Start the app with Gunicorn
+CMD ["gunicorn", "app.main:app", "--bind", "0.0.0.0:5000", "--workers", "1"]
