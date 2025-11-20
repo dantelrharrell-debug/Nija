@@ -1,3 +1,10 @@
+# Standard dependencies
+requests
+python-dotenv
+
+# Install Coinbase Advanced via HTTPS (no SSH required)
+git+https://github.com/coinbase/coinbase-advanced-python.git
+
 Flask==3.1.2
 gunicorn==23.0.0
 requests==2.32.5
