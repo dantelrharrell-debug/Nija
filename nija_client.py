@@ -8,7 +8,10 @@ from config import (
     COINBASE_JWT_ISSUER,
     COINBASE_API_BASE,
     TRADING_ACCOUNT_ID,
-    LIVE_TRADING
+    LIVE_TRADING,
+    SPOT_TICKERS,
+    MIN_TRADE_PERCENT,
+    MAX_TRADE_PERCENT
 )
 
 # Setup logging
@@ -26,13 +29,10 @@ class CoinbaseClient:
         }
 
     def generate_jwt(self):
-        """
-        Generate JWT for Coinbase Advanced API using EC private key
-        """
         now = int(time.time())
         payload = {
             "iat": now,
-            "exp": now + 60,  # short-lived token, 60 seconds
+            "exp": now + 60,  # short-lived token
             "sub": COINBASE_JWT_ISSUER
         }
         token = jwt.encode(
@@ -44,9 +44,6 @@ class CoinbaseClient:
         return token
 
     def get_accounts(self):
-        """
-        Fetch all accounts from Coinbase Advanced
-        """
         url = f"{self.base_url}/v2/accounts"
         try:
             resp = requests.get(url, headers=self.headers)
@@ -59,27 +56,61 @@ class CoinbaseClient:
             return []
 
     def get_account_balance(self, account_id=TRADING_ACCOUNT_ID):
-        """
-        Fetch balance for a specific account
-        """
         url = f"{self.base_url}/v2/accounts/{account_id}"
         try:
             resp = requests.get(url, headers=self.headers)
             resp.raise_for_status()
             data = resp.json()
-            balance = data.get("data", {}).get("balance", {})
+            balance = float(data.get("data", {}).get("balance", {}).get("amount", 0))
             logger.info(f"Account {account_id} balance: {balance}")
             return balance
         except Exception as e:
             logger.error(f"Failed to fetch account balance: {e}")
-            return {}
+            return 0.0
+
+    def place_order(self, symbol, side, size_usd):
+        """
+        Place a market order on Coinbase Advanced.
+        - side: 'buy' or 'sell'
+        - size_usd: order amount in USD
+        """
+        url = f"{self.base_url}/v2/accounts/{TRADING_ACCOUNT_ID}/orders"
+        payload = {
+            "type": "market",
+            "side": side,
+            "product_id": symbol,
+            "funds": str(size_usd)  # amount in USD
+        }
+        if not LIVE_TRADING:
+            logger.info(f"DRY RUN: {side.upper()} {size_usd}$ {symbol}")
+            return {"status": "dry_run"}
+
+        try:
+            resp = requests.post(url, json=payload, headers=self.headers)
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info(f"Order placed: {data}")
+            return data
+        except Exception as e:
+            logger.error(f"Failed to place order: {e}")
+            return {"status": "failed", "error": str(e)}
+
+    def auto_scale_order(self, balance, side, symbol):
+        """
+        Auto-scale trade size based on account balance and min/max percentages
+        """
+        size_usd = max(MIN_TRADE_PERCENT/100*balance,
+                       min(MAX_TRADE_PERCENT/100*balance, balance))
+        return self.place_order(symbol, side, size_usd)
+
 
 # ===========================
 # Example Usage
 # ===========================
 if __name__ == "__main__":
     client = CoinbaseClient()
+    account_balance = client.get_account_balance()
 
-    if LIVE_TRADING:
-        accounts = client.get_accounts()
-        balance = client.get_account_balance()
+    # Example: Place a scaled BUY for each ticker
+    for ticker in SPOT_TICKERS:
+        client.auto_scale_order(account_balance, "buy", ticker)
