@@ -1,4 +1,3 @@
-# web + runtime libs
 Flask==3.1.2
 gunicorn==23.0.0
 requests==2.32.5
@@ -8,4 +7,4 @@ python-dotenv==1.2.1
 loguru==0.7.3
 pandas==2.3.3
 numpy==2.3.4
-# other libs you need for bot but NOT the Coinbase git+ line here
+# add any other libs your app actually needs (but NOT coinbase-advanced)
