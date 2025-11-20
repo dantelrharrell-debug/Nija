@@ -1,78 +1,39 @@
-#!/usr/bin/env python3
-import os
-import time
+# nija_render_worker.py - main bot loop example
 import logging
-from backoff import expo
+from time import sleep
+from nija_client import get_coinbase_client
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("nija_worker")
 
-REQUIRED = ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_ACCOUNT_ID"]
+def main_loop():
+    client = get_coinbase_client()
 
-missing = [k for k in REQUIRED if not os.getenv(k)]
-if missing:
-    logging.error(f"Missing required environment variables: {missing}. Worker cannot start.")
-    raise SystemExit(1)
-
-GITHUB_PAT = os.getenv("GITHUB_PAT")
-if not GITHUB_PAT:
-    logging.error("Missing GITHUB_PAT; coinbase-advanced cannot be installed at runtime.")
-    raise SystemExit(1)
-
-# Import client (the package should be installed by start_all.sh)
-try:
-    from coinbase_advanced.client import Client
-except Exception as e:
-    logging.exception("coinbase_advanced import failed. Is the package installed?")
-    raise
-
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_ACCOUNT_ID = os.getenv("COINBASE_ACCOUNT_ID")
-
-def init_client():
+    # test accounts
     try:
-        client = Client(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET)
-        logging.info("✅ Coinbase client object created")
-        return client
+        accounts = client.get_accounts()
+        logger.info("Accounts fetched: %d", len(accounts))
+        # optionally identify funded account
+        acct_id = __import__("os").environ.get("COINBASE_ACCOUNT_ID")
+        if acct_id:
+            funded = next((a for a in accounts if a.get("id")==acct_id), None)
+            if funded:
+                logger.info("Found funded account: %s balance=%s", funded.get("currency"), funded.get("balance",{}).get("amount"))
+            else:
+                logger.warning("Funded account id not found in accounts list")
     except Exception as e:
-        logging.exception("Failed to construct Coinbase client")
+        logger.exception("Failed to fetch accounts: %s", e)
         raise
 
-@expo(max_time=60, max_tries=10)  # exponential backoff for initial connection
-def wait_for_connection(client):
-    logging.info("Checking Coinbase accounts...")
-    accounts = client.get_accounts()
-    if not accounts:
-        raise RuntimeError("No accounts returned")
-    # find funded account if provided
-    funded = next((a for a in accounts if a.get("id") == COINBASE_ACCOUNT_ID), None)
-    if funded:
-        logging.info(f"✅ Connected to funded account: {funded.get('currency')} balance={funded.get('balance')}")
-    else:
-        logging.warning("Funded account ID not found among accounts returned. Continuing but double-check COINBASE_ACCOUNT_ID.")
-    return True
-
-def trading_loop(client):
-    logging.info("Entering trading loop (placeholder) — will log account balances every 30s")
+    logger.info("⚡ Entering trading loop (placeholder).")
     while True:
         try:
-            accounts = client.get_accounts()
-            for a in accounts:
-                bal = a.get("balance", {})
-                logging.info(f"Account {a.get('id')} currency={a.get('currency')} balance={bal.get('amount')}")
-            # TODO: replace with your actual trading logic
-            time.sleep(30)
+            # TODO replace this with your live-trading logic: signals -> place orders via client
+            logger.info("Tick - checking market (placeholder).")
+            sleep(10)
         except Exception as e:
-            logging.exception("Error in trading loop — will sleep and retry")
-            time.sleep(5)
-
-def main():
-    client = init_client()
-    wait_for_connection(client)
-    trading_loop(client)
+            logger.exception("Error in trading loop: %s", e)
+            sleep(5)
 
 if __name__ == "__main__":
-    main()
+    main_loop()
