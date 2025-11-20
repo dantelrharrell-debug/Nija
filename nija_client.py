@@ -1,50 +1,33 @@
-# nija_client.py
+# nija_client.py - factory for Coinbase Advanced client
 import os
 import logging
-import time
-from typing import Optional
+from time import sleep
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
 
-def install_and_import():
-    """Attempt to import Client; if missing, raise so calling script can install at runtime."""
-    try:
-        from coinbase_advanced.client import Client
-        return Client
-    except Exception as e:
-        logger.error("coinbase_advanced not available (import failed).")
-        raise
+# Import after coinbase-advanced installed at runtime
+from coinbase_advanced.client import Client
 
-def get_coinbase_client(retries: int = 3, delay: float = 2.0):
-    Client = install_and_import()
+def get_coinbase_client():
     api_key = os.getenv("COINBASE_API_KEY")
     api_secret = os.getenv("COINBASE_API_SECRET")
-    api_passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+    api_passphrase = os.getenv("COINBASE_API_PASSPHRASE")  # if used
     org_id = os.getenv("COINBASE_ORG_ID")
-    pem_content = os.getenv("COINBASE_PEM_CONTENT")  # optional
+    pem_content = os.getenv("COINBASE_PEM_CONTENT")
 
-    if not all([api_key, api_secret]):
+    if not api_key or not api_secret:
         raise ValueError("Missing COINBASE_API_KEY or COINBASE_API_SECRET")
 
-    # Attempt initialization (some installs accept different kwargs)
-    for attempt in range(1, retries+1):
-        try:
-            client = Client(
-                api_key=api_key,
-                api_secret=api_secret,
-                api_passphrase=api_passphrase if api_passphrase else None,
-                api_org_id=org_id if org_id else None,
-                pem=pem_content.encode() if pem_content else None
-            )
-            logger.info("✅ Coinbase client initialized")
-            return client
-        except TypeError:
-            # fallback parameter names if the SDK uses different names
-            client = Client(api_key=api_key, api_secret=api_secret)
-            logger.info("✅ Coinbase client initialized with fallback args")
-            return client
-        except Exception as e:
-            logger.warning(f"Attempt {attempt} failed to init Coinbase client: {e}")
-            time.sleep(delay)
-    raise RuntimeError("Failed to initialize Coinbase client after retries")
+    client_kwargs = dict(api_key=api_key, api_secret=api_secret)
+    if api_passphrase:
+        client_kwargs["api_passphrase"] = api_passphrase
+    if org_id:
+        client_kwargs["api_org_id"] = org_id
+    if pem_content:
+        # some libs expect bytes
+        client_kwargs["pem"] = pem_content.encode()
+
+    client = Client(**client_kwargs)
+    logger.info("✅ Coinbase client created")
+    return client
