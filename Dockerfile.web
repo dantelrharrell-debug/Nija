@@ -1,22 +1,22 @@
 FROM python:3.11-slim
 
-# System deps for some python packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      build-essential libssl-dev libffi-dev python3-dev curl git \
+      build-essential \
+      libssl-dev \
+      libffi-dev \
+      python3-dev \
+      curl \
+      git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy web app files
-COPY main.py /app/main.py
-COPY requirements.web.txt /app/requirements.web.txt
-COPY start_web.sh /app/start_web.sh
+COPY . /app
 
-# Install runtime deps (gunicorn + Flask etc.)
 RUN python -m pip install --upgrade pip setuptools wheel \
- && python -m pip install --no-cache-dir -r /app/requirements.web.txt
+ && python -m pip install --no-cache-dir -r /app/requirements.txt
 
-RUN chmod +x /app/start_web.sh
+RUN chmod +x /app/start_all.sh /app/start_bot.sh || true
 
-ENTRYPOINT ["/app/start_web.sh"]
+ENTRYPOINT ["/app/start_all.sh"]
