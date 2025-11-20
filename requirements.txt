@@ -1,10 +1,14 @@
-# requirements.bot.txt
+# Web framework + server
+Flask==3.1.2
+gunicorn==23.0.0
+
+# core deps
 requests==2.32.5
 PyJWT==2.10.1
 cryptography==46.0.3
 python-dotenv==1.2.1
 loguru==0.7.3
+
+# Data
 pandas==2.3.3
 numpy==2.3.4
-backoff==2.2.1
-# do NOT include coinbase-advanced here; it's installed at runtime with GITHUB_PAT
