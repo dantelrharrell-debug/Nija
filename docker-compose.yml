@@ -4,14 +4,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
-    env_file: .env
     ports:
       - "5000:5000"
-    restart: unless-stopped
-
+    environment:
+      - PORT=5000
+      # do NOT set GITHUB_PAT here for web
   bot:
     build:
       context: .
       dockerfile: Dockerfile.bot
-    env_file: .env
-    restart: unless-stopped
+    environment:
+      - GITHUB_PAT=${GITHUB_PAT}
+      - COINBASE_API_KEY=${COINBASE_API_KEY}
+      - COINBASE_API_SECRET=${COINBASE_API_SECRET}
+      - COINBASE_API_PASSPHRASE=${COINBASE_API_PASSPHRASE}
+      - COINBASE_ACCOUNT_ID=${COINBASE_ACCOUNT_ID}
