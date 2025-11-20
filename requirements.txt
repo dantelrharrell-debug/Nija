@@ -1,14 +1,11 @@
-# Web framework + server
+# web + runtime libs
 Flask==3.1.2
 gunicorn==23.0.0
-
-# core deps
 requests==2.32.5
 PyJWT==2.10.1
 cryptography==46.0.3
 python-dotenv==1.2.1
 loguru==0.7.3
-
-# Data
 pandas==2.3.3
 numpy==2.3.4
+# other libs you need for bot but NOT the Coinbase git+ line here
