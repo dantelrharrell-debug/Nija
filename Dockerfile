@@ -1,13 +1,10 @@
-# Use official Python 3.11 slim image
+# Base Python image
 FROM python:3.11-slim
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies needed for crypto, pandas, numpy
+# Install system dependencies for cryptography, numpy, pandas, git
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
@@ -17,18 +14,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (to use Docker caching)
+# Copy requirements
 COPY requirements.txt .
 
-# Upgrade pip and install dependencies
+# Upgrade pip and install Python deps
 RUN pip install --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the app
+# Copy the app
 COPY . .
 
-# Expose default Railway port
+# Expose port for Railway
 EXPOSE 8080
 
-# Run the app using gunicorn (update main:app if your entrypoint differs)
+# Run app
 CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:8080"]
