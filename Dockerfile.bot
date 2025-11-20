@@ -17,6 +17,6 @@ COPY . /app
 RUN python -m pip install --upgrade pip setuptools wheel \
  && python -m pip install --no-cache-dir -r /app/requirements.txt
 
-RUN chmod +x /app/start_all.sh /app/start_bot.sh || true
+RUN chmod +x /app/start_bot.sh
 
-ENTRYPOINT ["/app/start_all.sh"]
+ENTRYPOINT ["/app/start_bot.sh"]
