@@ -1,10 +1,11 @@
-# nija_render_worker.py
-import os, logging, time
+import os
+import time
 from time import sleep
+from loguru import logger
 
-LOG_PATH = "/tmp/worker.log"
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("nija_worker")
+logger.info("nija_render_worker starting up")
+
+# --- Helper functions ---
 
 def dump_env_snippet():
     relevant = ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_ACCOUNT_ID",
@@ -12,7 +13,6 @@ def dump_env_snippet():
     logger.info("Env variables snapshot:")
     for k in relevant:
         v = os.getenv(k)
-        # show whether present and small hint (masked)
         if not v:
             logger.info(f"  {k}: MISSING")
         else:
@@ -28,12 +28,11 @@ def try_init_client_api_key_mode():
 
     api_key = os.getenv("COINBASE_API_KEY")
     api_secret = os.getenv("COINBASE_API_SECRET")
-    api_pass = os.getenv("COINBASE_API_PASSPHRASE") or None
+    api_pass = os.getenv("COINBASE_PASSPHRASE") or None
     if not api_key or not api_secret:
         logger.info("API key/secret not provided -> skipping API-key init attempt.")
         return None
 
-    # quick sanity detection: if api_secret looks like a PEM (contains BEGIN), bail and return None
     if "BEGIN" in api_secret and "PRIVATE KEY" in api_secret:
         logger.info("COINBASE_API_SECRET looks like a PEM block. API-key/secret mode unlikely to work.")
         return None
@@ -43,7 +42,7 @@ def try_init_client_api_key_mode():
         client = Client(api_key=api_key, api_secret=api_secret, api_passphrase=api_pass)
         logger.info("✅ Coinbase client (api_key mode) created")
         return client
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to initialize Client in api_key mode.")
         return None
 
@@ -62,35 +61,25 @@ def test_connection(client):
         else:
             logger.info("COINBASE_ACCOUNT_ID not set; cannot locate funded account here.")
         return False
-    except Exception as e:
+    except Exception:
         logger.exception("Error while testing Coinbase connection")
         return False
 
+# --- Main Worker Loop ---
+
 def main():
-    logger.info("nija_render_worker starting up")
     dump_env_snippet()
+    client = try_init_client_api_key_mode()
 
-    # Try API-key mode first
-    client = None
-    try:
-        client = try_init_client_api_key_mode()
-    except Exception:
-        logger.exception("SDK import or api-key init failed.")
+    if not client:
+        logger.error("No usable Coinbase auth method found. Set API_KEY/SECRET or PEM credentials.")
+        raise SystemExit("Cannot start worker: Coinbase auth missing")
 
-    if client:
-        ok = test_connection(client)
-        if not ok:
-            logger.error("Connection test failed using API key method. Please check COINBASE_API_KEY / COINBASE_API_SECRET values.")
-            raise SystemExit("Coinbase connection test failed (api key mode).")
-    else:
-        # no client from api-key path — give clear instructions
-        logger.error("Could not initialize client using API key/secret.")
-        logger.error("If you intend to use JWT/PEM-based auth, ensure COINBASE_PEM_CONTENT (PEM), COINBASE_ORG_ID and COINBASE_JWT_KID are set.")
-        logger.error("Alternatively, create a standard API key/secret pair in Coinbase Advanced and set COINBASE_API_KEY and COINBASE_API_SECRET to those values (not the PEM).")
-        raise SystemExit("No usable Coinbase auth method found")
+    if not test_connection(client):
+        logger.error("Coinbase connection test failed. Check credentials.")
+        raise SystemExit("Coinbase connection failed")
 
-    # If we reached here, we have a client and can run the trading loop
-    logger.info("⚡ Starting trading loop (placeholder) — will log account counts every 10s")
+    logger.info("⚡ Starting trading loop (placeholder)")
     while True:
         try:
             accounts = client.get_accounts()
