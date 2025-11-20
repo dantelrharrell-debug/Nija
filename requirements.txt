@@ -7,4 +7,4 @@ python-dotenv==1.2.1
 loguru==0.7.3
 pandas==2.3.3
 numpy==2.3.4
-# add any other libs your app actually needs (but NOT coinbase-advanced)
+# add any other libs your app needs (do NOT list coinbase-advanced here)
