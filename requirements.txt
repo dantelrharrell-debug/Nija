@@ -1,4 +1,4 @@
-# Install Coinbase Advanced via HTTPS (no SSH required)
+# Install Coinbase Advanced via HTTPS
 git+https://github.com/coinbase/coinbase-advanced-python.git
 
 # Standard dependencies
@@ -11,5 +11,3 @@ python-dotenv==1.2.1
 loguru==0.7.3
 pandas==2.3.3
 numpy==2.3.4
-
-# Add any other libraries your app needs
