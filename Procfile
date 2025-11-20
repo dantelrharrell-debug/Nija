@@ -1,2 +1,5 @@
-web: gunicorn -w 1 -b 0.0.0.0:$PORT main:app
-worker: python3 nija_render_worker.py
+# Web process (Flask API)
+web: gunicorn app.main:app --bind 0.0.0.0:$PORT --workers 1
+
+# Background worker process
+worker: python3 app/nija_render_worker.py
