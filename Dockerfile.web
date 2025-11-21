@@ -1,3 +1,4 @@
+# Dockerfile.web
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -10,16 +11,13 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy web dependencies first
-COPY web/requirements.txt .
+COPY web/ /app/web/
+COPY main.py config.py coinbase_trader.py tv_webhook_listener.py nija_client.py /app/
 
-RUN pip install --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python3 -m pip install --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir -r /app/web/requirements.txt
 
-# Copy web code
-COPY web/ /app/web
+COPY start_all.sh /app/start_all.sh
+RUN chmod +x /app/start_all.sh
 
-RUN chmod +x /app/web/start_web.sh
-
-# Default command
-CMD ["/app/web/start_web.sh"]
+CMD ["/app/start_all.sh"]
