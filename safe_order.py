@@ -13,7 +13,7 @@ import os
 import time
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -71,7 +71,7 @@ def _save_pending_approvals(data):
 def _audit_log(event_type: str, data: Dict[str, Any]):
     """Log an event to the audit log file."""
     log_entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "event_type": event_type,
         "mode": MODE,
         "data": data
@@ -181,7 +181,7 @@ def submit_order(
             # Add to pending approvals
             pending_order = {
                 "id": f"pending_{int(time.time())}_{len(approvals_data['pending_orders'])}",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "request": order_request,
                 "status": "pending_approval"
             }
