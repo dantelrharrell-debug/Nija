@@ -158,9 +158,10 @@ class CoinbaseClient:
             "product_id": symbol,
             "funds": str(size_usd)  # amount in USD
         }
-        if not LIVE_TRADING:
-            logger.info(f"DRY RUN: {side.upper()} {size_usd}$ {symbol}")
-            return {"status": "dry_run"}
+        # Use MODE instead of legacy LIVE_TRADING for consistency
+        if MODE != "LIVE":
+            logger.info(f"{MODE} MODE: {side.upper()} {size_usd}$ {symbol}")
+            return {"status": "dry_run", "mode": MODE}
 
         try:
             resp = requests.post(url, json=payload, headers=self.headers)

@@ -32,8 +32,14 @@ def verify_signature(payload_body: bytes, signature: str) -> bool:
         True if signature is valid, False otherwise
     """
     if not TRADINGVIEW_WEBHOOK_SECRET or TRADINGVIEW_WEBHOOK_SECRET == "your_webhook_secret_here":
-        logger.warning("TRADINGVIEW_WEBHOOK_SECRET not configured - signature verification disabled")
-        return True  # Allow webhooks if secret not configured (for testing)
+        # SECURITY: In production, this should fail, not allow unsigned requests
+        # Only allowing for development/testing when secret is not configured
+        from config import MODE
+        if MODE == "LIVE":
+            logger.error("TRADINGVIEW_WEBHOOK_SECRET must be configured for LIVE mode")
+            return False
+        logger.warning("TRADINGVIEW_WEBHOOK_SECRET not configured - signature verification disabled (development mode only)")
+        return True
     
     try:
         # Compute expected signature

@@ -38,7 +38,12 @@ _approved_count = 0
 
 
 def _get_pending_approvals_path() -> str:
-    """Get the path to the pending approvals file."""
+    """
+    Get the path to the pending approvals file.
+    
+    Note: Uses /tmp as fallback which may be cleared on system reboot.
+    For production use, ensure LOG_PATH is set to a persistent location.
+    """
     global _pending_approvals_path
     if _pending_approvals_path is None:
         log_dir = os.path.dirname(LOG_PATH)
@@ -242,7 +247,9 @@ def submit_order(
     global _approved_count
     _approved_count = _load_approved_count()
     
-    if MANUAL_APPROVAL_COUNT > 0 and _approved_count < MANUAL_APPROVAL_COUNT:
+    needs_approval = MANUAL_APPROVAL_COUNT > 0 and _approved_count < MANUAL_APPROVAL_COUNT
+    
+    if needs_approval:
         # Save to pending approvals
         _save_pending_approval(order_request)
         pending_response = {
@@ -277,8 +284,9 @@ def submit_order(
         
         _audit_log("order_submitted", {"request": order_request, "response": response})
         
-        # If this was within manual approval count, increment it
-        if MANUAL_APPROVAL_COUNT > 0 and _approved_count < MANUAL_APPROVAL_COUNT:
+        # Increment approved count if we're tracking approvals
+        # This happens AFTER successful submission
+        if MANUAL_APPROVAL_COUNT > 0:
             _increment_approved_count()
         
         return response
