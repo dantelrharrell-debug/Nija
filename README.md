@@ -113,42 +113,31 @@ This README reflects the current green-check stable version of NIJA Bot and its 
 
 ## Startup Script
 
-The `scripts/start_all.sh` script provides a robust way to start the NIJA bot with proper environment validation and configuration.
+The `scripts/start_all.sh` script provides a simple way to start the NIJA bot with environment checking.
 
-### Required Environment Variables
+### Environment Variables
 
-The startup script validates that the following environment variables are set before starting:
+The startup script checks for the following environment variables:
 
 - `COINBASE_API_KEY` - Your Coinbase API key
 - `COINBASE_API_SECRET` - Your Coinbase API secret
 - `COINBASE_PEM_CONTENT` - Your Coinbase PEM certificate content
 
-If any required variable is missing, the script will exit with a non-zero status code.
+The script will display which variables are set or missing, but will continue to start regardless.
 
 ### Configuration Options
 
 - `PORT` (default: `5000`) - The port on which the application will listen
-- `WEB_CONCURRENCY` (default: `1`) - Number of gunicorn worker processes
-- `ALLOW_MISSING_ENV` - Set to `1` to bypass required environment variable checks for testing/demo environments
 
 ### Usage
 
 ```bash
-# Standard production usage (requires all env vars)
 ./scripts/start_all.sh
-
-# Testing/demo mode (allows missing env vars)
-ALLOW_MISSING_ENV=1 ./scripts/start_all.sh
-
-# Custom port and worker configuration
-PORT=8080 WEB_CONCURRENCY=4 ./scripts/start_all.sh
 ```
 
 ### Features
 
-- **UTC timestamps** on all log lines for easier troubleshooting
-- **Environment validation** with clear error messages
-- **Graceful fallback**: tries system `gunicorn`, then `python -m gunicorn`, then falls back to `python main.py`
+- **Environment checking** - displays status of required environment variables
+- **Simple fallback**: uses `gunicorn` if available, otherwise falls back to `python main.py`
 - **Signal handling**: uses `exec` so the process receives signals directly
-- **Working directory check**: ensures the app runs from `/app` when available
 
