@@ -1,11 +1,15 @@
 /app
  ├─ bot/
- │    ├─ bot.py              # Coinbase trading loop
- │    ├─ requirements.txt    # Bot dependencies (coinbase client, pandas, etc.)
- │    └─ start_bot.sh        # Launches bot.py
+ │    ├─ bot.py
+ │    ├─ requirements.txt
+ │    └─ start_bot.sh
  ├─ web/
- │    ├─ app.py              # Flask API + TradingView webhook listener
- │    ├─ requirements.txt    # Web dependencies (Flask, loguru, etc.)
- │    └─ start_web.sh        # Launches Flask/Gunicorn
- ├─ config.py                # Shared configuration (keys, trading accounts, tickers)
- └─ docker-compose.yml       # Orchestrates both containers
+ │    ├─ app.py
+ │    ├─ requirements.txt
+ │    └─ start_web.sh
+ ├─ main.py
+ ├─ config.py
+ ├─ coinbase_trader.py
+ ├─ tv_webhook_listener.py
+ ├─ nija_client.py
+ └─ docker-compose.yml
