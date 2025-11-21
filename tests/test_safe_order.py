@@ -166,7 +166,10 @@ def test_manual_approval():
 
 def test_audit_log():
     """Test audit logging"""
-    log_file = tempfile.mktemp(suffix='_audit_test.log')
+    # Use NamedTemporaryFile with delete=False for secure temp file creation
+    with tempfile.NamedTemporaryFile(mode='w', suffix='_audit_test.log', delete=False) as tf:
+        log_file = tf.name
+    
     os.environ['MODE'] = 'DRY_RUN'
     os.environ['LOG_PATH'] = log_file
     
