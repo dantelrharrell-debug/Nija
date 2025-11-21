@@ -14,6 +14,7 @@ import os
 import time
 import json
 import logging
+import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 from config import (
@@ -31,6 +32,9 @@ logging.basicConfig(level=logging.INFO)
 
 # Rate limiting state
 _order_timestamps = []
+
+# Rate limiting configuration
+RATE_LIMIT_WINDOW_SECONDS = 60
 
 # Manual approval tracking
 _approval_file = None
@@ -86,14 +90,14 @@ def _check_rate_limit():
     global _order_timestamps
     
     now = time.time()
-    cutoff = now - 60  # 1 minute ago
+    cutoff = now - RATE_LIMIT_WINDOW_SECONDS
     
-    # Remove timestamps older than 1 minute
+    # Remove timestamps older than the rate limit window
     _order_timestamps = [ts for ts in _order_timestamps if ts > cutoff]
     
     if len(_order_timestamps) >= MAX_ORDERS_PER_MINUTE:
         raise RuntimeError(
-            f"Rate limit exceeded: {len(_order_timestamps)} orders in last minute "
+            f"Rate limit exceeded: {len(_order_timestamps)} orders in last {RATE_LIMIT_WINDOW_SECONDS}s "
             f"(max: {MAX_ORDERS_PER_MINUTE})"
         )
     
@@ -259,7 +263,26 @@ def submit_order(client, symbol, side, size_usd, order_type='market'):
         response = client.place_order(symbol, side, size_usd)
         _audit_log(order_request, response)
         return response
+    except requests.exceptions.RequestException as e:
+        # Handle API/network errors
+        error_response = {
+            'status': 'error',
+            'error': str(e),
+            'order': order_request
+        }
+        _audit_log(order_request, error_response)
+        raise
+    except ValueError as e:
+        # Handle validation errors
+        error_response = {
+            'status': 'error',
+            'error': str(e),
+            'order': order_request
+        }
+        _audit_log(order_request, error_response)
+        raise
     except Exception as e:
+        # Handle unexpected errors but still log them
         error_response = {
             'status': 'error',
             'error': str(e),

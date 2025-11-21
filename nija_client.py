@@ -65,15 +65,33 @@ def check_live_safety(client=None):
         try:
             # Try to get API key permissions
             permissions = client.get_api_key_permissions()
-            if permissions and 'withdraw' in str(permissions).lower():
-                raise RuntimeError(
-                    "API key has WITHDRAW permission! This is unsafe. "
-                    "Please create a new API key without withdraw permission."
-                )
-            logger.info("✅ API key permissions check passed (no withdraw)")
+            if permissions:
+                # Check for withdraw in permissions more carefully
+                # Look in common permission structures
+                perms_str = str(permissions).lower()
+                scopes = permissions.get('scopes', []) if isinstance(permissions, dict) else []
+                
+                # Check if withdraw is explicitly in scopes list
+                has_withdraw = any('withdraw' in str(scope).lower() for scope in scopes)
+                
+                # Fallback to string search if scopes not available
+                if not scopes and 'withdraw' in perms_str:
+                    has_withdraw = True
+                
+                if has_withdraw:
+                    raise RuntimeError(
+                        "API key has WITHDRAW permission! This is unsafe. "
+                        "Please create a new API key without withdraw permission."
+                    )
+                logger.info("✅ API key permissions check passed (no withdraw)")
+            else:
+                logger.warning("⚠️  Could not retrieve API key permissions")
         except AttributeError:
             # Method doesn't exist - use fallback check
             logger.warning("⚠️  Could not check API key permissions (method not available)")
+        except RuntimeError:
+            # Re-raise RuntimeError from permission check
+            raise
         except Exception as e:
             logger.warning(f"⚠️  Could not verify API key permissions: {e}")
 

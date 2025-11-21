@@ -133,7 +133,8 @@ def test_webhook_signature_verification():
     """Test TradingView webhook signature verification"""
     print("Testing webhook signature verification...")
     
-    setup_test_env()
+    # Set a proper secret for testing
+    os.environ['TRADINGVIEW_WEBHOOK_SECRET'] = 'test_secret_key_123'
     
     # Re-import modules
     if 'config' in sys.modules:
@@ -161,6 +162,21 @@ def test_webhook_signature_verification():
     invalid_signature = 'invalid_signature_12345'
     assert not verify_signature(payload, invalid_signature), "Invalid signature accepted"
     print("✅ Invalid signature rejected")
+    
+    # Test with no secret configured
+    os.environ['TRADINGVIEW_WEBHOOK_SECRET'] = ''
+    
+    # Re-import to pick up change
+    if 'config' in sys.modules:
+        del sys.modules['config']
+    if 'tv_webhook' in sys.modules:
+        del sys.modules['tv_webhook']
+    
+    from tv_webhook import verify_signature as verify_sig_no_secret
+    
+    # Should reject when no secret configured
+    assert not verify_sig_no_secret(payload, valid_signature), "Accepted request with no secret configured"
+    print("✅ Rejected request when secret not configured")
     
     return True
 

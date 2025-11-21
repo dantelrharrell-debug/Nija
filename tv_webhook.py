@@ -27,9 +27,10 @@ def verify_signature(payload_bytes, signature):
     Returns:
         bool: True if signature is valid
     """
-    if not TRADINGVIEW_WEBHOOK_SECRET or TRADINGVIEW_WEBHOOK_SECRET == "your_webhook_secret_here":
-        logger.warning("TRADINGVIEW_WEBHOOK_SECRET not configured - webhook security disabled!")
-        return True  # Allow for development, but warn
+    if not TRADINGVIEW_WEBHOOK_SECRET:
+        logger.error("TRADINGVIEW_WEBHOOK_SECRET not configured - rejecting webhook!")
+        logger.error("Set TRADINGVIEW_WEBHOOK_SECRET environment variable to enable webhook verification")
+        return False
     
     expected_signature = hmac.new(
         TRADINGVIEW_WEBHOOK_SECRET.encode('utf-8'),
