@@ -1,20 +1,10 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "== START_BOT.SH: Starting bot container =="
-
-if [ -z "${GITHUB_PAT:-}" ]; then
-  echo "❌ ERROR: GITHUB_PAT not set. Set it in the deployment provider secrets."
-  exit 1
+#!/bin/bash
+# Correct path inside container
+if [ -f /app/bot/bot.py ]; then
+    echo "Found bot.py, starting..."
+    python3 /app/bot/bot.py
+else
+    echo "Error: /app/bot/bot.py not found"
+    ls -l /app/bot
+    exit 1
 fi
-
-echo "⏳ Installing coinbase-advanced (runtime)..."
-python3 -m pip install --upgrade pip setuptools wheel
-python3 -m pip install --no-cache-dir "git+https://${GITHUB_PAT}@github.com/coinbase/coinbase-advanced-python.git" || {
-  echo "❌ Failed to install coinbase-advanced"
-  exit 1
-}
-echo "✅ coinbase-advanced installed"
-
-echo "⚡ Launching bot..."
-exec python3 nija_render_worker.py
