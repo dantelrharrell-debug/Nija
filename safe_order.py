@@ -68,6 +68,7 @@ def _check_rate_limit():
     """
     Check if we're within the rate limit (MAX_ORDERS_PER_MINUTE).
     Raises RuntimeError if rate limit exceeded.
+    Thread-safe implementation.
     """
     with _rate_limit_lock:
         now = time.time()
@@ -100,13 +101,15 @@ def _requires_manual_approval():
     """
     Check if this order requires manual approval based on MANUAL_APPROVAL_COUNT.
     Returns True if manual approval is needed.
+    Thread-safe implementation.
     """
     global _order_count
     if MANUAL_APPROVAL_COUNT <= 0:
         return False
     
-    _order_count += 1
-    return _order_count <= MANUAL_APPROVAL_COUNT
+    with _rate_limit_lock:  # Reuse existing lock for thread safety
+        _order_count += 1
+        return _order_count <= MANUAL_APPROVAL_COUNT
 
 
 def _audit_log(event_type, data):
@@ -258,6 +261,16 @@ def get_pending_approvals():
         dict: Pending and approved orders
     """
     return _load_pending_approvals()
+
+
+def get_pending_approvals_path():
+    """
+    Get the path to the pending approvals file.
+    
+    Returns:
+        Path: Path to pending-approvals.json file
+    """
+    return _get_pending_approvals_path()
 
 
 def approve_order(order_id):

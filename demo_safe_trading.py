@@ -110,7 +110,7 @@ def demo_safe_order():
     
     # Show audit log location
     print(f"\n📝 Check audit log at: {os.environ['LOG_PATH']}")
-    print(f"📋 Check pending approvals at: {safe_order._get_pending_approvals_path()}")
+    print(f"📋 Check pending approvals at: {safe_order.get_pending_approvals_path()}")
     
     print("\n" + "="*60)
     print("Demo completed!")

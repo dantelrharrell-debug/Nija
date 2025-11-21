@@ -44,7 +44,7 @@ def verify_signature(payload_body, signature):
     is_valid = hmac.compare_digest(expected_signature, signature)
     
     if not is_valid:
-        logger.warning(f"Invalid signature. Expected: {expected_signature}, Got: {signature}")
+        logger.warning("Signature verification failed")
     
     return is_valid
 
