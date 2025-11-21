@@ -1,10 +1,12 @@
-Flask==3.1.2
-gunicorn==23.0.0
-requests==2.32.5
-PyJWT==2.10.1
-cryptography==46.0.3
-python-dotenv==1.2.1
-loguru==0.7.3
-pandas==2.3.3
-numpy==2.3.4
-coinbase-advanced-py
+# (append)
+PyJWT>=2.6.0
+Flask>=2.0.0
+requests>=2.28.0
+gunicorn>=20.1.0
+loguru>=0.7.0
+# (append)
+PyJWT>=2.6.0
+Flask>=2.0.0
+requests>=2.28.0
+gunicorn>=20.1.0
+loguru>=0.7.0
