@@ -19,6 +19,15 @@ except Exception as e:
     client = None
     logger.exception("❌ Failed to initialize CoinbaseClient at startup")
 
+# Register TradingView webhook blueprint
+try:
+    from tv_webhook import tv_webhook
+    app.register_blueprint(tv_webhook)
+    logger.info("✅ TradingView webhook blueprint registered")
+except Exception as e:
+    logger.warning(f"⚠️  Failed to register TradingView webhook blueprint: {e}")
+    logger.warning("Continuing without TradingView webhook support")
+
 # --- Flask Routes ---
 
 @app.route("/")

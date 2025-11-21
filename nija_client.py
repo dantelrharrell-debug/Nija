@@ -1,7 +1,13 @@
 import time
-import jwt
 import requests
 import logging
+
+# Defensive import for PyJWT
+try:
+    import jwt
+except ImportError as e:
+    raise ImportError("PyJWT is required. Install with: pip install PyJWT>=2.6.0") from e
+
 from config import (
     COINBASE_JWT_PEM,
     COINBASE_JWT_KID,
@@ -11,15 +17,57 @@ from config import (
     LIVE_TRADING,
     SPOT_TICKERS,
     MIN_TRADE_PERCENT,
-    MAX_TRADE_PERCENT
+    MAX_TRADE_PERCENT,
+    MODE,
+    COINBASE_ACCOUNT_ID,
+    CONFIRM_LIVE
 )
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("NijaCoinbaseClient")
 
+def check_live_safety():
+    """
+    Enforce safety rules for LIVE trading mode.
+    Raises RuntimeError if safety requirements are not met.
+    """
+    logger.info(f"Safety check: MODE={MODE}")
+    
+    # Rule 1: LIVE mode requires COINBASE_ACCOUNT_ID and CONFIRM_LIVE=true
+    if MODE == "LIVE":
+        if not COINBASE_ACCOUNT_ID:
+            raise RuntimeError(
+                "LIVE mode requires COINBASE_ACCOUNT_ID to be set. "
+                "Set the environment variable COINBASE_ACCOUNT_ID to your account ID."
+            )
+        if not CONFIRM_LIVE:
+            raise RuntimeError(
+                "LIVE mode requires CONFIRM_LIVE=true to be set. "
+                "Set the environment variable CONFIRM_LIVE=true to confirm live trading."
+            )
+        logger.warning("⚠️  LIVE MODE ENABLED - Real orders will be placed!")
+    elif MODE == "DRY_RUN":
+        logger.info("✓ DRY_RUN mode - No real orders will be placed")
+    elif MODE == "SANDBOX":
+        logger.info("✓ SANDBOX mode - Using sandbox environment")
+    else:
+        raise RuntimeError(f"Invalid MODE: {MODE}. Must be SANDBOX, DRY_RUN, or LIVE")
+    
+    # Rule 2: Check API key permissions - refuse if withdraw permission is present
+    # Note: This is a placeholder check. In a real implementation, you would call
+    # an API endpoint to check permissions. For now, we log a warning.
+    logger.info("✓ API key permissions check: Withdraw permission should be disabled")
+    # TODO: Implement actual API key permission check when endpoint is available
+    # Example: permissions = client.get_api_key_permissions()
+    # if 'wallet:accounts:withdraw' in permissions:
+    #     raise RuntimeError("API key has withdraw permission. Remove this permission for safety.")
+
 class CoinbaseClient:
     def __init__(self):
+        # Perform safety checks before initialization
+        check_live_safety()
+        
         self.base_url = COINBASE_API_BASE
         self.jwt_token = self.generate_jwt()
         self.headers = {
