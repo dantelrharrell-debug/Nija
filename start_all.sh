@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
+set -eu
 # start_all.sh - minimal, safe startup wrapper for Nija bot
 
 echo "== START_ALL.SH: $(date -u) =="
