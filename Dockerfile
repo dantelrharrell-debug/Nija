@@ -22,6 +22,10 @@ COPY bot/ /app/bot/
 # Copy web folder
 COPY web/ /app/web/
 
+# Copy startup script
+COPY start_all.sh /app/start_all.sh
+RUN chmod +x /app/start_all.sh
+
 # Upgrade pip and install Python dependencies
 RUN python3 -m pip install --upgrade pip setuptools wheel
 
@@ -34,5 +38,5 @@ RUN pip install --no-cache-dir -r web/requirements.txt
 # Expose Flask port
 EXPOSE 5000
 
-# Default command
-CMD ["python3", "main.py"]
+# Use startup script as default command
+CMD ["/app/start_all.sh"]
