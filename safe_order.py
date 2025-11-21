@@ -17,15 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from config import (
-    MODE,
-    COINBASE_ACCOUNT_ID,
-    CONFIRM_LIVE,
-    MAX_ORDER_USD,
-    MAX_ORDERS_PER_MINUTE,
-    MANUAL_APPROVAL_COUNT,
-    LOG_PATH,
-)
+import config
 
 # Setup logging
 logger = logging.getLogger("SafeOrder")
@@ -58,12 +50,12 @@ class SafeOrderManager:
     """Manages safe order placement with all safety controls"""
     
     def __init__(self):
-        self.rate_limiter = RateLimiter(MAX_ORDERS_PER_MINUTE)
+        self.rate_limiter = RateLimiter(config.MAX_ORDERS_PER_MINUTE)
         self.order_count = 0
         self.pending_approvals = []
         
         # Ensure log directory exists
-        log_path = Path(LOG_PATH)
+        log_path = Path(config.LOG_PATH)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Pending approvals file
@@ -92,7 +84,7 @@ class SafeOrderManager:
     def _audit_log(self, entry: Dict[str, Any]):
         """Write audit log entry"""
         try:
-            with open(LOG_PATH, 'a') as f:
+            with open(config.LOG_PATH, 'a') as f:
                 timestamp = datetime.utcnow().isoformat()
                 log_entry = {
                     "timestamp": timestamp,
@@ -110,19 +102,19 @@ class SafeOrderManager:
             (is_valid, error_message)
         """
         # Check MODE requirements
-        if MODE == "LIVE":
-            if not COINBASE_ACCOUNT_ID:
+        if config.MODE == "LIVE":
+            if not config.COINBASE_ACCOUNT_ID:
                 return False, "LIVE mode requires COINBASE_ACCOUNT_ID"
-            if not CONFIRM_LIVE:
+            if not config.CONFIRM_LIVE:
                 return False, "LIVE mode requires CONFIRM_LIVE=true"
         
         # Check order size limit
-        if size_usd > MAX_ORDER_USD:
-            return False, f"Order size ${size_usd:.2f} exceeds MAX_ORDER_USD ${MAX_ORDER_USD:.2f}"
+        if size_usd > config.MAX_ORDER_USD:
+            return False, f"Order size ${size_usd:.2f} exceeds MAX_ORDER_USD ${config.MAX_ORDER_USD:.2f}"
         
         # Check rate limit
         if not self.rate_limiter.can_place_order():
-            return False, f"Rate limit exceeded: max {MAX_ORDERS_PER_MINUTE} orders per minute"
+            return False, f"Rate limit exceeded: max {config.MAX_ORDERS_PER_MINUTE} orders per minute"
         
         return True, ""
     
@@ -166,7 +158,7 @@ class SafeOrderManager:
             return result
         
         # Check manual approval requirement
-        if MANUAL_APPROVAL_COUNT > 0 and self.order_count < MANUAL_APPROVAL_COUNT:
+        if config.MANUAL_APPROVAL_COUNT > 0 and self.order_count < config.MANUAL_APPROVAL_COUNT:
             order_id = f"pending_{int(time.time() * 1000)}"
             pending_order = {
                 "order_id": order_id,
@@ -183,7 +175,7 @@ class SafeOrderManager:
             result = {
                 "status": "pending_approval",
                 "order_id": order_id,
-                "message": f"Order requires manual approval ({self.order_count + 1}/{MANUAL_APPROVAL_COUNT})",
+                "message": f"Order requires manual approval ({self.order_count + 1}/{config.MANUAL_APPROVAL_COUNT})",
                 "symbol": symbol,
                 "side": side,
                 "size_usd": size_usd
@@ -195,21 +187,24 @@ class SafeOrderManager:
                 "metadata": metadata
             })
             
+            # Increment order count for pending approvals
+            self.order_count += 1
+            
             logger.info(f"Order pending approval: {order_id}")
             return result
         
         # Place order based on MODE
-        if MODE == "SANDBOX" or MODE == "DRY_RUN":
+        if config.MODE == "SANDBOX" or config.MODE == "DRY_RUN":
             # Simulate order in sandbox/dry-run mode
             result = {
-                "status": f"{MODE.lower()}_simulated",
+                "status": f"{config.MODE.lower()}_simulated",
                 "order_id": f"sim_{int(time.time() * 1000)}",
                 "symbol": symbol,
                 "side": side,
                 "size_usd": size_usd,
-                "mode": MODE
+                "mode": config.MODE
             }
-            logger.info(f"{MODE} mode: Simulated {side} ${size_usd:.2f} {symbol}")
+            logger.info(f"{config.MODE} mode: Simulated {side} ${size_usd:.2f} {symbol}")
         else:
             # LIVE mode - place actual order
             try:
@@ -220,7 +215,7 @@ class SafeOrderManager:
                     "symbol": symbol,
                     "side": side,
                     "size_usd": size_usd,
-                    "mode": MODE
+                    "mode": config.MODE
                 }
                 logger.info(f"LIVE order placed: {side} ${size_usd:.2f} {symbol}")
             except Exception as e:
@@ -230,7 +225,7 @@ class SafeOrderManager:
                     "symbol": symbol,
                     "side": side,
                     "size_usd": size_usd,
-                    "mode": MODE
+                    "mode": config.MODE
                 }
                 logger.error(f"Failed to place live order: {e}")
         
