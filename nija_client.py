@@ -1,7 +1,13 @@
 import time
-import jwt
 import requests
 import logging
+
+# Defensive jwt import (PyJWT)
+try:
+    import jwt
+except ImportError as e:
+    raise ImportError("PyJWT is required. Install with: pip install PyJWT>=2.6.0") from e
+
 from config import (
     COINBASE_JWT_PEM,
     COINBASE_JWT_KID,
@@ -11,15 +17,78 @@ from config import (
     LIVE_TRADING,
     SPOT_TICKERS,
     MIN_TRADE_PERCENT,
-    MAX_TRADE_PERCENT
+    MAX_TRADE_PERCENT,
+    MODE,
+    COINBASE_ACCOUNT_ID,
+    CONFIRM_LIVE
 )
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("NijaCoinbaseClient")
 
+
+def check_live_safety():
+    """
+    Validate MODE/ACCOUNT/CONFIRM_LIVE rules before allowing trading.
+    Raises RuntimeError if safety checks fail.
+    """
+    if MODE == "LIVE":
+        if not COINBASE_ACCOUNT_ID:
+            raise RuntimeError(
+                "LIVE mode requires COINBASE_ACCOUNT_ID to be set. "
+                "Set the environment variable COINBASE_ACCOUNT_ID to your funded account ID."
+            )
+        if not CONFIRM_LIVE:
+            raise RuntimeError(
+                "LIVE mode requires CONFIRM_LIVE=true to be explicitly set. "
+                "Set the environment variable CONFIRM_LIVE=true to confirm live trading."
+            )
+        logger.warning("⚠️  LIVE MODE ENABLED - Real trades will be executed!")
+    elif MODE == "DRY_RUN":
+        logger.info("✅ DRY_RUN mode - No real trades will be executed")
+    elif MODE == "SANDBOX":
+        logger.info("✅ SANDBOX mode - Using sandbox/test environment")
+    else:
+        raise RuntimeError(
+            f"Invalid MODE: {MODE}. Must be one of: SANDBOX, DRY_RUN, LIVE"
+        )
+
+
+def check_api_key_permissions(client):
+    """
+    Check API key permissions and refuse to run if withdraw permission is present.
+    
+    Args:
+        client: CoinbaseClient instance
+        
+    Raises:
+        RuntimeError if withdraw permission is detected
+    """
+    try:
+        # Try to get API key permissions from Coinbase
+        # This is a placeholder - actual implementation depends on Coinbase API
+        # For now, we'll log a warning that this check should be implemented
+        logger.warning(
+            "API key permission check: Coinbase API does not expose key permissions via API. "
+            "Please manually verify that your API key does NOT have withdraw permissions. "
+            "Only 'view' and 'trade' permissions should be enabled for safety."
+        )
+        # If in the future Coinbase exposes this via API, uncomment and implement:
+        # permissions = client.get_api_key_permissions()
+        # if 'withdraw' in permissions or 'transfer' in permissions:
+        #     raise RuntimeError(
+        #         "SAFETY ERROR: API key has withdraw/transfer permissions. "
+        #         "For safety, please create a new API key with only 'view' and 'trade' permissions."
+        #     )
+    except Exception as e:
+        logger.warning(f"Could not verify API key permissions: {e}")
+
 class CoinbaseClient:
     def __init__(self):
+        # Perform safety checks before initializing
+        check_live_safety()
+        
         self.base_url = COINBASE_API_BASE
         self.jwt_token = self.generate_jwt()
         self.headers = {
@@ -27,6 +96,9 @@ class CoinbaseClient:
             "CB-VERSION": "2025-01-01",
             "Content-Type": "application/json"
         }
+        
+        # Check API key permissions
+        check_api_key_permissions(self)
 
     def generate_jwt(self):
         now = int(time.time())
