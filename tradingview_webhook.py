@@ -11,6 +11,15 @@ from flask import Blueprint, request, jsonify
 
 from config import TRADINGVIEW_WEBHOOK_SECRET
 
+# Try to import trading modules - gracefully handle if not available
+try:
+    from safe_order import safe_place_order
+    from nija_client import CoinbaseClient
+    TRADING_MODULES_AVAILABLE = True
+except ImportError as e:
+    TRADING_MODULES_AVAILABLE = False
+    _import_error = str(e)
+
 # Setup logging
 logger = logging.getLogger("TradingViewWebhook")
 
@@ -112,11 +121,28 @@ def webhook():
                 "error": "Invalid side. Must be 'buy' or 'sell'"
             }), 400
         
+        # Validate and convert size_usd to float
+        try:
+            size_usd_float = float(size_usd)
+            if size_usd_float <= 0:
+                raise ValueError("size_usd must be positive")
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid size_usd '{size_usd}': {e}")
+            return jsonify({
+                "status": "error",
+                "error": f"Invalid size_usd. Must be a positive number: {e}"
+            }), 400
+        
+        # Check if trading modules are available
+        if not TRADING_MODULES_AVAILABLE:
+            logger.error(f"Trading modules not available: {_import_error}")
+            return jsonify({
+                "status": "error",
+                "error": "Trading functionality not available"
+            }), 500
+        
         # Process order through safe_order module
         try:
-            from safe_order import safe_place_order
-            from nija_client import CoinbaseClient
-            
             client = CoinbaseClient()
             
             # Add webhook metadata
@@ -131,7 +157,7 @@ def webhook():
                 client=client,
                 symbol=symbol,
                 side=side,
-                size_usd=float(size_usd),
+                size_usd=size_usd_float,
                 metadata=metadata
             )
             

@@ -15,7 +15,7 @@ import time
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 import config
 
@@ -94,7 +94,7 @@ class SafeOrderManager:
         except Exception as e:
             logger.error(f"Failed to write audit log: {e}")
     
-    def validate_order(self, symbol: str, side: str, size_usd: float) -> tuple[bool, str]:
+    def validate_order(self, symbol: str, side: str, size_usd: float) -> Tuple[bool, str]:
         """
         Validate order against all safety rules
         
