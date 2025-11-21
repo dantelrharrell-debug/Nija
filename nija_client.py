@@ -1,7 +1,15 @@
 import time
-import jwt
 import requests
 import logging
+
+# Defensive import for jwt (PyJWT)
+try:
+    import jwt
+except ImportError as e:
+    raise ImportError(
+        "PyJWT is required. Install it with: pip install PyJWT>=2.6.0"
+    ) from e
+
 from config import (
     COINBASE_JWT_PEM,
     COINBASE_JWT_KID,
@@ -11,15 +19,87 @@ from config import (
     LIVE_TRADING,
     SPOT_TICKERS,
     MIN_TRADE_PERCENT,
-    MAX_TRADE_PERCENT
+    MAX_TRADE_PERCENT,
+    MODE,
+    COINBASE_ACCOUNT_ID,
+    CONFIRM_LIVE
 )
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("NijaCoinbaseClient")
 
+def check_live_safety(client=None):
+    """
+    Validate MODE, COINBASE_ACCOUNT_ID, and CONFIRM_LIVE requirements
+    Also checks API key permissions to ensure withdraw permission is not present
+    
+    Args:
+        client: Optional CoinbaseClient instance to check permissions
+    
+    Raises:
+        RuntimeError: If safety checks fail
+    """
+    # Check MODE requirements
+    if MODE == 'LIVE':
+        if not COINBASE_ACCOUNT_ID:
+            raise RuntimeError(
+                "MODE=LIVE requires COINBASE_ACCOUNT_ID to be set. "
+                "This prevents accidental trading from a funded account."
+            )
+        if not CONFIRM_LIVE:
+            raise RuntimeError(
+                "MODE=LIVE requires CONFIRM_LIVE=true to be set. "
+                "This is a safety check to prevent accidental live trading."
+            )
+        logger.warning("🔴 LIVE TRADING MODE ENABLED - Real money at risk!")
+    elif MODE == 'DRY_RUN':
+        logger.info("✅ DRY_RUN mode - No real orders will be placed")
+    elif MODE == 'SANDBOX':
+        logger.info("✅ SANDBOX mode - Using test environment")
+    else:
+        raise RuntimeError(f"Invalid MODE={MODE}. Must be SANDBOX, DRY_RUN, or LIVE")
+    
+    # Check API key permissions if client is available
+    if client:
+        try:
+            # Try to get API key permissions
+            permissions = client.get_api_key_permissions()
+            if permissions:
+                # Check for withdraw in permissions more carefully
+                # Look in common permission structures
+                perms_str = str(permissions).lower()
+                scopes = permissions.get('scopes', []) if isinstance(permissions, dict) else []
+                
+                # Check if withdraw is explicitly in scopes list
+                has_withdraw = any('withdraw' in str(scope).lower() for scope in scopes)
+                
+                # Fallback to string search if scopes not available
+                if not scopes and 'withdraw' in perms_str:
+                    has_withdraw = True
+                
+                if has_withdraw:
+                    raise RuntimeError(
+                        "API key has WITHDRAW permission! This is unsafe. "
+                        "Please create a new API key without withdraw permission."
+                    )
+                logger.info("✅ API key permissions check passed (no withdraw)")
+            else:
+                logger.warning("⚠️  Could not retrieve API key permissions")
+        except AttributeError:
+            # Method doesn't exist - use fallback check
+            logger.warning("⚠️  Could not check API key permissions (method not available)")
+        except RuntimeError:
+            # Re-raise RuntimeError from permission check
+            raise
+        except Exception as e:
+            logger.warning(f"⚠️  Could not verify API key permissions: {e}")
+
 class CoinbaseClient:
     def __init__(self):
+        # Run safety checks before initializing
+        check_live_safety()
+        
         self.base_url = COINBASE_API_BASE
         self.jwt_token = self.generate_jwt()
         self.headers = {
@@ -27,6 +107,9 @@ class CoinbaseClient:
             "CB-VERSION": "2025-01-01",
             "Content-Type": "application/json"
         }
+        
+        # Check permissions after client is initialized
+        check_live_safety(self)
 
     def generate_jwt(self):
         now = int(time.time())
@@ -54,6 +137,36 @@ class CoinbaseClient:
         except Exception as e:
             logger.error(f"Failed to fetch accounts: {e}")
             return []
+
+    def get_api_key_permissions(self):
+        """
+        Get API key permissions to check for unsafe permissions like withdraw
+        
+        Returns:
+            dict or list: API key permissions data, or None if unavailable
+        """
+        # Try different endpoints that might return permissions
+        endpoints = [
+            "/v2/user/auth",
+            "/v2/user",
+        ]
+        
+        for endpoint in endpoints:
+            url = f"{self.base_url}{endpoint}"
+            try:
+                resp = requests.get(url, headers=self.headers)
+                resp.raise_for_status()
+                data = resp.json()
+                
+                # Look for permissions in the response
+                if 'scopes' in data or 'permissions' in data:
+                    return data
+                
+            except Exception:
+                continue
+        
+        # Permissions not available through API
+        return None
 
     def get_account_balance(self, account_id=TRADING_ACCOUNT_ID):
         url = f"{self.base_url}/v2/accounts/{account_id}"
