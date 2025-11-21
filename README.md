@@ -109,3 +109,48 @@ This README reflects the current green-check stable version of NIJA Bot and its 
 3. Bot runs 24/7, trades automatically on Coinbase if SDK is available
 4. If Coinbase SDK is unavailable or PEM invalid, bot runs in **safe dry-run mode**
 
+---
+
+## Startup Script
+
+The `scripts/start_all.sh` script provides a robust startup mechanism with environment validation and flexible deployment options.
+
+### Required Environment Variables
+
+The startup script validates the following required environment variables:
+
+- **COINBASE_API_KEY** - Your Coinbase API key
+- **COINBASE_API_SECRET** - Your Coinbase API secret
+- **COINBASE_PEM_CONTENT** - Your Coinbase PEM certificate content
+
+If any required variable is missing, the script will exit with a non-zero status unless `ALLOW_MISSING_ENV=1` is set (see below).
+
+### Optional Environment Variables
+
+- **PORT** (default: `5000`) - The port on which the application will listen
+- **WEB_CONCURRENCY** (default: `1`) - Number of gunicorn worker processes
+- **ALLOW_MISSING_ENV** - Set to `1` to bypass environment validation for testing/demo environments
+
+### Usage
+
+Run the startup script:
+
+```bash
+./scripts/start_all.sh
+```
+
+For testing without required credentials:
+
+```bash
+ALLOW_MISSING_ENV=1 ./scripts/start_all.sh
+```
+
+### Features
+
+- ✅ UTC timestamps on all log lines for easier troubleshooting
+- ✅ Validates required environment variables before starting
+- ✅ Attempts to change to `/app` directory (warns if not found, continues anyway)
+- ✅ Tries `gunicorn` command first, falls back to `python -m gunicorn`, then `python main.py`
+- ✅ Uses `exec` to ensure the process receives signals directly
+- ✅ POSIX-compatible bash with `set -euo pipefail` for safety
+
