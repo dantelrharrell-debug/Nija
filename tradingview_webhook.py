@@ -17,6 +17,14 @@ from config import TRADINGVIEW_WEBHOOK_SECRET
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TradingViewWebhook")
 
+# Validate webhook secret at module import
+if not TRADINGVIEW_WEBHOOK_SECRET or TRADINGVIEW_WEBHOOK_SECRET == "your_webhook_secret_here":
+    logger.warning(
+        "⚠️  TRADINGVIEW_WEBHOOK_SECRET is not set or using default value. "
+        "Webhook signature verification will not be secure! "
+        "Set TRADINGVIEW_WEBHOOK_SECRET environment variable to a strong, random secret."
+    )
+
 # Create Flask blueprint
 tradingview_bp = Blueprint('tradingview', __name__, url_prefix='/tradingview')
 

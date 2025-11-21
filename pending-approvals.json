@@ -1,0 +1,29 @@
+{
+  "approved_count": 2,
+  "pending_orders": [
+    {
+      "id": "pending_1763761105_0",
+      "timestamp": "2025-11-21T21:38:25.371828+00:00",
+      "request": {
+        "symbol": "BTC-USD",
+        "side": "buy",
+        "size_usd": 25.0,
+        "order_type": "market",
+        "metadata": {}
+      },
+      "status": "pending_approval"
+    },
+    {
+      "id": "pending_1763761105_1",
+      "timestamp": "2025-11-21T21:38:25.372132+00:00",
+      "request": {
+        "symbol": "ETH-USD",
+        "side": "buy",
+        "size_usd": 30.0,
+        "order_type": "market",
+        "metadata": {}
+      },
+      "status": "pending_approval"
+    }
+  ]
+}

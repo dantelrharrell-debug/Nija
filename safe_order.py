@@ -41,7 +41,12 @@ def _get_pending_approvals_file():
     """Get the path to the pending approvals file."""
     global _pending_approvals_file
     if _pending_approvals_file is None:
-        log_dir = os.path.dirname(LOG_PATH) or "."
+        log_dir = os.path.dirname(LOG_PATH)
+        # If LOG_PATH is just a filename, use current directory
+        if not log_dir:
+            log_dir = "."
+        # Ensure directory exists
+        os.makedirs(log_dir, exist_ok=True)
         _pending_approvals_file = os.path.join(log_dir, "pending-approvals.json")
     return _pending_approvals_file
 
@@ -205,13 +210,23 @@ def submit_order(
         # Execute order based on mode
         if MODE == "LIVE":
             logger.warning(f"🚨 LIVE ORDER: {side.upper()} ${size_usd:.2f} {symbol}")
-            # Call the actual client method
-            response = client.place_order(symbol, side, size_usd)
-            _audit_log("order_placed_live", {
-                "request": order_request,
-                "response": response
-            })
-            return response
+            # Call the actual client method with specific error handling
+            try:
+                response = client.place_order(symbol, side, size_usd)
+                _audit_log("order_placed_live", {
+                    "request": order_request,
+                    "response": response
+                })
+                return response
+            except Exception as api_error:
+                # Log API-specific error
+                logger.error(f"Coinbase API error: {api_error}")
+                _audit_log("order_api_error", {
+                    "request": order_request,
+                    "error": str(api_error),
+                    "error_type": type(api_error).__name__
+                })
+                raise RuntimeError(f"Coinbase API error: {api_error}") from api_error
         
         elif MODE == "SANDBOX":
             logger.info(f"🏖️  SANDBOX ORDER: {side.upper()} ${size_usd:.2f} {symbol}")
