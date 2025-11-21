@@ -1,20 +1,21 @@
+# Dockerfile.bot
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y build-essential git libssl-dev libffi-dev python3-dev \
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy bot folder
-COPY bot/ /app/bot
+COPY bot/ /app/bot/
+RUN python3 -m pip install --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir -r /app/bot/requirements.txt
 
-# Install bot dependencies
-COPY bot/requirements.txt .
-RUN pip install --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir -r requirements.txt
+COPY start_all.sh /app/start_all.sh
+RUN chmod +x /app/start_all.sh
 
-# Make scripts executable
-RUN chmod +x /app/bot/start_bot.sh
-
-CMD ["/app/bot/start_bot.sh"]
+CMD ["/app/start_all.sh"]
