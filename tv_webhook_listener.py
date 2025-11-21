@@ -1,38 +1,30 @@
-from flask import Flask, request, jsonify
-import hmac, hashlib, logging
+from loguru import logger
 from nija_client import CoinbaseClient
-from config import TV_WEBHOOK_SECRET, TV_WEBHOOK_PORT
+from config import LIVE_TRADING
 
-logger = logging.getLogger("TVListener")
-logging.basicConfig(level=logging.INFO)
-
-app = Flask(__name__)
+# Initialize client (reuse CoinbaseClient if needed)
 client = CoinbaseClient()
 
-def verify_signature(data, signature):
-    mac = hmac.new(TV_WEBHOOK_SECRET.encode(), data, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(mac, signature)
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    signature = request.headers.get("X-Signature", "")
-    if not verify_signature(request.data, signature):
-        logger.warning("Invalid webhook signature")
-        return "Unauthorized", 401
-
-    payload = request.json
-    ticker = payload.get("ticker")
-    action = payload.get("action")
-
+def handle_tv_webhook(payload: dict):
+    """
+    Handles TradingView webhook signals
+    Payload example: { "ticker": "BTC/USD", "side": "buy", "size": 0.01 }
+    """
     try:
-        if action == "buy":
-            client.place_order("buy", ticker)
-        elif action == "sell":
-            client.place_order("sell", ticker)
-        logger.info(f"Executed TV trade: {action} {ticker}")
-    except Exception as e:
-        logger.error(f"Failed TV trade: {e}")
-    return jsonify({"status": "ok"}), 200
+        ticker = payload.get("ticker")
+        side = payload.get("side")
+        size = float(payload.get("size", 0))
 
-def run_webhook_server():
-    app.run(host="0.0.0.0", port=TV_WEBHOOK_PORT)
+        logger.info(f"TradingView signal received: {side} {size} {ticker}")
+
+        if LIVE_TRADING and ticker and side and size > 0:
+            # Map side to Coinbase order type
+            order_type = "buy" if side.lower() == "buy" else "sell"
+            # Execute trade (example, adjust to your order function)
+            result = client.place_order(ticker=ticker, side=order_type, size=size)
+            logger.info(f"Order executed: {result}")
+        else:
+            logger.info("Dry-run mode or incomplete signal. No order placed.")
+
+    except Exception as e:
+        logger.exception(f"Failed to handle TradingView webhook: {e}")
