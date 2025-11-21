@@ -4,6 +4,12 @@ This is the **stable version** of the NIJA trading bot, fully deployed and conne
 
 ---
 
+## Copilot Onboarding
+
+This repo includes `.github/copilot-coding-agent.yml` to configure the Copilot Coding Agent. See that file for agent tasks, startup script, and recommended environment/secret settings.
+
+---
+
 ## What NIJA Bot Is Capable Of
 
 NIJA Bot is a **high-speed, AI-driven crypto trading bot** designed for aggressive yet safe trading. Its capabilities include:
