@@ -38,10 +38,12 @@ start_gunicorn() {
 
 start_python() {
   echo "[$(timestamp)] INFO: gunicorn not found; trying 'python -m gunicorn'"
-  exec python -m gunicorn -w "$WORKERS" -k sync -b "0.0.0.0:${PORT}" main:app || {
-    echo "[$(timestamp)] WARN: python -m gunicorn failed; falling back to 'python main.py'"
+  if command -v python >/dev/null 2>&1 && python -c "import gunicorn" 2>/dev/null; then
+    exec python -m gunicorn -w "$WORKERS" -k sync -b "0.0.0.0:${PORT}" main:app
+  else
+    echo "[$(timestamp)] WARN: python -m gunicorn not available; falling back to 'python main.py'"
     exec python main.py
-  }
+  fi
 }
 
 if command -v gunicorn >/dev/null 2>&1; then
