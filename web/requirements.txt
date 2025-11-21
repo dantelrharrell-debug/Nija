@@ -1,3 +1,4 @@
-flask
-gunicorn
-loguru
+# (append)
+PyJWT>=2.6.0
+Flask>=2.0.0
+requests>=2.28.0
