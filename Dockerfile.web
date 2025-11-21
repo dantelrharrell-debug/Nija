@@ -18,6 +18,7 @@ RUN python3 -m pip install --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r /app/web/requirements.txt
 
 COPY start_all.sh /app/start_all.sh
-RUN chmod +x /app/start_all.sh
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /app/start_all.sh /docker-entrypoint.sh
 
-CMD ["/app/start_all.sh"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
