@@ -10,6 +10,14 @@ from tv_webhook_listener import handle_tv_webhook  # We'll define a route instea
 # Initialize Flask app
 app = Flask(__name__)
 
+# Register TradingView webhook blueprint (safe import/register)
+try:
+    from tradingview_webhook import tradingview_bp
+    app.register_blueprint(tradingview_bp)
+    logger.info("✅ TradingView webhook blueprint registered")
+except Exception as e:
+    logger.warning(f"⚠️  Could not register TradingView webhook blueprint: {e}")
+
 # Initialize Coinbase client once
 try:
     from nija_client import CoinbaseClient

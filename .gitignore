@@ -4,3 +4,7 @@ __pycache__/
 .vscode/
 node_modules/
 # do not ignore *.sh or start_all.sh
+
+# Safe trading stack artifacts
+*.log
+pending-approvals.json
