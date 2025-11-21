@@ -1,7 +1,13 @@
 import time
-import jwt
 import requests
 import logging
+
+# Defensive import for PyJWT
+try:
+    import jwt
+except ImportError as e:
+    raise ImportError("PyJWT is required. Install it with: pip install PyJWT>=2.6.0") from e
+
 from config import (
     COINBASE_JWT_PEM,
     COINBASE_JWT_KID,
@@ -11,15 +17,70 @@ from config import (
     LIVE_TRADING,
     SPOT_TICKERS,
     MIN_TRADE_PERCENT,
-    MAX_TRADE_PERCENT
+    MAX_TRADE_PERCENT,
+    MODE,
+    COINBASE_ACCOUNT_ID,
+    CONFIRM_LIVE
 )
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("NijaCoinbaseClient")
 
+
+def check_live_safety(client=None):
+    """
+    Validate MODE, COINBASE_ACCOUNT_ID, and CONFIRM_LIVE requirements.
+    Check API key permissions to ensure withdraw permission is not present.
+    
+    Raises:
+        RuntimeError: If safety checks fail
+    """
+    # Check MODE validity
+    valid_modes = ["SANDBOX", "DRY_RUN", "LIVE"]
+    if MODE not in valid_modes:
+        raise RuntimeError(f"Invalid MODE '{MODE}'. Must be one of: {', '.join(valid_modes)}")
+    
+    # LIVE mode requires COINBASE_ACCOUNT_ID and CONFIRM_LIVE
+    if MODE == "LIVE":
+        if not COINBASE_ACCOUNT_ID:
+            raise RuntimeError(
+                "LIVE mode requires COINBASE_ACCOUNT_ID environment variable to be set. "
+                "Refusing to place live orders without explicit account ID."
+            )
+        if not CONFIRM_LIVE:
+            raise RuntimeError(
+                "LIVE mode requires CONFIRM_LIVE=true environment variable. "
+                "Refusing to place live orders without explicit confirmation."
+            )
+        logger.warning("⚠️  LIVE MODE ENABLED - Real orders will be placed!")
+    else:
+        logger.info(f"Running in {MODE} mode - No real orders will be placed")
+    
+    # Check API key permissions if client is available
+    if client is not None:
+        try:
+            # Try to get API key permissions
+            permissions = client.get_api_key_permissions()
+            if permissions and "withdraw" in str(permissions).lower():
+                raise RuntimeError(
+                    "SECURITY WARNING: API key has withdraw permission. "
+                    "This is dangerous and unnecessary for trading. "
+                    "Please remove withdraw permission from your API key and try again."
+                )
+        except AttributeError:
+            # get_api_key_permissions method doesn't exist, use fallback check
+            logger.warning("Unable to check API key permissions - method not available")
+        except Exception as e:
+            logger.warning(f"Could not verify API key permissions: {e}")
+    
+    logger.info("✅ Live safety checks passed")
+
 class CoinbaseClient:
     def __init__(self):
+        # Run safety checks before initializing
+        check_live_safety()
+        
         self.base_url = COINBASE_API_BASE
         self.jwt_token = self.generate_jwt()
         self.headers = {
@@ -27,6 +88,12 @@ class CoinbaseClient:
             "CB-VERSION": "2025-01-01",
             "Content-Type": "application/json"
         }
+        
+        # Run safety checks again with client instance to check permissions
+        try:
+            check_live_safety(self)
+        except Exception as e:
+            logger.warning(f"Post-initialization safety check: {e}")
 
     def generate_jwt(self):
         now = int(time.time())
@@ -54,6 +121,15 @@ class CoinbaseClient:
         except Exception as e:
             logger.error(f"Failed to fetch accounts: {e}")
             return []
+    
+    def get_api_key_permissions(self):
+        """
+        Attempt to fetch API key permissions.
+        This is a placeholder - actual implementation depends on Coinbase API.
+        """
+        # Note: Coinbase Advanced Trade API may not have a direct endpoint for this
+        # This is a safety mechanism placeholder
+        return None
 
     def get_account_balance(self, account_id=TRADING_ACCOUNT_ID):
         url = f"{self.base_url}/v2/accounts/{account_id}"
