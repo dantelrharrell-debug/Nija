@@ -4,3 +4,11 @@ __pycache__/
 .vscode/
 node_modules/
 # do not ignore *.sh or start_all.sh
+
+# Backup files
+*.backup
+
+# Test artifacts and logs
+/tmp/*.log
+/tmp/*.json
+pending_approvals.json
