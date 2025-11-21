@@ -1,7 +1,13 @@
 import time
-import jwt
 import requests
 import logging
+
+# Defensive jwt import
+try:
+    import jwt
+except ImportError:
+    raise ImportError("PyJWT is required. Install with: pip install PyJWT>=2.6.0")
+
 from config import (
     COINBASE_JWT_PEM,
     COINBASE_JWT_KID,
@@ -11,15 +17,70 @@ from config import (
     LIVE_TRADING,
     SPOT_TICKERS,
     MIN_TRADE_PERCENT,
-    MAX_TRADE_PERCENT
+    MAX_TRADE_PERCENT,
+    MODE,
+    COINBASE_ACCOUNT_ID,
+    CONFIRM_LIVE
 )
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("NijaCoinbaseClient")
 
+
+def check_live_safety(client_instance=None):
+    """
+    Validates MODE/ACCOUNT rules and checks for withdraw permissions.
+    Raises RuntimeError if safety checks fail.
+    """
+    # Check MODE requirements
+    if MODE == "LIVE":
+        if not COINBASE_ACCOUNT_ID:
+            raise RuntimeError(
+                "LIVE mode requires COINBASE_ACCOUNT_ID to be set. "
+                "Please set the COINBASE_ACCOUNT_ID environment variable."
+            )
+        if not CONFIRM_LIVE:
+            raise RuntimeError(
+                "LIVE mode requires CONFIRM_LIVE=true to be set. "
+                "Please set the CONFIRM_LIVE environment variable to 'true' to confirm live trading."
+            )
+        logger.info(f"✅ LIVE mode enabled with account: {COINBASE_ACCOUNT_ID}")
+    elif MODE == "DRY_RUN":
+        logger.info("✅ DRY_RUN mode enabled - no real orders will be placed")
+    elif MODE == "SANDBOX":
+        logger.info("✅ SANDBOX mode enabled - using sandbox environment")
+    else:
+        raise RuntimeError(
+            f"Invalid MODE: {MODE}. Must be SANDBOX, DRY_RUN, or LIVE."
+        )
+    
+    # Check API key permissions if client is available
+    if client_instance:
+        try:
+            # Try to check API key permissions
+            permissions = client_instance.get_api_key_permissions()
+            if permissions and "withdraw" in str(permissions).lower():
+                raise RuntimeError(
+                    "SECURITY ERROR: API key has withdraw permission. "
+                    "For safety, please remove withdraw permission from your Coinbase API key."
+                )
+            logger.info("✅ API key permissions validated - no withdraw permission detected")
+        except AttributeError:
+            # Fallback if get_api_key_permissions doesn't exist
+            logger.warning(
+                "⚠️  Could not verify API key permissions. "
+                "Please manually ensure your API key does NOT have withdraw permission."
+            )
+        except Exception as e:
+            logger.warning(f"⚠️  Error checking API key permissions: {e}")
+
+
 class CoinbaseClient:
     def __init__(self):
+        # Validate safety checks before initializing
+        check_live_safety()
+        
         self.base_url = COINBASE_API_BASE
         self.jwt_token = self.generate_jwt()
         self.headers = {
@@ -27,6 +88,9 @@ class CoinbaseClient:
             "CB-VERSION": "2025-01-01",
             "Content-Type": "application/json"
         }
+        
+        # Run permission check after headers are set
+        check_live_safety(self)
 
     def generate_jwt(self):
         now = int(time.time())
@@ -54,6 +118,21 @@ class CoinbaseClient:
         except Exception as e:
             logger.error(f"Failed to fetch accounts: {e}")
             return []
+    
+    def get_api_key_permissions(self):
+        """
+        Attempt to retrieve API key permissions from Coinbase.
+        Returns permissions data if available.
+        """
+        url = f"{self.base_url}/v2/user/auth"
+        try:
+            resp = requests.get(url, headers=self.headers)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("data", {})
+        except Exception as e:
+            logger.debug(f"Could not fetch API key permissions: {e}")
+            return None
 
     def get_account_balance(self, account_id=TRADING_ACCOUNT_ID):
         url = f"{self.base_url}/v2/accounts/{account_id}"

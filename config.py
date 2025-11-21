@@ -25,3 +25,20 @@ FUTURES_TICKERS = SPOT_TICKERS.copy()
 # TradingView webhook
 TV_WEBHOOK_SECRET = "your_webhook_secret_here"
 TV_WEBHOOK_PORT = 5000
+
+# Coinbase API Base URL
+COINBASE_API_BASE = "https://api.coinbase.com"
+
+# Trade size percentages
+MIN_TRADE_PERCENT = 0.5
+MAX_TRADE_PERCENT = 2.0
+
+# Safe Trading Configuration
+MODE = os.getenv("MODE", "DRY_RUN")  # SANDBOX, DRY_RUN, or LIVE
+COINBASE_ACCOUNT_ID = os.getenv("COINBASE_ACCOUNT_ID", "")
+CONFIRM_LIVE = os.getenv("CONFIRM_LIVE", "false").lower() == "true"
+TRADINGVIEW_WEBHOOK_SECRET = os.getenv("TRADINGVIEW_WEBHOOK_SECRET", "")
+MAX_ORDER_USD = float(os.getenv("MAX_ORDER_USD", "100.0"))
+MAX_ORDERS_PER_MINUTE = int(os.getenv("MAX_ORDERS_PER_MINUTE", "5"))
+MANUAL_APPROVAL_COUNT = int(os.getenv("MANUAL_APPROVAL_COUNT", "0"))
+LOG_PATH = os.getenv("LOG_PATH", "/tmp/nija_trading.log")
