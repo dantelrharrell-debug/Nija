@@ -21,6 +21,19 @@ logger = logging.getLogger("TradingViewWebhook")
 tradingview_bp = Blueprint('tradingview', __name__, url_prefix='/tradingview')
 
 
+def _serialize_payload(payload: dict) -> bytes:
+    """
+    Serialize payload consistently for signature generation and verification.
+    
+    Args:
+        payload: Dictionary to serialize
+    
+    Returns:
+        JSON bytes with consistent formatting
+    """
+    return json.dumps(payload, separators=(',', ':')).encode('utf-8')
+
+
 def verify_signature(payload_bytes: bytes, signature: str) -> bool:
     """
     Verify HMAC SHA256 signature from TradingView webhook.
@@ -167,7 +180,7 @@ def generate_test_signature(payload: dict) -> str:
     Returns:
         HMAC SHA256 signature as hex string
     """
-    payload_bytes = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+    payload_bytes = _serialize_payload(payload)
     signature = hmac.new(
         TRADINGVIEW_WEBHOOK_SECRET.encode('utf-8'),
         payload_bytes,

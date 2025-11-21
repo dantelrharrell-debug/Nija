@@ -7,7 +7,7 @@ try:
     import jwt
 except ImportError:
     raise ImportError(
-        "PyJWT is required. Install it with: pip install PyJWT>=2.6.0"
+        "PyJWT is required. Install it with: pip install 'PyJWT>=2.6.0'"
     )
 
 from config import (

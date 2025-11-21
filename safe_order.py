@@ -29,6 +29,15 @@ from config import (
 
 logger = logging.getLogger("SafeOrder")
 
+# Order status constants
+STATUS_DRY_RUN = "dry_run"
+STATUS_REJECTED = "rejected"
+STATUS_RATE_LIMITED = "rate_limited"
+STATUS_PENDING_APPROVAL = "pending_approval"
+STATUS_READY_TO_SUBMIT = "ready_to_submit"
+STATUS_SUBMITTED = "submitted"
+STATUS_COMPLETED = "completed"
+
 
 class RateLimiter:
     """Simple rate limiter for order submission."""
@@ -83,7 +92,7 @@ class SafeOrderManager:
                     try:
                         entry = json.loads(line.strip())
                         # Only count orders that actually went through or would go through
-                        if entry.get("status") in ["ready_to_submit", "submitted", "completed"]:
+                        if entry.get("status") in [STATUS_READY_TO_SUBMIT, STATUS_SUBMITTED, STATUS_COMPLETED]:
                             count += 1
                     except json.JSONDecodeError:
                         continue
@@ -204,16 +213,16 @@ class SafeOrderManager:
             self._validate_live_mode()
         except RuntimeError as e:
             logger.error(f"Live mode validation failed: {e}")
-            response = {"error": str(e), "status": "rejected"}
-            self._log_order(order_request, response, "rejected")
+            response = {"error": str(e), "status": STATUS_REJECTED}
+            self._log_order(order_request, response, STATUS_REJECTED)
             return response
         
         # Check order size limit
         if size_usd > MAX_ORDER_USD:
             error_msg = f"Order size ${size_usd} exceeds MAX_ORDER_USD=${MAX_ORDER_USD}"
             logger.error(error_msg)
-            response = {"error": error_msg, "status": "rejected"}
-            self._log_order(order_request, response, "rejected")
+            response = {"error": error_msg, "status": STATUS_REJECTED}
+            self._log_order(order_request, response, STATUS_REJECTED)
             return response
         
         # Check rate limit
@@ -221,17 +230,17 @@ class SafeOrderManager:
             wait_time = self.rate_limiter.wait_time()
             error_msg = f"Rate limit exceeded. Wait {wait_time:.1f}s before next order"
             logger.warning(error_msg)
-            response = {"error": error_msg, "status": "rate_limited"}
-            self._log_order(order_request, response, "rate_limited")
+            response = {"error": error_msg, "status": STATUS_RATE_LIMITED}
+            self._log_order(order_request, response, STATUS_RATE_LIMITED)
             return response
         
         # Check manual approval if needed
         if not self._check_manual_approval(client_order_id):
             response = {
-                "status": "pending_approval",
+                "status": STATUS_PENDING_APPROVAL,
                 "message": f"Order requires manual approval. Check {self.approval_path}"
             }
-            self._log_order(order_request, response, "pending_approval")
+            self._log_order(order_request, response, STATUS_PENDING_APPROVAL)
             return response
         
         # Record rate limit before submission (applies to all modes)
@@ -240,23 +249,23 @@ class SafeOrderManager:
         # DRY_RUN mode - don't submit real orders
         if MODE == "DRY_RUN":
             response = {
-                "status": "dry_run",
+                "status": STATUS_DRY_RUN,
                 "message": f"DRY_RUN: {side.upper()} ${size_usd} {symbol}"
             }
             logger.info(f"DRY_RUN: {side.upper()} ${size_usd} {symbol}")
-            self._log_order(order_request, response, "dry_run")
+            self._log_order(order_request, response, STATUS_DRY_RUN)
             return response
         
         # SANDBOX or LIVE mode - prepare to submit
         # Here we would call the actual Coinbase client
         # For now, return a mock response indicating where real submission would happen
         response = {
-            "status": "ready_to_submit",
+            "status": STATUS_READY_TO_SUBMIT,
             "mode": MODE,
             "message": "Order passed all safety checks, ready for actual submission to Coinbase"
         }
         
-        self._log_order(order_request, response, "ready_to_submit")
+        self._log_order(order_request, response, STATUS_READY_TO_SUBMIT)
         self.order_count += 1
         
         return response
