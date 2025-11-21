@@ -28,8 +28,8 @@ order_timestamps = []
 # Track total orders submitted for manual approval
 total_orders_submitted = 0
 
-# Pending approvals file path
-PENDING_APPROVALS_FILE = LOG_PATH.replace(".log", "_pending_approvals.json")
+# Pending approvals file path - use pathlib for proper path construction
+PENDING_APPROVALS_FILE = str(Path(LOG_PATH).parent / (Path(LOG_PATH).stem + "_pending_approvals.json"))
 
 
 def validate_mode_and_account():
@@ -206,11 +206,12 @@ def submit_order(
         }
     elif MODE == "SANDBOX":
         logger.info(f"SANDBOX: {side.upper()} ${size_usd:.2f} {symbol}")
-        # In sandbox, we could call client.place_order with sandbox endpoint
-        # For now, just log it
+        # Note: SANDBOX mode currently logs orders without executing them
+        # For actual sandbox testing, implement sandbox-specific API calls
+        # or use a test account with minimal funds
         coinbase_response = {
             "status": "sandbox",
-            "message": "Order submitted to sandbox"
+            "message": "Order logged in SANDBOX mode (not executed)"
         }
     elif MODE == "LIVE":
         logger.info(f"LIVE: Placing {side.upper()} order for ${size_usd:.2f} {symbol}")

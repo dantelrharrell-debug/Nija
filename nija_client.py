@@ -123,16 +123,29 @@ class CoinbaseClient:
         """
         Attempt to retrieve API key permissions from Coinbase.
         Returns permissions data if available.
+        
+        Note: This endpoint may vary depending on Coinbase API version.
+        This is a best-effort check - manual verification is recommended.
         """
-        url = f"{self.base_url}/v2/user/auth"
-        try:
-            resp = requests.get(url, headers=self.headers)
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("data", {})
-        except Exception as e:
-            logger.debug(f"Could not fetch API key permissions: {e}")
-            return None
+        # Try multiple potential endpoints for permission checking
+        endpoints = [
+            f"{self.base_url}/v2/user/auth",
+            f"{self.base_url}/api/v3/brokerage/key_permissions"
+        ]
+        
+        for url in endpoints:
+            try:
+                resp = requests.get(url, headers=self.headers, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    logger.debug(f"Successfully fetched permissions from {url}")
+                    return data.get("data", {})
+            except Exception as e:
+                logger.debug(f"Could not fetch permissions from {url}: {e}")
+                continue
+        
+        logger.debug("Could not fetch API key permissions from any endpoint")
+        return None
 
     def get_account_balance(self, account_id=TRADING_ACCOUNT_ID):
         url = f"{self.base_url}/v2/accounts/{account_id}"

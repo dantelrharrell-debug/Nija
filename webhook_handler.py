@@ -28,8 +28,11 @@ def verify_signature(payload: bytes, signature: str) -> bool:
         True if signature is valid, False otherwise
     """
     if not TRADINGVIEW_WEBHOOK_SECRET:
-        logger.warning("TRADINGVIEW_WEBHOOK_SECRET not set - signature verification disabled")
-        return True  # Allow requests if no secret is configured (for testing)
+        logger.warning(
+            "TRADINGVIEW_WEBHOOK_SECRET not set - signature verification disabled. "
+            "This is insecure for production use!"
+        )
+        return True  # Allow requests if no secret is configured (for testing only)
     
     try:
         # Compute expected signature
