@@ -7,16 +7,29 @@ services:
       dockerfile: Dockerfile.bot
     container_name: nija-bot
     environment:
-      - COINBASE_API_KEY=${COINBASE_API_KEY}
-      - COINBASE_API_SECRET=${COINBASE_API_SECRET}
-      - COINBASE_API_PASSPHRASE=${COINBASE_API_PASSPHRASE}
-      - TRADING_ACCOUNT_ID=${TRADING_ACCOUNT_ID}
-      - LIVE_TRADING=${LIVE_TRADING}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - PORT=5000
-    volumes:
-      - .:/app
-    restart: always
+      # Coinbase Authentication (JWT-based)
+      - COINBASE_ORG_ID=${COINBASE_ORG_ID}
+      - COINBASE_JWT_PEM=${COINBASE_JWT_PEM}
+      - COINBASE_JWT_KID=${COINBASE_JWT_KID}
+      - COINBASE_JWT_ISSUER=${COINBASE_JWT_ISSUER}
+      # Legacy API credentials (if needed)
+      - COINBASE_API_KEY=${COINBASE_API_KEY:-}
+      - COINBASE_API_SECRET=${COINBASE_API_SECRET:-}
+      - COINBASE_API_PASSPHRASE=${COINBASE_API_PASSPHRASE:-}
+      # Bot Configuration
+      - COINBASE_ACCOUNT_ID=${COINBASE_ACCOUNT_ID:-}
+      - TRADING_ACCOUNT_ID=${TRADING_ACCOUNT_ID:-}
+      - LIVE_TRADING=${LIVE_TRADING:-0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Trading Parameters
+      - RETRY_DELAY=${RETRY_DELAY:-5}
+      - MAX_RETRIES=${MAX_RETRIES:-5}
+      - MIN_TRADE_PERCENT=${MIN_TRADE_PERCENT:-0.02}
+      - MAX_TRADE_PERCENT=${MAX_TRADE_PERCENT:-0.10}
+      - DEFAULT_TRADE_PERCENT=${DEFAULT_TRADE_PERCENT:-0.05}
+    restart: unless-stopped
+    depends_on:
+      - nija-web
 
   nija-web:
     build:
@@ -27,7 +40,13 @@ services:
       - "5000:5000"
     environment:
       - PORT=5000
-      - LOG_LEVEL=${LOG_LEVEL}
-    volumes:
-      - .:/app
-    restart: always
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Coinbase credentials for web service
+      - COINBASE_ORG_ID=${COINBASE_ORG_ID}
+      - COINBASE_JWT_PEM=${COINBASE_JWT_PEM}
+      - COINBASE_JWT_KID=${COINBASE_JWT_KID}
+      - COINBASE_JWT_ISSUER=${COINBASE_JWT_ISSUER}
+      - COINBASE_API_KEY=${COINBASE_API_KEY:-}
+      - COINBASE_API_SECRET=${COINBASE_API_SECRET:-}
+      - COINBASE_API_PASSPHRASE=${COINBASE_API_PASSPHRASE:-}
+    restart: unless-stopped
