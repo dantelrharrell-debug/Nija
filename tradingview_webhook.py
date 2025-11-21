@@ -107,11 +107,13 @@ def webhook():
         if signal and symbol:
             logger.info(f"TradingView signal: {signal} for {symbol}")
             
-            # Here you would call your trading logic, e.g.:
-            # from safe_order import submit_order
-            # from nija_client import CoinbaseClient
-            # client = CoinbaseClient()
-            # submit_order(client, symbol, signal, size_usd=10.0)
+            # Integration point for trading logic:
+            # To enable automated trading from TradingView alerts, implement here:
+            # 1. Import: from safe_order import submit_order
+            # 2. Import: from nija_client import CoinbaseClient
+            # 3. Initialize client (or use a shared instance)
+            # 4. Call submit_order(client, symbol, signal, size_usd=...)
+            # Note: Ensure proper error handling and rate limiting
         else:
             logger.warning("Webhook payload missing signal or symbol")
         

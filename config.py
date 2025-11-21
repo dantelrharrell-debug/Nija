@@ -1,4 +1,6 @@
 import os
+import secrets
+import logging
 
 # Coinbase Org + JWT
 COINBASE_ORG_ID = "ce77e4ea-ecca-42ec-912a-b6b4455ab9d0"
@@ -49,10 +51,8 @@ FUTURES_TICKERS = SPOT_TICKERS.copy()
 # TradingView webhook
 TRADINGVIEW_WEBHOOK_SECRET = os.getenv("TRADINGVIEW_WEBHOOK_SECRET", os.getenv("TV_WEBHOOK_SECRET", ""))
 if not TRADINGVIEW_WEBHOOK_SECRET:
-    import secrets
     # Generate random secret if not set (warn user to set it properly)
     TRADINGVIEW_WEBHOOK_SECRET = secrets.token_hex(32)
-    import logging
     logging.warning(
         "TRADINGVIEW_WEBHOOK_SECRET not set! Using auto-generated secret. "
         "Set TRADINGVIEW_WEBHOOK_SECRET environment variable for production use."

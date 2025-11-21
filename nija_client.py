@@ -2,7 +2,9 @@ import time
 import requests
 import logging
 
-# Defensive jwt import (PyJWT)
+# Defensive import for PyJWT library used for JWT token generation
+# PyJWT is required for authenticating with Coinbase Advanced Trade API
+# Install with: pip install PyJWT>=2.6.0
 try:
     import jwt
 except ImportError as e:
