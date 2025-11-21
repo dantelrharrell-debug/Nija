@@ -1,5 +1,11 @@
 import time
-import jwt
+try:
+    import jwt
+except ModuleNotFoundError as e:
+    raise ModuleNotFoundError(
+        "Missing Python dependency 'PyJWT' which provides the 'jwt' module. "
+        "Install it with `pip install PyJWT` or add `PyJWT>=2.6.0` to your requirements.txt and rebuild the image."
+    ) from e
 import requests
 import logging
 from config import (
