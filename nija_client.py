@@ -64,25 +64,17 @@ def check_api_key_permissions(client):
         
     Raises:
         RuntimeError if withdraw permission is detected
+    
+    Note:
+        Coinbase API does not currently expose key permissions via API.
+        This is a placeholder for future implementation when/if the API supports it.
     """
-    try:
-        # Try to get API key permissions from Coinbase
-        # This is a placeholder - actual implementation depends on Coinbase API
-        # For now, we'll log a warning that this check should be implemented
-        logger.warning(
-            "API key permission check: Coinbase API does not expose key permissions via API. "
-            "Please manually verify that your API key does NOT have withdraw permissions. "
-            "Only 'view' and 'trade' permissions should be enabled for safety."
-        )
-        # If in the future Coinbase exposes this via API, uncomment and implement:
-        # permissions = client.get_api_key_permissions()
-        # if 'withdraw' in permissions or 'transfer' in permissions:
-        #     raise RuntimeError(
-        #         "SAFETY ERROR: API key has withdraw/transfer permissions. "
-        #         "For safety, please create a new API key with only 'view' and 'trade' permissions."
-        #     )
-    except Exception as e:
-        logger.warning(f"Could not verify API key permissions: {e}")
+    # TODO: Implement actual API key permission check when Coinbase API supports it
+    logger.warning(
+        "API key permission check: Coinbase API does not expose key permissions via API. "
+        "Please manually verify that your API key does NOT have withdraw permissions. "
+        "Only 'view' and 'trade' permissions should be enabled for safety."
+    )
 
 class CoinbaseClient:
     def __init__(self):

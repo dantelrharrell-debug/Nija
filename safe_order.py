@@ -14,6 +14,7 @@ import os
 import json
 import time
 import logging
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -242,7 +243,7 @@ def submit_order(
         
         # Add to pending approvals
         approvals = _load_pending_approvals()
-        order_request["order_id"] = f"pending_{int(time.time())}_{_order_count}"
+        order_request["order_id"] = f"pending_{uuid.uuid4()}"
         order_request["status"] = "pending_approval"
         approvals["pending"].append(order_request)
         _save_pending_approvals(approvals)

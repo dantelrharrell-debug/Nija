@@ -6,15 +6,15 @@ import unittest
 import hmac
 import hashlib
 import json
+import os
 from unittest.mock import patch
 
 from flask import Flask
 
-# Mock config before importing
-with patch.dict('os.environ', {
-    'TRADINGVIEW_WEBHOOK_SECRET': 'test_secret_key_12345'
-}):
-    from tradingview_webhook import tradingview_bp, verify_signature
+# Set environment before any imports
+os.environ['TRADINGVIEW_WEBHOOK_SECRET'] = 'test_secret_key_12345'
+
+from tradingview_webhook import tradingview_bp, verify_signature
 
 
 class TestTradingViewWebhook(unittest.TestCase):

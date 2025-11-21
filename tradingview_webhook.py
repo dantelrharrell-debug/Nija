@@ -91,8 +91,11 @@ def webhook():
                 "message": "Invalid JSON payload"
             }), 400
         
-        # Log received webhook
-        logger.info(f"Received TradingView webhook: {payload}")
+        # Log received webhook (only non-sensitive fields)
+        logger.info(
+            f"Received TradingView webhook - signal: {payload.get('signal')}, "
+            f"symbol: {payload.get('symbol')}"
+        )
         
         # Process webhook payload
         # This is where you would integrate with your trading logic
