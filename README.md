@@ -109,3 +109,49 @@ This README reflects the current green-check stable version of NIJA Bot and its 
 3. Bot runs 24/7, trades automatically on Coinbase if SDK is available
 4. If Coinbase SDK is unavailable or PEM invalid, bot runs in **safe dry-run mode**
 
+---
+
+## Startup Script
+
+The repository includes a robust startup script at `scripts/start_all.sh` for production deployments.
+
+### Required Environment Variables
+
+The startup script checks for the following required environment variables:
+- `COINBASE_API_KEY` - Your Coinbase API key
+- `COINBASE_API_SECRET` - Your Coinbase API secret
+- `COINBASE_PEM_CONTENT` - Your Coinbase PEM certificate content
+
+If any of these variables are missing, the script will exit with a non-zero status unless `ALLOW_MISSING_ENV=1` is set (see below).
+
+### Optional Environment Variables
+
+- `PORT` - The port to run the server on (default: 5000)
+- `WEB_CONCURRENCY` - The number of gunicorn workers to spawn (default: 1)
+- `ALLOW_MISSING_ENV` - Set to `1` to allow the script to continue even if required environment variables are missing. This is useful for testing/demo environments but should **never** be used in production.
+
+### Features
+
+- **Environment validation**: Checks all required environment variables before starting
+- **UTC timestamps**: All log lines include UTC timestamps for easier troubleshooting
+- **Flexible execution**: Prefers system `gunicorn`, falls back to `python -m gunicorn`, and ultimately to `python main.py` if gunicorn is unavailable
+- **Signal handling**: Uses `exec` to ensure the process receives signals directly for graceful shutdown
+- **POSIX-compatible**: Written in POSIX-compatible Bash with `set -euo pipefail` for robust error handling
+
+### Usage
+
+```bash
+# Production usage (with all required env vars set)
+./scripts/start_all.sh
+
+# Testing/demo usage (allows missing env vars)
+ALLOW_MISSING_ENV=1 ./scripts/start_all.sh
+
+# Custom port and worker count
+PORT=8080 WEB_CONCURRENCY=4 ./scripts/start_all.sh
+```
+
+### Security Note
+
+⚠️ **Never** set `ALLOW_MISSING_ENV=1` in production environments. This setting bypasses critical environment variable validation and should only be used for testing or demonstration purposes.
+
