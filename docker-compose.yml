@@ -6,15 +6,14 @@ services:
       context: .
       dockerfile: Dockerfile.bot
     container_name: nija-bot
-    command: /app/bot/start_bot.sh
     environment:
-      - GITHUB_PAT=${GITHUB_PAT}
       - COINBASE_API_KEY=${COINBASE_API_KEY}
       - COINBASE_API_SECRET=${COINBASE_API_SECRET}
       - COINBASE_API_PASSPHRASE=${COINBASE_API_PASSPHRASE}
       - TRADING_ACCOUNT_ID=${TRADING_ACCOUNT_ID}
       - LIVE_TRADING=${LIVE_TRADING}
       - LOG_LEVEL=${LOG_LEVEL}
+      - PORT=5000
     volumes:
       - .:/app
     restart: always
@@ -24,12 +23,11 @@ services:
       context: .
       dockerfile: Dockerfile.web
     container_name: nija-web
-    command: /app/web/start_web.sh
+    ports:
+      - "5000:5000"
     environment:
       - PORT=5000
       - LOG_LEVEL=${LOG_LEVEL}
-    ports:
-      - "5000:5000"
     volumes:
       - .:/app
     restart: always
