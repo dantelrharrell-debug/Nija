@@ -17,8 +17,8 @@ services:
       - COINBASE_API_SECRET=${COINBASE_API_SECRET:-}
       - COINBASE_API_PASSPHRASE=${COINBASE_API_PASSPHRASE:-}
       # Bot Configuration
-      - COINBASE_ACCOUNT_ID=${COINBASE_ACCOUNT_ID:-}
-      - TRADING_ACCOUNT_ID=${TRADING_ACCOUNT_ID:-}
+      - COINBASE_ACCOUNT_ID=${COINBASE_ACCOUNT_ID:-}  # Specific account ID for trading
+      - TRADING_ACCOUNT_ID=${TRADING_ACCOUNT_ID:-}    # Legacy trading account ID (may be same as COINBASE_ACCOUNT_ID)
       - LIVE_TRADING=${LIVE_TRADING:-0}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Trading Parameters
@@ -28,8 +28,6 @@ services:
       - MAX_TRADE_PERCENT=${MAX_TRADE_PERCENT:-0.10}
       - DEFAULT_TRADE_PERCENT=${DEFAULT_TRADE_PERCENT:-0.05}
     restart: unless-stopped
-    depends_on:
-      - nija-web
 
   nija-web:
     build:
