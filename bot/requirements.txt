@@ -1,9 +1,6 @@
 PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
-<<<<<<< HEAD
-coinbase-advanced-py>=1.0.0
-=======
 gunicorn>=20.1.0
 loguru>=0.7.0
 Flask>=2.0.0
@@ -13,12 +10,18 @@ PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
 coinbase-advanced>=0.1.0
-<<<<<<< HEAD
->>>>>>> 0d2e855 (Add coinbase client + PyJWT[crypto], cryptography, ecdsa for LIVE trading)
-=======
 
 PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
 coinbase-advanced>=0.1.0
->>>>>>> 2b64308 (Add coinbase client + PyJWT[crypto], cryptography, ecdsa for LIVE trading)
+
+PyJWT[crypto]>=2.6.0
+cryptography>=40.0.0
+ecdsa>=0.18.0
+coinbase-advanced-py>=1.0.0
+
+PyJWT[crypto]>=2.6.0
+cryptography>=40.0.0
+ecdsa>=0.18.0
+coinbase-advanced-py>=1.0.0
