@@ -15,21 +15,22 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Install Rust for cryptography compilation ---
+# --- Install Rust (needed for cryptography) ---
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# --- Copy requirements files ---
-COPY bot/requirements.txt web/requirements.txt ./
+# --- Copy bot and web folders preserving folder structure ---
+COPY bot/ ./bot/
+COPY web/ ./web/
 
-# --- Install Python dependencies ---
+# --- Install Python dependencies from both requirements.txt ---
 RUN pip install --no-cache-dir -r bot/requirements.txt -r web/requirements.txt
 
-# --- Copy application source code ---
-COPY . .
+# --- Copy the rest of the application code ---
+COPY main.py config.py coinbase_trader.py tv_webhook_listener.py nija_client.py ./
 
 # --- Expose port for Gunicorn ---
 EXPOSE 5000
 
-# --- Command to start the app ---
+# --- Start the app using Gunicorn ---
 CMD ["gunicorn", "-b", "0.0.0.0:5000", "main:app"]
