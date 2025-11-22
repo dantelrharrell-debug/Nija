@@ -1,52 +1,46 @@
-# Use Python 3.11 slim base image
+# Use Python 3.11 slim as base
 FROM python:3.11-slim
 
-# metadata
-LABEL maintainer="you@example.com"
+# Ensure noninteractive apt
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Set working directory
-WORKDIR /app
-
-# Install basic system dependencies required to build Python packages.
-# We include curl because we may need it to install rust (optional).
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential \
-      ca-certificates \
-      curl \
-      git \
-      libssl-dev \
-      libffi-dev \
-      pkg-config \
-      python3-dev \
+# Install OS-level build dependencies needed to compile cryptography and other wheels
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    pkg-config \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
+    ca-certificates \
+    gcc \
+    g++ \
+    make \
     && rm -rf /var/lib/apt/lists/*
 
-# Optional: install Rust toolchain so cryptography can compile if wheels are not available.
-# Comment this block out if you want a smaller image and believe binary wheels will be available.
-RUN curl https://sh.rustup.rs -sSf | sh -s -- -y && \
-    /bin/bash -lc "source $HOME/.cargo/env" && \
-    rm -rf /root/.rustup/toolchains/*/install.log || true
+# Install rustup (non-interactive) — cryptography may need Rust to build on some platforms
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Make sure pip/setuptools/wheel are up-to-date (do this before pip installs)
+WORKDIR /app
+
+# Copy only requirements first to leverage Docker cache
+COPY requirements.txt /app/requirements.txt
+
+# Upgrade pip & install wheel & setuptools first
 RUN python3 -m pip install --upgrade pip setuptools wheel
 
-# Copy app code (copy requirements files first for better layer caching)
-COPY bot/requirements.txt ./bot/requirements.txt
-COPY web/requirements.txt ./web/requirements.txt
+# Install Python deps (this will install cryptography / PyJWT with crypto support if available)
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy the rest of the app
-COPY main.py config.py coinbase_trader.py tv_webhook_listener.py nija_client.py /app/
-COPY bot/ /app/bot/
-COPY web/ /app/web/
-COPY start_all.sh /app/start_all.sh
-RUN chmod +x /app/start_all.sh
+# Copy application code
+COPY . /app
 
-# Install Python deps (bot first then web). Use --no-cache-dir to avoid storing cache.
-RUN pip install --no-cache-dir -r bot/requirements.txt
-RUN pip install --no-cache-dir -r web/requirements.txt
+# Make sure start script is executable (adjust name/path if different in your repo)
+RUN if [ -f /app/start_all.sh ]; then chmod +x /app/start_all.sh; fi
 
-# Expose Flask port
 EXPOSE 5000
 
-# Default command
+# Use startup script if present, otherwise fallback to gunicorn command (adjust module/app as needed)
 CMD ["/app/start_all.sh"]
