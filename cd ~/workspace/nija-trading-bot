@@ -1,15 +1,18 @@
-/app
- ├─ bot/
- │    ├─ bot.py
- │    ├─ requirements.txt
- │    └─ start_bot.sh
- ├─ web/
- │    ├─ app.py
- │    ├─ requirements.txt
- │    └─ start_web.sh
- ├─ main.py
- ├─ config.py
- ├─ coinbase_trader.py
- ├─ tv_webhook_listener.py
- ├─ nija_client.py
- └─ docker-compose.yml
+/app (repo root)
+│
+├─ bot/
+│   ├─ bot.py
+│   ├─ requirements.txt   <-- include the full cleaned dependencies
+│   └─ start_bot.sh
+│
+├─ web/
+│   ├─ app.py
+│   ├─ requirements.txt   <-- include the full cleaned dependencies
+│   └─ start_web.sh
+│
+├─ main.py
+├─ config.py
+├─ coinbase_trader.py
+├─ tv_webhook_listener.py
+├─ nija_client.py
+└─ docker-compose.yml
