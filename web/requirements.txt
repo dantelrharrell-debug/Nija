@@ -1,16 +1,12 @@
-# Crypto/JWT and Coinbase client deps for LIVE (ES256 support)
+# Minimal web reqs
+Flask>=2.3.2
+gunicorn>=23.0.0
+
+# Crypto / JWT libs (match bot)
 PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
 
-# Official/common Coinbase SDKs
+# Coinbase client candidates
 cbpro>=1.1.0
 coinbase>=2.0.0
-
-# Bot/web common dependencies
-Flask>=2.3.2
-requests>=2.31.0
-gunicorn>=23.0.0
-python-dotenv>=1.0.0
-pandas>=2.1.0
-numpy>=1.26.0
