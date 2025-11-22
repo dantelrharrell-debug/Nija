@@ -2,7 +2,7 @@
 Robust, defensive CoinbaseClient wrapper for Nija bot.
 
 Features:
-- Tries multiple installed Coinbase client libraries (official + advanced).
+- Tries multiple installed Coinbase client libraries (coinbase_advanced, official coinbase, wallet client, cbpro).
 - Provides stable methods:
     - fetch_accounts()
     - fetch_open_orders()
@@ -15,7 +15,7 @@ import os
 import logging
 import inspect
 import traceback
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger("nija_client")
 if not logger.handlers:
@@ -45,7 +45,7 @@ class CoinbaseClient:
         self.org_id = os.getenv("COINBASE_ORG_ID")
         self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
         self.base_url = os.getenv("COINBASE_BASE_URL", "https://api.coinbase.com")
-        self.advanced = True  # user is using Coinbase Advanced
+        self.advanced = True  # user is using Coinbase Advanced by default
 
         # Diagnostics flags
         jwt_set = bool(self.pem_content)
@@ -64,9 +64,8 @@ class CoinbaseClient:
         self.client = None
         self._client_type = None
 
-        # Priority 1: coinbase_advanced (common package names vary)
+        # Try coinbase_advanced first
         try:
-            # try a few common import paths for Coinbase Advanced libs
             from coinbase_advanced.client import Client as AdvancedClient  # type: ignore
             try:
                 if jwt_set:
@@ -87,20 +86,50 @@ class CoinbaseClient:
                 logger.info(f"coinbase_advanced.Client exists but failed to init: {e}")
                 self.client = None
         except Exception:
-            # not installed; move on
             pass
 
-        # Priority 2: coinbase.rest (older official client)
+        # Try official coinbase client (common paths)
         if self.client is None:
             try:
-                from coinbase.rest import RESTClient  # type: ignore
+                # coinbase (official) sometimes exposes wallet client at coinbase.wallet.client.Client
                 try:
-                    # RESTClient variations differ, attempt safe init
-                    self.client = RESTClient(key=self.api_key, secret=self.api_secret, base_url=self.base_url)
-                    self._client_type = "coinbase.rest.RESTClient"
-                    logger.info("Using coinbase.rest.RESTClient")
-                except Exception as e:
-                    logger.info(f"coinbase.rest.RESTClient import succeeded but init failed: {e}")
+                    from coinbase.wallet.client import Client as WalletClient  # type: ignore
+                    try:
+                        self.client = WalletClient(api_key=self.api_key, api_secret=self.api_secret)
+                        self._client_type = "coinbase.wallet.client.Client"
+                        logger.info("Using coinbase.wallet.client.Client")
+                    except Exception as e:
+                        logger.info(f"coinbase.wallet.client.Client init failed: {e}")
+                        self.client = None
+                except Exception:
+                    # Try top-level coinbase.client.Client
+                    from coinbase.client import Client as CoinbaseClientLib  # type: ignore
+                    try:
+                        self.client = CoinbaseClientLib(api_key=self.api_key, api_secret=self.api_secret)
+                        self._client_type = "coinbase.client.Client"
+                        logger.info("Using coinbase.client.Client")
+                    except Exception as e:
+                        logger.info(f"coinbase.client.Client init failed: {e}")
+                        self.client = None
+            except Exception:
+                pass
+
+        # Try cbpro (Coinbase Pro) as a fallback (many deployments still have it)
+        if self.client is None:
+            try:
+                import cbpro  # type: ignore
+                try:
+                    # cbpro.AuthenticatedClient(api_key, api_secret, passphrase)
+                    # Passphrase may be empty for some setups; we intentionally don't crash
+                    passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")
+                    try:
+                        self.client = cbpro.AuthenticatedClient(self.api_key, self.api_secret, passphrase)
+                        self._client_type = "cbpro.AuthenticatedClient"
+                        logger.info("Using cbpro.AuthenticatedClient")
+                    except Exception as e:
+                        logger.info(f"cbpro.AuthenticatedClient init failed: {e}")
+                        self.client = None
+                except Exception:
                     self.client = None
             except Exception:
                 pass
@@ -109,7 +138,6 @@ class CoinbaseClient:
         try:
             if self.client is not None:
                 logger.info(f"Underlying client type: {type(self.client)}")
-                # show only short attribute list to avoid huge logs
                 try:
                     attrs = sorted([a for a in dir(self.client) if not a.startswith("_")])[:200]
                     logger.info(f"Underlying client attrs (sample): {attrs}")
@@ -119,7 +147,7 @@ class CoinbaseClient:
                 logger.info(
                     "No supported Coinbase client library detected or initialization failed. "
                     "Operations will safely no-op and log errors. To enable full functionality, "
-                    "install 'coinbase_advanced' or 'coinbase' client package and ensure env vars are set."
+                    "install 'coinbase_advanced' or 'coinbase' or 'cbpro' client package and ensure env vars are set."
                 )
         except Exception:
             logger.debug("Diagnostics logging failed", exc_info=True)
@@ -131,7 +159,6 @@ class CoinbaseClient:
             else:
                 logger.info("🔹 Coinbase connection appears OK (fetched accounts).")
         except Exception:
-            # we protect init; log the stack for debugging but continue
             logger.error("🔹 Coinbase verification threw an exception:\n" + traceback.format_exc())
 
     # -----------------------------
@@ -164,7 +191,6 @@ class CoinbaseClient:
                             # Try to call with kwargs if it accepts them, else without
                             if kwargs and any(p.kind in (p.VAR_KEYWORD, p.KEYWORD_ONLY) for p in sig.parameters.values()):
                                 return attr(**kwargs)
-                            # if positional only or no params, attempt simple calls
                             if kwargs:
                                 try:
                                     return attr(**kwargs)
@@ -207,15 +233,17 @@ class CoinbaseClient:
             # Try underlying client method names first
             result = None
             if self.client is not None:
-                # try common client method signatures that return accounts
-                for name in ("fetch_accounts", "get_accounts", "list_accounts", "accounts", "get_account_list"):
+                for name in ("fetch_accounts", "get_accounts", "list_accounts", "accounts", "get_account_list", "get_accounts"):
                     if self._has_method(name):
                         try:
                             method = getattr(self.client, name)
                             try:
                                 accounts = method()
                             except TypeError:
-                                accounts = method(params={})
+                                try:
+                                    accounts = method(params={})
+                                except Exception:
+                                    accounts = method()
                             result = accounts
                             break
                         except Exception:
@@ -226,7 +254,6 @@ class CoinbaseClient:
                 result = self.fetch_accounts()
             if not result:
                 return False
-            # if result is list-like and has items, connected
             try:
                 if isinstance(result, list) and len(result) > 0:
                     return True
@@ -248,7 +275,6 @@ class CoinbaseClient:
         Always returns a list (empty on error).
         """
         try:
-            # Prefer underlying client methods via _safe_client_call
             result = self._safe_client_call(
                 "fetch_accounts", "get_accounts", "list_accounts", "accounts", "get_account_list", default=None
             )
@@ -260,7 +286,6 @@ class CoinbaseClient:
                 return result["accounts"] or []
             if isinstance(result, list):
                 return result
-            # try to coerce iterable
             try:
                 return list(result)
             except Exception:
@@ -276,7 +301,7 @@ class CoinbaseClient:
         """
         try:
             result = self._safe_client_call(
-                "fetch_open_orders", "get_orders", "list_orders", "open_orders", "orders", default=None
+                "fetch_open_orders", "get_orders", "list_orders", "open_orders", "orders", "get_open_orders", default=None
             )
             if result is None:
                 logger.info("fetch_open_orders: no client method available; returning empty list.")
@@ -301,7 +326,7 @@ class CoinbaseClient:
         """
         try:
             if product_id:
-                result = self._safe_client_call("fetch_fills", "get_fills", "list_fills", default=None, product_id=product_id)
+                result = self._safe_client_call("fetch_fills", "get_fills", "list_fills", "fills", default=None, product_id=product_id)
             else:
                 result = self._safe_client_call("fetch_fills", "get_fills", "list_fills", "fills", default=None)
             if result is None:
@@ -331,20 +356,48 @@ class CoinbaseClient:
                 "side": side,
                 # clients differ - many expect strings for size
                 "size": str(size),
-                # some advanced clients expect nested config; we try simple first
                 "type": "market",
             }
-            # 1) try client.create_order if present
-            if self.client is not None and hasattr(self.client, "create_order"):
-                try:
-                    return getattr(self.client, "create_order")(payload)
-                except TypeError:
-                    try:
-                        return getattr(self.client, "create_order")(product_id=product_id, side=side, size=str(size), order_type="market")
-                    except Exception:
-                        logger.debug("client.create_order variants failed", exc_info=True)
 
-            # 2) place_order / post_order / create variants
+            # 1) coinbase_advanced / official clients often have create_order or place_order
+            if self.client is not None:
+                # try create_order(payload)
+                if hasattr(self.client, "create_order"):
+                    try:
+                        return getattr(self.client, "create_order")(payload)
+                    except TypeError:
+                        try:
+                            return getattr(self.client, "create_order")(product_id=product_id, side=side, size=str(size), order_type="market")
+                        except Exception:
+                            logger.debug("client.create_order variants failed", exc_info=True)
+
+                # some clients expect params dict: self.client.place_order(order=payload) or self.client.place_order(product_id, side, size)
+                try:
+                    if hasattr(self.client, "place_order"):
+                        try:
+                            return getattr(self.client, "place_order")(order=payload)
+                        except TypeError:
+                            try:
+                                return getattr(self.client, "place_order")(product_id, side, str(size))
+                            except Exception:
+                                logger.debug("client.place_order variants failed", exc_info=True)
+                except Exception:
+                    pass
+
+                # cbpro has a method: place_market_order(product_id, side, size) or place_market_order(product_id, side, funds)
+                try:
+                    if hasattr(self.client, "place_market_order"):
+                        try:
+                            return getattr(self.client, "place_market_order")(product_id, side, str(size))
+                        except TypeError:
+                            try:
+                                return getattr(self.client, "place_market_order")(product_id, side, size)
+                            except Exception:
+                                logger.debug("client.place_market_order variants failed", exc_info=True)
+                except Exception:
+                    pass
+
+            # 2) try generic names via _safe_client_call
             result = self._safe_client_call("place_order", "post_order", "create", default=None, order=payload)
             if result is not None:
                 return result
