@@ -1,38 +1,42 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e  # Exit immediately if a command fails
 
-echo "== START_ALL.SH: $(date -u) =="
+# --- Load environment variables ---
+echo "🔹 Checking environment variables..."
+: "${COINBASE_API_KEY:?Need to set COINBASE_API_KEY}"
+: "${COINBASE_API_SECRET:?Need to set COINBASE_API_SECRET}"
+: "${COINBASE_PEM_CONTENT:?Need to set COINBASE_PEM_CONTENT}"
+: "${COINBASE_ORG_ID:?Need to set COINBASE_ORG_ID}"
 
-# ---- Basic env checks (customize or remove as needed) ----
-# If a required var is missing, we'll print a warning but continue.
-missing=0
-for var in COINBASE_API_KEY COINBASE_API_SECRET COINBASE_PEM_CONTENT; do
-  if [ -z "${!var:-}" ]; then
-    echo "❌ ERROR: ${var} not set"
-    missing=1
-  else
-    echo "✅ ${var} present"
-  fi
-done
+# --- Live trading flag ---
+LIVE_MODE=${LIVE_TRADING:-0}
 
-# If you want the script to abort on missing required envs, uncomment:
-# if [ "$missing" -ne 0 ]; then
-#   echo "Exiting due to missing env vars"
-#   exit 1
-# fi
+if [ "$LIVE_MODE" -eq 1 ]; then
+    echo "⚠️  LIVE TRADING MODE ENABLED!"
+else
+    echo "ℹ️  Running in SIMULATION mode."
+fi
 
-# Optional: show PORT
-echo "PORT = ${PORT:-5000}"
+# --- Print a summary (mask sensitive info) ---
+echo ""
+echo "===== Deployment Summary ====="
+echo "Mode: $([ "$LIVE_MODE" -eq 1 ] && echo LIVE || echo SIMULATION)"
+echo "API Key: ${COINBASE_API_KEY:0:4}****"
+echo "API Secret: **** (hidden)"
+echo "PEM: **** (hidden)"
+echo "Org ID: ${COINBASE_ORG_ID:0:4}****"
+echo "=============================="
+echo ""
 
-# Optional runtime-only installs (avoid in production)
-# echo "Installing runtime extras..."
-# python -m pip install --no-cache-dir -r /app/requirements.runtime.txt || true
+# --- Confirmation if LIVE ---
+if [ "$LIVE_MODE" -eq 1 ]; then
+    read -p "Confirm you want to START LIVE TRADING? Type YES to proceed: " CONFIRM
+    if [ "$CONFIRM" != "YES" ]; then
+        echo "❌ Live trading cancelled by user."
+        exit 1
+    fi
+fi
 
-# Ensure the app directory exists
-cd /app || true
-
-# Any pre-start commands you need (migrations, downloads, etc.)
-# e.g. python manage.py migrate --noinput
-
-# Start the app with gunicorn (adjust workers if desired)
-exec gunicorn -w 1 -k sync -b 0.0.0.0:${PORT:-5000} main:app
+# --- Start bot ---
+echo "🚀 Starting Nija trading bot..."
+exec gunicorn -b 0.0.0.0:5000 main:app --workers 1 --log-level info
