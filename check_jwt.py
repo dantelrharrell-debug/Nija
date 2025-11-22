@@ -1,25 +1,31 @@
-# check_jwt.py
-import os, time, requests, jwt
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
+import sys
+def _print(pkg_name):
+    try:
+        m = __import__(pkg_name)
+        v = getattr(m, "__version__", "<unknown>")
+        print(f"{pkg_name} version: {v}")
+    except Exception as e:
+        print(f"{pkg_name} import error: {e}")
 
-PEM_PATH = os.environ.get("COINBASE_PEM_PATH", "/app/coinbase.pem")
-ORG_ID = os.environ.get("COINBASE_ORG_ID")
-KID = os.environ.get("COINBASE_JWT_KID") or None
+def main():
+    print("Python:", sys.version.splitlines()[0])
+    try:
+        import jwt
+        print("PyJWT version:", getattr(jwt, "__version__", "<unknown>"))
+        try:
+            algos = []
+            if hasattr(jwt, "api_jws") and hasattr(jwt.api_jws, "_algorithms"):
+                algos = list(jwt.api_jws._algorithms.keys())
+            elif hasattr(jwt, "algorithms") and hasattr(jwt.algorithms, "get_default_algorithms"):
+                algos = list(jwt.algorithms.get_default_algorithms().keys())
+            print("Registered JWT algorithms:", algos)
+        except Exception as e:
+            print("Could not enumerate jwt algorithms:", e)
+    except Exception as e:
+        print("PyJWT import error:", e)
 
-with open(PEM_PATH, "rb") as f:
-    data = f.read()
-print("PEM bytes:", len(data))
+    _print("cryptography")
+    _print("ecdsa")
 
-key = serialization.load_pem_private_key(data, password=None, backend=default_backend())
-iat = int(time.time())
-payload = {"sub": ORG_ID, "iat": iat, "exp": iat + 300}
-headers = {"kid": KID} if KID else None
-
-token = jwt.encode(payload, key, algorithm="ES256", headers=headers)
-print("JWT preview:", token[:80])
-
-h = {"Authorization": f"Bearer {token}", "CB-VERSION": "2025-01-01"}
-r = requests.get("https://api.coinbase.com/v2/accounts", headers=h, timeout=12)
-print("Status:", r.status_code)
-print("Body (first 400 chars):", r.text[:400])
+if __name__ == '__main__':
+    main()
