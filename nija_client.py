@@ -1,186 +1,300 @@
+# nija_client.py
+"""
+Robust Coinbase client adapter for NIJA bot.
+
+Design goals:
+ - Safe to import: no network calls at import time.
+ - Support Coinbase Advanced (JWT with PEM) and Retail (HMAC with API key/secret/passphrase).
+ - Provide get_accounts() which other modules expect.
+ - Fail loudly only when required credentials are missing, otherwise return empty lists with logs.
+ - Gracefully handle missing optional crypto libraries (PyJWT[crypto], cryptography).
+"""
+
+from __future__ import annotations
+import os
 import time
-import requests
-import logging
+import json
+import hmac
+import hashlib
+from typing import Optional, List, Dict, Any, Tuple
+import base64
 
-# Defensive import for JWT
+import requests  # Ensure requests is in requirements.txt
+from loguru import logger
+
+# Try to import PyJWT[crypto] and cryptography; if not available, we'll gracefully fallback.
 try:
-    import jwt
-except ImportError:
-    raise RuntimeError(
-        "PyJWT is required but not installed. "
-        "Install it with: pip install PyJWT>=2.6.0"
-    )
+    import jwt  # PyJWT
+    _HAS_PYJWT = True
+except Exception:
+    jwt = None
+    _HAS_PYJWT = False
 
-from config import (
-    COINBASE_JWT_PEM,
-    COINBASE_JWT_KID,
-    COINBASE_JWT_ISSUER,
-    COINBASE_API_BASE,
-    TRADING_ACCOUNT_ID,
-    LIVE_TRADING,
-    SPOT_TICKERS,
-    MIN_TRADE_PERCENT,
-    MAX_TRADE_PERCENT,
-    MODE,
-    COINBASE_ACCOUNT_ID,
-    CONFIRM_LIVE
-)
+# Try to import cryptography for EC keys (ES256)
+try:
+    # cryptography is used indirectly by PyJWT for ES256 signing if installed
+    import cryptography  # type: ignore
+    _HAS_CRYPTO = True
+except Exception:
+    _HAS_CRYPTO = False
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("NijaCoinbaseClient")
+# Default candidate bases / endpoints for Coinbase Advanced and Retail
+DEFAULT_BASES = [
+    "https://api.cdp.coinbase.com",  # Coinbase Advanced
+    "https://api.coinbase.com",       # Coinbase Retail (classic)
+]
 
+# Candidate account-listing endpoints for Coinbase Advanced and Retail.
+# We'll try these in order, logging what we try.
+CANDIDATE_ACCOUNT_ENDPOINTS = [
+    "/platform/v2/evm/accounts",     # advanced EVM/accounts
+    "/platform/v2/accounts",         # advanced generic accounts
+    "/v2/accounts",                  # retail API
+    "/accounts",                     # fallback
+]
 
-def check_live_safety():
-    """
-    Validate MODE and ACCOUNT rules for safe trading.
-    Raises RuntimeError if safety checks fail.
-    """
-    if MODE == "LIVE":
-        if not COINBASE_ACCOUNT_ID:
-            raise RuntimeError(
-                "LIVE mode requires COINBASE_ACCOUNT_ID environment variable to be set"
-            )
-        if not CONFIRM_LIVE:
-            raise RuntimeError(
-                "LIVE mode requires CONFIRM_LIVE=true environment variable to be set. "
-                "This is a safety measure to prevent accidental live trading."
-            )
-        logger.warning("⚠️  LIVE TRADING MODE ENABLED - Real money will be used!")
-    elif MODE == "SANDBOX":
-        logger.info("🏖️  SANDBOX mode - using test environment")
-    elif MODE == "DRY_RUN":
-        logger.info("🔍 DRY_RUN mode - no real orders will be placed")
-    else:
-        raise RuntimeError(
-            f"Invalid MODE: {MODE}. Must be one of: SANDBOX, DRY_RUN, LIVE"
-        )
-
-
-def check_api_key_permissions(client_instance):
-    """
-    Check if API key has withdraw permission and refuse to run if present.
-    This is a safety measure to prevent unauthorized withdrawals.
-    """
-    try:
-        # Try to get API key permissions if the method exists
-        if hasattr(client_instance, 'get_api_key_permissions'):
-            permissions = client_instance.get_api_key_permissions()
-            if permissions and 'withdraw' in str(permissions).lower():
-                raise RuntimeError(
-                    "API key has WITHDRAW permission enabled. "
-                    "For safety, please create a new API key without withdraw permission."
-                )
-        else:
-            # Fallback: warn the user to manually verify
-            logger.warning(
-                "⚠️  Unable to verify API key permissions automatically. "
-                "Please ensure your API key does NOT have withdraw permission enabled."
-            )
-    except Exception as e:
-        if "withdraw" in str(e).lower():
-            raise
-        logger.warning(f"Could not check API key permissions: {e}")
 
 class CoinbaseClient:
-    def __init__(self):
-        # Perform safety checks before initializing
-        check_live_safety()
-        
-        self.base_url = COINBASE_API_BASE
-        self.jwt_token = self.generate_jwt()
-        self.headers = {
-            "Authorization": f"Bearer {self.jwt_token}",
-            "CB-VERSION": "2025-01-01",
-            "Content-Type": "application/json"
-        }
-        
-        # Check API key permissions for safety
-        check_api_key_permissions(self)
+    def __init__(self, base: Optional[str] = None, advanced: Optional[bool] = None):
+        """
+        Initialize a client. This does NOT perform network calls.
+        Use get_accounts() to request accounts later.
 
-    def generate_jwt(self):
-        now = int(time.time())
-        payload = {
-            "iat": now,
-            "exp": now + 60,  # short-lived token
-            "sub": COINBASE_JWT_ISSUER
-        }
-        token = jwt.encode(
-            payload,
-            COINBASE_JWT_PEM,
-            algorithm="ES256",
-            headers={"kid": COINBASE_JWT_KID}
-        )
-        return token
+        Parameters:
+         - base: override COINBASE_API_BASE env var
+         - advanced: if True forces Advanced mode; if False forces Retail/HMAC;
+                     if None, auto-detect from env (presence of PEM/ORG -> Advanced)
+        """
+        self.api_key = os.getenv("COINBASE_API_KEY") or None
+        self.api_secret = os.getenv("COINBASE_API_SECRET") or None
+        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE") or None
+        self.base = base or os.getenv("COINBASE_API_BASE") or DEFAULT_BASES[0]
+        # Service key PEM (for Coinbase Advanced) can be provided either via env PEM content
+        # or via a file path in COINBASE_PRIVATE_KEY_PATH
+        self.pem_content = os.getenv("COINBASE_PEM_CONTENT") or None
+        self.private_key_path = os.getenv("COINBASE_PRIVATE_KEY_PATH") or None
+        self.org_id = os.getenv("COINBASE_ORG_ID") or None
 
-    def get_accounts(self):
-        url = f"{self.base_url}/v2/accounts"
+        # If advanced param explicitly provided, respect it; else detect heuristically
+        if advanced is None:
+            # prefer advanced if we have a PEM or org id set
+            self.advanced = bool(self.pem_content or self.private_key_path or self.org_id)
+        else:
+            self.advanced = bool(advanced)
+
+        # Compute available auth mechanisms
+        self._has_api_keys = bool(self.api_key and self.api_secret)
+        self._has_passphrase = bool(self.passphrase)
+        self._has_jwt_ability = bool(self.pem_content or self.private_key_path)
+
+        logger.info(f"nija_client startup: loading Coinbase auth config")
+        logger.info(f" - base={self.base}")
+        logger.info(f" - advanced={self.advanced}")
+        logger.info(f" - jwt_set={'yes' if self._has_jwt_ability else 'no'}")
+        logger.info(f" - api_key_set={'yes' if self._has_api_keys else 'no'}")
+        logger.info(f" - api_passphrase_set={'yes' if self._has_passphrase else 'no'}")
+        logger.info(f" - org_id_set={'yes' if bool(self.org_id) else 'no'}")
+        logger.info(f" - private_key_path_set={'yes' if bool(self.private_key_path) else 'no'}")
+
+        # Sanity checks: we don't throw on import, but initialization should surface missing credentials
+        if not self._has_api_keys and not self._has_jwt_ability:
+            # No credentials at all: warn but don't raise here; other code may expect exception later
+            logger.warning("No Coinbase API keys or PEM found. Calls that require auth will fail.")
+        else:
+            logger.success("Found at least one authentication method (JWT or API key/secret).")
+
+    # ---- Public API ----
+
+    def get_accounts(self) -> List[Dict[str, Any]]:
+        """
+        External-facing method other modules call. Returns a list of account dicts (possibly empty).
+        This method handles authentication (JWT or HMAC) and will try multiple candidate endpoints.
+        """
         try:
-            resp = requests.get(url, headers=self.headers)
-            resp.raise_for_status()
-            data = resp.json()
-            logger.info(f"Fetched {len(data.get('data', []))} accounts")
-            return data.get("data", [])
-        except Exception as e:
-            logger.error(f"Failed to fetch accounts: {e}")
+            accounts = self._fetch_accounts_try_endpoints()
+            if not accounts:
+                logger.warning("No accounts returned (empty list). If you expect accounts, check key permissions and COINBASE_API_BASE.")
+            return accounts
+        except Exception as exc:
+            logger.error(f"Failed to fetch Coinbase accounts: {exc}")
             return []
 
-    def get_account_balance(self, account_id=TRADING_ACCOUNT_ID):
-        url = f"{self.base_url}/v2/accounts/{account_id}"
-        try:
-            resp = requests.get(url, headers=self.headers)
-            resp.raise_for_status()
-            data = resp.json()
-            balance = float(data.get("data", {}).get("balance", {}).get("amount", 0))
-            logger.info(f"Account {account_id} balance: {balance}")
-            return balance
-        except Exception as e:
-            logger.error(f"Failed to fetch account balance: {e}")
-            return 0.0
+    # ---- Internal helpers ----
 
-    def place_order(self, symbol, side, size_usd):
+    def _fetch_accounts_try_endpoints(self) -> List[Dict[str, Any]]:
         """
-        Place a market order on Coinbase Advanced.
-        - side: 'buy' or 'sell'
-        - size_usd: order amount in USD
+        Try candidate endpoints under self.base. Return parsed JSON account list or raise on fatal issues.
         """
-        url = f"{self.base_url}/v2/accounts/{TRADING_ACCOUNT_ID}/orders"
+        if not (self._has_api_keys or self._has_jwt_ability):
+            raise RuntimeError("Missing Coinbase credentials (API key/secret or PEM).")
+
+        session = requests.Session()
+        headers_common = {"User-Agent": "NIJA-Client/1.0"}
+
+        last_exc: Optional[Exception] = None
+        for endpoint in CANDIDATE_ACCOUNT_ENDPOINTS:
+            url = self.base.rstrip("/") + endpoint
+            logger.info(f"Trying Coinbase accounts endpoint: {url}")
+
+            # Build headers and auth per current available method
+            try:
+                if self.advanced and self._has_jwt_ability and _HAS_PYJWT and _HAS_CRYPTO:
+                    # Prefer JWT signing for Advanced if we have everything
+                    headers = headers_common.copy()
+                    headers.update(self._jwt_auth_headers())
+                    resp = session.get(url, headers=headers, timeout=10)
+                else:
+                    # Fall back to HMAC-style headers compatible with retail Advanced/HMAC
+                    headers = headers_common.copy()
+                    # note: some advanced APIs require different HMAC forms; we implement a common one here
+                    headers.update(self._hmac_headers("GET", endpoint, body=""))
+                    resp = session.get(url, headers=headers, timeout=10)
+
+                # Handle common statuses
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Many Coinbase endpoints embed accounts under 'data' or return list directly
+                    if isinstance(data, dict) and "data" in data:
+                        accounts = data["data"]
+                    elif isinstance(data, list):
+                        accounts = data
+                    else:
+                        accounts = data
+                    logger.success(f"Fetched accounts from {url} (count={len(accounts) if hasattr(accounts,'__len__') else 'unknown'})")
+                    return accounts if isinstance(accounts, list) else [accounts]
+                elif resp.status_code in (401, 403):
+                    logger.warning(f"Authentication/permission error when fetching accounts ({resp.status_code}) for {url}. Check API keys and permissions.")
+                    last_exc = RuntimeError(f"Auth error {resp.status_code}: {resp.text}")
+                    # Don't immediately raise — try next candidate endpoint (maybe different auth needed)
+                    continue
+                elif resp.status_code == 404:
+                    logger.warning(f"Endpoint not found (404) for {url}. Trying other candidate endpoints.")
+                    last_exc = RuntimeError("404 Not Found")
+                    continue
+                else:
+                    # Unexpected status: log and try next
+                    logger.warning(f"HTTP error for {url}: {resp.status_code} {resp.text}")
+                    last_exc = RuntimeError(f"{resp.status_code} {resp.text}")
+                    continue
+
+            except requests.RequestException as re:
+                logger.warning(f"Network/Request exception while fetching accounts: {re}")
+                last_exc = re
+                continue
+            except Exception as e:
+                logger.exception(f"Unexpected exception while fetching accounts: {e}")
+                last_exc = e
+                continue
+
+        # If we exit loop without a successful call, raise the last error to signal failure to caller.
+        raise RuntimeError(f"Failed to fetch Coinbase accounts. Tried candidate endpoints and none returned a successful response. Check COINBASE_API_BASE, API keys, and that the API key has permissions to list accounts. Last error: {last_exc}")
+
+    def _load_private_key(self) -> Optional[str]:
+        """Return PEM content string if available, else None."""
+        if self.pem_content:
+            return self.pem_content
+        if self.private_key_path and os.path.exists(self.private_key_path):
+            try:
+                with open(self.private_key_path, "r", encoding="utf-8") as fh:
+                    return fh.read()
+            except Exception as exc:
+                logger.error(f"Failed to read private key file {self.private_key_path}: {exc}")
+                return None
+        return None
+
+    def _jwt_auth_headers(self) -> Dict[str, str]:
+        """
+        Generate Authorization headers with a short-lived JWT generated from the service key (PEM).
+        Requires PyJWT with crypto backend and cryptography installed for ES256.
+        """
+        if not _HAS_PYJWT or not _HAS_CRYPTO:
+            logger.warning("PyJWT[crypto] or cryptography not available — cannot generate ES256 JWT. Falling back to HMAC where possible.")
+            return {}
+
+        key = self._load_private_key()
+        if not key:
+            logger.warning("No private key available for JWT generation.")
+            return {}
+
+        now = int(time.time())
         payload = {
-            "type": "market",
-            "side": side,
-            "product_id": symbol,
-            "funds": str(size_usd)  # amount in USD
+            # standard JWT claims for Coinbase service key usage; adjust as Coinbase docs require
+            "iss": self.org_id or (self.api_key or "nija-client"),
+            "iat": now,
+            "exp": now + 60,  # short-lived token
+            "sub": self.api_key or "nija-client",
+            "jti": f"nija-{now}"
         }
-        if not LIVE_TRADING:
-            logger.info(f"DRY RUN: {side.upper()} {size_usd}$ {symbol}")
-            return {"status": "dry_run"}
-
+        # Use ES256 for Coinbase service keys (typical), but allow override if needed
+        alg = "ES256"
         try:
-            resp = requests.post(url, json=payload, headers=self.headers)
-            resp.raise_for_status()
-            data = resp.json()
-            logger.info(f"Order placed: {data}")
-            return data
-        except Exception as e:
-            logger.error(f"Failed to place order: {e}")
-            return {"status": "failed", "error": str(e)}
+            token = jwt.encode(payload, key, algorithm=alg)
+            headers = {"Authorization": f"Bearer {token}"}
+            # Some Advanced endpoints also expect an org id header
+            if self.org_id:
+                headers["CB-ORG-ID"] = self.org_id
+            return headers
+        except Exception as exc:
+            logger.exception(f"Failed to generate JWT (ES256). Exception: {exc}")
+            return {}
 
-    def auto_scale_order(self, balance, side, symbol):
+    def _hmac_headers(self, method: str, path: str, body: str = "") -> Dict[str, str]:
         """
-        Auto-scale trade size based on account balance and min/max percentages
+        Build HMAC style headers compatible with Coinbase REST (CB-ACCESS-SIGN-like) or generic HMAC.
+        This is a conservative implementation; if your API key uses a different HMAC scheme, replace this.
         """
-        size_usd = max(MIN_TRADE_PERCENT/100*balance,
-                       min(MAX_TRADE_PERCENT/100*balance, balance))
-        return self.place_order(symbol, side, size_usd)
+        if not self._has_api_keys:
+            return {}
+
+        # timestamp
+        ts = str(int(time.time()))
+        # message: timestamp + method + path + body
+        msg = ts + method.upper() + path + (body or "")
+        # If API secret is base64, we try to decode it else use raw bytes
+        secret = self.api_secret
+        try:
+            secret_bytes = base64.b64decode(secret)
+        except Exception:
+            secret_bytes = secret.encode("utf-8")
+
+        signature = hmac.new(secret_bytes, msg.encode("utf-8"), hashlib.sha256).digest()
+        sig_hex = base64.b64encode(signature).decode("utf-8")
+
+        headers = {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": sig_hex,
+            "CB-ACCESS-TIMESTAMP": ts,
+        }
+        if self.passphrase:
+            headers["CB-ACCESS-PASSPHRASE"] = self.passphrase
+        return headers
+
+    # Utilities
+    @staticmethod
+    def parse_accounts_response(raw: Any) -> List[Dict[str, Any]]:
+        """Normalize various Coinbase account response types into a list of dicts."""
+        if raw is None:
+            return []
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, dict):
+            if "data" in raw and isinstance(raw["data"], list):
+                return raw["data"]
+            # single account object
+            return [raw]
+        return [raw]
+
+    # For compatibility with older code that might call 'list_accounts'
+    def list_accounts(self) -> List[Dict[str, Any]]:
+        return self.get_accounts()
 
 
-# ===========================
-# Example Usage
-# ===========================
+# If run as a script, perform a safe dry-run fetch (debugging helper)
 if __name__ == "__main__":
-    client = CoinbaseClient()
-    account_balance = client.get_account_balance()
-
-    # Example: Place a scaled BUY for each ticker
-    for ticker in SPOT_TICKERS:
-        client.auto_scale_order(account_balance, "buy", ticker)
+    logger.info("nija_client module executed as script — performing dry run get_accounts()")
+    c = CoinbaseClient()
+    try:
+        accounts = c.get_accounts()
+        logger.info(f"Dry-run accounts result: {accounts}")
+    except Exception as e:
+        logger.exception("Dry-run failed: %s", e)
