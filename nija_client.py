@@ -2,7 +2,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class CoinbaseClientWrapper:
+class CoinbaseClient:
     """
     Wrapper to unify different Coinbase client libraries.
     Tries multiple clients in order: coinbase_advanced, cbpro, coinbase.
@@ -59,7 +59,7 @@ class CoinbaseClientWrapper:
 
         try:
             if self.client_type == 'coinbase_advanced':
-                return self.client.get_accounts()  # adjust to your wrapper method
+                return self.client.get_accounts()
             elif self.client_type == 'cbpro':
                 return self.client.get_accounts()
             elif self.client_type == 'coinbase':
@@ -72,7 +72,7 @@ class CoinbaseClientWrapper:
 if __name__ == "__main__":
     import os
 
-    client = CoinbaseClientWrapper(
+    client = CoinbaseClient(
         api_key=os.environ.get("COINBASE_API_KEY"),
         api_secret=os.environ.get("COINBASE_API_SECRET"),
         passphrase=os.environ.get("COINBASE_API_PASSPHRASE"),
