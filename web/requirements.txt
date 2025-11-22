@@ -1,12 +1,11 @@
-# Core app dependencies
+# Core web dependencies
 Flask>=2.3.2
 requests>=2.31.0
 gunicorn>=23.0.0
 python-dotenv>=1.0.0
 
 # Optional utilities
-pandas>=2.1.0
-numpy>=1.26.0
+Jinja2>=3.1.2
 
 # Crypto/JWT and Coinbase client deps for LIVE (ES256 support)
 PyJWT[crypto]>=2.6.0
