@@ -13,4 +13,12 @@ PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
 coinbase-advanced>=0.1.0
+<<<<<<< HEAD
 >>>>>>> 0d2e855 (Add coinbase client + PyJWT[crypto], cryptography, ecdsa for LIVE trading)
+=======
+
+PyJWT[crypto]>=2.6.0
+cryptography>=40.0.0
+ecdsa>=0.18.0
+coinbase-advanced>=0.1.0
+>>>>>>> 2b64308 (Add coinbase client + PyJWT[crypto], cryptography, ecdsa for LIVE trading)
