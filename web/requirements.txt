@@ -30,3 +30,12 @@ PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
 coinbase-advanced-py>=1.0.0
+
+# Crypto/JWT and Coinbase client deps for LIVE (ES256 support)
+PyJWT[crypto]>=2.6.0
+cryptography>=40.0.0
+ecdsa>=0.18.0
+# Try common Coinbase client packages; pick the one your environment uses
+coinbase-advanced>=0.1.0
+cbpro>=1.1.0
+coinbase>=2.0.0
