@@ -1,10 +1,13 @@
-# Use Python 3.11 slim as base
+# Use Python 3.11 slim as the base image
 FROM python:3.11-slim
 
 # Ensure noninteractive apt
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install OS-level build dependencies needed to compile cryptography and other wheels
+# ------------------------------------------------------------
+# Install OS-level build dependencies for cryptography,
+# PyJWT[crypto], ecdsa, and Coinbase clients.
+# ------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -19,28 +22,45 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# Install rustup (non-interactive) — cryptography may need Rust to build on some platforms
+# ------------------------------------------------------------
+# Install Rust — required to build cryptography if wheels fail
+# ------------------------------------------------------------
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
+# ------------------------------------------------------------
+# Workdir
+# ------------------------------------------------------------
 WORKDIR /app
 
-# Copy only requirements first to leverage Docker cache
+# ------------------------------------------------------------
+# Copy requirements first for Docker cache efficiency
+# ------------------------------------------------------------
 COPY requirements.txt /app/requirements.txt
 
-# Upgrade pip & install wheel & setuptools first
+# ------------------------------------------------------------
+# Upgrade pip and builder tools
+# ------------------------------------------------------------
 RUN python3 -m pip install --upgrade pip setuptools wheel
 
-# Install Python deps (this will install cryptography / PyJWT with crypto support if available)
+# ------------------------------------------------------------
+# Install Python dependencies
+# ------------------------------------------------------------
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy application code
+# ------------------------------------------------------------
+# Copy application source code
+# ------------------------------------------------------------
 COPY . /app
 
-# Make sure start script is executable (adjust name/path if different in your repo)
+# ------------------------------------------------------------
+# Ensure start script is executable
+# ------------------------------------------------------------
 RUN if [ -f /app/start_all.sh ]; then chmod +x /app/start_all.sh; fi
 
 EXPOSE 5000
 
-# Use startup script if present, otherwise fallback to gunicorn command (adjust module/app as needed)
+# ------------------------------------------------------------
+# Default CMD
+# ------------------------------------------------------------
 CMD ["/app/start_all.sh"]
