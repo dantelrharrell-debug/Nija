@@ -1,18 +1,18 @@
 Flask>=2.3.2
 gunicorn>=23.0.0
 
-# If you use FastAPI / ASGI endpoints anywhere
+# Optional ASGI server (only needed if you run FastAPI/uvicorn)
 uvicorn[standard]>=0.22.0
 
-# Crypto / JWT
+# Crypto / JWT libs
 PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
 
-# Coinbase client (official)
+# Coinbase official client
 coinbase>=2.0.0
 
-# Other runtime dependencies your app uses
+# Common runtime deps used by your app
 requests>=2.31.0
 python-dotenv>=1.0.0
 pandas>=2.1.0
