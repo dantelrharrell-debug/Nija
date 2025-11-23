@@ -14,5 +14,5 @@ cryptography>=40.0.0
 ecdsa>=0.18.0
 
 # Coinbase client candidates (install only the client you use)
-cbpro>=1.1.4
+cbpro2>=1.2.0
 coinbase>=2.0.0
