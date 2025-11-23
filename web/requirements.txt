@@ -1,12 +1,12 @@
-# Minimal web server dependencies
-Flask>=2.3.2
+Flask>=3.1.2
+requests>=2.28.0
 gunicorn>=23.0.0
-
-# Crypto / JWT libs (shared)
+python-dotenv>=1.0.0
+pandas>=2.1.0
+numpy>=1.26.0
+loguru>=0.7.0
+backoff>=2.2.1
 PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
-ecdsa>=0.18.0
-
-# Coinbase client candidates
-cbpro>=1.1.4
-coinbase>=2.0.0
+ecdsa>=0.19.1
+coinbase-advanced>=0.1.0
