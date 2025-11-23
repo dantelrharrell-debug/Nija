@@ -1,49 +1,49 @@
-#!/bin/sh
-# start_all.sh - conservative startup script for the app
-# - starts expected background scripts (if present) and runs the webserver in foreground
-# - writes logs to /app/logs/
-# - safe: checks files exist before launching
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -eu
+# Default PORT
+PORT=${PORT:-5000}
 
-LOGDIR="/app/logs"
-PORT="${PORT:-8000}"
-
+LOGDIR=/app/logs
 mkdir -p "$LOGDIR"
 
-start_bg() {
-  script="$1"
-  logfile="$LOGDIR/$(basename "$script").log"
-  if [ -f "$script" ]; then
-    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') starting $script -> $logfile"
-    nohup python "$script" >> "$logfile" 2>&1 &
-  else
-    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') skipping $script (not found)"
-  fi
+timestamp() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
 
-echo "== start_all.sh: starting background workers (if present) =="
-start_bg main.py
-start_bg tv_webhook_listener.py
-start_bg coinbase_trader.py
+echo "$(timestamp) [inf] start_all.sh: starting background workers (if present)"
 
-echo "== start_all.sh: launching web process in foreground =="
-# Prefer gunicorn if available and a common app entrypoint exists
-if command -v gunicorn >/dev/null 2>&1; then
-  if [ -f "web/app.py" ]; then
-    echo "Starting gunicorn web.app:app on 0.0.0.0:$PORT"
-    exec gunicorn --bind 0.0.0.0:"$PORT" web.app:app
-  elif [ -f "web/__init__.py" ]; then
-    echo "Starting gunicorn web:app on 0.0.0.0:$PORT"
-    exec gunicorn --bind 0.0.0.0:"$PORT" web:app
-  elif [ -f "web.py" ]; then
-    echo "Starting gunicorn web:app (fallback) on 0.0.0.0:$PORT"
-    exec gunicorn --bind 0.0.0.0:"$PORT" web:app
-  else
-    echo "Gunicorn available but no common web entrypoint found; falling back to python -m http.server"
-    exec python -m http.server "$PORT"
-  fi
+# Helper to launch a background worker with logging
+start_bg() {
+  local cmd="$1"
+  local logfile="$2"
+  echo "$(timestamp) [inf] launching: $cmd -> $logfile"
+  # Run in background with nohup to survive when called non-interactively
+  nohup bash -lc "$cmd" > "$logfile" 2>&1 &
+  sleep 0.2
+}
+
+# -- Start background workers (adjust these commands if your filenames differ) --
+# coinbase_trader: trading engine (will log to /app/logs/coinbase_trader.py.log)
+if [ -f ./coinbase_trader.py ]; then
+  start_bg "python ./coinbase_trader.py" "$LOGDIR/coinbase_trader.py.log"
 else
-  echo "gunicorn not found; falling back to built-in server on $PORT"
-  exec python -m http.server "$PORT"
+  echo "$(timestamp) [warn] coinbase_trader.py not found, skipping"
 fi
+
+# tv_webhook_listener - if it is a non-ASGI worker helper, keep it as background (optional)
+# Uncomment this if you want tv_webhook_listener to run separately as a worker process.
+# if [ -f ./tv_webhook_listener.py ]; then
+#   start_bg "python ./tv_webhook_listener.py" "$LOGDIR/tv_webhook_listener.py.log"
+# fi
+
+# main.py - optional background process if it contains tasks you want running
+if [ -f ./main.py ]; then
+  start_bg "python ./main.py" "$LOGDIR/main.py.log"
+fi
+
+echo "$(timestamp) [inf] start_all.sh: launching web process in foreground"
+
+# Exec uvicorn web server (this replaces python -m http.server fallback)
+# web_app:app will import tv_webhook_listener.app if present, otherwise expose /webhook.
+exec uvicorn web_app:app --host 0.0.0.0 --port "$PORT" --log-level info
