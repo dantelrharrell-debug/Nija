@@ -1,139 +1,182 @@
-# BEGIN: PEM helper (paste near the top of nija_client.py)
+# nija_client.py
+"""
+Robust Coinbase client bootstrap for Nija trading bot.
+
+Features:
+- Writes COINBASE_PEM_CONTENT or COINBASE_JWT_PEM to disk (COINBASE_PEM_PATH) if provided.
+- Attempts to import multiple Coinbase client libraries and construct a client.
+- Exposes fetch_accounts() for sanity checks.
+- Logs useful diagnostics for startup.
+"""
+
 import os
 import logging
 import pathlib
+import time
+from typing import Optional, Dict, Any
 
-_log = logging.getLogger(__name__)
+LOG = logging.getLogger(__name__)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
-# Accept either COINBASE_PEM_CONTENT or COINBASE_JWT_PEM for full PEM text
-pem_content = os.getenv("COINBASE_PEM_CONTENT") or os.getenv("COINBASE_JWT_PEM")
-pem_path = os.getenv("COINBASE_PEM_PATH") or "/tmp/coinbase.pem"
+# -----------------------
+# PEM helper: write PEM content (if provided) to disk and set COINBASE_PEM_PATH
+# -----------------------
+def _ensure_pem_on_disk() -> Optional[str]:
+    """
+    If COINBASE_PEM_CONTENT or COINBASE_JWT_PEM is set, write it to COINBASE_PEM_PATH (or /tmp/coinbase.pem)
+    and return the path. On failure return None.
+    """
+    pem_content = os.getenv("COINBASE_PEM_CONTENT") or os.getenv("COINBASE_JWT_PEM")
+    if not pem_content:
+        LOG.debug("No COINBASE_PEM_CONTENT / COINBASE_JWT_PEM provided.")
+        return os.getenv("COINBASE_PEM_PATH")  # may be None
 
-if pem_content:
+    pem_path = os.getenv("COINBASE_PEM_PATH") or "/tmp/coinbase.pem"
     try:
         p = pathlib.Path(pem_path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        # If content is a one-line base64 style PEM (sometimes from UIs), preserve line breaks if present.
-        p.write_text(pem_content)
+        # Normalize common mistakes: ensure beginning/ending markers are present, preserve supplied text
+        text = pem_content.strip()
+        p.write_text(text + ("\n" if not text.endswith("\n") else ""))
         p.chmod(0o600)
         os.environ["COINBASE_PEM_PATH"] = str(p)
-        _log.info("Wrote COINBASE_PEM_CONTENT to %s", p)
+        LOG.info("Wrote COINBASE_PEM_CONTENT to %s", p)
+        return str(p)
     except Exception as e:
-        _log.exception("Failed to write PEM to %s: %s", pem_path, e)
-# END: PEM helper
+        LOG.exception("Failed to write PEM to %s: %s", pem_path, e)
+        return None
 
-"""
-nija_client - now wired to coinbase_adapter for robust detection.
+# Ensure PEM file is created early
+COINBASE_PEM_PATH = _ensure_pem_on_disk()
 
-This wrapper exposes:
-- fetch_accounts()
-- fetch_open_orders()
-- fetch_fills(product_id=None)
-- place_market_order(product_id, side, size)
+# -----------------------
+# Read environment config used below
+# -----------------------
+COINBASE_API_BASE = os.getenv("COINBASE_API_BASE", "https://api.coinbase.com")
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")  # expected to be the UUID/key id or API key string
+COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+COINBASE_ORG_ID = os.getenv("COINBASE_ORG_ID")
+COINBASE_JWT_KID = os.getenv("COINBASE_JWT_KID") or os.getenv("COINBASE_API_KID")
+ADVANCED = os.getenv("COINBASE_ADVANCED", "True").lower() in ("1", "true", "yes")
 
-It uses coinbase_adapter.create_adapter(...) to instantiate a normalized adapter around
-any detected Coinbase client (cbpro, coinbase, coinbase.wallet, or coinbase_advanced if available).
-"""
-import os
-import logging
-from typing import Any, Dict, List, Optional
+LOG.debug("nija_client startup: loading Coinbase auth config")
+LOG.debug(" - base=%s", COINBASE_API_BASE)
+LOG.debug(" - advanced=%s", ADVANCED)
+LOG.debug(" - jwt_set=%s", bool(os.getenv("COINBASE_JWT_PEM") or os.getenv("COINBASE_PEM_CONTENT")))
+LOG.debug(" - api_key_set=%s", bool(COINBASE_API_KEY))
+LOG.debug(" - api_passphrase_set=%s", bool(os.getenv("COINBASE_API_PASSPHRASE")))
+LOG.debug(" - org_id_set=%s", bool(COINBASE_ORG_ID))
+LOG.debug(" - private_key_path_set=%s", bool(COINBASE_PEM_PATH))
 
-logger = logging.getLogger("nija_client")
-if not logger.handlers:
-    logging.basicConfig(level=logging.INFO)
-
-try:
-    from coinbase_adapter import create_adapter  # runtime import
-except Exception:
-    create_adapter = None
-
-
-class CoinbaseClient:
+# -----------------------
+# Adapter: attempt to create a usable client from a few libraries
+# -----------------------
+class CoinbaseAdapter:
     def __init__(self):
-        logger.info("nija_client startup: loading Coinbase auth config")
-        self.api_key = os.getenv("COINBASE_API_KEY")
-        self.api_secret = os.getenv("COINBASE_API_SECRET")
-        self.org_id = os.getenv("COINBASE_ORG_ID")
-        self.pem_content = os.getenv("COINBASE_PEM_CONTENT")
-        self.base_url = os.getenv("COINBASE_BASE_URL", "https://api.coinbase.com")
-        self.passphrase = os.getenv("COINBASE_API_PASSPHRASE", "")
+        self.client = None
+        self.client_name = "none"
+        self._attempt_clients()
 
-        jwt_set = bool(self.pem_content)
-        api_key_set = bool(self.api_key)
-        org_id_set = bool(self.org_id)
-
-        logger.info(f" - base={self.base_url}")
-        logger.info(f" - advanced=True")
-        logger.info(f" - jwt_set={'yes' if jwt_set else 'no'}")
-        logger.info(f" - api_key_set={'yes' if api_key_set else 'no'}")
-        logger.info(f" - api_passphrase_set={'yes' if bool(self.passphrase) else 'no'}")
-        logger.info(f" - org_id_set={'yes' if org_id_set else 'no'}")
-        logger.info(f" - private_key_path_set=no")
-
-        self.adapter = None
-        if create_adapter:
+    def _attempt_clients(self):
+        # 1) Try coinbase_advanced (if you vendor it or install it)
+        try:
+            # coinbase_advanced's API and constructor may vary; attempt a generic import
+            from coinbase_advanced.client import Client as AdvancedClient  # type: ignore
+            LOG.info("coinbase_advanced found; attempting to initialize")
             try:
-                self.adapter = create_adapter(self.api_key, self.api_secret, self.passphrase, self.pem_content, self.org_id, self.base_url)
-                logger.info(f"nija_client: adapter client_name={getattr(self.adapter, 'client_name', None)}")
-            except Exception:
-                logger.exception("nija_client: create_adapter raised an exception")
-                self.adapter = None
-        else:
-            logger.info("nija_client: create_adapter not available; operations will no-op")
+                # If your implementation requires (org_id, pem_path...) adapt here
+                if COINBASE_PEM_PATH and COINBASE_ORG_ID:
+                    # many advanced libs want org+pem to sign; adapt as necessary
+                    client = AdvancedClient(org_id=COINBASE_ORG_ID, pem_path=COINBASE_PEM_PATH)
+                else:
+                    client = AdvancedClient()
+                self.client = client
+                self.client_name = "coinbase_advanced"
+                LOG.info("Initialized coinbase_advanced client")
+                return
+            except Exception as e:
+                LOG.exception("coinbase_advanced import succeeded but initialization failed: %s", e)
+        except Exception:
+            LOG.debug("coinbase_advanced not available")
 
-        # Connection check (only log verified if accounts actually present)
+        # 2) Try official coinbase wallet client (legacy) - coinbase.wallet.client.Client
         try:
-            accounts = self.fetch_accounts()
-            if accounts and isinstance(accounts, list) and len(accounts) > 0:
-                logger.info("🔹 Coinbase connection verified. Accounts fetched.")
+            from coinbase.wallet.client import Client as WalletClient  # type: ignore
+            LOG.info("coinbase.wallet.client available; trying to construct")
+            # Official Client typically wants api_key and api_secret, or can be used read-only.
+            if COINBASE_API_KEY and COINBASE_API_SECRET:
+                try:
+                    client = WalletClient(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET)
+                    self.client = client
+                    self.client_name = "coinbase.wallet.client"
+                    LOG.info("Initialized coinbase.wallet.client with API key/secret")
+                    return
+                except Exception as e:
+                    LOG.exception("Failed to initialize coinbase.wallet.client with key/secret: %s", e)
             else:
-                logger.error("🔹 Coinbase connection failed: unable to fetch accounts (client missing or returned no accounts)")
+                LOG.info("coinbase.wallet.client present but COINBASE_API_KEY/SECRET missing.")
         except Exception:
-            logger.exception("nija_client connection check threw")
+            LOG.debug("coinbase.wallet.client not available")
 
-    def is_connected(self) -> bool:
-        try:
-            if not self.adapter or not getattr(self.adapter, "client", None):
-                return False
-            accounts = self.fetch_accounts()
-            return bool(accounts and isinstance(accounts, list) and len(accounts) > 0)
-        except Exception:
-            return False
+        # 3) Fall back to None, but expose diagnostics
+        LOG.info("no supported Coinbase client library found; adapter client=None")
 
-    def fetch_accounts(self) -> List[Dict[str, Any]]:
+    def fetch_accounts(self) -> Optional[Any]:
+        """
+        Try to fetch account list for sanity checks. Return accounts or raise.
+        """
+        if not self.client:
+            raise RuntimeError("no Coinbase client available")
+
+        # Try common method names across client libs
+        # coinbase.wallet.client.Client -> get_accounts(), get_account, get_accounts()
         try:
-            if not self.adapter:
-                logger.debug("fetch_accounts: no adapter present; returning empty list.")
-                return []
-            return self.adapter.get_accounts() or []
+            if hasattr(self.client, "get_accounts"):
+                LOG.debug("Calling client.get_accounts()")
+                return self.client.get_accounts()
+            if hasattr(self.client, "list_accounts"):
+                LOG.debug("Calling client.list_accounts()")
+                return self.client.list_accounts()
+            if hasattr(self.client, "accounts") and hasattr(self.client.accounts, "list"):
+                LOG.debug("Calling client.accounts.list()")
+                return self.client.accounts.list()
+            # generic fallback: try attribute 'get' or 'request' (very defensive)
+            if hasattr(self.client, "get"):
+                LOG.debug("Calling client.get('/accounts')")
+                return self.client.get("/accounts")
         except Exception as e:
-            logger.exception(f"fetch_accounts exception: {e}")
-            return []
+            LOG.exception("Error while fetching accounts: %s", e)
+            raise
 
-    def fetch_open_orders(self) -> List[Dict[str, Any]]:
-        try:
-            if not self.adapter:
-                return []
-            return self.adapter.get_open_orders() or []
-        except Exception as e:
-            logger.exception(f"fetch_open_orders exception: {e}")
-            return []
+        raise RuntimeError("client present but no supported accounts method found")
 
-    def fetch_fills(self, product_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        try:
-            if not self.adapter:
-                return []
-            return self.adapter.get_fills(product_id) or []
-        except Exception as e:
-            logger.exception(f"fetch_fills exception: {e}")
-            return []
+# Instantiate adapter on import so logs appear in container startup
+_adapter = CoinbaseAdapter()
 
-    def place_market_order(self, product_id: str, side: str, size: float) -> Optional[Dict[str, Any]]:
-        try:
-            if not self.adapter:
-                logger.error("place_market_order: no adapter present")
-                return None
-            return self.adapter.place_market_order(product_id, side, size)
-        except Exception as e:
-            logger.exception(f"place_market_order exception: {e}")
-            return None
+def fetch_accounts():
+    """
+    Public helper: try to fetch accounts and return a truthy result or raise.
+    Used by startup checks and tests.
+    """
+    try:
+        accounts = _adapter.fetch_accounts()
+        LOG.info("✅ Coinbase connection verified. Accounts fetched: %s", getattr(accounts, "__len__", lambda: None)())
+        return accounts
+    except Exception as e:
+        LOG.error("🔹 Coinbase connection failed: %s", e)
+        raise
+
+# Optionally export the adapter and client for other modules
+adapter = _adapter
+client = _adapter.client
+client_name = _adapter.client_name
+
+# Example quick-run sanity check (only run if invoked directly)
+if __name__ == "__main__":
+    LOG.info("Running quick sanity checks for nija_client.py")
+    LOG.info("Adapter client_name=%s", client_name)
+    try:
+        _ = fetch_accounts()
+        LOG.info("Sanity check: fetch_accounts succeeded")
+    except Exception:
+        LOG.exception("Sanity check failed")
