@@ -1,51 +1,21 @@
-#!/bin/sh
-# start_all.sh - conservative startup script for the app
-# - starts long-running "bot" processes in background and runs the webserver in foreground
-# - logs per-process to /app/logs/*
-# - safe: checks files exist before launching
+# ... earlier content unchanged ...
 
-set -eu
+# Copy constraints file so pip can use it during install
+COPY constraints.txt ./constraints.txt
 
-LOGDIR="/app/logs"
-PORT="${PORT:-8000}"
+# Copy app files (add start_all.sh here so it exists in image)
+COPY start_all.sh ./start_all.sh
+RUN chmod +x ./start_all.sh
 
-mkdir -p "$LOGDIR"
+COPY bot/ ./bot/
+COPY web/ ./web/
+COPY web/*.py ./web/
+COPY bot/*.py ./bot/
+COPY main.py config.py coinbase_trader.py tv_webhook_listener.py nija_client.py ./
+COPY docker-compose.yml ./
 
-start_bg() {
-  script="$1"
-  logfile="$LOGDIR/$(basename "$script").log"
-  if [ -f "$script" ]; then
-    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') starting $script -> $logfile"
-    # nohup so backgrounded processes survive; redirect stdout/stderr
-    nohup python "$script" >> "$logfile" 2>&1 &
-  else
-    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') skipping $script (not found)"
-  fi
-}
+# Use constraints during install to avoid long dependency resolution/backtracking
+RUN pip install --no-cache-dir -r bot/requirements.txt -r web/requirements.txt -c constraints.txt
 
-echo "== start_all.sh: starting background workers (if present) =="
-# Start expected background processes if they exist
-start_bg main.py
-start_bg tv_webhook_listener.py
-start_bg coinbase_trader.py
-
-echo "== start_all.sh: launching web process in foreground =="
-# Start web server in foreground (gunicorn preferred). Try multiple common entrypoints.
-if command -v gunicorn >/dev/null 2>&1; then
-  if [ -f "web/app.py" ]; then
-    echo "Starting gunicorn web.app:app on 0.0.0.0:$PORT"
-    exec gunicorn --bind 0.0.0.0:"$PORT" web.app:app
-  elif [ -f "web/__init__.py" ]; then
-    echo "Starting gunicorn web:app on 0.0.0.0:$PORT"
-    exec gunicorn --bind 0.0.0.0:"$PORT" web:app
-  elif [ -f "web.py" ]; then
-    echo "Starting gunicorn web:app (fallback) on 0.0.0.0:$PORT"
-    exec gunicorn --bind 0.0.0.0:"$PORT" web:app
-  else
-    echo "Gunicorn available but no common web entrypoint found; falling back to python -m http.server"
-    exec python -m http.server "$PORT"
-  fi
-else
-  echo "gunicorn not found; falling back to built-in server on $PORT"
-  exec python -m http.server "$PORT"
-fi
+# Make start_all.sh the container entrypoint (runs in foreground)
+ENTRYPOINT ["./start_all.sh"]
