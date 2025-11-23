@@ -1,49 +1,70 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# start_all.sh - conservative startup script with robust WSGI/ASGI detection.
+# Starts expected background scripts (if present) and launches a web server in foreground.
+# Writes logs to /app/logs/.
+set -eu
 
-# Default PORT
-PORT=${PORT:-5000}
+LOGDIR="/app/logs"
+PORT="${PORT:-8000}"
 
-LOGDIR=/app/logs
 mkdir -p "$LOGDIR"
 
-timestamp() {
-  date -u +"%Y-%m-%dT%H:%M:%SZ"
-}
-
-echo "$(timestamp) [inf] start_all.sh: starting background workers (if present)"
-
-# Helper to launch a background worker with logging
 start_bg() {
-  local cmd="$1"
-  local logfile="$2"
-  echo "$(timestamp) [inf] launching: $cmd -> $logfile"
-  # Run in background with nohup to survive when called non-interactively
-  nohup bash -lc "$cmd" > "$logfile" 2>&1 &
-  sleep 0.2
+  script="$1"
+  logfile="$LOGDIR/$(basename "$script").log"
+  # Avoid launching duplicates if a process is already running
+  if pgrep -f "$(basename "$script")" >/dev/null 2>&1; then
+    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') skipping $script (already running)"
+    return
+  fi
+  if [ -f "$script" ]; then
+    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') launching: python $script -> $logfile"
+    nohup python "$script" >> "$logfile" 2>&1 &
+  else
+    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') skipping $script (not found)"
+  fi
 }
 
-# -- Start background workers (adjust these commands if your filenames differ) --
-# coinbase_trader: trading engine (will log to /app/logs/coinbase_trader.py.log)
-if [ -f ./coinbase_trader.py ]; then
-  start_bg "python ./coinbase_trader.py" "$LOGDIR/coinbase_trader.py.log"
-else
-  echo "$(timestamp) [warn] coinbase_trader.py not found, skipping"
+echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') start_all.sh: starting background workers (if present)"
+start_bg main.py
+start_bg tv_webhook_listener.py
+start_bg coinbase_trader.py
+
+echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') start_all.sh: launching web process in foreground"
+
+# Candidate entrypoints to try (module:app)
+CANDIDATES="web.app:app web:app main:app app:app"
+
+# Prefer gunicorn (WSGI) if present
+if command -v gunicorn >/dev/null 2>&1 ; then
+  for cand in $CANDIDATES; do
+    module=$(echo "$cand" | cut -d: -f1)
+    if python -c "import importlib; importlib.import_module('$module')" >/dev/null 2>&1; then
+      echo "Starting gunicorn $cand on 0.0.0.0:$PORT"
+      exec gunicorn --bind 0.0.0.0:"$PORT" "$cand"
+    fi
+  done
 fi
 
-# tv_webhook_listener - if it is a non-ASGI worker helper, keep it as background (optional)
-# Uncomment this if you want tv_webhook_listener to run separately as a worker process.
-# if [ -f ./tv_webhook_listener.py ]; then
-#   start_bg "python ./tv_webhook_listener.py" "$LOGDIR/tv_webhook_listener.py.log"
-# fi
-
-# main.py - optional background process if it contains tasks you want running
-if [ -f ./main.py ]; then
-  start_bg "python ./main.py" "$LOGDIR/main.py.log"
+# Try uvicorn for ASGI apps (FastAPI/Starlette)
+if command -v uvicorn >/dev/null 2>&1 ; then
+  for cand in $CANDIDATES; do
+    module=$(echo "$cand" | cut -d: -f1)
+    if python -c "import importlib; importlib.import_module('$module')" >/dev/null 2>&1; then
+      echo "Starting uvicorn $cand on 0.0.0.0:$PORT"
+      exec uvicorn "$cand" --host 0.0.0.0 --port "$PORT"
+    fi
+  done
 fi
 
-echo "$(timestamp) [inf] start_all.sh: launching web process in foreground"
+# Flask fallback if flask CLI exists and web package looks like a Flask app
+if [ -f "web/app.py" ] || [ -f "web/__init__.py" ]; then
+  if command -v flask >/dev/null 2>&1 ; then
+    echo "Starting flask run on 0.0.0.0:$PORT"
+    FLASK_APP=web.app exec flask run --host=0.0.0.0 --port="$PORT"
+  fi
+fi
 
-# Exec uvicorn web server (this replaces python -m http.server fallback)
-# web_app:app will import tv_webhook_listener.app if present, otherwise expose /webhook.
-exec uvicorn web_app:app --host 0.0.0.0 --port "$PORT" --log-level info
+# Last resort: static server to keep container up (no dynamic endpoints)
+echo "No WSGI/ASGI entrypoint found or servers missing; falling back to python -m http.server on port $PORT"
+exec python -m http.server "$PORT"
