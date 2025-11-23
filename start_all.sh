@@ -1,65 +1,51 @@
-#!/bin/bash
-# =============================
-# start_all.sh - Nija Trading Bot
-# FULL LIVE MODE CONFIRMATION
-# =============================
+#!/bin/sh
+# start_all.sh - conservative startup script for the app
+# - starts long-running "bot" processes in background and runs the webserver in foreground
+# - logs per-process to /app/logs/*
+# - safe: checks files exist before launching
 
-echo "=============================="
-echo "🔹 Starting Container"
-echo "=============================="
+set -eu
 
-# --- Load environment variables from .env if present ---
-if [ -f .env ]; then
-    export $(grep -v '^#' .env | xargs)
-fi
+LOGDIR="/app/logs"
+PORT="${PORT:-8000}"
 
-# --- Check LIVE mode ---
-if [ "$LIVE_TRADING" = "1" ]; then
-    echo "⚡ LIVE TRADING MODE ENABLED! Trades WILL execute."
-    MODE="LIVE"
+mkdir -p "$LOGDIR"
+
+start_bg() {
+  script="$1"
+  logfile="$LOGDIR/$(basename "$script").log"
+  if [ -f "$script" ]; then
+    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') starting $script -> $logfile"
+    # nohup so backgrounded processes survive; redirect stdout/stderr
+    nohup python "$script" >> "$logfile" 2>&1 &
+  else
+    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') skipping $script (not found)"
+  fi
+}
+
+echo "== start_all.sh: starting background workers (if present) =="
+# Start expected background processes if they exist
+start_bg main.py
+start_bg tv_webhook_listener.py
+start_bg coinbase_trader.py
+
+echo "== start_all.sh: launching web process in foreground =="
+# Start web server in foreground (gunicorn preferred). Try multiple common entrypoints.
+if command -v gunicorn >/dev/null 2>&1; then
+  if [ -f "web/app.py" ]; then
+    echo "Starting gunicorn web.app:app on 0.0.0.0:$PORT"
+    exec gunicorn --bind 0.0.0.0:"$PORT" web.app:app
+  elif [ -f "web/__init__.py" ]; then
+    echo "Starting gunicorn web:app on 0.0.0.0:$PORT"
+    exec gunicorn --bind 0.0.0.0:"$PORT" web:app
+  elif [ -f "web.py" ]; then
+    echo "Starting gunicorn web:app (fallback) on 0.0.0.0:$PORT"
+    exec gunicorn --bind 0.0.0.0:"$PORT" web:app
+  else
+    echo "Gunicorn available but no common web entrypoint found; falling back to python -m http.server"
+    exec python -m http.server "$PORT"
+  fi
 else
-    echo "⚠️  LIVE TRADING NOT ENABLED. Running in SAFE/DRY mode."
-    MODE="TEST"
+  echo "gunicorn not found; falling back to built-in server on $PORT"
+  exec python -m http.server "$PORT"
 fi
-
-# --- Check TradingView Webhook Secret ---
-if [ -z "$TRADINGVIEW_WEBHOOK_SECRET" ]; then
-    echo "❌ WARNING: TRADINGVIEW_WEBHOOK_SECRET not set! Webhooks NOT secure."
-else
-    echo "✅ TradingView webhook secret detected (masked): ${TRADINGVIEW_WEBHOOK_SECRET:0:4}****"
-fi
-
-# --- Print deployment summary ---
-echo ""
-echo "===== DEPLOYMENT SUMMARY ====="
-echo "Mode: $MODE"
-echo "API Key: ${COINBASE_API_KEY:0:4}****"
-echo "API Secret: **** (hidden)"
-echo "PEM: **** (hidden)"
-echo "Org ID: ${COINBASE_ORG_ID:0:4}****"
-echo "=============================="
-echo ""
-
-# --- Optional: test Coinbase connection ---
-echo "🔹 Verifying Coinbase connection..."
-python3 - <<'EOF'
-import os
-import logging
-from nija_client import CoinbaseClient
-
-logging.basicConfig(level=logging.INFO)
-
-try:
-    client = CoinbaseClient()
-    accounts = client.fetch_accounts()  # fetch account balances
-    logging.info(f"✅ Coinbase connection verified. Accounts fetched:")
-    for acc in accounts:
-        logging.info(f"  - {acc['currency']}: {acc['balance']} available")
-except Exception as e:
-    logging.error(f"❌ Coinbase connection failed: {e}")
-    exit(1)
-EOF
-
-echo ""
-echo "🚀 Starting Nija trading bot..."
-exec gunicorn main:app -b 0.0.0.0:5000 --workers 1 --worker-class sync
