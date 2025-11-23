@@ -1,32 +1,30 @@
 # web/wsgi.py
-from flask import Flask, jsonify
+import os
 import logging
+from flask import Flask, jsonify
 
-LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+LOG = logging.getLogger(__name__)
 
 def create_app():
     app = Flask(__name__)
 
-    # Basic health endpoint for Railway / healthchecks
     @app.route("/_health")
     def health():
         return jsonify({"status": "ok"})
 
-    # If you have a TradingView blueprint import it if available
+    # Try to register optional TradingView blueprint without failing the whole app
     try:
-        # If you previously vendor a tradingview_webhook package or module:
-        from tradingview_webhook import tradingview_blueprint  # adjust import as needed
+        from tradingview_webhook import tradingview_blueprint  # <- adjust if your module name differs
         app.register_blueprint(tradingview_blueprint, url_prefix="/tv")
         LOG.info("Registered tradingview_webhook blueprint")
     except Exception as e:
         LOG.warning("Could not register TradingView blueprint: %s", e)
 
-    # Register any other routes / blueprints here
     return app
 
-# recommended pattern for gunicorn: web.wsgi:app
+# Expose module-level app for WSGI servers
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(__import__("os").environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
