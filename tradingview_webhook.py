@@ -1,13 +1,17 @@
-# Shim to preserve legacy top-level import name.
-# If the real module lives in web/tradingview_webhook.py, import and re-export it here.
+# Shim for top-level import `import tradingview_webhook`
+# Re-exports the real blueprint from web/tradingview_webhook.py if present,
+# otherwise raises a clear ImportError for logs.
 
 try:
-    from web.tradingview_webhook import bp as bp  # blueprint name used by main.py (adjust if needed)
-    from web.tradingview_webhook import create_blueprint as create_blueprint  # optional
-except Exception:
-    # Fallback: try importing top-level tradingview_webhook (if it already exists)
-    try:
-        from tradingview_webhook import bp as bp  # noqa: F401
-    except Exception:
-        # Re-raise with clear message for logs
-        raise ImportError("tradingview_webhook shim: failed to import web.tradingview_webhook; ensure the real module exists at web/tradingview_webhook.py")
+    # Adjust the names below if your blueprint/object names differ.
+    from web.tradingview_webhook import bp as bp  # blueprint object expected by main.py
+    # Optionally re-export helper functions or factory names used by main.py
+    # from web.tradingview_webhook import create_blueprint as create_blueprint
+except Exception as _e:
+    # Give a clear, actionable message that will appear in logs.
+    raise ImportError(
+        "tradingview_webhook shim: failed to import web.tradingview_webhook. "
+        "Ensure the file web/tradingview_webhook.py exists and exports 'bp' "
+        "(or update main.py to import the correct module path). Original error: "
+        + repr(_e)
+    )
