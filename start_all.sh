@@ -1,4 +1,5 @@
 #!/bin/sh
+# start_all.sh - start non-web background workers, then run web server in foreground.
 set -eu
 
 LOGDIR="/app/logs"
@@ -22,20 +23,19 @@ start_bg() {
 }
 
 echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') start_all.sh: starting background workers (if present)"
-start_bg main.py
+# NOTE: main.py is intentionally NOT started here because it contains the webserver.
 start_bg tv_webhook_listener.py
 start_bg coinbase_trader.py
 
 echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') start_all.sh: launching web process in foreground"
 
-# Prefer explicit wrapper wsgi:app which we recommend adding
+# Prefer wsgi wrapper (wsgi:app), then candidates. This will exec the web server and keep container alive.
 if command -v gunicorn >/dev/null 2>&1 ; then
-  if python -c "import importlib,sys; importlib.import_module('wsgi')" >/dev/null 2>&1; then
+  if python -c "import importlib; importlib.import_module('wsgi')" >/dev/null 2>&1; then
     echo "Starting gunicorn wsgi:app on 0.0.0.0:$PORT"
     exec gunicorn --bind 0.0.0.0:"$PORT" wsgi:app
   fi
 
-  # fallback candidates
   CANDIDATES="web.wsgi:app web.app:app web:app main:app app:app"
   for cand in $CANDIDATES; do
     module=$(echo "$cand" | cut -d: -f1)
@@ -46,9 +46,8 @@ if command -v gunicorn >/dev/null 2>&1 ; then
   done
 fi
 
-# uvicorn/asgi fallback (if installed)
 if command -v uvicorn >/dev/null 2>&1 ; then
-  if python -c "import importlib,sys; importlib.import_module('wsgi')" >/dev/null 2>&1; then
+  if python -c "import importlib; importlib.import_module('wsgi')" >/dev/null 2>&1; then
     echo "Starting uvicorn wsgi:app on 0.0.0.0:$PORT"
     exec uvicorn wsgi:app --host 0.0.0.0 --port "$PORT"
   fi
