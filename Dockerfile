@@ -21,6 +21,10 @@ RUN pip install --no-cache-dir --upgrade pip
 # Copy constraints file so pip can use it during install
 COPY constraints.txt ./constraints.txt
 
+# Copy start script and make it executable
+COPY start_all.sh ./start_all.sh
+RUN chmod +x ./start_all.sh
+
 # Copy app files
 COPY bot/ ./bot/
 COPY web/ ./web/
@@ -31,3 +35,6 @@ COPY docker-compose.yml ./
 
 # Use constraints during install to avoid long dependency resolution/backtracking
 RUN pip install --no-cache-dir -r bot/requirements.txt -r web/requirements.txt -c constraints.txt
+
+# Run the start script as the container entrypoint
+ENTRYPOINT ["./start_all.sh"]
