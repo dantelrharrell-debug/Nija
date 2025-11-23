@@ -41,3 +41,4 @@ RUN pip install --no-cache-dir -r bot/requirements.txt -r web/requirements.txt -
 
 # Run the start script
 ENTRYPOINT ["./start_all.sh"]
+CMD ["./start_all.sh"]
