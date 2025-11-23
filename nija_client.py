@@ -1,3 +1,27 @@
+# BEGIN: PEM helper (paste near the top of nija_client.py)
+import os
+import logging
+import pathlib
+
+_log = logging.getLogger(__name__)
+
+# Accept either COINBASE_PEM_CONTENT or COINBASE_JWT_PEM for full PEM text
+pem_content = os.getenv("COINBASE_PEM_CONTENT") or os.getenv("COINBASE_JWT_PEM")
+pem_path = os.getenv("COINBASE_PEM_PATH") or "/tmp/coinbase.pem"
+
+if pem_content:
+    try:
+        p = pathlib.Path(pem_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # If content is a one-line base64 style PEM (sometimes from UIs), preserve line breaks if present.
+        p.write_text(pem_content)
+        p.chmod(0o600)
+        os.environ["COINBASE_PEM_PATH"] = str(p)
+        _log.info("Wrote COINBASE_PEM_CONTENT to %s", p)
+    except Exception as e:
+        _log.exception("Failed to write PEM to %s: %s", pem_path, e)
+# END: PEM helper
+
 """
 nija_client - now wired to coinbase_adapter for robust detection.
 
