@@ -1,12 +1,12 @@
-# Minimal web reqs
-Flask>=2.3.2
-gunicorn>=23.0.0
+# Web service dependencies
+Flask==3.1.2
+gunicorn==23.0.0
 
-# Crypto / JWT libs (match bot)
+# Crypto / JWT libs
 PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
 
-# Coinbase client candidates
+# Coinbase client options (same candidates)
 cbpro>=1.1.0
 coinbase>=2.0.0
