@@ -12,7 +12,6 @@ any detected Coinbase client (cbpro, coinbase, coinbase.wallet, or coinbase_adva
 """
 import os
 import logging
-import traceback
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("nija_client")
@@ -22,7 +21,6 @@ if not logger.handlers:
 try:
     from coinbase_adapter import create_adapter  # relative import at runtime
 except Exception:
-    # If adapter isn't present, we'll fallback to safe no-op behavior
     create_adapter = None
 
 
