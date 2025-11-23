@@ -5,5 +5,4 @@ PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
 coinbase>=2.0.0
-tradingview-webhook
 git+https://github.com/dantelrharrell-debug/Nija.git#egg=tradingview-webhook
