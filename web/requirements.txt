@@ -1,17 +1,3 @@
-# Minimal web server dependencies
-Flask>=2.3.2
-gunicorn>=23.0.0
-
-# Optional: for ASGI (FastAPI)
+fastapi>=0.111.0
 uvicorn[standard]>=0.22.0
-
-# Crypto / JWT libs (shared)
-PyJWT[crypto]>=2.6.0
-cryptography>=40.0.0
-ecdsa>=0.18.0
-
-# Coinbase client
-coinbase>=2.0.0
-
-# TradingView webhook integration
-tradingview-webhook
+python-multipart>=0.0.6
