@@ -19,7 +19,7 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
 
 try:
-    from coinbase_adapter import create_adapter  # relative import at runtime
+    from coinbase_adapter import create_adapter  # runtime import
 except Exception:
     create_adapter = None
 
@@ -52,39 +52,38 @@ class CoinbaseClient:
                 self.adapter = create_adapter(self.api_key, self.api_secret, self.passphrase, self.pem_content, self.org_id, self.base_url)
                 logger.info(f"nija_client: adapter client_name={getattr(self.adapter, 'client_name', None)}")
             except Exception:
-                logger.debug("nija_client: create_adapter raised an exception", exc_info=True)
+                logger.exception("nija_client: create_adapter raised an exception")
                 self.adapter = None
         else:
             logger.info("nija_client: create_adapter not available; operations will no-op")
 
-        # Connection check (defensive)
+        # Connection check (only log verified if accounts actually present)
         try:
-            if self.is_connected():
-                logger.info("🔹 Coinbase connection appears OK (fetched accounts).")
+            accounts = self.fetch_accounts()
+            if accounts and isinstance(accounts, list) and len(accounts) > 0:
+                logger.info("🔹 Coinbase connection verified. Accounts fetched.")
             else:
                 logger.error("🔹 Coinbase connection failed: unable to fetch accounts (client missing or returned no accounts)")
         except Exception:
-            logger.debug("nija_client connection check threw", exc_info=True)
+            logger.exception("nija_client connection check threw")
 
     def is_connected(self) -> bool:
         try:
-            if not self.adapter or not self.adapter.client:
+            if not self.adapter or not getattr(self.adapter, "client", None):
                 return False
             accounts = self.fetch_accounts()
-            if accounts and isinstance(accounts, list) and len(accounts) > 0:
-                return True
-            return False
+            return bool(accounts and isinstance(accounts, list) and len(accounts) > 0)
         except Exception:
             return False
 
     def fetch_accounts(self) -> List[Dict[str, Any]]:
         try:
             if not self.adapter:
-                logger.error("fetch_accounts: no adapter present; returning empty list.")
+                logger.debug("fetch_accounts: no adapter present; returning empty list.")
                 return []
             return self.adapter.get_accounts() or []
         except Exception as e:
-            logger.error(f"fetch_accounts exception: {e}")
+            logger.exception(f"fetch_accounts exception: {e}")
             return []
 
     def fetch_open_orders(self) -> List[Dict[str, Any]]:
@@ -93,7 +92,7 @@ class CoinbaseClient:
                 return []
             return self.adapter.get_open_orders() or []
         except Exception as e:
-            logger.error(f"fetch_open_orders exception: {e}")
+            logger.exception(f"fetch_open_orders exception: {e}")
             return []
 
     def fetch_fills(self, product_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -102,7 +101,7 @@ class CoinbaseClient:
                 return []
             return self.adapter.get_fills(product_id) or []
         except Exception as e:
-            logger.error(f"fetch_fills exception: {e}")
+            logger.exception(f"fetch_fills exception: {e}")
             return []
 
     def place_market_order(self, product_id: str, side: str, size: float) -> Optional[Dict[str, Any]]:
@@ -112,5 +111,5 @@ class CoinbaseClient:
                 return None
             return self.adapter.place_market_order(product_id, side, size)
         except Exception as e:
-            logger.error(f"place_market_order exception: {e}")
+            logger.exception(f"place_market_order exception: {e}")
             return None
