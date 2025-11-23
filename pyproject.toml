@@ -1,10 +1,11 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tradingview-webhook"
-version = "0.1.0"
-description = "TradingView webhook helper"
+name = "nija-tradingview-webhook"
+version = "0.0.1"
+description = "Minimal TradingView webhook package for NIJA repo"
 authors = [{name = "Dante Harrell"}]
-dependencies = []
+dependencies = ["Flask>=2.3.2"]
+packages = ["bot.tradingview_webhook"]
