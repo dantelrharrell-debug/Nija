@@ -1,18 +1,13 @@
-/app (repo root)
-│
-├─ bot/
-│   ├─ bot.py
-│   ├─ requirements.txt   <-- include the full cleaned dependencies
-│   └─ start_bot.sh
-│
+/app
 ├─ web/
-│   ├─ app.py
-│   ├─ requirements.txt   <-- include the full cleaned dependencies
-│   └─ start_web.sh
-│
-├─ main.py
-├─ config.py
-├─ coinbase_trader.py
-├─ tv_webhook_listener.py
-├─ nija_client.py
-└─ docker-compose.yml
+│  ├─ __init__.py
+│  ├─ wsgi.py          # your Flask/FastAPI app
+│  └─ tradingview_webhook.py
+├─ bots/
+│  ├─ coinbase_trader.py
+│  └─ tv_webhook_listener.py
+├─ logs/              # will be created automatically
+├─ requirements.txt
+├─ start_all.sh
+├─ gunicorn.conf.py
+└─ Dockerfile
