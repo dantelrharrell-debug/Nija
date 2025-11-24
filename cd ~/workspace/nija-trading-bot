@@ -1,13 +1,7 @@
-/app
-├─ web/
-│  ├─ __init__.py
-│  ├─ wsgi.py          # your Flask/FastAPI app
-│  └─ tradingview_webhook.py
-├─ bots/
-│  ├─ coinbase_trader.py
-│  └─ tv_webhook_listener.py
-├─ logs/              # will be created automatically
-├─ requirements.txt
-├─ start_all.sh
-├─ gunicorn.conf.py
-└─ Dockerfile
+Nija/
+  pyproject.toml
+  src/
+    coinbase_advanced/
+       __init__.py
+       client.py
+       other files...
