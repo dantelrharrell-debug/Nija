@@ -1,0 +1,8 @@
+# ignore vscode etc
+.vscode
+.env
+*.pyc
+__pycache__/
+
+# DO NOT ignore bot/pyproject.toml or the bot/ directory
+# bot/
