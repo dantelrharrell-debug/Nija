@@ -9,7 +9,7 @@ ENV POETRY_VERSION=1.7.1 \
 
 WORKDIR /app
 
-# Install build tools & Poetry
+# Install build tools & Poetry (Poetry will be used only when appropriate)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential curl ca-certificates git \
  && pip install --upgrade pip setuptools wheel \
@@ -17,18 +17,22 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy repo-root pyproject & lock (cache-friendly)
-COPY pyproject.toml poetry.lock* /app/
+# Copy manifest files (pyproject + optional lock + common requirements)
+# (these files exist in your repo; adjust if you have additional req files)
+COPY pyproject.toml poetry.lock* requirements.txt requirements.bot.txt requirements.web.txt /app/
 
-# Install Python dependencies system-wide from repo root
-WORKDIR /app
-RUN poetry config virtualenvs.create false \
- && poetry install --no-root --no-dev \
+# If pyproject is Poetry-managed, run poetry; otherwise fallback to pip using requirements files
+RUN if [ -f /app/pyproject.toml ] && grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then \
+      poetry config virtualenvs.create false && poetry install --no-root --no-dev ; \
+    else \
+      pip install --upgrade pip setuptools wheel && \
+      ( [ -f /app/requirements.txt ] && pip install --no-cache-dir -r /app/requirements.txt || true ) && \
+      ( [ -f /app/requirements.bot.txt ] && pip install --no-cache-dir -r /app/requirements.bot.txt || true ) && \
+      ( [ -f /app/requirements.web.txt ] && pip install --no-cache-dir -r /app/requirements.web.txt || true ); \
+    fi \
  && rm -rf /root/.cache/pypoetry /root/.cache/pip
 
-# -------------------------
 # Stage 2: Final runtime
-# -------------------------
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -37,33 +41,30 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install runtime OS dependencies (add or remove as needed)
+# Runtime OS deps (adjust for your binary wheels)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libpq5 libjpeg62-turbo zlib1g libssl3 \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy installed Python packages and console scripts from builder
+# Copy installed Python packages & console scripts from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application code (only what's needed)
+# Copy application code
 COPY . /app
 
-# Optional: defensive rename if a non-Poetry root pyproject exists (harmless)
-RUN if [ -f /app/pyproject.toml ] && ! grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then mv /app/pyproject.toml /app/pyproject.not-poetry; fi
-
-# Create non-root user (optional but recommended)
+# Create non-root user and set permissions
 RUN groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app \
  && chown -R app:app /app /usr/local/bin /usr/local/lib/python3.12/site-packages
 
 USER app
 
-# Cleanup bytecode only
+# Cleanup bytecode (safe)
 RUN find /usr/local/lib/python3.12/site-packages -name "__pycache__" -type d -exec rm -rf {} + \
  && find /usr/local/lib/python3.12/site-packages -name "*.pyc" -delete || true
 
 EXPOSE 5000
 
-# Ensure this entrypoint matches your project (adjust if necessary)
+# Adjust the entrypoint to your WSGI module if needed
 CMD ["gunicorn", "web:app", "--bind", "0.0.0.0:5000"]
