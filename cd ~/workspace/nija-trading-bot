@@ -5,3 +5,11 @@ Nija/
        __init__.py
        client.py
        other files...
+/app
+ ├─ src/
+ │   ├─ wsgi.py
+ │   ├─ tradingview_webhook.py
+ │   └─ other modules...
+ ├─ .env
+ ├─ Dockerfile
+ └─ gunicorn.conf.py
