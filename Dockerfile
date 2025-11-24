@@ -7,6 +7,7 @@ ENV POETRY_VERSION=1.7.1 \
 
 WORKDIR /app
 
+# Install system deps & Poetry
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential curl \
  && pip install --upgrade pip setuptools wheel \
@@ -14,16 +15,15 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy the project's pyproject/lock that live under bot/ into the build context
-COPY bot/pyproject.toml bot/poetry.lock* /app/
+# Copy only pyproject/lock first to leverage cache
+COPY pyproject.toml poetry.lock* /app/
 
+# Configure Poetry and install dependencies into system Python
 RUN poetry config virtualenvs.create false \
  && poetry install --no-root --no-dev
 
-# Copy the whole repo
+# Copy application source
 COPY . /app
 
-# If the app package is under bot/ set PYTHONPATH or run gunicorn target accordingly
-ENV PYTHONPATH=/app/bot
 EXPOSE 5000
-CMD ["gunicorn", "bot.web.wsgi:app", "--bind", "0.0.0.0:5000"]
+CMD ["gunicorn", "web.wsgi:app", "--bind", "0.0.0.0:5000"]
