@@ -1,11 +1,8 @@
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "nija-tradingview-webhook"
-version = "0.0.1"
-description = "Minimal TradingView webhook package for NIJA repo"
-authors = [{name = "Dante Harrell"}]
-dependencies = ["Flask>=2.3.2"]
-packages = ["bot.tradingview_webhook"]
+name = "coinbase_advanced"
+version = "0.1.0"
+description = "Your package description"
+# remove 'packages' from here
+
+[tool.setuptools.packages.find]
+where = ["src"]
