@@ -1,2 +1,3 @@
-from .wsgi import app  # assuming you still keep the wsgi.py app factory
-__all__ = ["app"]
+# web/__init__.py
+# package marker for `web` package
+__all__ = ["wsgi", "tradingview_webhook"]
