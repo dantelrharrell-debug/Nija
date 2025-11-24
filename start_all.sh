@@ -1,38 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "== START_ALL.SH: $(date -u) =="
+# =========================
+# Configuration
+# =========================
 
-# ---- Basic env checks (customize or remove as needed) ----
-# If a required var is missing, we'll print a warning but continue.
-missing=0
-for var in COINBASE_API_KEY COINBASE_API_SECRET COINBASE_PEM_CONTENT; do
-  if [ -z "${!var:-}" ]; then
-    echo "❌ ERROR: ${var} not set"
-    missing=1
-  else
-    echo "✅ ${var} present"
-  fi
-done
+PORT=${PORT:-5000}
+LOG_DIR=/app/logs
+mkdir -p "$LOG_DIR"
 
-# If you want the script to abort on missing required envs, uncomment:
-# if [ "$missing" -ne 0 ]; then
-#   echo "Exiting due to missing env vars"
-#   exit 1
-# fi
+# =========================
+# Start background bots
+# =========================
 
-# Optional: show PORT
-echo "PORT = ${PORT:-5000}"
+echo "[INFO] Starting background workers..."
 
-# Optional runtime-only installs (avoid in production)
-# echo "Installing runtime extras..."
-# python -m pip install --no-cache-dir -r /app/requirements.runtime.txt || true
+nohup python3 /app/bots/tv_webhook_listener.py >> "$LOG_DIR/tv_webhook_listener.log" 2>&1 &
+nohup python3 /app/bots/coinbase_trader.py >> "$LOG_DIR/coinbase_trader.log" 2>&1 &
 
-# Ensure the app directory exists
-cd /app || true
+# =========================
+# Start web app (Gunicorn)
+# =========================
 
-# Any pre-start commands you need (migrations, downloads, etc.)
-# e.g. python manage.py migrate --noinput
-
-# Start the app with gunicorn (adjust workers if desired)
-exec gunicorn -w 1 -k sync -b 0.0.0.0:${PORT:-5000} main:app
+echo "[INFO] Starting web app on port $PORT..."
+exec gunicorn web.wsgi:app --bind 0.0.0.0:"$PORT" --log-level debug --error-logfile -

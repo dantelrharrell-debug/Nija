@@ -1,42 +1,39 @@
-# Use Python 3.11 slim base image
-FROM python:3.11-slim
+# Dockerfile - canonical for NIJA repo
+FROM python:3.12-slim
 
-# Set working directory
+LABEL maintainer="Dante Harrell <your-email@example.com>"
+
+# set working dir
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# system deps (minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    git \
-    libssl-dev \
-    libffi-dev \
-    python3-dev \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy root files
-COPY main.py config.py coinbase_trader.py tv_webhook_listener.py nija_client.py /app/
+# copy constraints (if present) and requirements
+COPY constraints.txt requirements.txt ./
 
-# Copy bot folder
-COPY bot/ /app/bot/
+# install python deps (use constraints if present)
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    if [ -f constraints.txt ]; then pip install --no-cache-dir -r requirements.txt -c constraints.txt; \
+    else pip install --no-cache-dir -r requirements.txt; fi
 
-# Copy web folder
-COPY web/ /app/web/
+# copy the whole repo into the image
+COPY . .
 
-# Copy startup script
-COPY start_all.sh /app/start_all.sh
-RUN chmod +x /app/start_all.sh
+# ensure src is on the python path so imports like `from src.xxx` work
+ENV PYTHONPATH=/app/src
 
-# Upgrade pip and install Python dependencies
-RUN python3 -m pip install --upgrade pip setuptools wheel
-
-# Install bot dependencies first
-RUN pip install --no-cache-dir -r bot/requirements.txt
-
-# Install web dependencies
-RUN pip install --no-cache-dir -r web/requirements.txt
-
-# Expose Flask port
+# expose port (gunicorn will bind to this)
 EXPOSE 5000
 
-# Use startup script as default command
-CMD ["/app/start_all.sh"]
+# recommend running under non-root, but keep simple for now
+# create app user (optional)
+RUN useradd -m -d /home/nija nija || true
+USER nija
+
+# entrypoint: run gunicorn pointing to the canonical entry: src.wsgi:app
+# ensure gunicorn.conf.py is present at repo root
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "src.wsgi:app"]

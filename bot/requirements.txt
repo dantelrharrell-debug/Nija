@@ -1,4 +1,21 @@
-loguru
-requests
-pandas
-websocket-client
+Flask>=2.3.2
+gunicorn>=23.0.0
+
+# Optional ASGI server (only needed if you run FastAPI/uvicorn)
+uvicorn[standard]>=0.22.0
+
+# Crypto / JWT libs
+PyJWT[crypto]>=2.6.0
+cryptography>=40.0.0
+ecdsa>=0.18.0
+
+# Coinbase official client
+coinbase>=2.0.0
+
+# Common runtime deps used by your app
+requests>=2.31.0
+python-dotenv>=1.0.0
+pandas>=2.1.0
+numpy>=1.26.0
+loguru>=0.7.0
+backoff>=2.2.1

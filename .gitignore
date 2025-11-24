@@ -12,3 +12,6 @@ node_modules/
 /tmp/*.log
 /tmp/*.json
 pending_approvals.json
+# Safe trading stack artifacts
+*.log
+pending-approvals.json

@@ -1,4 +1,5 @@
 import sys
+
 def _print(pkg_name):
     try:
         m = __import__(pkg_name)
@@ -23,7 +24,6 @@ def main():
             print("Could not enumerate jwt algorithms:", e)
     except Exception as e:
         print("PyJWT import error:", e)
-
     _print("cryptography")
     _print("ecdsa")
 

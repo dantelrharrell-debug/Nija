@@ -1,10 +1,12 @@
-Flask==3.1.2
-gunicorn==23.0.0
-requests==2.32.5
-PyJWT==2.10.1
-cryptography==46.0.3
-python-dotenv==1.2.1
-loguru==0.7.3
-pandas==2.3.3
-numpy==2.3.4
-coinbase-advanced-py
+Flask>=2.3.4
+gunicorn>=23.0.0
+uvicorn[standard]>=0.22.0
+PyJWT[crypto]>=2.6.0
+cryptography>=40.0.0
+ecdsa>=0.18.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Install your repo's coinbase_advanced from the branch that contains the src layout
+# **Replace <your-username> with dantelrharrell-debug or your GitHub org and make sure branch exists**
+git+https://github.com/dantelrharrell-debug/Nija.git@fix/pyproject-src-layout#egg=coinbase_advanced
