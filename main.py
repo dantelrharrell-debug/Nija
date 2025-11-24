@@ -1,4 +1,42 @@
 import os
+import subprocess
+import logging
+from nija_client import CoinbaseClient  # your existing client
+
+# --- Logging setup ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+
+# --- Step 0: Verify live trading env var ---
+live_mode = os.getenv("LIVE_TRADING", "0")
+if live_mode == "1":
+    logging.info("✅ LIVE_TRADING is ACTIVE")
+else:
+    logging.warning("⚠️ LIVE_TRADING is NOT active! Set LIVE_TRADING=1")
+
+# --- Step 1: Print installed Python packages ---
+logging.info("📦 Installed Python packages:")
+subprocess.run(["pip", "list"])
+
+# --- Step 2: Verify Coinbase connection ---
+def test_coinbase_connection():
+    try:
+        client = CoinbaseClient()  # adjust if constructor requires args
+        accounts = client.fetch_accounts()  # should return funded accounts
+        logging.info(f"✅ Coinbase connection OK. Accounts fetched: {accounts}")
+        # Optionally print balances
+        for acc in accounts:
+            logging.info(f"   {acc['currency']}: {acc['balance']['amount']}")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Coinbase connection failed: {e}")
+        return False
+
+if test_coinbase_connection():
+    logging.info("🚀 Bot is live and ready to trade!")
+else:
+    logging.error("❌ Bot is NOT live! Fix connection before trading.")
+
+import os
 import threading
 from flask import Flask, request, jsonify
 from loguru import logger
