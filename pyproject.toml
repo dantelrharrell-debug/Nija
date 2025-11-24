@@ -1,8 +1,22 @@
+# pyproject.toml (place at repo root)
+
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "coinbase_advanced"
 version = "0.1.0"
-description = "Your package description"
-# remove 'packages' from here
+description = "Coinbase Advanced client"
+readme = "README.md"
+requires-python = ">=3.8"
+# put runtime deps here (if any)
+dependencies = [
+  "requests>=2.31.0",
+]
 
 [tool.setuptools.packages.find]
+# Use src layout (recommended). If your package currently lives at top-level,
+# see alternate instructions further down.
 where = ["src"]
+include = ["coinbase_advanced*"]
