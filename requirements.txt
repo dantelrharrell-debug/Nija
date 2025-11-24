@@ -1,4 +1,4 @@
-Flask>=2.3.2
+Flask>=2.3.4
 gunicorn>=23.0.0
 uvicorn[standard]>=0.22.0
 PyJWT[crypto]>=2.6.0
