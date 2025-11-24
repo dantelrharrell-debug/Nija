@@ -37,6 +37,8 @@ RUN if [ -f /app/pyproject.toml ] && grep -q "^\[tool\.poetry\]" /app/pyproject.
 COPY . /app
 
 # Install local package if not Poetry-managed (ensures vendor packages are available)
+# This is important for non-Poetry projects where dependencies like coinbase_advanced
+# need to be installed from the local src/ directory
 RUN if [ -f /app/pyproject.toml ] && ! grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then \
       echo "INFO: Installing local package via pip..."; \
       pip install --no-cache-dir -e /app || pip install --no-cache-dir /app || true; \
@@ -76,5 +78,7 @@ RUN find /usr/local/lib/python3.12/site-packages -name "__pycache__" -type d -ex
 
 EXPOSE 5000
 
-# Default command - adjust to your WSGI module if needed
+# Use web.tradingview_webhook:app which includes all blueprints (tradingview, preflight)
+# and Coinbase initialization. Note: this imports directly from src.trading, not the root shim,
+# so there are no circular import issues.
 CMD ["gunicorn", "web.tradingview_webhook:app", "--bind", "0.0.0.0:5000"]

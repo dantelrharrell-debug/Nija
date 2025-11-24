@@ -1,6 +1,8 @@
 # Shim for top-level import `import tradingview_webhook`
 # Re-export the canonical blueprint from src.trading.tradingview_webhook
 # This prevents ImportError and circular import scenarios.
+# Note: Both bp and tradingview_blueprint are exported for backward compatibility
+# with different import styles used throughout the codebase.
 
 try:
     # Primary: import from src.trading.tradingview_webhook (canonical location)
