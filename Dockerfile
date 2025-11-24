@@ -33,7 +33,7 @@ RUN if [ -f /app/pyproject.toml ] && grep -q "^\[tool\.poetry\]" /app/pyproject.
       ( [ -f /app/requirements.txt ] && pip install --no-cache-dir -r /app/requirements.txt || true ) && \
       ( [ -f /app/requirements.bot.txt ] && pip install --no-cache-dir -r /app/requirements.bot.txt || true ) && \
       ( [ -f /app/requirements.web.txt ] && pip install --no-cache-dir -r /app/requirements.web.txt || true ) && \
-      ( [ -f /app/setup.py ] || [ -f /app/pyproject.toml ] ) && pip install --no-cache-dir /app || true ; \
+      if [ -f /app/setup.py ] || [ -f /app/pyproject.toml ]; then pip install --no-cache-dir /app || true; fi ; \
     fi \
  && rm -rf /root/.cache/pypoetry /root/.cache/pip
 

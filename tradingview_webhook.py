@@ -17,7 +17,7 @@ except ImportError as e:
         "falling back to web.tradingview_webhook", e
     )
     try:
-        from web.tradingview_webhook import bp as bp
+        from web.tradingview_webhook import bp
         tradingview_blueprint = bp
     except ImportError as e2:
         raise ImportError(
