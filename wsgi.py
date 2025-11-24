@@ -1,16 +1,16 @@
-# web/tradingview_webhook.py
-from flask import Blueprint, request, jsonify
+# web/wsgi.py
+from flask import Flask
+from web.tradingview_webhook import bp  # matches the 'bp' blueprint
 
-# Define the blueprint as 'bp' so imports match
-bp = Blueprint('tradingview', __name__)
+app = Flask(__name__)
 
-@bp.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "No JSON received"}), 400
+# Register the TradingView blueprint under /tv
+app.register_blueprint(bp, url_prefix='/tv')
 
-    # Log the received data (can be replaced with actual trading logic)
-    print("TradingView webhook received:", data)
+# Optional: basic health check route
+@app.route('/health', methods=['GET'])
+def health():
+    return "OK", 200
 
-    return jsonify({"status": "success"}), 200
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
