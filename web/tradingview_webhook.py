@@ -1,10 +1,10 @@
 # web/tradingview_webhook.py
 from flask import Blueprint, request, jsonify
 
-# Define the blueprint (must be named 'bp' for your import)
-bp = Blueprint('tradingview', __name__)
+# Blueprint name matches what we’ll import in wsgi.py
+tradingview_blueprint = Blueprint('tradingview', __name__)
 
-@bp.route('/webhook', methods=['POST'])
+@tradingview_blueprint.route('/webhook', methods=['POST'])
 def webhook():
     """
     Handle incoming TradingView webhook POST requests.
