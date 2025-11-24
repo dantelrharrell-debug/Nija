@@ -4,8 +4,9 @@ uvicorn[standard]>=0.22.0
 PyJWT[crypto]>=2.6.0
 cryptography>=40.0.0
 ecdsa>=0.18.0
-coinbase>=2.0.0
-coinbase-advanced>=0.1.0
 requests>=2.31.0
 python-dotenv>=1.0.0
-git+https://github.com/dantelrharrell-debug/Nija.git#egg=coinbase_advanced
+
+# Install your repo's coinbase_advanced from the branch that contains the src layout
+# **Replace <your-username> with dantelrharrell-debug or your GitHub org and make sure branch exists**
+git+https://github.com/dantelrharrell-debug/Nija.git@fix/pyproject-src-layout#egg=coinbase_advanced
