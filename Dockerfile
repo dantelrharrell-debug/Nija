@@ -1,23 +1,35 @@
-FROM python:3.12-slim
+# --- Base image ---
+FROM python:3.11-slim
 
-# Set working directory
+# --- Set working directory ---
 WORKDIR /app
 
-# Install git and other dependencies
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# --- Install system dependencies ---
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
+        libssl-dev \
+        libffi-dev \
+        python3-dev \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for caching
+# --- Copy requirements file ---
 COPY requirements.txt .
 
-# Upgrade pip and install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip \
+# --- Upgrade pip and install Python dependencies ---
+RUN pip install --no-cache-dir --upgrade pip==25.3 \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the app
+# --- Copy app source code ---
 COPY . .
 
-# Ensure start_all.sh is executable
+# --- Make start script executable ---
 RUN chmod +x /app/start_all.sh
 
-# Default command
+# --- Expose port if needed (adjust if your app uses a different port) ---
+EXPOSE 5000
+
+# --- Run the start script ---
 CMD ["/app/start_all.sh"]
