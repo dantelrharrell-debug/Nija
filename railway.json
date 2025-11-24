@@ -1,11 +1,22 @@
 {
+  "$schema": "https://railway.com/railway.schema.json",
   "build": {
-    "dockerfilePath": "Dockerfile",
-    "installCommand": "pip install -r requirements.txt",
-    "startCommand": "python main.py"
+    "builder": "RAILPACK",
+    "buildCommand": "pip install -r requirements.txt",
+    "buildEnvironment": "V3"
   },
-  "env": {
-    "COINBASE_PEM_CONTENT": "@COINBASE_PEM_CONTENT",
-    "COINBASE_ORG_ID": "@COINBASE_ORG_ID"
+  "deploy": {
+    "runtime": "V2",
+    "numReplicas": 1,
+    "startCommand": "./start_all.sh",
+    "sleepApplication": false,
+    "useLegacyStacker": false,
+    "multiRegionConfig": {
+      "us-west2": {
+        "numReplicas": 1
+      }
+    },
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
   }
 }
