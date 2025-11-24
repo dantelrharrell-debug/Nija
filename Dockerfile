@@ -18,14 +18,13 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy manifest files (pyproject + optional lock + common requirements) for cache
+# Copy manifest files for caching
 COPY pyproject.toml poetry.lock* requirements.txt requirements.bot.txt requirements.web.txt /app/
 
 # Copy full repo so local packages (setup.py / src/) are available for pip install fallback
 COPY . /app
 
-# If pyproject is Poetry-managed, run poetry; otherwise fallback to pip using requirements files
-# IMPORTANT: ensure we explicitly pip-install the local package (/app) in the fallback path
+# Install dependencies: poetry if configured, otherwise pip and install local package /app
 RUN if [ -f /app/pyproject.toml ] && grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then \
       poetry config virtualenvs.create false && poetry install --no-root --no-dev ; \
     else \
@@ -46,7 +45,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Runtime OS deps (adjust for your project's binary wheels)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libpq5 libjpeg62-turbo zlib1g libssl3 \
  && apt-get clean \
@@ -71,5 +69,4 @@ RUN find /usr/local/lib/python3.12/site-packages -name "__pycache__" -type d -ex
 
 EXPOSE 5000
 
-# Adjust entrypoint to your project (web:app is used in this repo)
 CMD ["gunicorn", "web:app", "--bind", "0.0.0.0:5000"]
