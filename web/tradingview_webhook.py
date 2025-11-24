@@ -32,6 +32,14 @@ try:
 except Exception as e:
     logging.warning(f"⚠️ Could not register TradingView blueprint: {e}")
 
+# --- Preflight blueprint ---
+try:
+    from web.preflight import bp as preflight_bp
+    app.register_blueprint(preflight_bp)
+    logging.info("✅ Preflight blueprint registered")
+except Exception as e:
+    logging.warning(f"⚠️ Could not register Preflight blueprint: {e}")
+
 # --- Minimal live Coinbase connection check ---
 def init_coinbase():
     if not COINBASE_AVAILABLE:

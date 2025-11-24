@@ -25,8 +25,8 @@ def check_auth_and_accounts():
     try:
         from src.nija_client import CoinbaseClient
         client = CoinbaseClient()
-        # Try a lightweight auth / accounts call (implement small wrapper if needed)
-        accounts = client.get_accounts()
+        # Try a lightweight auth / accounts call
+        accounts = client.fetch_accounts()
         has_accounts = bool(accounts)
         return {"ok": True, "detail": {"accounts_count": len(accounts), "sample": accounts[:3]}}
     except Exception as e:
@@ -37,7 +37,7 @@ def check_funded_balance(min_usd=1.0):
     try:
         from src.nija_client import CoinbaseClient
         client = CoinbaseClient()
-        accounts = client.get_accounts()
+        accounts = client.fetch_accounts()
         # try to detect an account with usable balance
         funded = []
         for a in accounts:
