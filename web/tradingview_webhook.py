@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 
-# --- Add vendor path for Coinbase client (kept as fallback) ---
+# Keep vendor path as fallback if you include vendor/coinbase_advanced_py in repo
 sys.path.append(os.path.join(os.path.dirname(__file__), "../vendor/coinbase_advanced_py"))
 
 # Try multiple import paths for the Coinbase client package to be resilient
@@ -28,23 +28,23 @@ except Exception as e:
         )
         COINBASE_AVAILABLE = False
 
-# --- Flask app ---
+# Flask app
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# --- Health check endpoint ---
+# Health check
 @app.route("/health", methods=["GET"])
 def health():
     return "OK", 200
 
-# --- Safe blueprint registration using the helper ---
+# Safe blueprint registration (use helper)
 try:
     from web.register_tradingview import try_register_tradingview
     try_register_tradingview(app)
-except Exception as e:
+except Exception:
     logging.exception("Unexpected error while trying to register TradingView blueprint")
 
-# --- Minimal live Coinbase connection check ---
+# Minimal live Coinbase connection check
 def init_coinbase():
     if not COINBASE_AVAILABLE or Client is None:
         return None
@@ -68,7 +68,7 @@ def init_coinbase():
 
 coinbase_client = init_coinbase()
 
-# --- Example live endpoint ---
+# Trade status endpoint
 @app.route("/trade/status", methods=["GET"])
 def trade_status():
     if not coinbase_client:
