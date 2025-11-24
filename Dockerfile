@@ -1,27 +1,23 @@
-# Use official Python image
 FROM python:3.12-slim
 
-# Set workdir
+# Set working directory
 WORKDIR /app
 
-# Copy requirements
+# Install git and other dependencies
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for caching
 COPY requirements.txt .
 
-# Install dependencies
+# Upgrade pip and install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the app
 COPY . .
 
-# Ensure logs folder exists
-RUN mkdir -p /app/logs
-
-# Make start script executable
+# Ensure start_all.sh is executable
 RUN chmod +x /app/start_all.sh
-
-# Expose web port
-EXPOSE 5000
 
 # Default command
 CMD ["/app/start_all.sh"]
