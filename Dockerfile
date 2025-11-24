@@ -7,7 +7,6 @@ ENV POETRY_VERSION=1.7.1 \
 
 WORKDIR /app
 
-# Install system deps & Poetry
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential curl \
  && pip install --upgrade pip setuptools wheel \
@@ -15,15 +14,12 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy only pyproject/lock first to leverage cache
-COPY pyproject.toml poetry.lock* /app/
+# COPY full project first so pyproject.toml is definitely present (no cache advantage)
+COPY . /app
 
-# Configure Poetry and install dependencies into system Python
 RUN poetry config virtualenvs.create false \
  && poetry install --no-root --no-dev
 
-# Copy application source
-COPY . /app
-
+ENV PYTHONPATH=/app
 EXPOSE 5000
 CMD ["gunicorn", "web.wsgi:app", "--bind", "0.0.0.0:5000"]
