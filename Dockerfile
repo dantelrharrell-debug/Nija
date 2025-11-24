@@ -1,16 +1,15 @@
-# Stage 1: Builder
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim
 
-# Environment
 ENV POETRY_VERSION=1.7.1 \
     POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_CREATE=false \
     PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    PYTHONPATH=/app/bot
 
 WORKDIR /app
 
-# Install build tools & Poetry
+# Install system deps & Poetry
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential curl ca-certificates git \
  && pip install --upgrade pip setuptools wheel \
@@ -18,55 +17,20 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy only bot's pyproject and lock for caching
-COPY bot/pyproject.toml bot/poetry.lock* /app/bot/
+# Copy entire repository so bot/ is guaranteed to be present
+COPY . /app
 
-# Install dependencies system-wide (no virtualenv)
+# If a root pyproject exists but is not a Poetry project, rename it out of the way
+RUN if [ -f /app/pyproject.toml ] && ! grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then mv /app/pyproject.toml /app/pyproject.not-poetry; fi
+
+# Install dependencies from bot/
 WORKDIR /app/bot
 RUN poetry config virtualenvs.create false \
  && poetry install --no-root --no-dev \
  && rm -rf /root/.cache/pypoetry /root/.cache/pip
 
-# -------------------------
-# Stage 2: Final runtime
-# -------------------------
-FROM python:3.12-slim
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app/bot \
-    DEBIAN_FRONTEND=noninteractive
-
+# Runtime settings
 WORKDIR /app
-
-# Install runtime OS dependencies (adjust list if your packages require others)
-# Common runtime libs: libpq5 (Postgres), libjpeg62-turbo (Pillow), zlib1g (compression), libssl3 (TLS)
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates libpq5 libjpeg62-turbo zlib1g libssl3 \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
-
-# Copy installed Python packages and console scripts from builder
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy only the bot/ folder (keep final image small)
-COPY bot/ /app/bot/
-
-# Defensive rename: if a root pyproject.toml exists but is not a Poetry project, rename it
-RUN if [ -f /app/pyproject.toml ] && ! grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then mv /app/pyproject.toml /app/pyproject.not-poetry; fi
-
-# Create non-root user and set permissions for /app
-RUN groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app \
- && chown -R app:app /app /usr/local/bin /usr/local/lib/python3.12/site-packages
-
-USER app
-
-# Cleanup bytecode & caches (safe)
-RUN find /usr/local/lib/python3.12/site-packages -name "__pycache__" -type d -exec rm -rf {} + \
- && find /usr/local/lib/python3.12/site-packages -name "*.pyc" -delete \
- || true
-
+ENV PYTHONPATH=/app/bot
 EXPOSE 5000
-
-# Runtime command — ensure this matches your project's entrypoint
 CMD ["gunicorn", "bot.web.wsgi:app", "--bind", "0.0.0.0:5000"]
