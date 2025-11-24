@@ -1,15 +1,14 @@
 Nija/
-  pyproject.toml
-  src/
-    coinbase_advanced/
-       __init__.py
-       client.py
-       other files...
-/app
- ├─ src/
+ ├─ web/
  │   ├─ wsgi.py
  │   ├─ tradingview_webhook.py
  │   └─ other modules...
+ ├─ bot/
+ │   └─ live bot scripts
+ ├─ vendor/
+ │   └─ coinbase_advanced_py/
+ │       ├─ __init__.py
+ │       └─ client.py
  ├─ .env
  ├─ Dockerfile
  └─ gunicorn.conf.py
