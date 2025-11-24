@@ -17,22 +17,29 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy entire repository so bot/ is guaranteed to be present
-COPY . /app
+# -------------------------
+# Copy only bot's pyproject/lock first (cache-friendly)
+# -------------------------
+COPY bot/pyproject.toml bot/poetry.lock* /app/bot/
 
-# If a root pyproject.toml exists but is not a Poetry project, rename it
-# (prevents Poetry from picking it up when run from /app/bot)
-RUN if [ -f /app/pyproject.toml ] && ! grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then mv /app/pyproject.toml /app/pyproject.not-poetry; fi
-
-# Install dependencies from bot/ (adjust path if your project dir differs)
+# Install Python dependencies system-wide from bot/
 WORKDIR /app/bot
 RUN poetry config virtualenvs.create false \
  && poetry install --no-root --no-dev \
  && rm -rf /root/.cache/pypoetry /root/.cache/pip
 
-# Runtime settings
+# -------------------------
+# Then copy the rest of the repo
+# -------------------------
 WORKDIR /app
-ENV PYTHONPATH=/app/bot
-EXPOSE 5000
+COPY . /app
 
+# Defensive rename: if a root pyproject exists but is not a Poetry project,
+# rename it so it won't interfere with tooling (optional but safe)
+RUN if [ -f /app/pyproject.toml ] && ! grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then mv /app/pyproject.toml /app/pyproject.not-poetry; fi
+
+# Ensure PYTHONPATH points to bot/
+ENV PYTHONPATH=/app/bot
+
+EXPOSE 5000
 CMD ["gunicorn", "bot.web.wsgi:app", "--bind", "0.0.0.0:5000"]
