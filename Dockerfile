@@ -17,18 +17,23 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy manifest files (pyproject + optional lock + common requirements)
+# Copy manifest files first for cache-friendliness
 # (these files exist in your repo; adjust if you have additional req files)
-COPY pyproject.toml poetry.lock* requirements.txt requirements.bot.txt requirements.web.txt /app/
+COPY pyproject.toml poetry.lock* requirements.txt requirements.bot.txt requirements.web.txt setup.py* /app/
+
+# Copy full repo so local packages (setup.py / src/) can be installed
+COPY src/ /app/src/
 
 # If pyproject is Poetry-managed, run poetry; otherwise fallback to pip using requirements files
+# Then install the local package (/app) so src modules are available
 RUN if [ -f /app/pyproject.toml ] && grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then \
-      poetry config virtualenvs.create false && poetry install --no-root --no-dev ; \
+      poetry config virtualenvs.create false && poetry install --no-dev ; \
     else \
       pip install --upgrade pip setuptools wheel && \
       ( [ -f /app/requirements.txt ] && pip install --no-cache-dir -r /app/requirements.txt || true ) && \
       ( [ -f /app/requirements.bot.txt ] && pip install --no-cache-dir -r /app/requirements.bot.txt || true ) && \
-      ( [ -f /app/requirements.web.txt ] && pip install --no-cache-dir -r /app/requirements.web.txt || true ); \
+      ( [ -f /app/requirements.web.txt ] && pip install --no-cache-dir -r /app/requirements.web.txt || true ) && \
+      ( [ -f /app/setup.py ] || [ -f /app/pyproject.toml ] ) && pip install --no-cache-dir /app || true ; \
     fi \
  && rm -rf /root/.cache/pypoetry /root/.cache/pip
 
