@@ -1,3 +1,4 @@
+# Multi-stage Dockerfile — tolerant installer (Poetry or fallback to pip and local package)
 # Stage 1: Builder
 FROM python:3.12-slim AS builder
 
@@ -17,18 +18,22 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy manifest files (pyproject + optional lock + common requirements)
-# (these files exist in your repo; adjust if you have additional req files)
+# Copy manifest files (pyproject + optional lock + common requirements) for cache
 COPY pyproject.toml poetry.lock* requirements.txt requirements.bot.txt requirements.web.txt /app/
 
+# Copy full repo so local packages (setup.py / src/) are available for pip install fallback
+COPY . /app
+
 # If pyproject is Poetry-managed, run poetry; otherwise fallback to pip using requirements files
+# IMPORTANT: ensure we explicitly pip-install the local package (/app) in the fallback path
 RUN if [ -f /app/pyproject.toml ] && grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then \
       poetry config virtualenvs.create false && poetry install --no-root --no-dev ; \
     else \
       pip install --upgrade pip setuptools wheel && \
       ( [ -f /app/requirements.txt ] && pip install --no-cache-dir -r /app/requirements.txt || true ) && \
       ( [ -f /app/requirements.bot.txt ] && pip install --no-cache-dir -r /app/requirements.bot.txt || true ) && \
-      ( [ -f /app/requirements.web.txt ] && pip install --no-cache-dir -r /app/requirements.web.txt || true ); \
+      ( [ -f /app/requirements.web.txt ] && pip install --no-cache-dir -r /app/requirements.web.txt || true ) && \
+      pip install --no-cache-dir /app || true ; \
     fi \
  && rm -rf /root/.cache/pypoetry /root/.cache/pip
 
@@ -41,30 +46,30 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Runtime OS deps (adjust for your binary wheels)
+# Runtime OS deps (adjust for your project's binary wheels)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libpq5 libjpeg62-turbo zlib1g libssl3 \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy installed Python packages & console scripts from builder
+# Copy installed python packages & scripts from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY . /app
 
-# Create non-root user and set permissions
+# Create non-root user and chown
 RUN groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app \
  && chown -R app:app /app /usr/local/bin /usr/local/lib/python3.12/site-packages
 
 USER app
 
-# Cleanup bytecode (safe)
+# Cleanup bytecode only (safe)
 RUN find /usr/local/lib/python3.12/site-packages -name "__pycache__" -type d -exec rm -rf {} + \
  && find /usr/local/lib/python3.12/site-packages -name "*.pyc" -delete || true
 
 EXPOSE 5000
 
-# Adjust the entrypoint to your WSGI module if needed
+# Adjust entrypoint to your project (web:app is used in this repo)
 CMD ["gunicorn", "web:app", "--bind", "0.0.0.0:5000"]
