@@ -1,3 +1,4 @@
+# Dockerfile
 FROM python:3.12-slim
 
 ENV POETRY_VERSION=1.7.1 \
@@ -15,21 +16,21 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy the entire repo so bot/ and any top-level files are present
+# Copy entire repo so bot/ and any top-level files are present
 COPY . /app
 
 # If a root pyproject.toml exists but doesn't have [tool.poetry], rename it so Poetry won't pick it up.
-# This preserves the file (renamed) in the image for debugging if needed.
+# Preserve it under /app/pyproject.not-poetry for debugging.
 RUN if [ -f /app/pyproject.toml ] && ! grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then mv /app/pyproject.toml /app/pyproject.not-poetry; fi
 
-# Run Poetry install from the bot/ directory (adjust if your project dir name differs)
+# Install from bot/ (adjust path if your project folder is named differently)
 WORKDIR /app/bot
 
 RUN poetry config virtualenvs.create false \
  && poetry install --no-root --no-dev
 
-# Ensure the app package can be imported
 ENV PYTHONPATH=/app
 
 EXPOSE 5000
+# Adjust the gunicorn module path if your WSGI app lives somewhere else
 CMD ["gunicorn", "bot.web.wsgi:app", "--bind", "0.0.0.0:5000"]
