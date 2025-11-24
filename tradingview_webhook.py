@@ -1,9 +1,11 @@
-# Shim for top-level import `import tradingview_webhook`
+# tradingview_webhook.py (repo root) - shim that re-exports the canonical blueprint
 try:
-    # If the actual code lives in web/tradingview_webhook.py and exposes `bp`
-    from web.tradingview_webhook import bp as bp  # re-export blueprint 'bp'
-    # Optionally export helpers used by main.py:
-    # from web.tradingview_webhook import create_blueprint as create_blueprint
+    # Prefer the src-based canonical module
+    from src.trading.tradingview_webhook import bp as bp, tradingview_blueprint as tradingview_blueprint
 except Exception as e:
-    # Raise a clear import error so logs show what's wrong
-    raise ImportError("tradingview_webhook shim: failed to import web.tradingview_webhook: " + repr(e))
+    # Fallback to web module if src import not present
+    try:
+        from web.tradingview_webhook import bp as bp, tradingview_blueprint as tradingview_blueprint
+    except Exception as e2:
+        raise ImportError("tradingview_webhook shim: failed to import tradingview blueprint: "
+                          + repr((e, e2)))

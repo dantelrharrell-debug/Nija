@@ -29,8 +29,11 @@ try:
     from src.trading.tradingview_webhook import tradingview_blueprint
     app.register_blueprint(tradingview_blueprint, url_prefix="/tv")
     logging.info("✅ TradingView blueprint registered")
+    # Export bp for compatibility with imports
+    bp = tradingview_blueprint
 except Exception as e:
     logging.warning(f"⚠️ Could not register TradingView blueprint: {e}")
+    bp = None
 
 # --- Minimal live Coinbase connection check ---
 def init_coinbase():
