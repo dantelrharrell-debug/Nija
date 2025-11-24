@@ -8,7 +8,7 @@ ENV POETRY_VERSION=1.7.1 \
 
 WORKDIR /app
 
-# Install system deps & Poetry
+# Install system deps and Poetry
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential curl ca-certificates git \
  && pip install --upgrade pip setuptools wheel \
@@ -16,19 +16,18 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy the full repository so bot/ is present in the image
+# Copy full repo so bot/ (and any pyproject files) are present
 COPY . /app
 
-# If a root pyproject exists and is not a Poetry project, rename it out of the way
+# If a root pyproject.toml exists but is not a Poetry project, rename it out of the way
 RUN if [ -f /app/pyproject.toml ] && ! grep -q "^\[tool\.poetry\]" /app/pyproject.toml; then mv /app/pyproject.toml /app/pyproject.not-poetry; fi
 
-# Install dependencies from bot/ (adjust path if different)
+# Install dependencies from your project directory (adjust if different)
 WORKDIR /app/bot
 RUN poetry config virtualenvs.create false \
  && poetry install --no-root --no-dev \
  && rm -rf /root/.cache/pypoetry /root/.cache/pip
 
-# Runtime settings
 ENV PYTHONPATH=/app/bot
 EXPOSE 5000
 CMD ["gunicorn", "bot.web.wsgi:app", "--bind", "0.0.0.0:5000"]
