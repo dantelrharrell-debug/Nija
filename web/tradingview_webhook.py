@@ -24,7 +24,9 @@ def health():
 
 # --- TradingView webhook blueprint ---
 try:
-    from tradingview_webhook import tradingview_blueprint
+    # Import the blueprint from the module that actually defines it to avoid
+    # circular imports / shim mismatches.
+    from src.trading.tradingview_webhook import tradingview_blueprint
     app.register_blueprint(tradingview_blueprint, url_prefix="/tv")
     logging.info("✅ TradingView blueprint registered")
 except Exception as e:
