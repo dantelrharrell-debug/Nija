@@ -1,39 +1,26 @@
-# Dockerfile - canonical for NIJA repo
+# --- Base image ---
 FROM python:3.12-slim
 
-LABEL maintainer="Dante Harrell <your-email@example.com>"
-
-# set working dir
+# --- Set working directory ---
 WORKDIR /app
 
-# system deps (minimal)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+# --- Copy only needed files ---
+COPY web/ ./web/
+COPY bot/ ./bot/
+COPY vendor/coinbase_advanced_py/ ./vendor/coinbase_advanced_py/
+COPY .env ./
+COPY gunicorn.conf.py ./
 
-# copy constraints (if present) and requirements
-COPY constraints.txt requirements.txt ./
+# --- Install dependencies ---
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install flask gunicorn requests
 
-# install python deps (use constraints if present)
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    if [ -f constraints.txt ]; then pip install --no-cache-dir -r requirements.txt -c constraints.txt; \
-    else pip install --no-cache-dir -r requirements.txt; fi
+# --- Set environment variables ---
+ENV PYTHONPATH=/app/web:/app/vendor/coinbase_advanced_py
+ENV FLASK_ENV=production
 
-# copy the whole repo into the image
-COPY . .
-
-# ensure src is on the python path so imports like `from src.xxx` work
-ENV PYTHONPATH=/app/src
-
-# expose port (gunicorn will bind to this)
+# --- Expose web port ---
 EXPOSE 5000
 
-# recommend running under non-root, but keep simple for now
-# create app user (optional)
-RUN useradd -m -d /home/nija nija || true
-USER nija
-
-# entrypoint: run gunicorn pointing to the canonical entry: src.wsgi:app
-# ensure gunicorn.conf.py is present at repo root
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "src.wsgi:app"]
+# --- Start Gunicorn ---
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
