@@ -1,30 +1,18 @@
-# web/wsgi.py
-import os
+from flask import Flask
 import logging
-from flask import Flask, jsonify
 
+app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
-LOG = logging.getLogger(__name__)
 
-def create_app():
-    app = Flask(__name__)
+# --- Health check endpoint ---
+@app.route("/health", methods=["GET"])
+def health():
+    return "OK", 200
 
-    @app.route("/_health")
-    def health():
-        return jsonify({"status": "ok"})
-
-    # Try to register optional TradingView blueprint without failing the whole app
-    try:
-        from tradingview_webhook import tradingview_blueprint  # <- adjust if your module name differs
-        app.register_blueprint(tradingview_blueprint, url_prefix="/tv")
-        LOG.info("Registered tradingview_webhook blueprint")
-    except Exception as e:
-        LOG.warning("Could not register TradingView blueprint: %s", e)
-
-    return app
-
-# Expose module-level app for WSGI servers
-app = create_app()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+# --- Register TradingView blueprint ---
+try:
+    from tradingview_webhook import tradingview_blueprint
+    app.register_blueprint(tradingview_blueprint, url_prefix="/tv")
+    logging.info("✅ TradingView blueprint registered")
+except Exception as e:
+    logging.warning(f"⚠️ Could not register TradingView blueprint: {e}")
