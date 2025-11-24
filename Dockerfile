@@ -1,26 +1,21 @@
-# --- Base image ---
+# Base image
 FROM python:3.12-slim
 
-# --- Set working directory ---
+# Set working directory
 WORKDIR /app
 
-# --- Copy only needed files ---
-COPY web/ ./web/
-COPY bot/ ./bot/
-COPY vendor/coinbase_advanced_py/ ./vendor/coinbase_advanced_py/
-COPY .env ./
-COPY gunicorn.conf.py ./
+# Copy project files
+COPY . /app
 
-# --- Install dependencies ---
+# Install dependencies
 RUN pip install --upgrade pip setuptools wheel \
-    && pip install flask gunicorn requests
+    && pip install -r requirements.txt
 
-# --- Set environment variables ---
-ENV PYTHONPATH=/app/web:/app/vendor/coinbase_advanced_py
-ENV FLASK_ENV=production
+# Set Python path for your src folder
+ENV PYTHONPATH=/app/src
 
-# --- Expose web port ---
+# Expose port
 EXPOSE 5000
 
-# --- Start Gunicorn ---
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
+# Start Gunicorn directly
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "src.wsgi:app"]
