@@ -1,6 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
+# Determine project root (adjust if your code lives elsewhere)
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$APP_DIR"
+echo "[INFO] Working directory set to $APP_DIR"
+#!/bin/bash
+set -euo pipefail
+
 echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
 
 # -----------------------
