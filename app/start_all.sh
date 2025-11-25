@@ -12,7 +12,7 @@ python3 -m pip install --upgrade pip setuptools wheel
 python3 -m pip install --no-cache-dir -r /app/requirements.txt
 
 # Diagnostic: list coinbase related install info
-python3 -m pip show coinbase-advanced || true
+python3 -m pip show coinbase-advanced-py || true
 python3 -c "import pkgutil; print('coinbase-like modules:', [m.name for m in pkgutil.iter_modules() if 'coinbase' in m.name])" || true
 
 # Start the app with gunicorn (adjust worker count as needed)

@@ -10,5 +10,5 @@ python-dotenv>=1.2.1
 # Optional ASGI server
 # uvicorn[standard]>=0.22.0
 
-# Coinbase client (local vendored version)
--e ./coinbase-advanced
+# Coinbase client (PyPI)
+coinbase-advanced-py==1.8.2
