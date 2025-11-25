@@ -37,16 +37,17 @@ RUN if [ -f /app/pyproject.toml ] && grep -q "^\[tool\.poetry\]" /app/pyproject.
  && rm -rf /root/.cache/pypoetry /root/.cache/pip
 
 # Stage 2: Final runtime
-FROM python:3.12-slim
+FROM python:3.12-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    PORT=5000
 
 WORKDIR /app
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates libpq5 libjpeg62-turbo zlib1g libssl3 \
+ && apt-get install -y --no-install-recommends ca-certificates libpq5 libjpeg62-turbo zlib1g libssl3 bash \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
@@ -57,9 +58,35 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code
 COPY . /app
 
-# Create non-root user and chown
+# Create start_all.sh inside image (here-doc ensures LF/no-BOM bytes)
+RUN mkdir -p /app \
+ && cat > /app/start_all.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== STARTING NIJA (embedded script) ==="
+
+# runtime-safe: ensure pip deps are present for the running interpreter
+python3 -m pip install --upgrade pip setuptools wheel || true
+python3 -m pip install --no-cache-dir -r /app/requirements.txt || true
+
+# diagnostics
+python3 - <<'PY' || true
+import sys, pkgutil
+print("sys.executable:", sys.executable)
+print("sys.path (first 6):", sys.path[:6])
+print("coinbase-like modules:", [m.name for m in pkgutil.iter_modules() if \"coinbase\" in m.name.lower()])
+PY
+
+exec gunicorn --bind 0.0.0.0:${PORT:-5000} main:app --workers 2 --threads 4
+EOF
+
+# Ensure the embedded script is executable (do this while root)
+RUN chmod +x /app/start_all.sh
+
+# Create non-root user and chown app files and site-packages
 RUN groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app \
- && chown -R app:app /app /usr/local/bin /usr/local/lib/python3.12/site-packages
+ && chown -R app:app /app /usr/local/lib/python3.12/site-packages /usr/local/bin
 
 USER app
 
@@ -69,4 +96,7 @@ RUN find /usr/local/lib/python3.12/site-packages -name "__pycache__" -type d -ex
 
 EXPOSE 5000
 
-CMD ["gunicorn", "web:app", "--bind", "0.0.0.0:5000"]
+# Use bash to interpret the script at container start to avoid kernel exec format errors
+ENTRYPOINT ["/bin/bash", "/app/start_all.sh"]
+# If you prefer to run gunicorn directly instead of the script, override entrypoint/CMD in runtime
+# CMD ["gunicorn", "web:app", "--bind", "0.0.0.0:5000"]
