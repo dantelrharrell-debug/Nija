@@ -8,32 +8,42 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # These must exist as repository secrets
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      COINBASE_API_KEY: ${{ secrets.COINBASE_API_KEY }}
+      COINBASE_API_SECRET: ${{ secrets.COINBASE_API_SECRET }}
+      COINBASE_PEM_CONTENT: ${{ secrets.COINBASE_PEM_CONTENT }} # optional
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Add SSH key and known_hosts only when a private key secret exists
       - name: Start SSH agent and add private key
+        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Ensure github.com known host
+        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         run: |
           mkdir -p ~/.ssh
-          # add github.com host key to known_hosts to avoid interactive prompt
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
+      # (Add your build/test/publish steps below)
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install deps
         run: |
-          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run tests
-        run: pytest
+        run: |
+          pytest -q
