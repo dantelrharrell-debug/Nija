@@ -14,11 +14,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Start SSH agent and add private key
+        if: ${{ secrets.SSH_PRIVATE_KEY }}
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Ensure github.com known host
+        if: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.ssh
           # add github.com host key to known_hosts to avoid interactive prompt
