@@ -1,21 +1,27 @@
-FROM python:3.12-slim
+# Use Python 3.11-slim for better crypto package support
+FROM python:3.11-slim
 
-# Avoid cached layers causing version mismatch
-ENV PIP_NO_CACHE_DIR=1
-
+# Set working directory
 WORKDIR /app
 
-# Copy requirements first to leverage caching
+# Copy local Python packages if you want to include coinbase_advanced locally
+# COPY coinbase_advanced ./coinbase_advanced
+
+# Copy requirements
 COPY requirements.txt .
 
-# Upgrade pip and install everything
+# Upgrade pip and install dependencies
 RUN python -m pip install --upgrade pip setuptools wheel \
     && pip install --upgrade -r requirements.txt
 
-# Copy app last
+# Copy the rest of the app
 COPY . .
 
-# Make sure start script is executable
+# Make start script executable
 RUN chmod +x ./start_all.sh
 
+# Expose port (if needed)
+EXPOSE 5000
+
+# Run your app
 CMD ["./start_all.sh"]
