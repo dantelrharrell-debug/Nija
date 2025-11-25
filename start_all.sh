@@ -1,61 +1,64 @@
-#!/bin/bash
-set -e
+import os
+import time
+import logging
+from coinbase_advanced.client import Client  # Official package
 
-echo "=== STARTING NIJA ==="
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# Upgrade pip and install dependencies
-python3 -m pip install --upgrade pip setuptools wheel
-python3 -m pip install --no-cache-dir -r requirements.txt
+# Load Coinbase credentials from environment variables
+COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
+COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-# Initial Coinbase connection test
-python3 - <<'PY'
-from nija_client import test_coinbase_connection
-test_coinbase_connection()
-PY
+# Retry settings
+MAX_RETRIES = 5
+RETRY_DELAY = 5  # seconds
 
-# Start Gunicorn in the background
-echo "Starting Gunicorn..."
-gunicorn main:app \
-    --bind 0.0.0.0:5000 \
-    --workers 1 \
-    --threads 2 \
-    --timeout 120 \
-    --log-level info &
+def create_client():
+    """Initialize Coinbase client safely."""
+    try:
+        return Client(
+            api_key=COINBASE_API_KEY,
+            api_secret=COINBASE_API_SECRET,
+            pem_content=COINBASE_PEM_CONTENT
+        )
+    except Exception as e:
+        logging.error(f"❌ Failed to initialize Coinbase client: {e}")
+        return None
 
-GUNICORN_PID=$!
-echo "Gunicorn PID: $GUNICORN_PID"
+client = create_client()
 
-# Function to check Coinbase connection with exponential backoff
-check_coinbase_loop() {
-    backoff=5  # start with 5 seconds
-    max_backoff=300  # max 5 minutes
-    while true; do
-        python3 - <<'PY'
-from nija_client import test_coinbase_connection
-success = test_coinbase_connection()
-PY
-        if [ $? -eq 0 ]; then
-            # Reset backoff if connection succeeds
-            backoff=5
-        else
-            # Increase backoff exponentially on failure
-            echo "⚠️ Coinbase check failed. Retrying in $backoff seconds..."
-            sleep $backoff
-            backoff=$((backoff * 2))
-            if [ $backoff -gt $max_backoff ]; then
-                backoff=$max_backoff
-            fi
-            continue
-        fi
-        # Wait 60 seconds before next regular check
-        sleep 60
-    done
-}
+def fetch_accounts():
+    """Fetch all Coinbase accounts with retries."""
+    retries = 0
+    while retries < MAX_RETRIES:
+        try:
+            accounts = client.get_accounts()
+            logging.info(f"✅ Coinbase accounts fetched: {accounts}")
+            return accounts
+        except Exception as e:
+            retries += 1
+            logging.warning(f"⚠️ Coinbase fetch attempt {retries} failed: {e}")
+            time.sleep(RETRY_DELAY)
+    logging.error(f"❌ Failed to fetch accounts after {MAX_RETRIES} attempts.")
+    return None
 
-# Run the health check loop in the background
-check_coinbase_loop &
-HEALTH_PID=$!
-echo "Coinbase health check PID: $HEALTH_PID"
+def test_coinbase_connection():
+    """Verify Coinbase connection with retries and return exit code."""
+    logging.info("Testing Coinbase connection...")
+    accounts = fetch_accounts()
+    if accounts:
+        logging.info("✅ Coinbase connection verified successfully.")
+        return True
+    else:
+        logging.error("❌ Coinbase connection failed after multiple retries.")
+        return False
 
-# Wait for Gunicorn to exit (keeps container alive)
-wait $GUNICORN_PID
+if __name__ == "__main__":
+    success = test_coinbase_connection()
+    # Exit with proper code for bash
+    if success:
+        exit(0)
+    else:
+        exit(1)
