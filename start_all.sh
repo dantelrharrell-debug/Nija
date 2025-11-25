@@ -15,11 +15,13 @@ else
 fi
 
 # -----------------------
-# Verify WSGI app safely
+# Verify WSGI app safely using a temp Python file
 # -----------------------
 WSGI_MODULE="web.wsgi:app"
 echo "[INFO] Checking WSGI module $WSGI_MODULE..."
-python3 - <<PYTHON
+
+TMP_PY=$(mktemp /tmp/check_wsgi.XXXX.py)
+cat <<EOF > "$TMP_PY"
 import importlib
 import sys
 import traceback
@@ -34,7 +36,10 @@ try:
 except Exception:
     traceback.print_exc()
     sys.exit(1)
-PYTHON
+EOF
+
+python3 "$TMP_PY"
+rm "$TMP_PY"
 
 # -----------------------
 # Prepare logs directory
