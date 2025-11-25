@@ -13,9 +13,11 @@ python-dotenv>=1.2.1
 # Coinbase client (PyPI)
 coinbase-advanced-py>=1.0.0
 
+coinbase-advanced>=0.1.0
+Flask>=2.3.0
+# ...other dependencies
 # Optional: install the coinbase client directly from a GitHub branch
-# Replace <branch> with the branch you want
-# git+https://github.com/dantelrharrell-debug/Nija.git@<branch>#egg=coinbase_advanced
+# git+https://github.com/dantelrharrell-debug/Nija.git@<main>#egg=coinbase_advanced
 
 # Optional: editable install for local dev
 # -e .
