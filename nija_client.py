@@ -1,86 +1,88 @@
 import os
-import time
 import logging
+import time
 
-# --- Logging setup ---
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger(__name__)
+# ===============================
+# LOGGING SETUP
+# ===============================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 
-# --- Try importing coinbase_advanced ---
-try:
-    from coinbase_advanced.client import Client
-except ModuleNotFoundError:
-    Client = None
-    logger.error("coinbase_advanced module not installed.")
-
-# --- Environment variables ---
+# ===============================
+# COINBASE ENVIRONMENT SETUP
+# ===============================
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
+COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-# --- Retry settings ---
-MAX_RETRIES = 5
-RETRY_DELAY = 5  # seconds
+# Verify that all env vars exist
+missing = []
+for name, value in [
+    ("API_KEY", COINBASE_API_KEY),
+    ("API_SECRET", COINBASE_API_SECRET),
+    ("API_SUB", COINBASE_API_SUB),
+    ("PEM_CONTENT", COINBASE_PEM_CONTENT)
+]:
+    if not value:
+        missing.append(name)
 
-# --- Client creation ---
-def create_client():
-    if not Client:
-        logger.error("Cannot create client: coinbase_advanced is missing.")
-        return None
-    if not COINBASE_API_KEY or not COINBASE_API_SECRET:
-        logger.error("COINBASE_API_KEY or COINBASE_API_SECRET missing.")
-        return None
+if missing:
+    logging.error(f"Missing Coinbase environment variables: {', '.join(missing)}")
+    LIVE_TRADING = False
+else:
+    LIVE_TRADING = True
+
+# Optional masked logging for debug
+def mask(s, visible=6):
+    return s[:visible] + "..." + s[-visible:] if s else "<MISSING>"
+
+logging.info(f"COINBASE_API_KEY: {mask(COINBASE_API_KEY)}")
+logging.info(f"COINBASE_API_SECRET: {mask(COINBASE_API_SECRET)}")
+logging.info(f"COINBASE_API_SUB: {mask(COINBASE_API_SUB)}")
+logging.info(f"COINBASE_PEM_CONTENT present? {bool(COINBASE_PEM_CONTENT)}")
+logging.info(f"Live trading enabled? {LIVE_TRADING}")
+
+# ===============================
+# COINBASE CLIENT INITIALIZATION
+# ===============================
+if LIVE_TRADING:
     try:
-        client = Client(
+        from coinbase_advanced_py import CoinbaseAdvancedClient
+
+        client = CoinbaseAdvancedClient(
             api_key=COINBASE_API_KEY,
             api_secret=COINBASE_API_SECRET,
-            pem_content=COINBASE_PEM_CONTENT
+            passphrase=COINBASE_API_SUB,
+            pem_content=COINBASE_PEM_CONTENT,
         )
-        logger.info("Coinbase client created successfully.")
-        return client
+
+        logging.info("✅ Coinbase client successfully initialized for live trading.")
     except Exception as e:
-        logger.error(f"Failed to initialize Coinbase client: {e}")
-        return None
+        logging.error(f"⚠️ Failed to initialize Coinbase client: {e}")
+        client = None
+        LIVE_TRADING = False
+else:
+    logging.warning("⚠️ Live trading disabled due to missing environment variables.")
+    client = None
 
-# --- Wrapper class for main.py usage ---
-class CoinbaseClientWrapper:
-    def __init__(self):
-        self.client = create_client()
-
-    def get_accounts(self):
-        """Fetch Coinbase accounts with retries."""
-        if not self.client:
-            logger.error("Client not initialized.")
-            return None
-
-        retries = 0
-        while retries < MAX_RETRIES:
-            try:
-                accounts = self.client.get_accounts()
-                logger.info(f"Coinbase accounts fetched: {accounts}")
-                return accounts
-            except Exception as e:
-                retries += 1
-                logger.warning(f"Attempt {retries} failed: {e}")
-                time.sleep(RETRY_DELAY)
-
-        logger.error(f"Failed to fetch accounts after {MAX_RETRIES} attempts.")
-        return None
-
-    def test_connection(self):
-        """Test if Coinbase connection works."""
-        accounts = self.get_accounts()
-        if accounts:
-            logger.info("Coinbase connection verified successfully.")
-            return True
-        logger.error("Coinbase connection failed.")
+# ===============================
+# UTILITY: TEST CONNECTION
+# ===============================
+def test_coinbase_connection():
+    if not client:
+        logging.warning("Coinbase client not initialized. Cannot test connection.")
+        return False
+    try:
+        account_info = client.get_accounts()
+        logging.info(f"Coinbase connection test successful. Accounts retrieved: {len(account_info)}")
+        return True
+    except Exception as e:
+        logging.error(f"Coinbase connection test failed: {e}")
         return False
 
-# --- Export for main.py ---
-CoinbaseClient = CoinbaseClientWrapper
-
-# --- Self-test when run directly ---
+# Example usage (can be called from Flask app on startup)
 if __name__ == "__main__":
-    client = CoinbaseClient()
-    success = client.test_connection()
-    exit(0 if success else 1)
+    test_coinbase_connection()
