@@ -1,73 +1,68 @@
 import os
 import logging
-from coinbase_advanced import Client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# Load Coinbase credentials from environment variables
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")  # usually same as API key ID
-COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # optional
-
-LIVE_TRADING = os.getenv("LIVE_TRADING", "0") == "1"
+Client = None  # global lazy-loaded client
 
 def get_coinbase_client():
-    if not LIVE_TRADING:
+    """Lazy initialization of Coinbase client."""
+    global Client
+    if Client:
+        return Client
+
+    # Check LIVE_TRADING
+    live_trading = os.getenv("LIVE_TRADING", "0") == "1"
+    if not live_trading:
         logging.warning("LIVE_TRADING disabled. Coinbase client will not be initialized.")
         return None
 
-    # Verify required credentials
+    # Required credentials
+    api_key = os.getenv("COINBASE_API_KEY")
+    api_secret = os.getenv("COINBASE_API_SECRET")
+    api_sub = os.getenv("COINBASE_API_SUB")
+    pem_content = os.getenv("COINBASE_PEM_CONTENT")
+    pem_path = os.getenv("COINBASE_PEM_PATH")
+
     missing = []
-    if not COINBASE_API_KEY:
-        missing.append("COINBASE_API_KEY")
-    if not COINBASE_API_SECRET:
-        missing.append("COINBASE_API_SECRET")
-    if not COINBASE_API_SUB:
-        missing.append("COINBASE_API_SUB")
-    if not (COINBASE_PEM_PATH or COINBASE_PEM_CONTENT):
-        missing.append("COINBASE_PEM_PATH or COINBASE_PEM_CONTENT")
+    if not api_key: missing.append("COINBASE_API_KEY")
+    if not api_secret: missing.append("COINBASE_API_SECRET")
+    if not api_sub: missing.append("COINBASE_API_SUB")
+    if not (pem_content or (pem_path and os.path.isfile(pem_path))):
+        missing.append("COINBASE_PEM_CONTENT or COINBASE_PEM_PATH")
 
     if missing:
-        logging.error(f"Cannot initialize Coinbase client. Missing keys: {missing}")
+        logging.error(f"Cannot initialize Coinbase client. Missing: {missing}")
         return None
 
-    # Decide PEM source
-    pem = None
-    if COINBASE_PEM_CONTENT:
-        pem = COINBASE_PEM_CONTENT
-    elif COINBASE_PEM_PATH and os.path.isfile(COINBASE_PEM_PATH):
-        with open(COINBASE_PEM_PATH, "r") as f:
+    # Load PEM
+    pem = pem_content
+    if not pem and pem_path:
+        with open(pem_path, "r") as f:
             pem = f.read()
-    else:
-        logging.error("PEM file not found or PEM content empty.")
-        return None
 
-    # Initialize client
     try:
-        client = Client(
-            key=COINBASE_API_KEY,
-            secret=COINBASE_API_SECRET,
-            passphrase=COINBASE_API_SUB,
+        from coinbase_advanced.client import Client as CBClient
+        Client = CBClient(
+            key=api_key,
+            secret=api_secret,
+            passphrase=api_sub,
             pem=pem
         )
         logging.info("✅ Coinbase client initialized successfully.")
-        return client
+        return Client
     except Exception as e:
         logging.exception(f"Failed to initialize Coinbase client: {e}")
         return None
 
-# Example usage
-coinbase_client = get_coinbase_client()
-
 def test_coinbase_connection():
-    if not coinbase_client:
+    client = get_coinbase_client()
+    if not client:
         logging.warning("Coinbase client not initialized; cannot test connection.")
         return
     try:
-        info = coinbase_client.get_accounts()
-        logging.info(f"Connected to Coinbase. Accounts retrieved: {len(info)}")
+        accounts = client.get_accounts()
+        logging.info(f"Connected to Coinbase. Accounts retrieved: {len(accounts)}")
     except Exception as e:
         logging.error(f"Coinbase connection test failed: {e}")
 
