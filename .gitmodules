@@ -1,3 +1,5 @@
 [submodule "coinbase_advanced_py"]
+    path = coinbase_advanced_py
+    url = https://github.com/dantelrharrell-debug/coinbase_advanced_py.git
 	path = coinbase_advanced_py
 	url = https://github.com/dantelrharrell-debug/coinbase_advanced_py.git
