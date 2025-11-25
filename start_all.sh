@@ -1,13 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Determine project root (adjust if your code lives elsewhere)
-APP_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$APP_DIR"
-echo "[INFO] Working directory set to $APP_DIR"
-#!/bin/bash
-set -euo pipefail
-
 echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
 
 # -----------------------
@@ -22,44 +15,30 @@ else
 fi
 
 # -----------------------
-# Verify WSGI app safely using a temp Python file
+# Verify WSGI app
 # -----------------------
 WSGI_MODULE="web.wsgi:app"
 echo "[INFO] Checking WSGI module $WSGI_MODULE..."
-
-TMP_PY=$(mktemp /tmp/check_wsgi.XXXX.py)
-cat <<EOF > "$TMP_PY"
-import importlib
-import sys
-import traceback
-
-WSGI_MODULE = "$WSGI_MODULE"
-
+python - <<'PY'
+import importlib, sys, traceback
 try:
-    mod_name, app_name = WSGI_MODULE.split(":")
+    mod_name, app_name = 'web.wsgi:app'.split(':')
     mod = importlib.import_module(mod_name)
     getattr(mod, app_name)
-    print(f"[INFO] {WSGI_MODULE} import ok")
+    print("WSGI module import ok")
 except Exception:
     traceback.print_exc()
     sys.exit(1)
-EOF
-
-python3 "$TMP_PY"
-rm "$TMP_PY"
-
-# -----------------------
-# Prepare logs directory
-# -----------------------
-LOG_DIR=/app/logs
-mkdir -p "$LOG_DIR"
+PY
 
 # -----------------------
 # Start background workers
 # -----------------------
+LOG_DIR=./logs
+mkdir -p "$LOG_DIR"
 echo "[INFO] Starting background bots..."
-nohup python3 /app/bots/tv_webhook_listener.py >> "$LOG_DIR/tv_webhook_listener.log" 2>&1 &
-nohup python3 /app/bots/coinbase_trader.py >> "$LOG_DIR/coinbase_trader.log" 2>&1 &
+nohup python3 ./bots/tv_webhook_listener.py >> "$LOG_DIR/tv_webhook_listener.log" 2>&1 &
+nohup python3 ./bots/coinbase_trader.py >> "$LOG_DIR/coinbase_trader.log" 2>&1 &
 
 # -----------------------
 # Start Gunicorn web app
