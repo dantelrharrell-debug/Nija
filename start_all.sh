@@ -25,14 +25,30 @@ gunicorn main:app \
 GUNICORN_PID=$!
 echo "Gunicorn PID: $GUNICORN_PID"
 
-# Function to check Coinbase connection every minute
+# Function to check Coinbase connection with exponential backoff
 check_coinbase_loop() {
+    backoff=5  # start with 5 seconds
+    max_backoff=300  # max 5 minutes
     while true; do
         python3 - <<'PY'
 from nija_client import test_coinbase_connection
-test_coinbase_connection()
+success = test_coinbase_connection()
 PY
-        sleep 60  # wait 1 minute
+        if [ $? -eq 0 ]; then
+            # Reset backoff if connection succeeds
+            backoff=5
+        else
+            # Increase backoff exponentially on failure
+            echo "⚠️ Coinbase check failed. Retrying in $backoff seconds..."
+            sleep $backoff
+            backoff=$((backoff * 2))
+            if [ $backoff -gt $max_backoff ]; then
+                backoff=$max_backoff
+            fi
+            continue
+        fi
+        # Wait 60 seconds before next regular check
+        sleep 60
     done
 }
 
@@ -41,5 +57,5 @@ check_coinbase_loop &
 HEALTH_PID=$!
 echo "Coinbase health check PID: $HEALTH_PID"
 
-# Wait for Gunicorn to exit (keep container alive)
+# Wait for Gunicorn to exit (keeps container alive)
 wait $GUNICORN_PID
