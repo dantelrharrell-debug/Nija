@@ -7,5 +7,5 @@ ecdsa>=0.19.1
 requests>=2.32.5
 python-dotenv>=1.2.1
 
-# Coinbase client (directly from GitHub)
+# Coinbase client directly from GitHub
 git+https://github.com/dantelrharrell-debug/coinbase-advanced.git@main#egg=coinbase-advanced
