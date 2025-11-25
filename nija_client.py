@@ -11,7 +11,7 @@ COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
 COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
 
-# Connection retry settings
+# Retry settings
 MAX_RETRIES = 5
 RETRY_DELAY = 5  # seconds
 
@@ -31,6 +31,10 @@ client = create_client()
 
 def fetch_accounts():
     """Fetch all Coinbase accounts with retries."""
+    if not client:
+        logging.error("Client not initialized.")
+        return None
+
     retries = 0
     while retries < MAX_RETRIES:
         try:
@@ -41,6 +45,7 @@ def fetch_accounts():
             retries += 1
             logging.warning(f"⚠️ Coinbase fetch attempt {retries} failed: {e}")
             time.sleep(RETRY_DELAY)
+
     logging.error(f"❌ Failed to fetch accounts after {MAX_RETRIES} attempts.")
     return None
 
@@ -56,5 +61,5 @@ def test_coinbase_connection():
         return False
 
 if __name__ == "__main__":
-    # Run a connection test when the module is executed directly
-    test_coinbase_connection()
+    success = test_coinbase_connection()
+    exit(0 if success else 1)
