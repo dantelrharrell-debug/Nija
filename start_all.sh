@@ -15,30 +15,36 @@ else
 fi
 
 # -----------------------
-# Verify WSGI app
+# Verify WSGI app safely
 # -----------------------
 WSGI_MODULE="web.wsgi:app"
 echo "[INFO] Checking WSGI module $WSGI_MODULE..."
-python - <<'PY'
+python3 - <<PYTHON
 import importlib
 import sys
 import traceback
 
+WSGI_MODULE = "$WSGI_MODULE"
+
 try:
-    mod_name, app_name = '$WSGI_MODULE'.split(':')
+    mod_name, app_name = WSGI_MODULE.split(":")
     mod = importlib.import_module(mod_name)
     getattr(mod, app_name)
-    print(f"{WSGI_MODULE} import ok")
+    print(f"[INFO] {WSGI_MODULE} import ok")
 except Exception:
     traceback.print_exc()
     sys.exit(1)
-PY
+PYTHON
+
+# -----------------------
+# Prepare logs directory
+# -----------------------
+LOG_DIR=/app/logs
+mkdir -p "$LOG_DIR"
 
 # -----------------------
 # Start background workers
 # -----------------------
-LOG_DIR=/app/logs
-mkdir -p "$LOG_DIR"
 echo "[INFO] Starting background bots..."
 nohup python3 /app/bots/tv_webhook_listener.py >> "$LOG_DIR/tv_webhook_listener.log" 2>&1 &
 nohup python3 /app/bots/coinbase_trader.py >> "$LOG_DIR/coinbase_trader.log" 2>&1 &
