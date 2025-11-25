@@ -1,34 +1,27 @@
-from flask import Flask, jsonify
-from nija_client import get_coinbase_client, test_coinbase_connection, LIVE_TRADING
+from flask import Flask
+import os
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
 app = Flask(__name__)
 
-# Initialize Coinbase client on startup
-coinbase_client = get_coinbase_client()
-
-@app.before_first_request
-def startup_checks():
-    if LIVE_TRADING:
-        test_coinbase_connection()
-    else:
-        app.logger.warning("LIVE_TRADING is disabled. Skipping Coinbase connection test.")
-
-# Basic health check endpoint
+# Health check route
 @app.route("/")
 def index():
-    return jsonify({"status": "Nija Bot Running!", "live_trading": LIVE_TRADING})
+    return "Nija Trading Bot Running!"
 
-# Optional endpoint to list Coinbase accounts
-@app.route("/accounts")
-def accounts():
-    if not coinbase_client:
-        return jsonify({"error": "Coinbase client not initialized"}), 400
-    try:
-        accounts = coinbase_client.get_accounts()
-        return jsonify({"accounts": accounts})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+# Optional: Test env variables safely at runtime
+def verify_env_vars():
+    keys = ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_SUB", "COINBASE_PEM_CONTENT"]
+    missing = [k for k in keys if not os.environ.get(k)]
+    if missing:
+        logging.error(f"Missing environment variables: {missing}")
+        raise RuntimeError(f"Missing environment variables: {missing}")
+    logging.info("All required environment variables are set.")
 
+# Only run this check when running standalone (not when Gunicorn loads WSGI)
 if __name__ == "__main__":
-    # Only used for local testing; Gunicorn will override
-    app.run(host="0.0.0.0", port=8080)
+    verify_env_vars()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
