@@ -1,10 +1,17 @@
+# nija_client.py
 import os
 import time
 import logging
-from coinbase_advanced.client import Client  # Official package
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+
+# Attempt to import Coinbase client safely
+try:
+    from coinbase_advanced.client import Client
+except ModuleNotFoundError:
+    Client = None
+    logging.error("coinbase_advanced module not installed.")
 
 # Load Coinbase credentials from environment variables
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
@@ -17,6 +24,9 @@ RETRY_DELAY = 5  # seconds
 
 def create_client():
     """Initialize Coinbase client safely."""
+    if not Client:
+        logging.error("Cannot create client: coinbase_advanced is missing.")
+        return None
     try:
         return Client(
             api_key=COINBASE_API_KEY,
@@ -24,7 +34,7 @@ def create_client():
             pem_content=COINBASE_PEM_CONTENT
         )
     except Exception as e:
-        logging.error(f"❌ Failed to initialize Coinbase client: {e}")
+        logging.error(f"Failed to initialize Coinbase client: {e}")
         return None
 
 client = create_client()
@@ -39,14 +49,14 @@ def fetch_accounts():
     while retries < MAX_RETRIES:
         try:
             accounts = client.get_accounts()
-            logging.info(f"✅ Coinbase accounts fetched: {accounts}")
+            logging.info(f"Coinbase accounts fetched: {accounts}")
             return accounts
         except Exception as e:
             retries += 1
-            logging.warning(f"⚠️ Coinbase fetch attempt {retries} failed: {e}")
+            logging.warning(f"Attempt {retries} failed: {e}")
             time.sleep(RETRY_DELAY)
 
-    logging.error(f"❌ Failed to fetch accounts after {MAX_RETRIES} attempts.")
+    logging.error(f"Failed to fetch accounts after {MAX_RETRIES} attempts.")
     return None
 
 def test_coinbase_connection():
@@ -54,10 +64,10 @@ def test_coinbase_connection():
     logging.info("Testing Coinbase connection...")
     accounts = fetch_accounts()
     if accounts:
-        logging.info("✅ Coinbase connection verified successfully.")
+        logging.info("Coinbase connection verified successfully.")
         return True
     else:
-        logging.error("❌ Coinbase connection failed after multiple retries.")
+        logging.error("Coinbase connection failed after multiple retries.")
         return False
 
 if __name__ == "__main__":
