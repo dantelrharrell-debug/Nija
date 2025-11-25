@@ -1,0 +1,22 @@
+name: Build image (with GH_TOKEN)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for multi-platform builders) - optional
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build Docker image (using GH_TOKEN)
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          docker build --no-cache --build-arg GH_TOKEN="${GH_TOKEN}" -t nija:latest .

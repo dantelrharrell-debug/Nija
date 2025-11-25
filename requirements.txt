@@ -1,14 +1,13 @@
 # Core runtime requirements
-Flask>=2.3.4
+Flask>=3.1.2
 gunicorn>=23.0.0
 PyJWT[crypto]>=2.6.0
-cryptography>=40.0.0
-ecdsa>=0.18.0
-requests>=2.31.0
-python-dotenv>=1.0.0
+cryptography>=46.0.3
+ecdsa>=0.19.1
+requests>=2.32.5
+python-dotenv>=1.2.1
 
-# Optional ASGI server (only if using FastAPI/uvicorn)
-# Uncomment only if you need an ASGI server
+# Optional ASGI server
 # uvicorn[standard]>=0.22.0
 
 # Coinbase client (PyPI)
@@ -20,3 +19,4 @@ coinbase-advanced-py>=1.0.0
 
 # Optional: editable install for local dev
 # -e .
+coinbase-advanced-py==1.8.2

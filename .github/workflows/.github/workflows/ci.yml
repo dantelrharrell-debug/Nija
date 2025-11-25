@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      # These must exist as repository secrets
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      COINBASE_API_KEY: ${{ secrets.COINBASE_API_KEY }}
+      COINBASE_API_SECRET: ${{ secrets.COINBASE_API_SECRET }}
+      COINBASE_PEM_CONTENT: ${{ secrets.COINBASE_PEM_CONTENT }} # optional
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start SSH agent and add private key
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Ensure github.com known host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          # Install private repo first if GH_TOKEN exists
+          if [ -n "${GH_TOKEN}" ]; then
+            echo "Installing private repo coinbase-advanced using GH_TOKEN"
+            python -m pip install "git+https://${GH_TOKEN}@github.com/dantelrharrell-debug/coinbase-advanced.git@main"
+            # Install remaining requirements without coinbase-advanced
+            grep -v -E "coinbase-advanced" requirements.txt > /tmp/reqs_for_pip.txt || true
+            python -m pip install -r /tmp/reqs_for_pip.txt
+            shred -u /tmp/reqs_for_pip.txt || rm -f /tmp/reqs_for_pip.txt
+            unset GH_TOKEN
+          else
+            echo "No GH_TOKEN provided; attempting normal pip install (will fail for private repos)"
+            python -m pip install -r requirements.txt
+          fi
+
+      - name: Run tests
+        run: pytest
+
+      - name: Optional: Smoke test Coinbase connection
+        run: |
+          python - <<'PY'
+          import os
+          from coinbase_advanced.client import Client
+
+          client = Client(
+              api_key=os.getenv("COINBASE_API_KEY"),
+              api_secret=os.getenv("COINBASE_API_SECRET"),
+              pem_content=os.getenv("COINBASE_PEM_CONTENT", None)
+          )
+
+          accounts = client.get_accounts()
+          print({"ok": True, "accounts": [a.id for a in accounts]})
+          PY
