@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Start SSH agent and add private key
         if: ${{ secrets.SSH_PRIVATE_KEY }}
