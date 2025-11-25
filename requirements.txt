@@ -20,3 +20,4 @@ coinbase-advanced-py>=1.0.0
 # Optional: editable install for local dev
 # -e .
 coinbase-advanced-py==1.8.2
+git+https://github.com/coinbase/coinbase-advanced-py.git
