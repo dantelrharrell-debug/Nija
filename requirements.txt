@@ -1,11 +1,8 @@
-# Core dependencies
-Flask>=2.3.0
+Flask>=3.1.2
 gunicorn>=23.0.0
-requests>=2.32.5
-python-dotenv>=1.2.1
 PyJWT[crypto]>=2.6.0
 cryptography>=46.0.3
 ecdsa>=0.19.1
-
-# Coinbase client (PyPI)
+requests>=2.32.5
+python-dotenv>=1.2.1
 coinbase-advanced-py==1.8.2
