@@ -1,25 +1,47 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
-IFS=$'\n\t'
 
-echo "=== START_ALL.SH: $(date -u) ==="
+echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
 
-# Show Python and env info
-echo "PYTHON: $(which python) $(python --version 2>&1 || true)"
-echo "ENV SAMPLE: COINBASE_API_KEY=${COINBASE_API_KEY:-<missing>}"
-echo "PWD: $(pwd)"
-ls -la /app || true
+# -----------------------
+# Install dependencies
+# -----------------------
+if [ -f requirements.txt ]; then
+    echo "[INFO] Installing Python dependencies..."
+    pip install --upgrade pip setuptools wheel
+    pip install -r requirements.txt
+else
+    echo "[WARN] requirements.txt not found, skipping pip install."
+fi
 
-# Pre-check main import (logs errors if any)
-python -c "import sys, traceback; \
-try: import main; print('main import OK'); \
-except Exception as e: traceback.print_exc(); sys.exit(1)"
+# -----------------------
+# Verify WSGI app
+# -----------------------
+WSGI_MODULE="web.wsgi:app"
+echo "[INFO] Checking WSGI module $WSGI_MODULE..."
+python -c "import importlib; mod_name, app_name = '$WSGI_MODULE'.split(':'); mod = importlib.import_module(mod_name); getattr(mod, app_name)" || {
+    echo "[ERROR] WSGI module $WSGI_MODULE not found or 'app' missing."
+    exit 1
+}
 
-# Start gunicorn with full logging to console
-exec gunicorn main:app \
-  --bind 0.0.0.0:5000 \
-  --workers 2 \
-  --timeout 30 \
-  --log-level debug \
-  --access-logfile - \
-  --error-logfile -
+# -----------------------
+# Start background workers
+# -----------------------
+LOG_DIR=/app/logs
+mkdir -p "$LOG_DIR"
+echo "[INFO] Starting background bots..."
+nohup python3 /app/bots/tv_webhook_listener.py >> "$LOG_DIR/tv_webhook_listener.log" 2>&1 &
+nohup python3 /app/bots/coinbase_trader.py >> "$LOG_DIR/coinbase_trader.log" 2>&1 &
+
+# -----------------------
+# Start Gunicorn web app
+# -----------------------
+PORT=${PORT:-5000}
+echo "[INFO] Starting Gunicorn on port $PORT..."
+exec gunicorn "$WSGI_MODULE" \
+    --bind 0.0.0.0:"$PORT" \
+    --workers 1 \
+    --threads 1 \
+    --timeout 30 \
+    --log-level debug \
+    --error-logfile -
