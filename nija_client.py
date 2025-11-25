@@ -1,88 +1,75 @@
 import os
 import logging
-import time
+from coinbase_advanced import Client
 
-# ===============================
-# LOGGING SETUP
-# ===============================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# ===============================
-# COINBASE ENVIRONMENT SETUP
-# ===============================
+# Load Coinbase credentials from environment variables
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
+COINBASE_API_SUB = os.getenv("COINBASE_API_SUB")  # usually same as API key ID
+COINBASE_PEM_PATH = os.getenv("COINBASE_PEM_PATH")
+COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")  # optional
 
-# Verify that all env vars exist
-missing = []
-for name, value in [
-    ("API_KEY", COINBASE_API_KEY),
-    ("API_SECRET", COINBASE_API_SECRET),
-    ("API_SUB", COINBASE_API_SUB),
-    ("PEM_CONTENT", COINBASE_PEM_CONTENT)
-]:
-    if not value:
-        missing.append(name)
+LIVE_TRADING = os.getenv("LIVE_TRADING", "0") == "1"
 
-if missing:
-    logging.error(f"Missing Coinbase environment variables: {', '.join(missing)}")
-    LIVE_TRADING = False
-else:
-    LIVE_TRADING = True
+def get_coinbase_client():
+    if not LIVE_TRADING:
+        logging.warning("LIVE_TRADING disabled. Coinbase client will not be initialized.")
+        return None
 
-# Optional masked logging for debug
-def mask(s, visible=6):
-    return s[:visible] + "..." + s[-visible:] if s else "<MISSING>"
+    # Verify required credentials
+    missing = []
+    if not COINBASE_API_KEY:
+        missing.append("COINBASE_API_KEY")
+    if not COINBASE_API_SECRET:
+        missing.append("COINBASE_API_SECRET")
+    if not COINBASE_API_SUB:
+        missing.append("COINBASE_API_SUB")
+    if not (COINBASE_PEM_PATH or COINBASE_PEM_CONTENT):
+        missing.append("COINBASE_PEM_PATH or COINBASE_PEM_CONTENT")
 
-logging.info(f"COINBASE_API_KEY: {mask(COINBASE_API_KEY)}")
-logging.info(f"COINBASE_API_SECRET: {mask(COINBASE_API_SECRET)}")
-logging.info(f"COINBASE_API_SUB: {mask(COINBASE_API_SUB)}")
-logging.info(f"COINBASE_PEM_CONTENT present? {bool(COINBASE_PEM_CONTENT)}")
-logging.info(f"Live trading enabled? {LIVE_TRADING}")
+    if missing:
+        logging.error(f"Cannot initialize Coinbase client. Missing keys: {missing}")
+        return None
 
-# ===============================
-# COINBASE CLIENT INITIALIZATION
-# ===============================
-if LIVE_TRADING:
+    # Decide PEM source
+    pem = None
+    if COINBASE_PEM_CONTENT:
+        pem = COINBASE_PEM_CONTENT
+    elif COINBASE_PEM_PATH and os.path.isfile(COINBASE_PEM_PATH):
+        with open(COINBASE_PEM_PATH, "r") as f:
+            pem = f.read()
+    else:
+        logging.error("PEM file not found or PEM content empty.")
+        return None
+
+    # Initialize client
     try:
-        from coinbase_advanced_py import CoinbaseAdvancedClient
-
-        client = CoinbaseAdvancedClient(
-            api_key=COINBASE_API_KEY,
-            api_secret=COINBASE_API_SECRET,
+        client = Client(
+            key=COINBASE_API_KEY,
+            secret=COINBASE_API_SECRET,
             passphrase=COINBASE_API_SUB,
-            pem_content=COINBASE_PEM_CONTENT,
+            pem=pem
         )
-
-        logging.info("✅ Coinbase client successfully initialized for live trading.")
+        logging.info("✅ Coinbase client initialized successfully.")
+        return client
     except Exception as e:
-        logging.error(f"⚠️ Failed to initialize Coinbase client: {e}")
-        client = None
-        LIVE_TRADING = False
-else:
-    logging.warning("⚠️ Live trading disabled due to missing environment variables.")
-    client = None
+        logging.exception(f"Failed to initialize Coinbase client: {e}")
+        return None
 
-# ===============================
-# UTILITY: TEST CONNECTION
-# ===============================
+# Example usage
+coinbase_client = get_coinbase_client()
+
 def test_coinbase_connection():
-    if not client:
-        logging.warning("Coinbase client not initialized. Cannot test connection.")
-        return False
+    if not coinbase_client:
+        logging.warning("Coinbase client not initialized; cannot test connection.")
+        return
     try:
-        account_info = client.get_accounts()
-        logging.info(f"Coinbase connection test successful. Accounts retrieved: {len(account_info)}")
-        return True
+        info = coinbase_client.get_accounts()
+        logging.info(f"Connected to Coinbase. Accounts retrieved: {len(info)}")
     except Exception as e:
         logging.error(f"Coinbase connection test failed: {e}")
-        return False
 
-# Example usage (can be called from Flask app on startup)
 if __name__ == "__main__":
     test_coinbase_connection()
