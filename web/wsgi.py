@@ -1,10 +1,13 @@
 import logging
 import os
-from flask import Flask
+from flask import Flask, send_file, abort
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("wsgi")
+
+# Create Flask app
+app = Flask(__name__)
 
 # Correct Coinbase client import
 try:
@@ -34,9 +37,6 @@ def test_coinbase_connection():
         logger.error(f"Failed to initialize Coinbase client: {e}")
         return False
 
-# Create Flask app
-app = Flask(__name__)
-
 # Run startup checks
 with app.app_context():
     test_coinbase_connection()
@@ -44,3 +44,15 @@ with app.app_context():
 @app.route("/")
 def index():
     return "Nija Trading Bot is running!"
+
+# Temporary Coinbase debug download endpoint
+DEBUG_FILE = "/app/logs/coinbase_module_debug.txt"
+
+@app.route("/debug/coinbase")
+def debug_coinbase():
+    if not os.path.exists(DEBUG_FILE):
+        return "Debug file not yet created. Wait a few seconds and refresh.\n", 404
+    try:
+        return send_file(DEBUG_FILE, mimetype="text/plain", as_attachment=True, download_name="coinbase_module_debug.txt")
+    except Exception as e:
+        abort(500, description=str(e))
