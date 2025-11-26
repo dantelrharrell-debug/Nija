@@ -18,8 +18,8 @@ COPY . /app
 # Upgrade pip
 RUN pip install --upgrade pip
 
-# Install Coinbase Advanced client from correct branch
-RUN pip install git+https://github.com/coinbase/coinbase-advanced-py.git#egg=coinbase_advanced
+# Install Coinbase Advanced client (fixed #egg name)
+RUN pip install git+https://github.com/coinbase/coinbase-advanced-py.git#egg=coinbase-advanced-py
 
 # Install Python dependencies from requirements.txt if exists
 COPY requirements.txt /app/requirements.txt
