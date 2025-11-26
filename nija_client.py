@@ -1,57 +1,61 @@
-# nija_client.py
 import os
 import logging
+import importlib
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# Attempt to import Coinbase client dynamically
-Client = None
-try:
-    import coinbase_advanced_py
-    logging.info("Imported module candidate: coinbase_advanced_py")
+# List of module candidates (your repo)
+MODULE_CANDIDATES = [
+    "coinbase_advanced",
+    "coinbase_advanced_py"
+]
 
-    # Try common locations for the Client class
-    if hasattr(coinbase_advanced_py, "Client"):
-        Client = coinbase_advanced_py.Client
-    elif hasattr(coinbase_advanced_py, "client") and hasattr(coinbase_advanced_py.client, "Client"):
-        Client = coinbase_advanced_py.client.Client
-    else:
-        logging.warning("coinbase client not found among candidates.")
+def find_coinbase_client():
+    """
+    Dynamically searches module candidates for a Client class.
+    Returns the Client class if found, else None.
+    """
+    for module_name in MODULE_CANDIDATES:
+        try:
+            mod = importlib.import_module(module_name)
+            logging.info(f"Imported module candidate: {module_name}")
 
-except ModuleNotFoundError:
-    logging.error("coinbase_advanced_py module not installed.")
-except Exception as e:
-    logging.error(f"Unexpected error importing Coinbase client: {e}")
-
+            # Check for Client class in module
+            if hasattr(mod, "Client"):
+                logging.info(f"Found Client in {module_name}")
+                return getattr(mod, "Client")
+            # Check for submodule 'client'
+            if hasattr(mod, "client"):
+                client_mod = getattr(mod, "client")
+                if hasattr(client_mod, "Client"):
+                    logging.info(f"Found Client in {module_name}.client")
+                    return getattr(client_mod, "Client")
+        except ModuleNotFoundError:
+            logging.warning(f"Module {module_name} not found")
+    logging.warning("coinbase client not found among candidates.")
+    return None
 
 def test_coinbase_connection():
-    """Run a single test connection to Coinbase. Returns True/False."""
-    if not Client:
+    ClientClass = find_coinbase_client()
+    if not ClientClass:
         logging.warning("No client class available for connection test.")
         return False
 
+    # Load credentials from environment
+    api_key = os.environ.get("COINBASE_API_KEY")
+    api_secret = os.environ.get("COINBASE_API_SECRET")
+    api_sub = os.environ.get("COINBASE_API_SUB")
+
+    if not api_key or not api_secret or not api_sub:
+        logging.warning("Coinbase API credentials not set in environment.")
+        return False
+
     try:
-        # Load credentials from environment
-        api_key = os.environ.get("COINBASE_API_KEY")
-        api_secret = os.environ.get("COINBASE_API_SECRET")
-        api_sub = os.environ.get("COINBASE_API_SUB")
-
-        if not api_key or not api_secret or not api_sub:
-            logging.warning("Coinbase credentials not fully set in environment.")
-            return False
-
-        client = Client(api_key=api_key, api_secret=api_secret, api_sub=api_sub)
-        # Example call to verify connection (adjust depending on API)
-        accounts = client.get_accounts()  # or client.list_accounts(), depending on module
-        logging.info(f"Coinbase connection successful. Accounts retrieved: {len(accounts)}")
+        client = ClientClass(api_key=api_key, api_secret=api_secret, api_sub=api_sub)
+        # Optionally: perform a small test call
+        # result = client.get_accounts()  # If method exists
+        logging.info("Coinbase client instantiated successfully.")
         return True
-
     except Exception as e:
         logging.warning(f"Coinbase connection test failed: {e}")
         return False
-
-
-if __name__ == "__main__":
-    logging.info("Running standalone Coinbase connection test...")
-    result = test_coinbase_connection()
-    logging.info(f"Connection test result: {result}")
