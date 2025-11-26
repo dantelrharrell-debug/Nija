@@ -6,12 +6,12 @@ from flask import Flask
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("wsgi")
 
-# Try importing Coinbase client
+# Correct Coinbase client import
 try:
-    from coinbase_advanced.client import Client
+    from coinbase_advanced_py.client import Client
 except ModuleNotFoundError:
     Client = None
-    logger.error("coinbase_advanced.client module not found. Ensure coinbase-advanced-py is installed.")
+    logger.error("coinbase_advanced_py.client module not found. Ensure coinbase-advanced-py is installed.")
 
 # Load Coinbase credentials from environment
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
@@ -37,7 +37,7 @@ def test_coinbase_connection():
 # Create Flask app
 app = Flask(__name__)
 
-# Run startup checks immediately
+# Run startup checks
 with app.app_context():
     test_coinbase_connection()
 
