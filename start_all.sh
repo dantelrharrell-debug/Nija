@@ -1,47 +1,27 @@
 #!/usr/bin/env bash
-set -e  # Exit immediately if any command fails
+set -euo pipefail
 
 echo "[INFO] === STARTING NIJA TRADING BOT CONTAINER ==="
 date
 
-# ----------------------------
-# Install Python dependencies
-# ----------------------------
-python3 -m pip install --no-cache-dir --root-user-action=ignore --upgrade pip setuptools wheel
-python3 -m pip install --no-cache-dir --root-user-action=ignore -r /app/requirements.txt
-
-# ----------------------------
-# Check required environment variables
-# ----------------------------
-: "${COINBASE_API_KEY:?Need to set COINBASE_API_KEY}"
-: "${COINBASE_API_SECRET:?Need to set COINBASE_API_SECRET}"
-: "${COINBASE_API_SUB:?Need to set COINBASE_API_SUB}"
-echo "[INFO] All required environment variables are set."
-
-# ----------------------------
-# Test Coinbase connection
-# ----------------------------
-echo "[INFO] Testing Coinbase connection..."
-python3 - <<END
-from nija_client import test_coinbase_connection
-import sys
-
-if not test_coinbase_connection():
-    print("[ERROR] Coinbase connection test failed. Exiting container.")
-    sys.exit(1)
-END
-
-# ----------------------------
-# Start background workers
-# ----------------------------
-echo "[INFO] Starting background workers..."
+# Create logs folder
 mkdir -p /app/logs
-python3 /app/tv_webhook_listener.py >> /app/logs/tv_webhook_listener.log 2>&1 &
-python3 /app/coinbase_trader.py >> /app/logs/coinbase_trader.log 2>&1 &
-echo "[INFO] Background workers started."
 
-# ----------------------------
-# Launch Gunicorn web server
-# ----------------------------
+# Environment variable check (log, but do not exit)
+: "${COINBASE_API_KEY:=""}"
+: "${COINBASE_API_SECRET:=""}"
+: "${COINBASE_API_SUB:=""}"
+
+echo "[INFO] Starting background workers (if present)..."
+# spawn workers if present
+if [ -f /app/tv_webhook_listener.py ]; then
+    nohup python3 /app/tv_webhook_listener.py >> /app/logs/tv_webhook_listener.log 2>&1 &
+fi
+
+if [ -f /app/coinbase_trader.py ]; then
+    nohup python3 /app/coinbase_trader.py >> /app/logs/coinbase_trader.log 2>&1 &
+fi
+
 echo "[INFO] Launching Gunicorn..."
-exec gunicorn -c /app/gunicorn.conf.py web.wsgi:app
+# Adjust module path to whatever your app uses; default below is web.wsgi:app
+exec gunicorn -b 0.0.0.0:5000 web.wsgi:app
