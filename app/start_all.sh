@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e  # Exit immediately if any command fails (except our Coinbase check)
+set -e  # Exit on any error
 
 echo "[INFO] === STARTING NIJA TRADING BOT CONTAINER ==="
 date
@@ -12,7 +12,7 @@ python3 -m pip install --no-cache-dir --root-user-action=ignore --upgrade pip se
 python3 -m pip install --no-cache-dir --root-user-action=ignore -r /app/requirements.txt
 
 # ----------------------------
-# 2️⃣ Check environment variables
+# 2️⃣ Check required environment variables
 # ----------------------------
 : "${COINBASE_API_KEY:?Need to set COINBASE_API_KEY}"
 : "${COINBASE_API_SECRET:?Need to set COINBASE_API_SECRET}"
@@ -20,16 +20,17 @@ python3 -m pip install --no-cache-dir --root-user-action=ignore -r /app/requirem
 echo "[INFO] All required environment variables are set."
 
 # ----------------------------
-# 3️⃣ Test Coinbase connection (non-fatal)
+# 3️⃣ Test Coinbase connection safely
 # ----------------------------
 echo "[INFO] Testing Coinbase connection..."
 python3 - <<END
 from nija_client import test_coinbase_connection
+import sys
 
 if test_coinbase_connection():
     print("[INFO] Coinbase connection OK.")
 else:
-    print("[WARNING] Coinbase connection test failed. Continuing container startup.")
+    print("[WARNING] Coinbase client unavailable. Continuing container startup.")
 END
 
 # ----------------------------
@@ -38,7 +39,10 @@ END
 echo "[INFO] Starting background workers..."
 mkdir -p /app/logs
 
+# Start tv_webhook_listener.py in background
 python3 /app/tv_webhook_listener.py >> /app/logs/tv_webhook_listener.log 2>&1 &
+
+# Start coinbase_trader.py in background
 python3 /app/coinbase_trader.py >> /app/logs/coinbase_trader.log 2>&1 &
 
 echo "[INFO] Background workers started."
