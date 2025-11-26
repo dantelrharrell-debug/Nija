@@ -3,6 +3,36 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
+try:
+    from coinbase_advanced_py.client import Client
+except ModuleNotFoundError:
+    Client = None
+    logging.warning("coinbase client not found. Live trading disabled.")
+
+def test_coinbase_connection():
+    if Client is None:
+        logging.warning("No client class available for connection test.")
+        return False
+
+    try:
+        client = Client(
+            api_key=os.environ.get("COINBASE_API_KEY"),
+            api_secret=os.environ.get("COINBASE_API_SECRET"),
+            api_sub=os.environ.get("COINBASE_API_SUB")
+        )
+        # optional: fetch accounts to verify
+        client.get_accounts()
+        logging.info("Coinbase connection successful!")
+        return True
+    except Exception as e:
+        logging.warning(f"Coinbase connection failed: {e}")
+        return False
+
+import os
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+
 # Candidate modules for Coinbase client
 MODULE_CANDIDATES = [
     "coinbase_advanced",  # Must match your cloned repo/module name
