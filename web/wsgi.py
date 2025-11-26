@@ -4,28 +4,21 @@ import os
 import traceback
 from flask import Flask, send_file, abort, jsonify
 
-# ----------------------
-# App & logging (create app before any routes)
-# ----------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("web.wsgi")
 
 app = Flask(__name__)
 
-# ----------------------
-# Paths
-# ----------------------
 LOG_DIR = "/app/logs"
 DEBUG_FILE = os.path.join(LOG_DIR, "coinbase_module_debug.txt")
 MODULES_DEBUG = os.path.join(LOG_DIR, "modules_debug.txt")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# ----------------------
-# Safe import of nija_client.test_coinbase_connection
-# ----------------------
+# Attempt to import the symbol. We intentionally import the symbol name,
+# but we will *verify* it is callable before calling.
 test_coinbase_connection = None
 try:
-    # nija_client should expose test_coinbase_connection()
+    # prefer direct function import if available
     from nija_client import test_coinbase_connection as _t
     test_coinbase_connection = _t
     logger.info("Imported nija_client.test_coinbase_connection")
@@ -36,18 +29,34 @@ except Exception as e:
         f.write("nija_client import failed at startup:\n")
         traceback.print_exc(file=f)
 
-# ----------------------
-# Startup check (safe, non-fatal)
-# ----------------------
 def run_startup_coinbase_check():
+    # Clear old debug file
+    try:
+        if os.path.exists(DEBUG_FILE):
+            os.remove(DEBUG_FILE)
+    except Exception:
+        logger.debug("Couldn't remove old debug file.")
+
     if test_coinbase_connection is None:
         logger.warning("Coinbase client not available (module not installed).")
+        with open(DEBUG_FILE, "w") as f:
+            f.write("nija_client import failed or is missing.\n")
+        return False
+
+    # IMPORTANT: verify the imported object is callable (function)
+    if not callable(test_coinbase_connection):
+        ttype = type(test_coinbase_connection)
+        logger.error("test_coinbase_connection imported but is NOT callable. type=%s repr=%r", ttype, test_coinbase_connection)
+        with open(DEBUG_FILE, "w") as f:
+            f.write("test_coinbase_connection imported but not callable.\n")
+            f.write(f"type: {ttype}\nrepr:\n{repr(test_coinbase_connection)}\n\nTraceback:\n")
+            traceback.print_stack(file=f)
         return False
 
     try:
         ok = bool(test_coinbase_connection())
         if not ok:
-            logger.warning("Coinbase connection test failed at startup. App will continue; check /debug/coinbase for details.")
+            logger.warning("Coinbase connection test returned False at startup. App will continue; check /debug/coinbase for details.")
             with open(DEBUG_FILE, "w") as f:
                 f.write("Coinbase test returned False at startup.\n")
         else:
@@ -60,12 +69,9 @@ def run_startup_coinbase_check():
             traceback.print_exc(file=f)
         return False
 
-# Run once (does NOT exit the app on failure)
 startup_coinbase_ok = run_startup_coinbase_check()
 
-# ----------------------
-# Routes (app already defined above)
-# ----------------------
+# Routes
 @app.route("/")
 def index():
     return "Nija Trading Bot is running!"
@@ -73,7 +79,7 @@ def index():
 @app.route("/debug/coinbase")
 def debug_coinbase():
     if not os.path.exists(DEBUG_FILE):
-        return "Debug file not yet created. Coinbase test either succeeded or hasn't run. If failing, check logs.\n", 404
+        return "Debug file not yet created. If coinbase test failed, check logs.\n", 404
     try:
         return send_file(DEBUG_FILE, mimetype="text/plain", as_attachment=True, download_name="coinbase_module_debug.txt")
     except Exception as e:
@@ -82,10 +88,6 @@ def debug_coinbase():
 
 @app.route("/debug/modules")
 def debug_modules():
-    """
-    Returns a JSON object listing which import candidates are present and the python path.
-    Useful to debug different module names (coinbase_advanced, coinbase_advanced_py, etc).
-    """
     candidates = [
         "coinbase_advanced",
         "coinbase_advanced.client",
@@ -94,6 +96,7 @@ def debug_modules():
         "coinbaseadvanced",
     ]
     found = {}
+    import sys
     for name in candidates:
         try:
             __import__(name)
@@ -104,11 +107,10 @@ def debug_modules():
     info = {
         "found": found,
         "python_path": os.environ.get("PYTHONPATH", ""),
-        "sys_path_sample": __import__("sys").path[:10],  # don't dump too long
+        "sys_path_sample": sys.path[:10],
         "startup_coinbase_ok": bool(startup_coinbase_ok),
     }
 
-    # write to modules debug file for offline inspection
     try:
         with open(MODULES_DEBUG, "w") as f:
             f.write(str(info))
@@ -117,13 +119,5 @@ def debug_modules():
 
     return jsonify(info)
 
-# ----------------------
-# Optionally expose gunicorn-ready callable
-# ----------------------
-# The WSGI callable 'app' is already defined for gunicorn: web.wsgi:app
-
-# ----------------------
-# If you run this file directly (for local dev)
-# ----------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
