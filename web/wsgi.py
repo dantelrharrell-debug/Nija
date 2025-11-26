@@ -4,21 +4,12 @@ import logging
 from flask import Flask, send_file, abort
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("web.wsgi")
+logger = logging.getLogger("wsgi")
 
 app = Flask(__name__)
 
-# debug file path (will be created by nija_client on failures)
+# Debug file written by start_all.sh (if any)
 DEBUG_FILE = "/app/logs/coinbase_module_debug.txt"
-
-# Import safe test function
-from nija_client import test_coinbase_connection  # safe: won't raise on import
-
-# Run test but never exit container if test fails
-with app.app_context():
-    ok = test_coinbase_connection()
-    if not ok:
-        logger.warning("Coinbase connection test failed at startup. App will continue; check /debug/coinbase for details.")
 
 @app.route("/")
 def index():
@@ -26,9 +17,8 @@ def index():
 
 @app.route("/debug/coinbase")
 def debug_coinbase():
-    # Serve debug file if present
     if not os.path.exists(DEBUG_FILE):
-        return "Debug file not present yet. Check logs.\n", 404
+        return "Debug file not yet created. Wait a few seconds and refresh.\n", 404
     try:
         return send_file(DEBUG_FILE, mimetype="text/plain", as_attachment=True, download_name="coinbase_module_debug.txt")
     except Exception as e:
