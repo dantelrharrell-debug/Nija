@@ -1,92 +1,49 @@
-# nija_client.py
 import os
 import logging
-import importlib
-import subprocess
-import sys
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("nija_client")
 
-# Candidate module names to try importing (no git fallback at runtime)
-IMPORT_CANDIDATES = [
-    "coinbase_advanced.client",
-    "coinbase_advanced_py.client",
-    "coinbase_advanced_py",
-    "coinbase_advanced",
-]
+# Try to import Coinbase module safely
+try:
+    import coinbase_advanced_py as coinbase_module
+except ModuleNotFoundError:
+    coinbase_module = None
+    logging.error("coinbase_advanced_py module not installed.")
 
 def _import_client_class():
-    """Try to import a client class from a list of candidate modules. Return client class or None."""
-    for p in IMPORT_CANDIDATES:
-        try:
-            mod = importlib.import_module(p)
-            logger.info("Imported module candidate: %s", p)
-        except Exception:
-            continue
-        # prefer common attributes
-        for attr in ("Client", "RESTClient", "APIClient"):
-            if hasattr(mod, attr):
-                logger.info("Found client attribute '%s' in %s", attr, p)
-                return getattr(mod, attr)
-        # fallback: module itself might be the client factory
-        if hasattr(mod, "__call__") or callable(mod):
-            logger.info("Module %s is callable; using module itself as client factory.", p)
-            return mod
+    """
+    Tries to find a callable client class inside the imported module.
+    """
+    if not coinbase_module:
+        return None
+
+    # Common names to try
+    candidates = ["Client", "RESTClient", "APIClient", "CoinbaseClient"]
+    for attr in candidates:
+        client_cls = getattr(coinbase_module, attr, None)
+        if callable(client_cls):
+            logging.info(f"Using Coinbase client class: {attr}")
+            return client_cls
+
+    logging.warning("coinbase client not found among candidates.")
     return None
 
-def _safe_instantiate(client_cls, api_key, api_secret, api_sub):
-    """Try common constructor signatures."""
-    try:
-        return client_cls(api_key=api_key, api_secret=api_secret, api_sub=api_sub)
-    except TypeError:
-        try:
-            return client_cls(api_key, api_secret, api_sub)
-        except Exception as e:
-            raise
-
-def _do_connection_test(client_cls):
-    API_KEY = os.environ.get("COINBASE_API_KEY")
-    API_SECRET = os.environ.get("COINBASE_API_SECRET")
-    API_SUB = os.environ.get("COINBASE_API_SUB")
-
-    if not (API_KEY and API_SECRET and API_SUB):
-        logger.error("Missing Coinbase env vars.")
-        return False
-
-    try:
-        client = _safe_instantiate(client_cls, API_KEY, API_SECRET, API_SUB)
-    except Exception as e:
-        logger.warning("Failed to instantiate client class: %s", e)
-        return False
-
-    # Try a couple read-only method names (non-destructive)
-    for fn in ("get_accounts", "list_accounts", "accounts", "list"):
-        if hasattr(client, fn):
-            try:
-                getattr(client, fn)()
-                logger.info("Coinbase client call succeeded using %s()", fn)
-                return True
-            except Exception as e:
-                logger.warning("Read call %s() failed: %s", fn, e)
-
-    # If object instantiated but no known read call, assume success (non-ideal)
-    logger.info("Coinbase client instantiated, no standard read call found — assuming success.")
-    return True
-
-# Final exported function (guaranteed callable)
 def test_coinbase_connection():
-    """
-    Returns True if client class can be imported and a simple instantiation/call works.
-    Returns False otherwise. DOES NOT attempt git installs at runtime.
-    """
-    client_cls = _import_client_class()
-    if not client_cls:
-        logger.warning("coinbase client not found among candidates.")
+    ClientClass = _import_client_class()
+    if not ClientClass:
+        logging.warning("Coinbase connection test failed: no client class available")
         return False
 
     try:
-        return _do_connection_test(client_cls)
-    except Exception:
-        logger.exception("Unexpected error during connection test.")
+        client = ClientClass(
+            api_key=os.environ.get("COINBASE_API_KEY"),
+            api_secret=os.environ.get("COINBASE_API_SECRET"),
+            api_sub=os.environ.get("COINBASE_API_SUB")
+        )
+        # Optional quick test call
+        accounts = getattr(client, "list_accounts", lambda: [])()
+        logging.info(f"Coinbase connection test succeeded. Accounts found: {len(accounts)}")
+        return True
+    except Exception as e:
+        logging.warning(f"Coinbase connection test failed: {e}")
         return False
