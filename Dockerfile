@@ -5,37 +5,51 @@
 # Use Python 3.11 slim as base
 FROM python:3.11-slim
 
-# Set environment variables for Python
+# -------------------------------
+# Environment settings
+# -------------------------------
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Set working directory
 WORKDIR /app
 
+# -------------------------------
 # Copy application files
+# -------------------------------
 COPY . /app
 
-# Upgrade pip
+# -------------------------------
+# Upgrade pip and install dependencies
+# -------------------------------
 RUN pip install --upgrade pip
 
 # Install Coinbase Advanced client
 RUN pip install git+https://github.com/coinbase/coinbase-advanced-py.git@main#egg=coinbase_advanced
 
-# Install dependencies from requirements.txt if you have one
-# (create requirements.txt with your other Python packages)
+# Install other dependencies from requirements.txt if exists
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt || echo "No requirements.txt found, skipping"
 
-# Ensure start_all.sh is executable
+# -------------------------------
+# Ensure scripts are executable
+# -------------------------------
 RUN chmod +x start_all.sh
 
-# Expose port
+# -------------------------------
+# Expose Flask port
+# -------------------------------
 EXPOSE 5000
 
-# Set environment variables for Coinbase (replace with your secrets in your platform)
-# ENV COINBASE_API_KEY=your_key_here
-# ENV COINBASE_API_SECRET=your_secret_here
-# ENV COINBASE_API_SUB=your_sub_here
+# -------------------------------
+# Environment variables for Coinbase
+# -------------------------------
+# These should be set in your deployment platform
+# ENV COINBASE_API_KEY=your_api_key
+# ENV COINBASE_API_SECRET=your_api_secret
+# ENV COINBASE_API_SUB=your_api_sub
 
+# -------------------------------
 # Start the bot
+# -------------------------------
 CMD ["./start_all.sh"]
