@@ -1,60 +1,46 @@
 import os
 import logging
-import importlib
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# List of module candidates (your repo)
+# Candidate modules for Coinbase client
 MODULE_CANDIDATES = [
-    "coinbase_advanced",
-    "coinbase_advanced_py"
+    "coinbase_advanced",  # Must match your cloned repo/module name
 ]
 
-def find_coinbase_client():
-    """
-    Dynamically searches module candidates for a Client class.
-    Returns the Client class if found, else None.
-    """
-    for module_name in MODULE_CANDIDATES:
-        try:
-            mod = importlib.import_module(module_name)
-            logging.info(f"Imported module candidate: {module_name}")
+Client = None
 
-            # Check for Client class in module
-            if hasattr(mod, "Client"):
-                logging.info(f"Found Client in {module_name}")
-                return getattr(mod, "Client")
-            # Check for submodule 'client'
-            if hasattr(mod, "client"):
-                client_mod = getattr(mod, "client")
-                if hasattr(client_mod, "Client"):
-                    logging.info(f"Found Client in {module_name}.client")
-                    return getattr(client_mod, "Client")
-        except ModuleNotFoundError:
-            logging.warning(f"Module {module_name} not found")
-    logging.warning("coinbase client not found among candidates.")
-    return None
+# Try importing the client from each candidate
+for module_name in MODULE_CANDIDATES:
+    try:
+        mod = __import__(module_name)
+        if hasattr(mod, "Client"):
+            Client = getattr(mod, "Client")
+            logging.info(f"Coinbase Client class found in module: {module_name}")
+            break
+    except ModuleNotFoundError:
+        logging.warning(f"Module {module_name} not found")
+
+if Client is None:
+    logging.warning("Coinbase client not found among candidates.")
 
 def test_coinbase_connection():
-    ClientClass = find_coinbase_client()
-    if not ClientClass:
+    """
+    Returns True if Coinbase connection works, False otherwise.
+    """
+    if Client is None:
         logging.warning("No client class available for connection test.")
         return False
 
-    # Load credentials from environment
-    api_key = os.environ.get("COINBASE_API_KEY")
-    api_secret = os.environ.get("COINBASE_API_SECRET")
-    api_sub = os.environ.get("COINBASE_API_SUB")
-
-    if not api_key or not api_secret or not api_sub:
-        logging.warning("Coinbase API credentials not set in environment.")
-        return False
-
     try:
-        client = ClientClass(api_key=api_key, api_secret=api_secret, api_sub=api_sub)
-        # Optionally: perform a small test call
-        # result = client.get_accounts()  # If method exists
-        logging.info("Coinbase client instantiated successfully.")
+        client = Client(
+            api_key=os.environ.get("COINBASE_API_KEY"),
+            api_secret=os.environ.get("COINBASE_API_SECRET"),
+            api_sub=os.environ.get("COINBASE_API_SUB")  # optional
+        )
+        # Simple test call
+        info = client.get_accounts()  # or equivalent function in your client
+        logging.info("Coinbase connection successful.")
         return True
     except Exception as e:
         logging.warning(f"Coinbase connection test failed: {e}")
