@@ -1,37 +1,49 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e  # Exit immediately if a command exits with a non-zero status
 
 echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
-date
+echo "$(date)"
 
-WSGI_MODULE="${WSGI_MODULE:-web.wsgi:app}"
-PORT="${PORT:-5000}"
-LOG_DIR="/app/logs"
-mkdir -p "$LOG_DIR"
+# ----------------------------
+# 1️⃣ Install Python dependencies
+# ----------------------------
+echo "[INFO] Installing Python dependencies..."
+pip install --upgrade pip setuptools wheel
+pip install -r /app/requirements.txt --quiet
 
-echo "[INFO] WSGI_MODULE='$WSGI_MODULE'  PORT='$PORT'"
+# ----------------------------
+# 2️⃣ Check environment variables
+# ----------------------------
+: "${COINBASE_API_KEY:?Need to set COINBASE_API_KEY}"
+: "${COINBASE_API_SECRET:?Need to set COINBASE_API_SECRET}"
+: "${COINBASE_API_SUB:?Need to set COINBASE_API_SUB}"
 
-# Install dependencies if requirements.txt exists
-if [ -f "/app/requirements.txt" ]; then
-  echo "[INFO] Installing Python dependencies..."
-  pip install --upgrade pip setuptools wheel
-  pip install -r /app/requirements.txt
-fi
+echo "[INFO] All required environment variables are set."
 
-# Environment checks
-echo "[ENV] COINBASE_API_KEY set? ${COINBASE_API_KEY:+yes}"
-echo "[ENV] COINBASE_API_SECRET set? ${COINBASE_API_SECRET:+yes}"
-echo "[ENV] COINBASE_API_SUB set? ${COINBASE_API_SUB:+yes}"
+# ----------------------------
+# 3️⃣ Test Coinbase client
+# ----------------------------
+echo "[INFO] Testing Coinbase connection..."
+python3 - <<END
+from nija_client import test_coinbase_connection
+if not test_coinbase_connection():
+    print("[ERROR] Coinbase connection test failed. Exiting container.")
+    exit(1)
+END
 
-# Start background workers safely
-for worker in tv_webhook_listener coinbase_trader; do
-  echo "[INFO] Starting $worker (logs -> $LOG_DIR/$worker.log)..."
-  nohup python -m "bots.$worker" >> "$LOG_DIR/$worker.log" 2>&1 &
-done
+# ----------------------------
+# 4️⃣ Start background workers
+# ----------------------------
+echo "[INFO] Starting background workers..."
+mkdir -p /app/logs
 
-sleep 0.5
+python3 /app/tv_webhook_listener.py >> /app/logs/tv_webhook_listener.log 2>&1 &
+python3 /app/coinbase_trader.py >> /app/logs/coinbase_trader.log 2>&1 &
+
 echo "[INFO] Background workers started."
 
-# Start Gunicorn
-echo "[INFO] Launching Gunicorn on 0.0.0.0:$PORT..."
-exec gunicorn "$WSGI_MODULE" --bind "0.0.0.0:$PORT" --workers 1 --threads 1 --timeout 30 --log-level debug --error-logfile -
+# ----------------------------
+# 5️⃣ Launch Gunicorn web server
+# ----------------------------
+echo "[INFO] Launching Gunicorn..."
+exec gunicorn -c /app/gunicorn.conf.py web.wsgi:app
