@@ -15,16 +15,25 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # -------------------------------
+# Install system dependencies
+# -------------------------------
+RUN apt-get update && apt-get install -y \
+    git \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# -------------------------------
 # Copy application files
 # -------------------------------
 COPY . /app
 
 # -------------------------------
-# Upgrade pip and install dependencies
+# Upgrade pip and install Python dependencies
 # -------------------------------
 RUN pip install --upgrade pip
 
-# Install Coinbase Advanced client
+# Install Coinbase Advanced client from GitHub
 RUN pip install git+https://github.com/coinbase/coinbase-advanced-py.git@main#egg=coinbase_advanced
 
 # Install other dependencies from requirements.txt if exists
@@ -44,7 +53,6 @@ EXPOSE 5000
 # -------------------------------
 # Environment variables for Coinbase
 # -------------------------------
-# These should be set in your deployment platform
 # ENV COINBASE_API_KEY=your_api_key
 # ENV COINBASE_API_SECRET=your_api_secret
 # ENV COINBASE_API_SUB=your_api_sub
