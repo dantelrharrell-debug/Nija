@@ -1,107 +1,45 @@
-# nija_client.py
 import os
-import sys
 import logging
-import subprocess
-import importlib
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+# -----------------------------
+# Logging setup
+# -----------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 logger = logging.getLogger("nija_client")
 
-IMPORT_CANDIDATES = [
-    "coinbase_advanced.client",
-    "coinbase_advanced_py.client",
-    "coinbase_advanced_py",
-    "coinbase_advanced",
-    "coinbaseadvanced.client",
-    "coinbaseadvanced",
-]
+# -----------------------------
+# Import Coinbase client
+# -----------------------------
+try:
+    from coinbase_advanced_py.client import Client
+    logger.info("Imported coinbase_advanced_py successfully.")
+except ModuleNotFoundError:
+    Client = None
+    logger.error("coinbase_advanced_py module not installed. Coinbase functions will be disabled.")
 
-PIP_CANDIDATES = [
-    "coinbase-advanced-py==1.8.2",
-    "coinbase-advanced-py",
-]
-
-GIT_FALLBACK = "git+https://github.com/coinbase/coinbase-advanced-py.git"
-
-def try_import_client():
-    for p in IMPORT_CANDIDATES:
-        try:
-            # try importing module or module.submodule as provided
-            mod_name = p.rsplit(".", 1)[0] if "." in p else p
-            mod = importlib.import_module(mod_name)
-            logger.info(f"Imported module '{mod_name}'")
-            # prefer a Client attribute if present
-            for attr in ("Client", "RESTClient", "APIClient"):
-                if hasattr(mod, attr):
-                    logger.info(f"Found client attr '{attr}' in {mod_name}")
-                    return getattr(mod, attr)
-            # try importing the full path if it contains a submodule
-            if "." in p:
-                try:
-                    sub = importlib.import_module(p)
-                    for attr in ("Client", "RESTClient", "APIClient"):
-                        if hasattr(sub, attr):
-                            logger.info(f"Found client attr '{attr}' in {p}")
-                            return getattr(sub, attr)
-                except Exception:
-                    pass
-        except ModuleNotFoundError:
-            continue
-        except Exception as e:
-            logger.warning(f"Import attempt for {p} raised {e}")
-    return None
-
-def pip_install_once(packages):
-    for pkg in packages:
-        try:
-            logger.info(f"Running pip install {pkg} ...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", "--root-user-action=ignore", pkg])
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"pip install {pkg} failed: {e}")
-    return False
-
-def ensure_client_class():
-    # try first without installing
-    cls = try_import_client()
-    if cls:
-        return cls
-    # try pip names
-    if pip_install_once(PIP_CANDIDATES):
-        importlib.invalidate_caches()
-        cls = try_import_client()
-        if cls:
-            return cls
-    # try git fallback
-    logger.info("Trying git fallback install...")
-    if pip_install_once([GIT_FALLBACK]):
-        importlib.invalidate_caches()
-        cls = try_import_client()
-        if cls:
-            return cls
-    return None
-
+# -----------------------------
+# Coinbase connection test
+# -----------------------------
 def test_coinbase_connection() -> bool:
-    client_cls = ensure_client_class()
-    if not client_cls:
-        logger.error("Coinbase client class not available after attempts.")
+    if Client is None:
+        logger.warning("Coinbase client not available. Skipping connection test.")
         return False
 
     API_KEY = os.environ.get("COINBASE_API_KEY")
     API_SECRET = os.environ.get("COINBASE_API_SECRET")
     API_SUB = os.environ.get("COINBASE_API_SUB")
+
     if not (API_KEY and API_SECRET and API_SUB):
-        logger.error("Missing Coinbase env vars.")
+        logger.error("Missing Coinbase environment variables (COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_API_SUB).")
         return False
 
     try:
-        # try common constructor signatures
-        try:
-            client = client_cls(api_key=API_KEY, api_secret=API_SECRET, api_sub=API_SUB)
-        except TypeError:
-            client = client_cls(API_KEY, API_SECRET, API_SUB)
-        # try some safe read-only method names
+        client = Client(api_key=API_KEY, api_secret=API_SECRET, api_sub=API_SUB)
+
+        # Optional quick test: call a safe read-only method if exists
         for fn in ("get_accounts", "list_accounts", "accounts", "list"):
             if hasattr(client, fn):
                 try:
@@ -110,9 +48,10 @@ def test_coinbase_connection() -> bool:
                     return True
                 except Exception as e:
                     logger.warning(f"Call {fn} raised: {e}")
-        # if no calls succeeded but instantiation worked, assume success
-        logger.info("Coinbase client instantiated (no common read method found) — assuming success.")
+
+        # If instantiation worked but no read method found, assume success
+        logger.info("Coinbase client instantiated successfully (no read method tested).")
         return True
     except Exception as e:
-        logger.error(f"Failed to instantiate or call Coinbase client: {e}")
+        logger.error(f"Failed to initialize Coinbase client: {e}")
         return False
