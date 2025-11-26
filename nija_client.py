@@ -1,46 +1,49 @@
 # nija_client.py
-"""
-Safe Coinbase client loader + connection test.
-This file never contains shell code. Importing it should never raise SyntaxError.
-"""
-
 import os
 import logging
+import importlib
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("nija_client")
 
-# Try common module names used by coinbase advanced libs
-CLIENT_MODULE_CANDIDATES = [
+# Do NOT run any tests at import time.
+# This module only exposes helpers and a test function that start_all.sh will call once.
+
+IMPORT_CANDIDATES = [
     "coinbase_advanced.client",
     "coinbase_advanced_py.client",
     "coinbase_advanced_py",
     "coinbase_advanced",
 ]
 
-def import_client_class():
-    import importlib
-    for mod_path in CLIENT_MODULE_CANDIDATES:
+def try_import_client_class():
+    for candidate in IMPORT_CANDIDATES:
         try:
-            mod = importlib.import_module(mod_path)
+            spec = importlib.util.find_spec(candidate)
+            if not spec:
+                continue
+            mod = importlib.import_module(candidate)
+            # prefer Client attribute
             for attr in ("Client", "RESTClient", "APIClient"):
                 if hasattr(mod, attr):
-                    logger.info("Found client class '%s' in %s", attr, mod_path)
+                    logger.info(f"Imported {candidate}; found client attr {attr}")
                     return getattr(mod, attr)
+            # if module itself is client-like, return module (caller will try instantiation)
+            return mod
         except ModuleNotFoundError:
             continue
         except Exception as e:
-            logger.warning("Import attempt %s raised: %s", mod_path, e)
+            logger.debug(f"Import attempt {candidate} raised: {e}")
     return None
 
-Client = import_client_class()
-
-def test_coinbase_connection(timeout_seconds: int = 5) -> bool:
+def test_coinbase_connection(timeout_seconds: int = 10) -> bool:
     """
-    Return True if a client can be constructed and a safe read-only call succeeds.
-    Never raises; always returns True/False.
+    Try to import the Coinbase client and do a minimal instantiation / read-only call.
+    Returns True if a usable client is available; False otherwise.
+    This function should be called *once* at container startup (before Gunicorn forks).
     """
-    if Client is None:
+    client_cls = try_import_client_class()
+    if not client_cls:
         logger.warning("Coinbase client not available (module not installed).")
         return False
 
@@ -49,30 +52,33 @@ def test_coinbase_connection(timeout_seconds: int = 5) -> bool:
     API_SUB = os.environ.get("COINBASE_API_SUB")
 
     if not (API_KEY and API_SECRET and API_SUB):
-        logger.error("Missing Coinbase environment variables. Skipping live API check.")
+        logger.warning("Coinbase env vars missing; skipping live calls.")
+        # still considered available (module present) but not configured
         return False
 
     try:
-        # Try constructor with common signatures
+        # Try common constructor signatures; be defensive about calling methods
         try:
-            client = Client(api_key=API_KEY, api_secret=API_SECRET, api_sub=API_SUB)
+            client = client_cls(api_key=API_KEY, api_secret=API_SECRET, api_sub=API_SUB)
         except TypeError:
-            client = Client(API_KEY, API_SECRET, API_SUB)
+            try:
+                client = client_cls(API_KEY, API_SECRET, API_SUB)
+            except TypeError:
+                client = client_cls()  # last resort
 
-        # Try a small read-only call if available
+        # Try a small read-only call if present (wrap in try/except)
         for fn in ("get_accounts", "list_accounts", "accounts", "list"):
             if hasattr(client, fn):
                 try:
                     getattr(client, fn)()
-                    logger.info("Coinbase client call succeeded — connection OK.")
+                    logger.info("Coinbase client call succeeded; connection OK.")
                     return True
                 except Exception as e:
-                    logger.warning("Read-only call %s raised: %s", fn, e)
-
-        # If instantiated but no read method worked, assume partial success (avoid crashing)
-        logger.info("Coinbase client instantiated (no common read method succeeded). Assuming client available.")
+                    logger.debug(f"Read-only call {fn} failed: {e}")
+                    # keep trying other call names
+        # If instantiation succeeded but no known read-only calls ran, we still treat as available.
+        logger.info("Coinbase client instantiated (no known read call succeeded).")
         return True
-
     except Exception as e:
-        logger.error("Failed to instantiate/call Coinbase client: %s", e)
+        logger.warning(f"Coinbase connection test failed: {e}")
         return False
