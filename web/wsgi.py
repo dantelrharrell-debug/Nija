@@ -1,25 +1,17 @@
-# web/wsgi.py
-import os
-import logging
-from flask import Flask, send_file, abort
+# add this to web/wsgi.py (or app.py) near other routes
+import pkgutil
+from flask import jsonify
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("wsgi")
-
-app = Flask(__name__)
-
-# Debug file written by start_all.sh (if any)
-DEBUG_FILE = "/app/logs/coinbase_module_debug.txt"
-
-@app.route("/")
-def index():
-    return "Nija Trading Bot is running!"
-
-@app.route("/debug/coinbase")
-def debug_coinbase():
-    if not os.path.exists(DEBUG_FILE):
-        return "Debug file not yet created. Wait a few seconds and refresh.\n", 404
-    try:
-        return send_file(DEBUG_FILE, mimetype="text/plain", as_attachment=True, download_name="coinbase_module_debug.txt")
-    except Exception as e:
-        abort(500, description=str(e))
+@app.route("/debug/modules")
+def debug_modules():
+    """
+    Return a small JSON list of top-level modules discovered by pkgutil.iter_modules().
+    Not exhaustive but helpful for debugging install/import issues.
+    """
+    names = sorted([m.name for m in pkgutil.iter_modules()])
+    # return only a short list to avoid massive output
+    short = [n for n in names if n.startswith('coin') or n.startswith('coinbase')][:200]
+    return jsonify({
+        "found_matches_sample": short,
+        "count_top_level": len(names)
+    })
