@@ -1,51 +1,44 @@
-#!/usr/bin/env bash
-set -e  # Exit immediately if any command fails
+# nija_client.py
 
-echo "[INFO] === STARTING NIJA TRADING BOT CONTAINER ==="
-date
+import os
+import logging
 
-# ----------------------------
-# 1️⃣ Install Python dependencies safely
-# ----------------------------
-echo "[INFO] Installing Python dependencies..."
-python3 -m pip install --no-cache-dir --root-user-action=ignore --upgrade pip setuptools wheel
-python3 -m pip install --no-cache-dir --root-user-action=ignore -r /app/requirements.txt
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# ----------------------------
-# 2️⃣ Check required environment variables
-# ----------------------------
-: "${COINBASE_API_KEY:?Need to set COINBASE_API_KEY}"
-: "${COINBASE_API_SECRET:?Need to set COINBASE_API_SECRET}"
-: "${COINBASE_API_SUB:?Need to set COINBASE_API_SUB}"
-echo "[INFO] All required environment variables are set."
+# Try to import Coinbase client
+try:
+    from coinbase_advanced.client import Client
+except ModuleNotFoundError:
+    Client = None
+    logging.error("coinbase_advanced module not installed.")
 
-# ----------------------------
-# 3️⃣ Test Coinbase connection safely (non-blocking)
-# ----------------------------
-echo "[INFO] Testing Coinbase connection..."
-python3 - <<END
-from nija_client import test_coinbase_connection
-import sys
 
-if test_coinbase_connection():
-    print("[INFO] Coinbase connection OK.")
-else:
-    print("[WARNING] Coinbase connection test failed. Continuing container startup.")
-END
+def test_coinbase_connection():
+    """
+    Safe Coinbase connection test.
+    Never crashes the container.
+    Always returns True or False.
+    """
+    if Client is None:
+        logging.warning("Coinbase client is unavailable.")
+        return False
 
-# ----------------------------
-# 4️⃣ Start background workers
-# ----------------------------
-echo "[INFO] Starting background workers..."
-mkdir -p /app/logs
+    try:
+        api_key = os.environ.get("COINBASE_API_KEY")
+        api_secret = os.environ.get("COINBASE_API_SECRET")
+        api_sub = os.environ.get("COINBASE_API_SUB")
 
-python3 /app/tv_webhook_listener.py >> /app/logs/tv_webhook_listener.log 2>&1 &
-python3 /app/coinbase_trader.py >> /app/logs/coinbase_trader.log 2>&1 &
+        if not api_key or not api_secret or not api_sub:
+            logging.error("Missing Coinbase API environment variables.")
+            return False
 
-echo "[INFO] Background workers started."
+        client = Client(api_key=api_key, api_secret=api_secret, api_sub=api_sub)
 
-# ----------------------------
-# 5️⃣ Launch Gunicorn web server
-# ----------------------------
-echo "[INFO] Launching Gunicorn..."
-exec gunicorn -c /app/gunicorn.conf.py web.wsgi:app
+        # Simple health check call
+        client.get_accounts()
+        logging.info("Coinbase API connection successful.")
+        return True
+
+    except Exception as e:
+        logging.error(f"Coinbase API connection failed: {e}")
+        return False
