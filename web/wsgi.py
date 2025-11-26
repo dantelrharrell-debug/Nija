@@ -18,14 +18,11 @@ app = Flask(__name__)
 # ----------------------
 try:
     from coinbase_advanced_py.client import Client
-except ModuleNotFoundError:
+except (ModuleNotFoundError, AttributeError):
     Client = None
-    logger.error("coinbase_advanced_py.client module not found. Ensure coinbase-advanced-py is installed.")
-except AttributeError:
-    Client = None
-    logger.error("Coinbase Client class not found in coinbase_advanced_py.client")
+    logger.error("Coinbase Client class not found. Ensure coinbase-advanced-py is installed correctly.")
 
-# Load Coinbase credentials from environment
+# Load Coinbase credentials
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
 COINBASE_API_SUB = os.environ.get("COINBASE_API_SUB")
@@ -40,6 +37,9 @@ def test_coinbase_connection():
     if Client is None:
         logger.error("Cannot connect: Coinbase client not available.")
         return False
+
+    os.makedirs(os.path.dirname(DEBUG_FILE), exist_ok=True)
+
     try:
         client = Client(
             api_key=COINBASE_API_KEY,
@@ -47,20 +47,18 @@ def test_coinbase_connection():
             api_sub=COINBASE_API_SUB
         )
         logger.info("Coinbase client initialized successfully!")
-        # Optional: write debug info
-        os.makedirs(os.path.dirname(DEBUG_FILE), exist_ok=True)
         with open(DEBUG_FILE, "w") as f:
             f.write(f"Coinbase client initialized: {client}\n")
         return True
     except Exception as e:
         logger.error(f"Failed to initialize Coinbase client: {e}")
-        # Write error to debug file
-        os.makedirs(os.path.dirname(DEBUG_FILE), exist_ok=True)
         with open(DEBUG_FILE, "w") as f:
             f.write(f"Coinbase init error: {e}\n")
         return False
 
+# ----------------------
 # Run startup check safely
+# ----------------------
 with app.app_context():
     success = test_coinbase_connection()
     if not success:
