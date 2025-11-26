@@ -1,15 +1,15 @@
-#!/bin/bash
-set -e  # Exit immediately if a command exits with a non-zero status
+#!/usr/bin/env bash
+set -e  # Exit immediately if any command fails
 
-echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
-echo "$(date)"
+echo "[inf] === STARTING NIJA TRADING BOT CONTAINER ==="
+date
 
 # ----------------------------
-# 1️⃣ Install Python dependencies
+# 1️⃣ Install Python dependencies safely
 # ----------------------------
 echo "[INFO] Installing Python dependencies..."
-pip install --upgrade pip setuptools wheel
-pip install -r /app/requirements.txt --quiet
+python3 -m pip install --no-cache-dir --root-user-action=ignore --upgrade pip setuptools wheel
+python3 -m pip install --no-cache-dir --root-user-action=ignore -r /app/requirements.txt
 
 # ----------------------------
 # 2️⃣ Check environment variables
@@ -17,18 +17,19 @@ pip install -r /app/requirements.txt --quiet
 : "${COINBASE_API_KEY:?Need to set COINBASE_API_KEY}"
 : "${COINBASE_API_SECRET:?Need to set COINBASE_API_SECRET}"
 : "${COINBASE_API_SUB:?Need to set COINBASE_API_SUB}"
-
 echo "[INFO] All required environment variables are set."
 
 # ----------------------------
-# 3️⃣ Test Coinbase client
+# 3️⃣ Test Coinbase connection
 # ----------------------------
 echo "[INFO] Testing Coinbase connection..."
 python3 - <<END
 from nija_client import test_coinbase_connection
+import sys
+
 if not test_coinbase_connection():
     print("[ERROR] Coinbase connection test failed. Exiting container.")
-    exit(1)
+    sys.exit(1)
 END
 
 # ----------------------------
