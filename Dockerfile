@@ -1,22 +1,37 @@
-# Use official Python base image
+# Dockerfile
 FROM python:3.11-slim
 
-# Set work directory
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Copy requirements first for caching
+# Install system dependencies required to build some Python packages (do at build time)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      git \
+      build-essential \
+      gcc \
+      libssl-dev \
+      libffi-dev \
+      python3-dev \
+      ca-certificates \
+      curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy app first for dependency caching
 COPY requirements.txt .
 
-# Install dependencies once
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir gunicorn
+# Install Python dependencies at build time
+RUN python3 -m pip install --upgrade pip setuptools wheel \
+ && python3 -m pip install --no-cache-dir -r requirements.txt
 
-# Copy app code
+# Copy rest of the application
 COPY . .
 
-# Expose port
+# Make startup script executable
+RUN chmod +x ./start_all.sh || true
+
 EXPOSE 5000
 
-# Start Flask app using Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "web.wsgi:app"]
+CMD ["./start_all.sh"]
