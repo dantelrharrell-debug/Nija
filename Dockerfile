@@ -1,43 +1,31 @@
-# ===============================
-# NIJA Trading Bot Dockerfile
-# ===============================
-
-# Use Python 3.11 slim as base
+# Use slim Python 3.11
 FROM python:3.11-slim
-
-# Set environment variables for Python
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (git required for pip install from Git)
+# Install system dependencies
 RUN apt-get update && \
-    apt-get install -y git build-essential curl && \
+    apt-get install -y git build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy application files
+# Copy app files
 COPY . /app
 
-# Upgrade pip and install Coinbase Advanced client system-wide
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git
+# Upgrade pip
+RUN pip install --upgrade pip
 
-# Install any other Python dependencies from requirements.txt
-COPY requirements.txt /app/requirements.txt
+# Install Python dependencies
+# 1) requirements.txt if present
+# 2) Coinbase Advanced directly from GitHub
 RUN pip install --no-cache-dir -r requirements.txt || echo "No requirements.txt found, skipping"
+RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git#egg=coinbase-advanced-py
 
 # Make start script executable
 RUN chmod +x start_all.sh
 
-# Expose port
+# Expose Flask port
 EXPOSE 5000
-
-# Environment variables for Coinbase (replace in your deployment)
-# ENV COINBASE_API_KEY=your_key_here
-# ENV COINBASE_API_SECRET=your_secret_here
-# ENV COINBASE_API_SUB=your_sub_here
 
 # Start the bot
 CMD ["./start_all.sh"]
