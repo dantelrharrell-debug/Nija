@@ -1,86 +1,35 @@
-import logging
+# web/wsgi.py
 import os
+import logging
 from flask import Flask, send_file, abort
 
-# ----------------------
-# Setup logging
-# ----------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("wsgi")
+logger = logging.getLogger("web.wsgi")
 
-# ----------------------
-# Create Flask app
-# ----------------------
 app = Flask(__name__)
 
-# ----------------------
-# Coinbase setup
-# ----------------------
-try:
-    from coinbase_advanced_py.client import Client
-except (ModuleNotFoundError, AttributeError):
-    Client = None
-    logger.error("Coinbase Client class not found. Ensure coinbase-advanced-py is installed correctly.")
-
-# Load Coinbase credentials
-COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
-COINBASE_API_SUB = os.environ.get("COINBASE_API_SUB")
-
-# Debug file path
+# debug file path (will be created by nija_client on failures)
 DEBUG_FILE = "/app/logs/coinbase_module_debug.txt"
 
-# ----------------------
-# Test Coinbase connection safely
-# ----------------------
-def test_coinbase_connection():
-    if Client is None:
-        logger.error("Cannot connect: Coinbase client not available.")
-        return False
+# Import safe test function
+from nija_client import test_coinbase_connection  # safe: won't raise on import
 
-    os.makedirs(os.path.dirname(DEBUG_FILE), exist_ok=True)
-
-    try:
-        client = Client(
-            api_key=COINBASE_API_KEY,
-            api_secret=COINBASE_API_SECRET,
-            api_sub=COINBASE_API_SUB
-        )
-        logger.info("Coinbase client initialized successfully!")
-        with open(DEBUG_FILE, "w") as f:
-            f.write(f"Coinbase client initialized: {client}\n")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to initialize Coinbase client: {e}")
-        with open(DEBUG_FILE, "w") as f:
-            f.write(f"Coinbase init error: {e}\n")
-        return False
-
-# ----------------------
-# Run startup check safely
-# ----------------------
+# Run test but never exit container if test fails
 with app.app_context():
-    success = test_coinbase_connection()
-    if not success:
-        logger.warning("Coinbase client failed, but Flask app will continue running.")
+    ok = test_coinbase_connection()
+    if not ok:
+        logger.warning("Coinbase connection test failed at startup. App will continue; check /debug/coinbase for details.")
 
-# ----------------------
-# Routes
-# ----------------------
 @app.route("/")
 def index():
     return "Nija Trading Bot is running!"
 
 @app.route("/debug/coinbase")
 def debug_coinbase():
+    # Serve debug file if present
     if not os.path.exists(DEBUG_FILE):
-        return "Debug file not yet created. Wait a few seconds and refresh.\n", 404
+        return "Debug file not present yet. Check logs.\n", 404
     try:
-        return send_file(
-            DEBUG_FILE,
-            mimetype="text/plain",
-            as_attachment=True,
-            download_name="coinbase_module_debug.txt"
-        )
+        return send_file(DEBUG_FILE, mimetype="text/plain", as_attachment=True, download_name="coinbase_module_debug.txt")
     except Exception as e:
         abort(500, description=str(e))
