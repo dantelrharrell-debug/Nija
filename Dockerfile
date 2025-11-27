@@ -1,23 +1,33 @@
-# Base image
+# Use official Python image
 FROM python:3.11-slim
 
+# Working directory
 WORKDIR /app
 
-COPY . .
+# Install git so pip can install GitHub packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    build-essential \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
 
 # Upgrade pip
-RUN python3 -m pip install --upgrade pip
+RUN pip install --upgrade pip
 
-# Install Flask, Gunicorn, and other deps
-RUN pip install --no-cache-dir Flask gunicorn
+# Install ALL Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install coinbase_advanced directly from GitHub
-RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git
+# Copy project
+COPY . .
+
+# Make sure start script can run
+RUN chmod +x start_all.sh
 
 # Expose Flask port
 EXPOSE 5000
 
-# Make start script executable
-RUN chmod +x ./start_all.sh
-
+# Start gunicorn + bot
 CMD ["./start_all.sh"]
