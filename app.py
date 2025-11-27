@@ -1,5 +1,5 @@
-from flask import Flask, jsonify
-from nija_client import test_coinbase_connection, COINBASE_CLIENT_AVAILABLE
+from flask import Flask
+from nija_client import test_coinbase_connection
 
 app = Flask(__name__)
 
@@ -7,15 +7,9 @@ app = Flask(__name__)
 def index():
     return "Nija Bot Running!"
 
-@app.route("/debug/coinbase")
-def debug_coinbase():
-    """Return status of Coinbase client and a fresh connection test."""
-    available = bool(COINBASE_CLIENT_AVAILABLE)
-    ok = test_coinbase_connection()
-    return jsonify({
-        "coinbase_module_imported": available,
-        "coinbase_connection_test": ok
-    })
+@app.before_first_request
+def startup_checks():
+    test_coinbase_connection()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
