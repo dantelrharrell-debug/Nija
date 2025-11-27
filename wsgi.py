@@ -1,10 +1,3 @@
-So this is not correct # wsgi.py
-from nija_app import app
-
-# Expose "app" for Gunicorn
-if __name__ == "__main__":
-    app.run()
-
 # wsgi.py
 """
 Create a guaranteed Flask WSGI app object called `app` for Gunicorn to consume.
