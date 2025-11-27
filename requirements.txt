@@ -1,15 +1,13 @@
-Flask==2.2.5
-gunicorn==23.0.0
+# Core dependencies
+Flask==2.3.5
+gunicorn==21.2.0
 requests==2.32.5
 python-dotenv==1.2.1
 
+# Security / crypto dependencies
 PyJWT[crypto]==2.6.0
 cryptography==46.0.3
 ecdsa==0.19.1
 
-## Core dependencies
-flask
-gunicorn
-
-# Coinbase advanced client (fixed branch)
+# Coinbase advanced client from GitHub
 git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase_advanced
