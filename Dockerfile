@@ -1,32 +1,33 @@
-# Use Python 3.11 slim base
+# Use official Python slim image
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for git & builds
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git \
-        build-essential \
-        gcc \
-        libffi-dev \
-        musl-dev \
-        ca-certificates \
-        curl \
+    git \
+    build-essential \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Copy Python requirements if you have one
 COPY requirements.txt .
 
-# Upgrade pip and install Python dependencies
-RUN python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
 
-# Copy app code
+# Install coinbase_advanced manually
+RUN git clone https://github.com/coinbase/coinbase-advanced-py.git /tmp/coinbase-advanced \
+    && pip install /tmp/coinbase-advanced \
+    && rm -rf /tmp/coinbase-advanced
+
+# Copy the rest of the app
 COPY . .
 
-# Expose Flask default port
+# Expose Flask port
 EXPOSE 5000
 
-# Start the app
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "web_service:app"]
+# Use start script
+CMD ["./start_all.sh"]
