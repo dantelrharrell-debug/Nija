@@ -1,17 +1,17 @@
 #!/bin/bash
 set -e
 
-echo "[INFO] Starting NIJA Trading Bot..."
+echo "[INFO] Starting NIJA Trading Bot pre-flight checks..."
 
-# Test Coinbase import
-python - <<END
+# Check Coinbase module
+python3 - <<END
+import logging
 try:
     import coinbase_advanced
     print("[INFO] Coinbase import SUCCESS")
 except ModuleNotFoundError:
-    print("[ERROR] Coinbase import FAILED")
+    logging.error("[ERROR] Coinbase import FAILED — continuing in limited mode")
 END
 
-# Start Gunicorn
-# Replace 'web_service' with your Flask file name (without .py)
-gunicorn --bind 0.0.0.0:5000 web_service:app
+# Start Gunicorn with limited workers (avoid flooding)
+exec gunicorn --workers 3 --bind 0.0.0.0:5000 app:app
