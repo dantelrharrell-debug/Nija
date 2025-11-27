@@ -1,106 +1,163 @@
-#!/usr/bin/env python3
-"""
-nija_client.py
-
-- No heavy side-effects at import time.
-- Exposes:
-    create_coinbase_client() -> client or raises
-    test_coinbase_connection() -> bool  # safe for import by web workers
-    start_trading_loop() -> runs loop (blocking)
-"""
-
+# nija_client.py
 import os
-import logging
 import time
-from typing import Optional
+import logging
+import inspect
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(message)s")
+logging.basicConfig(level=LOG_LEVEL, format="%(Y-%m-%d %H:%M:%S,")  # kept intentionally simple
 logger = logging.getLogger("nija_client")
+logger.setLevel(LOG_LEVEL)
 
-# Environment (read at import; values can be updated by container env)
+# load env
 COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
 COINBASE_API_SUB = os.environ.get("COINBASE_API_SUB")
 COINBASE_PEM_CONTENT = os.environ.get("COINBASE_PEM_CONTENT")
 LIVE_TRADING = os.environ.get("LIVE_TRADING", "0") == "1"
+DEFAULT_LOOP_INTERVAL = float(os.environ.get("LOOP_INTERVAL", "5"))
 
-# Candidate import modules (prefer vendor path)
-_CANDIDATES = [
-    "vendor.coinbase_advanced_py.client",
-    "vendor.coinbase_advanced.client",
-    "coinbase_advanced_py.client",
-    "coinbase_advanced.client",
+# Try to import vendor client module in several ways
+ClientClass = None
+CLIENT_MODULE = None
+try:
+    # preferred when vendor/ is on PYTHONPATH: vendor.coinbase_advanced_py.client
+    import vendor.coinbase_advanced_py.client as client_mod
+    CLIENT_MODULE = "vendor.coinbase_advanced_py.client"
+except Exception:
+    client_mod = None
+
+candidates = [
+    ("vendor.coinbase_advanced_py.client", "client"),
+    ("coinbase_advanced_py.client", "client"),
+    ("coinbase_advanced.client", "client"),
+    ("coinbase_advanced_py", None),
+    ("coinbase_advanced", None),
 ]
 
-def _discover_client_class():
-    """Try to find a usable client class/factory in candidate modules.
-    Returns (module, ClientClass) or (None, None).
-    """
-    for cand in _CANDIDATES:
+if not client_mod:
+    for modname, _ in candidates:
         try:
-            mod = __import__(cand, fromlist=["*"])
+            client_mod = __import__(modname, fromlist=["*"])
+            CLIENT_MODULE = modname
+            break
         except Exception:
+            client_mod = None
             continue
-        # look for common class or factory names
-        for name in ("Client", "CoinbaseClient", "CoinbaseAdvancedClient"):
-            cls = getattr(mod, name, None)
-            if cls:
-                logger.info("Detected Coinbase client class '%s' in module '%s'.", name, cand)
-                return mod, cls
-        # sometimes module itself is the factory
-        if callable(getattr(mod, "Client", None)):
-            logger.info("Detected callable Client in module '%s'.", cand)
-            return mod, getattr(mod, "Client")
-    return None, None
 
-def create_coinbase_client() -> object:
-    """Instantiate Coinbase client. Raises on failure."""
-    mod, ClientClass = _discover_client_class()
+if client_mod:
+    # try to discover a client class (prefer 'Client', 'CoinbaseClient', 'Coinbase')
+    for candidate_name in ("Client", "CoinbaseClient", "Coinbase", "CoinbaseAPI"):
+        cls = getattr(client_mod, candidate_name, None)
+        if inspect.isclass(cls):
+            ClientClass = cls
+            logger.info("Detected Coinbase client class '%s' in module '%s'.", candidate_name, CLIENT_MODULE)
+            break
+
+    # fallback: if module exposes a factory function or object
     if ClientClass is None:
-        raise RuntimeError("coinbase client class not found in vendor modules.")
+        # if module defines a submodule 'client' with a class
+        sub = getattr(client_mod, "client", None)
+        if sub:
+            for candidate_name in ("Client", "CoinbaseClient"):
+                cls = getattr(sub, candidate_name, None)
+                if inspect.isclass(cls):
+                    ClientClass = cls
+                    logger.info("Detected Coinbase client class '%s' in submodule '%s.client'.", candidate_name, CLIENT_MODULE)
+                    break
 
-    # try multiple common constructor signatures
-    trials = [
-        {"api_key": COINBASE_API_KEY, "api_secret": COINBASE_API_SECRET},
-        {"api_key": COINBASE_API_KEY, "api_secret": COINBASE_API_SECRET, "pem_content": COINBASE_PEM_CONTENT},
-        {"key": COINBASE_API_KEY, "secret": COINBASE_API_SECRET},
-        {"jwt_issuer": os.environ.get("COINBASE_JWT_ISSUER"), "jwt_kid": os.environ.get("COINBASE_JWT_KID"), "pem": COINBASE_PEM_CONTENT},
-    ]
+if not ClientClass:
+    logger.error("coinbase_advanced client package not found or no usable Client class detected. Bot will run in simulation mode.")
+else:
+    logger.info("Coinbase client module present: %s", CLIENT_MODULE)
 
-    last_exc = None
-    for kw in trials:
-        # filter out missing values
-        kw = {k: v for k, v in kw.items() if v is not None}
-        if not kw:
-            continue
+def _instantiate_client():
+    """Try multiple constructor signatures and return an instance or raise."""
+    if ClientClass is None:
+        raise RuntimeError("No Coinbase client class available")
+
+    ctor = ClientClass.__init__
+    sig = inspect.signature(ctor)
+    # build candidate kwargs according to what we have available
+    candidates = []
+
+    # common: api_key + api_secret
+    kwargs_kv = {}
+    if COINBASE_API_KEY and COINBASE_API_SECRET:
+        kwargs_kv = {"api_key": COINBASE_API_KEY, "api_secret": COINBASE_API_SECRET}
+        candidates.append(kwargs_kv)
+
+    # some libs call the key 'key'/'secret'
+    if COINBASE_API_KEY and COINBASE_API_SECRET:
+        candidates.append({"key": COINBASE_API_KEY, "secret": COINBASE_API_SECRET})
+
+    # jwt/pem style
+    if COINBASE_PEM_CONTENT:
+        candidates.append({"pem_content": COINBASE_PEM_CONTENT})
+        candidates.append({"pem": COINBASE_PEM_CONTENT})
+
+    # try adding sub
+    if COINBASE_API_SUB:
+        # try with api_sub appended to earlier candidates
+        new = dict(kwargs_kv)
+        new["api_sub"] = COINBASE_API_SUB
+        candidates.append(new)
+
+    # unique: COINBASE_API_BASE for alternate endpoints
+    if os.environ.get("COINBASE_API_BASE"):
+        for c in list(candidates):
+            c2 = dict(c)
+            c2["api_base"] = os.environ.get("COINBASE_API_BASE")
+            candidates.append(c2)
+
+    last_err = None
+    for kw in candidates:
         try:
-            logger.info("Attempting to instantiate Coinbase client with keys: %s", list(kw.keys()))
-            client = ClientClass(**kw)
-            logger.info("Coinbase client instantiated using keys: %s", list(kw.keys()))
-            return client
+            # instantiate using only matching kwargs from the class signature
+            matching = {}
+            for k in kw:
+                if k in sig.parameters:
+                    matching[k] = kw[k]
+            # If matching empty, still attempt to pass kw (some clients accept **kwargs)
+            if matching:
+                inst = ClientClass(**matching)
+            else:
+                inst = ClientClass(**kw)
+            logger.info("Coinbase client instantiated using keys: %s", sorted(list(kw.keys())))
+            return inst
         except TypeError as te:
-            last_exc = te
-            continue
-        except Exception as e:
-            last_exc = e
-            logger.warning("Instantiation attempt failed: %s", e)
-            continue
-
-    # positional fallback
+            last_err = te
+            # continue to next candidate
+        except Exception as ex:
+            last_err = ex
+    # final attempt: try zero-arg constructor
     try:
-        logger.info("Attempting positional instantiation fallback.")
-        client = ClientClass(COINBASE_API_KEY, COINBASE_API_SECRET)
-        return client
-    except Exception as e:
-        last_exc = e
+        inst = ClientClass()
+        logger.info("Coinbase client instantiated with empty constructor.")
+        return inst
+    except Exception as ex:
+        last_err = ex
 
-    raise RuntimeError(f"Failed to instantiate Coinbase client: {last_exc}")
+    raise RuntimeError(f"Failed to instantiate Coinbase client: {last_err}")
 
-def _smoke_test_client(client: object) -> bool:
-    """Non-destructive smoke test of client. Returns True on success."""
-    if not client:
+# exported helper used by health endpoint
+def test_coinbase_connection() -> bool:
+    """
+    Lightweight test for use in /healthz.
+    Attempts to instantiate a client and perform a minimal safe call when available.
+    Returns True when call succeeds, False otherwise.
+    """
+    if ClientClass is None:
+        logger.debug("test_coinbase_connection: client class not available")
         return False
+
+    try:
+        client = _instantiate_client()
+    except Exception as e:
+        logger.warning("test_coinbase_connection: failed to instantiate client: %s", e)
+        return False
+
+    # minimal read-only test calls (try multiple)
     try:
         if hasattr(client, "ping"):
             client.ping()
@@ -114,65 +171,53 @@ def _smoke_test_client(client: object) -> bool:
         if hasattr(client, "list_accounts"):
             client.list_accounts(limit=1)
             return True
-        # If no test method available, treat instantiation as success
+        # if none of the above exist treat instantiation success as test pass
         return True
     except Exception as e:
-        logger.warning("Coinbase client smoke test failed: %s", e)
+        logger.warning("test_coinbase_connection: call failed: %s", e)
         return False
 
-def test_coinbase_connection() -> bool:
-    """Backwards-compatible function. Attempts a temporary client instantiation and test.
-    This is safe for web health checks (non-blocking, short).
-    """
-    try:
-        client = create_coinbase_client()
-        ok = _smoke_test_client(client)
-        return bool(ok)
-    except Exception as e:
-        logger.debug("test_coinbase_connection: failed: %s", e)
-        return False
-
-def start_trading_loop(poll_seconds: int = 5):
-    """Blocking trading loop. Instantiate client here (so import is side-effect free)."""
-    logger.info("Starting trading loop (LIVE_TRADING=%s)", LIVE_TRADING)
-    client = None
-    simulation = True
-
-    if LIVE_TRADING:
-        try:
-            client = create_coinbase_client()
-            if _smoke_test_client(client):
-                simulation = False
-                logger.info("Coinbase client ready (LIVE TRADING).")
-            else:
-                logger.warning("Coinbase client smoke test failed; falling back to simulation mode.")
-                client = None
-                simulation = True
-        except Exception as e:
-            logger.error("Failed to create Coinbase client: %s", e)
-            simulation = True
-            client = None
+# Top-level: create a client for the running loop if LIVE_TRADING else None
+coinbase_client = None
+try:
+    if LIVE_TRADING and ClientClass:
+        coinbase_client = _instantiate_client()
+        logger.info("Coinbase client ready (LIVE_TRADING=%s).", LIVE_TRADING)
     else:
-        logger.info("LIVE_TRADING not enabled; running in simulation mode.")
+        logger.info("Coinbase client not created - running in simulation mode.")
+except Exception as e:
+    logger.error("Failed to create Coinbase client: %s", e)
+    coinbase_client = None
 
-    logger.info("Trading loop started. Simulation mode=%s", simulation)
-    try:
-        while True:
-            if simulation:
-                logger.debug("Simulation tick")
+# Minimal example trading loop. Replace with your real logic.
+def trading_loop():
+    logger.info("Starting trading loop (LIVE_TRADING=%s)", LIVE_TRADING)
+    iteration = 0
+    while True:
+        iteration += 1
+        try:
+            if coinbase_client:
+                # an example safe call or account check
+                # adapt to the client's API surface (these names are library-specific)
+                if hasattr(coinbase_client, "list_accounts"):
+                    try:
+                        accounts = coinbase_client.list_accounts(limit=1)
+                        logger.debug("Account check OK (iter=%d)", iteration)
+                    except Exception:
+                        logger.debug("Account check failed (iter=%d)", iteration)
+                else:
+                    logger.debug("Client present but no account test method found.")
             else:
-                # Place non-destructive status call to confirm connectivity
-                try:
-                    _smoke_test_client(client)
-                except Exception as e:
-                    logger.warning("Live tick error: %s", e)
-            time.sleep(poll_seconds)
-    except KeyboardInterrupt:
-        logger.info("Trading loop shutdown requested.")
+                logger.debug("Simulation tick: %d", iteration)
+            time.sleep(DEFAULT_LOOP_INTERVAL)
+        except Exception as ex:
+            logger.exception("Trading loop error: %s", ex)
+            time.sleep(5)
 
-# Exported names
-__all__ = [
-    "create_coinbase_client",
-    "test_coinbase_connection",
-    "start_trading_loop",
-]
+if __name__ == "__main__":
+    logger.info(".env not present — using environment variables provided by the host." if not os.path.exists(".env") else ".env present")
+    logger.info("Starting trading loop (LIVE_TRADING=%s)", LIVE_TRADING)
+    try:
+        trading_loop()
+    except KeyboardInterrupt:
+        logger.info("Shutting down trading loop (keyboard interrupt).")
