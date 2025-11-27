@@ -9,27 +9,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git build-essential gcc libffi-dev musl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for caching
+# Copy requirements first (caches pip installs)
 COPY requirements.txt /app/requirements.txt
 
-# Upgrade pip, setuptools, wheel and install Python deps
+# Install Python dependencies
 RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy the rest of your app
+# Copy application code
 COPY . /app
 
-# Optional: verify Coinbase import
-RUN python - <<'END'
-try:
-    from coinbase_advanced.client import Client
-    print("Coinbase import OK ✅")
-except Exception as e:
-    print("Coinbase import FAILED ❌", e)
-END
+# Ensure start script is executable
+RUN chmod +x ./start_all.sh
 
-# Expose the port your app runs on
-EXPOSE 5000
-
-# Start app via Gunicorn
-CMD ["python", "-m", "gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "2"]
+# Start container
+CMD ["./start_all.sh"]
