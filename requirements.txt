@@ -1,8 +1,10 @@
+# Core web server
 Flask==2.3.5
 gunicorn==23.0.0
 requests==2.32.5
 python-dotenv==1.2.1
 
+# Security / crypto
 PyJWT[crypto]==2.6.0
 cryptography==46.0.3
 ecdsa==0.19.1
