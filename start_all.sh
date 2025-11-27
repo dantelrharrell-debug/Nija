@@ -3,15 +3,18 @@ set -e
 
 echo "[INFO] Starting NIJA Trading Bot pre-flight checks..."
 
-# Check Coinbase module
-python3 - <<END
-import logging
+python3 - << 'EOF'
+import sys
 try:
     import coinbase_advanced
-    print("[INFO] Coinbase import SUCCESS")
-except ModuleNotFoundError:
-    logging.error("[ERROR] Coinbase import FAILED — continuing in limited mode")
-END
+    from coinbase_advanced.client import Client
+    print("[INFO] Coinbase Advanced IMPORT SUCCESS ✓")
+except Exception as e:
+    print("[ERROR] Coinbase import FAILED ✗")
+    print(e)
+    # continue - app will run in limited mode
+EOF
 
-# Start Gunicorn with limited workers (avoid flooding)
-exec gunicorn --workers 3 --bind 0.0.0.0:5000 app:app
+echo "[INFO] Launching Gunicorn..."
+# small number of workers so we don't spawn dozens on the platform
+exec gunicorn --workers 3 --threads 2 --bind 0.0.0.0:5000 app:app
