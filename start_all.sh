@@ -1,26 +1,18 @@
 #!/bin/bash
-set -euo pipefail
+# ========================
+# start_all.sh
+# ========================
 
-echo "[INFO] === STARTING NIJA TRADING BOT PRE-FLIGHT ==="
-echo "[INFO] Python: $(python3 -V 2>&1)"
-echo "[INFO] Pip: $(pip -V 2>&1)"
+# Exit immediately if a command fails
+set -e
 
-echo "[INFO] Pip list (full):"
-pip list --format=columns
+echo "[INFO] Running pre-flight checks..."
+python3 nija_client.py
 
-# Print any installed coinbase-related packages for debugging
-python3 - <<'PY'
-import pkg_resources
-installed = {d.project_name: d.version for d in pkg_resources.working_set}
-coinbase_pkgs = {k:v for k,v in installed.items() if 'coinbase' in k.lower()}
-print("PY: coinbase-related installed distributions:", coinbase_pkgs)
-PY
-
-echo "[INFO] Starting Nija App (Gunicorn)..."
-gunicorn --workers 2 --threads 2 --timeout 30 --bind 0.0.0.0:5000 wsgi:app &
-
-echo "[INFO] Starting Nija Trading Bot..."
+echo "[INFO] Starting Nija Trading Bot in background..."
+# Run the trading bot in the background
 python3 nija_client.py &
 
-# Wait for both background processes
-wait
+echo "[INFO] Starting Flask App with Gunicorn..."
+# Run Flask/Gunicorn in foreground (container keeps running)
+exec gunicorn -w 2 -k gthread --threads 2 -b 0.0.0.0:5000 app:app
