@@ -1,26 +1,26 @@
-# Base image
+# Use official slim Python 3.11 image
 FROM python:3.11-slim
 
-# Set working directory
+# Set work directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for building packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git build-essential gcc libffi-dev musl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (caches pip installs)
-COPY requirements.txt /app/requirements.txt
+# Copy requirements first for caching
+COPY requirements.txt .
 
-# Install Python dependencies
+# Upgrade pip/setuptools and install Python dependencies
 RUN python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install --no-cache-dir -r /app/requirements.txt
+    && python -m pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . /app
+# Copy app code
+COPY . .
 
-# Ensure start script is executable
-RUN chmod +x ./start_all.sh
+# Expose port
+EXPOSE 5000
 
-# Start container
-CMD ["./start_all.sh"]
+# Start the app using Gunicorn
+CMD ["python", "-m", "gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "2"]
