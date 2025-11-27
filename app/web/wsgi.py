@@ -1,8 +1,7 @@
 """
-web/wsgi.py - Flask application factory with lazy nija_client imports for health checks.
-Expose `app` variable for gunicorn:  e.g. gunicorn -c gunicorn.conf.py web.wsgi:app
+web/wsgi.py - simple Flask app with lazy nija_client usage.
+Expose `app` to gunicorn:  web.wsgi:app
 """
-
 from flask import Flask, jsonify
 
 def create_app():
@@ -14,28 +13,30 @@ def create_app():
 
     @app.route("/healthz")
     def healthz():
-        """
-        Lazy-import nija_client to avoid import-time side effects in Gunicorn workers.
-        Returns basic status - does not attempt destructive actions.
-        """
+        # Lazy import so gunicorn workers start quickly and don't evaluate nija_client top-level side-effects
         try:
-            import nija_client as nc  # lazy import
+            import nija_client as nc
             client_present = bool(getattr(nc, "coinbase_client", None))
-            test_fn = getattr(nc, "test_coinbase_connection", None)
-            test_ok = False
+            simulation = bool(getattr(nc, "simulation_mode", True))
+
+            # prefer the well-known test function if available
+            test_fn = getattr(nc, "test_coinbase_connection", None) or getattr(nc, "test_coinbase_client", None)
+
+            test_ok = None
             if callable(test_fn):
                 try:
                     test_ok = bool(test_fn())
                 except Exception as e:
                     test_ok = False
+
             return jsonify({
                 "status": "ok",
                 "coinbase_client_present": client_present,
                 "coinbase_test_ok": test_ok,
-                "simulation_mode": getattr(nc, "simulation_mode", True),
+                "simulation_mode": simulation,
             }), 200
         except Exception as e:
-            # If import fails, return 200 but include diagnostic info
+            # Return status = ok but include diagnostic detail; avoids worker crash on import-time errors
             return jsonify({
                 "status": "ok",
                 "coinbase_client_present": False,
@@ -45,5 +46,4 @@ def create_app():
 
     return app
 
-# expose to gunicorn
 app = create_app()
