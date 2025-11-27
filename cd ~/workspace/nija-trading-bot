@@ -1,14 +1,20 @@
 Nija/
- ├─ web/
- │   ├─ wsgi.py
- │   ├─ tradingview_webhook.py
- │   └─ other modules...
- ├─ bot/
- │   └─ live bot scripts
- ├─ vendor/
- │   └─ coinbase_advanced_py/
- │       ├─ __init__.py
- │       └─ client.py
- ├─ .env
- ├─ Dockerfile
- └─ gunicorn.conf.py
+├─ app.py
+├─ nija_client.py
+├─ Dockerfile
+├─ gunicorn.conf.py
+├─ .env
+├─ web/
+│   ├─ __init__.py
+│   ├─ wsgi.py
+│   ├─ tradingview_webhook.py
+│   ├─ other_module1.py
+│   └─ other_module2.py
+├─ bot/
+│   ├─ __init__.py
+│   └─ live_bot_script.py
+├─ cd/
+│   └─ vendor/
+│       └─ coinbase_advanced_py/
+│           ├─ __init__.py
+│           └─ client.py
