@@ -1,33 +1,47 @@
-# Use official Python slim image
+# ----------------------
+# Dockerfile for Nija Trading Bot
+# ----------------------
+# Use official Python 3.11 slim image
 FROM python:3.11-slim
 
-# Set working directory
+# ----------------------
+# ENV VARIABLES (Set API keys in container runtime or .env)
+# ----------------------
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+
+# ----------------------
+# WORKDIR
+# ----------------------
 WORKDIR /app
 
-# Install system dependencies for git & builds
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    build-essential \
-    gcc \
-    ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install (upgrade pip first)
+# ----------------------
+# COPY FILES
+# ----------------------
 COPY requirements.txt .
-RUN pip install --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir -r requirements.txt
+COPY app.py .
+COPY nija_client.py .
 
-# Install coinbase advanced client directly from GitHub (explicit pip call to avoid egg/name confusion)
-# --no-deps prevents pip trying to re-resolve deps; deps are handled by requirements.txt
-RUN pip install --no-cache-dir "git+https://github.com/coinbase/coinbase-advanced-py.git@v1.8.2"
+# ----------------------
+# INSTALL DEPENDENCIES
+# ----------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libssl-dev \
+        libffi-dev \
+        python3-dev \
+        curl \
+    && pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy app sources
-COPY . .
-
-# Ensure start script is executable
-RUN chmod +x start_all.sh
-
+# ----------------------
+# EXPOSE PORT
+# ----------------------
 EXPOSE 5000
 
-CMD ["./start_all.sh"]
+# ----------------------
+# ENTRYPOINT
+# ----------------------
+# Use Gunicorn with 2 workers and gthread (threaded) for Flask + background trading thread
+CMD ["gunicorn", "-w", "2", "-k", "gthread", "--threads", "2", "-b", "0.0.0.0:5000", "app:app"]
