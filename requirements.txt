@@ -5,4 +5,4 @@ python-dotenv==1.2.1
 PyJWT[crypto]==2.6.0
 cryptography==46.0.3
 ecdsa==0.19.1
-git+https://github.com/coinbase/coinbase-advanced-py.git@v1.8.2#egg=coinbase_advanced
+git+https://github.com/coinbase/coinbase-advanced-py.git@v1.8.2#egg=coinbase-advanced-py
