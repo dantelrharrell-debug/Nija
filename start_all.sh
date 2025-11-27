@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# start_all.sh - starts the nija trading loop in background and runs gunicorn
+
+# allow overriding port via env
 PORT="${PORT:-8080}"
-GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
-GUNICORN_THREADS="${GUNICORN_THREADS:-2}"
-GUNICORN_MODULE="${GUNICORN_MODULE:-web.wsgi:app}"
 
-echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | .env not present — using environment variables provided by the host."
+# Ensure the script is executable (chmod +x start_all.sh in repo)
+# Show .env notice:
+if [ -f ".env" ]; then
+  echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Loading .env from repo (be careful committing secrets!)"
+  # optionally load it if you intend to during dev:
+  # set -o allexport; source .env; set +o allexport
+else
+  echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | .env not present — using environment variables provided by the host."
+fi
 
-# Start trading runner in background
-(
-  while true; do
-    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Starting Nija trading bot (background loop)..."
-    # run the dedicated runner (keeps import-time of nija_client safe)
-    python3 -u /app/nija_bot_runner.py || echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | nija_bot_runner exited; restarting in 2s..."
-    sleep 2
-  done
-) &
+echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Starting Nija trading bot (background loop)..."
 
-sleep 1
+# Set PYTHONPATH so vendor package can be imported
+export PYTHONPATH="/app/vendor:${PYTHONPATH:-}"
 
+# Launch trading bot in background and redirect its logs to stdout
+# The bot itself will handle retries; we keep it supervised here to simplify container lifecycle.
+nohup python3 nija_client.py 2>&1 &
+
+# Start Gunicorn (wsgi app in web.wsgi:app).  Use sync/gthread as you prefer.
 echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Starting Gunicorn web server..."
-exec gunicorn -w "${GUNICORN_WORKERS}" --threads "${GUNICORN_THREADS}" -b 0.0.0.0:"${PORT}" "${GUNICORN_MODULE}"
+exec gunicorn -c gunicorn.conf.py web.wsgi:app
