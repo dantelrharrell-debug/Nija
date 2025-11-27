@@ -1,11 +1,10 @@
 # ----------------------
 # Dockerfile for Nija Trading Bot
 # ----------------------
-# Use official Python 3.11 slim image
 FROM python:3.11-slim
 
 # ----------------------
-# ENV VARIABLES (Set API keys in container runtime or .env)
+# ENV VARIABLES
 # ----------------------
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
@@ -21,6 +20,7 @@ WORKDIR /app
 COPY requirements.txt .
 COPY app.py .
 COPY nija_client.py .
+COPY start_all.sh .
 
 # ----------------------
 # INSTALL DEPENDENCIES
@@ -33,7 +33,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # ----------------------
 # EXPOSE PORT
@@ -41,7 +42,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 EXPOSE 5000
 
 # ----------------------
-# ENTRYPOINT
+# START ALL SCRIPT
 # ----------------------
-# Use Gunicorn with 2 workers and gthread (threaded) for Flask + background trading thread
-CMD ["gunicorn", "-w", "2", "-k", "gthread", "--threads", "2", "-b", "0.0.0.0:5000", "app:app"]
+CMD ["./start_all.sh"]
