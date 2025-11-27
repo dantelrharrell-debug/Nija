@@ -1,24 +1,28 @@
-# nija_client.py
 import os
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+# -----------------------
+# Logging configuration
+# -----------------------
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
 
+# -----------------------
+# Dynamic Coinbase client import
+# -----------------------
 Client = None
 IMPORT_MODULE = None
 
-# Try the two likely import names used by coinbase libs
 candidates = [
-    "coinbase_advanced.client",    # repo may expose coinbase_advanced
-    "coinbase_advanced_py.client", # some distributions expose coinbase_advanced_py
-    "coinbase_advanced",           # fallback module-level
-    "coinbase_advanced_py",        # fallback module-level
+    "coinbase_advanced.client",
+    "coinbase_advanced_py.client",
+    "coinbase_advanced",
+    "coinbase_advanced_py",
 ]
 
 for cand in candidates:
     try:
-        # dynamic import
         parts = cand.split(".")
         if len(parts) == 2:
             modname, attr = parts
@@ -30,13 +34,11 @@ for cand in candidates:
                 break
         else:
             mod = __import__(cand)
-            # prefer a 'Client' object or 'client' module inside
-            Client = getattr(mod, "Client", None) or getattr(mod, "client", None) or None
+            Client = getattr(mod, "Client", None) or getattr(mod, "client", None)
             if Client:
                 IMPORT_MODULE = cand
                 break
     except Exception:
-        # keep trying other candidates without noisy trace
         continue
 
 COINBASE_CLIENT_AVAILABLE = Client is not None
@@ -45,7 +47,9 @@ if COINBASE_CLIENT_AVAILABLE:
 else:
     logger.warning("Coinbase client import failed for all candidates: %s", candidates)
 
-
+# -----------------------
+# Test Coinbase connection
+# -----------------------
 def test_coinbase_connection() -> bool:
     """Return True if a light Coinbase client test succeeds."""
     if not COINBASE_CLIENT_AVAILABLE:
@@ -61,11 +65,10 @@ def test_coinbase_connection() -> bool:
         return False
 
     try:
-        # instantiate client (library signatures vary)
         try:
             client = Client(api_key=api_key, api_secret=api_secret, api_sub=api_sub)
         except TypeError:
-            # maybe Client is a module exposing a Client class
+            # Try alternative class-based Client instantiation
             module_root = IMPORT_MODULE.split(".")[0] if IMPORT_MODULE else None
             if module_root:
                 mod = __import__(module_root, fromlist=["Client"])
@@ -79,7 +82,7 @@ def test_coinbase_connection() -> bool:
                 logger.warning("Unable to instantiate Coinbase client (signature mismatch).")
                 return False
 
-        # Try minimal safe test calls (library-dependent)
+        # Minimal test calls
         if hasattr(client, "ping"):
             client.ping()
         elif hasattr(client, "get_system_status"):
@@ -89,7 +92,6 @@ def test_coinbase_connection() -> bool:
         elif hasattr(client, "list_accounts"):
             client.list_accounts(limit=1)
         else:
-            # If instantiation succeeded but no simple test exists, treat as success
             logger.info("Coinbase client instantiated; no test call available.")
             return True
 
