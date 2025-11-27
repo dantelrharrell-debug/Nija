@@ -7,6 +7,9 @@ PyJWT[crypto]==2.6.0
 cryptography==46.0.3
 ecdsa==0.19.1
 
-# Install coinbase client from GitHub
-# Will be importable as `coinbase_advanced`
-git+https://github.com/coinbase/coinbase-advanced-py.git@main#egg=coinbase_advanced
+## Core dependencies
+flask
+gunicorn
+
+# Coinbase advanced client (fixed branch)
+git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase_advanced
