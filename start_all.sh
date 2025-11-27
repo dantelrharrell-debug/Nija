@@ -1,14 +1,16 @@
 #!/bin/bash
-# Make sure this file is executable: chmod +x start_all.sh
+# Ensure the script is executable: chmod +x start_all.sh
 
+# Load environment variables
+export $(grep -v '^#' .env | xargs)
+
+# Start Flask app in the background
 echo "=== Starting Flask App... ==="
-# Start Flask app in background
 gunicorn -w 2 -k gthread --threads 2 -b 0.0.0.0:5000 app:app &
 
+# Start Nija Trading Bot with auto-restart
 echo "=== Starting Nija Trading Bot... ==="
-# Loop to restart bot on crash
 while true; do
-    python3 nija_client.py
-    echo "Bot crashed or stopped! Restarting in 2 seconds..."
+    python3 nija_client.py || echo "Bot crashed! Restarting..."
     sleep 2
 done
