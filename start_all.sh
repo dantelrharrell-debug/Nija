@@ -1,20 +1,21 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo "[INFO] Starting NIJA Trading Bot pre-flight checks..."
+echo "[INFO] === STARTING NIJA TRADING BOT PRE-FLIGHT ==="
+echo "[INFO] Python: $(python -V 2>&1)"
+echo "[INFO] Pip: $(pip -V 2>&1)"
 
-python3 - << 'EOF'
-import sys
-try:
-    import coinbase_advanced
-    from coinbase_advanced.client import Client
-    print("[INFO] Coinbase Advanced IMPORT SUCCESS ✓")
-except Exception as e:
-    print("[ERROR] Coinbase import FAILED ✗")
-    print(e)
-    # continue - app will run in limited mode
-EOF
+echo "[INFO] Pip list (full):"
+pip list --format=columns
+
+# Print any installed coinbase-related packages for debugging
+python3 - <<'PY'
+import pkg_resources, traceback
+installed = {d.project_name: d.version for d in pkg_resources.working_set}
+coinbase_pkgs = {k:v for k,v in installed.items() if 'coinbase' in k.lower()}
+print("PY: coinbase-related installed distributions:", coinbase_pkgs)
+PY
 
 echo "[INFO] Launching Gunicorn..."
-# small number of workers so we don't spawn dozens on the platform
-exec gunicorn --workers 3 --threads 2 --bind 0.0.0.0:5000 app:app
+# Use explicit wsgi:app so gunicorn imports wsgi.py -> app variable
+exec gunicorn --workers 2 --threads 2 --timeout 30 --bind 0.0.0.0:5000 wsgi:app
