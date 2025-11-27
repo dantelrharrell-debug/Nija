@@ -1,8 +1,6 @@
-from flask import Flask
-from nija_client import test_coinbase_connection
-import logging
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+# app.py
+from flask import Flask, jsonify
+from nija_client import test_coinbase_connection, COINBASE_CLIENT_AVAILABLE
 
 app = Flask(__name__)
 
@@ -10,14 +8,15 @@ app = Flask(__name__)
 def index():
     return "Nija Bot Running!"
 
-@app.before_first_request
-def startup_checks():
-    logging.info("Running startup checks...")
-    if not test_coinbase_connection():
-        logging.error("Coinbase test failed. Exiting container...")
-        # Stop Flask app without terminal
-        import os
-        os._exit(1)
+@app.route("/debug/coinbase")
+def debug_coinbase():
+    """Return status of Coinbase client and a fresh connection test."""
+    available = bool(COINBASE_CLIENT_AVAILABLE)
+    ok = test_coinbase_connection()
+    return jsonify({
+        "coinbase_module_imported": available,
+        "coinbase_connection_test": ok
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
