@@ -1,18 +1,21 @@
 #!/bin/bash
-# ========================
-# start_all.sh
-# ========================
+# ----------------------
+# Start All Script for Nija Trading Bot
+# ----------------------
 
-# Exit immediately if a command fails
-set -e
+# Function to start the trading bot in a loop
+start_bot() {
+  while true; do
+    echo "Starting Nija Trading Bot..."
+    python3 nija_client.py
+    echo "Bot crashed or stopped! Restarting in 2 seconds..."
+    sleep 2
+  done
+}
 
-echo "[INFO] Running pre-flight checks..."
-python3 nija_client.py
+# Start the trading bot in the background
+start_bot &
 
-echo "[INFO] Starting Nija Trading Bot in background..."
-# Run the trading bot in the background
-python3 nija_client.py &
-
-echo "[INFO] Starting Flask App with Gunicorn..."
-# Run Flask/Gunicorn in foreground (container keeps running)
+# Start the Flask app with Gunicorn
+echo "Starting Flask App..."
 exec gunicorn -w 2 -k gthread --threads 2 -b 0.0.0.0:5000 app:app
