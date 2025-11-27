@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, jsonify
 from nija_client import test_coinbase_connection, COINBASE_CLIENT_AVAILABLE
 
