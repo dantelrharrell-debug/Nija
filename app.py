@@ -1,61 +1,58 @@
 # app.py
 import logging
-import os
-import traceback
-from flask import Flask, jsonify
+from flask import Blueprint, jsonify, Flask
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+# Blueprint containing your main routes (preferred)
+bp = Blueprint("nija", __name__)
 
-COINBASE_AVAILABLE = False
-COINBASE_IMPORT_ERROR = None
-COINBASE_IMPORT_PATH = None
+@bp.route("/nija")
+def nija_root():
+    return "Nija Bot Running (nija blueprint)!"
 
-def try_coinbase_import():
-    global COINBASE_AVAILABLE, COINBASE_IMPORT_ERROR, COINBASE_IMPORT_PATH
-    # Try multiple possible import paths (tolerant)
-    candidates = [
-        "coinbase_advanced.client",
-        "coinbase_advanced",
-        "coinbase_advanced_py.client",
-        "coinbase.client",
-    ]
-    for c in candidates:
-        try:
-            module = __import__(c, fromlist=["*"])
-            COINBASE_AVAILABLE = True
-            COINBASE_IMPORT_PATH = c
-            logging.info("Coinbase import successful from path: %s", c)
-            return True
-        except Exception as e:
-            logging.info("Coinbase import attempt %s failed: %s", c, e)
-    COINBASE_AVAILABLE = False
-    COINBASE_IMPORT_ERROR = traceback.format_exc()
-    return False
-
-# Attempt import at startup (non-fatal)
-try_coinbase_import()
-
-@app.route("/")
-def index():
-    return f"Nija Bot Running! Coinbase module loaded: {COINBASE_AVAILABLE} (path: {COINBASE_IMPORT_PATH})"
-
-@app.route("/debug/coinbase")
+@bp.route("/debug/coinbase")
 def debug_coinbase():
-    return jsonify({
-        "coinbase_available": COINBASE_AVAILABLE,
-        "coinbase_import_path": COINBASE_IMPORT_PATH,
-        "coinbase_import_error_snippet": (COINBASE_IMPORT_ERROR or "")[:1000]
-    })
+    """
+    Quick diagnostic: reports whether coinbase-advanced can be imported and its version.
+    """
+    try:
+        import importlib, pkg_resources
+        mod = importlib.import_module("coinbase_advanced")
+        # try to look up distribution if installed as coinbase-advanced-py
+        try:
+            dist = pkg_resources.get_distribution("coinbase-advanced-py")
+            version = dist.version
+        except Exception:
+            version = getattr(mod, "__version__", "unknown")
+        return jsonify({"coinbase_import": True, "version": version})
+    except Exception as e:
+        return jsonify({"coinbase_import": False, "error": str(e)})
 
-@app.route("/debug/env")
-def debug_env():
-    return jsonify({
-        "PYTHONPATH": os.environ.get("PYTHONPATH"),
-        "FLASK_ENV": os.environ.get("FLASK_ENV"),
-        "GUNICORN_CMD_ARGS": os.environ.get("GUNICORN_CMD_ARGS")
-    })
+def register_to_app(app: Flask):
+    """
+    Called by wsgi.create_app(app) to attach blueprint(s) safely.
+    """
+    if not isinstance(app, Flask):
+        raise TypeError("register_to_app expects a Flask instance")
+    app.register_blueprint(bp)
+    logger.info("Blueprint 'nija' registered via register_to_app")
+
+# ALSO expose a module-level Flask app object (so wsgi.create_app can see mod.app)
+# This is intentionally minimal — we do NOT auto-register bp here to avoid double-registration.
+app = None
+try:
+    # create a convenience local app if someone runs this file directly
+    _local = Flask(__name__)
+    _local.register_blueprint(bp)
+    app = _local
+    # Keep running-only helper folded behind __main__
+except Exception:
+    app = None
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # If run directly, create a standalone app and run it.
+    server = Flask(__name__)
+    register_to_app(server)
+    server.run(host="0.0.0.0", port=5000)
