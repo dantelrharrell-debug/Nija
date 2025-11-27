@@ -6,27 +6,29 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git build-essential gcc \
+    git \
+    build-essential \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python requirements
+# Copy Python requirements if you have one
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+# Upgrade pip and install dependencies
+RUN python -m pip install --upgrade pip
+RUN python -m pip install -r requirements.txt
 
 # Install coinbase_advanced directly from GitHub
-RUN pip install git+https://github.com/coinbase/coinbase-advanced-py.git
+RUN python -m pip install git+https://github.com/coinbase/coinbase-advanced-py.git
 
 # Copy the rest of the app
 COPY . .
 
-# Make sure start script is executable
-RUN chmod +x start_all.sh
+# Make start script executable
+RUN chmod +x ./start_all.sh
 
 # Expose Flask port
 EXPOSE 5000
 
-# Use start script
+# Use start script as entry point
 CMD ["./start_all.sh"]
