@@ -1,46 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start all services: bot loop (background) + Gunicorn for Flask
-# This script is executed as the container's CMD.
+# start_all.sh
+# - Runs nija_client.py in a monitored background loop
+# - Starts Gunicorn with the web app
+# Environment:
+#   PORT (optional, default 8080)
+#   LOG_LEVEL - forwarded to Python logging
+#   LIVE_TRADING - if '1' the client tries live mode
 
-LOG() { echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | $*"; }
+PORT="${PORT:-8080}"
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
+GUNICORN_THREADS="${GUNICORN_THREADS:-2}"
+GUNICORN_MODULE="${GUNICORN_MODULE:-web.wsgi:app}"
 
-# load .env if present (non-fatal)
-if [ -f "/app/.env" ]; then
-  # shellcheck disable=SC1091
-  set -a
-  # Use grep -v to ignore blank lines and comments
-  grep -v '^\s*#' /app/.env | sed '/^\s*$/d' > /tmp/.env.parsed || true
-  # shellcheck disable=SC1091
-  . /tmp/.env.parsed || true
-  set +a
-  LOG "Loaded /app/.env"
-else
-  LOG ".env not present — using environment variables provided by the host."
-fi
+echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | .env not present — using environment variables provided by the host."
 
-# ensure python path includes vendor dir
-export PYTHONPATH="/app/vendor:${PYTHONPATH:-}"
-
-# start bot in a restart loop in background
-LOG "Starting Nija trading bot (background loop)..."
+# start background trading loop
 (
   while true; do
-    LOG "Launching nija_client.py"
-    python3 /app/nija_client.py || LOG "nija_client crashed ($?). Restarting in 2s..."
+    echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Starting Nija trading bot (background loop)..."
+    # run nija_client in foreground so crashes show logs; script will restart it after exit
+    python3 /app/nija_client.py || echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | nija_client exited/crashed; restarting in 2s..."
     sleep 2
   done
 ) &
 
-# wait a moment to let bot initialize
+# Give the background a moment to initialize
 sleep 1
 
-# Start Gunicorn (web app). Expose web.wsgi:app
-LOG "Starting Gunicorn web server..."
-# If you have a gunicorn.conf.py use it; otherwise default options used.
-if [ -f "/app/gunicorn.conf.py" ]; then
-  exec gunicorn -c /app/gunicorn.conf.py web.wsgi:app
-else
-  exec gunicorn -w 2 -k gthread --threads 2 -b 0.0.0.0:${PORT:-8080} web.wsgi:app
-fi
+# start gunicorn for the web app (bind to $PORT)
+echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Starting Gunicorn web server..."
+exec gunicorn -w "${GUNICORN_WORKERS}" --threads "${GUNICORN_THREADS}" -b 0.0.0.0:"${PORT}" "${GUNICORN_MODULE}"
