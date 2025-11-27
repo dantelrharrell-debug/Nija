@@ -1,8 +1,10 @@
-Flask==2.2.5
+Flask==3.0.2
 gunicorn==23.0.0
-requests==2.32.5
-python-dotenv==1.2.1
-cryptography==46.0.3
-ecdsa==0.19.1
-PyJWT>=2.8.0,<3.0.0
-git+https://github.com/coinbase/coinbase-advanced-py.git@v1.8.2#egg=coinbase-advanced-py
+
+# Coinbase dependencies
+PyJWT[crypto]==2.6.0
+cryptography==42.0.4
+ecdsa==0.18.0
+
+# Install Coinbase Advanced from GitHub (always latest)
+git+https://github.com/coinbase/coinbase-advanced-py.git
