@@ -1,65 +1,72 @@
-# nija_client.py
 import os
 import time
-import threading
 import logging
+import threading
 from flask import Flask
 
-# -------------------------------
-# Logging setup
-LOG_LEVEL = logging.INFO
-logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(message)s")
+# --------------------------
+# Setup Logging
+# --------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 
-# -------------------------------
-# Flask app (callable for Gunicorn)
+# --------------------------
+# Import Coinbase Client
+# --------------------------
+try:
+    from coinbase_advanced.client import Client
+    client = Client(
+        api_key=os.environ.get("COINBASE_API_KEY"),
+        api_secret=os.environ.get("COINBASE_API_SECRET"),
+        api_sub=os.environ.get("COINBASE_API_SUB", None)
+    )
+    logging.info(f"Coinbase client ready (LIVE_TRADING={os.environ.get('LIVE_TRADING', True)})")
+except ModuleNotFoundError:
+    client = None
+    logging.error("coinbase_advanced module not installed. Trading disabled.")
+
+# --------------------------
+# Trading Loop
+# --------------------------
+def trading_loop():
+    if not client:
+        logging.error("Trading loop not started: Coinbase client not available.")
+        return
+
+    logging.info("Starting trading loop...")
+    while True:
+        try:
+            # Use the correct Coinbase client method
+            accounts = client.get_accounts()
+            for account in accounts:
+                logging.info(f"Account: {account['currency']} | Balance: {account['balance']['amount']}")
+            
+            # TODO: Add your trading logic here
+            
+            time.sleep(5)  # pause 5 sec between loops
+        except Exception as e:
+            logging.error(f"Error in trading loop: {e}")
+            time.sleep(5)
+
+# --------------------------
+# Flask App
+# --------------------------
 app = Flask(__name__)
 
 @app.route("/")
 def index():
     return "Nija Bot Running!"
 
-# -------------------------------
-# Coinbase client setup
-try:
-    from vendor.coinbase_advanced_py.client import CoinbaseClient
-except ModuleNotFoundError:
-    CoinbaseClient = None
-    logging.error("Coinbase client module not found.")
+# --------------------------
+# Startup
+# --------------------------
+def start_background_loop():
+    thread = threading.Thread(target=trading_loop, daemon=True)
+    thread.start()
 
-COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
-
-if CoinbaseClient and COINBASE_API_KEY and COINBASE_API_SECRET:
-    client = CoinbaseClient(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET)
-    logging.info("Coinbase client ready (LIVE_TRADING=True).")
-else:
-    client = None
-    logging.warning("Coinbase client not instantiated. Check your API keys or module.")
-
-# -------------------------------
-# Trading loop (runs in background thread)
-def trading_loop():
-    if not client:
-        logging.error("Cannot start trading loop without Coinbase client.")
-        return
-
-    logging.info("Starting trading loop (LIVE_TRADING=True)")
-    while True:
-        try:
-            # Example: fetch account balance
-            balances = client.get_account_balances()  # replace with your actual function
-            logging.info(f"Balances: {balances}")
-
-            # Your trading logic goes here...
-            # e.g., check signals, execute trades, risk management
-
-            time.sleep(5)  # loop interval
-        except Exception as e:
-            logging.error(f"Error in trading loop: {e}")
-            time.sleep(5)
-
-# -------------------------------
-# Only start trading loop if run directly
+# Only run Flask dev server if executed directly
 if __name__ == "__main__":
-    threading.Thread(target=trading_loop, daemon=True).start()
+    start_background_loop()
     app.run(host="0.0.0.0", port=8080)
