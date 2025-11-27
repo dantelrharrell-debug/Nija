@@ -21,7 +21,9 @@ COPY requirements.txt .
 COPY app.py .
 COPY nija_client.py .
 COPY start_all.sh .
-COPY .env .
+
+# Only include this if you are actually using a .env file locally
+# COPY .env .
 
 # ----------------------
 # INSTALL DEPENDENCIES
