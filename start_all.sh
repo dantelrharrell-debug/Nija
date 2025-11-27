@@ -1,30 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# start_all.sh - starts the nija trading loop in background and runs gunicorn
-
-# allow overriding port via env
-PORT="${PORT:-8080}"
-
-# Ensure the script is executable (chmod +x start_all.sh in repo)
-# Show .env notice:
+# Load .env if it exists (optional)
 if [ -f ".env" ]; then
-  echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Loading .env from repo (be careful committing secrets!)"
-  # optionally load it if you intend to during dev:
-  # set -o allexport; source .env; set +o allexport
+  echo ".env found — loading"
+  # shellcheck disable=SC1091
+  . ./.env
 else
-  echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | .env not present — using environment variables provided by the host."
+  echo ".env not present — using environment variables provided by the host."
 fi
 
-echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Starting Nija trading bot (background loop)..."
-
-# Set PYTHONPATH so vendor package can be imported
+# export PYTHONPATH to include vendor (so vendor.coinbase_advanced_py is importable)
 export PYTHONPATH="/app/vendor:${PYTHONPATH:-}"
 
-# Launch trading bot in background and redirect its logs to stdout
-# The bot itself will handle retries; we keep it supervised here to simplify container lifecycle.
-nohup python3 nija_client.py 2>&1 &
+# log to stdout for container logs
+echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Starting Nija trading bot (background loop)..."
 
-# Start Gunicorn (wsgi app in web.wsgi:app).  Use sync/gthread as you prefer.
+# start the trading bot in background and redirect output to stdout/stderr
+# It will continue running while gunicorn serves web.
+# Using nohup + & so it survives (and logs appear in container logs).
+nohup python -u /app/nija_client.py 2>&1 &
+
+sleep 0.5
+
 echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | Starting Gunicorn web server..."
-exec gunicorn -c gunicorn.conf.py web.wsgi:app
+# Start gunicorn (replace web.wsgi:app if your wsgi module differs)
+exec gunicorn -c /app/gunicorn.conf.py web.wsgi:app
