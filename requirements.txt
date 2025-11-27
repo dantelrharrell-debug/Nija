@@ -2,14 +2,11 @@
 Flask==3.0.2
 gunicorn==23.0.0
 
-# Crypto / auth
+# Auth / crypto libs (loose but compatible)
 PyJWT>=2.8.0
 cryptography>=42.0.4
 ecdsa>=0.18.0
 
-# Utility
+# Utilities
 requests>=2.32.0
 python-dotenv>=1.0.0
-
-# Coinbase advanced client - pinned to tag for reproducibility
-git+https://github.com/coinbase/coinbase-advanced-py.git@v1.8.2
