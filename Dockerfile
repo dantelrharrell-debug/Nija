@@ -4,11 +4,14 @@
 FROM python:3.11-slim
 
 # ----------------------
-# ENV VARIABLES (set in cloud or .env)
+# ENV VARIABLES
 # ----------------------
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
+# ----------------------
+# WORKDIR
+# ----------------------
 WORKDIR /app
 
 # ----------------------
@@ -18,6 +21,7 @@ COPY requirements.txt .
 COPY app.py .
 COPY nija_client.py .
 COPY start_all.sh .
+COPY .env .
 
 # ----------------------
 # INSTALL DEPENDENCIES
@@ -33,15 +37,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Ensure start script is executable
-RUN chmod +x start_all.sh
-
 # ----------------------
 # EXPOSE PORT
 # ----------------------
 EXPOSE 5000
 
 # ----------------------
-# START ALL SCRIPT
+# START SCRIPT
 # ----------------------
 CMD ["./start_all.sh"]
