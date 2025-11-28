@@ -1,8 +1,9 @@
 # ===============================
 # NIJA Trading Bot Dockerfile
-# Fully reliable coinbase_advanced install
+# Optimized for production
 # ===============================
 
+# Use official Python 3.11 slim image
 FROM python:3.11-slim
 
 # Set working directory
@@ -16,26 +17,29 @@ ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     build-essential \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies
-COPY requirements.txt .
+# Upgrade pip
 RUN pip install --upgrade pip
+
+# Copy requirements and install all Python dependencies, including Coinbase SDK
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install coinbase_advanced directly from GitHub (most reliable method)
-RUN git clone https://github.com/coinbase/coinbase-advanced-py.git /tmp/coinbase_advanced && \
-    pip install --no-cache-dir /tmp/coinbase_advanced && \
-    rm -rf /tmp/coinbase_advanced
+# Optional: Explicitly install Coinbase Advanced SDK (if not in requirements.txt)
+RUN pip install --no-cache-dir coinbase-advanced-py
 
-# Copy app code
+# Copy application code
 COPY . .
 
-# Validate coinbase_advanced installation (fail build if missing)
+# Optional sanity check: verify Coinbase SDK is installed
 RUN python -c "from coinbase_advanced.client import Client; print('coinbase_advanced installed ✅')"
 
-# Expose Gunicorn port
+# Expose port for Gunicorn
 EXPOSE 8080
 
-# Start the app with Gunicorn
+# Start Gunicorn server using your configuration
 CMD ["gunicorn", "-c", "./gunicorn.conf.py", "wsgi:app"]
