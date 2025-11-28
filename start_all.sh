@@ -3,8 +3,9 @@ set -euo pipefail
 
 echo "$(date -u) | INFO | Starting NIJA entrypoint"
 
-# Optional: quick health check - will not crash container on failure
+# Optional non-fatal connectivity test (keeps container alive even if it fails)
 python test_coinbase_connection.py || echo "$(date -u) | WARN | coinbase test failed"
 
-# Launch gunicorn, explicitly point at Flask instance in app.py
-exec gunicorn --bind 0.0.0.0:8080 --workers 2 --threads 2 --timeout 120 app:app
+# Explicitly point gunicorn at the Flask WSGI app (module:object).
+# This assumes your Flask app file is 'app.py' and your Flask instance is named 'app'.
+exec gunicorn -c gunicorn.conf.py app:app
