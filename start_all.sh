@@ -1,10 +1,9 @@
 #!/bin/bash
-set -e
+set -e  # Exit immediately if a command fails
 
-echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
+# 1️⃣ Run pre-start checks
+python pre_start.py
 
-echo "Running funded account check..."
-python3 /app/check_funded.py || { echo "❌ Funded account check failed. Exiting container."; exit 1; }
-
-echo "✅ Funded account verified. Starting Gunicorn..."
-exec gunicorn --config /app/gunicorn.conf.py wsgi:app
+# 2️⃣ Start Gunicorn
+echo "[INFO] Starting Gunicorn..."
+exec gunicorn -c ./gunicorn.conf.py wsgi:app
