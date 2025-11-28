@@ -1,9 +1,15 @@
 #!/bin/bash
-set -e  # Exit immediately if a command fails
+set -e
 
-# 1️⃣ Run pre-start checks
-python pre_start.py
+# Ensure we are in /app
+cd /app || exit 1
 
-# 2️⃣ Start Gunicorn
-echo "[INFO] Starting Gunicorn..."
-exec gunicorn -c ./gunicorn.conf.py wsgi:app
+# Verify critical files exist
+if [ ! -f nija_client.py ] || [ ! -f check_funded.py ]; then
+    echo "[ERROR] nija_client.py or check_funded.py missing in /app!"
+    ls -l /app
+    exit 1
+fi
+
+# Start Gunicorn
+exec gunicorn -c gunicorn_conf.py wsgi:app
