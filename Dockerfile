@@ -4,6 +4,7 @@ FROM python:3.11-slim
 # ensure apt-get noninteractive
 ENV DEBIAN_FRONTEND=noninteractive
 
+# working directory
 WORKDIR /app
 
 # system deps for building wheels (if necessary) and dos2unix
@@ -14,7 +15,7 @@ RUN apt-get update && \
 # copy only requirements first for better cache
 COPY requirements.txt /app/requirements.txt
 
-# Install python deps; prefer no-cache
+# Install python deps
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
 
@@ -27,5 +28,5 @@ RUN if [ -f ./start_all.sh ]; then dos2unix ./start_all.sh || true; chmod +x ./s
 # Expose port used by flask/gunicorn
 EXPOSE 5000
 
-# Run the startup script (exec form)
-CMD ["bash", "-lc", "./start_all.sh"]
+# Run the startup script
+CMD ["./start_all.sh"]
