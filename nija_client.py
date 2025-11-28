@@ -1,3 +1,34 @@
+import os
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+
+# Attempt to import Coinbase client safely
+try:
+    from coinbase_advanced.client import Client
+except ModuleNotFoundError:
+    Client = None
+    logging.error("coinbase_advanced module not installed. Live trading disabled.")
+
+def test_coinbase_connection():
+    if Client is None:
+        logging.warning("Coinbase client unavailable. Skipping connection test.")
+        return False
+
+    try:
+        client = Client(
+            api_key=os.environ.get("COINBASE_API_KEY"),
+            api_secret=os.environ.get("COINBASE_API_SECRET"),
+            api_sub=os.environ.get("COINBASE_API_SUB")
+        )
+        # Optional: ping to check connection
+        client.get_accounts()
+        logging.info("✅ Coinbase connection successful!")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Coinbase connection failed: {e}")
+        return False
+
 # nija_client.py
 import logging
 import os
