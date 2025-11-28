@@ -1,33 +1,52 @@
 # test_coinbase_connection.py
-import os
-from loguru import logger
-from nija_client import CoinbaseClient
+import logging
+import sys
+import traceback
+from nija_client import build_client, CDP_API_KEY, load_pem_secret
 
-logger.add(lambda msg: print(msg, end=""))  # log to stdout
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("test_coinbase")
 
 def main():
+    logger.info("Starting Coinbase connection test.")
     try:
-        client = CoinbaseClient()
-    except Exception as e:
-        logger.error("Failed to initialize CoinbaseClient: {}", e)
-        raise SystemExit(1)
+        logger.info("CDP_API_KEY: %s", CDP_API_KEY or "<NOT SET>")
+        pem = load_pem_secret()
+        logger.info("CDP_API_SECRET loaded: %s", "yes" if pem else "no")
 
-    try:
-        accts = client.list_accounts()
-        # attempt to get simple length without printing account contents
-        try:
-            count = len(accts)
-        except Exception:
-            # if object isn't list-like, coerce to list length safely
+        client = build_client()
+        logger.info("Client instantiated: %s", type(client))
+
+        # Try a safe read-only call. Different SDK versions expose different methods;
+        # attempt a few known read-only methods.
+        for fnname in ("get_accounts", "accounts", "get_products", "get_wallets", "list_accounts"):
             try:
-                count = len(list(accts))
+                fn = getattr(client, fnname, None)
+                if callable(fn):
+                    logger.info("Calling client.%s() ...", fnname)
+                    result = fn()  # many SDKs return a list-like or Response object
+                    logger.info("Success: client.%s returned type %s", fnname, type(result))
+                    # don't dump sensitive details
+                    return 0
+            except Exception as e:
+                logger.debug("client.%s threw: %s", fnname, e)
+
+        # If none of the above worked, attempt a low-level call if the client has 'request' or 'send'
+        if hasattr(client, "request"):
+            try:
+                logger.info("Attempting low-level client.request('GET','/health') if available.")
+                resp = client.request("GET", "/health")
+                logger.info("Low-level request responded: %s", getattr(resp, "status_code", str(type(resp))))
+                return 0
             except Exception:
-                count = "unknown"
-        logger.info("Connection OK — accounts_count={}", count)
-        return 0
+                logger.debug("Low-level request failed:\n%s", traceback.format_exc())
+
+        logger.warning("No known read-only API methods succeeded. Check SDK docs for your installed version.")
+        return 1
+
     except Exception as e:
-        logger.error("Failed account fetch: {}", e)
-        raise SystemExit(2)
+        logger.exception("Coinbase connection test failed: %s", e)
+        return 2
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
