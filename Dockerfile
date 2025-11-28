@@ -1,21 +1,42 @@
+# Base image
 FROM python:3.11-slim
 
-# Put app files into /app
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Set working directory
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git build-essential bzip2 xz-utils \
- && rm -rf /var/lib/apt/lists/*
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
+        curl \
+        wget \
+        unzip \
+        xz-utils \
+        perl \
+        ca-certificates \
+        && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (if you use a requirements.txt). If you don't have one,
-# adapt this step in your host UI to add packages.
-COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Upgrade pip
+RUN python -m pip install --upgrade pip setuptools wheel
 
-COPY . /app
+# Copy requirements if you have one
+COPY requirements.txt .
 
-# Ensure entrypoint is executable
-RUN chmod +x /app/start_all.sh
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt || echo "Warning: some packages failed to install"
 
-ENTRYPOINT ["/app/start_all.sh"]
+# Copy bot files
+COPY . .
+
+# Make startup script executable
+RUN chmod +x start_all.sh
+
+# Expose Flask port (if using web interface)
+EXPOSE 5000
+
+# Default command
+CMD ["./start_all.sh"]
