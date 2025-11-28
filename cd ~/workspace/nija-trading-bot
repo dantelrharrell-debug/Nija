@@ -1,23 +1,20 @@
 Nija/
-├─ app.py
-|-app
-    ├─ nija_client/
-│   ├─ __init__.py      # will define your Flask app
-│   ├─ check_funded.py  # funded accounts logic
+├─ app/
+│  └─ nija_client/
+│     ├─ __init__.py
+│     └─ check_funded.py
+├─ web/
+│  ├─ __init__.py
+│  └─ wsgi.py
+├─ bot/
+│  ├─ __init__.py
+│  └─ live_bot_script.py
+├─ cd/
+│  └─ vendor/
+│     └─ coinbase_advanced_py/
+│        ├─ __init__.py
+│        └─ client.py
 ├─ Dockerfile
 ├─ gunicorn.conf.py
-├─ .env
-├─ web/
-│   ├─ __init__.py
-│   ├─ wsgi.py
-│   ├─ tradingview_webhook.py
-│   ├─ other_module1.py
-│   └─ other_module2.py
-├─ bot/
-│   ├─ __init__.py
-│   └─ live_bot_script.py
-├─ cd/
-│   └─ vendor/
-│       └─ coinbase_advanced_py/
-│           ├─ __init__.py
-│           └─ client.py
+├─ requirements.txt
+└─ .env
