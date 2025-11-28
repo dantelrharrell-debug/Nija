@@ -1,32 +1,33 @@
-# Dockerfile - minimal, reproducible image for NIJA trading bot
+# Base image
 FROM python:3.11-slim
 
-# ensure apt-get noninteractive
+# Non-interactive for apt
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONPATH=/app
 
-# working directory
+# Set working directory
 WORKDIR /app
 
-# system deps for building wheels (if necessary) and dos2unix
+# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends build-essential git ca-certificates dos2unix && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# copy only requirements first for better cache
+# Copy only requirements first (cache optimization)
 COPY requirements.txt /app/requirements.txt
 
-# Install python deps
+# Upgrade pip and install Python dependencies
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
 
-# copy application code
+# Copy all application code
 COPY . /app
 
-# Make sure shell scripts are LF and executable
+# Fix shell script line endings and make executable
 RUN if [ -f ./start_all.sh ]; then dos2unix ./start_all.sh || true; chmod +x ./start_all.sh; fi
 
-# Expose port used by flask/gunicorn
+# Expose Flask/Gunicorn port
 EXPOSE 5000
 
-# Run the startup script
-CMD ["./start_all.sh"]
+# Run startup script
+CMD ["bash", "-lc", "./start_all.sh"]
