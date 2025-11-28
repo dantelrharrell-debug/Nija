@@ -22,4 +22,4 @@ Jinja2==3.1.6
 MarkupSafe==3.0.3
 
 # Coinbase Advanced Python SDK
-git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase_advanced
+git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase-advanced-py
