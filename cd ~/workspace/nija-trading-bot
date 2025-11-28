@@ -1,6 +1,7 @@
 Nija/
 ├─ app.py
-├─ nija_client/
+|-app
+    ├─ nija_client/
 │   ├─ __init__.py      # will define your Flask app
 │   ├─ check_funded.py  # funded accounts logic
 ├─ Dockerfile
