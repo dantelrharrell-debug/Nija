@@ -1,32 +1,38 @@
+# =========================
+# NIJA Trading Bot Dockerfile
+# =========================
+
+# Use official Python 3.11 slim image
 FROM python:3.11-slim
 
-# Working directory
+# Set working directory
 WORKDIR /app
 
-# Prevent interactive prompts
-ENV DEBIAN_FRONTEND=noninteractive
-ENV LIVE_TRADING=1
+# Prevent Python from writing pyc files and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
-RUN git clone https://github.com/coinbase/coinbase-advanced-py.git /tmp/coinbase-advanced \
-    && pip install /tmp/coinbase-advanced \
-    && rm -rf /tmp/coinbase-advanced
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
-RUN python -m pip install --upgrade pip setuptools wheel
-
-# Copy requirements and install all dependencies including coinbase_advanced
+# Copy requirements.txt and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy bot files
+# Install coinbase_advanced directly from GitHub
+RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git
+
+# Copy application code
 COPY . .
 
-# Make startup script executable
-RUN chmod +x start_all.sh
+# Optional: test if coinbase_advanced installed
+RUN python -c "from coinbase_advanced.client import Client; print('coinbase_advanced installed ✅')"
 
-# Expose Flask port (for web interface)
+# Expose the port Gunicorn will use
 EXPOSE 8080
 
-# Start the bot
-CMD ["./start_all.sh"]
+# Start Gunicorn with your config
+CMD ["gunicorn", "-c", "./gunicorn.conf.py", "wsgi:app"]
