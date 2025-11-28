@@ -1,3 +1,2 @@
 # web/__init__.py
-# package marker for `web` package
-__all__ = ["wsgi", "tradingview_webhook"]
+# package marker for web
