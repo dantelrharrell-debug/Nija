@@ -1,27 +1,36 @@
+# Use official Python 3.11 slim
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# system deps required for some packages (cryptography, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git build-essential libssl-dev libffi-dev python3-dev \
+      git build-essential libssl-dev libffi-dev python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# copy requirements and upgrade pip
 COPY requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --upgrade pip setuptools wheel
 
-# Clone SDK & copy the coinbase_advanced module into /app (not into site-packages)
-RUN git clone https://github.com/coinbase/coinbase-advanced-py.git /tmp/coinbase_advanced \
-    && cp -r /tmp/coinbase_advanced/coinbase_advanced /app/
+# install everything in requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
-# Test that import works now (build will fail if not)
-RUN python -c "from coinbase_advanced.client import Client; print('coinbase_advanced import works ✅')"
+# install Coinbase SDK from PyPI (preferred)
+RUN python -m pip install --no-cache-dir coinbase-advanced-py
 
-# Copy the rest of your source code (your app, nija_client.py, etc)
+# build-time check: will fail the build if import doesn't work
+RUN python -c "import importlib, sys; spec = importlib.util.find_spec('coinbase_advanced'); print('spec=', spec); import coinbase_advanced.client as c; print('coinbase_advanced import OK')"
+
+# copy app files
 COPY . .
 
-RUN chmod +x /app/start_all.sh
+# make start script executable (if you use it)
+RUN [ -f /app/start_all.sh ] && chmod +x /app/start_all.sh || echo "no start_all.sh"
 
+EXPOSE 8080
+
+# entrypoint (or run gunicorn directly if preferred)
 ENTRYPOINT ["/app/start_all.sh"]
