@@ -1,8 +1,16 @@
 from flask import Flask
+from nija_client import test_coinbase_connection
 
-# Must be top-level for Gunicorn
 app = Flask(__name__)
 
 @app.route("/")
 def index():
     return "Nija Bot Running!"
+
+@app.before_first_request
+def startup_checks():
+    # Verify Coinbase connection on container start
+    test_coinbase_connection()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
