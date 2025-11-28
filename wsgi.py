@@ -29,7 +29,6 @@ def create_app():
         try:
             mod = importlib.import_module("app")  # your app.py
         except BaseException as be:
-            # Catch BaseException to avoid SystemExit / KeyboardInterrupt killing the process
             LOG.warning("Optional importlib.import_module('app') raised BaseException; skipping optional import. %s", be)
             mod = None
 
@@ -53,7 +52,6 @@ def create_app():
             else:
                 LOG.info("Optional app module imported but did not expose register_to_app() or bp.")
     except Exception:
-        # This outer Exception is defensive: we already protected BaseException above.
         LOG.exception("Unexpected error during optional app module import. Continuing with base app.")
 
     return app
