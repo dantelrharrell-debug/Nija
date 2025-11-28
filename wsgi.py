@@ -1,63 +1,42 @@
-# wsgi.py
-"""
-Safe WSGI entrypoint for Gunicorn.
-- Always exposes a valid `app` immediately.
-- Optionally tries to import `app` module non-fatally.
-- If the optional module provides register_to_app(app), it will be invoked.
-"""
 import logging
-import importlib
-
 from flask import Flask
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-LOG = logging.getLogger("nija.wsgi")
+import os
 
 def create_app():
+    # Initialize Flask app
     app = Flask(__name__)
 
+    # Example main route
     @app.route("/")
-    def _index():
-        return "Nija Bot Running (wsgi root)!"
+    def index():
+        return "Nija Bot Running!"
 
-    @app.route("/health")
-    def health():
-        return {"status": "ok"}
+    # Optional modules (replace with your real optional module names if any)
+    optional_modules = [
+        "nija_client.optional_app_module1",
+        "nija_client.optional_app_module2"
+    ]
 
-    # Optional safer import of richer app module (non-fatal)
-    try:
+    for module_name in optional_modules:
         try:
-            mod = importlib.import_module("app")  # your app.py
-        except BaseException as be:
-            LOG.warning("Optional importlib.import_module('app') raised BaseException; skipping optional import. %s", be)
-            mod = None
-
-        if mod:
-            # Preferred: app.py can expose a function to register routes safely
-            if hasattr(mod, "register_to_app") and callable(getattr(mod, "register_to_app")):
-                try:
-                    mod.register_to_app(app)
-                    LOG.info("Registered routes via app.register_to_app")
-                except Exception as e:
-                    LOG.exception("register_to_app raised an exception (routes not registered): %s", e)
-
-            # Optional: if module exposes a blueprint object called 'bp', register it
-            if hasattr(mod, "bp"):
-                try:
-                    bp = getattr(mod, "bp")
-                    app.register_blueprint(bp)
-                    LOG.info("Registered blueprint 'bp' from app module")
-                except Exception as e:
-                    LOG.exception("registering blueprint 'bp' failed: %s", e)
+            mod = __import__(module_name, fromlist=["register_to_app", "bp"])
+            if hasattr(mod, "register_to_app"):
+                mod.register_to_app(app)
+                logging.info(f"Optional module {module_name} registered via register_to_app()")
+            elif hasattr(mod, "bp"):
+                app.register_blueprint(mod.bp)
+                logging.info(f"Optional module {module_name} registered via blueprint")
             else:
-                LOG.info("Optional app module imported but did not expose register_to_app() or bp.")
-    except Exception:
-        LOG.exception("Unexpected error during optional app module import. Continuing with base app.")
+                logging.info(f"Optional module {module_name} imported but no register_to_app() or bp found. Ignored.")
+        except ModuleNotFoundError:
+            logging.info(f"Optional module {module_name} not found. Skipping.")
 
     return app
 
-# WSGI callable
+# Create the app for Gunicorn
 app = create_app()
 
+# Optional: only run if this file is executed directly (not necessary for Gunicorn)
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port, debug=True)
