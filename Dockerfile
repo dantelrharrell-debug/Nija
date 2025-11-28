@@ -1,45 +1,35 @@
-# ===============================
-# NIJA Trading Bot Dockerfile
-# Optimized for production
-# ===============================
-
-# Use official Python 3.11 slim image
+# Use the official slim Python image
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Prevent Python from writing pyc files and enable unbuffered output
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    build-essential \
-    libssl-dev \
-    libffi-dev \
-    python3-dev \
+# Install system dependencies required for many Python packages and for compiling dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
+        libssl-dev \
+        libffi-dev \
+        python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
-RUN pip install --upgrade pip
-
-# Copy requirements and install all Python dependencies, including Coinbase SDK
+# Install pip and Python requirements
 COPY requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Optional: Explicitly install Coinbase Advanced SDK (if not in requirements.txt)
-RUN pip install --no-cache-dir coinbase-advanced-py
+# Install Coinbase Advanced SDK directly from GitHub (most reliable method)
+RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git
 
-# Copy application code
-COPY . .
-
-# Optional sanity check: verify Coinbase SDK is installed
+# Optional: verify package import after install
 RUN python -c "from coinbase_advanced.client import Client; print('coinbase_advanced installed ✅')"
 
-# Expose port for Gunicorn
-EXPOSE 8080
+# Copy the rest of the source code
+COPY . .
 
-# Start Gunicorn server using your configuration
-CMD ["gunicorn", "-c", "./gunicorn.conf.py", "wsgi:app"]
+# Make your entrypoint script executable (if you have one)
+RUN chmod +x /app/start_all.sh
+
+# Set ENTRYPOINT to your start script (adjust if launching with Gunicorn directly)
+ENTRYPOINT ["/app/start_all.sh"]
