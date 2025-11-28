@@ -43,34 +43,26 @@ def healthz():
 # ----------------------------
 @app.before_first_request
 def run_startup_checks():
-    """
-    Import nija_client and run lightweight checks here.
-    This runs after import-time so failures won't prevent Gunicorn from importing this module.
-    """
     LOG.info("Running lazy startup checks (before_first_request).")
     try:
-        # Import inside function — prevents import-time side effects from crashing Gunicorn
         try:
+            # import inside function — prevents import-time side effects
             from nija_client import test_coinbase_connection, coinbase_available
         except Exception as exc:
-            # handle normal exceptions (ImportError, ModuleNotFoundError, etc.)
             LOG.exception("Could not import nija_client: %s", exc)
             _set_coinbase_flag(False)
             return
         except BaseException as bexc:
-            # Catch SystemExit/KeyboardInterrupt or other BaseExceptions raised at import time
-            LOG.error("nija_client import raised BaseException (fatal during import): %s", bexc)
-            # Don't re-raise here; set flag false and continue to keep the worker alive
+            LOG.error("nija_client import raised BaseException; skipping. %s", bexc)
             _set_coinbase_flag(False)
             return
 
-        # If we got here, import succeeded — check availability, but guard the check as well
+        # If import succeeded, run the connection test guarded
         try:
             LOG.info("Running test_coinbase_connection() now.")
-            test_coinbase_connection()  # may raise; catch below
+            test_coinbase_connection()
             avail = False
             try:
-                # coinbase_available may be a callable or boolean — handle both
                 avail = coinbase_available() if callable(coinbase_available) else bool(coinbase_available)
             except Exception:
                 LOG.exception("coinbase_available() call failed; defaulting to False.")
@@ -79,12 +71,10 @@ def run_startup_checks():
             _set_coinbase_flag(avail)
             LOG.info("Coinbase available flag set to: %s", avail)
         except BaseException as be:
-            # catch everything (SystemExit etc.) so that the worker does not die
             LOG.exception("test_coinbase_connection raised during startup: %s", be)
             _set_coinbase_flag(False)
 
     except Exception:
-        # Failsafe so no import-time issues occur
         LOG.exception("Unexpected error during lazy startup checks.")
         _set_coinbase_flag(False)
 
@@ -93,7 +83,6 @@ def run_startup_checks():
 # ----------------------------
 if __name__ == "__main__":
     LOG.info("Starting local Flask server (dev only)")
-    # Run the startup check manually in dev launch
     try:
         run_startup_checks()
     except Exception:
