@@ -20,23 +20,26 @@ RUN apt-get update && \
         ca-certificates \
         && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
+# Upgrade pip and install core Python packages
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Copy requirements if you have one
+# Copy requirements.txt (if you have one)
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt || echo "Warning: some packages failed to install"
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy bot files
+# Install Coinbase advanced library (if not in requirements.txt)
+RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git
+
+# Copy all bot files
 COPY . .
 
 # Make startup script executable
 RUN chmod +x start_all.sh
 
-# Expose Flask port (if using web interface)
-EXPOSE 5000
+# Expose Flask port (adjust to match app)
+EXPOSE 8080
 
-# Default command
+# Default command to start bot (no terminal needed)
 CMD ["./start_all.sh"]
