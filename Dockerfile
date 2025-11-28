@@ -8,9 +8,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LIVE_TRADING=1
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git build-essential curl wget unzip xz-utils perl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/coinbase/coinbase-advanced-py.git /tmp/coinbase-advanced \
+    && pip install /tmp/coinbase-advanced \
+    && rm -rf /tmp/coinbase-advanced
 
 # Upgrade pip
 RUN python -m pip install --upgrade pip setuptools wheel
