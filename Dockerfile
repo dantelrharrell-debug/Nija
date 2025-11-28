@@ -1,25 +1,19 @@
-# Use official Python image
+# Base image
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy bot code
+# Copy all files
 COPY . /app
 
-# Install dependencies
+# Upgrade pip and install dependencies
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
-    && pip install gunicorn \
-    && pip install coinbase-advanced
+    && pip install gunicorn
 
-# Expose port for web server
-EXPOSE 8080
+# Expose the port for Flask
+EXPOSE 5000
 
-# Set environment variables (if not using a .env)
-ENV FLASK_ENV=production
-ENV COINBASE_API_KEY=${COINBASE_API_KEY}
-ENV COINBASE_API_SECRET=${COINBASE_API_SECRET}
-
-# Use a startup script to start Gunicorn (no Flask dev server)
-CMD ["./start_all.sh"]
+# Command to run the app
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "web_service:app"]
