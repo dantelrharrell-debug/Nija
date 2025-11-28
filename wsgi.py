@@ -1,3 +1,6 @@
+# wsgi.py
+from nija_client import app  # Ensure your Flask app is defined in nija_client.py
+
 from flask import Flask
 import sys
 
