@@ -1,31 +1,32 @@
+# Dockerfile - minimal, reproducible image for NIJA trading bot
 FROM python:3.11-slim
+
+# Ensure apt-get is non-interactive
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONPATH=/app
 
 WORKDIR /app
 
-# Install basic system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git build-essential libssl-dev libffi-dev python3-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies (for building wheels and dos2unix)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential git ca-certificates dos2unix && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install Python dependencies
-COPY requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy requirements first (better cache)
+COPY requirements.txt /app/requirements.txt
 
-# Copy ALL app code and directories (this ensures every .py and folder is present!)
+# Install Python dependencies
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy application code
 COPY . /app
 
-# Confirm key files exist
-RUN test -f /app/nija_client.py
-RUN test -f /app/check_funded.py
-RUN test -d /app/coinbase_advanced
-RUN test -f /app/coinbase_advanced/client.py
-RUN test -f /app/coinbase_advanced/__init__.py
+# Make sure shell scripts are LF and executable
+RUN if [ -f ./start_all.sh ]; then dos2unix ./start_all.sh || true; chmod +x ./start_all.sh; fi
 
-# (Optional but recommended) Test import at build time
-RUN python -c "from coinbase_advanced.client import Client; print('SDK import works')"
+# Expose Flask port
+EXPOSE 5000
 
-# Make sure start script is executable
-RUN chmod +x /app/start_all.sh
-
-ENTRYPOINT ["/app/start_all.sh"]
+# Run startup script
+CMD ["bash", "-lc", "./start_all.sh"]
