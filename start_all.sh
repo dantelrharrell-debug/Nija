@@ -1,11 +1,23 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e  # exit on error
 
-echo "$(date -u) | INFO | Starting NIJA entrypoint"
+echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
 
-# Optional non-fatal connectivity test (keeps container alive even if it fails)
-python test_coinbase_connection.py || echo "$(date -u) | WARN | coinbase test failed"
+# 1️⃣ Print environment variables for debug
+echo "COINBASE_API_KEY=${COINBASE_API_KEY}"
+echo "COINBASE_API_SECRET=${COINBASE_API_SECRET}"
+echo "COINBASE_API_SUB=${COINBASE_API_SUB}"
 
-# Explicitly point gunicorn at the Flask WSGI app (module:object).
-# This assumes your Flask app file is 'app.py' and your Flask instance is named 'app'.
-exec gunicorn -c gunicorn.conf.py app:app
+# 2️⃣ Run the funded account check
+echo "Running funded account check..."
+python3 /app/check_funded.py
+RESULT=$?
+
+if [ $RESULT -ne 0 ]; then
+    echo "❌ No funded account detected. Container will exit."
+    exit 1
+fi
+
+# 3️⃣ Start Gunicorn if funded account exists
+echo "✅ Funded account verified. Starting Gunicorn..."
+exec gunicorn --config /app/gunicorn.conf.py wsgi:app
