@@ -1,16 +1,11 @@
 import logging
-import sys
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-
-def main():
-    # Replace this with real Coinbase balance check
-    accounts = ["BTC", "ETH"]  # mock example
-    if not accounts:
-        logging.error("❌ No funded accounts found. Exiting.")
-        sys.exit(1)
-    logging.info(f"✅ Funded accounts found: {accounts}")
-    sys.exit(0)
-
-if __name__ == "__main__":
-    main()
+def check_funded_accounts():
+    # Replace this mock with your Coinbase API call later
+    funded_accounts = ["BTC", "ETH"]  # Example, could be empty []
+    if funded_accounts:
+        logging.info(f"✅ Funded accounts found: {funded_accounts}")
+        return True
+    else:
+        logging.warning("⚠️ No funded accounts found.")
+        return False
