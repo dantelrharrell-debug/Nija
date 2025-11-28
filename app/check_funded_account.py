@@ -1,39 +1,36 @@
-# app/check_funded_account.py
+import os
+import logging
 
-from loguru import logger
-from app.nija_client import CoinbaseClient
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-def main():
-    logger.info("Checking funded Coinbase accounts...")
+try:
+    from coinbase_advanced.client import Client
+except ModuleNotFoundError:
+    logging.error("coinbase_advanced module not installed. Cannot check account.")
+    exit(1)
 
-    try:
-        client = CoinbaseClient()  # Uses your JWT auth from .env
-        logger.info("Coinbase client initialized successfully.")
-    except Exception as e:
-        logger.error("Failed to initialize Coinbase client: {}", e)
-        return
+# Load Coinbase credentials from environment
+api_key = os.environ.get("COINBASE_API_KEY")
+api_secret = os.environ.get("COINBASE_API_SECRET")
+api_sub = os.environ.get("COINBASE_API_SUB")
 
-    try:
-        accounts = client.get_accounts()
-    except Exception as e:
-        logger.error("Failed to fetch accounts: {}", e)
-        return
+if not api_key or not api_secret:
+    logging.error("API key or secret not set in environment.")
+    exit(1)
 
-    funded_accounts = []
-    for acct in accounts:
-        name = acct.get("name", "Unnamed")
-        balance_info = acct.get("balance", {})
-        amount = float(balance_info.get("amount", 0))
-        currency = balance_info.get("currency", "USD")
-        if amount > 0:
-            funded_accounts.append((name, amount, currency))
+client = Client(api_key=api_key, api_secret=api_secret, api_sub=api_sub)
+
+# Fetch accounts
+try:
+    accounts = client.get_accounts()  # Returns a list of dicts with balances
+    funded_accounts = [a for a in accounts if float(a.get("balance", 0)) > 0]
 
     if funded_accounts:
-        logger.info("✅ Funded accounts detected:")
-        for name, amount, currency in funded_accounts:
-            print(f"{name}: {amount} {currency}")
+        logging.info(f"Live trading ENABLED. Funded accounts: {len(funded_accounts)}")
+        for acc in funded_accounts:
+            logging.info(f"Account: {acc['currency']}, Balance: {acc['balance']}")
     else:
-        logger.warning("⚠️ No funded accounts found. Check your API keys, JWT, or org ID.")
-
-if __name__ == "__main__":
-    main()
+        logging.info("No funded accounts. Live trading disabled.")
+except Exception as e:
+    logging.error(f"Error fetching accounts: {e}")
