@@ -1,19 +1,15 @@
-# Base image
+# Dockerfile
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Copy all files
-COPY . /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Upgrade pip and install dependencies
-RUN pip install --upgrade pip \
-    && pip install -r requirements.txt \
-    && pip install gunicorn
+COPY . .
 
-# Expose the port for Flask
-EXPOSE 5000
+# Make sure shell script is executable
+RUN chmod +x start_all.sh
 
-# Command to run the app
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "web_service:app"]
+# Set container entrypoint
+ENTRYPOINT ["./start_all.sh"]
