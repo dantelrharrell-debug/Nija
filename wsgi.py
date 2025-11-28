@@ -1,6 +1,4 @@
 # wsgi.py
-from nija_client import app  # Ensure your Flask app is defined in nija_client.py
-
 from flask import Flask
 import sys
 
@@ -15,6 +13,7 @@ if not check_funded_accounts():
     print("[ERROR] No funded accounts. Exiting.")
     sys.exit(1)
 
+# Create Flask app
 app = Flask(__name__)
 
 @app.route("/")
