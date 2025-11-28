@@ -3,8 +3,9 @@ FROM python:3.11-slim
 # Put app files into /app
 WORKDIR /app
 
-# Install system deps that pip sometimes needs
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (if you use a requirements.txt). If you don't have one,
