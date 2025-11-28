@@ -1,23 +1,32 @@
-# app.py (Robust, copy-paste ready)
+# app.py
 import logging
 from flask import Flask, jsonify
 
+# ----------------------------
+# Logging setup
+# ----------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 LOG = logging.getLogger("nija")
 
-# IMPORTANT: this top-level variable must be named `app`
-app = Flask(__name__)
+# ----------------------------
+# Flask app (must be top-level)
+# ----------------------------
+app = Flask(__name__)  # <-- top-level variable, Gunicorn requires this
 
-# Try to import nija_client but don't crash if it fails
+# ----------------------------
+# Coinbase client import (safe)
+# ----------------------------
 coinbase_available_flag = False
 try:
-    # import lazily to avoid import-time crashes
-    from nija_client import test_coinbase_connection, coinbase_available  # noqa: E402
+    from nija_client import test_coinbase_connection, coinbase_available
     coinbase_available_flag = coinbase_available()
-    LOG.info("Imported nija_client successfully.")
+    LOG.info("nija_client imported successfully.")
 except Exception as e:
-    LOG.exception("Could not import nija_client at startup (continuing). %s", e)
+    LOG.exception("Could not import nija_client at startup. Continuing without it: %s", e)
 
+# ----------------------------
+# Routes
+# ----------------------------
 @app.route("/")
 def index():
     return "Nija Bot Running!"
@@ -29,13 +38,17 @@ def healthz():
         "coinbase_available": coinbase_available_flag
     })
 
-# Local dev runner (only used if you run python app.py)
+# ----------------------------
+# Local startup check
+# ----------------------------
 if __name__ == "__main__":
+    LOG.info("Starting local Flask server (dev only)")
     try:
-        LOG.info("Running startup check...")
         if 'test_coinbase_connection' in globals():
+            LOG.info("Running Coinbase connection test...")
             test_coinbase_connection()
-        LOG.info("Startup check done.")
+            LOG.info("Coinbase test done.")
     except Exception:
-        LOG.exception("Startup check raised an exception.")
-    app.run(host="0.0.0.0", port=8080)
+        LOG.exception("Coinbase test failed.")
+    
+    app.run(host="0.0.0.0", port=8080, debug=False)
