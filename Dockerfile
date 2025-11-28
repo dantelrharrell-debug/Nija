@@ -1,36 +1,31 @@
-# Use official Python 3.11 slim
+# Dockerfile - minimal, reproducible image for NIJA trading bot
 FROM python:3.11-slim
+
+# ensure apt-get noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# system deps for building wheels (if necessary) and dos2unix
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential git ca-certificates dos2unix && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# system deps required for some packages (cryptography, etc.)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git build-essential libssl-dev libffi-dev python3-dev \
-    && rm -rf /var/lib/apt/lists/*
+# copy only requirements first for better cache
+COPY requirements.txt /app/requirements.txt
 
-# copy requirements and upgrade pip
-COPY requirements.txt .
-RUN python -m pip install --upgrade pip setuptools wheel
+# Install python deps; prefer no-cache
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r /app/requirements.txt
 
-# install everything in requirements.txt
-RUN python -m pip install --no-cache-dir -r requirements.txt
+# copy application code
+COPY . /app
 
-# install Coinbase SDK from PyPI (preferred)
-RUN python -m pip install --no-cache-dir coinbase-advanced-py
+# Make sure shell scripts are LF and executable
+RUN if [ -f ./start_all.sh ]; then dos2unix ./start_all.sh || true; chmod +x ./start_all.sh; fi
 
-# build-time check: will fail the build if import doesn't work
-RUN python -c "import importlib, sys; spec = importlib.util.find_spec('coinbase_advanced'); print('spec=', spec); import coinbase_advanced.client as c; print('coinbase_advanced import OK')"
+# Expose port used by flask/gunicorn
+EXPOSE 5000
 
-# copy app files
-COPY . .
-
-# make start script executable (if you use it)
-RUN [ -f /app/start_all.sh ] && chmod +x /app/start_all.sh || echo "no start_all.sh"
-
-EXPOSE 8080
-
-# entrypoint (or run gunicorn directly if preferred)
-ENTRYPOINT ["/app/start_all.sh"]
+# Run the startup script (exec form)
+CMD ["bash", "-lc", "./start_all.sh"]
