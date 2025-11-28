@@ -4,9 +4,8 @@ FROM python:3.11-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git \
-        build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    git build-essential bzip2 xz-utils \
+ && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (if you use a requirements.txt). If you don't have one,
 # adapt this step in your host UI to add packages.
