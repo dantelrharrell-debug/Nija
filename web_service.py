@@ -9,8 +9,8 @@ def index():
 
 @app.before_first_request
 def startup_checks():
-    # Verify Coinbase connection on container start
     test_coinbase_connection()
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+# REMOVE this part entirely:
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5000)
