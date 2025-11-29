@@ -1,10 +1,6 @@
-__pycache__
-*.pyc
 .env
 .git
-.gitignore
-node_modules
-tests
+__pycache__
+*.pyc
 .vscode
-*.local
-*.log
+node_modules
