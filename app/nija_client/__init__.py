@@ -1,8 +1,7 @@
 # app/nija_client/__init__.py
-from flask import Flask, jsonify
+from flask import Flask
 
 app = Flask(__name__)
 
-@app.route("/", methods=["GET"])
-def index():
-    return jsonify({"status": "ok", "service": "Nija Bot Running!"})
+# import any submodules that register routes if needed
+# from . import routes   # if you have routes
