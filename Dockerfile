@@ -8,8 +8,7 @@ RUN apt-get update && \
         git \
         ca-certificates \
         dos2unix && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip setuptools wheel && \
@@ -19,11 +18,9 @@ COPY app/ /app/app/
 COPY web/ /app/web/
 COPY bot/ /app/bot/
 
-# Make sure /app/cd exists first
+# Ensure folder exists
 RUN mkdir -p /app/cd
-# Copy contents of cd/ folder (if it exists; will copy nothing if empty)
 COPY cd/ /app/cd/
 
 EXPOSE 8080
-
 CMD ["python", "-m", "app.main"]
