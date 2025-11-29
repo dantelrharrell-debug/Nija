@@ -1,4 +1,4 @@
-# Dockerfile - NIJA Bot (Railway-friendly)
+# NIJA Bot Dockerfile - Render/Railway Ready
 FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -8,42 +8,33 @@ ENV PORT=8080
 
 WORKDIR /app
 
-# System deps required for cryptography / building wheels
+# System dependencies for cryptography, builds, etc.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       build-essential git ca-certificates dos2unix bash libffi-dev libssl-dev pkg-config \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements (for build cache)
+# Copy requirements first for caching
 COPY requirements.txt /app/requirements.txt
 
-# Upgrade pip and install python deps
+# Install Python deps
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy app and web (these should exist)
+# Copy project files
 COPY app/ /app/app/
 COPY web/ /app/web/
+COPY bot/ /app/bot/
+COPY cd/vendor/ /app/cd/vendor/
 
-# Copy bot only if present in build context (fail-safe: this COPY will only run if bot/ exists)
-# If bot/ is missing this will cause build to fail; see below for alternative (BOT_GIT_URL).
-# If you want optional cloning, set the build ARG BOT_GIT_URL (see notes).
-ARG BOT_GIT_URL=""
-RUN if [ -d /tmp/build_bot_marker ]; then echo ""; fi
-# Optional: clone bot at build if BOT_GIT_URL provided
-RUN if [ -n "$BOT_GIT_URL" ]; then \
-      git clone --depth=1 "$BOT_GIT_URL" /app/bot || (echo "bot git clone failed" && false); \
-    else \
-      echo "No BOT_GIT_URL provided; skipping bot clone"; \
-    fi
-
-# Normalize any shell scripts (if present)
+# Normalize shell scripts if present
 RUN if [ -f /app/scripts/start_all.sh ]; then dos2unix /app/scripts/start_all.sh && chmod +x /app/scripts/start_all.sh; fi
 RUN if [ -f /app/start_all.sh ]; then dos2unix /app/start_all.sh && chmod +x /app/start_all.sh; fi
 
+# Expose port
 EXPOSE 8080
 
-# Use explicit module path that exists in this repo
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "web.wsgi:application", \
+# Start Gunicorn with Flask app
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "web.wsgi:wsgi_app", \
      "--worker-class", "gthread", "--threads", "1", "--workers", "2", \
      "--log-level", "debug", "--capture-output"]
