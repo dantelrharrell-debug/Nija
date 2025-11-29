@@ -14,6 +14,11 @@ except Exception as e:
 wsgi_app = app
 
 # optional: a quick sanity route if you want a container-level endpoint for tests
+from app import app
+
+@app.route("/")
+def home():
+    return "Hello from NIJA Bot!"
 @app.route("/")
 def index():
     return "Nija Bot Running!", 200
