@@ -1,33 +1,26 @@
 Flask==2.3.3
 gunicorn==23.0.0
-
 requests==2.32.1
 python-dotenv==1.2.1
-
 pandas==2.1.1
 numpy==1.26.3
-
 websockets==13.1
 python-dateutil==2.9.0.post0
 pytz==2025.2
 tzdata==2025.2
-
 cryptography==46.0.3
-# Remove direct cffi pin: let cryptography select a compatible one.
-# cffi should NOT be explicitly pinned here unless you have a strong reason.
-
+# do NOT pin cffi explicitly here — let cryptography choose a compatible version
 ecdsa==0.19.1
 PyJWT==2.10.1
-
 backoff==2.2.1
 click==8.3.1
 six==1.17.0
 packaging==25.0
 blinker==1.9.0
-
 Werkzeug==3.1.3
 Jinja2==3.1.6
 MarkupSafe==3.0.3
 
-# Install Coinbase advanced client from GitHub (pinned to the commit resolved in your logs)
-git+https://github.com/coinbase/coinbase-advanced-py.git@d316b758811ce3c13ef179fb228c569b333cddd1#egg=coinbase-advanced-py
+# Coinbase client (install directly from the official repo). If this fails on Railway,
+# vendor the code into the repo and use -e ./coinbase-advanced-py instead.
+git+https://github.com/coinbase/coinbase-advanced-py.git@d316b758811ce3c13ef179fb228c569b333cddd1#egg=coinbase_advanced_py
