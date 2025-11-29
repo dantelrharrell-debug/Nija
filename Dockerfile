@@ -25,13 +25,17 @@ RUN pip install --upgrade pip setuptools wheel && \
 # Copy entire repo into container
 COPY . /app
 
-# =========================
-# Optional: sanity checks
-# =========================
-RUN test -f /app/app/nija_client/__init__.py || echo "WARNING: nija_client/__init__.py missing" && \
-    test -f /app/web/wsgi.py || echo "WARNING: web/wsgi.py missing"
+# Copy coinbase_advanced_py safely if exists
+RUN if [ -d "/app/app/coinbase_advanced_py" ]; then \
+        echo "coinbase_advanced_py found"; \
+    else \
+        echo "WARNING: coinbase_advanced_py missing"; \
+    fi
 
-# Expose Flask port
+# Optional sanity check for Flask
+RUN test -f /app/web/wsgi.py || echo "WARNING: wsgi.py missing"
+
+# Set environment variables
 ENV PORT=8080
 EXPOSE 8080
 
