@@ -1,4 +1,6 @@
 import sys
+sys.path.insert(0, "/app")  # ensures /app is on Python path
+
 from app.app import app
 
 try:
