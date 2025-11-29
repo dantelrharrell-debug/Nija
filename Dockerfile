@@ -28,4 +28,4 @@ ENV PYTHONPATH=/app
 EXPOSE 8080
 
 # Start Gunicorn with your WSGI app
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:application"] 
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:application"]
