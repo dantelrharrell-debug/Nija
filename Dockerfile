@@ -1,30 +1,40 @@
 # NIJA Bot Dockerfile - Render/Railway Ready
 FROM python:3.11-slim
 
+# Prevent Python buffering
 ENV PYTHONUNBUFFERED=1
+# Ensure Python can find our packages
 ENV PYTHONPATH=/app
+# Default port
 ENV PORT=8080
 
+# Set working directory
 WORKDIR /app
 
-# System dependencies
+# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      build-essential git ca-certificates dos2unix bash libffi-dev libssl-dev pkg-config \
+        build-essential git ca-certificates dos2unix bash libffi-dev libssl-dev pkg-config \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# Copy requirements first to leverage Docker cache
 COPY requirements.txt /app/requirements.txt
+
+# Install Python dependencies
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy project files
-COPY app/ /app/app/
+# Copy project files explicitly
+COPY gunicorn.conf.py /app/gunicorn.conf.py
 COPY web/ /app/web/
+COPY app/ /app/app/
 COPY bot/ /app/bot/
 COPY cd/vendor/ /app/cd/vendor/
 
-# Optional: normalize shell scripts
+# Debug: list files to ensure copy worked
+RUN echo "==== /app CONTENTS ====" && ls -R /app
+
+# Normalize shell scripts if present
 RUN for f in /app/scripts/start_all.sh /app/start_all.sh; do \
       if [ -f "$f" ]; then dos2unix "$f" && chmod +x "$f"; fi; \
     done
@@ -32,44 +42,5 @@ RUN for f in /app/scripts/start_all.sh /app/start_all.sh; do \
 # Expose port
 EXPOSE 8080
 
-# Start Gunicorn
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
-
-# NIJA Bot Dockerfile - Render/Railway Ready
-FROM python:3.11-slim
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
-ENV PORT=8080
-
-WORKDIR /app
-
-# System dependencies for cryptography, builds, etc.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      build-essential git ca-certificates dos2unix bash libffi-dev libssl-dev pkg-config \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first for caching
-COPY requirements.txt /app/requirements.txt
-
-# Install Python deps
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r /app/requirements.txt
-
-# Copy project files
-COPY app/ /app/app/
-COPY web/ /app/web/
-COPY bot/ /app/bot/
-COPY cd/vendor/ /app/cd/vendor/
-
-# Normalize shell scripts if present
-RUN if [ -f /app/scripts/start_all.sh ]; then dos2unix /app/scripts/start_all.sh && chmod +x /app/scripts/start_all.sh; fi
-RUN if [ -f /app/start_all.sh ]; then dos2unix /app/start_all.sh && chmod +x /app/start_all.sh; fi
-
-# Expose port
-EXPOSE 8080
-
-# Start Gunicorn with Flask app
+# Launch Gunicorn
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
