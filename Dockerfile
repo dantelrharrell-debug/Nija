@@ -1,33 +1,28 @@
-# Dockerfile (updated - do NOT copy .env into the image)
+# Dockerfile (robust: copy requirements first, then whole context)
 FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
-# system deps you might need (git/build tools)
+# Install system deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends build-essential git ca-certificates dos2unix && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for layer cache
+# Copy only requirements first to leverage Docker cache
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy app code
-COPY app/ /app/app/
-COPY web/ /app/web/
-COPY bot/ /app/bot/
-COPY cd/ /app/cd/
+# Copy the rest of the project in one shot (avoids multiple COPY errors when optional dirs missing)
+# Use a single COPY so Docker doesn't fail if an optional subfolder is omitted by CI.
+COPY . /app
 
-# Copy config files that are safe to include
-COPY gunicorn.conf.py /app/gunicorn.conf.py
-# DO NOT COPY .env - supply it at runtime instead
+# Make entrypoint executable and normalize line endings if present
+RUN if [ -f /app/entrypoint.sh ]; then dos2unix /app/entrypoint.sh || true; chmod +x /app/entrypoint.sh; fi
 
-# Make sure any shell scripts are LF and executable (if present)
-RUN if [ -f /app/app/nija_client/start_all.sh ]; then dos2unix /app/app/nija_client/start_all.sh || true; chmod +x /app/app/nija_client/start_all.sh; fi
-
+# Expose the port your platform will map (Gunicorn will bind to 8080)
 EXPOSE 8080
 
-# Run Gunicorn pointing to web.wsgi:app
-CMD ["gunicorn", "--config", "/app/gunicorn.conf.py", "web.wsgi:app"]
+# Use an entrypoint script that runs pre-check and then execs Gunicorn
+ENTRYPOINT ["/app/entrypoint.sh"]
