@@ -13,3 +13,4 @@ capture_output = True
 loglevel = "debug"
 errorlog = "-"
 accesslog = "-"
+gunicorn --config gunicorn.conf.py wsgi:app
