@@ -10,7 +10,7 @@ RUN apt-get update && \
         build-essential git ca-certificates dos2unix && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy Python dependencies and install
+# Copy requirements and install Python dependencies
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
@@ -21,11 +21,11 @@ COPY web /app/web
 COPY bot /app/bot
 COPY cd /app/cd
 
-# Set PYTHONPATH so imports work
+# Set Python path so your packages are discoverable
 ENV PYTHONPATH=/app
 
-# Expose port
+# Expose port for Gunicorn
 EXPOSE 8080
 
-# Start Gunicorn with your WSGI app
+# Start Gunicorn server
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:application"]
