@@ -22,8 +22,9 @@ COPY app /app/app
 COPY web /app/web
 COPY bot /app/bot
 
-# Safely copy cd folder (make sure it has at least one file, e.g., cd/.keep)
-COPY cd /app/cd
+# Ensure cd folder exists even if empty
+RUN mkdir -p /app/cd
+COPY cd/* /app/cd/ 2>/dev/null || true
 
 # Set PYTHONPATH
 ENV PYTHONPATH=/app
