@@ -3,13 +3,13 @@ import os
 
 def check_funded_accounts() -> bool:
     """
-    Minimal stub. Replace with real funded-account logic.
-    Returns True if any funded account detected, False otherwise.
+    Replace this with your real funding-check logic.
+    For now, check FUNDING_OK or FORCE_FUNDED env var to allow deploy tests.
     """
-    # Example: prefer an env var for quick tests
-    if os.environ.get("FORCE_FUNDED") == "1":
+    if os.getenv("FORCE_FUNDED") == "1":
+        return True
+    if os.getenv("FUNDING_OK") == "1":
         return True
 
-    # Insert actual Coinbase/account checks here. For now:
-    # - return True when FUNDING_OK=1 env var set
-    return os.environ.get("FUNDING_OK", "0") == "1"
+    # TODO: implement real checks e.g. coinbase client query
+    return False
