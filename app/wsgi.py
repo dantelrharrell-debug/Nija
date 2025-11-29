@@ -17,8 +17,5 @@ wsgi_app = app
 from app import app
 
 @app.route("/")
-def home():
-    return "Hello from NIJA Bot!"
-@app.route("/")
 def index():
     return "Nija Bot Running!", 200
