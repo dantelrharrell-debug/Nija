@@ -1,5 +1,12 @@
-# web/wsgi.py
-from app import app as flask_app
+import sys
+import traceback
 
-# Gunicorn expects a WSGI callable called "application" or uses the module:callable string.
-application = flask_app
+try:
+    from web import app
+except Exception as e:
+    print("[ERROR] Failed to import `app` from web:", file=sys.stderr)
+    traceback.print_exc()
+    sys.exit(1)
+
+# Gunicorn expects this variable
+wsgi_app = app
