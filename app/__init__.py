@@ -11,7 +11,7 @@ def create_app():
     def home():
         return "NIJA Bot is running!"
 
-    # Optional: initialize Coinbase client safely
+    # Optional Coinbase client
     try:
         from cd.vendor.coinbase_advanced_py.client import Client
         COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
