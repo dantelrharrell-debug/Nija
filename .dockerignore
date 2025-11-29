@@ -1,6 +1,8 @@
-.env
-.git
 __pycache__
 *.pyc
-.vscode
-node_modules
+.git
+.gitignore
+.env
+venv/
+node_modules/
+*.log
