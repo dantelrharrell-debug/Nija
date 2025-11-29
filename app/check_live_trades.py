@@ -1,18 +1,45 @@
-from nija_client import CoinbaseClient
+import os
 import logging
+from nija_client import Client  # Your Coinbase client wrapper
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-client = CoinbaseClient()
+def check_live_trading():
+    live_flag = os.environ.get("LIVE_TRADING")
+    if live_flag != "1":
+        logging.warning("LIVE_TRADING environment variable is not enabled!")
+        return False
 
-# --- Check Open Orders ---
-open_orders = client.fetch_open_orders()
-logging.info("🔹 Open Orders:")
-for order in open_orders:
-    logging.info(f"  - {order['product_id']} | {order['side']} | {order['size']} @ {order['price']} | Status: {order['status']}")
+    try:
+        client = Client(
+            api_key=os.environ.get("COINBASE_API_KEY"),
+            api_secret=os.environ.get("COINBASE_API_SECRET"),
+            api_sub=os.environ.get("COINBASE_API_SUB")
+        )
+    except Exception as e:
+        logging.error(f"Could not initialize Coinbase client: {e}")
+        return False
 
-# --- Check Recent Fills ---
-fills = client.fetch_fills()  # last executed trades
-logging.info("🔹 Recent Fills:")
-for fill in fills[:10]:  # show last 10 fills
-    logging.info(f"  - {fill['product_id']} | {fill['side']} | {fill['size']} @ {fill['price']} | Fee: {fill['fee']}")
+    # Quick test: get account balances or recent trades
+    try:
+        balances = client.get_balances()
+        logging.info(f"Account balances: {balances}")
+    except Exception as e:
+        logging.error(f"Could not fetch balances: {e}")
+        return False
+
+    try:
+        recent_trades = client.get_recent_trades(limit=1)  # adapt to your client method
+        if recent_trades:
+            logging.info(f"Recent trades detected: {recent_trades}")
+            logging.info("✅ Bot is LIVE trading!")
+            return True
+        else:
+            logging.info("No recent trades. Bot may be idle or in dry run mode.")
+            return False
+    except Exception as e:
+        logging.error(f"Could not fetch recent trades: {e}")
+        return False
+
+if __name__ == "__main__":
+    check_live_trading()
