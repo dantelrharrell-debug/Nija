@@ -1,3 +1,4 @@
+# Core
 Flask==2.3.3
 gunicorn==23.0.0
 requests==2.32.1
@@ -9,13 +10,14 @@ python-dateutil==2.9.0.post0
 pytz==2025.2
 tzdata==2025.2
 
-# crypto/security/deps
+# Crypto / security
 cryptography==46.0.3
-cffi==1.16.0
+cffi>=2.0.0             # Use >=2.0.0 to satisfy cryptography dependency
 
-# Coinbase Advanced client (patched from direct git, recommended)
+# Coinbase Advanced client (direct git install, patched)
 git+https://github.com/coinbase/coinbase-advanced-py.git@d316b758811ce3c13ef179fb228c569b333cddd1#egg=coinbase-advanced-py
 
+# Additional dependencies
 ecdsa==0.19.1
 PyJWT==2.10.1
 backoff==2.2.1
