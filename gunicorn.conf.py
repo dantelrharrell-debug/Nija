@@ -10,20 +10,20 @@ capture_output = True
 errorlog = "-"
 accesslog = "-"
 
-# Explicit WSGI app used by gunicorn (ensure this matches your web/wsgi.py)
+# explicit WSGI module
 wsgi_app = "web.wsgi:app"
 
 def post_worker_init(worker):
     """
-    Called after a worker boots. Import and call init_bot() here to
-    initialize per-worker bot processes safely.
+    Called once per worker after it boots. Import and call init_bot() here.
+    Wrap in try/except so errors don't kill the worker.
     """
+    import sys, traceback
     try:
-        # Import using package path that matches your repository layout
+        # adjust import path if your package name differs
         from app import init_bot
-        print("post_worker_init: calling init_bot()")
+        print("post_worker_init: calling init_bot()", file=sys.stderr)
         init_bot()
-    except Exception as e:
-        # Do NOT let initialization errors crash the worker - just log them
-        import sys
-        print("post_worker_init error:", repr(e), file=sys.stderr)
+    except Exception:
+        print("post_worker_init error:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
