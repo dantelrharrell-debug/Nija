@@ -1,7 +1,7 @@
 # wsgi.py
 import sys
-from flask import Flask
 
+# Check funded accounts before starting Flask
 try:
     from nija_client.check_funded import check_funded_accounts
 except ModuleNotFoundError:
@@ -12,8 +12,5 @@ if not check_funded_accounts():
     print("[ERROR] No funded accounts. Exiting.")
     sys.exit(1)
 
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return "Nija Bot Running!"
+# Import the Flask app instance
+from app.app import app
