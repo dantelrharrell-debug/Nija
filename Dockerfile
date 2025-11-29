@@ -1,70 +1,66 @@
-# Dockerfile - NIJA Bot (robust, no top-level shell conditionals)
+# Dockerfile - NIJA Bot (clean, no top-level if/else)
 FROM python:3.11-slim
 
-ARG STRICT=0
+# Basic env
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
+ENV PORT=8080
+
 WORKDIR /app
 
-# system deps
+# Install essential system packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential git ca-certificates dos2unix bash \
+      build-essential \
+      git \
+      ca-certificates \
+      dos2unix \
+      bash \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# copy and install requirements (cache-friendly)
+# Copy requirements and install Python deps
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
 
-# deterministic copies
+# Copy app code
 COPY app/ /app/app/
 COPY web/ /app/web/
 COPY bot/ /app/bot/
 
-# create cd directory and copy if present (don't fail build if absent)
+# Create cd dir and copy vendor if present (do not fail if it's absent)
 RUN mkdir -p /app/cd
 COPY cd/ /app/cd/ 2>/dev/null || true
 
-# normalize scripts if present
-RUN if [ -f /app/scripts/start_all.sh ]; then dos2unix /app/scripts/start_all.sh || true; chmod +x /app/scripts/start_all.sh; fi
-RUN if [ -f /app/start_all.sh ]; then dos2unix /app/start_all.sh || true; chmod +x /app/start_all.sh; fi
+# Normalize and make scripts executable if present
+RUN if [ -f /app/scripts/start_all.sh ]; then dos2unix /app/scripts/start_all.sh && chmod +x /app/scripts/start_all.sh; fi
+RUN if [ -f /app/start_all.sh ]; then dos2unix /app/start_all.sh && chmod +x /app/start_all.sh; fi
 
-# Build-time checks inside a single RUN (shell handles if/else/fi)
-RUN set -euo pipefail; \
-    echo "Build sanity checks (STRICT=${STRICT})..."; \
-    test -f /app/web/wsgi.py || (echo "WARNING: web/wsgi.py missing" && [ "${STRICT}" -eq "1" ] && exit 1 || true); \
-    test -f /app/app/nija_client/__init__.py || (echo "WARNING: app/nija_client/__init__.py missing" && [ "${STRICT}" -eq "1" ] && exit 1 || true); \
-    \
-    if [ -d /app/app/coinbase_advanced_py ] || [ -d /app/cd/vendor/coinbase_advanced_py ] || [ -d /app/cd/coinbase_advanced_py ]; then \
-        echo "Found coinbase vendor folder – attempting import test"; \
-        python - <<'PY' || (echo "Import check failed" && [ "${STRICT}" -eq "1" ] && exit 1 || true)
-import importlib
-candidates = [
+# Lightweight build-time sanity checks (no top-level else)
+# - Warn rather than fail so builder logs show useful info
+RUN set -e; \
+    echo "Build sanity checks..."; \
+    if [ ! -f /app/web/wsgi.py ]; then echo "WARNING: web/wsgi.py missing"; fi; \
+    if [ ! -f /app/app/nija_client/__init__.py ]; then echo "WARNING: app/nija_client/__init__.py missing"; fi; \
+    # try to import coinbase vendor from likely locations (if present)
+    python - <<'PY' || true
+import importlib, sys
+cands = [
     "app.coinbase_advanced_py.client",
     "cd.vendor.coinbase_advanced_py.client",
     "coinbase_advanced_py.client",
 ]
-ok = False
-for mod in candidates:
+for m in cands:
     try:
-        importlib.import_module(mod)
-        print("OK import:", mod)
-        ok = True
+        importlib.import_module(m)
+        print("Import OK:", m)
         break
     except Exception:
         pass
-if not ok:
-    print("WARNING: coinbase vendor present but imports failed for known paths")
-    raise SystemExit(2)
 PY
-    else \
-        echo "No coinbase vendor folder detected; skipping coinbase import test"; \
-    fi
 
-ENV PORT=8080
 EXPOSE 8080
 
-# start web app (gunicorn will serve web.wsgi:application)
+# Start Gunicorn serving the web app. Gunicorn will import web.wsgi:application.
 CMD ["gunicorn", "--config", "./gunicorn.conf.py", "web.wsgi:application"]
