@@ -1,12 +1,19 @@
 # app/__init__.py
-from flask import Flask, jsonify
+from flask import Flask
 
-app = Flask(__name__)
+def create_app():
+    """
+    Minimal Flask factory. Add config/env wiring here as needed.
+    """
+    app = Flask(__name__)
+    # Example: load from env or config file if present
+    # app.config.from_prefixed_env()
 
-@app.route("/")
-def index():
-    return "NIJA Bot Running!"
+    @app.route("/healthz")
+    def health():
+        return "OK", 200
 
-@app.route("/health")
-def health():
-    return jsonify({"status": "ok"})
+    return app
+
+# create top-level `app` variable so gunicorn can import `app.wsgi:app`
+app = create_app()
