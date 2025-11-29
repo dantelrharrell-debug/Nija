@@ -1,12 +1,15 @@
 # app/__init__.py
 from flask import Flask
-import logging
-import os
+import logging, os
 
 def create_app():
     app = Flask(__name__)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+
+    @app.route("/")
+    def home():
+        return "NIJA Bot is running!"
 
     # Optional: initialize Coinbase client safely
     try:
@@ -24,9 +27,5 @@ def create_app():
     except ModuleNotFoundError:
         client = None
         logging.warning("Coinbase module not found; live trading disabled.")
-
-    @app.route("/")
-    def home():
-        return "NIJA Bot is running!"
 
     return app
