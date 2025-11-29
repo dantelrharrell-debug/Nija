@@ -1,28 +1,27 @@
-# Dockerfile (robust: copy requirements first, then whole context)
+# Dockerfile (robust)
 FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Make sure Python sees /app as import root
+ENV PYTHONPATH=/app
+
 WORKDIR /app
 
-# Install system deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends build-essential git ca-certificates dos2unix && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first to leverage Docker cache
+# copy requirements first for cache
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy the rest of the project in one shot (avoids multiple COPY errors when optional dirs missing)
-# Use a single COPY so Docker doesn't fail if an optional subfolder is omitted by CI.
+# copy whole project (single COPY avoids missing-path errors)
 COPY . /app
 
-# Make entrypoint executable and normalize line endings if present
+# make entrypoint executable if present
 RUN if [ -f /app/entrypoint.sh ]; then dos2unix /app/entrypoint.sh || true; chmod +x /app/entrypoint.sh; fi
 
-# Expose the port your platform will map (Gunicorn will bind to 8080)
 EXPOSE 8080
 
-# Use an entrypoint script that runs pre-check and then execs Gunicorn
 ENTRYPOINT ["/app/entrypoint.sh"]
