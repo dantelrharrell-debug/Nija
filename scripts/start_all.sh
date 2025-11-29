@@ -1,24 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== NIJA STARTUP: $(date -u) ==="
+# Start the web app with gunicorn in background and start bot script in foreground
+# Adjust paths to your start scripts as necessary.
 
-echo "[ENV CHECK]"
-for v in COINBASE_API_KEY COINBASE_API_SECRET COINBASE_PEM_CONTENT; do
-  if [ -z "${!v:-}" ]; then
-    echo "❌ $v is NOT SET"
-  else
-    echo "✅ $v present"
-  fi
-done
+PORT="${PORT:-8080}"
+GUNICORN_CONFIG="./gunicorn.conf.py"
 
-# Ensure we're in /app
-cd /app || cd .
+# Start Gunicorn (background)
+echo "Starting Gunicorn on :${PORT}..."
+gunicorn --config "${GUNICORN_CONFIG}" web.wsgi:application &
 
-echo "[START] Launching NIJA bot via Gunicorn..."
-if command -v gunicorn >/dev/null 2>&1; then
-  exec gunicorn -w 1 -k sync -b 0.0.0.0:${PORT:-5000} main:app
-else
-  echo "⚠️ Gunicorn not installed, using fallback: python main.py"
-  exec python main.py
-fi
+# Start bot as a separate process (foreground). Adjust module path if different.
+echo "Starting NIJA bot process..."
+# Example: python -m bot.live_bot_script
+python -u bot/live_bot_script.py
