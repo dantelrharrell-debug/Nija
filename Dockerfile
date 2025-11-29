@@ -28,12 +28,12 @@ COPY . /app
 # =========================
 # Build-time sanity checks
 # =========================
-RUN test -f /app/app/nija_client.py && \
+
+RUN test -f /app/app/nija_client/__init__.py && \
     test -f /app/web/wsgi.py && \
     test -d /app/cd/vendor/coinbase_advanced_py && \
     test -f /app/cd/vendor/coinbase_advanced_py/client.py && \
     python -c "from cd.vendor.coinbase_advanced_py.client import Client; print('Client import OK')"
-
 # Expose the port your Flask app will run on
 ENV PORT=8080
 EXPOSE 8080
