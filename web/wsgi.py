@@ -1,6 +1,5 @@
 # web/wsgi.py
-
-from flask import Flask  # or FastAPI, Django, etc. depending on your app
+from flask import Flask
 
 app = Flask(__name__)
 
