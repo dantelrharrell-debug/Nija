@@ -1,6 +1,5 @@
-# web/wsgi.py
+# /app/web/wsgi.py
 from flask import Flask, jsonify
-import importlib
 
 def create_app():
     app = Flask(__name__)
@@ -11,9 +10,10 @@ def create_app():
 
     @app.route("/healthz")
     def healthz():
-        # very small, non-blocking diagnostic
+        # Keep healthz tiny and import-safe
         return jsonify({"status": "ok"}), 200
 
     return app
 
+# Expose app for gunicorn: web.wsgi:app
 app = create_app()
