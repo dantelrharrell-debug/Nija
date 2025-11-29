@@ -28,17 +28,14 @@ COPY app /app/app
 # Copy web folder
 COPY web /app/web
 
-# Optional sanity check for coinbase_advanced_py
-RUN if [ -d "/app/app/coinbase_advanced_py" ]; then \
-        echo "coinbase_advanced_py found"; \
-    else \
-        echo "WARNING: coinbase_advanced_py missing"; \
-    fi
+# Sanity checks
+RUN test -f /app/app/nija_client/__init__.py || (echo "ERROR: nija_client/__init__.py missing" && exit 1)
+RUN test -f /app/web/wsgi.py || (echo "ERROR: web/wsgi.py missing" && exit 1)
+RUN test -d /app/app/coinbase_advanced_py || (echo "ERROR: coinbase_advanced_py folder missing" && exit 1)
+RUN test -f /app/app/coinbase_advanced_py/client.py || (echo "ERROR: client.py missing in coinbase_advanced_py" && exit 1)
+RUN python -c "from app.coinbase_advanced_py.client import Client; print('Client import OK')"
 
-# Optional sanity check for Flask
-RUN test -f /app/web/wsgi.py || echo "WARNING: wsgi.py missing"
-
-# Set environment variables
+# Expose the port your Flask app will run on
 ENV PORT=8080
 EXPOSE 8080
 
