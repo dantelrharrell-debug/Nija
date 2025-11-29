@@ -1,12 +1,9 @@
-import sys
-import traceback
+# web/wsgi.py
 
-try:
-    from web import app
-except Exception as e:
-    print("[ERROR] Failed to import `app` from web:", file=sys.stderr)
-    traceback.print_exc()
-    sys.exit(1)
+from flask import Flask  # or FastAPI, Django, etc. depending on your app
 
-# Gunicorn expects this variable
-wsgi_app = app
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "NIJA Bot is running!"
