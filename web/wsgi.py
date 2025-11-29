@@ -1,21 +1,11 @@
-import logging
-from web import create_app  # your Flask app factory
+from flask import Flask
 
 # Create Flask app
-app = create_app()
+app = Flask(__name__)
 
-# =========================
-# Optional bot startup
-# =========================
-try:
-    from app.nija_client import start_trading_loop
-    start_trading_loop()  # only runs if module exists
-except ModuleNotFoundError:
-    logging.warning("nija_client not found — skipping bot startup.")
-except FileNotFoundError:
-    logging.warning("check_funded.py missing — skipping bot startup.")
-except Exception as e:
-    logging.error(f"Failed to start trading bot: {e}")
+@app.route("/")
+def index():
+    return "Nija Bot Running!"
 
-# Gunicorn uses this
+# This is required by Gunicorn
 application = app
