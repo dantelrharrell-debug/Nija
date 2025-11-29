@@ -35,6 +35,4 @@ RUN if [ -f /app/start_all.sh ]; then dos2unix /app/start_all.sh && chmod +x /ap
 EXPOSE 8080
 
 # Start Gunicorn with Flask app
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "web.wsgi:wsgi_app", \
-     "--worker-class", "gthread", "--threads", "1", "--workers", "2", \
-     "--log-level", "debug", "--capture-output"]
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
