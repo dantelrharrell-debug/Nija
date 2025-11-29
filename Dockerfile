@@ -1,4 +1,4 @@
-# Base image
+# Use slim Python 3.11
 FROM python:3.11-slim
 
 # Set working directory
@@ -10,23 +10,26 @@ RUN apt-get update && \
         build-essential \
         git \
         ca-certificates \
-        dos2unix && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+        dos2unix \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies
+# Copy requirements and install Python dependencies
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy project directories
+# Copy app, web, bot, and cd folders
 COPY app /app/app
 COPY web /app/web
 COPY bot /app/bot
-COPY cd/vendor /app/cd/vendor
+COPY cd /app/cd
 
-# Set PYTHONPATH so imports work correctly
+# Set PYTHONPATH so Python can find your packages
 ENV PYTHONPATH=/app
 
-# Optional sanity checks
-RUN test -f /app/app/nija_client/__init__.py || (echo "ERROR: nija_client missing" && exit 1)
-RUN test -f /app/web/wsgi.py || (echo "ERROR: wsgi.py missing" && exit 1)
+# Expose port for web service
+EXPOSE 8080
+
+# Command to run Gunicorn
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:application"]
