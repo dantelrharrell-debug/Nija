@@ -1,4 +1,3 @@
-# nija_trading_loop.py
 import threading
 import time
 import logging
@@ -11,6 +10,7 @@ except ModuleNotFoundError:
     Client = None
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
 # Load Coinbase credentials
 API_KEY = os.environ.get("COINBASE_API_KEY")
@@ -31,7 +31,6 @@ def trading_loop():
     while True:
         try:
             if client:
-                # Example: Fetch account balances
                 accounts = client.get_accounts()
                 logger.info(f"Fetched {len(accounts)} account(s).")
             else:
@@ -39,7 +38,6 @@ def trading_loop():
         except Exception as e:
             logger.error(f"Error in trading loop: {e}")
 
-        # Wait before next iteration
         time.sleep(5)  # change to your preferred frequency
 
 # Function to start the loop in a separate thread
