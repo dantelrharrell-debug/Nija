@@ -28,13 +28,19 @@ COPY . /app
 # =========================
 # Build-time sanity checks
 # =========================
-RUN test -f /app/app/nija_client/__init__.py && \
-    test -f /app/web/wsgi.py && \
-    test -d /app/cd/vendor/coinbase_advanced_py && \
-    test -f /app/cd/vendor/coinbase_advanced_py/client.py && \
-    python -c "from cd.vendor.coinbase_advanced_py.client import Client; print('Client import OK')"
 
-# Expose the port your Flask app will run on
+# Check files exist with verbose output
+RUN test -f /app/app/nija_client/__init__.py || (echo "ERROR: nija_client/__init__.py missing" && exit 1)
+RUN test -f /app/web/wsgi.py || (echo "ERROR: web/wsgi.py missing" && exit 1)
+RUN test -d /app/cd/vendor/coinbase_advanced_py || (echo "ERROR: coinbase_advanced_py folder missing" && exit 1)
+RUN test -f /app/cd/vendor/coinbase_advanced_py/client.py || (echo "ERROR: client.py missing" && exit 1)
+
+# Test Python import of Coinbase client with PYTHONPATH
+RUN PYTHONPATH=/app python -c "from cd.vendor.coinbase_advanced_py.client import Client; print('Client import OK')"
+
+# =========================
+# Environment & Port
+# =========================
 ENV PORT=8080
 EXPOSE 8080
 
