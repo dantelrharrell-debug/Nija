@@ -1,20 +1,19 @@
 # /app/app/__init__.py
 from flask import Flask
+import sys
 
 app = Flask(__name__)
 
 def init_bot():
     """
-    Safe place for bot initialization logic.
-    DO NOT run this at import time — call from gunicorn.post_worker_init instead.
-    Keep this function fast/non-blocking if possible.
+    Bot startup logic — called from gunicorn.post_worker_init.
+    Keep this non-blocking or start background threads from here.
     """
     try:
-        # Example: import your client and start things here
-        # from .nija_client.check_funded import main as start_bot
+        # Example safe startup — replace with your real startup
+        # from .nija_client import start_bot
         # start_bot()
-        print("init_bot() called — put bot startup here")
-    except Exception as e:
-        # Always catch exceptions — don't raise on import or init
-        import sys
-        print("init_bot error:", repr(e), file=sys.stderr)
+        print("init_bot() called", file=sys.stderr)
+    except Exception:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
