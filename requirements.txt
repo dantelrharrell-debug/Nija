@@ -27,5 +27,5 @@ Werkzeug==3.0.3
 Jinja2==3.1.3
 MarkupSafe==2.1.5
 
-# Coinbase Advanced Python SDK (vendored)
--e ./coinbase-advanced
+# Install coinbase-advanced-py directly from the official repo
+git+https://github.com/coinbase/coinbase-advanced-py.git@main#egg=coinbase_advanced
