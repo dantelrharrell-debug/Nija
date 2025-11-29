@@ -22,10 +22,13 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy entire repo into container
-COPY . /app
+# Copy main app folder
+COPY app /app/app
 
-# Copy coinbase_advanced_py safely if exists
+# Copy web folder
+COPY web /app/web
+
+# Optional sanity check for coinbase_advanced_py
 RUN if [ -d "/app/app/coinbase_advanced_py" ]; then \
         echo "coinbase_advanced_py found"; \
     else \
