@@ -1,149 +1,147 @@
-# NIJA Bot - Stable Deployment (Green Checks ✅)
+NIJA Bot – Stable Live-Trading Deployment (Green Checks ✅)
 
-This is the **stable version** of the NIJA trading bot, fully deployed and connected to your funded Coinbase account. All critical systems are running, webhook server active, and the bot is ready for live trades.
+This is the stable, production-ready version of the NIJA Automated Trading Bot.
+Currently connected to your funded Coinbase account, container active, and webhook server running.
 
----
+NIJA executes aggressive-but-safe algorithmic trades using AI logic, TradingView alerts, and Coinbase Advanced API.
 
-## Copilot Onboarding
 
-This repo includes `.github/copilot-coding-agent.yml` to configure the Copilot Coding Agent. See that file for agent tasks, startup script, and recommended environment/secret settings.
+⸻
 
----
+🚀 Copilot Coding-Agent Onboarding
 
-## What NIJA Bot Is Capable Of
+This repo includes:
+.github/copilot-coding-agent.yml
 
-NIJA Bot is a **high-speed, AI-driven crypto trading bot** designed for aggressive yet safe trading. Its capabilities include:
+This config powers:
+	•	Automatic code analysis
+	•	Auto-container fixes
+	•	Startup validation checks
+	•	Secret/environment guidance
 
-- ⚡ **Live trading on funded Coinbase accounts**  
-- 📈 **Automatic order execution** based on TradingView alerts  
-- 🔒 **Safety checks**:
-  - Minimum funded account threshold
-  - Stops trading if no account is funded
-- 📊 **Portfolio monitoring** in real time  
-- 🧠 **Dynamic position sizing**:
-  - Minimum 2% and maximum 10% of account equity per trade  
-  - Bot adjusts allocation based on current account size and market signals
-- 💡 **Webhook integration** for instant alert response  
-- 🛡 **Code integrity enforcement**:
-  - Nested folder structure prevents circular imports
-  - Bot refuses to start if critical files are missing or misconfigured  
+Your agent is fully configured for this repo.
 
-> ⚠️ NIJA is designed for advanced users. Never disable safeguards.
+⚡ What NIJA Bot Can Do
 
----
+Core Live-Trading Abilities
+	•	🟢 Executes real trades on Coinbase funded accounts
+	•	🚀 Responds instantly to TradingView Webhook alerts
+	•	📡 Persistent webhook listener (24/7)
+	•	📈 Dynamic position sizing (2%–10% of account equity)
+	•	🧠 AI risk logic based on balance, volatility, and alerts
+	•	🔒 Funding safeguard:
+	•	Bot will not start trading unless ≥1 account is funded
+	•	Prevents accidental execution on empty accounts
 
-## Folder Structure
+System Safeguards
+	•	Auto-stop if:
+	•	No funded accounts
+	•	Coinbase connection fails
+	•	Missing critical files
+	•	Circular import prevention enforced with locked folder structure
+	•	Nested module architecture prevents accidental breakage
 
+	📁 Folder Structure (DO NOT CHANGE)
+	
 Nija/
 ├─ app/
-│  ├─ init.py
+│  ├─ __init__.py
 │  ├─ start_bot_main.py
 │  ├─ nija_client.py
-│  ├─ app/                   # Nested app folder
-│  │  ├─ init.py         # MUST exist
+│  ├─ app/                    # ← nested on purpose (DON’T MOVE)
+│  │  ├─ __init__.py
 │  │  └─ webhook.py
-├─ start_bot.py
+├─ start_bot.py               # ← entry script
 ├─ requirements.txt
 └─ README.md
 
-### Notes on Folder Structure
+Critical Notes
+	•	Do NOT rename or relocate app/app/ — this breaks import resolution.
+	•	Never import start_bot_main from webhook.py — avoids circular reference.
+	•	nija_client.py contains your Coinbase Advanced client bound to your funded account.
+	•	start_bot_main.py runs:
+	1.	Coinbase initialization
+	2.	Funding check
+	3.	Webhook server startup
+	4.	Trading engine
 
-- `start_bot.py` → Entry point for the bot  
-- `start_bot_main.py` → Main bot logic: initializes Coinbase client, checks funded accounts, starts webhook server  
-- `nija_client.py` → Coinbase client code; fully connected to your funded account  
-- `app/webhook.py` → Webhook server handling; must remain inside `app/app` to **avoid circular imports**  
-- `FUND_THRESHOLD` is implemented: bot **will not trade** if no account meets minimum balance  
+	💼 Deployment Status
 
----
+	Component
+Status
+Container
+🟢 Running
+Webhook Server
+🟢 Active
+Coinbase Client
+🟢 Connected
+Funded Account
+🟢 Verified
+Trading Mode
+🟢 Live Enabled
+Safeguards
+🟢 Active
 
-## Deployment Status
+NIJA Bot is fully operational.
 
-- **Container Status:** ✅ Active and running  
-- **Webhook Server:** ✅ Started  
-- **Coinbase Client:** ✅ Connected to funded account  
-- **Trading Ready:** ✅ Yes, live and ready to execute trades  
+⸻
 
----
+⚠️ Warnings (Read Carefully)
+	1.	Do NOT edit the folder structure.
+	2.	Do NOT disable funding checks.
+	3.	Do NOT import files upward from nested app/app.
+	4.	Only update code from a separate branch, then redeploy clean.
+	5.	Never modify running containers directly on Render — always redeploy stable build.
 
-## Important Warnings
+▶️ Start the Bot Locally
 
-1. **Do NOT move or rename the nested `app/app` folder** — this will break imports.  
-2. **Do NOT import `start_bot_main` inside `webhook.py`** — prevents circular imports.  
-3. **Lock this deployment**. Only test updates in a separate branch.  
-4. **Minimum funded account check** is active. If no account is funded, bot will stop automatically.  
-5. **Always verify your funded accounts** before trading; bot will not override safeguards.  
-
----
-
-## Startup Command
-
-Run the bot with:
-
-```bash
 python3 start_bot.py
 
 This will:
-	1.	Start the bot
-	2.	Initialize Coinbase client
-	3.	Check funded accounts
-	4.	Start the webhook server
-	5.	Begin listening for live trading signals
+	1.	Start Coinbase Client
+	2.	Validate funded accounts
+	3.	Start the webhook server
+	4.	Begin listening for live trade alerts
 
-⸻
+🛠 start_all.sh (Deployment Entrypoint)
 
-Recommended Best Practices
-	•	Always verify funded account balance before trading
-	•	Keep app/app/webhook.py unchanged unless you fully understand circular import constraints
-	•	Use a separate test branch for any modifications
-	•	Do not manually edit running containers; redeploy from this locked, stable version if needed
+Environment vars required:
+	•	COINBASE_API_KEY
+	•	COINBASE_API_SECRET
+	•	COINBASE_PEM_CONTENT
+	•	(Optional) PORT (default: 5000)
 
-⸻
+Features:
+	•	Validates environment configuration
+	•	Falls back to python main.py if gunicorn is unavailable
+	•	Uses exec so Unix signals (SIGTERM) are handled properly
 
-Status Summary
-	•	✅ Stable and running
-	•	✅ Connected to funded account
-	•	✅ Webhook server started
-	•	✅ Ready to trade
-	•	✅ All safeguards active
+Run:
+	./scripts/start_all.sh
 
-This README reflects the current green-check stable version of NIJA Bot and its full capabilities.
+	
+📘 If Coinbase SDK is Missing
 
-# Nija Trading Bot
+If the SDK cannot load or API credentials fail:
 
-1. Copy `.env.example` → `.env` and fill your Coinbase PEM/ORG_ID
-2. Deploy to Railway
-3. Bot runs 24/7, trades automatically on Coinbase if SDK is available
-4. If Coinbase SDK is unavailable or PEM invalid, bot runs in **safe dry-run mode**
+✔ Bot automatically switches to dry-run mode
+✔ Avoids all live orders
+✔ Still logs alerts and order calculations
 
----
+Safety is never bypassed.
 
-## Startup Script
 
-The `scripts/start_all.sh` script provides a simple way to start the NIJA bot with environment checking.
+🎯 Status Summary
+	•	🟢 Stable and Running
+	•	🟢 Connected to funded account
+	•	🟢 Coinbase Client Verified
+	•	🟢 Webhook server up
+	•	🟢 Live trading authorized
+	•	🛡 All protections ON
 
-### Environment Variables
+This README reflects the official stable deployment of NIJA Bot.
 
-The startup script checks for the following environment variables:
 
-- `COINBASE_API_KEY` - Your Coinbase API key
-- `COINBASE_API_SECRET` - Your Coinbase API secret
-- `COINBASE_PEM_CONTENT` - Your Coinbase PEM certificate content
 
-The script will display which variables are set or missing, but will continue to start regardless.
 
-### Configuration Options
-
-- `PORT` (default: `5000`) - The port on which the application will listen
-
-### Usage
-
-```bash
-./scripts/start_all.sh
-```
-
-### Features
-
-- **Environment checking** - displays status of required environment variables
-- **Simple fallback**: uses `gunicorn` if available, otherwise falls back to `python main.py`
-- **Signal handling**: uses `exec` so the process receives signals directly
 
