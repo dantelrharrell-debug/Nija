@@ -3,5 +3,7 @@ from flask import Flask
 
 app = Flask(__name__)
 
-# import any submodules that register routes if needed
-# from . import routes   # if you have routes
+# Example route for sanity:
+@app.route("/_health")
+def _health():
+    return "ok", 200
