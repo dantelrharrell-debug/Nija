@@ -1,12 +1,11 @@
 # app/__init__.py
 from flask import Flask
-import os
 import logging
+import os
 
 def create_app():
     app = Flask(__name__)
 
-    # Setup logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
     # Optional: initialize Coinbase client safely
@@ -17,9 +16,7 @@ def create_app():
         COINBASE_API_SUB = os.environ.get("COINBASE_API_SUB")
 
         if all([COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_API_SUB]):
-            client = Client(api_key=COINBASE_API_KEY,
-                            api_secret=COINBASE_API_SECRET,
-                            api_sub=COINBASE_API_SUB)
+            client = Client(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET, api_sub=COINBASE_API_SUB)
             logging.info("Coinbase client initialized!")
         else:
             client = None
@@ -28,7 +25,6 @@ def create_app():
         client = None
         logging.warning("Coinbase module not found; live trading disabled.")
 
-    # Example route
     @app.route("/")
     def home():
         return "NIJA Bot is running!"
