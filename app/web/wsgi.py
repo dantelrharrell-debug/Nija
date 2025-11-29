@@ -1,8 +1,6 @@
-"""
-web/wsgi.py - simple Flask app with lazy nija_client usage.
-Expose `app` to gunicorn:  web.wsgi:app
-"""
+# web/wsgi.py
 from flask import Flask, jsonify
+import importlib
 
 def create_app():
     app = Flask(__name__)
@@ -13,20 +11,29 @@ def create_app():
 
     @app.route("/healthz")
     def healthz():
-        # Lazy import so gunicorn workers start quickly and don't evaluate nija_client top-level side-effects
+        """
+        Lazy diagnostic endpoint. Attempts to import the nija_client module
+        from the `app` package (app/nija_client). This avoids import-time
+        side effects during gunicorn worker startup.
+        """
         try:
-            import nija_client as nc
+            # Try the package path that matches your repo layout first
+            try:
+                nc = importlib.import_module("app.nija_client")
+            except Exception:
+                # Fallback if layout differs
+                nc = importlib.import_module("nija_client")
+
             client_present = bool(getattr(nc, "coinbase_client", None))
             simulation = bool(getattr(nc, "simulation_mode", True))
 
-            # prefer the well-known test function if available
             test_fn = getattr(nc, "test_coinbase_connection", None) or getattr(nc, "test_coinbase_client", None)
 
             test_ok = None
             if callable(test_fn):
                 try:
                     test_ok = bool(test_fn())
-                except Exception as e:
+                except Exception:
                     test_ok = False
 
             return jsonify({
@@ -35,15 +42,20 @@ def create_app():
                 "coinbase_test_ok": test_ok,
                 "simulation_mode": simulation,
             }), 200
+
         except Exception as e:
-            # Return status = ok but include diagnostic detail; avoids worker crash on import-time errors
+            # Return diagnostics but do not crash worker on import-time errors
+            err = repr(e)
+            if len(err) > 1000:
+                err = err[:1000] + "..."
             return jsonify({
                 "status": "ok",
                 "coinbase_client_present": False,
                 "coinbase_test_ok": False,
-                "error": str(e)
+                "error": err
             }), 200
 
     return app
 
+# Expose the WSGI app for gunicorn: web.wsgi:app
 app = create_app()
