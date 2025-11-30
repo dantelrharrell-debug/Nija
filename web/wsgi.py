@@ -1,3 +1,11 @@
+# web/wsgi.py
+
+from web import app
+
+if __name__ == "__main__":
+    # For local testing only
+    app.run(host="0.0.0.0", port=5000)
+
 from web import app  # imports the Flask app from __init__.py
 
 if __name__ == "__main__":
