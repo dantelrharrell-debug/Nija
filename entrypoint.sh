@@ -3,42 +3,39 @@ set -euo pipefail
 
 echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
 
-# Safe PYTHONPATH defaults
-PYTHONPATH="${PYTHONPATH:-}"
 ROOT_DIR="/app"
-VENDORED_DIR="${ROOT_DIR}/cd/vendor/coinbase_advanced_py"
+VENDORED_DIR="${ROOT_DIR}/cd/vendor"
 
-# Ensure app root on PYTHONPATH
+# Ensure safe defaults for PYTHONPATH
+export PYTHONPATH="${PYTHONPATH:-}"
+# Add repo root and vendored dir(s)
 case ":$PYTHONPATH:" in
   *":${ROOT_DIR}:"*) : ;;
-  *) PYTHONPATH="${ROOT_DIR}:${PYTHONPATH}" ;;
+  *) export PYTHONPATH="${ROOT_DIR}:${PYTHONPATH}" ;;
 esac
-
-# If vendored client exists, add it
-if [ -d "$VENDORED_DIR" ]; then
+if [ -d "${VENDORED_DIR}" ]; then
   case ":$PYTHONPATH:" in
     *":${VENDORED_DIR}:"*) : ;;
-    *) PYTHONPATH="${VENDORED_DIR}:${PYTHONPATH}" ;;
+    *) export PYTHONPATH="${VENDORED_DIR}:${PYTHONPATH}" ;;
   esac
 fi
 
-export PYTHONPATH
 echo "PYTHONPATH=${PYTHONPATH}"
 
-# quick import diagnostic (non-fatal)
+# Quick non-fatal import checks (helpful in logs)
 python - <<'PY'
-import sys, logging
+import logging, sys
 logging.basicConfig(level=logging.INFO)
 logging.info("sys.path (first 8): %s", sys.path[:8])
-for name in ("web.wsgi", "web", "app.wsgi", "app", "coinbase_advanced", "coinbase_advanced_py"):
+for name in ("coinbase_advanced", "coinbase_advanced_py", "web.wsgi", "web"):
     try:
         __import__(name)
-        logging.info("imported: %s", name)
+        logging.info("import OK: %s", name)
     except Exception as e:
-        logging.info("failed import %s: %s", name, e)
+        logging.info("import FAIL: %s -> %s", name, e)
 PY
 
 PORT="${PORT:-5000}"
 
-# Exec Gunicorn with the module path that matches your structure (web.wsgi:app)
+# Exec gunicorn (so PID 1 is gunicorn)
 exec gunicorn --config ./gunicorn.conf.py web.wsgi:app --bind "0.0.0.0:${PORT}"
