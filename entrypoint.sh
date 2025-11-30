@@ -1,39 +1,28 @@
-#!/bin/bash
-set -e
+# ---- Base Image ----
+FROM python:3.11-slim
 
-echo "=== STARTING NIJA TRADING BOT ==="
+# ---- Set Working Directory ----
+WORKDIR /app
 
-# Run a small Python pre-flight check
-python3 - <<'END_PY'
-import sys
-import os
-import logging
+# ---- Install System Dependencies ----
+RUN apt-get update && \
+    apt-get install -y git build-essential && \
+    rm -rf /var/lib/apt/lists/*
 
-logging.basicConfig(level=logging.INFO)
+# ---- Copy Requirements ----
+COPY requirements.txt .
 
-# Adjust this path if your vendored copy is somewhere else
-VENDORED_PATH = os.path.abspath("./cd/vendor/coinbase_advanced_py")
-if VENDORED_PATH not in sys.path:
-    sys.path.insert(0, VENDORED_PATH)
-    logging.info(f"Added vendored path to sys.path: {VENDORED_PATH}")
+# ---- Install Python Dependencies ----
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-try:
-    from coinbase_advanced.client import Client
-    logging.info("coinbase_advanced module loaded successfully ✅ Live trading ENABLED")
-except ModuleNotFoundError as e:
-    logging.error("coinbase_advanced module NOT installed ❌ Live trading DISABLED")
-    logging.error(repr(e))
-END_PY
+# ---- Copy Project Files ----
+COPY . .
 
-# Determine Gunicorn WSGI path
-if [ -f app/wsgi.py ]; then
-    WSGI_MODULE="app.wsgi:app"
-elif [ -f wsgi.py ]; then
-    WSGI_MODULE="wsgi:app"
-else
-    echo "No wsgi file found, exiting"
-    exit 1
-fi
+# ---- Make Entrypoint Executable ----
+RUN chmod +x ./entrypoint.sh
 
-# Start Gunicorn
-exec gunicorn --config ./gunicorn.conf.py "$WSGI_MODULE"
+# ---- Expose Port for Gunicorn ----
+EXPOSE 5000
+
+# ---- Entrypoint ----
+ENTRYPOINT ["bash", "-lc", "./entrypoint.sh"]
