@@ -4,15 +4,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 logger = logging.getLogger("web.wsgi")
 
 try:
-    # prefer your factory if present
     from web import create_app
-    logger.info("Using web.create_app() to build Flask app")
+    logger.info("Calling web.create_app()")
     app = create_app()
-except Exception as e:
-    logger.exception("web.create_app() failed: %s", e)
-    # Minimal fallback app so Gunicorn starts and you can hit / and see error
+except Exception as exc:
+    logger.exception("create_app() failed — starting fallback app: %s", exc)
     from flask import Flask, jsonify
     app = Flask(__name__)
     @app.route("/")
     def index():
-        return jsonify({"ok": False, "error": "create_app import failed; check logs"})
+        return jsonify({"ok": False, "error": "create_app() failed; check logs"})
+    @app.route("/__diagnose")
+    def diag():
+        return jsonify({"ok": False, "diagnostic": "create_app() exception logged"})
