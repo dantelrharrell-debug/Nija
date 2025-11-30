@@ -1,21 +1,23 @@
-# Use slim Python 3.11 image
+# Use official Python 3.11 image
 FROM python:3.11-slim
 
-# Set working directory
-WORKDIR /app
+# Set working directory in container
+WORKDIR /usr/src/app
 
-# Copy and install dependencies
+# Set Python path so 'web' and 'bot' are recognized
+ENV PYTHONPATH=/usr/src/app
+
+# Copy dependency file first (for caching)
 COPY requirements.txt .
+
+# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy all project files
+# Copy the rest of the app
 COPY . .
 
-# Make Python see top-level folders like 'bot'
-ENV PYTHONPATH=/app
-
 # Expose port
-EXPOSE 5000
+EXPOSE 8080
 
-# Start Gunicorn
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
+# Start Gunicorn server for your web app
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8080", "web:app"]
