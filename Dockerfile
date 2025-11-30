@@ -1,27 +1,23 @@
+# Use Python 3.11 slim
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for building packages & git
 RUN apt-get update && \
     apt-get install -y git build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
-RUN pip install --upgrade pip setuptools wheel
-
-# Copy requirements first for caching
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the rest of the app
+# Copy rest of your app
 COPY . .
 
-# Expose port
+# Expose Flask port
 EXPOSE 5000
 
-# Start Gunicorn
-CMD ["gunicorn", "--config", "./gunicorn.conf.py", "wsgi:app"]
+# Start the bot via entrypoint script
+ENTRYPOINT ["./entrypoint.sh"]
