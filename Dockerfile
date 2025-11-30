@@ -13,11 +13,11 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy rest of your app
+# Copy rest of your app including the vendored Coinbase client
 COPY . .
 
-# Install vendored Coinbase Advanced client
-RUN pip install -e cd/vendor/coinbase_advanced_py
+# Add vendored Coinbase client to PYTHONPATH
+ENV PYTHONPATH="/app/cd/vendor/coinbase_advanced_py:${PYTHONPATH}"
 
 # Expose Flask port
 EXPOSE 5000
