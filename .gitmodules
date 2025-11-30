@@ -1,5 +1,3 @@
-[submodule "coinbase_advanced_py"]
-    path = coinbase_advanced_py
-    url = https://github.com/dantelrharrell-debug/coinbase_advanced_py.git
-	path = coinbase_advanced_py
-	url = https://github.com/dantelrharrell-debug/coinbase_advanced_py.git
+[submodule "vendor/coinbase_advanced_py"]
+    path = vendor/coinbase_advanced_py
+    url = https://github.com/coinbase/coinbase-advanced-py.git
