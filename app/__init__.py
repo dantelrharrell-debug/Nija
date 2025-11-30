@@ -1,8 +1,8 @@
-# app/__init__.py
 from flask import Flask
 from .routes import register_routes
 from .config import configure_logging
-from .coinbase_client import start_trading_thread
+from .coinbase_client import start_trading_thread, Client
+
 
 def create_app():
     app = Flask(__name__)
@@ -13,7 +13,10 @@ def create_app():
     # Register routes
     register_routes(app)
 
-    # Start trading thread
-    start_trading_thread()
+    # Start live trading thread safely
+    if Client is not None:
+        start_trading_thread()
+    else:
+        app.logger.warning("Skipping trading thread: Client not available")
 
     return app
