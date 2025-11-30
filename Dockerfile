@@ -1,34 +1,35 @@
-# ===============================
-# NIJA Trading Bot – Dockerfile
-# ===============================
+# -----------------------------
+# NIJA Trading Bot Dockerfile
+# -----------------------------
 
+# Base image
 FROM python:3.11-slim
 
+# Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies (git for pip installs from GitHub)
+RUN apt-get update && \
+    apt-get install -y git && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
 COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
+# Copy the rest of the app
 COPY . .
 
-# -------------------------------
-#   Gunicorn / Port Configuration
-# -------------------------------
+# Set environment variable for port
 ENV PORT=8080
+
+# Expose port
 EXPOSE 8080
 
-# Run Gunicorn (Railway-friendly)
+# Start Gunicorn using shell form to expand $PORT
 CMD ["sh", "-c", "exec gunicorn wsgi:app \
   --bind 0.0.0.0:${PORT:-8080} \
   --workers 2 \
