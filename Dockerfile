@@ -1,26 +1,24 @@
-# Dockerfile
+# Use official Python 3.11 image
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install dependencies
-RUN apt-get update && \
-    apt-get install -y git build-essential && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install
+# Copy Python requirements
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Upgrade pip and install dependencies
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
 
 # Copy the rest of the app
 COPY . .
 
-# Make entrypoint executable
-RUN chmod +x ./entrypoint.sh
+# Install vendored coinbase_advanced module
+RUN pip install ./app/cd/vendor/coinbase_advanced_py
 
-# Expose port for web server
+# Expose port 5000
 EXPOSE 5000
 
-# Run entrypoint on container start
+# Use entrypoint script
 ENTRYPOINT ["./entrypoint.sh"]
