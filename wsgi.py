@@ -3,6 +3,7 @@ from flask import Flask, jsonify
 import threading
 import logging
 import os
+import time
 
 # Import your NIJA bot entry point
 try:
@@ -15,25 +16,26 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "NIJA Bot is online! Visit /start to launch the bot."
-
-@app.route("/start")
-def start():
-    if start_bot is None:
-        return "Bot function not available", 500
-
-    # Run the bot in a separate thread to avoid blocking the web server
-    threading.Thread(target=start_bot, daemon=True).start()
-    return "NIJA Bot has been started!"
+    return "NIJA Bot is online and running!"
 
 @app.route("/status")
 def status():
-    # Optional: simple health check endpoint
+    # Simple health check endpoint
     return jsonify({
         "status": "running",
         "bot_available": start_bot is not None,
         "environment": os.environ.get("RAILWAY_ENVIRONMENT", "unknown")
     })
+
+def launch_bot():
+    if start_bot is None:
+        logging.error("Bot function not available")
+        return
+    logging.info("Starting NIJA Bot...")
+    start_bot()  # Run your bot's main function
+
+# Start the bot in a separate thread to avoid blocking Gunicorn
+threading.Thread(target=launch_bot, daemon=True).start()
 
 if __name__ == "__main__":
     # Local development
