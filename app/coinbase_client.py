@@ -1,11 +1,13 @@
+# app/coinbase_client.py
 import sys
 import os
 import logging
 import threading
+import time
 
 logging.basicConfig(level=logging.INFO)
 
-# Add vendored Coinbase client to sys.path at runtime
+# Vendored Coinbase client path
 VENDORED_PATH = os.path.join(os.path.dirname(__file__), "cd/vendor/coinbase_advanced_py")
 if VENDORED_PATH not in sys.path:
     sys.path.insert(0, VENDORED_PATH)
@@ -13,23 +15,28 @@ if VENDORED_PATH not in sys.path:
 
 try:
     from coinbase_advanced.client import Client
-    logging.info("coinbase_advanced successfully imported.")
-except ModuleNotFoundError:
+    logging.info("coinbase_advanced module loaded successfully ✅")
+except ModuleNotFoundError as e:
     Client = None
-    logging.error("coinbase_advanced module not installed. Live trading disabled.")
+    logging.error("coinbase_advanced module NOT installed ❌. Live trading disabled!")
+    logging.error(repr(e))
 
-def start_trading_thread():
-    if Client is None:
-        logging.warning("Trading thread not started because Client is None.")
+
+# Optional: Start trading thread
+def trading_loop():
+    if not Client:
+        logging.warning("Client not available. Skipping trading loop.")
         return
 
-    def trading_loop():
-        client = Client(api_key=os.environ.get("COINBASE_API_KEY"),
-                        api_secret=os.environ.get("COINBASE_API_SECRET"))
-        logging.info("Live trading thread started.")
-        while True:
-            # Example: fetch prices, make trades, etc.
-            pass
+    client = Client(api_key=os.environ.get("COINBASE_API_KEY"),
+                    api_secret=os.environ.get("COINBASE_API_SECRET"))
 
-    thread = threading.Thread(target=trading_loop, daemon=True)
-    thread.start()
+    logging.info("Trading loop started.")
+    while True:
+        # Placeholder: your live trading logic here
+        logging.info("Trading tick...")
+        time.sleep(10)
+
+def start_trading_thread():
+    t = threading.Thread(target=trading_loop, daemon=True)
+    t.start()
