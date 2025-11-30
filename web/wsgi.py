@@ -7,8 +7,8 @@ try:
     from web import create_app
     logger.info("Calling web.create_app()")
     app = create_app()
-except Exception as exc:
-    logger.exception("create_app() failed — starting fallback app: %s", exc)
+except Exception:
+    logger.exception("create_app() failed — falling back to minimal app")
     from flask import Flask, jsonify
     app = Flask(__name__)
     @app.route("/")
