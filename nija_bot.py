@@ -1,119 +1,177 @@
-import os
-import json
-from flask import Flask, request, jsonify
-from loguru import logger
-import threading
+# nija_bot.py
+import logging
 import time
+import os
 
-# ------------------------------
-# Coinbase Client Setup
-# ------------------------------
-COINBASE_AVAILABLE = False
-try:
-    from coinbase_advanced_py.client import AdvancedClient
-    COINBASE_AVAILABLE = True
-    logger.info("✅ Coinbase Advanced SDK import succeeded")
-except ImportError:
-    logger.warning("⚠️ Coinbase Advanced SDK not installed, using MockClient")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("nija_bot")
 
-PEM = os.environ.get("COINBASE_PEM_CONTENT")
-ORG_ID = os.environ.get("COINBASE_ORG_ID")
-
-# ------------------------------
-# Mock client (dry-run fallback)
-# ------------------------------
-class MockClient:
-    def get_accounts(self):
-        logger.info("MockClient.get_accounts() called — returning simulated account")
-        return [{"id": "mock-1", "currency": "USD", "balance": "1000.00"}]
-
-    def place_order(self, *args, **kwargs):
-        logger.info(f"MockClient.place_order() called with args={args}, kwargs={kwargs}")
-        return {"status": "simulated"}
-
-# ------------------------------
-# Get Coinbase client
-# ------------------------------
-def get_coinbase_client(pem=None, org_id=None):
+# Coinbase client factory with fallbacks (tries known names)
+def get_advanced_client(pem=None, org_id=None):
     """
-    Returns a live AdvancedClient if SDK is available and PEM/org_id are provided,
-    otherwise falls back to MockClient.
+    Tries to import and instantiate the Coinbase Advanced client.
+    Falls back to a Mock client if import/instantiation fail.
     """
-    if COINBASE_AVAILABLE and pem and org_id:
+    class MockClient:
+        def get_accounts(self):
+            return [{"id": "mock-1", "currency": "USD", "balance": "1000.00"}]
+
+        def place_order(self, *args, **kwargs):
+            return {"status": "simulated"}
+
+    pem = pem or os.environ.get("COINBASE_PEM_CONTENT")
+    org_id = org_id or os.environ.get("COINBASE_ORG_ID")
+    # Try a few import paths the package might expose
+    candidates = [
+        ("coinbase_advanced.client", "AdvancedClient"),
+        ("coinbase_advanced.client", "Client"),
+        ("coinbase_advanced_py.client", "AdvancedClient"),
+        ("coinbase_advanced_py.client", "Client"),
+        ("coinbase_advanced", "AdvancedClient"),
+    ]
+    for module_name, class_name in candidates:
         try:
-            client = AdvancedClient(pem=pem, org_id=org_id)
-            logger.info("✅ Live Coinbase Advanced client instantiated")
-            return client
-        except Exception as e:
-            logger.error(f"❌ Failed to instantiate AdvancedClient: {e}")
-            return MockClient()
-    else:
-        logger.warning("⚠️ Coinbase Advanced client unavailable, using MockClient")
-        return MockClient()
+            mod = __import__(module_name, fromlist=[class_name])
+            ClientClass = getattr(mod, class_name)
+            logger.info(f"Using Coinbase client from {module_name}.{class_name}")
+            # instantiate depending on constructor signature; try common kwargs
+            try:
+                return ClientClass(pem=pem, org_id=org_id)
+            except TypeError:
+                try:
+                    return ClientClass(pem)
+                except Exception:
+                    return ClientClass()
+        except Exception:
+            continue
 
-# ------------------------------
-# Bot Logic
-# ------------------------------
-client = get_coinbase_client(PEM, ORG_ID)
+    logger.warning("Coinbase advanced client not available; using MockClient")
+    return MockClient()
 
-def fetch_accounts():
-    try:
-        accounts = client.get_accounts()
-        logger.info(f"Accounts fetched: {accounts}")
-        return accounts
-    except Exception as e:
-        logger.error(f"Failed to fetch accounts: {e}")
-        return []
 
-def place_order(product_id, side, price, size):
-    try:
-        result = client.place_order(product_id=product_id, side=side, price=price, size=size)
-        logger.info(f"Order result: {result}")
-        return result
-    except Exception as e:
-        logger.error(f"Failed to place order: {e}")
-        return {"status": "error", "error": str(e)}
+# Import your own nija_client.start_bot if you have it
+try:
+    from nija_client import start_bot  # adapt this to your code's entrypoint
+except Exception as e:
+    start_bot = None
+    logger.warning("nija_client.start_bot not available: %s", e)
 
-# ------------------------------
-# Flask Webhook Server
-# ------------------------------
-app = Flask(__name__)
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "mysecret")
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    data = request.json
-    if not data or data.get("secret") != WEBHOOK_SECRET:
-        logger.warning("Unauthorized webhook attempt")
-        return jsonify({"status": "unauthorized"}), 403
-
-    symbol = data.get("symbol")
-    side = data.get("side")
-    price = data.get("price")
-    risk_pct = data.get("risk_pct", 0.01)
-
-    # Basic risk sizing logic
-    accounts = fetch_accounts()
-    usd_balance = float(accounts[0]["balance"]) if accounts else 1000
-    size = usd_balance * risk_pct / price
-
-    logger.info(f"Webhook received: {data}")
-    order_result = place_order(symbol, side, price, round(size, 6))
-    return jsonify(order_result)
-
-# ------------------------------
-# Background 24/7 Bot Loop
-# ------------------------------
-def run_bot_loop():
+def background_loop(client):
+    """
+    Example 24/7 loop — replace with your bot's real logic.
+    """
     while True:
-        logger.info("Bot heartbeat: running 24/7...")
-        fetch_accounts()
-        time.sleep(60)  # Every minute
+        try:
+            accounts = client.get_accounts()
+            logger.info("Heartbeat: fetched %d accounts", len(accounts))
+        except Exception as e:
+            logger.exception("Error fetching accounts: %s", e)
+        time.sleep(60)  # pause between heartbeats
 
-# ------------------------------
-# Main
-# ------------------------------
+def main():
+    logger.info("NIJA worker starting")
+    client = get_advanced_client()
+    # If you have a start_bot function, run it; otherwise run background_loop
+    if start_bot:
+        logger.info("Calling start_bot() from nija_client")
+        try:
+            start_bot()  # assume this function blocks / runs the bot
+        except Exception:
+            logger.exception("start_bot() crashed")
+    else:
+        logger.info("No start_bot(); starting simple background loop")
+        try:
+            background_loop(client)
+        except Exception:
+            logger.exception("Background loop crashed")
+
 if __name__ == "__main__":
-    logger.info("🚀 Starting Nija bot with TradingView webhook...")
-    threading.Thread(target=run_bot_loop, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    main()# nija_bot.py
+import logging
+import time
+import os
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("nija_bot")
+
+# Coinbase client factory with fallbacks (tries known names)
+def get_advanced_client(pem=None, org_id=None):
+    """
+    Tries to import and instantiate the Coinbase Advanced client.
+    Falls back to a Mock client if import/instantiation fail.
+    """
+    class MockClient:
+        def get_accounts(self):
+            return [{"id": "mock-1", "currency": "USD", "balance": "1000.00"}]
+
+        def place_order(self, *args, **kwargs):
+            return {"status": "simulated"}
+
+    pem = pem or os.environ.get("COINBASE_PEM_CONTENT")
+    org_id = org_id or os.environ.get("COINBASE_ORG_ID")
+    # Try a few import paths the package might expose
+    candidates = [
+        ("coinbase_advanced.client", "AdvancedClient"),
+        ("coinbase_advanced.client", "Client"),
+        ("coinbase_advanced_py.client", "AdvancedClient"),
+        ("coinbase_advanced_py.client", "Client"),
+        ("coinbase_advanced", "AdvancedClient"),
+    ]
+    for module_name, class_name in candidates:
+        try:
+            mod = __import__(module_name, fromlist=[class_name])
+            ClientClass = getattr(mod, class_name)
+            logger.info(f"Using Coinbase client from {module_name}.{class_name}")
+            # instantiate depending on constructor signature; try common kwargs
+            try:
+                return ClientClass(pem=pem, org_id=org_id)
+            except TypeError:
+                try:
+                    return ClientClass(pem)
+                except Exception:
+                    return ClientClass()
+        except Exception:
+            continue
+
+    logger.warning("Coinbase advanced client not available; using MockClient")
+    return MockClient()
+
+
+# Import your own nija_client.start_bot if you have it
+try:
+    from nija_client import start_bot  # adapt this to your code's entrypoint
+except Exception as e:
+    start_bot = None
+    logger.warning("nija_client.start_bot not available: %s", e)
+
+def background_loop(client):
+    """
+    Example 24/7 loop — replace with your bot's real logic.
+    """
+    while True:
+        try:
+            accounts = client.get_accounts()
+            logger.info("Heartbeat: fetched %d accounts", len(accounts))
+        except Exception as e:
+            logger.exception("Error fetching accounts: %s", e)
+        time.sleep(60)  # pause between heartbeats
+
+def main():
+    logger.info("NIJA worker starting")
+    client = get_advanced_client()
+    # If you have a start_bot function, run it; otherwise run background_loop
+    if start_bot:
+        logger.info("Calling start_bot() from nija_client")
+        try:
+            start_bot()  # assume this function blocks / runs the bot
+        except Exception:
+            logger.exception("start_bot() crashed")
+    else:
+        logger.info("No start_bot(); starting simple background loop")
+        try:
+            background_loop(client)
+        except Exception:
+            logger.exception("Background loop crashed")
+
+if __name__ == "__main__":
+    main()
