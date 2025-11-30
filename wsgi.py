@@ -1,3 +1,16 @@
+# wsgi.py
+from nija_coinbase import test_coinbase_connection
+
+# Run Coinbase test on container startup
+test_coinbase_connection()
+
+from flask import Flask  # or whatever your app uses
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "NIJA Bot is running!"
+
 # nija_bot.py
 import os
 import logging
