@@ -1,5 +1,10 @@
-from app import app
+from flask import jsonify
 
-@app.route("/")
-def home():
-    return "Hello World from NIJA Bot!"
+def register_routes(app):
+    @app.route("/")
+    def home():
+        return jsonify({"status": "NIJA Trading Bot Online!"})
+
+    @app.route("/health")
+    def health():
+        return jsonify({"status": "healthy"})
