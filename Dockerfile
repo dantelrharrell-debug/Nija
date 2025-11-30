@@ -4,7 +4,13 @@ FROM python:3.11-slim
 # ---------- Set working directory ----------
 WORKDIR /app
 
-# ---------- Install dependencies ----------
+# ---------- Install system dependencies ----------
+# git is needed to install some Python packages from GitHub
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------- Install Python dependencies ----------
 COPY requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
@@ -17,8 +23,6 @@ ENV PORT=8080
 EXPOSE ${PORT}
 
 # ---------- Start Gunicorn ----------
-# Use shell form to expand $PORT at runtime
-# Force Gunicorn to ignore gunicorn.conf.py by passing empty -c ''
 CMD ["sh", "-c", "exec gunicorn wsgi:app \
   --bind 0.0.0.0:${PORT:-8080} \
   --workers 2 \
