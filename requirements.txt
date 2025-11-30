@@ -1,5 +1,5 @@
 # Core
-Flask>=2.3,<2.4
+Flask==2.3.6
 gunicorn==23.0.0
 requests==2.32.1
 python-dotenv==1.2.1
@@ -18,7 +18,7 @@ PyJWT==2.10.1
 backoff==2.2.1
 
 # Coinbase Advanced client (GitHub)
-git+https://github.com/coinbase/coinbase-advanced-py.git@d316b758811ce3c13ef179fb228c569b333cddd1#egg=coinbase-advanced-py
+coinbase-advanced-py @ git+https://github.com/coinbase/coinbase-advanced-py.git@d316b758811ce3c13ef179fb228c569b333cddd1
 
 # Utilities
 click==8.3.1
