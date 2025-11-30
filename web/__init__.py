@@ -3,21 +3,19 @@
 import sys
 import os
 
-# Add root folder to Python path so 'bot' can be imported
+# Add root directory to path so 'bot' can be imported
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from bot.live_bot_script import start_trading_loop
-from flask import Flask
-
-app = Flask(__name__)
 from flask import Flask
 from bot.live_bot_script import start_trading_loop
 
 app = Flask(__name__)
 
 @app.route("/")
-def index():
-    return "Nija Bot Running!", 200
+def home():
+    return "NIJA Trading Bot is Running!"
 
-# Start the trading loop
-start_trading_loop()
+# Optional: start trading loop in background
+# Uncomment if you want it to auto-start with Flask
+# import threading
+# threading.Thread(target=start_trading_loop, daemon=True).start()
