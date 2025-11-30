@@ -1,21 +1,30 @@
-# Base image
+# Use Python 3.11 slim
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Copy everything
-COPY . .
+# Install system deps for building wheels
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git build-essential && \
+    rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install dependencies
+# Copy project files first so pip cache works
+COPY requirements.txt .
+# Install dependencies
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
-# Install vendored coinbase_advanced module
-RUN pip install ./cd/vendor/coinbase_advanced_py
+# Copy entire repo
+COPY . .
 
-# Expose port
+# Install vendored coinbase packages under /app/cd/vendor
+# We install both wrapper and implementation as editable if possible
+RUN pip install --no-deps -e ./cd/vendor/coinbase_advanced || true
+RUN pip install --no-deps -e ./cd/vendor/coinbase_advanced_py || true
+
+# Make entrypoint executable
+RUN chmod +x ./entrypoint.sh
+
 EXPOSE 5000
 
-# Entrypoint
 ENTRYPOINT ["./entrypoint.sh"]
