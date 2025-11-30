@@ -77,3 +77,4 @@ threading.Thread(target=bot_loop, daemon=True).start()
 if __name__ == "__main__":
     logging.info("Starting Flask server for NIJA Bot...")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    
