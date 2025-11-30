@@ -1,24 +1,18 @@
 #!/bin/bash
-set -e  # Exit immediately on any error
+set -e
 
 echo "=== STARTING NIJA TRADING BOT ==="
 
-# Check if coinbase_advanced is installed
-python3 - <<PYTHON
-import importlib
-import subprocess
-import sys
-
-package_name = "coinbase_advanced"
-
+# Pre-flight check for coinbase_advanced
+python3 - <<END
+import logging
+logging.basicConfig(level=logging.INFO)
 try:
-    importlib.import_module(package_name)
-    print(f"{package_name} module loaded successfully.")
+    from coinbase_advanced.client import Client
+    logging.info("coinbase_advanced module loaded successfully ✅")
 except ModuleNotFoundError:
-    print(f"{package_name} module NOT installed. Installing now...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "git+https://github.com/coinbase/coinbase-advanced-py.git"])
-    print(f"{package_name} module installed successfully.")
-PYTHON
+    logging.error("coinbase_advanced module NOT installed ❌. Live trading disabled!")
+END
 
-# Start Gunicorn
+# Run Gunicorn to serve Flask application
 exec gunicorn --config ./gunicorn.conf.py wsgi:app
