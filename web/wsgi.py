@@ -1,3 +1,8 @@
+from web import app  # imports the Flask app from __init__.py
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+
 # web/wsgi.py
 import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
