@@ -2,7 +2,7 @@
 FROM python:3.11-slim
 
 WORKDIR /app
-ENV PYTHONPATH="/:/app:/web:/bot"
+ENV PYTHONPATH="/app:/bot:$PYTHONPATH"
 
 # Install system deps for building wheels
 RUN apt-get update && \
