@@ -1,79 +1,142 @@
-# wsgi.py  (or web/wsgi.py — whatever path your Gunicorn points to; your Gunicorn config shows wsgi:app)
+# web/wsgi.py
 import os
 import threading
 import logging
-from flask import Flask, jsonify
+from flask import jsonify
 
-# Use your nija client module
-from nija_client import build_client, client as nija_client_instance, check_and_log_accounts
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("nija-wsgi")
-
-app = Flask(__name__)
-
-# Start Coinbase client in a background thread exactly once
-_started = False
-def start_if_needed():
-    global _started
-    if _started:
-        return
+# Prefer the app factory if present
+try:
+    # If your factory is web.create_app
+    from web import create_app
+    app = create_app()
+except Exception:
+    # Fallback: try to import top-level create_app
     try:
-        logger.info("wsgi: initializing Coinbase client (build)")
-        c = build_client()
-        if c:
-            logger.info("wsgi: client built; fetching accounts now")
-            check_and_log_accounts()
-        else:
-            logger.warning("wsgi: client not created (check env vars).")
+        from create_app import create_app as _factory
+        app = _factory()
     except Exception:
-        logger.exception("wsgi: error while building client")
-    _started = True
+        # Last resort: create a minimal app so gunicorn still binds
+        from flask import Flask
+        app = Flask(__name__)
 
-# If preload_app=True then this import runs in master process; it's okay to start background thread.
-t = threading.Thread(target=start_if_needed, daemon=True)
-t.start()
+logger = logging.getLogger("nija-wsgi")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# A health route to see accounts quickly
+# Import nija_client safely (works whether package is app.nija_client or nija_client)
+_nija_mod = None
+for mod_name in ("app.nija_client", "nija_client"):
+    try:
+        _nija_mod = __import__(mod_name, fromlist=["build_client", "client", "check_and_log_accounts"])
+        break
+    except Exception:
+        _nija_mod = None
+
+if not _nija_mod:
+    logger.warning("Could not import nija_client module. Background trading client won't start.")
+
+_build_lock = threading.Lock()
+_started = False
+_client = None
+
+def _start_client_once():
+    """Build client once (thread-safe). Returns client or None."""
+    global _started, _client
+    if _started:
+        return _client
+
+    with _build_lock:
+        if _started:
+            return _client
+        try:
+            logger.info("Initializing Coinbase client (build_client)...")
+            # safe attribute access
+            build_client = getattr(_nija_mod, "build_client", None) if _nija_mod else None
+            if build_client:
+                _client = build_client()
+                if _client:
+                    logger.info("Client built successfully.")
+                    # optional: call helper that logs accounts
+                    checker = getattr(_nija_mod, "check_and_log_accounts", None)
+                    if callable(checker):
+                        try:
+                            checker()
+                        except Exception:
+                            logger.exception("check_and_log_accounts failed (non-fatal)")
+                else:
+                    logger.warning("build_client returned falsy client (check env/credentials).")
+            else:
+                logger.warning("No build_client() function found in nija_client module.")
+        except Exception:
+            logger.exception("Error while building Coinbase client")
+        _started = True
+    return _client
+
+# Start client in background thread in worker process.
+def _maybe_start_background():
+    if _nija_mod is None:
+        return
+    t = threading.Thread(target=_start_client_once, daemon=True)
+    t.start()
+
+# If Gunicorn uses preload_app=True, we prefer starting in worker after fork.
+# Gunicorn will call this if you use the 'post_fork' hook — but we can't assume hooks here.
+# Use before_first_request to ensure we start once in the worker process when first request arrives.
+@app.before_first_request
+def _start_on_first_request():
+    _maybe_start_background()
+
+# Also try to start immediately (useful when preload_app=False)
+# This runs at import-time (master or worker depending on preload_app); it's harmless because _start_client_once is idempotent.
+try:
+    _maybe_start_background()
+except Exception:
+    logger.exception("Failed to spawn background client thread on import; will try on first request.")
+
+# Helper route to inspect accounts
 @app.route("/__nija_accounts")
 def accounts():
     try:
-        # call build_client again if not present; safe idempotent attempt
-        from nija_client import client as client_obj
-        if client_obj is None:
-            # try building one now
-            client_now = build_client()
-            if client_now:
-                # try to read accounts (nija_client.check_and_log_accounts logs them; we'll try to fetch to return)
-                try:
-                    accounts = client_now.get_accounts()
-                    # try to coerce to json-able structure
-                    if hasattr(accounts, "to_dict"):
-                        accounts = accounts.to_dict()
-                    return jsonify({"connected": True, "accounts": accounts})
-                except Exception as e:
-                    logger.exception("nija_accounts route: failed to fetch accounts after build: %s", e)
-                    return jsonify({"connected": True, "error_fetching_accounts": str(e)}), 500
-            else:
-                return jsonify({"connected": False, "reason": "no-client"}), 503
-        else:
+        # ensure client exists (try building now if necessary)
+        client = _client or _start_client_once()
+        if not client:
+            return jsonify({"connected": False, "reason": "no-client"}), 503
+        # call method to get accounts; handle failures
+        try:
+            accounts = client.get_accounts()
+            # convert to JSON-friendly form
+            if hasattr(accounts, "to_dict"):
+                accounts = accounts.to_dict()
+            # If it's a list of objects, try to coerce
             try:
-                accounts = client_obj.get_accounts()
-                if hasattr(accounts, "to_dict"):
-                    accounts = accounts.to_dict()
-                return jsonify({"connected": True, "accounts": accounts})
-            except Exception as e:
-                logger.exception("nija_accounts route: failed to fetch accounts: %s", e)
-                return jsonify({"connected": True, "error_fetching_accounts": str(e)}), 500
+                import json
+                json.dumps(accounts)  # quick-check for serializability
+            except Exception:
+                # best-effort convert
+                if isinstance(accounts, (list, tuple)):
+                    safe = []
+                    for a in accounts:
+                        if hasattr(a, "to_dict"):
+                            safe.append(a.to_dict())
+                        elif hasattr(a, "__dict__"):
+                            safe.append(dict(a.__dict__))
+                        else:
+                            safe.append(str(a))
+                    accounts = safe
+                else:
+                    accounts = str(accounts)
+            return jsonify({"connected": True, "accounts": accounts})
+        except Exception as e:
+            logger.exception("Failed to fetch accounts")
+            return jsonify({"connected": True, "error_fetching_accounts": str(e)}), 500
     except Exception:
-        logger.exception("nija_accounts: unexpected")
+        logger.exception("Unexpected in accounts route")
         return jsonify({"error": "internal"}), 500
 
-# Root simple page
+# Root health endpoint
 @app.route("/")
 def index():
     return "NIJA TRADING BOT — running"
 
-# expose the Flask app as `app` (gunicorn expects wsgi:app)
+# Expose 'app' variable for Gunicorn (wsgi:app)
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
