@@ -1,28 +1,11 @@
-# ---- Base Image ----
-FROM python:3.11-slim
+#!/bin/bash
+set -e
 
-# ---- Set Working Directory ----
-WORKDIR /app
+echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
 
-# ---- Install System Dependencies ----
-RUN apt-get update && \
-    apt-get install -y git build-essential && \
-    rm -rf /var/lib/apt/lists/*
+# Optional: Check Coinbase module
+python -c "import sys; sys.path.append('/app/app/cd/vendor/coinbase_advanced_py'); import coinbase_advanced" 2>/dev/null || \
+echo "coinbase_advanced module NOT installed ❌. Live trading disabled"
 
-# ---- Copy Requirements ----
-COPY requirements.txt .
-
-# ---- Install Python Dependencies ----
-RUN pip install --upgrade pip && pip install -r requirements.txt
-
-# ---- Copy Project Files ----
-COPY . .
-
-# ---- Make Entrypoint Executable ----
-RUN chmod +x ./entrypoint.sh
-
-# ---- Expose Port for Gunicorn ----
-EXPOSE 5000
-
-# ---- Entrypoint ----
-ENTRYPOINT ["bash", "-lc", "./entrypoint.sh"]
+# Start Gunicorn
+exec gunicorn -c gunicorn.conf.py app.wsgi:app
