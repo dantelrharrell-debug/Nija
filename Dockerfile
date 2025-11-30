@@ -1,23 +1,21 @@
-# Use official Python 3.11 image
+# Dockerfile
 FROM python:3.11-slim
 
-# Set working directory in container
+# create app dir
 WORKDIR /usr/src/app
 
-# Set Python path so 'web' and 'bot' are recognized
-ENV PYTHONPATH=/usr/src/app
+# copy project
+COPY . /usr/src/app
 
-# Copy dependency file first (for caching)
-COPY requirements.txt .
+# install dependencies
+# create a minimal requirements.txt if you don't already have one
+RUN pip install --no-cache-dir -U pip setuptools wheel
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# If you have requirements.txt in repo, install it.
+RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
 
-# Copy the rest of the app
-COPY . .
+# expose port
+EXPOSE 5000
 
-# Expose port
-EXPOSE 8080
-
-# Start Gunicorn server for your web app
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8080", "web:app"]
+# run gunicorn with config file at repo root
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "web.wsgi:app"]
