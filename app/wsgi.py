@@ -1,21 +1,11 @@
-import os
-import sys
-import traceback
+from flask import Flask, jsonify
 
-# attempt to import the exported `app` from the package
-try:
-    from app import app  # app is the Flask instance created in app/__init__.py
-except Exception as e:
-    print("[ERROR] Failed to import `app` from package 'app':", file=sys.stderr)
-    traceback.print_exc()
-    sys.exit(1)
-
-# This is what Gunicorn uses
-wsgi_app = app
-
-# optional: a quick sanity route if you want a container-level endpoint for tests
-from app import app
+app = Flask(__name__)
 
 @app.route("/")
-def index():
-    return "Nija Bot Running!", 200
+def root():
+    return "NIJA BOT ROOT", 200
+
+@app.route("/__nija_probe")
+def probe():
+    return jsonify({"status": "ok", "bot": "NIJA running"}), 200
