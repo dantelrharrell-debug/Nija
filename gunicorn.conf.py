@@ -1,36 +1,44 @@
 import os
 import multiprocessing
 
-# Bind to port from environment variable, fallback to 8080
+# Bind to Railway's dynamic port
 bind = f"0.0.0.0:{os.environ.get('PORT', '8080')}"
 
-# Worker configuration
-worker_class = "gthread"  # alternatives: "gevent", "sync"
-workers = multiprocessing.cpu_count() * 2 + 1
-threads = 4
-timeout = 60
-graceful_timeout = 30
-keepalive = 2
+# Determine CPU count safely (fallback to 1)
+cpu_count = multiprocessing.cpu_count() or 1
+
+# Workers and threads
+# Rule of thumb: 2-4 threads per worker, 1 worker per CPU is safe for most bots
+workers = max(1, cpu_count)  # at least 1 worker
+threads = 2  # threads per worker
+
+# Worker type: gthread is safe for I/O-heavy tasks like bots
+worker_class = "gthread"
+
+# Timeouts
+timeout = 60           # seconds before force-kill
+graceful_timeout = 30  # allow workers to finish ongoing requests
+keepalive = 2          # HTTP keep-alive
 
 # Logging
-loglevel = "info"  # or "debug" for more verbose logs
-accesslog = "-"    # stdout
-errorlog = "-"     # stderr
-capture_output = True
+loglevel = "info"     # set to "debug" for verbose logs
+accesslog = "-"       # stdout
+errorlog = "-"        # stderr
+capture_output = True # redirect stdout/stderr
 
 # Preload app for faster worker spawn
 preload_app = True
 
-# Max request line and header size (prevents weird client errors)
+# Request limits (prevents weird client errors)
 limit_request_line = 4094
 limit_request_fields = 100
 limit_request_field_size = 8190
 
-# Working directory (optional)
+# Working directory
 chdir = "/app"
 
 # WSGI application
 wsgi_app = "wsgi:app"
 
-# Auto-reload (disable in production)
+# Reload for development (disable in production)
 reload = False
