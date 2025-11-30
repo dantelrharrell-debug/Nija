@@ -10,3 +10,4 @@ capture_output = True
 accesslog = "-"
 errorlog = "-"
 chdir = "/app"
+wsgi_app = "wsgi:app"
