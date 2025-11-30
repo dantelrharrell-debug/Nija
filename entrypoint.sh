@@ -1,33 +1,52 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# entrypoint.sh - robust startup for NIJA Trading Bot
 set -euo pipefail
 
 echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
 
-# Safely ensure PYTHONPATH contains /app and the vendored folder (won't error if PYTHONPATH was unset)
-export PYTHONPATH="${PYTHONPATH:-}:/app:/app/cd/vendor/coinbase_advanced_py"
-# Optional: normalize (remove leading colon if PYTHONPATH was empty)
-PYTHONPATH="${PYTHONPATH#:}"
+# Safe default for PYTHONPATH (avoid unbound variable when set -u is used)
+PYTHONPATH="${PYTHONPATH:-}"
+
+# App root and vendored client path
+ROOT_DIR="/app"
+VENDORED_DIR="${ROOT_DIR}/cd/vendor/coinbase_advanced_py"
+
+# Prepend app root and vendor folder to PYTHONPATH if not already present
+case ":$PYTHONPATH:" in
+  *":${ROOT_DIR}:"*) : ;; 
+  *) PYTHONPATH="${ROOT_DIR}:${PYTHONPATH}" ;;
+esac
+
+if [ -d "$VENDORED_DIR" ]; then
+  case ":$PYTHONPATH:" in
+    *":${VENDORED_DIR}:"*) : ;;
+    *) PYTHONPATH="${VENDORED_DIR}:${PYTHONPATH}" ;;
+  esac
+fi
+
 export PYTHONPATH
+echo "PYTHONPATH=${PYTHONPATH}"
 
-echo "PYTHONPATH=$PYTHONPATH"
-
-# Quick runtime check for coinbase module (non-fatal)
+# Quick non-fatal python import check (prints to logs)
 python - <<'PY'
 import sys, logging
 logging.basicConfig(level=logging.INFO)
-loaded = False
-# Try the likely module names in order
-for mod in ("coinbase_advanced", "coinbase_advanced_py", "coinbase_advanced.client", "coinbase_advanced_py.client"):
+logging.info("sys.path preview: %s", sys.path[:6])
+found = False
+for name in ("coinbase_advanced", "coinbase_advanced_py"):
     try:
-        __import__(mod)
-        logging.info("Loaded coinbase module: %s", mod)
-        loaded = True
+        __import__(name)
+        logging.info("Imported vendored package: %s", name)
+        found = True
         break
     except Exception as e:
-        logging.debug("Import failed for %s (%s)", mod, e)
-if not loaded:
-    logging.error("coinbase_advanced module NOT installed. Live trading disabled")
+        logging.info("Couldn't import %s: %s", name, e)
+if not found:
+    logging.warning("Vendored coinbase client not importable. Live trading disabled.")
 PY
 
-# Start Gunicorn — point to the wsgi your config expects
-exec gunicorn -c gunicorn.conf.py web.wsgi:app
+# Determine PORT (platform-provided or fallback)
+PORT="${PORT:-5000}"
+
+# Run gunicorn - use exec so it becomes PID 1
+exec gunicorn --config ./gunicorn.conf.py web.wsgi:app --bind "0.0.0.0:${PORT}"
