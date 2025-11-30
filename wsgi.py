@@ -13,6 +13,7 @@ def check_coinbase_accounts():
     if not Client:
         logging.warning("Coinbase client not available, skipping.")
         return
+
     api_key = os.environ.get("COINBASE_API_KEY")
     api_secret = os.environ.get("COINBASE_API_SECRET")
     if not api_key or not api_secret:
@@ -29,5 +30,4 @@ def check_coinbase_accounts():
     except Exception as e:
         logging.error(f"Failed to connect to Coinbase: {e}")
 
-# Run check on startup
 check_coinbase_accounts()
