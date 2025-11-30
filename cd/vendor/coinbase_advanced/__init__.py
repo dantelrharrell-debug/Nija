@@ -1,32 +1,14 @@
-# Thin wrapper so code using `import coinbase_advanced` works
-# It re-exports everything from the vendored implementation.
-
-from importlib import util, import_module
-import pkgutil
-import os
-import sys
-
-# compute path to the vendored implementation
-HERE = os.path.dirname(__file__)
-VENDORED_IMPL = os.path.normpath(os.path.join(HERE, "..", "coinbase_advanced_py"))
-
-# Insert vendored implementation into sys.path so it can be imported
-if VENDORED_IMPL not in sys.path:
-    sys.path.insert(0, VENDORED_IMPL)
-
-# try to import the main module from vendored implementation
+# cd/vendor/coinbase_advanced/__init__.py
+# small shim so code that does `import coinbase_advanced` can find the vendored package
+# Assumes cd/vendor is on PYTHONPATH (we add it in entrypoint)
 try:
-    _impl = import_module("client") if pkgutil.find_loader("client") else import_module("coinbase_advanced_py.client")
-except Exception:
-    # fallback: import the vendored package as a package
+    # prefer the vendored coinbase_advanced_py package
+    from coinbase_advanced_py import *  # re-export everything
+    # optional: expose client directly for convenience
     try:
-        _impl = import_module("coinbase_advanced_py")
+        from coinbase_advanced_py.client import Client  # noqa: F401
     except Exception:
-        _impl = None
-
-# Expose names from the vendored module if available
-if _impl:
-    # import all public names
-    for attr in dir(_impl):
-        if not attr.startswith("_"):
-            globals()[attr] = getattr(_impl, attr)
+        pass
+except Exception:
+    # If this fails it's okay — import errors will show in logs
+    raise
