@@ -1,31 +1,26 @@
-# Use Python 3.11 slim
 FROM python:3.11-slim
 
+# Set working directory
 WORKDIR /app
-ENV PYTHONPATH="/app:/bot:$PYTHONPATH"
 
-# Install system deps for building wheels
+# Install dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends git build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy project files first so pip cache works
+# Copy requirements and install
 COPY requirements.txt .
-# Install dependencies
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
-# Copy entire repo
-COPY . /app
+# Copy everything
+COPY . .
 
-# Install vendored coinbase packages under /app/cd/vendor
-# We install both wrapper and implementation as editable if possible
-RUN pip install --no-deps -e ./cd/vendor/coinbase_advanced || true
-RUN pip install --no-deps -e ./cd/vendor/coinbase_advanced_py || true
+# Add top-level to PYTHONPATH so 'bot' is visible
+ENV PYTHONPATH="/app:/:$PYTHONPATH"
 
 # Make entrypoint executable
 RUN chmod +x ./entrypoint.sh
 
-EXPOSE 5000
-
+# Start Gunicorn
 ENTRYPOINT ["./entrypoint.sh"]
