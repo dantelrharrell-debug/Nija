@@ -1,18 +1,21 @@
-# Base image
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y git build-essential && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y git build-essential && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Upgrade pip
+RUN pip install --upgrade pip setuptools wheel
+
+# Copy requirements first for caching
 COPY requirements.txt .
 
-# Upgrade pip and install Python dependencies
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the app
 COPY . .
@@ -21,4 +24,4 @@ COPY . .
 EXPOSE 5000
 
 # Start Gunicorn
-CMD ["gunicorn", "--config", "gunicorn.conf.py", "wsgi:app"]
+CMD ["gunicorn", "--config", "./gunicorn.conf.py", "wsgi:app"]
