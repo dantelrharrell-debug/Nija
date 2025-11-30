@@ -1,35 +1,24 @@
-# -----------------------------
-# NIJA Trading Bot Dockerfile
-# -----------------------------
-
-# Base image
+# ---------- Base Image ----------
 FROM python:3.11-slim
 
-# Set working directory
+# ---------- Set working directory ----------
 WORKDIR /app
 
-# Install system dependencies (git for pip installs from GitHub)
-RUN apt-get update && \
-    apt-get install -y git && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copy requirements
+# ---------- Install dependencies ----------
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# Copy the rest of the app
+# ---------- Copy application ----------
 COPY . .
 
-# Set environment variable for port
+# ---------- Expose port ----------
 ENV PORT=8080
+EXPOSE ${PORT}
 
-# Expose port
-EXPOSE 8080
-
-# Start Gunicorn using shell form to expand $PORT
+# ---------- Start Gunicorn ----------
+# Use shell form to expand $PORT at runtime
+# Force Gunicorn to ignore gunicorn.conf.py by passing empty -c ''
 CMD ["sh", "-c", "exec gunicorn wsgi:app \
   --bind 0.0.0.0:${PORT:-8080} \
   --workers 2 \
@@ -39,4 +28,5 @@ CMD ["sh", "-c", "exec gunicorn wsgi:app \
   --graceful-timeout 120 \
   --log-level debug \
   --capture-output \
-  --enable-stdio-inheritance"]
+  --enable-stdio-inheritance \
+  -c ''"]
