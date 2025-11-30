@@ -1,36 +1,27 @@
-# ---------- Base Image ----------
+# Use Python 3.11 slim image
 FROM python:3.11-slim
 
-# ---------- Set working directory ----------
-WORKDIR /app
-
-# ---------- Install system dependencies ----------
-# git is needed to install some Python packages from GitHub
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies: git and build tools
+RUN apt-get update && apt-get install -y \
     git \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# ---------- Install Python dependencies ----------
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first for caching
 COPY requirements.txt .
+
+# Upgrade pip and install Python dependencies
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
-# ---------- Copy application ----------
+# Copy the rest of your application
 COPY . .
 
-# ---------- Expose port ----------
-ENV PORT=8080
-EXPOSE ${PORT}
+# Expose the port Gunicorn will run on
+EXPOSE 5000
 
-# ---------- Start Gunicorn ----------
-CMD ["sh", "-c", "exec gunicorn wsgi:app \
-  --bind 0.0.0.0:${PORT:-8080} \
-  --workers 2 \
-  --worker-class gthread \
-  --threads 1 \
-  --timeout 120 \
-  --graceful-timeout 120 \
-  --log-level debug \
-  --capture-output \
-  --enable-stdio-inheritance \
-  -c ''"]
+# Start the app with Gunicorn
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "wsgi:app"]
