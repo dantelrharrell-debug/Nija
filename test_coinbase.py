@@ -18,7 +18,7 @@ if Client:
     else:
         try:
             client = Client(api_key=api_key, api_secret=api_secret)
-            accounts = client.get_accounts()  # just fetches account info
+            accounts = client.get_accounts()
             logging.info(f"Successfully connected to Coinbase. Found {len(accounts)} accounts.")
             for acc in accounts:
                 logging.info(f"Account: {acc['currency']} | Balance: {acc['balance']}")
