@@ -8,7 +8,7 @@
   "deploy": {
     "runtime": "V2",
     "numReplicas": 1,
-    "startCommand": "bash -lc 'exec gunicorn app.wsgi:app --bind 0.0.0.0:$PORT --workers 2 --worker-class gthread --threads 2 --timeout 120 --log-level debug --capture-output'",
+    "startCommand": "bash -lc './entrypoint.sh'",
     "sleepApplication": false,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
