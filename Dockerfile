@@ -15,7 +15,7 @@ RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
 # Copy entire repo
-COPY . .
+COPY . /app
 
 # Install vendored coinbase packages under /app/cd/vendor
 # We install both wrapper and implementation as editable if possible
