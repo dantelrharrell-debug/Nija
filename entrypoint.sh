@@ -1,19 +1,22 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
 echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
 
-# Add vendored path to PYTHONPATH just in case
-export PYTHONPATH="$PYTHONPATH:/app/cd/vendor/coinbase_advanced_py"
+# Add vendored path to PYTHONPATH (helps imports during runtime)
+export PYTHONPATH="$PYTHONPATH:/app/cd/vendor/coinbase_advanced:/app/cd/vendor/coinbase_advanced_py"
 
-# Test Coinbase module
-python - <<END
+# Quick runtime check for coinbase_advanced
+python - <<'PY'
+import sys, logging
+logging.basicConfig(level=logging.INFO)
 try:
     import coinbase_advanced
-    print("coinbase_advanced module installed ✅")
-except ModuleNotFoundError:
-    print("coinbase_advanced module NOT installed ❌. Live trading disabled")
-END
+    logging.info("coinbase_advanced import OK ✅")
+except Exception as e:
+    logging.error("coinbase_advanced import FAILED ❌: %s", e)
+    # not exiting: container can still serve dashboard/status
+PY
 
-# Start Gunicorn
-exec gunicorn -c gunicorn.conf.py web.wsgi:app
+# Start Gunicorn; prefer web.wsgi:app
+exec gunicorn --config ./gunicorn.conf.py web.wsgi:app
