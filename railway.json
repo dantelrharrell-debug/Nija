@@ -8,7 +8,7 @@
   "deploy": {
     "runtime": "V2",
     "numReplicas": 1,
-    "startCommand": "bash -lc 'if [ -f app/wsgi.py ]; then exec gunicorn app.wsgi:app --bind 0.0.0.0:$PORT --workers 2 --worker-class gthread --threads 2 --timeout 120 --log-level debug --capture-output; elif [ -f wsgi.py ]; then exec gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --worker-class gthread --threads 2 --timeout 120 --log-level debug --capture-output; else echo \"No wsgi file found\"; exit 1; fi'",
+    "startCommand": "bash -lc 'exec gunicorn app.wsgi:app --bind 0.0.0.0:$PORT --workers 2 --worker-class gthread --threads 2 --timeout 120 --log-level debug --capture-output'",
     "sleepApplication": false,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
