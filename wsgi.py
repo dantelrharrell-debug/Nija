@@ -1,33 +1,21 @@
-import os
+# wsgi.py
+# This file is the entrypoint Gunicorn will import as `wsgi:app`
 import logging
+from startup import check_coinbase_connection
+from trading_engine import engine_loop  # imports start the engine logic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("wsgi")
 
-try:
-    from coinbase_advanced.client import Client
-except ModuleNotFoundError:
-    Client = None
-    logging.error("coinbase_advanced module not installed. Live trading disabled.")
+# run Coinbase check and ensure client present (this will sys.exit on failure)
+client = check_coinbase_connection(require_live=True)
 
-def check_coinbase_accounts():
-    if not Client:
-        logging.warning("Coinbase client not available, skipping.")
-        return
+# Start engine in a background thread so gunicorn can serve web requests if any.
+import threading
+engine_thread = threading.Thread(target=engine_loop, daemon=True)
+engine_thread.start()
 
-    api_key = os.environ.get("COINBASE_API_KEY")
-    api_secret = os.environ.get("COINBASE_API_SECRET")
-    if not api_key or not api_secret:
-        logging.error("Missing Coinbase API credentials!")
-        return
-
-    try:
-        client = Client(api_key=api_key, api_secret=api_secret)
-        accounts = client.get_accounts()
-        logging.info(f"✅ Connected to Coinbase. Found {len(accounts)} accounts.")
-        for acc in accounts:
-            bal = getattr(acc.balance, "amount", "N/A") if getattr(acc, "balance", None) else "N/A"
-            logging.info(f"Account: {acc.currency} | Balance: {bal}")
-    except Exception as e:
-        logging.error(f"Failed to connect to Coinbase: {e}")
-
-check_coinbase_accounts()
+# Minimal WSGI app so Gunicorn has something to serve (200 OK)
+def app(environ, start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return [b'NIJA trading bot running\n']
