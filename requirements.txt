@@ -17,8 +17,8 @@ ecdsa==0.19.1
 PyJWT==2.10.1
 backoff==2.2.1
 
-# Coinbase Advanced client (GitHub)
-coinbase-advanced-py @ git+https://github.com/coinbase/coinbase-advanced-py.git@d316b758811ce3c13ef179fb228c569b333cddd1
+# Coinbase Advanced client
+coinbase-advanced-py @ git+https://github.com/coinbase/coinbase-advanced-py.git
 
 # Utilities
 click==8.3.1
