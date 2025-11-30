@@ -1,52 +1,22 @@
-#!/usr/bin/env bash
-# entrypoint.sh - robust startup for NIJA Trading Bot
-set -euo pipefail
+# web/wsgi.py
+import os
+import logging
 
-echo "=== STARTING NIJA TRADING BOT CONTAINER ==="
+# configure minimal logging so errors show in container logs
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("web.wsgi")
 
-# Safe default for PYTHONPATH (avoid unbound variable when set -u is used)
-PYTHONPATH="${PYTHONPATH:-}"
-
-# App root and vendored client path
-ROOT_DIR="/app"
-VENDORED_DIR="${ROOT_DIR}/cd/vendor/coinbase_advanced_py"
-
-# Prepend app root and vendor folder to PYTHONPATH if not already present
-case ":$PYTHONPATH:" in
-  *":${ROOT_DIR}:"*) : ;; 
-  *) PYTHONPATH="${ROOT_DIR}:${PYTHONPATH}" ;;
-esac
-
-if [ -d "$VENDORED_DIR" ]; then
-  case ":$PYTHONPATH:" in
-    *":${VENDORED_DIR}:"*) : ;;
-    *) PYTHONPATH="${VENDORED_DIR}:${PYTHONPATH}" ;;
-  esac
-fi
-
-export PYTHONPATH
-echo "PYTHONPATH=${PYTHONPATH}"
-
-# Quick non-fatal python import check (prints to logs)
-python - <<'PY'
-import sys, logging
-logging.basicConfig(level=logging.INFO)
-logging.info("sys.path preview: %s", sys.path[:6])
-found = False
-for name in ("coinbase_advanced", "coinbase_advanced_py"):
-    try:
-        __import__(name)
-        logging.info("Imported vendored package: %s", name)
-        found = True
-        break
-    except Exception as e:
-        logging.info("Couldn't import %s: %s", name, e)
-if not found:
-    logging.warning("Vendored coinbase client not importable. Live trading disabled.")
-PY
-
-# Determine PORT (platform-provided or fallback)
-PORT="${PORT:-5000}"
-
-# Run gunicorn - use exec so it becomes PID 1
-exec gunicorn --config ./gunicorn.conf.py web.wsgi:app --bind "0.0.0.0:${PORT}"
+try:
+    # If your factory is in web.__init__.py and called create_app():
+    from web import create_app
+    logger.info("Found web.create_app(), building app via factory")
+    app = create_app()
+except Exception as e:
+    # If factory import fails, log full exception + fallback for simple app
+    logger.exception("Failed to import create_app() from web — check import errors: %s", e)
+    # Minimal fallback so Gunicorn can still start and you see errors on / route:
+    from flask import Flask, jsonify
+    app = Flask(__name__)
+    @app.route("/")
+    def index():
+        return jsonify({"ok": False, "error": "app import failed; check logs"})
