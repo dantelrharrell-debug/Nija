@@ -1,26 +1,23 @@
-# wsgi.py
-import logging
-from flask import Flask, jsonify
-from nija_client import test_coinbase_connection
+# wsgi.py (or app.py)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("nija-wsgi")
+from flask import Flask, jsonify
+import os
 
 app = Flask(__name__)
 
-@app.route("/")
-def index():
-    return "NIJA TRADING BOT — up"
+# NIJA bot health check endpoint
+@app.route("/__nija_probe", methods=["GET"])
+def nija_probe():
+    # You can add extra checks here (DB, Coinbase API, etc.)
+    return jsonify({
+        "status": "ok",
+        "message": "NIJA bot is live",
+    }), 200
 
-@app.route("/__nija_probe")
-def probe():
-    """Call the test function and return its dict as JSON."""
-    try:
-        result = test_coinbase_connection()
-        return jsonify(result), 200
-    except Exception as e:
-        logger.exception("Unexpected probe failure")
-        return jsonify({"error": str(e)}), 500
+# Example root route
+@app.route("/")
+def root():
+    return "Hello World", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
