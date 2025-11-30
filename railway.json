@@ -2,20 +2,14 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "docker build -t nija-trading-bot .",
+    "buildCommand": "docker build -t nija-bot .",
     "buildEnvironment": "V3"
   },
   "deploy": {
     "runtime": "V2",
     "numReplicas": 1,
-    "startCommand": "bash -lc 'if [ -f app/wsgi.py ]; then exec gunicorn app.wsgi:app --bind 0.0.0.0:$PORT --workers 2 --worker-class gthread --threads 1 --timeout 120 --graceful-timeout 120 --log-level debug --capture-output --enable-stdio-inheritance --log-file -; elif [ -f wsgi.py ]; then exec gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --worker-class gthread --threads 1 --timeout 120 --graceful-timeout 120 --log-level debug --capture-output --enable-stdio-inheritance --log-file -; else echo \"No wsgi entrypoint found (tried app/wsgi.py and wsgi.py)\"; exit 1; fi'",
+    "startCommand": "bash -lc 'if [ -f app/wsgi.py ]; then exec gunicorn app.wsgi:app --bind 0.0.0.0:$PORT --workers 2 --worker-class gthread --threads 2 --timeout 120 --log-level debug --capture-output; elif [ -f wsgi.py ]; then exec gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --worker-class gthread --threads 2 --timeout 120 --log-level debug --capture-output; else echo \"No wsgi file found\"; exit 1; fi'",
     "sleepApplication": false,
-    "useLegacyStacker": false,
-    "multiRegionConfig": {
-      "us-west2": {
-        "numReplicas": 1
-      }
-    },
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
