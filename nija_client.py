@@ -2,163 +2,181 @@
 import os
 import logging
 import time
-from datetime import datetime
-from random import uniform  # Example signal generator
+from decimal import Decimal
 
-# ------------------------------
-# Logging Setup
-# ------------------------------
+# ----------------------------
+# Logging setup
+# ----------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-# ------------------------------
-# Coinbase Connection
-# ------------------------------
+# ----------------------------
+# Coinbase connection
+# ----------------------------
 try:
     from coinbase_advanced.client import Client
+
     client = Client(
-        api_key="organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/ce5dbcbe-ba9f-45a4-a374-5d2618af0ccd",
-        api_secret="""-----BEGIN EC PRIVATE KEY-----
-MHcCAQEEIC4EDrIQiByWHS5qIrHsMI6SZb0sYSqx744G2kvqr+PCoAoGCCqGSM49
-AwEHoUQDQgAE3gkuCL8xUOM81/alCSOLqEtyUmY7A09z7QEAoN/cfCtbAslo6pXR
-qONKAu6GS9PS/W3BTFyB6ZJBRzxMZeNzBg==
------END EC PRIVATE KEY-----"""
+        api_key=os.environ.get("COINBASE_API_KEY"),
+        api_secret=os.environ.get("COINBASE_API_SECRET"),
+        api_sub=os.environ.get("COINBASE_API_SUB")
     )
-    account = client.get_account()  # Basic API test
-    logging.info(f"Coinbase connection successful. Account ID: {account['id']}")
+
+    # Test connection
+    account = client.get_account()
+    logging.info(f"✅ Coinbase connection successful. Account ID: {account['id']}")
+
 except ModuleNotFoundError:
     client = None
     logging.error("coinbase_advanced module not installed. Live trading disabled.")
 except Exception as e:
     client = None
-    logging.error(f"Coinbase connection failed: {e}")
+    logging.error(f"❌ Coinbase connection failed: {e}")
 
-# ------------------------------
-# Signals Database
-# ------------------------------
-signals_db = []
-
-def fetch_signals():
-    return signals_db
-
-def add_signal(symbol, side, entry_price, stop_loss, take_profit, asset_type):
-    signal = {
-        'symbol': symbol,
-        'side': side,
-        'entry_price': entry_price,
-        'stop_loss': stop_loss,
-        'take_profit': take_profit,
-        'trailing_stop': stop_loss,
-        'trailing_take': take_profit,
-        'asset_type': asset_type,
-        'status': 'pending'
-    }
-    signals_db.append(signal)
-    logging.info(f"Added new signal: {symbol} {side} ({asset_type})")
-
-# ------------------------------
-# Position Sizing
-# ------------------------------
-def calculate_position_size(signal):
-    base_risk_percent = 0.05
-    if client:
-        account_balance = float(client.get_account()['balance']['amount'])
-    else:
-        account_balance = 1000  # fallback for offline mode
-    size = account_balance * base_risk_percent
-    logging.info(f"Calculated position size for {signal['symbol']}: {size}")
-    return size
-
-# ------------------------------
-# Trading Functions
-# ------------------------------
-def execute_trade(signal, size):
-    logging.info(f"Executing trade: {signal['side']} {size} of {signal['symbol']} ({signal['asset_type']})")
-    if client:
-        try:
-            client.place_order(
-                symbol=signal['symbol'],
-                side=signal['side'],
-                size=size
-            )
-            signal['status'] = 'open'
-            signal['entry_time'] = datetime.utcnow()
-        except Exception as e:
-            logging.error(f"Failed to execute trade for {signal['symbol']}: {e}")
-    else:
-        signal['status'] = 'open'
-        signal['entry_time'] = datetime.utcnow()
-
-def update_trailing_stop(signal):
-    if signal.get('status') != 'open':
-        return
-    current_price = float(client.get_price(signal['symbol'])['amount']) if client else signal['entry_price']
-    if signal['side'] == 'buy':
-        signal['trailing_stop'] = max(signal.get('trailing_stop', signal['stop_loss']), current_price * 0.98)
-    else:
-        signal['trailing_stop'] = min(signal.get('trailing_stop', signal['stop_loss']), current_price * 1.02)
-    logging.info(f"Updated trailing stop for {signal['symbol']}: {signal['trailing_stop']}")
-
-def update_trailing_take_profit(signal):
-    if signal.get('status') != 'open':
-        return
-    current_price = float(client.get_price(signal['symbol'])['amount']) if client else signal['entry_price']
-    if signal['side'] == 'buy':
-        signal['trailing_take'] = max(signal.get('trailing_take', signal['take_profit']), current_price * 1.02)
-    else:
-        signal['trailing_take'] = min(signal.get('trailing_take', signal['take_profit']), current_price * 0.98)
-    logging.info(f"Updated trailing take-profit for {signal['symbol']}: {signal['trailing_take']}")
-
-# ------------------------------
-# Ultimate NIJA Strategy Logic
-# ------------------------------
+# ----------------------------
+# NIJA Signal Logic Placeholder
+# ----------------------------
+# Replace this function with your full NIJA logic
 def generate_nija_signals():
-    # Example: Replace with your ultimate Ninja algorithms
-    symbols = [
-        {'symbol': 'BTC-USD', 'asset_type': 'crypto'},
-        {'symbol': 'ETH-USD', 'asset_type': 'crypto'},
-        {'symbol': 'AAPL', 'asset_type': 'stock'},
-        {'symbol': 'TSLA', 'asset_type': 'stock'}
+    """
+    Return a list of trade signals.
+    Each signal should be a dict:
+    {
+        'symbol': 'BTC-USD',
+        'side': 'buy' or 'sell',
+        'type': 'spot'/'crypto'/'stock'/'options'/'futures',
+        'quantity': 0.01,
+        'price': None,  # optional for market orders
+        'trail_sl': 0.02,  # trailing stop loss 2%
+        'trail_tp': 0.03   # trailing take profit 3%
+    }
+    """
+    # Example static signal
+    return [
+        {
+            'symbol': 'BTC-USD',
+            'side': 'buy',
+            'type': 'crypto',
+            'quantity': 0.001,
+            'price': None,
+            'trail_sl': 0.02,
+            'trail_tp': 0.03
+        }
     ]
-    
-    for s in symbols:
-        # Replace this with your real trading logic
-        side = 'buy' if uniform(0, 1) > 0.5 else 'sell'
-        entry = uniform(100, 50000)
-        sl = entry * 0.98
-        tp = entry * 1.02
-        add_signal(s['symbol'], side, entry, sl, tp, s['asset_type'])
 
-# ------------------------------
-# Bot Main Loop
-# ------------------------------
+# ----------------------------
+# Order execution
+# ----------------------------
+def place_order(signal):
+    if client is None:
+        logging.warning(f"Dry run: {signal['side']} {signal['quantity']} {signal['symbol']}")
+        return None
+
+    try:
+        order = client.create_order(
+            product_id=signal['symbol'],
+            side=signal['side'],
+            size=signal['quantity'],
+            type='market' if signal['price'] is None else 'limit',
+            price=signal['price']
+        )
+        logging.info(f"✅ Order placed: {signal['side']} {signal['quantity']} {signal['symbol']} @ {signal['price']}")
+        return order
+    except Exception as e:
+        logging.error(f"❌ Failed to place order: {e}")
+        return None
+
+# ----------------------------
+# Trailing Stop / Take Profit
+# ----------------------------
+def monitor_trailing(order, trail_sl, trail_tp):
+    if client is None or order is None:
+        return
+    try:
+        symbol = order['product_id']
+        side = order['side']
+        filled_price = Decimal(order['filled_avg_price'])
+        logging.info(f"Starting trailing monitor for {symbol} @ {filled_price}")
+
+        # Placeholder logic for trailing
+        while True:
+            market_price = Decimal(client.get_ticker(symbol)['price'])
+            
+            # Trailing Stop Loss
+            if side == 'buy':
+                if market_price <= filled_price * (1 - Decimal(trail_sl)):
+                    logging.info(f"Trigger trailing SL: sell {symbol} at {market_price}")
+                    client.create_order(
+                        product_id=symbol,
+                        side='sell',
+                        size=order['filled_size'],
+                        type='market'
+                    )
+                    break
+            elif side == 'sell':
+                if market_price >= filled_price * (1 + Decimal(trail_sl)):
+                    logging.info(f"Trigger trailing SL: buy {symbol} at {market_price}")
+                    client.create_order(
+                        product_id=symbol,
+                        side='buy',
+                        size=order['filled_size'],
+                        type='market'
+                    )
+                    break
+
+            # Trailing Take Profit
+            if side == 'buy':
+                if market_price >= filled_price * (1 + Decimal(trail_tp)):
+                    logging.info(f"Trigger trailing TP: sell {symbol} at {market_price}")
+                    client.create_order(
+                        product_id=symbol,
+                        side='sell',
+                        size=order['filled_size'],
+                        type='market'
+                    )
+                    break
+            elif side == 'sell':
+                if market_price <= filled_price * (1 - Decimal(trail_tp)):
+                    logging.info(f"Trigger trailing TP: buy {symbol} at {market_price}")
+                    client.create_order(
+                        product_id=symbol,
+                        side='buy',
+                        size=order['filled_size'],
+                        type='market'
+                    )
+                    break
+
+            time.sleep(5)  # check every 5 seconds
+
+    except Exception as e:
+        logging.error(f"Error in trailing monitor: {e}")
+
+# ----------------------------
+# Bot loop
+# ----------------------------
 def start_bot():
     if client is None:
-        logging.warning("Bot running in offline/dry mode.")
+        logging.warning("Bot running in dry/offline mode.")
     else:
-        logging.info("Bot running with live Coinbase connection.")
+        logging.info("Bot running LIVE 24/7 with Coinbase connection.")
 
     while True:
-        # 1. Generate new signals
-        generate_nija_signals()
+        try:
+            signals = generate_nija_signals()
+            for signal in signals:
+                order = place_order(signal)
+                if order:
+                    monitor_trailing(order, signal['trail_sl'], signal['trail_tp'])
+            logging.info("✅ Bot heartbeat complete. Waiting 60s for next cycle.")
+            time.sleep(60)
+        except Exception as e:
+            logging.error(f"Bot runtime error: {e}")
+            time.sleep(60)
 
-        # 2. Process signals
-        signals = fetch_signals()
-        for signal in signals:
-            if signal['status'] == 'pending':
-                size = calculate_position_size(signal)
-                execute_trade(signal, size)
-            if signal['status'] == 'open':
-                update_trailing_stop(signal)
-                update_trailing_take_profit(signal)
-        
-        logging.info("Bot heartbeat...")
-        time.sleep(60)  # adjust frequency as needed
-
-# ------------------------------
-# Run Bot
-# ------------------------------
+# ----------------------------
+# Entry point
+# ----------------------------
 if __name__ == "__main__":
     start_bot()
