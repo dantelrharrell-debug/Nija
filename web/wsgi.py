@@ -1,32 +1,12 @@
 # web/wsgi.py
-
-from web import app
-
-if __name__ == "__main__":
-    # For local testing only
-    app.run(host="0.0.0.0", port=5000)
-
+import logging
 from web import app  # imports the Flask app from __init__.py
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
-
-# web/wsgi.py
-import logging
+# Optional: configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("web.wsgi")
+logger.info("Starting Flask app via Gunicorn")
 
-try:
-    from web import create_app
-    logger.info("Calling web.create_app()")
-    app = create_app()
-except Exception as exc:
-    logger.exception("create_app() failed — starting fallback app: %s", exc)
-    from flask import Flask, jsonify
-    app = Flask(__name__)
-    @app.route("/")
-    def index():
-        return jsonify({"ok": False, "error": "create_app() failed; check logs"})
-    @app.route("/__diagnose")
-    def diag():
-        return jsonify({"ok": False, "diagnostic": "create_app() exception logged"})
+if __name__ == "__main__":
+    # Only used for local testing
+    app.run(host="0.0.0.0", port=5000)
