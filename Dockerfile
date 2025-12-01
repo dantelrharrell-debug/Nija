@@ -1,22 +1,24 @@
-# Use Python 3.11 slim (or 3.10 if needed)
+# Use Python 3.11 slim
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /usr/src/app
 
-# Install git (needed to clone the repo)
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Install git and build tools for Python packages
+RUN apt-get update && \
+    apt-get install -y git build-essential && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy your requirements.txt
+# Copy requirements file
 COPY requirements.txt .
 
-# Install Python dependencies including coinbase_advanced directly from GitHub
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of your app
+# Copy application code
 COPY . .
 
-# Expose port
+# Expose port for Flask/Gunicorn
 EXPOSE 5000
 
 # Start Gunicorn
