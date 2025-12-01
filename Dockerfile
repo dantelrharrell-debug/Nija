@@ -1,6 +1,3 @@
-COPY ./coinbase_advanced_py /usr/src/app/coinbase_advanced_py
-RUN pip install /usr/src/app/coinbase_advanced_py
-
 FROM python:3.11-slim
 
 # Install git and build tools
@@ -15,16 +12,12 @@ RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced
 # Set working directory
 WORKDIR /usr/src/app
 
-# Copy application code
-COPY . .
-
-# Install other Python dependencies
+# Copy only requirements first for caching
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Set environment variables at runtime (recommended)
-# ENV COINBASE_API_KEY="your_api_key"
-# ENV COINBASE_API_SECRET="your_api_secret"
-# ENV COINBASE_API_PASSPHRASE="your_passphrase"
+# Copy application code
+COPY . .
 
 # Expose port
 EXPOSE 5000
