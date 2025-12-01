@@ -1,48 +1,27 @@
-# ----------------------------
 # Base image
-# ----------------------------
 FROM python:3.11-slim
 
-# ----------------------------
 # Set working directory
-# ----------------------------
 WORKDIR /usr/src/app
 
-# ----------------------------
 # Install system dependencies
-# ----------------------------
-RUN apt-get update && \
-    apt-get install -y git build-essential && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y git build-essential && rm -rf /var/lib/apt/lists/*
 
-# ----------------------------
-# Copy and install Python dependencies
-# ----------------------------
+# Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ----------------------------
-# Copy application code
-# ----------------------------
+# Copy app code
 COPY . .
 
-# ----------------------------
-# Copy vendor libraries
-# ----------------------------
-# We include coinbase_advanced_py in vendor but do NOT pip install it
-COPY cd/vendor/coinbase_advanced_py /usr/src/app/cd/vendor/coinbase_advanced_py
-
-# ----------------------------
-# Set PYTHONPATH to include vendor folder
-# ----------------------------
+# Set PYTHONPATH so the container can find vendor modules
 ENV PYTHONPATH="/usr/src/app/cd/vendor:$PYTHONPATH"
 
-# ----------------------------
-# Expose port
-# ----------------------------
+# Install coinbase_advanced_py in editable mode to bypass pyproject.toml wheel issues
+RUN pip install -e /usr/src/app/cd/vendor/coinbase_advanced_py
+
+# Expose the app port
 EXPOSE 5000
 
-# ----------------------------
-# Start Gunicorn pointing to WSGI app
-# ----------------------------
+# Start Gunicorn
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
