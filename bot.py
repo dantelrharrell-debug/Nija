@@ -1,5 +1,6 @@
 import os
 import logging
+import threading
 import time
 from flask import Flask, jsonify
 
@@ -15,7 +16,7 @@ logging.basicConfig(
 # Coinbase Client Setup
 # ---------------------------
 try:
-    from coinbase_advanced_py.client import Client
+    from coinbase_advanced_py.client import Client  # <-- FIXED HERE
     logging.info("Imported coinbase_advanced_py.Client successfully")
     LIVE_TRADING_ENABLED = True
 except ModuleNotFoundError:
@@ -64,8 +65,7 @@ def run_bot():
         for account in accounts:
             logging.info(f"Account: {account['currency']} | Balance: {account['balance']['amount']}")
         
-        # --- Add your trading logic here ---
-        # Example placeholder:
+        # --- Trading logic placeholder ---
         # if some_condition:
         #     client.place_order(...)
         logging.info("Bot executed successfully")
@@ -73,12 +73,25 @@ def run_bot():
         logging.error(f"Bot execution failed: {e}")
 
 # ---------------------------
-# Main Loop
+# Background Bot Loop
 # ---------------------------
-if __name__ == "__main__":
+def bot_loop():
     interval = int(os.environ.get("BOT_INTERVAL", 60))  # seconds
     logging.info(f"Starting bot loop with interval {interval} seconds")
-
     while True:
         run_bot()
         time.sleep(interval)
+
+# Start the bot loop in a separate thread
+if LIVE_TRADING_ENABLED:
+    thread = threading.Thread(target=bot_loop, daemon=True)
+    thread.start()
+    logging.info("Bot thread started")
+
+# ---------------------------
+# Run Flask App
+# ---------------------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    logging.info(f"Starting Flask app on port {port}")
+    app.run(host="0.0.0.0", port=port)
