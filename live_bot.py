@@ -1,273 +1,177 @@
-# live_bot.py
-"""
-Full NIJA trading bot (single-file).
-Primary import requested: from coinbase_advanced.client import Client
-Falls back to other plausible imports if that fails.
-Includes a MockClient so the app can run without the real package (useful for CI/deploy when you
-can't install locally or to test endpoints).
-"""
-
+# bot_live.py
 import os
 import logging
 import threading
 import time
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 
 # ---------------------------
-# Logging
+# Logging Setup
 # ---------------------------
 logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO"),
+    level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-log = logging.getLogger("nija_live_bot")
 
 # ---------------------------
-# Try imports (requested first)
+# Import Coinbase client robustly
 # ---------------------------
 Client = None
-IMPORTED_AS = None
+LIVE_TRADING_ENABLED = False
+_import_errors = []
 
+# Try the exact import you asked for first (priority)
 try:
-    # --- user requested (try this first) ---
-    from coinbase_advanced.client import Client
-    IMPORTED_AS = "coinbase_advanced.client"
-    log.info("Imported Client from coinbase_advanced.client")
-except Exception as e1:
-    # try other reasonable variants observed in your logs/repos
+    from coinbase_advanced.client import Client  # preferred per your request
+    logging.info("Imported Client from coinbase_advanced.client")
+    LIVE_TRADING_ENABLED = True
+except Exception as e:
+    _import_errors.append(("coinbase_advanced.client", str(e)))
+    # try other plausible names
     try:
         from coinbase_advanced_py.client import Client
-        IMPORTED_AS = "coinbase_advanced_py.client"
-        log.info("Imported Client from coinbase_advanced_py.client")
+        logging.info("Imported Client from coinbase_advanced_py.client")
+        LIVE_TRADING_ENABLED = True
     except Exception as e2:
+        _import_errors.append(("coinbase_advanced_py.client", str(e2)))
         try:
-            # package might expose 'coinbase_advanced' (top-level)
-            from coinbase_advanced import Client
-            IMPORTED_AS = "coinbase_advanced"
-            log.info("Imported Client from coinbase_advanced")
+            # Many versions of the repo expose 'coinbase' as top-level package
+            from coinbase.rest import RESTClient as Client
+            logging.info("Imported RESTClient from coinbase.rest (aliased to Client)")
+            LIVE_TRADING_ENABLED = True
         except Exception as e3:
-            try:
-                # new coinbase SDK variants sometimes use coinbase.rest.RESTClient
-                from coinbase.rest import RESTClient as Client
-                IMPORTED_AS = "coinbase.rest.RESTClient"
-                log.info("Imported RESTClient from coinbase.rest as Client")
-            except Exception as e4:
-                # No real client available — will use mock
-                Client = None
-                IMPORTED_AS = None
-                log.error("No coinbase client package available; running without live client.")
-
-# ---------------------------
-# Mock fallback client (safe for testing)
-# ---------------------------
-class MockClient:
-    def __init__(self, *args, **kwargs):
-        self._balances = {"USD": "10000.00", "BTC": "0.002"}
-        log.info("Initialized MockClient (no real API calls will be made).")
-
-    def get_accounts(self):
-        # return list-like structure similar to many coinbase clients
-        return [
-            {"currency": k, "balance": {"amount": v}} for k, v in self._balances.items()
-        ]
-
-    def place_order(self, **kwargs):
-        # return mock order
-        log.info(f"[MOCK] place_order called with: {kwargs}")
-        return {"id": "mock-order-123", "status": "mock_placed", **kwargs}
-
-    def close(self):
-        log.info("MockClient closed.")
-
-# ---------------------------
-# Globals / config
-# ---------------------------
-LIVE_TRADING_ENABLED = os.environ.get("LIVE_TRADING", "0") in ("1", "true", "True", "yes")
-BOT_INTERVAL = int(os.environ.get("BOT_INTERVAL", 60))  # seconds
-COINBASE_API_KEY = os.environ.get("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.environ.get("COINBASE_API_SECRET")
-COINBASE_API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")
-
-client = None
-_client_lock = threading.Lock()
-
-def init_client():
-    global client, LIVE_TRADING_ENABLED
-    if IMPORTED_AS is None:
-        log.warning("No installed coinbase client found; using MockClient.")
-        client = MockClient()
-        LIVE_TRADING_ENABLED = False
-        return
-
-    # If user enabled live trading but missing keys, disable for safety
-    if LIVE_TRADING_ENABLED and (not COINBASE_API_KEY or not COINBASE_API_SECRET):
-        log.error("LIVE_TRADING requested but API key/secret missing. Disabling live trading.")
-        LIVE_TRADING_ENABLED = False
-
-    if LIVE_TRADING_ENABLED:
-        try:
-            # adapt to Client constructor signatures if necessary
-            # Most clients accept api_key/api_secret (and maybe passphrase). We'll try to pass safely.
-            try:
-                client = Client(
-                    api_key=COINBASE_API_KEY,
-                    api_secret=COINBASE_API_SECRET,
-                    api_passphrase=COINBASE_API_PASSPHRASE
-                )
-            except TypeError:
-                # fallback: some libs expect different param names
-                client = Client(COINBASE_API_KEY, COINBASE_API_SECRET)
-            log.info(f"Initialized live Client from {IMPORTED_AS}")
-        except Exception as e:
-            log.exception(f"Failed to initialize live client: {e}")
-            log.warning("Falling back to MockClient and disabling LIVE_TRADING.")
-            client = MockClient()
+            _import_errors.append(("coinbase.rest", str(e3)))
+            Client = None
             LIVE_TRADING_ENABLED = False
-    else:
-        # Not live trading — create mock client for endpoints to work
-        client = MockClient()
 
-# initialize client at import
-init_client()
+# Log import attempt details
+if LIVE_TRADING_ENABLED:
+    logging.info("Coinbase client import succeeded.")
+else:
+    logging.error("Coinbase client import failed. Details:")
+    for mod, err in _import_errors:
+        logging.error("  Tried %s -> %s", mod, err)
 
 # ---------------------------
-# Flask app (health + simple endpoints)
+# Initialize client if available
+# ---------------------------
+client = None
+if LIVE_TRADING_ENABLED and Client is not None:
+    try:
+        # The constructor params may differ slightly between packages.
+        # We try common environment variable names; adjust if your package expects different args.
+        client = Client(
+            api_key=os.environ.get("COINBASE_API_KEY"),
+            api_secret=os.environ.get("COINBASE_API_SECRET"),
+            api_passphrase=os.environ.get("COINBASE_API_PASSPHRASE")
+        )
+        logging.info("Coinbase client initialized successfully")
+    except TypeError:
+        # Some Client classes expect different constructor names; try alternate factory methods
+        try:
+            # Example: some clients use RESTClient(api_key=..., api_secret=...)
+            client = Client(os.environ.get("COINBASE_API_KEY"),
+                            os.environ.get("COINBASE_API_SECRET"),
+                            os.environ.get("COINBASE_API_PASSPHRASE"))
+            logging.info("Coinbase client initialized with positional args")
+        except Exception as e:
+            logging.error("Error initializing Coinbase client: %s", e)
+            client = None
+            LIVE_TRADING_ENABLED = False
+    except Exception as e:
+        logging.error("Error initializing Coinbase client: %s", e)
+        client = None
+        LIVE_TRADING_ENABLED = False
+
+# ---------------------------
+# Flask App Setup
 # ---------------------------
 app = Flask(__name__)
+logging.info("Flask app created successfully")
 
-@app.route("/", methods=["GET"])
-def index():
+@app.route("/")
+def home():
     return jsonify({
-        "service": "nija-live-bot",
         "status": "ok",
         "live_trading": LIVE_TRADING_ENABLED,
-        "client_imported_as": IMPORTED_AS or "none"
+        "client_present": bool(client is not None)
     })
 
-@app.route("/health", methods=["GET"])
-def health():
-    # quick self-check
-    ok = client is not None
-    return jsonify({
-        "ok": ok,
-        "live_trading": LIVE_TRADING_ENABLED,
-        "client": IMPORTED_AS or "mock" if isinstance(client, MockClient) else "none"
-    })
-
-@app.route("/balances", methods=["GET"])
-def balances():
-    with _client_lock:
-        try:
-            accounts = client.get_accounts()
-            return jsonify({"accounts": accounts})
-        except Exception as e:
-            log.exception("Error fetching balances")
-            return jsonify({"error": str(e)}), 500
-
-@app.route("/place-order", methods=["POST"])
-def place_order_endpoint():
-    """
-    Simple endpoint to place an order (demo). POST JSON body is forwarded to client.place_order.
-    This endpoint will be disabled if LIVE_TRADING is False to avoid accidental trades.
-    """
-    payload = request.get_json(force=True, silent=True) or {}
-    if not LIVE_TRADING_ENABLED:
-        return jsonify({"error": "live trading disabled"}), 403
-
-    with _client_lock:
-        try:
-            result = client.place_order(**payload)
-            return jsonify({"result": result})
-        except Exception as e:
-            log.exception("Order placement failed")
-            return jsonify({"error": str(e)}), 500
-
 # ---------------------------
-# Trading logic (placeholder)
+# Bot Logic (simple example)
 # ---------------------------
-def trading_step():
-    """
-    One iteration of trading logic.
-    Put your buy/sell logic here. Keep it idempotent and safe.
-    Examples:
-      - get_accounts(), get_current_price(), check signals, place small test order, cancel if needed
-    """
-    with _client_lock:
-        try:
-            accounts = client.get_accounts()
-            log.info("Accounts snapshot:")
-            for a in accounts:
-                # defensive: different clients have slightly different shapes
-                try:
-                    currency = a.get("currency", a.get("asset", "unknown"))
-                    balance = a.get("balance", {}).get("amount", str(a))
-                except Exception:
-                    currency = str(a)
-                    balance = ""
-                log.info(f"  -> {currency} : {balance}")
-            # ----- Example placeholder signal -----
-            # Add your own real signal detection + sized order logic here.
-            # Example (DO NOT UNCOMMENT UNLESS YOU WANT ORDERS):
-            # if signal_buy:
-            #     resp = client.place_order(product_id="BTC-USD", side="buy", size="0.001", type="market")
-            #     log.info(f"Placed order: {resp}")
-        except Exception as e:
-            log.exception("trading_step failed")
-
-# ---------------------------
-# Background bot loop
-# ---------------------------
-_stop_event = threading.Event()
-_bot_thread = None
-
-def bot_loop():
-    log.info(f"Bot loop starting (interval={BOT_INTERVAL}s). LIVE_TRADING={LIVE_TRADING_ENABLED}")
-    while not _stop_event.is_set():
-        start = time.time()
-        try:
-            trading_step()
-        except Exception:
-            log.exception("Unhandled error in trading loop")
-        elapsed = time.time() - start
-        wait = max(0, BOT_INTERVAL - elapsed)
-        _stop_event.wait(wait)
-    log.info("Bot loop stopped.")
-
-def start_bot_thread():
-    global _bot_thread
-    if _bot_thread and _bot_thread.is_alive():
-        log.info("Bot thread already running.")
+def run_bot_once():
+    if not LIVE_TRADING_ENABLED or client is None:
+        logging.warning("Live trading disabled or client missing; skipping run.")
         return
-    _stop_event.clear()
-    _bot_thread = threading.Thread(target=bot_loop, daemon=True, name="nija-bot-thread")
-    _bot_thread.start()
-    log.info("Bot thread started.")
 
-def stop_bot_thread():
-    _stop_event.set()
-    if _bot_thread:
-        _bot_thread.join(timeout=5)
-        log.info("Bot thread join attempted.")
+    try:
+        # call a safe, read-only method if available
+        # Note: method names vary between packages; we attempt common ones
+        accounts = None
+        if hasattr(client, "get_accounts"):
+            accounts = client.get_accounts()
+        elif hasattr(client, "list_accounts"):
+            accounts = client.list_accounts()
+        elif hasattr(client, "accounts"):
+            accounts = client.accounts()
+        else:
+            logging.warning("No known accounts method on client; introspecting methods.")
+            # attempt REST call via a generic GET endpoint (best-effort; non-destructive)
+            try:
+                # If client exposes .request or .get, call a simple endpoint
+                if hasattr(client, "request"):
+                    accounts = client.request("GET", "/accounts")
+                elif hasattr(client, "get"):
+                    accounts = client.get("/accounts")
+            except Exception as e:
+                logging.error("Generic GET /accounts failed: %s", e)
 
-# Auto-start thread if desired (default: do NOT auto-start unless env set)
-if os.environ.get("AUTO_START_BOT", "0") in ("1", "true", "True"):
-    start_bot_thread()
+        if accounts is not None:
+            # `accounts` may be a list or a generator; log key fields safely
+            try:
+                for a in accounts:
+                    # safe field access - logs what we can
+                    try:
+                        if isinstance(a, dict):
+                            currency = a.get("currency") or a.get("currency_code") or a.get("asset")
+                            balance = a.get("balance", {}).get("amount") if a.get("balance") else a.get("balance")
+                            logging.info("Account: %s | Balance: %s", currency, balance)
+                        else:
+                            logging.info("Account item: %r", a)
+                    except Exception:
+                        logging.info("Account item (raw): %r", a)
+            except TypeError:
+                logging.info("Accounts object: %r", accounts)
+        else:
+            logging.info("No accounts info retrieved (maybe API version mismatch).")
+
+        # (No live order placement in this example - add your trading logic safely here)
+        logging.info("Bot run complete.")
+    except Exception as e:
+        logging.error("Bot execution failed: %s", e)
+
+# ---------------------------
+# Background bot loop (non-blocking)
+# ---------------------------
+def bot_loop():
+    interval = int(os.environ.get("BOT_INTERVAL", 60))
+    logging.info("Starting background bot loop with interval %s seconds", interval)
+    while True:
+        run_bot_once()
+        time.sleep(interval)
+
+if LIVE_TRADING_ENABLED and client is not None:
+    bg = threading.Thread(target=bot_loop, daemon=True)
+    bg.start()
+    logging.info("Bot background thread started")
 else:
-    log.info("AUTO_START_BOT not set, bot will NOT auto-start. Use start_bot_thread() to run.")
+    logging.info("Bot background thread not started because live trading is disabled or client missing")
 
 # ---------------------------
-# CLI / WSGI entrypoint
+# Run Flask when executed directly (Gunicorn will import the module; it should only expose 'app')
 # ---------------------------
-def run_forever():
-    """
-    If you run this file directly (python live_bot.py) it will start Flask and optionally the bot.
-    On production with gunicorn, use an app factory pointing to 'app' (gunicorn wsgi:app)
-    """
-    if os.environ.get("AUTO_START_BOT", "0") in ("1", "true", "True"):
-        start_bot_thread()
-    port = int(os.environ.get("PORT", 5000))
-    log.info(f"Starting Flask dev server on 0.0.0.0:{port}")
-    app.run(host="0.0.0.0", port=port)
-
 if __name__ == "__main__":
-    run_forever()
+    port = int(os.environ.get("PORT", 5000))
+    logging.info("Starting Flask development server on port %s", port)
+    app.run(host="0.0.0.0", port=port)
