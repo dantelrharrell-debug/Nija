@@ -1,10 +1,9 @@
-# Use your base image
 FROM python:3.11-slim
 
-# Install git and other dependencies
+# Install git and build tools
 RUN apt-get update && apt-get install -y git build-essential && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install wheel/setuptools
+# Upgrade pip, setuptools, wheel
 RUN python3 -m pip install --upgrade pip setuptools wheel
 
 # Install coinbase_advanced_py from GitHub
@@ -13,19 +12,19 @@ RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced
 # Set working directory
 WORKDIR /usr/src/app
 
-# Copy your app code
+# Copy application code
 COPY . .
 
-# Install any other requirements
+# Install other Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Set environment variables (optional, or set at runtime)
-# ENV COINBASE_API_KEY="your_key"
-# ENV COINBASE_API_SECRET="your_secret"
+# Set environment variables at runtime (recommended)
+# ENV COINBASE_API_KEY="your_api_key"
+# ENV COINBASE_API_SECRET="your_api_secret"
 # ENV COINBASE_API_PASSPHRASE="your_passphrase"
 
 # Expose port
 EXPOSE 5000
 
-# Run gunicorn
+# Start the app with gunicorn
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
