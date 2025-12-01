@@ -1,11 +1,29 @@
-from nija_hmac_client import CoinbaseClient
+from coinbase.rest import accounts
+import os
 
-client = CoinbaseClient()
-status, accounts = client.get_accounts()
+print("Testing coinbase.rest.accounts module...\n")
 
-if status != 200:
-    raise Exception(f"Failed to fetch accounts: {accounts}")
+print("Functions available:", dir(accounts))
 
-print("Accounts fetched successfully:")
-for acct in accounts.get("data", []):
-    print(f"{acct['name']} ({acct['currency']}): {acct['balance']['amount']}")
+print("\n--- Test: get_accounts() ---")
+try:
+    resp = accounts.get_accounts(
+        api_key=os.getenv("COINBASE_API_KEY"),
+        api_secret=os.getenv("COINBASE_API_SECRET"),
+        api_passphrase=os.getenv("COINBASE_API_PASSPHRASE")  # may not be needed
+    )
+    print("RESPONSE TYPE:", type(resp))
+    print("RESPONSE:", resp)
+except Exception as e:
+    print("ERROR calling get_accounts():", e)
+
+print("\n--- Test: get_account (dummy UUID) ---")
+try:
+    resp = accounts.get_account(
+        account_uuid="fake-uuid",
+        api_key=os.getenv("COINBASE_API_KEY"),
+        api_secret=os.getenv("COINBASE_API_SECRET"),
+    )
+    print("RESPONSE:", resp)
+except Exception as e:
+    print("Expected failure (bad uuid):", e)
