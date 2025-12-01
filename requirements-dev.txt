@@ -1,0 +1,2 @@
+# Pylance pinned stable version
+ms-pylance==2025.9.1
