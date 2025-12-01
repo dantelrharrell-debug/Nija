@@ -21,4 +21,4 @@ Werkzeug==3.1.3
 Jinja2==3.1.6
 MarkupSafe==3.0.3
 loguru==0.7.0
-git+https://github.com/coinbase/coinbase-advanced-py.git@d316b758811ce3c13ef179fb228c569b333cddd1#egg=coinbase-advanced-py
+git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase-advanced-py
