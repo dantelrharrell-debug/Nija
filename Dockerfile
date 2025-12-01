@@ -1,20 +1,19 @@
 FROM python:3.11-slim
-
 WORKDIR /usr/src/app
 
-# Install git for pip install from GitHub
+# Install git (if needed by other deps) and build tools
 RUN apt-get update && \
     apt-get install -y git && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Copy and install requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install coinbase_advanced_py directly from GitHub (use master branch)
-RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git@master
+# Install official coinbase‑advanced‑py from PyPI
+RUN pip install --no-cache-dir coinbase-advanced-py
 
-# Copy your app code
+# Copy application code
 COPY . .
 
 EXPOSE 5000
