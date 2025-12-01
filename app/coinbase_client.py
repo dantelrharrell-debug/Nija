@@ -1,40 +1,57 @@
-import threading
-import logging
-import time
 import os
-import sys
+from importlib import import_module
 
-logging.basicConfig(level=logging.INFO)
+class NijaCoinbaseClient:
+    def __init__(self):
+        self.api_key = os.getenv("COINBASE_API_KEY")
+        self.api_secret = os.getenv("COINBASE_API_SECRET")
+        self.api_passphrase = os.getenv("COINBASE_API_PASSPHRASE")
+        self.base_url = os.getenv("COINBASE_API_BASE_URL")
 
-# Add vendored Coinbase path
-VENDORED_PATH = os.path.join(os.path.dirname(__file__), "cd/vendor/coinbase_advanced_py")
-if VENDORED_PATH not in sys.path:
-    sys.path.insert(0, VENDORED_PATH)
-    logging.info(f"Added vendored path to sys.path: {VENDORED_PATH}")
+        if not self.api_key or not self.api_secret:
+            raise RuntimeError("Missing Coinbase API environment variables")
 
-# Attempt to import Client
-try:
-    from coinbase_advanced.client import Client
-    logging.info("coinbase_advanced module loaded successfully ✅")
-except ModuleNotFoundError as e:
-    Client = None
-    logging.error("coinbase_advanced module NOT installed ❌. Live trading disabled")
-    logging.error(repr(e))
+        # Load REST modules dynamically
+        self.accounts_mod = import_module("coinbase.rest.accounts")
+        self.products_mod = import_module("coinbase.rest.products")
+        self.market_mod = import_module("coinbase.rest.market_data")
 
+    # ------------------------
+    # ACCOUNT LISTING FUNCTION
+    # ------------------------
+    def list_accounts(self):
+        """
+        Calls get_accounts() whether it exists as:
+        - a top-level function, or
+        - a method on a class inside coinbase.rest.accounts
+        """
 
-def trading_loop():
-    """Dummy loop to simulate live trading"""
-    logging.info("Trading thread started...")
-    while True:
-        logging.info("Trading loop running...")
-        time.sleep(10)  # Replace with your actual trading logic
+        acct_mod = self.accounts_mod
 
+        # A) Does module have top-level get_accounts?
+        if hasattr(acct_mod, "get_accounts"):
+            try:
+                return acct_mod.get_accounts(
+                    api_key=self.api_key,
+                    api_secret=self.api_secret,
+                    api_passphrase=self.api_passphrase
+                )
+            except TypeError:
+                # try without params if SDK doesn't accept them
+                return acct_mod.get_accounts()
 
-def start_trading_thread():
-    if Client is None:
-        logging.warning("Trading thread not started: Client unavailable")
-        return
+        # B) No top-level function → search for class
+        for name in dir(acct_mod):
+            obj = getattr(acct_mod, name)
+            if isinstance(obj, type) and hasattr(obj, "get_accounts"):
+                try:
+                    client = obj(
+                        api_key=self.api_key,
+                        api_secret=self.api_secret,
+                        api_passphrase=self.api_passphrase
+                    )
+                except:
+                    client = obj()
+                return client.get_accounts()
 
-    thread = threading.Thread(target=trading_loop, daemon=True)
-    thread.start()
-    logging.info("Trading thread started in background ✅")
+        raise RuntimeError("Could not find any get_accounts implementation")
