@@ -1,22 +1,22 @@
 FROM python:3.11-slim
 WORKDIR /usr/src/app
 
-# Install git (if needed by other deps) and build tools
+# Install git (for future extensibility, not strictly required by PyPI install)
 RUN apt-get update && \
     apt-get install -y git && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy and install requirements
+# Upgrade pip and install requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python3 -m pip install --upgrade pip
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
-# Install official coinbase‑advanced‑py from PyPI
-RUN pip install --no-cache-dir coinbase-advanced-py
+# Install coinbase-advanced-py from PyPI (recommended)
+RUN python3 -m pip install --no-cache-dir coinbase-advanced-py
 
-# Copy application code
+# Copy app code
 COPY . .
 
 EXPOSE 5000
 
-# Start Gunicorn
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "wsgi:app"]
