@@ -1,21 +1,19 @@
 FROM python:3.11-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y git build-essential && rm -rf /var/lib/apt/lists/*
-
-# Set working directory
 WORKDIR /usr/src/app
 
-# Copy requirements
-COPY requirements.txt .
+# Install only needed packages and clean up in one layer
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git build-essential && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies first to leverage caching
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the app
+# Copy app source
 COPY . .
 
-# Expose port
 EXPOSE 5000
 
 # Run Gunicorn
