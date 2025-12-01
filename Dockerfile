@@ -1,3 +1,6 @@
+COPY ./coinbase_advanced_py /usr/src/app/coinbase_advanced_py
+RUN pip install /usr/src/app/coinbase_advanced_py
+
 FROM python:3.11-slim
 
 # Install git and build tools
