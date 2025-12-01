@@ -1,35 +1,23 @@
-# ===========================
-# Dockerfile for NIJA Trading Bot
-# ===========================
-
+# Use Python 3.11 slim (or 3.10 if needed)
 FROM python:3.11-slim
-
-# Install git and minimal build tools
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      git \
-      build-essential \
-      gcc \
-      libssl-dev \
-      libffi-dev \
-      ca-certificates \
-      curl && \
-    rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /usr/src/app
 
-# Copy project files
-COPY . /usr/src/app
+# Install git (needed to clone the repo)
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip, setuptools, wheel
-RUN pip install --no-cache-dir -U pip setuptools wheel
+# Copy your requirements.txt
+COPY requirements.txt .
 
-# Install Python dependencies
-RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+# Install Python dependencies including coinbase_advanced directly from GitHub
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose Gunicorn port
+# Copy the rest of your app
+COPY . .
+
+# Expose port
 EXPOSE 5000
 
-# Use a proper Gunicorn CMD
+# Start Gunicorn
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
