@@ -1,41 +1,26 @@
-# Use Python 3.11 slim image
+# Use slim Python 3.11 image
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /usr/src/app
 
-# Install system dependencies
+# Install git and dependencies for pip
 RUN apt-get update && \
-    apt-get install -y git build-essential && \
+    apt-get install -y git && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy Python dependencies
+# Copy and install Python dependencies
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy all app files
+# Install coinbase_advanced_py directly from GitHub
+RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git@main
+
+# Copy the rest of the app
 COPY . .
 
-# Set Python path to include vendor modules
-ENV PYTHONPATH="/usr/src/app/cd/vendor:/usr/src/app:$PYTHONPATH"
-
-# Expose app port
+# Expose port for Flask/Gunicorn
 EXPOSE 5000
 
-# Validate coinbase_advanced_py module
-RUN if [ -d "/usr/src/app/cd/vendor/coinbase_advanced_py" ]; then \
-        echo "coinbase_advanced_py folder exists, ready to import"; \
-    else \
-        echo "coinbase_advanced_py folder missing, live trading disabled"; \
-    fi
-
-# Use Gunicorn with production-appropriate worker settings
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app", \
-     "--workers", "4", \
-     "--worker-class", "gthread", \
-     "--threads", "2", \
-     "--bind", "0.0.0.0:5000", \
-     "--capture-output", \
-     "--log-level", "info"]
+# Start Gunicorn with config
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "wsgi:app"]
