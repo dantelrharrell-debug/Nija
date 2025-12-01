@@ -1,35 +1,31 @@
-# Start from Python 3.11 slim
+# Use your base image
 FROM python:3.11-slim
+
+# Install git and other dependencies
+RUN apt-get update && apt-get install -y git build-essential && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip and install wheel/setuptools
+RUN python3 -m pip install --upgrade pip setuptools wheel
+
+# Install coinbase_advanced_py from GitHub
+RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git
 
 # Set working directory
 WORKDIR /usr/src/app
 
-# Install OS-level build dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends git build-essential && \
-    rm -rf /var/lib/apt/lists/*
-
-# Cleanup any local copies of coinbase-related packages that could shadow pip installs
-RUN rm -rf /usr/src/app/coinbase \
-           /usr/src/app/coinbase_advanced \
-           /usr/src/app/coinbase-advanced \
-           /usr/src/app/coinbase_advanced_py || true
-
-# Upgrade pip, setuptools, wheel
-RUN python3 -m pip install --upgrade pip setuptools wheel
-
-# Install coinbase_advanced_py explicitly first to avoid naming conflicts
-RUN python3 -m pip install --no-cache-dir \
-    git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase_advanced_py
-
-# Copy your requirements file (should no longer include coinbase_advanced_py)
-COPY requirements.txt .
-
-# Install remaining Python dependencies
-RUN python3 -m pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
+# Copy your app code
 COPY . .
 
-# Default command (optional, adjust for your app)
-CMD ["python3", "nija_client.py"]
+# Install any other requirements
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Set environment variables (optional, or set at runtime)
+# ENV COINBASE_API_KEY="your_key"
+# ENV COINBASE_API_SECRET="your_secret"
+# ENV COINBASE_API_PASSPHRASE="your_passphrase"
+
+# Expose port
+EXPOSE 5000
+
+# Run gunicorn
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
