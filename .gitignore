@@ -1,10 +1,32 @@
+# Bytecode / caches
 __pycache__/
 *.pyc
-.env
-.vscode/
-node_modules/
-# do not ignore *.sh or start_all.sh
+*.pyo
+*.pyd
 
-# Safe trading stack artifacts
+# Virtual envs
+venv/
+.env
+.env.* 
+.venv/
+pip-wheel-metadata/
+build/
+dist/
+
+# IDEs / editors
+.vscode/
+.idea/
+
+# Logs
 *.log
-pending-approvals.json
+
+# Node
+node_modules/
+
+# Test / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Git metadata
+.git
