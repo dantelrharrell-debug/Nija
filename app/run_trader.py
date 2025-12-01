@@ -132,7 +132,7 @@ def get_coinbase_client():
 
             # Try coinbase_advanced_py client class
             try:
-                from coinbase_advanced_py.client import CoinbaseClient
+                
                 if COINBASE_API_KEY and COINBASE_API_SECRET:
                     _coinbase_client = CoinbaseClient(api_key=COINBASE_API_KEY, api_secret=COINBASE_API_SECRET)
                     logger.info("✅ CoinbaseClient initialized (CoinbaseClient)")

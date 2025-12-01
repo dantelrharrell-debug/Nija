@@ -21,7 +21,7 @@ def main():
 
     # Check submodules
     try:
-        from coinbase_advanced_py import advanced
+        
         print("\nTop-level attributes in 'coinbase_advanced_py.advanced':")
         for attr in dir(advanced):
             print(f" - {attr}")

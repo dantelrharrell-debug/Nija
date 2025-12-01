@@ -7,7 +7,7 @@ import numpy as np
 COINBASE_CLIENT = None
 try:
     # adjust import path if your vendor library differs
-    from coinbase_advanced_py.client import CoinbaseClient
+    
     # instantiate if environment keys are present in your normal app
     # Here we DON'T create a client automatically (safer). Your main app should attach client if needed.
 except Exception:

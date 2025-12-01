@@ -11,7 +11,7 @@ logger = logging.getLogger("nija_worker_multi")
 
 # --- Attempt Coinbase import ---
 try:
-    from coinbase_advanced_py.client import CoinbaseClient
+    
     logger.info("[NIJA] CoinbaseClient imported successfully")
 except ModuleNotFoundError:
     logger.warning("[NIJA] CoinbaseClient unavailable, using dummy")

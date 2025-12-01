@@ -47,7 +47,7 @@ except Exception as e:
     print(">>> pkgutil.find_loader error:", e)
 
 try:
-    import coinbase_advanced_py as capp
+     as capp
     print(">>> imported top-level coinbase_advanced_py:", capp)
     print("    __file__:", getattr(capp, "__file__", None))
     print("    __path__:", getattr(capp, "__path__", None))
@@ -60,7 +60,7 @@ try:
         except Exception as e:
             print("      iter_modules error:", e)
 except Exception as e:
-    print(">>> import coinbase_advanced_py failed:", repr(e))
+    print(">>>  failed:", repr(e))
 
 # 3) Quick attempts to import likely paths
 print("\n=== TRY IMPORT LIKELY MODULE PATHS ===")

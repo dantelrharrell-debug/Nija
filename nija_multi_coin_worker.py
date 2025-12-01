@@ -12,7 +12,7 @@ logger = logging.getLogger("nija_multi_coin_worker")
 
 # --- Coinbase client import ---
 try:
-    from coinbase_advanced_py.client import CoinbaseClient
+    
     logger.info("[NIJA] CoinbaseClient imported")
 except ModuleNotFoundError:
     logger.warning("[NIJA] CoinbaseClient unavailable, using dummy")

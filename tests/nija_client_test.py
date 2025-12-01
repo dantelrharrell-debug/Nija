@@ -1,6 +1,6 @@
 # nija_client_test.py
 import os
-from coinbase_advanced_py import Client
+
 
 c = Client(
     api_key=os.getenv("COINBASE_API_KEY"),

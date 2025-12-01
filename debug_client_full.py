@@ -14,7 +14,7 @@ vendor_path = os.path.join(current_dir, "vendor")
 sys.path.insert(0, vendor_path)
 
 try:
-    from coinbase_advanced_py.client import CoinbaseClient
+    
 except Exception as e:
     print("⚠️ CoinbaseClient import failed:", e)
     traceback.print_exc()

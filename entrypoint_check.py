@@ -53,7 +53,7 @@ def try_import_coinbase_pkg():
         log.info("coinbase_advanced_py import: OK (module: %s)", getattr(pkg, "__file__", str(pkg)))
         # try to import client submodule if available
         try:
-            from coinbase_advanced_py.client import CoinbaseClient  # may raise
+            
             log.info("coinbase_advanced_py.client import: OK")
             return True
         except Exception as e:
@@ -95,7 +95,7 @@ def attempt_client_init(env):
 
         # Try importing the client with safe guard
         try:
-            from coinbase_advanced_py.client import CoinbaseClient
+            
             # Try instantiating with given values (some clients validate PEM immediately)
             try:
                 obj = CoinbaseClient(api_key=api_key, api_secret=api_secret, api_passphrase=passphrase, sandbox=sandbox)

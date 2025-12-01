@@ -7,7 +7,7 @@ import traceback
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
 try:
-    from coinbase_advanced_py.client import CoinbaseClient
+    
 except Exception as e:
     print("⚠️ CoinbaseClient import failed:", e)
     traceback.print_exc()

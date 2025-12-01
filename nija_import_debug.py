@@ -37,7 +37,7 @@ for p in possible_pkg_paths:
 
 # 3) Try to import the top-level package and list submodules
 try:
-    import coinbase_advanced_py as capp
+     as capp
     print(">>> Imported coinbase_advanced_py module:", capp)
     print("    __file__:", getattr(capp, "__file__", None))
     print("    __path__:", getattr(capp, "__path__", None))
@@ -51,7 +51,7 @@ try:
         except Exception as e:
             print("   iter_modules error:", e)
 except Exception as e:
-    print(">>> import coinbase_advanced_py failed:", repr(e))
+    print(">>>  failed:", repr(e))
     traceback.print_exc()
 
 # 4) Attempt to import likely module paths for CoinbaseClient

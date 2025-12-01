@@ -15,10 +15,10 @@ if VENDOR_DIR not in sys.path:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
 # ----------------------------
-# Attempt to import coinbase_advanced_py
+# Attempt to 
 # ----------------------------
 try:
-    from coinbase_advanced_py.client import Client
+    
     logging.info("coinbase_advanced_py module imported. Live trading enabled.")
 except ModuleNotFoundError:
     Client = None

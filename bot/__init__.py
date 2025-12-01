@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Attempt to import Coinbase client safely
 # ======================
 try:
-    from coinbase_advanced_py.client import Client
+    
     COINBASE_AVAILABLE = True
     logger.info("coinbase_advanced_py imported successfully.")
 except ModuleNotFoundError:

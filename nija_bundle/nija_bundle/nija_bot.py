@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
 
 try:
-    from coinbase_advanced_py import CoinbaseClient
+    
 except ImportError:
     raise ImportError("❌ coinbase_advanced_py not found in vendor folder.")
 

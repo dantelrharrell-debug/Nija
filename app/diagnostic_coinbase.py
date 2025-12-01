@@ -11,7 +11,7 @@ try:
     if spec is None:
         print("❌ coinbase-advanced-py not found in environment!")
     else:
-        import coinbase_advanced_py
+        
         print(f"✅ coinbase-advanced-py is installed, version: {coinbase_advanced_py.__version__}")
 except Exception as e:
     print(f"❌ Error checking coinbase-advanced-py: {e}")
@@ -19,7 +19,7 @@ except Exception as e:
 
 # Step 2: Try importing AdvancedClient
 try:
-    from coinbase_advanced_py.client import AdvancedClient
+    
     print("✅ Successfully imported AdvancedClient")
 except ImportError as e:
     print(f"❌ Failed to import AdvancedClient: {e}")

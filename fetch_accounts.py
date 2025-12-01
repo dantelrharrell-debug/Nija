@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from coinbase_advanced_py.advanced import CoinbaseAdvanced
+
 import os
 import json
 

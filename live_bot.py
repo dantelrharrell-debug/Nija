@@ -14,7 +14,7 @@ logging.basicConfig(
 # ---------- SDK Import (recommended) ----------
 # Use this import because your build logs showed coinbase-advanced-py metadata.
 try:
-    from coinbase_advanced_py.client import Client
+    
     logging.info("Imported coinbase_advanced_py.client.Client")
     LIVE_TRADING_ENABLED = True
 except ModuleNotFoundError as e:

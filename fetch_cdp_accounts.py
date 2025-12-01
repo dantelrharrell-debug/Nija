@@ -2,7 +2,7 @@
 # fetch_cdp_accounts.py
 import os
 import json
-from coinbase_advanced_py.advanced import CoinbaseAdvanced
+
 
 def main():
     # Ensure COINBASE_API_SECRET has proper line breaks if using PEM/JWT

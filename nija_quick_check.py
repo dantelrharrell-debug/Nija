@@ -10,7 +10,7 @@ except Exception:
     running = False
 
 try:
-    from coinbase_advanced_py.client import CoinbaseClient
+    
 except Exception:
     print("❌ Could not import CoinbaseClient. Check your vendor folder.")
     sys.exit(1)
