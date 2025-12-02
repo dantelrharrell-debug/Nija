@@ -1,9 +1,10 @@
+# Gunicorn config
 bind = "0.0.0.0:5000"
 workers = 2
-worker_class = "gthread"
 threads = 2
+worker_class = "gthread"
 timeout = 120
+capture_output = True
 loglevel = "debug"
 accesslog = "-"
 errorlog = "-"
-capture_output = True
