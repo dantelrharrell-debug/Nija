@@ -1,6 +1,6 @@
-# -----------------------
-# Stage 0: Builder
-# -----------------------
+# --------------------------
+# Stage 1: Builder
+# --------------------------
 FROM python:3.11-slim AS builder
 
 # Set working directory
@@ -18,12 +18,15 @@ RUN apt-get update && \
 # Upgrade pip, setuptools, wheel
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Clone your main repo (optional if needed)
+# Clone your main project (if needed)
 RUN git clone --depth 1 https://github.com/dantelrharrell-debug/Nija.git Nija
 
 WORKDIR /src/Nija
 
-# Install required Python packages, including coinbase_advanced_py from GitHub
+# Copy coinbase_advanced_py module from your repo
+COPY ./coinbase_advanced_py ./coinbase_advanced_py
+
+# Install Python dependencies
 RUN pip install --no-cache-dir \
         PyJWT \
         backoff \
@@ -35,21 +38,20 @@ RUN pip install --no-cache-dir \
         websockets \
         charset_normalizer \
         pycparser \
-        git+https://github.com/dantelrharrell-debug/coinbase_advanced_py.git
+        ./coinbase_advanced_py
 
-# -----------------------
-# Stage 1: Final image
-# -----------------------
+# --------------------------
+# Stage 2: Final image
+# --------------------------
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /usr/src/app
 
-# Copy installed site-packages and binaries from builder
+# Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy bot source code and start script
+# Copy your bot code and start script
 COPY ./bot ./bot
 COPY start.sh ./
 
