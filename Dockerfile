@@ -1,67 +1,55 @@
-# Stage 1: build / install dependencies
-FROM python:3.11-slim AS builder
+# Use a small official base
+FROM python:3.11-slim
 
-# avoid interactive apt prompts
-ENV DEBIAN_FRONTEND=noninteractive
+# Environment
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=5000
 
-# install system deps needed to build and Wheels
+# Working dir
+WORKDIR /usr/src/app
+
+# Install OS packages required for building wheels and git (no recommended extras)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       git \
       build-essential \
-      libffi-dev \
       ca-certificates \
-      curl \
-    && rm -rf /var/lib/apt/lists/*
+      curl && \
+    rm -rf /var/lib/apt/lists/*
 
-WORKDIR /src
+# Defensive: remove any pre-existing shadowing folders (if the build context somehow included them)
+RUN rm -rf /usr/src/app/coinbase \
+           /usr/src/app/coinbase_advanced \
+           /usr/src/app/coinbase-advanced \
+           /usr/src/app/coinbase_advanced_py || true
 
-# Upgrade pip and tools
-RUN python -m pip install --upgrade pip setuptools wheel
+# Copy only requirements first (prevents copying local source that could shadow packages)
+COPY requirements.txt .
 
-# Copy local wheel files and any wheels you want installed at build-time
-# (Make sure coinbase_advanced_py-1.8.2-py3-none-any.whl is at repo root)
-COPY ./coinbase_advanced_py-1.8.2-py3-none-any.whl ./coinbase_advanced_py-1.8.2-py3-none-any.whl
-# Optionally copy other local wheels if present:
-# COPY ./some_other.whl ./some_other.whl
+# Upgrade pip & build tooling
+RUN python3 -m pip install --upgrade pip setuptools wheel
 
-# Install runtime Python dependencies (including the local wheel)
-# Keep this list minimal so the builder caches well. Add more if needed.
-RUN python -m pip install --no-cache-dir \
-      PyJWT \
-      backoff \
-      certifi \
-      cffi \
-      cryptography \
-      idna \
-      urllib3 \
-      websockets \
-      charset_normalizer \
-      pycparser \
-      ./coinbase_advanced_py-1.8.2-py3-none-any.whl
+# Install the official Coinbase Advanced SDK explicitly (install first to avoid naming confusion)
+# Note: we install from the official public repo
+RUN python3 -m pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase_advanced_py
 
-# Stage 2: runtime image
-FROM python:3.11-slim
+# Install remaining requirements (requirements.txt should NOT contain another git+ line for coinbase)
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
-ENV DEBIAN_FRONTEND=noninteractive
-WORKDIR /usr/src/app
+# Now copy the application source
+# Make sure .dockerignore prevents copying any local folders that would shadow pip packages.
+COPY . .
 
-# Copy installed packages from builder to runtime image
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Final defensive cleanup in container filesystem (in case any files were copied inadvertently)
+RUN rm -rf ./coinbase \
+           ./coinbase_advanced \
+           ./coinbase-advanced \
+           ./coinbase_advanced_py || true
 
-# Copy app code
-# (assumes your bot folder and start scripts are in repo root)
-COPY ./bot ./bot
-COPY ./start.sh ./
-# If you use start_all.sh or start_bot.sh, copy them as well:
-# COPY ./start_all.sh ./
+# Expose port used by Flask/Gunicorn
+EXPOSE 5000
 
-# Make start script executable
-RUN chmod +x ./start.sh
-
-# Export the PEM path environment variable default (optional)
-ENV LIVE_TRADING=1
-
-# Entrypoint
-CMD ["./start.sh"]
+# Default command — use your gunicorn conf as before
+# If you run the app differently in production adjust this CMD accordingly
+CMD ["gunicorn", "-c", "./gunicorn.conf.py", "web.wsgi:app"]
