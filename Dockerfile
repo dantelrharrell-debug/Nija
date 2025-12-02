@@ -1,31 +1,34 @@
-# --- Step 1: Base image ---
+# Base image
 FROM python:3.11-slim
 
-# --- Step 2: Environment variables ---
-# GITHUB_PAT is set in Railway, not hardcoded
-ARG GITHUB_PAT
-ENV PATH="/root/.local/bin:$PATH"
-ENV GITHUB_PAT=${GITHUB_PAT}
-
-# --- Step 3: Install system dependencies ---
+# System dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends git build-essential curl && \
     rm -rf /var/lib/apt/lists/*
 
-# --- Step 4: Copy requirements ---
-COPY requirements.txt /app/requirements.txt
-
-# --- Step 5: Install Python dependencies ---
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.txt && \
-    pip install --no-cache-dir git+https://${GITHUB_PAT}@github.com/dantelrharrell-debug/coinbase_advanced_py.git@main#egg=coinbase_advanced_py
-
-# --- Step 6: Copy bot code ---
-COPY . /app
+# Set workdir
 WORKDIR /app
 
-# --- Step 7: Expose port for Railway ---
+# Copy requirements
+COPY requirements.txt .
+
+# Upgrade pip & install standard packages
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# --- Install private GitHub repo ---
+# Step 1: Configure git credential helper to read token from env
+ARG GITHUB_PAT
+RUN git config --global url."https://${GITHUB_PAT}:@github.com/".insteadOf "https://github.com/"
+
+# Step 2: Install coinbase_advanced_py from GitHub
+RUN pip install --no-cache-dir git+https://github.com/dantelrharrell-debug/coinbase_advanced_py.git@main#egg=coinbase_advanced_py
+
+# Copy app code
+COPY . .
+
+# Expose port
 EXPOSE 8080
 
-# --- Step 8: Run bot ---
+# Start your bot
 CMD ["python", "bot/live_trading.py"]
