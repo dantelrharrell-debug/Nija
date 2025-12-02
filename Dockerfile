@@ -1,5 +1,3 @@
-COPY entrypoint.sh /usr/src/app/entrypoint.sh
-ENTRYPOINT ["/usr/src/app/entrypoint.sh"]
 # -------------------------------
 # Base image
 # -------------------------------
@@ -30,14 +28,12 @@ RUN python3 -m pip install --upgrade pip setuptools wheel
 # -------------------------------
 COPY requirements.txt .
 
-# Fix any potential merge conflict markers before installing
+# Remove any leftover merge conflict markers
 RUN sed -i '/^<<<<<<< HEAD$/,/^>>>>>>>/d' requirements.txt
 
 RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
 
-# -------------------------------
-# Install additional Python packages
-# -------------------------------
+# Install essential Python packages
 RUN pip install --no-cache-dir python-dotenv flask gunicorn
 
 # -------------------------------
@@ -46,16 +42,17 @@ RUN pip install --no-cache-dir python-dotenv flask gunicorn
 COPY . .
 
 # -------------------------------
-# Make entrypoint executable
+# Copy entrypoint and make it executable
 # -------------------------------
-RUN chmod +x ./entrypoint.sh
+COPY entrypoint.sh /usr/src/app/entrypoint.sh
+RUN chmod +x /usr/src/app/entrypoint.sh
 
 # -------------------------------
-# Expose port for Gunicorn
+# Expose port
 # -------------------------------
-EXPOSE 8080
+EXPOSE 5000
 
 # -------------------------------
-# Command to run the app with Gunicorn
+# Entrypoint
 # -------------------------------
-CMD ["gunicorn", "wsgi:app", "-c", "gunicorn.conf.py"]
+ENTRYPOINT ["/usr/src/app/entrypoint.sh"]
