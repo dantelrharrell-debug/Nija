@@ -1,23 +1,24 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# -------------------------------
-# Load environment variables
-# -------------------------------
+# load .env if exists
 if [ -f .env ]; then
-  export $(grep -v '^#' .env | xargs)
+  echo "Loading .env"
+  set -o allexport
+  source .env
+  set +o allexport
 fi
 
-# -------------------------------
-# Check Coinbase credentials
-# -------------------------------
-if [ -n "$COINBASE_API_KEY" ] && [ -n "$COINBASE_API_SECRET" ] && [ -n "$COINBASE_API_PASSPHRASE" ]; then
-    echo "Live trading enabled."
+# print environment summary (not secrets) for debugging
+echo "Starting container..."
+if [ -n "${COINBASE_API_KEY:-}" ] && [ -n "${COINBASE_API_SECRET:-}" ]; then
+  echo "COINBASE creds present."
 else
-    echo "Live trading disabled: missing credentials."
+  echo "WARNING: Missing COINBASE_API_KEY or COINBASE_API_SECRET. Live trading disabled."
 fi
 
-# -------------------------------
-# Start Gunicorn
-# -------------------------------
-exec gunicorn wsgi:app -c gunicorn.conf.py
+# Ensure required packages installed (helps with iterative deploys)
+python3 -m pip install --no-cache-dir --upgrade pandas numpy || true
+
+# Launch Gunicorn (use provided CMD by default)
+exec "$@"
