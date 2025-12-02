@@ -1,30 +1,27 @@
 #!/bin/bash
 set -e
 
-# ---- Load environment variables from .env if it exists ----
-if [ -f /usr/src/app/.env ]; then
-    echo "[INFO] Loading environment variables from .env"
-    export $(grep -v '^#' /usr/src/app/.env | xargs)
-else
-    echo "[WARNING] No .env file found. Make sure environment variables are set."
+# Load environment variables from .env if it exists
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
 fi
 
-# ---- Optional: Check required Coinbase variables ----
+# Check required Coinbase credentials
 REQUIRED_VARS=("COINBASE_API_KEY" "COINBASE_API_SECRET" "COINBASE_API_PASSPHRASE")
 for VAR in "${REQUIRED_VARS[@]}"; do
     if [ -z "${!VAR}" ]; then
-        echo "[ERROR] Missing required environment variable: $VAR"
+        echo "ERROR: Missing environment variable: $VAR"
         exit 1
     fi
 done
 
-# ---- Start Gunicorn ----
-echo "[INFO] Starting Gunicorn..."
-exec gunicorn \
+echo "All required Coinbase credentials are set."
+
+# Start Gunicorn
+exec gunicorn web.wsgi:app \
     --bind 0.0.0.0:5000 \
     --workers 2 \
     --threads 2 \
     --worker-class gthread \
-    --timeout 120 \
-    --preload \
-    web.wsgi:app
+    --log-level debug \
+    --capture-output
