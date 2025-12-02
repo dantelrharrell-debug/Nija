@@ -1,27 +1,32 @@
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-
-# Use official Python image
+# --- Step 1: Base image ---
 FROM python:3.11-slim
 
-# Set working directory
-WORKDIR /usr/src/app
+# --- Step 2: Set environment variables ---
+# GITHUB_PAT will be set in Railway environment variables
+ENV PATH="/root/.local/bin:$PATH"
 
-# Copy your app files
-COPY . .
+# --- Step 3: Install system dependencies ---
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git build-essential curl && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# --- Step 4: Copy requirements if you have them ---
+# COPY requirements.txt /app/requirements.txt
 
-# Use GITHUB_PAT environment variable to install private repo
-# Make sure Railway has GITHUB_PAT set in env vars
-RUN pip install --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir git+https://$GITHUB_PAT@github.com/<your-username>/coinbase_advanced_py.git@main#egg=coinbase_advanced_py
+# --- Step 5: Install Python dependencies ---
+# If you have a requirements.txt
+# RUN pip install --upgrade pip && pip install -r /app/requirements.txt
 
-# Install other dependencies from requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# --- Step 6: Install your private GitHub package securely ---
+RUN pip install --upgrade pip
+RUN pip install git+https://$GITHUB_PAT@github.com/dantelrharrell-debug/coinbase_advanced_py.git@main#egg=coinbase_advanced_py
 
-# Expose port for Gunicorn
-EXPOSE 5000
+# --- Step 7: Copy your bot code ---
+COPY . /app
+WORKDIR /app
 
-# Start Gunicorn
-CMD ["gunicorn", "--config", "gunicorn.conf.py", "web.wsgi:app"]
+# --- Step 8: Expose port (Railway detects automatically) ---
+EXPOSE 8080
+
+# --- Step 9: Run your bot ---
+CMD ["python", "bot/live_trading.py"]
