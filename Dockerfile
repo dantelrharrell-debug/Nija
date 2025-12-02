@@ -37,3 +37,4 @@ EXPOSE 5000
 
 # Start Gunicorn
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
+
