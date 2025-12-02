@@ -22,5 +22,34 @@ RUN git clone --depth 1 https://github.com/dantelrharrell-debug/Nija.git Nija
 # Go into repo
 WORKDIR /src/Nija
 
-# Install Python dependencies directly from PyPI (no wheels needed)
-RUN pip install --no-cache-dir PyJWT backoff certifi cffi cryptography idna urllib3 websockets charset_normalizer pycparser
+# Install Python dependencies directly from PyPI
+RUN pip install --no-cache-dir \
+    PyJWT \
+    backoff \
+    certifi \
+    cffi \
+    cryptography \
+    idna \
+    urllib3 \
+    websockets \
+    charset_normalizer \
+    pycparser
+
+# ---------- FINAL IMAGE STAGE ----------
+FROM python:3.11-slim
+
+WORKDIR /usr/src/app
+
+# Copy installed packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy bot folder and start script
+COPY ./bot ./bot
+COPY start.sh ./
+
+# Make start script executable
+RUN chmod +x start.sh
+
+# Set default entrypoint (optional)
+ENTRYPOINT ["./start.sh"]
