@@ -28,12 +28,12 @@ RUN python3 -m pip install --upgrade pip setuptools wheel
 # -------------------------------
 COPY requirements.txt .
 
-# Remove any leftover merge conflict markers
+# Remove any merge conflict markers if present
 RUN sed -i '/^<<<<<<< HEAD$/,/^>>>>>>>/d' requirements.txt
 
 RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
 
-# Install essential Python packages
+# Install additional Python packages
 RUN pip install --no-cache-dir python-dotenv flask gunicorn
 
 # -------------------------------
@@ -42,17 +42,17 @@ RUN pip install --no-cache-dir python-dotenv flask gunicorn
 COPY . .
 
 # -------------------------------
-# Copy entrypoint and make it executable
+# Make entrypoint executable
 # -------------------------------
-COPY entrypoint.sh /usr/src/app/entrypoint.sh
-RUN chmod +x /usr/src/app/entrypoint.sh
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
 # -------------------------------
-# Expose port
+# Expose port for Gunicorn
 # -------------------------------
 EXPOSE 5000
 
 # -------------------------------
-# Entrypoint
+# Set entrypoint
 # -------------------------------
-ENTRYPOINT ["/usr/src/app/entrypoint.sh"]
+ENTRYPOINT ["./entrypoint.sh"]
