@@ -11,12 +11,15 @@ WORKDIR /src
 # Upgrade pip and install wheel/setuptools
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Clone your repo using GitHub PAT
+# Clone your repo from GitHub using the personal access token
 ARG GITHUB_PAT
 RUN git clone --depth 1 https://x-access-token:${GITHUB_PAT}@github.com/dantelrharrell-debug/Nija.git Nija
 
-# Install coinbase_advanced_py from cloned repo
-RUN pip install --no-cache-dir ./Nija/coinbase_advanced_py
+# Set WORKDIR to the repo folder
+WORKDIR /src/Nija
+
+# Install coinbase_advanced_py
+RUN pip install --no-cache-dir ./coinbase_advanced_py
 
 # Stage 2: runtime environment
 FROM python:3.11-slim
@@ -27,14 +30,14 @@ WORKDIR /usr/src/app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy bot code and start script
+# Copy bot code
 COPY ./bot ./bot
 COPY start.sh ./
 
 # Make start script executable
 RUN chmod +x start.sh
 
-# Environment variables
+# Set environment variables (Railway will override with secrets)
 ENV LIVE_TRADING=1
 
 # Start bot
