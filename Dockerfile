@@ -8,7 +8,7 @@ RUN apt-get update && \
 WORKDIR /app
 COPY requirements.txt .
 
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir git+https://github.com/dantelrharrell-debug/coinbase_advanced_py.git@main#egg=coinbase_advanced_py
 
 # Install private repo using SSH
 # Requires GIT_SSH_COMMAND via build secret
