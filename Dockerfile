@@ -1,3 +1,5 @@
+COPY entrypoint.sh /usr/src/app/entrypoint.sh
+ENTRYPOINT ["/usr/src/app/entrypoint.sh"]
 # -------------------------------
 # Base image
 # -------------------------------
