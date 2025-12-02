@@ -1,3 +1,5 @@
+import os
+from coinbase.wallet.client import Client   # ✅ REQUIRED FIX
 # bot/live_bot_script.py
 import os
 from flask import Flask, jsonify, request
