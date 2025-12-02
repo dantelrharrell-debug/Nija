@@ -1,23 +1,17 @@
-# Standard dependencies
 anyio==4.11.0
 argon2-cffi==25.1.0
-argon2-cffi-bindings==25.1.0
 arrow==1.4.0
-asttokens==3.0.1
-async-lru==2.0.5
 attrs==25.4.0
 babel==2.17.0
 backoff==2.2.1
 beautifulsoup4==4.14.2
 bleach==6.3.0
-blinker==1.9.0
 certifi==2025.11.12
 cffi==2.0.0
 charset-normalizer==3.4.4
 click==8.3.1
 coinbase==2.1.0
 colorama==0.4.6
-comm==0.2.3
 cryptography==46.0.3
 debugpy==1.8.17
 decorator==5.2.1
@@ -36,6 +30,3 @@ idna==3.11
 numpy==1.26.3
 pandas==2.1.1
 requests==2.32.5
-
-# Coinbase Advanced Py (installed via GitHub PAT during Docker build)
-coinbase_advanced_py @ git+https://github.com/dantelrharrell-debug/coinbase_advanced_py.git@main
