@@ -36,4 +36,5 @@ idna==3.11
 numpy==1.26.3
 pandas==2.1.1
 requests==2.32.5
-# coinbase_advanced_py will be installed via Dockerfile from GitHub
+# coinbase_advanced
+# coinbase_advanced_py will be installed during the build via GITHUB_PAT
