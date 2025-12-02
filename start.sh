@@ -1,11 +1,8 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-echo "== start.sh: beginning container startup =="
+echo "Starting NIJA Trading Bot..."
+echo "LIVE_TRADING=$LIVE_TRADING"
 
-# Install coinbase-advanced-py from PyPI
-python3 -m pip install --no-cache-dir coinbase-advanced-py==1.8.2
-echo "✅ coinbase-advanced-py installed"
-
-# Start Gunicorn web server
-exec gunicorn -w 1 -b 0.0.0.0:5000 main:app --log-level info
+# Run the live trading script
+python ./bot/live_trading.py
