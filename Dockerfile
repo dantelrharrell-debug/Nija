@@ -1,7 +1,7 @@
-# ---------- BUILDER STAGE ----------
+# ---- Builder stage ----
 FROM python:3.11-slim AS builder
 
-# Install system dependencies needed to build Python packages
+# Install build dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         git \
@@ -10,19 +10,17 @@ RUN apt-get update && \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /src
 
-# Upgrade pip, setuptools, and wheel
+# Upgrade pip
 RUN python -m pip install --upgrade pip setuptools wheel
 
 # Clone your repo
 RUN git clone --depth 1 https://github.com/dantelrharrell-debug/Nija.git Nija
 
-# Go into repo
 WORKDIR /src/Nija
 
-# Install Python dependencies directly from PyPI
+# Install dependencies
 RUN pip install --no-cache-dir \
     PyJWT \
     backoff \
@@ -35,21 +33,24 @@ RUN pip install --no-cache-dir \
     charset_normalizer \
     pycparser
 
-# ---------- FINAL IMAGE STAGE ----------
+# ---- Stage 1: Final image ----
 FROM python:3.11-slim
 
 WORKDIR /usr/src/app
 
-# Copy installed packages from builder
+# Copy Python packages and binaries from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy bot folder and start script
+# Copy your bot code
 COPY ./bot ./bot
-COPY start.sh ./
 
-# Make start script executable
+# Copy start.sh and make it executable
+COPY start.sh ./
 RUN chmod +x start.sh
 
-# Set default entrypoint (optional)
-ENTRYPOINT ["./start.sh"]
+# Symlink start_all.sh -> start.sh
+RUN ln -s start.sh start_all.sh
+
+# Set container entrypoint
+ENTRYPOINT ["./start_all.sh"]
