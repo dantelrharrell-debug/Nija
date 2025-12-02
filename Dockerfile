@@ -1,7 +1,12 @@
-# ---- Builder stage ----
+# -----------------------
+# Stage 0: Builder
+# -----------------------
 FROM python:3.11-slim AS builder
 
-# Install build dependencies
+# Set working directory
+WORKDIR /src
+
+# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         git \
@@ -10,47 +15,46 @@ RUN apt-get update && \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /src
-
-# Upgrade pip
+# Upgrade pip, setuptools, wheel
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Clone your repo
+# Clone your main repo (optional if needed)
 RUN git clone --depth 1 https://github.com/dantelrharrell-debug/Nija.git Nija
 
 WORKDIR /src/Nija
 
-# Install dependencies
+# Install required Python packages, including coinbase_advanced_py from GitHub
 RUN pip install --no-cache-dir \
-    PyJWT \
-    backoff \
-    certifi \
-    cffi \
-    cryptography \
-    idna \
-    urllib3 \
-    websockets \
-    charset_normalizer \
-    pycparser
+        PyJWT \
+        backoff \
+        certifi \
+        cffi \
+        cryptography \
+        idna \
+        urllib3 \
+        websockets \
+        charset_normalizer \
+        pycparser \
+        git+https://github.com/dantelrharrell-debug/coinbase_advanced_py.git
 
-# ---- Stage 1: Final image ----
+# -----------------------
+# Stage 1: Final image
+# -----------------------
 FROM python:3.11-slim
 
+# Set working directory
 WORKDIR /usr/src/app
 
-# Copy Python packages and binaries from builder
+# Copy installed site-packages and binaries from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy your bot code
+# Copy bot source code and start script
 COPY ./bot ./bot
-
-# Copy start.sh and make it executable
 COPY start.sh ./
+
+# Make start script executable
 RUN chmod +x start.sh
 
-# Symlink start_all.sh -> start.sh
-RUN ln -s start.sh start_all.sh
-
-# Set container entrypoint
-ENTRYPOINT ["./start_all.sh"]
+# Default command
+CMD ["./start.sh"]
