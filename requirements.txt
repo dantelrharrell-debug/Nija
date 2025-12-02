@@ -36,6 +36,4 @@ idna==3.11
 numpy==1.26.3
 pandas==2.1.1
 requests==2.32.5
-
-# Install your private GitHub package securely
--e git+https://${GITHUB_PAT}@github.com/dantelrharrell-debug/coinbase_advanced_py.git@main#egg=coinbase_advanced_py
+# coinbase_advanced_py will be installed via Dockerfile from GitHub
