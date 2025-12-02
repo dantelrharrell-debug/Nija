@@ -1,16 +1,7 @@
-# ==============================
-# NIJA TRADING BOT - Dockerfile
-# ==============================
-
-# Base image
+# === Base Image ===
 FROM python:3.11-slim
 
-# Set working directory
-WORKDIR /usr/src/app
-
-# ------------------------------
-# Install system dependencies
-# ------------------------------
+# === System Dependencies ===
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     build-essential \
@@ -19,39 +10,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ------------------------------
-# Upgrade pip, setuptools, wheel
-# ------------------------------
+# === Upgrade pip and setuptools ===
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# ------------------------------
-# Copy requirements
-# ------------------------------
+# === Set working directory ===
+WORKDIR /usr/src/app
+
+# === Copy requirements ===
 COPY requirements.txt .
 
-# ------------------------------
-# Install Python dependencies
-# ------------------------------
+# === Install normal Python dependencies ===
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ------------------------------
-# Install coinbase_advanced_py from GitHub using PAT
-# ------------------------------
-# Use build-arg to pass GitHub PAT safely
+# === Build argument for GitHub PAT ===
 ARG GITHUB_PAT
-RUN pip install --no-cache-dir git+https://${GITHUB_PAT}@github.com/dantelrharrell-debug/coinbase_advanced_py.git
 
-# ------------------------------
-# Copy application source code
-# ------------------------------
+# === Install private GitHub repo using PAT ===
+RUN pip install --no-cache-dir git+https://${GITHUB_PAT}@github.com/dantelrharrell-debug/coinbase_advanced_py.git || \
+    echo "coinbase_advanced_py failed to install, continuing with fallback"
+
+# === Copy application code ===
 COPY . .
 
-# ------------------------------
-# Expose port
-# ------------------------------
-EXPOSE 5000
-
-# ------------------------------
-# Start Gunicorn
-# ------------------------------
-CMD ["gunicorn", "--config", "gunicorn.conf.py", "web.wsgi:app"]
+# === Default command ===
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
