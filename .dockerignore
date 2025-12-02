@@ -1,9 +1,14 @@
 __pycache__
 *.pyc
-*.pyo
-*.pyd
 .git
+.gitignore
 .env
-venv
-node_modules
-/tmp
+venv/
+node_modules/
+*.log
+
+# Prevent local shadowing of pip package names
+coinbase
+coinbase_advanced
+coinbase_advanced_py
+coinbase-advanced
