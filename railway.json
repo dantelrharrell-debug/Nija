@@ -1,8 +1,5 @@
 {
   "build": {
-    "buildCommand": "bash ./railway_build.sh"
-  },
-  "deploy": {
-    "startCommand": "gunicorn -c gunicorn.conf.py web.wsgi:app --bind 0.0.0.0:$PORT"
+    "command": "docker build --build-arg GITHUB_PAT=$GITHUB_PAT -t nija-trading-bot ."
   }
 }
