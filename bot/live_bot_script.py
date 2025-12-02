@@ -1,3 +1,25 @@
+import os
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+API_KEY = os.getenv("COINBASE_API_KEY")
+API_SECRET = os.getenv("COINBASE_API_SECRET")
+
+if API_KEY and API_SECRET:
+    try:
+        from coinbase_advanced_py.client import Client
+        # initialize using only key & secret (no passphrase)
+        client = Client(api_key=API_KEY, api_secret=API_SECRET)
+        logger.info("Coinbase client initialized. Live trading enabled.")
+    except Exception as e:
+        client = None
+        logger.exception("Failed to initialize Coinbase client: %s", e)
+else:
+    client = None
+    logger.warning("Coinbase client not initialized. Missing API_KEY or API_SECRET. Live trading disabled.")
+
 # bot/live_bot_script.py
 import os
 import time
