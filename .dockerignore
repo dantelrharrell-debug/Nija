@@ -1,38 +1,9 @@
-# General
-__pycache__/
+__pycache__
 *.pyc
 *.pyo
 *.pyd
-*.log
-
-# Venvs and build output
-venv/
-.venv/
-pip-wheel-metadata/
-build/
-dist/
-
-# Git
 .git
-.gitignore
-
-# Local env/secrets
 .env
-.env.* 
-
-# Node
-node_modules/
-
-# Editor metadata
-.vscode/
-.idea/
-
-# Test/coverage
-.pytest_cache/
-.coverage
-
-# Prevent local package shadowing (critical)
-coinbase
-coinbase_advanced
-coinbase_advanced_py
-coinbase-advanced
+venv
+node_modules
+/tmp
