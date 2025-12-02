@@ -2,6 +2,7 @@
 FROM python:3.11-slim
 
 # --- Step 2: Environment variables ---
+# GITHUB_PAT is set in Railway, not hardcoded
 ARG GITHUB_PAT
 ENV PATH="/root/.local/bin:$PATH"
 ENV GITHUB_PAT=${GITHUB_PAT}
@@ -17,14 +18,13 @@ COPY requirements.txt /app/requirements.txt
 # --- Step 5: Install Python dependencies ---
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r /app/requirements.txt && \
-    # Install private repo securely using the environment variable
     pip install --no-cache-dir git+https://${GITHUB_PAT}@github.com/dantelrharrell-debug/coinbase_advanced_py.git@main#egg=coinbase_advanced_py
 
-# --- Step 6: Copy your bot code ---
+# --- Step 6: Copy bot code ---
 COPY . /app
 WORKDIR /app
 
-# --- Step 7: Expose port ---
+# --- Step 7: Expose port for Railway ---
 EXPOSE 8080
 
 # --- Step 8: Run bot ---
