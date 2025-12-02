@@ -1,6 +1,5 @@
 import os
 import logging
-from flask import Flask, jsonify
 
 # ----------------------------
 # Logging setup
@@ -13,10 +12,10 @@ logger = logging.getLogger(__name__)
 # ----------------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
-PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
+PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")  # Optional, can be None
 
 # ----------------------------
-# Initialize Coinbase client only if credentials exist
+# Initialize Coinbase client
 # ----------------------------
 client = None
 if API_KEY and API_SECRET and PASSPHRASE:
@@ -27,39 +26,43 @@ if API_KEY and API_SECRET and PASSPHRASE:
     except Exception as e:
         logger.error(f"Failed to initialize Coinbase client: {e}")
 else:
-    logger.warning("Coinbase client not initialized. Missing credentials. Live trading disabled.")
+    logger.warning(
+        "Coinbase client not initialized. Missing credentials. "
+        "Live trading disabled."
+    )
 
 # ----------------------------
-# Flask app setup
+# Example trading loop
 # ----------------------------
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    status = "Live trading enabled" if client else "Live trading disabled"
-    return jsonify({"status": status})
-
-# ----------------------------
-# Example bot logic (safe check for client)
-# ----------------------------
-def run_bot():
+def start_trading_loop():
     if not client:
-        logger.warning("Bot skipped execution: Coinbase client not initialized.")
+        logger.warning("Trading loop skipped: Coinbase client not initialized.")
         return
 
-    # Example trading logic (replace with your actual bot)
-    logger.info("Bot is running...")
-    # Example: fetch accounts
+    logger.info("Starting trading loop...")
     try:
-        accounts = client.get_accounts()
+        accounts = client.get_accounts()  # Example method
         logger.info(f"Accounts fetched: {accounts}")
     except Exception as e:
         logger.error(f"Error fetching accounts: {e}")
 
 # ----------------------------
-# Entrypoint for script
+# Flask App
 # ----------------------------
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return jsonify({"status": "Bot running", "live_trading": client is not None})
+
+# Optional: endpoint to manually start trading loop
+@app.route("/start")
+def start():
+    start_trading_loop()
+    return jsonify({"status": "Trading loop triggered"})
+
 if __name__ == "__main__":
-    logger.info("Starting bot and Flask app...")
-    run_bot()
+    logger.info("Starting Flask app...")
     app.run(host="0.0.0.0", port=5000)
