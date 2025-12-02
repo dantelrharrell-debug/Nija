@@ -15,15 +15,17 @@ RUN apt-get update && \
 COPY requirements.txt /app/requirements.txt
 
 # --- Step 5: Install Python dependencies ---
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r /app/requirements.txt && \
+    # Install private repo securely using the environment variable
+    pip install --no-cache-dir git+https://${GITHUB_PAT}@github.com/dantelrharrell-debug/coinbase_advanced_py.git@main#egg=coinbase_advanced_py
 
 # --- Step 6: Copy your bot code ---
 COPY . /app
 WORKDIR /app
 
-# --- Step 7: Expose port for Railway ---
+# --- Step 7: Expose port ---
 EXPOSE 8080
 
-# --- Step 8: Run your bot ---
+# --- Step 8: Run bot ---
 CMD ["python", "bot/live_trading.py"]
