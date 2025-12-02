@@ -1,15 +1,26 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Ensure we are in /app
-cd /app || exit 1
+echo "Starting NIJA Trading Bot orchestrator..."
+echo "LIVE_TRADING=${LIVE_TRADING:-0}"
 
-# Verify critical files exist
-if [ ! -f nija_client.py ] || [ ! -f check_funded.py ]; then
-    echo "[ERROR] nija_client.py or check_funded.py missing in /app!"
-    ls -l /app
-    exit 1
+# Example: run any preflight checks
+if [ -f ./pre_start.sh ]; then
+  echo "Running pre_start.sh"
+  ./pre_start.sh
 fi
 
-# Start Gunicorn
-exec gunicorn -c gunicorn_conf.py wsgi:app
+# Make sure the bot script exists
+if [ -f ./start.sh ]; then
+  echo "Launching start.sh"
+  exec ./start.sh
+fi
+
+# Fallback: try to run the main bot entrypoint if present
+if [ -f ./bot/live_trading.py ]; then
+  echo "Running python bot/live_trading.py"
+  exec python ./bot/live_trading.py
+fi
+
+echo "No start script found. Exiting."
+exit 1
