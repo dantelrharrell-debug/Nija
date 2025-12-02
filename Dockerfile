@@ -22,15 +22,15 @@ COPY requirements.txt .
 # === Install normal Python dependencies ===
 RUN pip install --no-cache-dir -r requirements.txt
 
-# === Build argument for GitHub PAT ===
-ARG GITHUB_PAT
-
-# === Install private GitHub repo using PAT ===
-RUN pip install --no-cache-dir git+https://${GITHUB_PAT}@github.com/dantelrharrell-debug/coinbase_advanced_py.git || \
-    echo "coinbase_advanced_py failed to install, continuing with fallback"
-
 # === Copy application code ===
 COPY . .
 
+# === Set environment variable for GitHub PAT at runtime ===
+ENV GITHUB_PAT=${GITHUB_PAT}
+
+# === Entrypoint script for runtime private module install ===
+COPY entrypoint.sh /usr/src/app/entrypoint.sh
+RUN chmod +x /usr/src/app/entrypoint.sh
+
 # === Default command ===
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
+CMD ["/usr/src/app/entrypoint.sh"]
