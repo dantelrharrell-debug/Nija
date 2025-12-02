@@ -1,24 +1,13 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-# load .env if exists
-if [ -f .env ]; then
-  echo "Loading .env"
-  set -o allexport
-  source .env
-  set +o allexport
-fi
-
-# print environment summary (not secrets) for debugging
-echo "Starting container..."
-if [ -n "${COINBASE_API_KEY:-}" ] && [ -n "${COINBASE_API_SECRET:-}" ]; then
-  echo "COINBASE creds present."
+# Install private repo at runtime
+if [ -z "$GITHUB_PAT" ]; then
+  echo "GITHUB_PAT not set! Skipping coinbase_advanced_py install..."
 else
-  echo "WARNING: Missing COINBASE_API_KEY or COINBASE_API_SECRET. Live trading disabled."
+  echo "Installing coinbase_advanced_py..."
+  pip install --no-cache-dir git+https://${GITHUB_PAT}@github.com/dantelrharrell-debug/coinbase_advanced_py.git
 fi
 
-# Ensure required packages installed (helps with iterative deploys)
-python3 -m pip install --no-cache-dir --upgrade pandas numpy || true
-
-# Launch Gunicorn (use provided CMD by default)
-exec "$@"
+# Start Gunicorn
+exec gunicorn -c gunicorn.conf.py web.wsgi:app
