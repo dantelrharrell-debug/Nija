@@ -1,3 +1,13 @@
+# bot/live_bot_script.py (top)
+# other imports...
+try:
+    # adjust path if your function is in live_trading.py under same package
+    from .live_trading import initialize_coinbase_client, run_live_trading
+    logger.info("Imported initialize_coinbase_client from .live_trading")
+except Exception as e:
+    # fallback: maybe it's in the same file or missing
+    logger.debug("Could not import initialize_coinbase_client from .live_trading: %s", e)
+
 # file: bot/live_bot_script.py
 import os
 import time
