@@ -1,36 +1,25 @@
-# === Base Image ===
+# Use official Python image
 FROM python:3.11-slim
 
-# === System Dependencies ===
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    build-essential \
-    libffi-dev \
-    libssl-dev \
-    python3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# === Upgrade pip and setuptools ===
-RUN python -m pip install --upgrade pip setuptools wheel
-
-# === Set working directory ===
+# Set working directory
 WORKDIR /usr/src/app
 
-# === Copy requirements ===
-COPY requirements.txt .
-
-# === Install normal Python dependencies ===
-RUN pip install --no-cache-dir -r requirements.txt
-
-# === Copy application code ===
+# Copy your app files
 COPY . .
 
-# === Set environment variable for GitHub PAT at runtime ===
-ENV GITHUB_PAT=${GITHUB_PAT}
+# Install system dependencies
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-# === Entrypoint script for runtime private module install ===
-COPY entrypoint.sh /usr/src/app/entrypoint.sh
-RUN chmod +x /usr/src/app/entrypoint.sh
+# Use GITHUB_PAT environment variable to install private repo
+# Make sure Railway has GITHUB_PAT set in env vars
+RUN pip install --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir git+https://$GITHUB_PAT@github.com/<your-username>/coinbase_advanced_py.git@main#egg=coinbase_advanced_py
 
-# === Default command ===
-CMD ["/usr/src/app/entrypoint.sh"]
+# Install other dependencies from requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Expose port for Gunicorn
+EXPOSE 5000
+
+# Start Gunicorn
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "web.wsgi:app"]
