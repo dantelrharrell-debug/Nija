@@ -1,14 +1,4 @@
-# bot/live_bot_script.py (top)
-# other imports...
-try:
-    # adjust path if your function is in live_trading.py under same package
-    from .live_trading import initialize_coinbase_client, run_live_trading
-    logger.info("Imported initialize_coinbase_client from .live_trading")
-except Exception as e:
-    # fallback: maybe it's in the same file or missing
-    logger.debug("Could not import initialize_coinbase_client from .live_trading: %s", e)
-
-# file: bot/live_bot_script.py
+# bot/live_trading.py
 import os
 import time
 import threading
@@ -18,42 +8,97 @@ from typing import Optional, Dict, Any
 
 from flask import Flask, jsonify, request
 
-# Logging setup (stdout + rotating file)
+# ----------------------------
+# Logging
+# ----------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("nija_trading_bot")
+
+# Optional rotating file handler (permission required)
 try:
-    # optional rotating file handler
     from logging.handlers import RotatingFileHandler
     log_path = os.getenv("NIJA_TRADE_LOG_PATH", "/var/log/nija_trades.log")
     fh = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3)
     fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
     logger.addHandler(fh)
-    logger.info(f"Trade logs will also be written to: {log_path}")
+    logger.info("Trade logs will also be written to: %s", log_path)
 except Exception as e:
-    logger.warning("Could not configure file logging (permission?): %s", e)
+    logger.debug("Could not configure file logging (ok for dev): %s", e)
 
-# Coinbase credentials from env
+# ----------------------------
+# Environment / trading config
+# ----------------------------
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
 
-# trading config
 PRODUCT_ID = os.getenv("TRADE_PRODUCT_ID", "BTC-USD")
 ORDER_SIZE = float(os.getenv("TRADE_ORDER_SIZE", "0.001"))
-TRADE_INTERVAL = float(os.getenv("TRADE_INTERVAL", "5"))
+TRADE_INTERVAL = float(os.getenv("TRADE_INTERVAL", "5"))  # seconds
 MAX_ORDERS_PER_LOOP = int(os.getenv("MAX_ORDERS_PER_LOOP", "1"))
+ACCOUNT_ID = os.getenv("TRADE_ACCOUNT_ID", "")
 
+# ----------------------------
+# State & small in-memory trade buffer
+# ----------------------------
 client = None
-
-# keep a small in-memory recent trades buffer for quick API checks
-_RECENT_TRADES = []
+_RECENT_TRADES: list[Dict[str, Any]] = []
 _RECENT_TRADES_MAX = int(os.getenv("RECENT_TRADES_MAX", "50"))
 _RECENT_TRADES_LOCK = threading.Lock()
 
+_trading_thread: Optional[threading.Thread] = None
+_trading_stop_event = threading.Event()
+_trading_lock = threading.Lock()
+_trading_state = {"running": False, "loops": 0, "orders_placed": 0}
+
+# ----------------------------
+# Client initializer (robust)
+# ----------------------------
+def initialize_coinbase_client() -> Optional[Any]:
+    """
+    Robust client init:
+     - Prefer coinbase_advanced_py (if installed)
+     - Fallback to official 'coinbase' package
+     - Do NOT require a passphrase here (support key+secret only)
+    """
+    global client
+
+    if not (API_KEY and API_SECRET):
+        logger.warning("No COINBASE_API_KEY/COINBASE_API_SECRET found; Coinbase client not initialized.")
+        client = None
+        return None
+
+    # Try advanced/pro client first
+    try:
+        from coinbase_advanced_py.client import Client as AdvancedClient  # optional package
+        logger.info("Found coinbase_advanced_py; initializing advanced client.")
+        client = AdvancedClient(api_key=API_KEY, api_secret=API_SECRET)
+        logger.info("coinbase_advanced_py Client initialized.")
+        return client
+    except ModuleNotFoundError:
+        logger.info("coinbase_advanced_py not installed; will try official coinbase client.")
+    except Exception as e:
+        logger.warning("coinbase_advanced_py import/instantiation failed: %s", e)
+
+    # Fallback -> official wallet client
+    try:
+        from coinbase.wallet.client import Client as WalletClient
+        logger.info("Initializing official coinbase wallet Client (fallback).")
+        client = WalletClient(API_KEY, API_SECRET)
+        logger.info("Official coinbase Client initialized (fallback).")
+        return client
+    except Exception as e:
+        logger.error("Official coinbase client init failed: %s", e)
+
+    client = None
+    logger.error("Failed to initialize any Coinbase client. Live trading disabled.")
+    return None
+
+# ----------------------------
+# Trade logging helpers
+# ----------------------------
 def _record_trade_log(entry: Dict[str, Any]):
-    """Write trade record to in-memory buffer and JSON log line"""
-    # ensure timestamp
     entry.setdefault("timestamp", time.time())
-    # human readable block for stdout logs
+    # Human-friendly block
     try:
         ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(entry["timestamp"]))
     except Exception:
@@ -71,14 +116,13 @@ def _record_trade_log(entry: Dict[str, Any]):
     )
     logger.info(human_block)
 
-    # structured JSON log line (one-line)
+    # Structured JSON line (easier for log parsing)
     try:
         json_line = json.dumps(entry, default=str)
         logger.info("NIJA_JSON_TRADE: %s", json_line)
     except Exception as e:
         logger.warning("Failed to JSON-serialize trade entry: %s", e)
 
-    # keep in-memory buffer
     with _RECENT_TRADES_LOCK:
         _RECENT_TRADES.append(entry)
         if len(_RECENT_TRADES) > _RECENT_TRADES_MAX:
@@ -101,10 +145,12 @@ def _record_failed_order_attempt(product_id: str, side: str, size: float, error:
         if len(_RECENT_TRADES) > _RECENT_TRADES_MAX:
             _RECENT_TRADES.pop(0)
 
+# ----------------------------
+# Order placement (multi-client)
+# ----------------------------
 def _try_place_order(product_id: str, side: str, size: float, price: Optional[float] = None) -> Dict[str, Any]:
     """
-    Robust, multi-client order attempt. Logs and returns structured result.
-    WARNING: WILL PLACE A LIVE ORDER when client is initialized.
+    Multi-client order attempt. WILL PLACE A LIVE ORDER when client is initialized.
     """
     if client is None:
         raise RuntimeError("Coinbase client not initialized")
@@ -113,7 +159,7 @@ def _try_place_order(product_id: str, side: str, size: float, price: Optional[fl
     logger.info("Attempting to place live order: %s", payload)
 
     attempts = []
-    # Try coinbase_advanced_py-like methods
+    # 1) coinbase_advanced_py-like
     try:
         if hasattr(client, "place_order"):
             resp = client.place_order(product_id=product_id, side=side, order_type="market" if price is None else "limit", size=size, price=price)
@@ -145,10 +191,9 @@ def _try_place_order(product_id: str, side: str, size: float, price: Optional[fl
         attempts.append(("advanced attempt", str(e)))
         logger.warning("Advanced client order attempt failed: %s", e)
 
-    # Try official wallet-style interfaces (less common for market orders)
+    # 2) official wallet-style
     try:
         if hasattr(client, "buy"):
-            # wallet-style buy expects amount and currency; map product to base/currency
             base_currency = product_id.split("-")[-1]
             resp = client.buy(amount=str(size), currency=base_currency)
             order_id = getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp))
@@ -165,17 +210,14 @@ def _try_place_order(product_id: str, side: str, size: float, price: Optional[fl
         attempts.append(("wallet attempt", str(e)))
         logger.warning("Wallet-style order attempt failed: %s", e)
 
-    # No method succeeded
+    # no supported method
     err = RuntimeError("No supported order method found on client")
     _record_failed_order_attempt(product_id, side, size, err, attempts=attempts)
     raise err
 
-# trading loop control (same variables you had)
-_trading_thread: Optional[threading.Thread] = None
-_trading_stop_event = threading.Event()
-_trading_lock = threading.Lock()
-_trading_state = {"running": False, "loops": 0, "orders_placed": 0}
-
+# ----------------------------
+# Trading loop control
+# ----------------------------
 def start_trading_loop():
     global _trading_thread, _trading_stop_event, _trading_state
 
@@ -194,26 +236,18 @@ def start_trading_loop():
                     _trading_state["loops"] += 1
                     logger.info("Loop #%d", _trading_state["loops"])
 
-                    # pre-check: client must be present
                     if client is None:
                         logger.error("Client not initialized. Stopping trading loop.")
                         break
 
-                    # Optional: check balances BEFORE placing orders (basic)
+                    # attempt to read balances (best-effort)
                     try:
-                        # many clients provide get_accounts() or get_account(account_id)
-                        bal_info = None
                         if hasattr(client, "get_accounts"):
-                            bal_info = client.get_accounts()
-                            logger.debug("Balance info fetched for pre-check.")
-                        elif hasattr(client, "get_account"):
-                            bal_info = client.get_account()
-                            logger.debug("Balance info fetched (single get_account).")
-                        # You can expand balance checks here (USD available, etc.)
+                            _ = client.get_accounts()
+                            logger.debug("Fetched accounts for pre-check.")
                     except Exception as bex:
-                        logger.warning("Could not fetch balances before trading: %s", bex)
+                        logger.debug("Balance pre-check failed (non-fatal): %s", bex)
 
-                    # place up to MAX_ORDERS_PER_LOOP market buys
                     orders_this_loop = 0
                     for i in range(MAX_ORDERS_PER_LOOP):
                         try:
@@ -223,7 +257,6 @@ def start_trading_loop():
                             orders_this_loop += 1
                         except Exception as oerr:
                             logger.error("Order failed in loop: %s", oerr)
-                            # If live error like insufficient funds we stop placing further orders this loop
                             break
 
                     logger.info("Finished loop #%d: orders_placed_this_loop=%d", _trading_state["loops"], orders_this_loop)
@@ -231,7 +264,6 @@ def start_trading_loop():
                 except Exception as ex:
                     logger.exception("Unexpected error in trading loop: %s", ex)
 
-                # Sleep between loops
                 waited = 0.0
                 while waited < TRADE_INTERVAL and not _trading_stop_event.is_set():
                     time.sleep(0.5)
@@ -261,9 +293,15 @@ def status_info():
         "trade_interval": TRADE_INTERVAL
     }
 
+# ----------------------------
+# Flask app factory
+# ----------------------------
 def create_app():
-    # ensure client is initialized on startup (call your existing init)
-    initialize_coinbase_client()
+    # initialize client on startup; create_app must not crash if init fails
+    try:
+        initialize_coinbase_client()
+    except Exception as e:
+        logger.exception("initialize_coinbase_client raised during startup: %s", e)
 
     app = Flask("nija_live_bot")
 
@@ -308,7 +346,7 @@ def create_app():
             recent = list(_RECENT_TRADES[-n:])
         return jsonify({"ok": True, "recent_trades": recent}), 200
 
-    # auto-start option (optional)
+    # auto-start (if env enabled)
     if os.getenv("AUTO_START_TRADING", "false").lower() in ("1", "true", "yes"):
         if client is not None:
             logger.info("AUTO_START_TRADING set -> starting trading loop at startup.")
