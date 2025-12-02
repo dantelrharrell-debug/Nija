@@ -1,55 +1,53 @@
-# --- Stage 1: builder (uses PAT at build-time only) ---
+# ---------- Builder stage: clone private repo & build wheel ----------
 FROM python:3.11-slim AS builder
+
+# Build-time secret (set as Build Argument in Railway)
 ARG GITHUB_PAT
-ENV DEBIAN_FRONTEND=noninteractive
 
-# system deps for building wheels
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    build-essential \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Install git and build deps needed to build wheel
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git build-essential ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-WORKDIR /src
+WORKDIR /tmp/build
 
-# upgrade pip in builder
+# Upgrade pip and tools
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# If you have a requirements.txt for PyPI packages, optionally build wheels for them here:
-# COPY requirements.txt /src/requirements.txt
-# RUN pip wheel --no-cache-dir -r /src/requirements.txt -w /wheels
+# Clone the private repo using the x-access-token username (non-interactive)
+# NOTE: using the build arg here. This URL will only be visible during build.
+RUN git clone --depth 1 "https://x-access-token:${GITHUB_PAT}@github.com/dantelrharrell-debug/coinbase_advanced_py.git" coinbase_advanced_py
 
-# clone private repo using PAT (non-interactive)
-RUN git clone https://$GITHUB_PAT@github.com/dantelrharrell-debug/coinbase_advanced_py.git /src/coinbase_advanced_py
+# Build wheel for the private package (avoid installing into builder's site-packages)
+RUN pip wheel --no-cache-dir --wheel-dir /tmp/wheels /tmp/build/coinbase_advanced_py
 
-# build a wheel for the private package
-WORKDIR /src/coinbase_advanced_py
-RUN python -m pip wheel --no-deps --no-cache-dir -w /wheels .
-
-# --- Stage 2: final image ---
+# ---------- Final stage: install wheels & app dependencies ----------
 FROM python:3.11-slim
+
 ENV PATH="/root/.local/bin:$PATH"
 WORKDIR /usr/src/app
 
-# runtime minimal deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Install system libs required at runtime (minimize footprint)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-# upgrade pip in final image
-RUN python -m pip install --upgrade pip setuptools wheel
+# Copy wheels built in builder
+COPY --from=builder /tmp/wheels /tmp/wheels
 
-# copy wheels produced in builder stage
-COPY --from=builder /wheels /wheels
+# Copy requirements (if you have one)
+COPY requirements.txt /usr/src/app/requirements.txt
 
-# install private wheel(s) and any wheels from requirements (if built)
-RUN pip install --no-cache-dir /wheels/* || true
+# Upgrade pip, install requirements and the private wheel(s)
+RUN python -m pip install --upgrade pip setuptools wheel && \
+    if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt || true; fi && \
+    pip install --no-cache-dir /tmp/wheels/* || true
 
-# copy project code
-COPY . .
+# Copy application code
+COPY . /usr/src/app
 
-# default port
+# Expose port (Railway sets $PORT env variable — your start command must use it)
 EXPOSE 8080
 
-# default command (adjust to your entrypoint)
+# Default command (change as needed)
 CMD ["python", "bot/live_trading.py"]
