@@ -1,40 +1,30 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
-echo "=== STARTUP CHECKS ==="
-
-# 1) Print Python and pip locations
-echo "[INFO] python: $(which python3 || echo 'not found')"
-echo "[INFO] pip: $(which pip || echo 'not found')"
-python3 --version || true
-
-# 2) Verify Coinbase package import
-python3 - <<'PY'
-import sys
-try:
-    import coinbase
-    print("[OK] 'coinbase' package import OK. __file__:", getattr(coinbase, '__file__', 'n/a'))
-except Exception as e:
-    print("[ERROR] cannot import 'coinbase' package:", repr(e))
-    sys.exit(10)
-PY
-
-# 3) Ensure required environment variables exist
-missing=()
-for v in COINBASE_API_KEY COINBASE_API_SECRET COINBASE_API_PASSPHRASE; do
-  if [ -z "${!v:-}" ]; then
-    missing+=("$v")
-  fi
-done
-
-if [ ${#missing[@]} -gt 0 ]; then
-  echo "[ERROR] Missing environment variables: ${missing[*]}"
-  echo "Set them with your platform's env UI or with --env-file / -e for local docker."
-  exit 11
+# ---- Load environment variables from .env if it exists ----
+if [ -f /usr/src/app/.env ]; then
+    echo "[INFO] Loading environment variables from .env"
+    export $(grep -v '^#' /usr/src/app/.env | xargs)
+else
+    echo "[WARNING] No .env file found. Make sure environment variables are set."
 fi
 
-# 4) Run a small health check that validates your bot module and start_trading_loop symbol
-python3 health_check.py || { echo "[ERROR] health_check.py failed"; exit 12; }
+# ---- Optional: Check required Coinbase variables ----
+REQUIRED_VARS=("COINBASE_API_KEY" "COINBASE_API_SECRET" "COINBASE_API_PASSPHRASE")
+for VAR in "${REQUIRED_VARS[@]}"; do
+    if [ -z "${!VAR}" ]; then
+        echo "[ERROR] Missing required environment variable: $VAR"
+        exit 1
+    fi
+done
 
-echo "=== STARTING GUNICORN ==="
-exec gunicorn -c gunicorn.conf.py web.wsgi:app
+# ---- Start Gunicorn ----
+echo "[INFO] Starting Gunicorn..."
+exec gunicorn \
+    --bind 0.0.0.0:5000 \
+    --workers 2 \
+    --threads 2 \
+    --worker-class gthread \
+    --timeout 120 \
+    --preload \
+    web.wsgi:app
