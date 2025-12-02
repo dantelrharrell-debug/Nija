@@ -1,4 +1,4 @@
-ENV DEBIAN_FRONTEND=noninteractive
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
 # Use official Python image
 FROM python:3.11-slim
