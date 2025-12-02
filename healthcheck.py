@@ -1,25 +1,22 @@
-# healthcheck.py
-from loguru import logger
-from nija_client import CoinbaseClient
+# health_check.py
+import importlib
+import sys
+import os
 
-logger.add(lambda msg: print(msg, end=""))
+print("[INFO] Verifying bot.live_bot_script module and start_trading_loop...")
 
-def run_check():
-    logger.info("HEALTHCHECK: Starting Coinbase client test")
-    try:
-        # decide advanced_mode via env (nija_client handles it) but explicit True here if you want:
-        client = CoinbaseClient()  # uses env and nija_client logic
-        accounts = client.fetch_accounts()
-        balances = client.get_balances() if hasattr(client, "get_balances") else client.get_account_balances()
-        logger.info("HEALTHCHECK: fetch_accounts returned type=%s length=%d", type(accounts).__name__, len(accounts) if hasattr(accounts, "__len__") else 0)
-        logger.info("HEALTHCHECK: balances (sample) %s", {k: balances[k] for k in list(balances)[:5]})
-        # explicit success condition:
-        if accounts and len(accounts) > 0:
-            logger.success("HEALTHCHECK: SUCCESS — accounts fetched")
-        else:
-            logger.warning("HEALTHCHECK: WARNING — no accounts returned (check key permissions / endpoint)")
-    except Exception as e:
-        logger.error("HEALTHCHECK: FAILURE - Exception during check: %s", e)
+try:
+    mod = importlib.import_module("bot.live_bot_script")
+except Exception as e:
+    print("[ERROR] Failed to import bot.live_bot_script:", repr(e))
+    sys.exit(20)
 
-if __name__ == "__main__":
-    run_check()
+if not hasattr(mod, "start_trading_loop"):
+    print("[ERROR] bot.live_bot_script does not define 'start_trading_loop'.")
+    # show available attributes for debugging
+    print("Available names in bot.live_bot_script:", [n for n in dir(mod) if not n.startswith("_")])
+    sys.exit(21)
+
+print("[OK] start_trading_loop found:", mod.start_trading_loop)
+print("[INFO] health_check passed.")
+sys.exit(0)
