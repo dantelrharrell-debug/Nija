@@ -1,4 +1,4 @@
-# Stage 1: build environment
+# Stage 1: Build environment
 FROM python:3.11-slim AS builder
 
 # Install system dependencies
@@ -6,39 +6,48 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends git build-essential ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /src
-
-# Upgrade pip and install wheel/setuptools
+# Upgrade pip, setuptools, wheel
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Clone your repo from GitHub using the personal access token
-ARG GITHUB_PAT
-RUN git clone --depth 1 https://x-access-token:${GITHUB_PAT}@github.com/dantelrharrell-debug/Nija.git Nija
-
-# Set WORKDIR to the repo folder
+# Clone the repo
+WORKDIR /src
+RUN git clone --depth 1 https://github.com/dantelrharrell-debug/Nija.git Nija
 WORKDIR /src/Nija
 
-# Install coinbase_advanced_py
-RUN pip install --no-cache-dir ./coinbase_advanced_py
+# Install all wheel dependencies in repo root
+COPY ./coinbase_advanced_py-*.whl ./
+COPY ./PyJWT-*.whl ./
+COPY ./backoff-*.whl ./
+COPY ./certifi-*.whl ./
+COPY ./cffi-*.whl ./
+COPY ./charset_normalizer-*.whl ./
+COPY ./cryptography-*.whl ./
+COPY ./idna-*.whl ./
+COPY ./pycparser-*.whl ./
+COPY ./requests-*.whl ./
+COPY ./urllib3-*.whl ./
+COPY ./websockets-*.whl ./
 
-# Stage 2: runtime environment
+RUN pip install --no-cache-dir ./*.whl
+
+# Stage 2: Runtime environment
 FROM python:3.11-slim
-
-WORKDIR /usr/src/app
 
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy bot code
-COPY ./bot ./bot
-COPY start.sh ./
+# Set working directory
+WORKDIR /usr/src/app
+
+# Copy repo code
+COPY . .
 
 # Make start script executable
 RUN chmod +x start.sh
 
-# Set environment variables (Railway will override with secrets)
-ENV LIVE_TRADING=1
+# Expose port if using web app
+EXPOSE 8080
 
-# Start bot
+# Entrypoint
 CMD ["./start.sh"]
