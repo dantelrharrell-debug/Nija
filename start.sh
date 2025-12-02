@@ -1,28 +1,16 @@
-#!/bin/bash
-# ===============================
-# start.sh - Launch NIJA Trading Bot
-# ===============================
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Exit immediately if a command exits with a non-zero status
-set -e
-
-# Optional: print each command before executing (for debug)
-# set -x
-
-# Environment check
 echo "Starting NIJA Trading Bot..."
 echo "LIVE_TRADING=${LIVE_TRADING:-0}"
 
-# Activate Python environment (if needed)
-# In this Dockerfile, we use system Python, so this is not required
-
-# Navigate to bot directory
-cd ./bot || { echo "Bot directory not found!"; exit 1; }
-
-# Run the main bot script
-# Replace 'main.py' with your bot's entrypoint file if different
-echo "Launching bot..."
-python main.py
-
-# Keep container alive if bot exits (optional)
-# tail -f /dev/null
+# Activate any environment-specific commands (none here)
+# Launch the python bot entrypoint (update path if your main runner is different)
+if [ -f ./bot/live_trading.py ]; then
+  exec python ./bot/live_trading.py
+elif [ -f ./start_bot.sh ]; then
+  exec ./start_bot.sh
+else
+  echo "ERROR: No bot entrypoint found (expected ./bot/live_trading.py or ./start_bot.sh)."
+  exit 2
+fi
