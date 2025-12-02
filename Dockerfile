@@ -1,29 +1,34 @@
-# Start from slim Python 3.11
 FROM python:3.11-slim
 
-# Set working directory early
+# Set workdir early
 WORKDIR /usr/src/app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    build-essential \
+# Install system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git build-essential curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip, setuptools, wheel
+# Upgrade pip
 RUN python3 -m pip install --upgrade pip setuptools wheel
 
-# Install coinbase_advanced_py from GitHub
-RUN pip install --no-cache-dir git+https://github.com/coinbase/coinbase-advanced-py.git
+# Install official coinbase SDK (stable public package)
+# NOTE: 'coinbase' is the typical package name for Coinbase's public SDKs.
+RUN pip install --no-cache-dir coinbase
 
-# Copy application code
+# Install project requirements (if present)
+COPY requirements.txt .
+RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+
+# Copy code
 COPY . .
 
-# Install other Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dotenv to allow .env usage (optional)
+RUN pip install --no-cache-dir python-dotenv
 
-# Expose Flask port
+# Make entrypoint executable
+RUN chmod +x ./entrypoint.sh
+
 EXPOSE 5000
 
-# Run Gunicorn with config
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "web.wsgi:app"]
+# Entrypoint runs verification before starting gunicorn
+CMD ["./entrypoint.sh"]
