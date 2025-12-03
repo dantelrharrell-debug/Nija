@@ -1,9 +1,26 @@
 import os
 import time
+from pathlib import Path
 from coinbase.rest import RESTClient
 from trading_strategy import TradingStrategy
 
+# Load environment variables from .env file
+def load_env():
+    env_path = Path(__file__).parent.parent / '.env'
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    # Remove quotes if present
+                    value = value.strip('"').strip("'")
+                    os.environ[key] = value
+
 def run_live_trading():
+    # Load environment variables
+    load_env()
+    
     # Pull keys from environment
     api_key = os.environ.get("COINBASE_API_KEY")
     api_secret = os.environ.get("COINBASE_API_SECRET")
