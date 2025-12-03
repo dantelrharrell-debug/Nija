@@ -1,50 +1,80 @@
-# Dockerfile — place at repo root (replace existing)
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1.4
+# Dockerfile (remote-builder compatible: no --mount=type=secret)
+# Multi-stage build (builder -> base -> dev -> prod)
+# This variant prefers a committed local vendor at cd/vendor/coinbase_advanced_py.
+# If vendor is not present, the builder will skip attempting to clone (remote builders may not support secret mounts).
 
-# set working dir
+# ---------- builder: build wheel ----------
+FROM python:3.11-slim AS builder
+
+WORKDIR /src
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONUNBUFFERED=1
+
+# Build-time system deps
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Prefer local vendor copy (this COPY will be used when vendor is committed to the repo)
+COPY cd/vendor/coinbase_advanced_py /src/vendor/coinbase_advanced_py
+
+# NOTE: remote builder does not support BuildKit secret mounts here.
+# If vendor is missing from the build context, we will skip cloning on the remote builder.
+RUN sh -eux -c '\
+      if [ -d /src/vendor/coinbase_advanced_py ]; then \
+        echo "Using local vendor package"; \
+      else \
+        echo "Vendor not present in build context; skipping clone (remote builder)"; \
+      fi'
+
+# Prepare pip build tools and build wheel if vendor exists
+RUN python3 -m pip install --upgrade pip setuptools wheel build || true
+RUN sh -c 'if [ -d /src/vendor/coinbase_advanced_py ]; then cd /src/vendor/coinbase_advanced_py && python3 -m build --wheel --outdir /wheels .; else echo "No vendor package to build"; fi'
+
+# ---------- base: runtime ----------
+FROM python:3.11-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NIJA_ENV=production
+
 WORKDIR /usr/src/app
 
-# Reduce interactive prompts and install system deps used for building wheels
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        git \
-        build-essential \
-        ca-certificates \
-        curl && \
-    rm -rf /var/lib/apt/lists/*
+# Copy built wheel(s) from builder
+COPY --from=builder /wheels /wheels
 
-# Copy only requirements first to avoid shadowing issues
-COPY requirements.txt ./
+# Copy requirements early for caching
+COPY requirements.txt /usr/src/app/requirements.txt
 
-# Make sure we don't have repo shadowing in build context (defensive)
-# (This won't remove anything from the host—only inside the image)
-RUN rm -rf /usr/src/app/coinbase \
-           /usr/src/app/coinbase_advanced \
-           /usr/src/app/coinbase-advanced \
-           /usr/src/app/coinbase_advanced_py || true
+# Install runtime dependencies and wheel(s)
+RUN python3 -m pip install --upgrade pip setuptools wheel \
+ && if [ -f /usr/src/app/requirements.txt ]; then python3 -m pip install -r /usr/src/app/requirements.txt; fi \
+ && if ls /wheels/*.whl 1> /dev/null 2>&1; then python3 -m pip install /wheels/*.whl; fi
 
-# Upgrade pip & tooling
-RUN python3 -m pip install --upgrade pip setuptools wheel
+# Copy application source
+COPY . /usr/src/app
 
-# Install the official Coinbase Advanced SDK first (explicit)
-RUN python3 -m pip install --no-cache-dir --force-reinstall \
-    git+https://github.com/coinbase/coinbase-advanced-py.git@master#egg=coinbase_advanced_py
+# Make start.sh executable if present
+RUN [ -f /usr/src/app/start.sh ] && chmod +x /usr/src/app/start.sh || true
 
-# Then install the rest of the requirements (requirements.txt should NOT contain coinbase git line)
-RUN python3 -m pip install --no-cache-dir -r requirements.txt
+# ---------- dev: editable install ----------
+FROM builder AS dev
 
-# Copy the rest of app files
-COPY . .
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NIJA_ENV=development
 
-# Final cleanup: remove any repo-provided shadowing folders so they can't mask site-packages
-RUN rm -rf ./coinbase \
-           ./coinbase_advanced \
-           ./coinbase-advanced \
-           ./coinbase_advanced_py || true
+WORKDIR /usr/src/app
+COPY . /usr/src/app
 
-# Default command — use your existing start or gunicorn command
-# If you have start.sh:
+RUN python3 -m pip install --upgrade pip setuptools wheel \
+ && if [ -f /usr/src/app/requirements.txt ]; then python3 -m pip install -r /usr/src/app/requirements.txt; fi \
+ && if [ -d /src/vendor/coinbase_advanced_py ]; then python3 -m pip install --no-deps -e /src/vendor/coinbase_advanced_py; fi
+
+RUN [ -f /usr/src/app/start.sh ] && chmod +x /usr/src/app/start.sh || true
+
+# ---------- prod: final runtime ----------
+FROM base AS prod
+WORKDIR /usr/src/app
 CMD ["./start.sh"]
-# Or, to run gunicorn directly:
-# CMD ["python3", "-m", "gunicorn", "-c", "./gunicorn.conf.py", "web.wsgi:app"]
