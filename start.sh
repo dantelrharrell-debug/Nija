@@ -5,8 +5,8 @@ echo "=============================="
 
 python3 --version
 
-# Test if Coinbase module is visible
+# Test Coinbase module
 python3 -c "import coinbase_advanced_py; print('✅ coinbase_advanced_py found at', coinbase_advanced_py.__file__)"
 
-# Launch your bot
+# Start bot
 python3 ./bot/live_trading.py
