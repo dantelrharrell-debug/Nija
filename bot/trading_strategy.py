@@ -93,13 +93,32 @@ class TradingStrategy:
             
             print(f"      API response received: {type(candles)}")
             
-            if not candles or 'candles' not in candles:
-                print(f"      No candles in response: {candles}")
+            if not candles:
+                print(f"      Response is None or empty!")
+                return None
+                
+            # Handle different response types
+            if hasattr(candles, '__dict__'):
+                print(f"      Response attributes: {list(candles.__dict__.keys())}")
+                
+            if hasattr(candles, 'candles'):
+                candle_list = candles.candles
+                print(f"      Found candles attribute: {len(candle_list) if candle_list else 0} candles")
+            elif isinstance(candles, dict) and 'candles' in candles:
+                candle_list = candles['candles']
+                print(f"      Found candles in dict: {len(candle_list)} candles")
+            else:
+                print(f"      No candles found in response!")
                 return None
             
-            print(f"      Processing {len(candles['candles'])} candles...")
+            if not candle_list:
+                print(f"      Candle list is empty!")
+                return None
+            
+            print(f"      Processing {len(candle_list)} candles...")
                 
-            df = pd.DataFrame(candles['candles'])
+            df = pd.DataFrame(candle_list)
+            print(f"      DataFrame columns: {list(df.columns)}")
             df['start'] = pd.to_datetime(df['start'], unit='s')
             df = df.sort_values('start')
             
