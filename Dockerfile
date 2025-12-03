@@ -10,15 +10,23 @@ RUN rm -rf ./cd/vendor
 # Copy all project files
 COPY . .
 
-# Upgrade pip
-RUN python3 -m pip install --upgrade pip
+# Upgrade pip and install dependencies
+RUN python3 -m pip install --upgrade pip setuptools wheel
 
-# Install coinbase_advanced_py and other requirements
-RUN python3 -m pip install --no-cache-dir coinbase-advanced-py==1.8.2
+# Install Coinbase SDK and its dependencies
+RUN python3 -m pip install --no-cache-dir \
+    cryptography>=46.0.0 \
+    PyJWT>=2.6.0 \
+    requests>=2.31.0 \
+    pandas>=2.1.0 \
+    numpy>=1.26.0 \
+    coinbase-advanced-py==1.8.2
+
+# Install remaining requirements
 RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
-# Preflight: Verify coinbase_advanced_py installation
-RUN python3 -c "from coinbase.rest import RESTClient; print('✅ coinbase-advanced-py installed successfully')"
+# Preflight: Verify coinbase installation and imports
+RUN python3 -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client import successful')"
 
 # Optional: show installed packages for debug
 RUN python3 -m pip list

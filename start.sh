@@ -6,7 +6,7 @@ echo "=============================="
 python3 --version
 
 # Test Coinbase module
-python3 -c "import coinbase_advanced_py; print('✅ coinbase_advanced_py found at', coinbase_advanced_py.__file__)"
+python3 -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')"
 
 # Start bot
 python3 ./bot/live_trading.py

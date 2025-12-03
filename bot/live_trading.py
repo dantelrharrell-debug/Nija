@@ -1,16 +1,70 @@
 import os
-from coinbase_advanced_py.client import Client
+import time
+from coinbase.rest import RESTClient
+from trading_strategy import TradingStrategy
 
 def run_live_trading():
     # Pull keys from environment
     api_key = os.environ.get("COINBASE_API_KEY")
     api_secret = os.environ.get("COINBASE_API_SECRET")
-    api_sub = os.environ.get("COINBASE_API_SUB")  # optional
-
-    client = Client(api_key=api_key, api_secret=api_secret, api_sub=api_sub)
     
-    accounts = client.get_accounts()
-    print("Accounts:", accounts)
+    # Handle newline characters in the PEM key
+    if api_secret and "\\n" in api_secret:
+        api_secret = api_secret.replace("\\n", "\n")
+    
+    # Ensure proper PEM format
+    if api_secret and not api_secret.endswith("\n"):
+        api_secret = api_secret.rstrip() + "\n"
+
+    try:
+        # Initialize Coinbase client
+        client = RESTClient(api_key=api_key, api_secret=api_secret)
+        
+        # Test connection
+        accounts = client.get_accounts()
+        print("✅ Successfully connected to Coinbase!")
+        print(f"Found {len(accounts['accounts'])} accounts")
+        
+        # Display account balances
+        for account in accounts['accounts']:
+            balance = float(account['available_balance']['value'])
+            if balance > 0:
+                print(f"  {account['currency']}: {balance} ({account['name']})")
+        
+        # Initialize trading strategy
+        strategy = TradingStrategy(
+            client=client,
+            pairs=["BTC-USD", "ETH-USD", "SOL-USD"],
+            base_allocation=5.0,  # 5% of balance per trade
+            max_exposure=0.3,     # Max 30% in open positions
+            max_daily_loss=0.1    # Max 10% daily loss
+        )
+        
+        print("\n🚀 Starting 24/7 trading bot...")
+        print("   Pairs: BTC-USD, ETH-USD, SOL-USD")
+        print("   Strategy: VWAP + RSI + MACD")
+        print("   Press Ctrl+C to stop\n")
+        
+        # Main trading loop
+        while True:
+            try:
+                strategy.run_trading_cycle()
+                
+                # Wait 5 minutes between cycles
+                print(f"\n⏰ Waiting 5 minutes until next cycle...")
+                time.sleep(300)
+                
+            except KeyboardInterrupt:
+                print("\n\n🛑 Stopping trading bot...")
+                break
+            except Exception as e:
+                print(f"\n❌ Error in trading cycle: {e}")
+                print("   Retrying in 1 minute...")
+                time.sleep(60)
+        
+    except Exception as e:
+        print(f"❌ Error connecting to Coinbase: {e}")
+        raise
 
 if __name__ == "__main__":
     run_live_trading()
