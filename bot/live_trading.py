@@ -23,12 +23,17 @@ def load_env():
                     os.environ[key] = value
 
 def run_live_trading():
+    print("📋 Initializing trading bot...")
+    
     # Load environment variables
     load_env()
     
     # Pull keys from environment
     api_key = os.environ.get("COINBASE_API_KEY")
     api_secret = os.environ.get("COINBASE_API_SECRET")
+    
+    print(f"🔑 API Key present: {'YES' if api_key else 'NO'}")
+    print(f"🔑 API Secret present: {'YES' if api_secret else 'NO'}")
     
     # Handle newline characters in the PEM key
     if api_secret and "\\n" in api_secret:
@@ -39,10 +44,12 @@ def run_live_trading():
         api_secret = api_secret.rstrip() + "\n"
 
     try:
+        print("🔌 Connecting to Coinbase API...")
         # Initialize Coinbase client
         client = RESTClient(api_key=api_key, api_secret=api_secret)
         
         # Test connection
+        print("📊 Fetching account data...")
         accounts = client.get_accounts()
         print("✅ Successfully connected to Coinbase!")
         print(f"Found {len(accounts['accounts'])} accounts")
@@ -54,6 +61,7 @@ def run_live_trading():
                 print(f"  {account['currency']}: {balance} ({account['name']})")
         
         # Initialize trading strategy
+        print("\n🔧 Initializing trading strategy...")
         strategy = TradingStrategy(
             client=client,
             pairs=["BTC-USD", "ETH-USD", "SOL-USD"],
@@ -61,15 +69,20 @@ def run_live_trading():
             max_exposure=0.3,     # Max 30% in open positions
             max_daily_loss=0.1    # Max 10% daily loss
         )
+        print("✅ Strategy initialized successfully")
         
         print("\n🚀 Starting 24/7 trading bot...")
         print("   Pairs: BTC-USD, ETH-USD, SOL-USD")
         print("   Strategy: VWAP + RSI + MACD")
+        print("   Scan interval: 2.5 minutes")
+        print("   Signal threshold: 2/5 conditions")
+        print("   Max daily trades: 200")
         print("   Press Ctrl+C to stop\n")
         
         # Main trading loop
         while True:
             try:
+                print(f"🔍 [{time.strftime('%Y-%m-%d %H:%M:%S')}] Running trading cycle...")
                 strategy.run_trading_cycle()
                 
                 # Wait 2.5 minutes between cycles (24 scans/hour = 12+ trades/hour)
