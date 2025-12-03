@@ -56,11 +56,24 @@ class TradingStrategy:
             print(f"Error fetching USD balance: {e}")
         return 0.0
     
-    def get_product_candles(self, product_id, granularity=300, count=100):
+    def get_product_candles(self, product_id, granularity="FIVE_MINUTE", count=100):
         """Fetch candle data for technical analysis"""
         try:
+            # Coinbase API granularity mapping
+            granularity_seconds = {
+                "ONE_MINUTE": 60,
+                "FIVE_MINUTE": 300,
+                "FIFTEEN_MINUTE": 900,
+                "THIRTY_MINUTE": 1800,
+                "ONE_HOUR": 3600,
+                "TWO_HOUR": 7200,
+                "SIX_HOUR": 21600,
+                "ONE_DAY": 86400
+            }
+            
+            seconds = granularity_seconds.get(granularity, 300)
             end = int(time.time())
-            start = end - (granularity * count)
+            start = end - (seconds * count)
             
             candles = self.client.get_candles(
                 product_id=product_id,
