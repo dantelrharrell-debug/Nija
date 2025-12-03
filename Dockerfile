@@ -1,12 +1,18 @@
 FROM python:3.11-slim
 
+# Set working directory
 WORKDIR /usr/src/app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy your bot code
+COPY ./bot ./bot
+COPY start.sh ./
 
-COPY . .
+# Upgrade pip and install dependencies
+RUN python3 -m pip install --upgrade pip
+RUN python3 -m pip install coinbase_advanced_py==1.8.2
 
-RUN chmod +x ./start.sh
+# Make start.sh executable
+RUN chmod +x start.sh
 
+# Default entrypoint
 CMD ["./start.sh"]
