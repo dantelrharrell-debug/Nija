@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# commit_cd_vendor.sh
-# Add, commit (if needed), and push cd/vendor/coinbase_advanced_py to the current git repo.
-# Run this from the repository root.
 set -euo pipefail
+# commit_cd_vendor.sh
+# Add, commit (if needed), and push cd/vendor/coinbase_advanced_py into the current git repo.
+# Usage: run from your repository root.
 
 VENDOR_PATH="cd/vendor/coinbase_advanced_py"
 COMMIT_MSG="Add vendor/coinbase_advanced_py for Docker build"
