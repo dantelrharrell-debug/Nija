@@ -1,27 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# commit_cd_vendor.sh
-# Add, commit (if needed), and push cd/vendor/coinbase_advanced_py into the current git repo.
-# Usage: run from your repository root.
 
+# commit_cd_vendor.sh
+# Usage: run this from the repository root to add and push cd/vendor/coinbase_advanced_py.
 VENDOR_PATH="cd/vendor/coinbase_advanced_py"
 COMMIT_MSG="Add vendor/coinbase_advanced_py for Docker build"
 
 if [ ! -d "$VENDOR_PATH" ]; then
-  echo "ERROR: Vendor folder not found at: $VENDOR_PATH"
+  echo "ERROR: Vendor folder not present at: $VENDOR_PATH"
   exit 1
 fi
 
-echo "Staging $VENDOR_PATH..."
+echo "Staging $VENDOR_PATH ..."
 git add "$VENDOR_PATH"
 
-# If there are staged changes, commit and push. Otherwise inform the user.
+# Only commit if there are staged changes
 if ! git diff --staged --quiet; then
   echo "Committing staged changes..."
   git commit -m "$COMMIT_MSG"
-  echo "Pushing to origin $(git rev-parse --abbrev-ref HEAD)..."
+  echo "Pushing branch $(git rev-parse --abbrev-ref HEAD) to origin..."
   git push
   echo "Vendor folder committed and pushed."
 else
-  echo "No changes to commit for $VENDOR_PATH."
+  echo "No changes detected to commit for $VENDOR_PATH (already committed)."
 fi
