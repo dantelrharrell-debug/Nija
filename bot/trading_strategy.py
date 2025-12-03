@@ -116,8 +116,19 @@ class TradingStrategy:
                 return None
             
             print(f"      Processing {len(candle_list)} candles...")
-                
-            df = pd.DataFrame(candle_list)
+            
+            # Convert candle objects to dict format
+            candle_dicts = []
+            for candle in candle_list:
+                if hasattr(candle, '__dict__'):
+                    candle_dicts.append(candle.__dict__)
+                elif isinstance(candle, dict):
+                    candle_dicts.append(candle)
+                else:
+                    # Try to convert to dict
+                    candle_dicts.append(dict(candle))
+            
+            df = pd.DataFrame(candle_dicts)
             print(f"      DataFrame columns: {list(df.columns)}")
             df['start'] = pd.to_datetime(df['start'], unit='s')
             df = df.sort_values('start')
