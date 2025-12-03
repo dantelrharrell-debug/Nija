@@ -130,7 +130,7 @@ class TradingStrategy:
             
             df = pd.DataFrame(candle_dicts)
             print(f"      DataFrame columns: {list(df.columns)}")
-            df['start'] = pd.to_datetime(df['start'], unit='s')
+            df['start'] = pd.to_datetime(pd.to_numeric(df['start'], errors='coerce'), unit='s')
             df = df.sort_values('start')
             
             # Rename columns for indicators
@@ -366,11 +366,11 @@ class TradingStrategy:
                 
                 # Display entry conditions
                 long_cond = indicators['entry_conditions']['long']
-                print(f"   ✅ Price above VWAP: {long_cond['price_above_vwap']}")
-                print(f"   ✅ EMA 9>21>50: {long_cond['ema_alignment']}")
-                print(f"   ✅ RSI cross above 30: {long_cond['rsi_cross_above_30']}")
-                print(f"   ✅ Volume ≥ prev 2 candles: {long_cond['volume_confirmation']}")
-                print(f"   ✅ Candle close bullish: {long_cond['candle_close_bullish']}")
+                print(f"   {'✅' if long_cond['price_above_vwap'] else '❌'} Price above VWAP: {long_cond['price_above_vwap']}")
+                print(f"   {'✅' if long_cond['ema_alignment'] else '❌'} EMA 9>21>50: {long_cond['ema_alignment']}")
+                print(f"   {'✅' if long_cond['rsi_favorable'] else '❌'} RSI favorable (momentum/pullback): {long_cond['rsi_favorable']}")
+                print(f"   {'✅' if long_cond['volume_confirmation'] else '❌'} Volume ≥ 50% prev 2: {long_cond['volume_confirmation']}")
+                print(f"   {'✅' if long_cond['candle_close_bullish'] else '❌'} Candle close bullish: {long_cond['candle_close_bullish']}")
                 
                 position_size = self.calculate_position_size(product_id, signal_score)
                 
@@ -386,11 +386,11 @@ class TradingStrategy:
                 
                 # Display entry conditions
                 short_cond = indicators['entry_conditions']['short']
-                print(f"   ✅ Price below VWAP: {short_cond['price_below_vwap']}")
-                print(f"   ✅ EMA 9<21<50: {short_cond['ema_alignment']}")
-                print(f"   ✅ RSI cross below 70: {short_cond['rsi_cross_below_70']}")
-                print(f"   ✅ Volume ≥ prev 2 candles: {short_cond['volume_confirmation']}")
-                print(f"   ✅ Candle close bearish: {short_cond['candle_close_bearish']}")
+                print(f"   {'✅' if short_cond['price_below_vwap'] else '❌'} Price below VWAP: {short_cond['price_below_vwap']}")
+                print(f"   {'✅' if short_cond['ema_alignment'] else '❌'} EMA 9<21<50: {short_cond['ema_alignment']}")
+                print(f"   {'✅' if short_cond['rsi_favorable'] else '❌'} RSI favorable (momentum/bounce): {short_cond['rsi_favorable']}")
+                print(f"   {'✅' if short_cond['volume_confirmation'] else '❌'} Volume ≥ 50% prev 2: {short_cond['volume_confirmation']}")
+                print(f"   {'✅' if short_cond['candle_close_bearish'] else '❌'} Candle close bearish: {short_cond['candle_close_bearish']}")
                 
                 print(f"   (Shorts not enabled)")
             

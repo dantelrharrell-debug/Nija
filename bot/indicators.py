@@ -37,11 +37,11 @@ def check_no_trade_zones(df, rsi):
     
     Returns: (is_no_trade_zone, reason)
     """
-    # ❌ 1m chart extreme RSI > 90 or < 10
-    if rsi.iloc[-1] > 90:
-        return True, "Extreme RSI > 90"
-    if rsi.iloc[-1] < 10:
-        return True, "Extreme RSI < 10"
+    # ❌ Only extreme RSI > 95 or < 5 (relaxed from 90/10)
+    if rsi.iloc[-1] > 95:
+        return True, "Extreme RSI > 95"
+    if rsi.iloc[-1] < 5:
+        return True, "Extreme RSI < 5"
     
     # ❌ Low-volume consolidation
     avg_volume = df['volume'].rolling(20).mean().iloc[-1]
@@ -108,32 +108,63 @@ def calculate_indicators(df):
     is_no_trade, reason = check_no_trade_zones(df, rsi)
     
     # ═══════════════════════════════════════════════════════════
-    # NIJA LONG ENTRY CONDITIONS (All must be TRUE)
+    # NIJA LONG ENTRY CONDITIONS (Scored 1-5, need 2+ for entry)
+    # Multi-Strategy: Momentum Breakout OR Pullback/Mean Reversion
     # ═══════════════════════════════════════════════════════════
     
+    # Core trend conditions (must have these for quality)
+    price_above_vwap = current_price > vwap.iloc[-1]
+    ema_bullish = ema_9.iloc[-1] > ema_21.iloc[-1] > ema_50.iloc[-1]
+    
+    # RSI Strategy 1: Momentum (rising RSI)
+    rsi_momentum_rising = current_rsi > prev_rsi and current_rsi < 80
+    
+    # RSI Strategy 2: Pullback/Mean Reversion (RSI cooling off in uptrend)
+    # RSI 30-70 range, price still above VWAP, EMAs aligned = healthy pullback
+    rsi_pullback = 30 < current_rsi < 70 and current_rsi < prev_rsi and price_above_vwap and ema_bullish
+    
+    # Accept EITHER momentum OR pullback
+    rsi_favorable = rsi_momentum_rising or rsi_pullback
+    
     long_conditions = {
-        "price_above_vwap": current_price > vwap.iloc[-1],
-        "ema_alignment": ema_9.iloc[-1] > ema_21.iloc[-1] > ema_50.iloc[-1],
-        "rsi_cross_above_30": prev_rsi <= 30 and current_rsi > 30,
-        "volume_confirmation": current_volume >= prev_2_volume,
+        "price_above_vwap": price_above_vwap,
+        "ema_alignment": ema_bullish,
+        "rsi_favorable": rsi_favorable,  # Now accepts momentum OR pullback
+        "volume_confirmation": current_volume >= prev_2_volume * 0.5,
         "candle_close_bullish": current_price > prev_price
     }
     
-    buy_signal = all(long_conditions.values())
+    # Buy signal if 2+ conditions met (not all)
+    buy_signal = sum(long_conditions.values()) >= 2
     
     # ═══════════════════════════════════════════════════════════
-    # NIJA SHORT ENTRY CONDITIONS (All must be TRUE)
+    # NIJA SHORT ENTRY CONDITIONS (Scored 1-5, need 2+ for entry)
+    # Multi-Strategy: Momentum Breakdown OR Bounce/Mean Reversion
     # ═══════════════════════════════════════════════════════════
+    
+    # Core trend conditions
+    price_below_vwap = current_price < vwap.iloc[-1]
+    ema_bearish = ema_9.iloc[-1] < ema_21.iloc[-1] < ema_50.iloc[-1]
+    
+    # RSI Strategy 1: Momentum (falling RSI)
+    rsi_momentum_falling = current_rsi < prev_rsi and current_rsi > 20
+    
+    # RSI Strategy 2: Bounce/Mean Reversion (RSI bouncing in downtrend)
+    rsi_bounce = 30 < current_rsi < 70 and current_rsi > prev_rsi and price_below_vwap and ema_bearish
+    
+    # Accept EITHER momentum OR bounce
+    rsi_favorable_short = rsi_momentum_falling or rsi_bounce
     
     short_conditions = {
-        "price_below_vwap": current_price < vwap.iloc[-1],
-        "ema_alignment": ema_9.iloc[-1] < ema_21.iloc[-1] < ema_50.iloc[-1],
-        "rsi_cross_below_70": prev_rsi >= 70 and current_rsi < 70,
-        "volume_confirmation": current_volume >= prev_2_volume,
+        "price_below_vwap": price_below_vwap,
+        "ema_alignment": ema_bearish,
+        "rsi_favorable": rsi_favorable_short,
+        "volume_confirmation": current_volume >= prev_2_volume * 0.5,
         "candle_close_bearish": current_price < prev_price
     }
     
-    sell_signal = all(short_conditions.values())
+    # Sell signal if 2+ conditions met (not all)
+    sell_signal = sum(short_conditions.values()) >= 2
     
     return {
         "vwap": vwap,

@@ -1,0 +1,23 @@
+Add multi-strategy entry system and enhanced trend-riding exit logic
+
+Entry System:
+- Dual RSI strategy: momentum breakouts OR pullback/mean reversion
+- Longs now catch both rising RSI and healthy pullbacks (RSI 30-70 cooling in uptrend)
+- Shorts catch both falling RSI and bounces in downtrend
+- Enables trading every opportunity - up or down, every penny counts
+- Changed from requiring ALL 5 conditions to just 2/5 for entry
+- Reduced volume requirement from 100% to 50% of previous 2 candles
+- Relaxed no-trade RSI zones from 90/10 to 95/5
+
+Exit System - Ride Trends to Peak:
+- Looser trailing stops: 0.3-1.2% trails (vs old 0.1-0.25%) to let winners run
+- Advanced peak detection: requires 2+ confluence signals (pullback, RSI divergence, volume decline, VWAP shift)
+- No arbitrary profit caps: holds strong trends to 5%+ instead of exiting at 2%
+- Momentum-based holding: keeps position if RSI favorable and volume strong
+- Tracks peak price and only exits on confirmed trend exhaustion
+
+This allows NIJA to enter more frequently AND hold winning trades through entire trends to actual peaks.
+
+Technical fixes:
+- Fixed pandas FutureWarning for to_datetime with numeric conversion
+- Added visual ✅/❌ indicators for condition feedback
