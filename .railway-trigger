@@ -1,1 +1,3 @@
-# Railway rebuild trigger
+# Railway rebuild trigger - High frequency trading update
+# Timestamp: 2025-12-03
+# Signal threshold: 2/5, Cooldown: 0s, Interval: 2.5min
