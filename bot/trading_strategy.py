@@ -361,7 +361,7 @@ class TradingStrategy:
             # Get signal score (1-5)
             action, signal_score = self.calculate_signal_score(product_id, indicators, df)
             
-            if action == 'buy' and signal_score >= 2:
+            if action == 'buy' and signal_score >= 1:
                 print(f"� LONG SIGNAL DETECTED - Score: {signal_score}/5")
                 
                 # Display entry conditions
@@ -381,7 +381,7 @@ class TradingStrategy:
                 else:
                     print(f"⚠️ Position size too small: ${position_size:.2f}")
             
-            elif action == 'sell' and signal_score >= 2:
+            elif action == 'sell' and signal_score >= 1:
                 print(f"📉 SHORT SIGNAL DETECTED - Score: {signal_score}/5")
                 
                 # Display entry conditions

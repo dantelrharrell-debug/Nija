@@ -75,7 +75,7 @@ def run_live_trading():
         print("   Pairs: BTC-USD, ETH-USD, SOL-USD")
         print("   Strategy: VWAP + RSI + MACD")
         print("   Scan interval: 2.5 minutes")
-        print("   Signal threshold: 2/5 conditions")
+        print("   Signal threshold: 1/5 conditions (ULTRA AGGRESSIVE)")
         print("   Max daily trades: 200")
         print("   Press Ctrl+C to stop\n")
         
