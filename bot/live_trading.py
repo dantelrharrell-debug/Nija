@@ -1,7 +1,12 @@
 import os
+import sys
 import time
 from pathlib import Path
 from coinbase.rest import RESTClient
+
+# Add bot directory to path
+sys.path.insert(0, os.path.dirname(__file__))
+
 from trading_strategy import TradingStrategy
 
 # Load environment variables from .env file

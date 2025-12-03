@@ -2,6 +2,13 @@
 import time
 import pandas as pd
 from datetime import datetime, timedelta
+import sys
+import os
+
+# Add bot directory to path if running from root
+if os.path.basename(os.getcwd()) != 'bot':
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+
 from nija_trailing_system import NIJATrailingSystem
 from market_adapter import market_adapter, MarketType
 
