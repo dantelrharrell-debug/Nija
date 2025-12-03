@@ -11,6 +11,7 @@ ecdsa>=0.18.0
 
 # Coinbase official client
 coinbase>=2.0.0
+coinbase-advanced-py==1.8.2
 
 # Common runtime deps used by your app
 requests>=2.31.0

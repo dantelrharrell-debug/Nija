@@ -14,8 +14,11 @@ COPY . .
 RUN python3 -m pip install --upgrade pip
 
 # Install coinbase_advanced_py and other requirements
-RUN python3 -m pip install --no-cache-dir coinbase_advanced_py==1.8.2
+RUN python3 -m pip install --no-cache-dir coinbase-advanced-py==1.8.2
 RUN python3 -m pip install --no-cache-dir -r requirements.txt
+
+# Preflight: Verify coinbase_advanced_py installation
+RUN python3 -c "from coinbase.rest import RESTClient; print('✅ coinbase-advanced-py installed successfully')"
 
 # Optional: show installed packages for debug
 RUN python3 -m pip list

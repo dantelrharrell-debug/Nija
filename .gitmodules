@@ -1,3 +1,1 @@
-[submodule "vendor/coinbase_advanced_py"]
-    path = vendor/coinbase_advanced_py
-    url = https://github.com/coinbase/coinbase-advanced-py.git
+
