@@ -82,6 +82,8 @@ class TradingStrategy:
             end = int(time.time())
             start = end - (seconds * count)
             
+            print(f"      Calling Coinbase API: product={product_id}, start={start}, end={end}, granularity={granularity}")
+            
             candles = self.client.get_candles(
                 product_id=product_id,
                 start=start,
@@ -89,8 +91,13 @@ class TradingStrategy:
                 granularity=granularity
             )
             
+            print(f"      API response received: {type(candles)}")
+            
             if not candles or 'candles' not in candles:
+                print(f"      No candles in response: {candles}")
                 return None
+            
+            print(f"      Processing {len(candles['candles'])} candles...")
                 
             df = pd.DataFrame(candles['candles'])
             df['start'] = pd.to_datetime(df['start'], unit='s')
@@ -109,10 +116,13 @@ class TradingStrategy:
             for col in ['low', 'high', 'open', 'close', 'volume']:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             
+            print(f"      DataFrame created: {len(df)} rows")
             return df
             
         except Exception as e:
             print(f"Error fetching candles for {product_id}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def calculate_position_size(self, product_id, signal_score=3):
