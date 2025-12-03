@@ -1,0 +1,261 @@
+# market_adapter.py
+"""
+NIJA MARKET ADAPTER™
+Auto-detect market type and adjust risk/volatility parameters
+
+Supports:
+- Crypto (Spot + Futures + Coinbase)
+- Stocks (Intraday Trading)
+- Futures (Indexes: S&P, NASDAQ, Dow, Gold, Oil)
+- Options (Day trading contracts)
+"""
+
+from enum import Enum
+from dataclasses import dataclass
+from typing import Tuple
+
+class MarketType(Enum):
+    CRYPTO = "crypto"
+    STOCKS = "stocks"
+    FUTURES = "futures"
+    OPTIONS = "options"
+
+@dataclass
+class MarketParameters:
+    """Market-specific trading parameters"""
+    market_type: MarketType
+    
+    # Stop-Loss & Take-Profit
+    sl_min: float
+    sl_max: float
+    tp1: float
+    tp2: float
+    tp3_min: float
+    tp3_max: float
+    
+    # Position Sizing
+    position_min: float
+    position_max: float
+    
+    # Trailing
+    use_ema_trail: bool
+    use_percentage_trail: bool
+    percentage_trail_threshold: float
+    
+    # Limits
+    max_daily_trades: int
+    max_daily_loss: float  # as percentage
+    
+    # Options-specific
+    min_delta: float = 0.0
+    max_bid_ask_spread: float = 0.0
+    min_volume: int = 0
+    max_iv_rank: float = 0.0
+
+class MarketAdapter:
+    """Auto-detect and configure market-specific parameters"""
+    
+    def __init__(self):
+        self.market_configs = {
+            MarketType.CRYPTO: MarketParameters(
+                market_type=MarketType.CRYPTO,
+                sl_min=0.0035,  # 0.35%
+                sl_max=0.0050,  # 0.50%
+                tp1=0.005,      # 0.5%
+                tp2=0.010,      # 1.0%
+                tp3_min=0.015,  # 1.5%
+                tp3_max=0.020,  # 2.0%
+                position_min=0.02,  # 2%
+                position_max=0.10,  # 10%
+                use_ema_trail=True,
+                use_percentage_trail=True,
+                percentage_trail_threshold=0.005,  # Active at TP1
+                max_daily_trades=15,
+                max_daily_loss=0.025  # 2.5%
+            ),
+            
+            MarketType.STOCKS: MarketParameters(
+                market_type=MarketType.STOCKS,
+                sl_min=0.0015,  # 0.15%
+                sl_max=0.0030,  # 0.30%
+                tp1=0.0025,     # 0.25%
+                tp2=0.0050,     # 0.50%
+                tp3_min=0.0075, # 0.75%
+                tp3_max=0.010,  # 1.0%
+                position_min=0.01,  # 1%
+                position_max=0.05,  # 5%
+                use_ema_trail=True,
+                use_percentage_trail=True,
+                percentage_trail_threshold=0.0075,  # Active above +0.75%
+                max_daily_trades=10,
+                max_daily_loss=0.025  # 2.5%
+            ),
+            
+            MarketType.FUTURES: MarketParameters(
+                market_type=MarketType.FUTURES,
+                sl_min=0.0015,  # 0.15% (ES)
+                sl_max=0.0050,  # 0.50% (GOLD)
+                tp1=0.0025,     # 0.25%
+                tp2=0.0050,     # 0.50%
+                tp3_min=0.0075, # 0.75%
+                tp3_max=0.010,  # 1.0%
+                position_min=0.0025,  # 0.25%
+                position_max=0.0075,  # 0.75%
+                use_ema_trail=True,
+                use_percentage_trail=True,
+                percentage_trail_threshold=0.005,  # Active at +0.5%
+                max_daily_trades=7,
+                max_daily_loss=0.025  # 2.5%
+            ),
+            
+            MarketType.OPTIONS: MarketParameters(
+                market_type=MarketType.OPTIONS,
+                sl_min=0.10,    # 10% of premium
+                sl_max=0.20,    # 20% of premium
+                tp1=0.15,       # 15%
+                tp2=0.25,       # 25%
+                tp3_min=0.40,   # 40%
+                tp3_max=0.50,   # 50%
+                position_min=0.01,  # 1%
+                position_max=0.03,  # 3%
+                use_ema_trail=True,
+                use_percentage_trail=True,
+                percentage_trail_threshold=0.15,  # Active at TP1
+                max_daily_trades=5,
+                max_daily_loss=0.025,  # 2.5%
+                # Options-specific filters
+                min_delta=0.30,
+                max_bid_ask_spread=0.08,  # 8%
+                min_volume=500,
+                max_iv_rank=50.0
+            )
+        }
+    
+    def detect_market_type(self, symbol: str) -> MarketType:
+        """
+        Auto-detect market type from symbol
+        
+        Examples:
+        - BTC-USD, ETH-USD → CRYPTO
+        - AAPL, TSLA, SPY → STOCKS
+        - ES, NQ, GC, CL → FUTURES
+        - AAPL250117C00150000 → OPTIONS
+        """
+        symbol = symbol.upper()
+        
+        # Crypto patterns
+        if any(crypto in symbol for crypto in ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'ADA']):
+            return MarketType.CRYPTO
+        
+        # Futures patterns
+        futures_symbols = ['ES', 'NQ', 'YM', 'RTY', 'GC', 'SI', 'CL', 'NG', 'ZB', 'ZN']
+        if any(symbol.startswith(fut) for fut in futures_symbols):
+            return MarketType.FUTURES
+        
+        # Options pattern (contains strike/expiry)
+        if len(symbol) > 10 and any(c in symbol for c in ['C', 'P']) and any(c.isdigit() for c in symbol):
+            return MarketType.OPTIONS
+        
+        # Default to stocks
+        return MarketType.STOCKS
+    
+    def get_parameters(self, symbol: str) -> MarketParameters:
+        """Get market-specific parameters for symbol"""
+        market_type = self.detect_market_type(symbol)
+        return self.market_configs[market_type]
+    
+    def adjust_stop_loss(self, symbol: str, entry_price: float, volatility: float) -> float:
+        """Calculate market-adjusted stop-loss"""
+        params = self.get_parameters(symbol)
+        
+        # For futures, could implement tick-based logic here
+        if params.market_type == MarketType.FUTURES:
+            # Example: ES tick = 0.25, NQ tick = 0.25, GC tick = 0.10
+            if symbol.startswith('ES'):
+                sl_pct = 0.0015 + (volatility * 5)  # 0.15-0.25%
+            elif symbol.startswith('NQ'):
+                sl_pct = 0.0025 + (volatility * 7.5)  # 0.25-0.40%
+            elif symbol.startswith('GC') or symbol.startswith('SI'):
+                sl_pct = 0.0030 + (volatility * 10)  # 0.30-0.50%
+            else:
+                sl_pct = params.sl_min + (volatility * 10)
+        else:
+            sl_pct = params.sl_min + (volatility * 10)
+        
+        # Clamp to market limits
+        sl_pct = max(params.sl_min, min(sl_pct, params.sl_max))
+        
+        return entry_price * (1 - sl_pct)
+    
+    def get_position_size(self, symbol: str, signal_score: int, account_balance: float) -> float:
+        """Calculate market-adjusted position size"""
+        params = self.get_parameters(symbol)
+        
+        # Score-based allocation
+        if signal_score <= 2:
+            allocation_pct = 0.0
+        elif signal_score == 3:
+            allocation_pct = params.position_min + (params.position_max - params.position_min) * 0.3
+        elif signal_score == 4:
+            allocation_pct = params.position_min + (params.position_max - params.position_min) * 0.6
+        elif signal_score >= 5:
+            allocation_pct = params.position_max
+        else:
+            allocation_pct = params.position_min
+        
+        position_size = account_balance * allocation_pct
+        
+        # Enforce market limits
+        min_size = account_balance * params.position_min
+        max_size = account_balance * params.position_max
+        
+        return max(min_size, min(position_size, max_size))
+    
+    def validate_options_entry(self, options_data: dict) -> Tuple[bool, str]:
+        """
+        Validate options contract meets NIJA filters
+        
+        Required data:
+        - delta: float
+        - bid_ask_spread: float (percentage)
+        - volume: int
+        - iv_rank: float
+        """
+        params = self.market_configs[MarketType.OPTIONS]
+        
+        # Check delta
+        if options_data.get('delta', 0) < params.min_delta:
+            return False, f"Delta too low: {options_data.get('delta')} < {params.min_delta}"
+        
+        # Check bid/ask spread
+        spread = options_data.get('bid_ask_spread', 1.0)
+        if spread > params.max_bid_ask_spread:
+            return False, f"Bid/ask spread too wide: {spread*100:.1f}%"
+        
+        # Check volume
+        if options_data.get('volume', 0) < params.min_volume:
+            return False, f"Volume too low: {options_data.get('volume')} < {params.min_volume}"
+        
+        # Check IV rank
+        if options_data.get('iv_rank', 100) > params.max_iv_rank:
+            return False, f"IV Rank too high: {options_data.get('iv_rank')} > {params.max_iv_rank}"
+        
+        return True, "Options filters passed"
+    
+    def supports_shorting(self, symbol: str) -> bool:
+        """Check if market supports shorting"""
+        market_type = self.detect_market_type(symbol)
+        
+        # Crypto (Coinbase spot) typically doesn't support shorting
+        # Stocks and Futures do
+        # Options use PUTs instead
+        if market_type == MarketType.CRYPTO:
+            # Could check if it's a futures symbol (e.g., BTC-PERP)
+            return 'PERP' in symbol or 'FUTURE' in symbol
+        elif market_type == MarketType.OPTIONS:
+            return False  # Use PUTs instead
+        else:
+            return True  # Stocks and Futures support shorts
+
+# Global instance
+market_adapter = MarketAdapter()

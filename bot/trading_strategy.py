@@ -3,6 +3,7 @@ import time
 import pandas as pd
 from datetime import datetime, timedelta
 from nija_trailing_system import NIJATrailingSystem
+from market_adapter import market_adapter, MarketType
 
 class TradingStrategy:
     """
@@ -95,27 +96,34 @@ class TradingStrategy:
             return None
     
     def calculate_position_size(self, product_id, signal_score=3):
-        """Calculate position size based on signal scoring and risk rules"""
+        """
+        NIJA Position Sizing Logic - Multi-Market Adaptive
+        
+        Auto-detects market type and adjusts sizing:
+        - Crypto: 2-10%
+        - Stocks: 1-5%
+        - Futures: 0.25-0.75%
+        - Options: 1-3%
+        
+        Allocation based on signal strength (score 1-5)
+        """
         usd_balance = self.get_usd_balance()
         
         if usd_balance == 0:
             return 0.0
         
-        # Signal-based allocation
-        # Score 5/5 → 8-10%
-        # Score 4/5 → 4-6%
-        # Score 3/5 → 2-3%
-        # Score ≤2 → No trade
-        if signal_score <= 2:
+        # Get market-specific parameters
+        params = market_adapter.get_parameters(product_id)
+        market_type = params.market_type
+        
+        # Use market adapter for position sizing
+        position_size = market_adapter.get_position_size(product_id, signal_score, usd_balance)
+        
+        if position_size == 0:
             return 0.0
-        elif signal_score == 3:
-            allocation_pct = 2.5  # 2-3%
-        elif signal_score == 4:
-            allocation_pct = 5.0  # 4-6%
-        elif signal_score >= 5:
-            allocation_pct = 9.0  # 8-10%
-        else:
-            allocation_pct = 2.0  # Default minimum
+        
+        # Convert to percentage for logging
+        allocation_pct = (position_size / usd_balance) * 100
         
         # Smart Burn-Down Rule: 3 losses in a row → 2% for next 3 trades
         if self.burn_down_mode:
@@ -150,66 +158,35 @@ class TradingStrategy:
             print(f"⚠️ Max daily trades reached ({self.daily_trades}/{self.max_daily_trades})")
             return 0.0
         
-        position_size = usd_balance * (allocation_pct / 100)
-        return min(position_size, usd_balance * 0.1)  # Cap at 10% per trade
+        print(f"   💰 Market: {market_type.value.upper()} | Allocation: {allocation_pct:.1f}%")
+        
+        return position_size
     
     def calculate_signal_score(self, product_id, indicators, df):
-        """Calculate signal score 1-5 based on NIJA criteria"""
+        """
+        NIJA ULTIMATE TRADING LOGIC™ - Signal Strength Scoring
+        
+        Scores 1-5 based on how many entry conditions are met.
+        All 5 conditions = Score 5/5 (A+ setup)
+        """
         if not indicators or indicators.get('rsi') is None:
             return None, 0
         
-        rsi = indicators['rsi'].iloc[-1]
-        vwap = indicators['vwap'].iloc[-1]
-        current_price = df['close'].iloc[-1]
-        volume = df['volume'].iloc[-1]
-        avg_volume = df['volume'].rolling(20).mean().iloc[-1]
-        
-        score = 0
         action = None
+        score = 0
         
-        # Detect buy or sell direction first
+        # Check if we have a buy or sell signal
         if indicators['buy_signal']:
             action = 'buy'
-            
-            # +1 point: Price above VWAP
-            if current_price > vwap:
-                score += 1
-            
-            # +1 point: RSI oversold cross (30-50 range)
-            if 30 < rsi < 50:
-                score += 1
-            
-            # +1 point: Volume confirmation
-            if volume > avg_volume * 1.2:
-                score += 1
-            
-            # +1 point: MACD bullish crossover
-            if indicators['histogram'].iloc[-1] > 0:
-                score += 1
-            
-            # +1 point: EMA alignment (9 > 21 > 50)
-            ema_9 = df['close'].ewm(span=9).mean().iloc[-1]
-            ema_21 = df['close'].ewm(span=21).mean().iloc[-1]
-            if ema_9 > ema_21:
-                score += 1
+            # Count how many LONG conditions are TRUE
+            long_conditions = indicators['entry_conditions']['long']
+            score = sum(1 for condition in long_conditions.values() if condition)
         
         elif indicators['sell_signal']:
             action = 'sell'
-            
-            # Similar scoring for sell signals
-            if current_price < vwap:
-                score += 1
-            if 50 < rsi < 70:
-                score += 1
-            if volume > avg_volume * 1.2:
-                score += 1
-            if indicators['histogram'].iloc[-1] < 0:
-                score += 1
-            
-            ema_9 = df['close'].ewm(span=9).mean().iloc[-1]
-            ema_21 = df['close'].ewm(span=21).mean().iloc[-1]
-            if ema_9 < ema_21:
-                score += 1
+            # Count how many SHORT conditions are TRUE
+            short_conditions = indicators['entry_conditions']['short']
+            score = sum(1 for condition in short_conditions.values() if condition)
         
         return action, score
     
@@ -285,7 +262,8 @@ class TradingStrategy:
                     print(f"\n⏳ Trade cooldown active: {self.trade_cooldown_seconds - time_since_last:.0f}s remaining")
                     continue
             
-            print(f"\n--- Analyzing {product_id} for Entry ---")
+            market_type = market_adapter.detect_market_type(product_id)
+            print(f"\n--- Analyzing {product_id} ({market_type.value.upper()}) for Entry ---")
             
             # Get candle data
             df = self.get_product_candles(product_id)
@@ -307,7 +285,15 @@ class TradingStrategy:
             action, signal_score = self.calculate_signal_score(product_id, indicators, df)
             
             if action == 'buy' and signal_score > 2:
-                print(f"📊 Signal Score: {signal_score}/5")
+                print(f"� LONG SIGNAL DETECTED - Score: {signal_score}/5")
+                
+                # Display entry conditions
+                long_cond = indicators['entry_conditions']['long']
+                print(f"   ✅ Price above VWAP: {long_cond['price_above_vwap']}")
+                print(f"   ✅ EMA 9>21>50: {long_cond['ema_alignment']}")
+                print(f"   ✅ RSI cross above 30: {long_cond['rsi_cross_above_30']}")
+                print(f"   ✅ Volume ≥ prev 2 candles: {long_cond['volume_confirmation']}")
+                print(f"   ✅ Candle close bullish: {long_cond['candle_close_bullish']}")
                 
                 position_size = self.calculate_position_size(product_id, signal_score)
                 
@@ -319,15 +305,26 @@ class TradingStrategy:
                     print(f"⚠️ Position size too small: ${position_size:.2f}")
             
             elif action == 'sell' and signal_score > 2:
-                print(f"📉 Sell signal {signal_score}/5 (shorts not enabled)")
+                print(f"📉 SHORT SIGNAL DETECTED - Score: {signal_score}/5")
+                
+                # Display entry conditions
+                short_cond = indicators['entry_conditions']['short']
+                print(f"   ✅ Price below VWAP: {short_cond['price_below_vwap']}")
+                print(f"   ✅ EMA 9<21<50: {short_cond['ema_alignment']}")
+                print(f"   ✅ RSI cross below 70: {short_cond['rsi_cross_below_70']}")
+                print(f"   ✅ Volume ≥ prev 2 candles: {short_cond['volume_confirmation']}")
+                print(f"   ✅ Candle close bearish: {short_cond['candle_close_bearish']}")
+                
+                print(f"   (Shorts not enabled)")
             
             else:
                 print(f"⏸️ No entry signal (score: {signal_score}/5)")
             
             # Display current indicators
             if indicators and indicators.get('rsi') is not None:
-                print(f"   RSI: {indicators['rsi'].iloc[-1]:.1f}")
-                print(f"   VWAP: ${df['close'].iloc[-1]:.2f} vs ${indicators['vwap'].iloc[-1]:.2f}")
+                print(f"   RSI: {indicators['rsi'].iloc[-1]:.1f} (prev: {indicators['rsi_prev']:.1f})")
+                print(f"   Price: ${df['close'].iloc[-1]:.2f} | VWAP: ${indicators['vwap'].iloc[-1]:.2f}")
+                print(f"   EMA: 9=${indicators['ema_9'].iloc[-1]:.2f} | 21=${indicators['ema_21'].iloc[-1]:.2f} | 50=${indicators['ema_50'].iloc[-1]:.2f}")
     
     def enter_position(self, product_id, side, usd_amount, df):
         """Enter a new position with NIJA trailing"""
@@ -349,7 +346,10 @@ class TradingStrategy:
             # Calculate volatility for stop-loss
             volatility = df['close'].pct_change().std()
             
-            # Open NIJA position
+            # Get market-specific parameters
+            params = market_adapter.get_parameters(product_id)
+            
+            # Open NIJA position with market-adjusted parameters
             self.position_counter += 1
             position_id = f"{product_id}-{self.position_counter}"
             
@@ -358,7 +358,8 @@ class TradingStrategy:
                 side=side,
                 entry_price=entry_price,
                 size=size,
-                volatility=volatility
+                volatility=volatility,
+                market_params=params
             )
             
             # Add product_id for tracking

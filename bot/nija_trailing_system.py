@@ -188,18 +188,33 @@ class NIJATrailingSystem:
         
         return 'hold', 0, f"Trailing (+{profit_pct:.2f}%) - Stop at {new_stop:.2f}"
     
-    def open_position(self, position_id, side, entry_price, size, volatility=0.004):
-        """Open a new NIJA position"""
+    def open_position(self, position_id, side, entry_price, size, volatility=0.004, market_params=None):
+        """Open a new NIJA position with market-specific parameters"""
+        # Use market parameters if provided, otherwise use default crypto params
+        if market_params:
+            # Calculate stop using market-specific ranges
+            stop_distance = market_params.sl_min + (volatility * 10)
+            stop_distance = min(stop_distance, market_params.sl_max)
+            
+            if side == 'long':
+                stop_loss = entry_price * (1 - stop_distance)
+            else:
+                stop_loss = entry_price * (1 + stop_distance)
+        else:
+            # Default crypto behavior
+            stop_loss = self.get_base_stop_loss(entry_price, side, volatility)
+        
         self.positions[position_id] = {
             'side': side,
             'entry_price': entry_price,
             'size': size,
             'remaining_size': 1.0,  # 100% initially
-            'stop_loss': self.get_base_stop_loss(entry_price, side, volatility),
+            'stop_loss': stop_loss,
             'tsl_active': False,
             'ttp_active': False,
             'profit_pct': 0.0,
-            'opened_at': datetime.now()
+            'opened_at': datetime.now(),
+            'market_params': market_params  # Store for later use
         }
         return self.positions[position_id]
     
