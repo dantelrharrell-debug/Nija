@@ -71,11 +71,54 @@ def run_live_trading():
         )
         print("✅ Strategy initialized successfully")
         
+        # Get ALL available trading pairs from Coinbase
+        print("\n📡 Fetching all available trading products...")
+        try:
+            products_response = client.get_products()
+            all_products = []
+            
+            # Filter for tradable products ending in USD, USDC, or USDT
+            for product in products_response.products:
+                product_id = product.product_id
+                # Include all USD-based pairs (crypto, stocks, futures, options)
+                if product_id.endswith('-USD') or product_id.endswith('-USDC') or product_id.endswith('-USDT'):
+                    # Check if trading is enabled
+                    if hasattr(product, 'status') and product.status == 'online':
+                        all_products.append(product_id)
+            
+            # If can't get products, fallback to expanded list
+            if not all_products:
+                all_products = [
+                    # Major Crypto
+                    'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD',
+                    'DOGE-USD', 'MATIC-USD', 'LINK-USD', 'AVAX-USD', 'DOT-USD',
+                    'SHIB-USD', 'UNI-USD', 'ATOM-USD', 'LTC-USD', 'BCH-USD',
+                    'NEAR-USD', 'APT-USD', 'ARB-USD', 'OP-USD', 'FIL-USD',
+                    'ICP-USD', 'VET-USD', 'ALGO-USD', 'HBAR-USD', 'GRT-USD',
+                    # DeFi
+                    'AAVE-USD', 'MKR-USD', 'SNX-USD', 'CRV-USD', 'COMP-USD',
+                    # Layer 2s
+                    'IMX-USD', 'LRC-USD', 'MINA-USD',
+                    # Meme/Community
+                    'PEPE-USD', 'FLOKI-USD', 'BONK-USD',
+                    # Stablecoins (for monitoring)
+                    'USDC-USD', 'DAI-USD', 'USDT-USD'
+                ]
+            
+            print(f"   Found {len(all_products)} tradable products")
+            print(f"   Markets: {', '.join(all_products[:10])}{'...' if len(all_products) > 10 else ''}")
+            
+        except Exception as e:
+            print(f"   ⚠️ Could not fetch products: {e}")
+            # Fallback to major crypto pairs
+            all_products = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'DOGE-USD']
+            print(f"   Using fallback: {', '.join(all_products)}")
+        
         print("\n🚀 Starting 24/7 trading bot...")
-        print("   Pairs: BTC-USD, ETH-USD, SOL-USD")
+        print(f"   Pairs: {len(all_products)} markets (ALL USD-based)")
         print("   Strategy: VWAP + RSI + MACD")
         print("   Scan interval: 2.5 minutes")
-        print("   Signal threshold: 1/5 conditions (ULTRA AGGRESSIVE)")
+        print("   Signal threshold: 2/5 conditions")
         print("   Max daily trades: 200")
         print("   Press Ctrl+C to stop\n")
         
@@ -83,6 +126,9 @@ def run_live_trading():
         while True:
             try:
                 print(f"🔍 [{time.strftime('%Y-%m-%d %H:%M:%S')}] Running trading cycle...")
+                
+                # Update strategy pairs with all available products each cycle
+                strategy.pairs = all_products
                 strategy.run_trading_cycle()
                 
                 # Wait 2.5 minutes between cycles (24 scans/hour = 12+ trades/hour)
