@@ -1,5 +1,10 @@
 # syntax=docker/dockerfile:1.4
 <<<<<<< HEAD
+# Dockerfile (remote-builder compatible: no --mount=type=secret)
+# Multi-stage build (builder -> base -> dev -> prod)
+# This variant prefers a committed local vendor at cd/vendor/coinbase_advanced_py.
+# If vendor is not present, the builder will skip attempting to clone (remote builders may not support secret mounts).
+=======
 # Dockerfile
 # Multi-stage build (builder -> base -> dev -> prod)
 # - Uses BuildKit secret mount for secure cloning if local vendor is missing.
@@ -8,12 +13,7 @@
 #   DOCKER_BUILDKIT=1 docker build --secret id=github_token,src=/tmp/github_token --target prod -t nija:prod .
 #
 # Note: do NOT pass tokens via --build-arg in production; use --secret instead.
-=======
-# Dockerfile (remote-builder compatible: no --mount=type=secret)
-# Multi-stage build (builder -> base -> dev -> prod)
-# This variant prefers a committed local vendor at cd/vendor/coinbase_advanced_py.
-# If vendor is not present, the builder will skip attempting to clone (remote builders may not support secret mounts).
->>>>>>> 55d63ed (Remove BuildKit secret mount for remote-builder compatibility; prefer committed vendor)
+>>>>>>> origin/main
 
 # ---------- builder: build wheel ----------
 FROM python:3.11-slim AS builder
@@ -28,6 +28,17 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 <<<<<<< HEAD
+# Prefer local vendor copy (this COPY will be used when vendor is committed to the repo)
+COPY cd/vendor/coinbase_advanced_py /src/vendor/coinbase_advanced_py
+
+# NOTE: remote builder does not support BuildKit secret mounts here.
+# If vendor is missing from the build context, we will skip cloning on the remote builder.
+RUN sh -eux -c '\
+      if [ -d /src/vendor/coinbase_advanced_py ]; then \
+        echo "Using local vendor package"; \
+      else \
+        echo "Vendor not present in build context; skipping clone (remote builder)"; \
+=======
 # Prefer local vendor copy (overrides any clone)
 COPY cd/vendor/coinbase_advanced_py /src/vendor/coinbase_advanced_py
 
@@ -44,18 +55,7 @@ RUN --mount=type=secret,id=github_token,target=/run/secrets/github_token \
         else \
           echo "Warning: vendor not present and no BuildKit secret provided; proceeding without vendor."; \
         fi; \
-=======
-# Prefer local vendor copy (this COPY will be used when vendor is committed to the repo)
-COPY cd/vendor/coinbase_advanced_py /src/vendor/coinbase_advanced_py
-
-# NOTE: remote builder does not support BuildKit secret mounts here.
-# If vendor is missing from the build context, we will skip cloning on the remote builder.
-RUN sh -eux -c '\
-      if [ -d /src/vendor/coinbase_advanced_py ]; then \
-        echo "Using local vendor package"; \
-      else \
-        echo "Vendor not present in build context; skipping clone (remote builder)"; \
->>>>>>> 55d63ed (Remove BuildKit secret mount for remote-builder compatibility; prefer committed vendor)
+>>>>>>> origin/main
       fi'
 
 # Prepare pip build tools and build wheel if vendor exists

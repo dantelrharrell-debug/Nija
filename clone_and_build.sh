@@ -1,3 +1,6 @@
+<<<<<<< HEAD
+<paste the script above>
+=======
 #!/usr/bin/env bash
 # clone_and_build.sh
 # - Attempts to obtain the vendor package and build the prod Docker image.
@@ -157,3 +160,4 @@ else
 fi
 
 echo "Done."
+>>>>>>> origin/main
