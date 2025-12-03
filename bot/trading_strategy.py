@@ -16,18 +16,33 @@ class TradingStrategy:
     - Risk management and position sizing
     """
     
-    def __init__(self, client, pairs=None, base_allocation=5.0, max_exposure=0.3, max_daily_loss=0.1):
+    def __init__(self, client, pairs=None, base_allocation=5.0, max_exposure=0.3, max_daily_loss=0.025):
         self.client = client
         self.pairs = pairs or ["BTC-USD", "ETH-USD", "SOL-USD"]
         self.base_allocation = base_allocation  # % of balance per trade
         self.max_exposure = max_exposure  # max % of account in positions
-        self.max_daily_loss = max_daily_loss  # max daily loss %
+        self.max_daily_loss = max_daily_loss  # max daily loss % (default 2.5%)
         self.daily_pnl = 0.0
         self.start_balance = 0.0
+        self.daily_trades = 0
+        self.max_daily_trades = 15
         
         # NIJA Trailing System
         self.nija = NIJATrailingSystem()
         self.position_counter = 0
+        
+        # Trade Cooldown (2 minutes)
+        self.last_trade_time = None
+        self.trade_cooldown_seconds = 120  # 2 minutes
+        
+        # Smart Burn-Down Rule
+        self.consecutive_losses = 0
+        self.burn_down_mode = False
+        self.burn_down_trades_remaining = 0
+        
+        # Daily Profit Lock
+        self.daily_profit_lock_threshold = 0.03  # 3% daily profit
+        self.profit_lock_active = False
         
     def get_usd_balance(self):
         """Get USD balance from Coinbase"""
@@ -79,15 +94,41 @@ class TradingStrategy:
             print(f"Error fetching candles for {product_id}: {e}")
             return None
     
-    def calculate_position_size(self, product_id, signal_strength=1.0):
-        """Calculate position size based on volatility and account balance"""
+    def calculate_position_size(self, product_id, signal_score=3):
+        """Calculate position size based on signal scoring and risk rules"""
         usd_balance = self.get_usd_balance()
         
         if usd_balance == 0:
             return 0.0
         
-        # Base allocation adjusted by signal strength
-        allocation_pct = self.base_allocation * signal_strength
+        # Signal-based allocation
+        # Score 5/5 → 8-10%
+        # Score 4/5 → 4-6%
+        # Score 3/5 → 2-3%
+        # Score ≤2 → No trade
+        if signal_score <= 2:
+            return 0.0
+        elif signal_score == 3:
+            allocation_pct = 2.5  # 2-3%
+        elif signal_score == 4:
+            allocation_pct = 5.0  # 4-6%
+        elif signal_score >= 5:
+            allocation_pct = 9.0  # 8-10%
+        else:
+            allocation_pct = 2.0  # Default minimum
+        
+        # Smart Burn-Down Rule: 3 losses in a row → 2% for next 3 trades
+        if self.burn_down_mode:
+            allocation_pct = 2.0
+            print(f"🔥 BURN-DOWN MODE: Reduced to 2% ({self.burn_down_trades_remaining} trades remaining)")
+        
+        # Daily Profit Lock: If +3% daily profit → smaller size (2-3%), only A+ setups
+        if self.profit_lock_active:
+            if signal_score < 5:
+                print(f"🔒 PROFIT LOCK: Skipping (need A+ setup, score={signal_score})")
+                return 0.0
+            allocation_pct = min(allocation_pct, 2.5)  # Cap at 2-3%
+            print(f"🔒 PROFIT LOCK: Reduced to {allocation_pct}% (A+ only)")
         
         # Check max exposure (sum of all open NIJA positions)
         current_exposure = sum([
@@ -99,40 +140,78 @@ class TradingStrategy:
             print(f"⚠️ Max exposure reached ({current_exposure/usd_balance:.1%})")
             return 0.0
         
-        # Check daily loss limit
+        # Check daily loss limit (2.5%)
         if self.start_balance > 0 and self.daily_pnl / self.start_balance < -self.max_daily_loss:
             print(f"⚠️ Max daily loss reached ({self.daily_pnl:.2f})")
+            return 0.0
+        
+        # Check max daily trades
+        if self.daily_trades >= self.max_daily_trades:
+            print(f"⚠️ Max daily trades reached ({self.daily_trades}/{self.max_daily_trades})")
             return 0.0
         
         position_size = usd_balance * (allocation_pct / 100)
         return min(position_size, usd_balance * 0.1)  # Cap at 10% per trade
     
-    def should_trade(self, product_id, indicators):
-        """Determine if we should trade based on indicators"""
+    def calculate_signal_score(self, product_id, indicators, df):
+        """Calculate signal score 1-5 based on NIJA criteria"""
         if not indicators or indicators.get('rsi') is None:
-            return None, 0.0
+            return None, 0
         
         rsi = indicators['rsi'].iloc[-1]
-        buy_signal = indicators['buy_signal']
-        sell_signal = indicators['sell_signal']
+        vwap = indicators['vwap'].iloc[-1]
+        current_price = df['close'].iloc[-1]
+        volume = df['volume'].iloc[-1]
+        avg_volume = df['volume'].rolling(20).mean().iloc[-1]
         
-        # Strong buy signal: oversold + MACD crossover + above VWAP
-        if buy_signal and rsi < 40:
-            return 'buy', 0.8
+        score = 0
+        action = None
         
-        # Moderate buy signal
-        elif buy_signal:
-            return 'buy', 0.5
+        # Detect buy or sell direction first
+        if indicators['buy_signal']:
+            action = 'buy'
+            
+            # +1 point: Price above VWAP
+            if current_price > vwap:
+                score += 1
+            
+            # +1 point: RSI oversold cross (30-50 range)
+            if 30 < rsi < 50:
+                score += 1
+            
+            # +1 point: Volume confirmation
+            if volume > avg_volume * 1.2:
+                score += 1
+            
+            # +1 point: MACD bullish crossover
+            if indicators['histogram'].iloc[-1] > 0:
+                score += 1
+            
+            # +1 point: EMA alignment (9 > 21 > 50)
+            ema_9 = df['close'].ewm(span=9).mean().iloc[-1]
+            ema_21 = df['close'].ewm(span=21).mean().iloc[-1]
+            if ema_9 > ema_21:
+                score += 1
         
-        # Strong sell signal: overbought + MACD crossunder + below VWAP
-        elif sell_signal and rsi > 60:
-            return 'sell', 0.8
+        elif indicators['sell_signal']:
+            action = 'sell'
+            
+            # Similar scoring for sell signals
+            if current_price < vwap:
+                score += 1
+            if 50 < rsi < 70:
+                score += 1
+            if volume > avg_volume * 1.2:
+                score += 1
+            if indicators['histogram'].iloc[-1] < 0:
+                score += 1
+            
+            ema_9 = df['close'].ewm(span=9).mean().iloc[-1]
+            ema_21 = df['close'].ewm(span=21).mean().iloc[-1]
+            if ema_9 < ema_21:
+                score += 1
         
-        # Moderate sell signal
-        elif sell_signal:
-            return 'sell', 0.5
-        
-        return None, 0.0
+        return action, score
     
     def place_market_order(self, product_id, side, usd_amount):
         """Place a market order"""
@@ -185,11 +264,26 @@ class TradingStrategy:
         # Manage existing positions first
         self.manage_open_positions()
         
+        # Check daily profit lock
+        if self.start_balance > 0:
+            daily_profit_pct = self.daily_pnl / self.start_balance
+            if daily_profit_pct >= self.daily_profit_lock_threshold and not self.profit_lock_active:
+                self.profit_lock_active = True
+                print(f"\n🔒 DAILY PROFIT LOCK ACTIVATED: +{daily_profit_pct*100:.2f}% (threshold: +3%)")
+                print(f"   → Switching to: Smaller size (2-3%), A+ setups only")
+        
         # Look for new entry signals
         for product_id in self.pairs:
             # Skip if already have position in this pair
             if any(pos['product_id'] == product_id for pos in self.nija.positions.values()):
                 continue
+            
+            # Check trade cooldown (2 minutes)
+            if self.last_trade_time:
+                time_since_last = (datetime.now() - self.last_trade_time).total_seconds()
+                if time_since_last < self.trade_cooldown_seconds:
+                    print(f"\n⏳ Trade cooldown active: {self.trade_cooldown_seconds - time_since_last:.0f}s remaining")
+                    continue
             
             print(f"\n--- Analyzing {product_id} for Entry ---")
             
@@ -204,23 +298,31 @@ class TradingStrategy:
             from indicators import calculate_indicators
             indicators = calculate_indicators(df)
             
-            # Get trading signal
-            action, signal_strength = self.should_trade(product_id, indicators)
+            # Check no-trade zones
+            if indicators.get('no_trade_zone'):
+                print(f"❌ NO-TRADE ZONE: {indicators['no_trade_reason']}")
+                continue
             
-            if action == 'buy':
-                position_size = self.calculate_position_size(product_id, signal_strength)
+            # Get signal score (1-5)
+            action, signal_score = self.calculate_signal_score(product_id, indicators, df)
+            
+            if action == 'buy' and signal_score > 2:
+                print(f"📊 Signal Score: {signal_score}/5")
+                
+                position_size = self.calculate_position_size(product_id, signal_score)
                 
                 if position_size > 10:  # Minimum $10 trade
                     self.enter_position(product_id, 'long', position_size, df)
+                    self.last_trade_time = datetime.now()
+                    self.daily_trades += 1
                 else:
                     print(f"⚠️ Position size too small: ${position_size:.2f}")
             
-            elif action == 'sell':
-                # Could implement short positions here
-                print(f"📉 Sell signal (shorts not enabled)")
+            elif action == 'sell' and signal_score > 2:
+                print(f"📉 Sell signal {signal_score}/5 (shorts not enabled)")
             
             else:
-                print(f"⏸️ No entry signal")
+                print(f"⏸️ No entry signal (score: {signal_score}/5)")
             
             # Display current indicators
             if indicators and indicators.get('rsi') is not None:
@@ -324,16 +426,42 @@ class TradingStrategy:
             print(f"   ❌ Error closing partial: {e}")
     
     def close_full_position(self, product_id, position_id, reason):
-        """Close full position"""
+        """Close full position with burn-down tracking"""
         try:
             position = self.nija.positions.get(position_id)
             if position:
                 profit = position['profit_pct']
+                profit_usd = position['entry_price'] * position['size'] * profit / 100
+                
                 print(f"   🎯 Full Close: {reason}")
-                print(f"   Final P&L: {profit:.2f}%")
+                print(f"   Final P&L: {profit:.2f}% (${profit_usd:.2f})")
                 
                 # Update daily P&L
-                self.daily_pnl += (position['entry_price'] * position['size'] * profit / 100)
+                self.daily_pnl += profit_usd
+                
+                # Smart Burn-Down Rule: Track consecutive losses
+                if profit < 0:
+                    self.consecutive_losses += 1
+                    print(f"   📉 Consecutive Losses: {self.consecutive_losses}")
+                    
+                    # 3 losses in a row → activate burn-down mode
+                    if self.consecutive_losses >= 3 and not self.burn_down_mode:
+                        self.burn_down_mode = True
+                        self.burn_down_trades_remaining = 3
+                        print(f"\n🔥 SMART BURN-DOWN ACTIVATED")
+                        print(f"   → Reducing allocation to 2% for next 3 trades")
+                else:
+                    # Win resets consecutive losses
+                    self.consecutive_losses = 0
+                    
+                    # If in burn-down mode, count down wins
+                    if self.burn_down_mode:
+                        self.burn_down_trades_remaining -= 1
+                        print(f"   ✅ Burn-down win ({self.burn_down_trades_remaining} trades remaining)")
+                        
+                        if self.burn_down_trades_remaining <= 0:
+                            self.burn_down_mode = False
+                            print(f"\n🎉 BURN-DOWN COMPLETE - Resuming normal allocation")
                 
                 # Remove from NIJA system
                 self.nija.close_position(position_id)

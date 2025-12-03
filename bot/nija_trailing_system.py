@@ -26,9 +26,10 @@ class NIJATrailingSystem:
     
     def get_base_stop_loss(self, entry_price, side, volatility=0.004):
         """
-        Calculate base stop-loss: 0.35% - 0.50% from entry
+        Calculate base stop-loss: 0.35% - 0.50% from entry (NIJA DEFAULT)
         Higher volatility = wider stop
         """
+        # Base: 0.35%, adjusts up to 0.50% based on volatility
         stop_distance = 0.0035 + (volatility * 10)  # 0.35% + volatility adjustment
         stop_distance = min(stop_distance, 0.005)  # Cap at 0.50%
         
@@ -165,11 +166,11 @@ class NIJATrailingSystem:
             position['ttp_active'] = True
             return 'partial_close', 0.25, f"TP2 hit (+{profit_pct:.2f}%) - TTP activated"
         
-        # TP3: +1.5-2% → Close final 25% OR keep trailing
+        # TP3: +1.5-2.0% → Close final 25% OR keep trailing
         if profit_pct >= 1.5 and position['remaining_size'] == 0.25:
-            # Check if momentum is insane (keep riding)
-            if rsi > 60 and df['volume'].iloc[-1] > df['volume'].rolling(20).mean().iloc[-1] * 1.5:
-                return 'hold', 0, f"TP3 reached but momentum strong - trailing (RSI={rsi:.1f})"
+            # Check if momentum is insane (keep riding to 2%)
+            if profit_pct < 2.0 and rsi > 60 and df['volume'].iloc[-1] > df['volume'].rolling(20).mean().iloc[-1] * 1.5:
+                return 'hold', 0, f"TP3 zone - momentum strong, trailing to 2% (RSI={rsi:.1f})"
             else:
                 return 'close_all', 0.25, f"TP3 hit (+{profit_pct:.2f}%) - Final exit"
         
