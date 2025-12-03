@@ -286,15 +286,32 @@ class TradingStrategy:
             print(f"\n--- Analyzing {product_id} ({market_type.value.upper()}) for Entry ---")
             
             # Get candle data
-            df = self.get_product_candles(product_id)
-            
-            if df is None or len(df) < 30:
-                print(f"⚠️ Insufficient data for {product_id}")
+            try:
+                print(f"   📈 Fetching candle data...")
+                df = self.get_product_candles(product_id)
+                
+                if df is None or len(df) < 30:
+                    print(f"⚠️ Insufficient data for {product_id}")
+                    continue
+                    
+                print(f"   ✅ Got {len(df)} candles")
+            except Exception as e:
+                print(f"❌ Error fetching candles for {product_id}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
             
             # Calculate indicators
-            from indicators import calculate_indicators
-            indicators = calculate_indicators(df)
+            try:
+                print(f"   🧮 Calculating indicators...")
+                from indicators import calculate_indicators
+                indicators = calculate_indicators(df)
+                print(f"   ✅ Indicators calculated")
+            except Exception as e:
+                print(f"❌ Error calculating indicators for {product_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
             
             # Check no-trade zones
             if indicators.get('no_trade_zone'):
