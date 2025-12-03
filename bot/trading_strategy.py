@@ -26,15 +26,15 @@ class TradingStrategy:
         self.daily_pnl = 0.0
         self.start_balance = 0.0
         self.daily_trades = 0
-        self.max_daily_trades = 15
+        self.max_daily_trades = 200  # 12+ trades per hour
         
         # NIJA Trailing System
         self.nija = NIJATrailingSystem()
         self.position_counter = 0
         
-        # Trade Cooldown (2 minutes)
+        # Trade Cooldown (removed for high frequency)
         self.last_trade_time = None
-        self.trade_cooldown_seconds = 120  # 2 minutes
+        self.trade_cooldown_seconds = 0  # No cooldown for 12 trades/hour
         
         # Smart Burn-Down Rule
         self.consecutive_losses = 0
@@ -297,7 +297,7 @@ class TradingStrategy:
             # Get signal score (1-5)
             action, signal_score = self.calculate_signal_score(product_id, indicators, df)
             
-            if action == 'buy' and signal_score > 2:
+            if action == 'buy' and signal_score >= 2:
                 print(f"� LONG SIGNAL DETECTED - Score: {signal_score}/5")
                 
                 # Display entry conditions
@@ -317,7 +317,7 @@ class TradingStrategy:
                 else:
                     print(f"⚠️ Position size too small: ${position_size:.2f}")
             
-            elif action == 'sell' and signal_score > 2:
+            elif action == 'sell' and signal_score >= 2:
                 print(f"📉 SHORT SIGNAL DETECTED - Score: {signal_score}/5")
                 
                 # Display entry conditions

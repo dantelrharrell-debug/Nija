@@ -67,9 +67,9 @@ def run_live_trading():
             try:
                 strategy.run_trading_cycle()
                 
-                # Wait 5 minutes between cycles
-                print(f"\n⏰ Waiting 5 minutes until next cycle...")
-                time.sleep(300)
+                # Wait 2.5 minutes between cycles (24 scans/hour = 12+ trades/hour)
+                print(f"\n⏰ Waiting 2.5 minutes until next cycle...")
+                time.sleep(150)
                 
             except KeyboardInterrupt:
                 print("\n\n🛑 Stopping trading bot...")
