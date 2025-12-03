@@ -1,105 +1,75 @@
-#!/usr/bin/env bash
-set -euo pipefail
+# Multi-mode Dockerfile with builder-stage clone for vendor package
+# Save this as "Dockerfile" at the repository root and run the docker build command from that directory.
 
-# Simple, robust environment bootstrap for coinbase_advanced_py
-GITHUB_USER="dantelrharrell-debug"
-REPO_NAME="coinbase_advanced_py"
-PACKAGE_DEST="/workspaces/Nija/vendor/${REPO_NAME}"
-PACKAGE_NAME="coinbase_advanced_py"  # Python package import name (may differ from repo)
+# ---------- Builder (build wheels; will clone vendor if not in build context) ----------
+FROM python:3.11-slim AS builder
+ARG GITHUB_TOKEN
+WORKDIR /src
+ENV PIP_NO_CACHE_DIR=1
 
-REQUIRED_PIP="23.0.0"
+# Install build tools required to build wheels (keep them only in builder)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential git \
+ && rm -rf /var/lib/apt/lists/*
 
-CLEANUP_TMP() { [ -n "${TMP_ASKPASS:-}" ] && rm -f "$TMP_ASKPASS" || true; }
-trap CLEANUP_TMP EXIT
+# If vendor isn't provided in the build context, clone it (private repo uses GITHUB_TOKEN).
+# If vendor is present in the context, COPY later will ensure the local copy is used.
+RUN if [ ! -d /src/vendor/coinbase_advanced_py ]; then \
+      if [ -n "${GITHUB_TOKEN:-}" ]; then \
+        git clone "https://${GITHUB_TOKEN}@github.com/dantelrharrell-debug/coinbase_advanced_py.git" /src/vendor/coinbase_advanced_py ; \
+      else \
+        git clone "https://github.com/dantelrharrell-debug/coinbase_advanced_py.git" /src/vendor/coinbase_advanced_py ; \
+      fi \
+    ; fi
 
-# sanity checks
-if ! command -v python3 &>/dev/null; then
-    echo "ERROR: python3 not found. Please install Python 3."
-    exit 1
-fi
+# If vendor exists in build context, this COPY will replace the cloned content (local preferred).
+COPY vendor/coinbase_advanced_py /src/vendor/coinbase_advanced_py
 
-if [ ! -d "$PACKAGE_DEST" ]; then
-    echo "Package directory $PACKAGE_DEST not found. Attempting to clone ${GITHUB_USER}/${REPO_NAME} ..."
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        TMP_ASKPASS=$(mktemp)
-        echo "echo \$GITHUB_TOKEN" > "$TMP_ASKPASS"
-        chmod +x "$TMP_ASKPASS"
-        GIT_ASKPASS="$TMP_ASKPASS" git clone --depth 1 "https://github.com/${GITHUB_USER}/${REPO_NAME}.git" "$PACKAGE_DEST"
-    else
-        # try unauthenticated clone (works for public repos)
-        if ! git clone --depth 1 "https://github.com/${GITHUB_USER}/${REPO_NAME}.git" "$PACKAGE_DEST"; then
-            echo "ERROR: Clone failed. If the repo is private, set GITHUB_TOKEN and retry."
-            exit 1
-        fi
-    fi
-else
-    echo "Package directory $PACKAGE_DEST exists. Checking for upstream updates..."
-    # try to update if there are upstream commits
-    if [ -d "${PACKAGE_DEST}/.git" ]; then
-        pushd "$PACKAGE_DEST" >/dev/null
-        # fetch remote refs
-        if [ -n "${GITHUB_TOKEN:-}" ]; then
-            TMP_ASKPASS=$(mktemp)
-            echo "echo \$GITHUB_TOKEN" > "$TMP_ASKPASS"
-            chmod +x "$TMP_ASKPASS"
-            GIT_ASKPASS="$TMP_ASKPASS" git fetch --all --prune
-        else
-            git fetch --all --prune || true
-        fi
+# Build a wheel for the vendor package
+RUN python3 -m pip install --upgrade pip setuptools wheel build \
+ && cd /src/vendor/coinbase_advanced_py \
+ && python3 -m build --wheel --outdir /wheels .
 
-        UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
-        if [ -n "$UPSTREAM" ] && [ "$(git rev-list --count HEAD..$UPSTREAM || echo 0)" -gt 0 ]; then
-            echo "Remote has new commits. Attempting to pull --rebase..."
-            if [ -n "${GITHUB_TOKEN:-}" ]; then
-                TMP_ASKPASS=$(mktemp)
-                echo "echo \$GITHUB_TOKEN" > "$TMP_ASKPASS"
-                chmod +x "$TMP_ASKPASS"
-                GIT_ASKPASS="$TMP_ASKPASS" git pull --rebase || echo "Warning: git pull failed"
-            else
-                git pull --rebase || echo "Warning: git pull failed (no GITHUB_TOKEN may block private repos)"
-            fi
-        else
-            echo "Repo is up to date."
-        fi
-        popd >/dev/null
-    else
-        echo "Warning: $PACKAGE_DEST exists but is not a git repo. Skipping update."
-    fi
-fi
+# ---------- Base runtime (small) ----------
+FROM python:3.11-slim AS base
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NIJA_ENV=production
+WORKDIR /usr/src/app
 
-# Ensure pip/tools are recent enough
-PIP_VERSION=$(python3 -m pip --version | awk '{print $2}')
-if [ "$(printf '%s\n' "$REQUIRED_PIP" "$PIP_VERSION" | sort -V | head -n1)" != "$REQUIRED_PIP" ]; then
-    echo "Upgrading pip, setuptools, and wheel..."
-    python3 -m pip install --upgrade pip setuptools wheel
-else
-    echo "Pip is recent ($PIP_VERSION), skipping upgrade."
-fi
+# Copy built wheels from builder stage
+COPY --from=builder /wheels /wheels
 
-# Install or upgrade the package in editable mode (so local changes are reflected)
-if python3 -m pip show "$PACKAGE_NAME" &>/dev/null; then
-    INSTALLED_LOCATION=$(python3 -c "import importlib, sys; m=importlib.import_module('${PACKAGE_NAME}'); print(getattr(m, '__file__', ''))")
-    echo "Package ${PACKAGE_NAME} already installed at: ${INSTALLED_LOCATION:-unknown}. Installing/refreshing from $PACKAGE_DEST ..."
-fi
+# Optional: copy requirements if you use one
+COPY requirements.txt /usr/src/app/requirements.txt
 
-python3 -m pip install --upgrade -e "$PACKAGE_DEST"
+# Install runtime deps and wheel
+RUN python3 -m pip install --upgrade pip setuptools wheel \
+ && if [ -f /usr/src/app/requirements.txt ]; then python3 -m pip install -r /usr/src/app/requirements.txt; fi \
+ && if ls /wheels/*.whl 1> /dev/null 2>&1; then python3 -m pip install /wheels/*.whl; fi
 
-# Verify import works
-echo "Testing Python import..."
-python3 - <<PY
-try:
-    import importlib, traceback
-    m = importlib.import_module("$PACKAGE_NAME")
-    print("Imported:", getattr(m, "__file__", "<no __file__>"))
-except Exception:
-    traceback.print_exc()
-    raise SystemExit(2)
-PY
+# Copy app source after installing packages to keep earlier layers cached
+COPY . /usr/src/app
+RUN chmod +x /usr/src/app/start.sh
 
-echo "Environment bootstrap complete. Executing start.sh ..."
-if [ ! -x /usr/src/app/start.sh ]; then
-    echo "Warning: /usr/src/app/start.sh not executable or not found. Making executable if present."
-    [ -f /usr/src/app/start.sh ] && chmod +x /usr/src/app/start.sh || echo "ERROR: start.sh missing at /usr/src/app/start.sh"
-fi
+# ---------- Dev stage (editable installs + build tools) ----------
+FROM builder AS dev
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NIJA_ENV=development
+WORKDIR /usr/src/app
 
-exec /usr/src/app/start.sh
+# Copy application source
+COPY . /usr/src/app
+
+# Install runtime deps (if present) and then an editable install of vendor package
+RUN python3 -m pip install --upgrade pip setuptools wheel \
+ && if [ -f /usr/src/app/requirements.txt ]; then python3 -m pip install -r /usr/src/app/requirements.txt; fi \
+ && python3 -m pip install --no-deps -e /src/vendor/coinbase_advanced_py
+
+RUN chmod +x /usr/src/app/start.sh
+
+# ---------- Prod stage (final image) ----------
+FROM base AS prod
+WORKDIR /usr/src/app
+CMD ["./start.sh"]
