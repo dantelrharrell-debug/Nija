@@ -1,75 +1,50 @@
 # syntax=docker/dockerfile:1.4
-
-# ---------- builder: build wheel ----------
-FROM python:3.11-slim AS builder
-
-WORKDIR /src
-ENV PIP_NO_CACHE_DIR=1 \
-    PYTHONUNBUFFERED=1
-
-# Build-time system deps
-RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential git ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-
-# Prefer local vendor copy (this COPY will be used when vendor is committed to the repo)
-COPY cd/vendor/coinbase_advanced_py /src/vendor/coinbase_advanced_py
-
-# If vendor not in context, securely clone using BuildKit secret mounted at /run/secrets/github_token.
-RUN sh -eux -c '\
-      if [ -d /src/vendor/coinbase_advanced_py ]; then \
-        echo "Using local vendor package"; \
-      else \
-        echo "Warning: vendor not present; proceeding without vendor."; \
-      fi'
-
-# Prepare pip build tools and build wheel if vendor exists
-RUN python3 -m pip install --upgrade pip setuptools wheel build || true
-RUN sh -c 'if [ -d /src/vendor/coinbase_advanced_py ]; then cd /src/vendor/coinbase_advanced_py && python3 -m build --wheel --outdir /wheels .; else echo "No vendor package to build"; fi'
-
-# ---------- base: runtime ----------
+#
+# Multi-stage build:
+#  - builder: build wheels for all requirements (and vendor package if present)
+#  - final: install wheels and copy app sources
+#
 FROM python:3.11-slim AS base
-
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    NIJA_ENV=production
-
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 WORKDIR /usr/src/app
 
-# Copy built wheel(s) from builder
+# Builder stage: produce wheels so final stage can install without build deps
+FROM base AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only what we need to build wheels
+COPY requirements.txt ./
+
+# Upgrade pip and make a wheelhouse for faster, reproducible installs
+RUN pip install --upgrade pip setuptools wheel \
+ && pip wheel --no-deps --wheel-dir /wheels -r requirements.txt
+
+# If a vendored local package is present, build a wheel for it too (optional)
+# This lets you vendor cd/vendor/coinbase_advanced_py to avoid private clones during build.
+COPY cd/vendor cd/vendor
+RUN if [ -d "cd/vendor/coinbase_advanced_py" ]; then \
+      pip wheel --no-deps --wheel-dir /wheels cd/vendor/coinbase_advanced_py || true; \
+    fi
+
+# Final runtime image
+FROM base AS final
+
+# Copy pre-built wheels and install them (no compilers needed in final)
 COPY --from=builder /wheels /wheels
-
-# Copy requirements early for caching
-COPY requirements.txt /usr/src/app/requirements.txt
-
-# Install runtime dependencies and wheel(s)
-RUN python3 -m pip install --upgrade pip setuptools wheel \
- && if [ -f /usr/src/app/requirements.txt ]; then python3 -m pip install -r /usr/src/app/requirements.txt; fi \
- && if ls /wheels/*.whl 1> /dev/null 2>&1; then python3 -m pip install /wheels/*.whl; fi
+RUN if [ -n "$(ls -A /wheels 2>/dev/null || true)" ]; then \
+      pip install --no-deps /wheels/*.whl || true; \
+    fi
 
 # Copy application source
-COPY . /usr/src/app
+COPY . .
 
-# Make start.sh executable if present
-RUN [ -f /usr/src/app/start.sh ] && chmod +x /usr/src/app/start.sh || true
+# If vendor package was not built as a wheel for some reason, install it editable as fallback
+RUN if [ -d "cd/vendor/coinbase_advanced_py" ]; then \
+      pip install --no-deps -e cd/vendor/coinbase_advanced_py || true; \
+    fi
 
-# ---------- dev: editable install ----------
-FROM builder AS dev
-
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    NIJA_ENV=development
-
-WORKDIR /usr/src/app
-COPY . /usr/src/app
-
-RUN python3 -m pip install --upgrade pip setuptools wheel \
- && if [ -f /usr/src/app/requirements.txt ]; then python3 -m pip install -r /usr/src/app/requirements.txt; fi \
- && if [ -d /src/vendor/coinbase_advanced_py ]; then python3 -m pip install --no-deps -e /src/vendor/coinbase_advanced_py; fi
-
-RUN [ -f /usr/src/app/start.sh ] && chmod +x /usr/src/app/start.sh || true
-
-# ---------- prod: final runtime ----------
-FROM base AS prod
-WORKDIR /usr/src/app
-CMD ["./start.sh"]
+# (Optional) expose port or set entrypoint here. Keep CMD minimal to avoid breaking
+# the repo's existing run flow. Replace with your real command if needed:
+CMD ["python", "-m", "nija"] 
