@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 # build_with_buildarg.sh
-# Build the Docker image using --build-arg GITHUB_TOKEN (insecure: token may appear in build logs/image history).
-# Use this only if you cannot commit vendor and your builder does not support BuildKit secrets.
+# Insecure fallback: passes GITHUB_TOKEN as --build-arg to docker build (token may appear in logs/history).
+# Use only if you cannot commit vendor and your remote builder does not support BuildKit secrets.
 #
 # Usage:
 #   ./build_with_buildarg.sh --token "ghp_xxx" --target prod --tag nija:prod
-#   or set env GITHUB_TOKEN and run:
-#   ./build_with_buildarg.sh --target prod --tag nija:prod
+#   or: GITHUB_TOKEN="ghp_xxx" ./build_with_buildarg.sh --target prod --tag nija:prod
 #
-# WARNING: Passing a token this way is less secure. Revoke the token after use:
-#   https://github.com/settings/tokens (Developer settings -> Personal access tokens)
+# WARNING: Passing a token this way is less secure. Revoke the PAT after use:
+#   https://github.com/settings/tokens
 
 print_help() {
   cat <<EOF
 Usage: $0 [OPTIONS]
 
 Options:
-  --token TOKEN      Provide GitHub PAT on the command line (insecure; will be passed to docker build).
+  --token TOKEN      Provide GitHub PAT (optional if GITHUB_TOKEN env var set).
   --target TARGET    Docker build target (default: prod).
   --tag IMAGE_TAG    Docker image tag (default: nija:prod).
-  -h,--help          Show this help.
+  -h, --help         Show this help.
 EOF
 }
 
@@ -45,35 +45,23 @@ if [ -z "$TOKEN" ]; then
 fi
 
 if [ ! -f Dockerfile ]; then
-  echo "ERROR: Dockerfile not found in $(pwd). Run from repo root."
+  echo "ERROR: Dockerfile not found in $(pwd). Run from repository root."
   exit 1
 fi
 
-# Print a redacted build command (do not print the actual token)
 echo "Running insecure build using --build-arg (token will be passed to docker build)."
-echo "WARNING: This may expose your token in build logs or image layers. Revoke the PAT after use:"
+echo "WARNING: This may expose your token in build logs or image layers. Revoke the PAT immediately after use:"
 echo "  https://github.com/settings/tokens"
 
-BUILD_CMD=(docker build --progress=plain --build-arg GITHUB_TOKEN="${TOKEN}" --target "${TARGET}" -t "${TAG}" .)
+# Run the build (token value is not printed)
+docker build --progress=plain --build-arg GITHUB_TOKEN="${TOKEN}" --target "${TARGET}" -t "${TAG}" .
 
-# Print command with token redacted
-REDACTED=("${BUILD_CMD[@]}")
-for i in "${!REDACTED[@]}"; do
-  if [ "${REDACTED[$i]}" = "$TOKEN" ]; then
-    REDACTED[$i]="<REDACTED_TOKEN>"
-  fi
-done
-printf 'Executing: '; printf '%q ' "${REDACTED[@]}"; echo
-
-# Run build
-"${BUILD_CMD[@]}"
-
-EXIT_CODE=$?
-if [ $EXIT_CODE -ne 0 ]; then
-  echo "docker build failed with exit code $EXIT_CODE"
-  exit $EXIT_CODE
+BUILD_EXIT=$?
+if [ $BUILD_EXIT -ne 0 ]; then
+  echo "docker build failed with exit code $BUILD_EXIT"
+  exit $BUILD_EXIT
 fi
 
 echo "Build completed: ${TAG}"
-echo "IMPORTANT: Revoke the token used immediately if it was a long-lived PAT:"
+echo "IMPORTANT: Revoke the token used immediately in GitHub settings:"
 echo "  https://github.com/settings/tokens"
