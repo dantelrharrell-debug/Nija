@@ -121,10 +121,10 @@ def calculate_indicators(df):
     
     # RSI Strategy 2: Pullback/Mean Reversion (RSI cooling off in uptrend)
     # RSI 30-70 range, price still above VWAP, EMAs aligned = healthy pullback
-    rsi_pullback = 30 < current_rsi < 70 and current_rsi < prev_rsi and price_above_vwap and ema_bullish
+    rsi_pullback = bool(30 < current_rsi < 70 and current_rsi < prev_rsi and price_above_vwap and ema_bullish)
     
     # Accept EITHER momentum OR pullback
-    rsi_favorable = rsi_momentum_rising or rsi_pullback
+    rsi_favorable = bool(rsi_momentum_rising or rsi_pullback)
     
     long_conditions = {
         "price_above_vwap": bool(price_above_vwap),
@@ -150,10 +150,10 @@ def calculate_indicators(df):
     rsi_momentum_falling = current_rsi < prev_rsi and current_rsi > 20
     
     # RSI Strategy 2: Bounce/Mean Reversion (RSI bouncing in downtrend)
-    rsi_bounce = 30 < current_rsi < 70 and current_rsi > prev_rsi and price_below_vwap and ema_bearish
+    rsi_bounce = bool(30 < current_rsi < 70 and current_rsi > prev_rsi and price_below_vwap and ema_bearish)
     
     # Accept EITHER momentum OR bounce
-    rsi_favorable_short = rsi_momentum_falling or rsi_bounce
+    rsi_favorable_short = bool(rsi_momentum_falling or rsi_bounce)
     
     short_conditions = {
         "price_below_vwap": bool(price_below_vwap),
