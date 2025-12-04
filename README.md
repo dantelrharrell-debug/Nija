@@ -19,21 +19,24 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 | Universal Management | 🟢 **All holdings tracked** |
 
 **Latest Updates** (Dec 4, 2025):
-- ✅ **PROFIT MAXIMIZATION MODE ACTIVATED - LIVE & TRADING**
+- ✅ **ULTRA-SCALP MODE ACTIVATED** - 3x faster profit capture!
+- ✅ **SELL ORDERS FIXED** - Bot now executes take-profit and stop-loss exits
 - ✅ **DUAL-MODE SUPPORT**: LIVE (Coinbase real money) + PAPER (local simulation)
-- ✅ 50% max exposure (increased from 30%) - deploy more capital
-- ✅ Accept 1/5 signals with momentum - catch early breakouts
+- ✅ Position sizing: **8% per trade** (increased from 5%)
+- ✅ Max exposure: **70%** (increased from 50%) - ultra-aggressive compounding
+- ✅ Stop-loss: **0.4-0.6%** (tightened from 0.75-1.5%) - better risk/reward
+- ✅ **TP0.5 at +0.4%** → Sell 30% (ultra-fast scalp lock)
+- ✅ **TP1 at +0.8%** → Sell 30% more (60% total out, TSL activated)
+- ✅ **TP2 at +1.5%** → Sell 20% more (80% total out, TTP activated)
+- ✅ **Runners capped at 5%** (from 10%) for faster reinvestment
+- ✅ Trailing stops: **2% default** (tightened from 3%) for faster profit protection
+- ✅ Accept 2/5 signals (lowered from 3/5) - more entry opportunities
 - ✅ Pyramiding enabled - add to winning positions (>2% profit)
-- ✅ Micro trades: $0.005 minimum (from $0.01) - maximize small accounts
-- ✅ Faster profit taking: TP0.5 at 0.75%, TP1 at 1.5%, TP2 at 3.0%
-- ✅ Aggressive sizing: 3-15% per trade (from 2-10%)
-- ✅ Runners to 10% (from 5%) with 3% wide trailing
+- ✅ Micro trades: $0.005 minimum - maximize small accounts
 - ✅ Volatility boost: +20% size in high volatility
-- ✅ RSI no-trade zones ultra-relaxed (98/2 instead of 95/5)
 - ✅ NO burn-down mode, NO profit locks - maximum opportunities
 - ✅ Universal position management: ALL holdings protected
-- ✅ Market detection fixed: USDC/USDT pairs = CRYPTO
-- ✅ **CRITICAL BUGS FIXED**: Pyramiding crash, pandas Series ambiguity, RSI comparison errors
+- ✅ **CRITICAL BUGS FIXED**: Sell orders implemented, pyramiding crash, pandas Series ambiguity
 - ✅ **FIRST TRADES EXECUTED**: BTC-USDC, ETH-USDC, SOL-USD, SOL-USDC (Dec 4, 2025 03:19 UTC)
 
 ---
@@ -177,8 +180,9 @@ Adjusts based on profit level to give trends room to breathe:
 
 Locks profits progressively while letting runners maximize:
 
-- **TP1 (+0.5%)**: Exit 50% of position → Lock initial gains
-- **TP2 (+1.0%)**: Exit 25% of position → Capture momentum
+- **TP0.5 (+0.4%)**: Exit 30% of position → Ultra-fast scalp lock
+- **TP1 (+0.8%)**: Exit 30% of position (60% total out) → TSL activated
+- **TP2 (+1.5%)**: Exit 20% of position (80% total out) → TTP activated
 - **Runner**: Final 25% trails with TSL → No cap, can run to 5%+ profits
 
 ### **Peak Detection System**
