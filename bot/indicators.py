@@ -127,15 +127,15 @@ def calculate_indicators(df):
     rsi_favorable = rsi_momentum_rising or rsi_pullback
     
     long_conditions = {
-        "price_above_vwap": price_above_vwap,
-        "ema_alignment": ema_bullish,
-        "rsi_favorable": rsi_favorable,  # Now accepts momentum OR pullback
-        "volume_confirmation": current_volume >= prev_2_volume * 0.5,
-        "candle_close_bullish": current_price > prev_price
+        "price_above_vwap": bool(price_above_vwap),
+        "ema_alignment": bool(ema_bullish),
+        "rsi_favorable": bool(rsi_favorable),  # Now accepts momentum OR pullback
+        "volume_confirmation": bool(current_volume >= prev_2_volume * 0.5),
+        "candle_close_bullish": bool(current_price > prev_price)
     }
     
     # Buy signal if 2+ conditions met (not all)
-    buy_signal = sum(long_conditions.values()) >= 2
+    buy_signal = bool(sum(long_conditions.values()) >= 2)
     
     # ═══════════════════════════════════════════════════════════
     # NIJA SHORT ENTRY CONDITIONS (Scored 1-5, need 2+ for entry)
@@ -156,15 +156,15 @@ def calculate_indicators(df):
     rsi_favorable_short = rsi_momentum_falling or rsi_bounce
     
     short_conditions = {
-        "price_below_vwap": price_below_vwap,
-        "ema_alignment": ema_bearish,
-        "rsi_favorable": rsi_favorable_short,
-        "volume_confirmation": current_volume >= prev_2_volume * 0.5,
-        "candle_close_bearish": current_price < prev_price
+        "price_below_vwap": bool(price_below_vwap),
+        "ema_alignment": bool(ema_bearish),
+        "rsi_favorable": bool(rsi_favorable_short),
+        "volume_confirmation": bool(current_volume >= prev_2_volume * 0.5),
+        "candle_close_bearish": bool(current_price < prev_price)
     }
     
     # Sell signal if 2+ conditions met (not all)
-    sell_signal = sum(short_conditions.values()) >= 2
+    sell_signal = bool(sum(short_conditions.values()) >= 2)
     
     return {
         "vwap": vwap,
