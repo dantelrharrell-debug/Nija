@@ -626,13 +626,30 @@ class TradingStrategy:
     def close_partial_position(self, product_id, position_id, size_pct, current_price, reason):
         """Close a partial position (TP1 or TP2) - supports LIVE and PAPER modes"""
         try:
+            position = self.nija.positions.get(position_id)
+            if not position:
+                print(f"   ⚠️ Position {position_id} not found")
+                return
+            
             mode_indicator = "📄 PAPER" if self.paper_mode else "💰 LIVE"
             print(f"   🔄 {mode_indicator} Partial Close: {size_pct*100:.0f}% - {reason}")
             
+            # Calculate amount to sell (base crypto size)
+            total_crypto_size = position['size']
+            crypto_to_sell = total_crypto_size * size_pct
+            
             # LIVE MODE: Execute real sell order
             if not self.paper_mode:
-                # Implement actual sell order here
-                pass
+                try:
+                    order = self.client.market_order_sell(
+                        client_order_id=f"{product_id}-sell-{int(time.time())}",
+                        product_id=product_id,
+                        base_size=str(crypto_to_sell)
+                    )
+                    print(f"   ✅ Sold {crypto_to_sell:.8f} {product_id.split('-')[0]} at ${current_price:.2f}")
+                except Exception as sell_error:
+                    print(f"   ❌ Sell order failed: {sell_error}")
+                    return
             
             # PAPER MODE: Update paper account
             else:
@@ -669,8 +686,20 @@ class TradingStrategy:
                 
                 # LIVE MODE: Execute real sell order
                 if not self.paper_mode:
-                    # Implement actual sell order here
-                    pass
+                    try:
+                        # Calculate remaining crypto size to sell
+                        total_crypto_size = position['size']
+                        remaining_size = total_crypto_size * position['remaining_size']
+                        
+                        order = self.client.market_order_sell(
+                            client_order_id=f"{product_id}-sell-{int(time.time())}",
+                            product_id=product_id,
+                            base_size=str(remaining_size)
+                        )
+                        print(f"   ✅ Sold {remaining_size:.8f} {product_id.split('-')[0]} at ${current_price:.2f}")
+                    except Exception as sell_error:
+                        print(f"   ❌ Sell order failed: {sell_error}")
+                        return
                 
                 # PAPER MODE: Close paper position
                 else:
