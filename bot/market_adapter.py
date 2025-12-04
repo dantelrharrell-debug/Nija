@@ -136,14 +136,17 @@ class MarketAdapter:
         Auto-detect market type from symbol
         
         Examples:
-        - BTC-USD, ETH-USD → CRYPTO
+        - BTC-USD, ETH-USD, FORTH-USDC → CRYPTO
         - AAPL, TSLA, SPY → STOCKS
         - ES, NQ, GC, CL → FUTURES
         - AAPL250117C00150000 → OPTIONS
         """
         symbol = symbol.upper()
         
-        # Crypto patterns
+        # Crypto patterns - check for crypto pairs first
+        if '-USD' in symbol or '-USDC' in symbol or '-USDT' in symbol:
+            return MarketType.CRYPTO
+        
         if any(crypto in symbol for crypto in ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'ADA']):
             return MarketType.CRYPTO
         

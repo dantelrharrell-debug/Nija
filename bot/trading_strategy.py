@@ -69,7 +69,11 @@ class TradingStrategy:
                 if currency in ['USD', 'USDC', 'USDT']:
                     continue
                 
-                balance = float(account.get('available_balance', {}).get('value', 0))
+                # Handle both dict and object formats
+                if hasattr(account, 'available_balance'):
+                    balance = float(account.available_balance.get('value', 0)) if isinstance(account.available_balance, dict) else float(account.available_balance.value)
+                else:
+                    balance = float(account.get('available_balance', {}).get('value', 0))
                 
                 # If we have a balance, we have a position
                 if balance > 0:
@@ -281,14 +285,15 @@ class TradingStrategy:
             allocation_pct = min(allocation_pct, 2.5)  # Cap at 2-3%
             print(f"🔒 PROFIT LOCK: Reduced to {allocation_pct}% (A+ only)")
         
-        # Check max exposure (sum of all open NIJA positions)
+        # Check max exposure (sum of NIJA-created positions only, not imported manual trades)
         current_exposure = sum([
             pos['entry_price'] * pos['size'] * pos['remaining_size']
             for pos in self.nija.positions.values()
+            if not pos.get('imported', False)  # Exclude imported manual positions
         ])
         
         if current_exposure / usd_balance > self.max_exposure:
-            print(f"⚠️ Max exposure reached ({current_exposure/usd_balance:.1%})")
+            print(f"⚠️ Max exposure reached ({current_exposure/usd_balance:.1%}) - NIJA trades only")
             return 0.0
         
         # Check daily loss limit (2.5%)
@@ -465,7 +470,7 @@ class TradingStrategy:
                     self.last_trade_time = datetime.now()
                     self.daily_trades += 1
                 else:
-                    print(f"⚠️ Position size too small: ${position_size:.2f}")
+                    print(f"⚠️ Position size too small: ${position_size:.2f} (minimum: $0.01)")
             
             elif action == 'sell' and signal_score >= 2:
                 print(f"📉 SHORT SIGNAL DETECTED - Score: {signal_score}/5")
