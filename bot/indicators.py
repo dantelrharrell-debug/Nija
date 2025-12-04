@@ -37,15 +37,15 @@ def check_no_trade_zones(df, rsi):
     
     Returns: (is_no_trade_zone, reason)
     """
-    # ❌ Only extreme RSI > 95 or < 5 (relaxed from 90/10)
-    if rsi.iloc[-1] > 95:
-        return True, "Extreme RSI > 95"
-    if rsi.iloc[-1] < 5:
-        return True, "Extreme RSI < 5"
+    # ❌ Only extreme RSI > 98 or < 2 (ultra relaxed - almost never triggers)
+    if rsi.iloc[-1] > 98:
+        return True, "Extreme RSI > 98"
+    if rsi.iloc[-1] < 2:
+        return True, "Extreme RSI < 2"
     
     # ❌ Low-volume consolidation
     avg_volume = df['volume'].rolling(20).mean().iloc[-1]
-    if df['volume'].iloc[-1] < avg_volume * 0.3:
+    if df['volume'].iloc[-1] < avg_volume * 0.15:  # Lower threshold - accept more trades
         return True, "Low volume consolidation"
     
     # ❌ Large unpredictable wicks (wick > 2x body)

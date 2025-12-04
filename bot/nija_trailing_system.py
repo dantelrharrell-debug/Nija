@@ -26,12 +26,12 @@ class NIJATrailingSystem:
     
     def get_base_stop_loss(self, entry_price, side, volatility=0.004):
         """
-        Calculate base stop-loss: 0.35% - 0.50% from entry (NIJA DEFAULT)
+        Calculate base stop-loss: 0.75% - 1.5% from entry (LOOSER for bigger moves)
         Higher volatility = wider stop
         """
-        # Base: 0.35%, adjusts up to 0.50% based on volatility
-        stop_distance = 0.0035 + (volatility * 10)  # 0.35% + volatility adjustment
-        stop_distance = min(stop_distance, 0.005)  # Cap at 0.50%
+        # Base: 0.75%, adjusts up to 1.5% based on volatility
+        stop_distance = 0.0075 + (volatility * 15)  # 0.75% + volatility adjustment
+        stop_distance = min(stop_distance, 0.015)  # Cap at 1.5%
         
         if side == 'long':
             return entry_price * (1 - stop_distance)
@@ -48,8 +48,8 @@ class NIJATrailingSystem:
         side = position['side']
         entry_price = position['entry_price']
         
-        # Not activated until TP1 (+0.5%) hits
-        if current_profit_pct < 0.5:
+        # Not activated until TP1 (+1.0%) hits
+        if current_profit_pct < 1.0:
             return position['stop_loss']
         
         # A. EMA-21 Dynamic Trail (looser - use EMA-21 minus buffer)
@@ -58,17 +58,17 @@ class NIJATrailingSystem:
         else:
             ema_stop = ema_21 * 1.005  # 0.5% above EMA-21
         
-        # B. Percentage-Based Trail - MUCH LOOSER for trend riding
-        if current_profit_pct > 5.0:
-            trail_pct = 0.003  # 0.30% trail (massive winners get tight)
+        # B. Percentage-Based Trail - EXTRA LOOSE for capturing big moves
+        if current_profit_pct > 10.0:
+            trail_pct = 0.01   # 1.0% trail (massive winners)
+        elif current_profit_pct > 5.0:
+            trail_pct = 0.015  # 1.5% trail
         elif current_profit_pct > 3.0:
-            trail_pct = 0.005  # 0.50% trail
+            trail_pct = 0.02   # 2.0% trail
         elif current_profit_pct > 2.0:
-            trail_pct = 0.008  # 0.80% trail
-        elif current_profit_pct > 1.0:
-            trail_pct = 0.01   # 1.0% trail
+            trail_pct = 0.025  # 2.5% trail
         else:
-            trail_pct = 0.012  # 1.2% trail (default after TP1 - very loose)
+            trail_pct = 0.03   # 3.0% trail (default - very loose)
         
         if side == 'long':
             percentage_stop = current_price * (1 - trail_pct)
@@ -119,7 +119,7 @@ class NIJATrailingSystem:
         peak_signals = 0
         
         # A. Strong Candle Pullback (price retracing from peak)
-        if pullback_from_peak > 0.3:  # 0.3% pullback from peak
+        if pullback_from_peak > 0.8:  # 0.8% pullback from peak (less sensitive)
             peak_signals += 1
             
         # B. RSI Divergence (price higher but RSI lower = weakening)
@@ -199,33 +199,41 @@ class NIJATrailingSystem:
         elif side == 'short' and current_price >= position['stop_loss']:
             return 'close_all', position['remaining_size'], f"Stop-loss hit at {position['stop_loss']:.2f}"
         
-        # TP1: +0.5% → Close 50%
-        if profit_pct >= 0.5 and position['remaining_size'] == 1.0:
-            position['remaining_size'] = 0.5
-            position['tsl_active'] = True
-            return 'partial_close', 0.5, f"TP1 hit (+{profit_pct:.2f}%) - TSL activated"
+        # FAST PROFIT CAPTURE: TP0.5 at +0.75% → Close 25% (early quick wins)
+        if profit_pct >= 0.75 and position['remaining_size'] == 1.0 and not position.get('tp05_hit', False):
+            position['remaining_size'] = 0.75
+            position['tp05_hit'] = True
+            return 'partial_close', 0.25, f"TP0.5 hit (+{profit_pct:.2f}%) - Quick profit lock"
         
-        # TP2: +1.0% → Close 25%
-        if profit_pct >= 1.0 and position['remaining_size'] == 0.5:
+        # TP1: +1.5% → Close 25% more (50% total out)
+        if profit_pct >= 1.5 and position['remaining_size'] == 0.75 and not position.get('tp1_hit', False):
+            position['remaining_size'] = 0.50
+            position['tsl_active'] = True
+            position['tp1_hit'] = True
+            return 'partial_close', 0.25, f"TP1 hit (+{profit_pct:.2f}%) - TSL activated"
+        
+        # TP2: +3.0% → Close 25% more (25% remaining)
+        if profit_pct >= 3.0 and position['remaining_size'] == 0.50 and not position.get('tp2_hit', False):
             position['remaining_size'] = 0.25
             position['ttp_active'] = True
+            position['tp2_hit'] = True
             return 'partial_close', 0.25, f"TP2 hit (+{profit_pct:.2f}%) - TTP activated"
         
         # TP3: Let it RUN! Only exit on peak detection, no arbitrary limits
-        if profit_pct >= 1.5 and position['remaining_size'] == 0.25:
+        if profit_pct >= 4.0 and position['remaining_size'] == 0.25:
             # Check momentum - if strong, keep riding
             avg_volume = df['volume'].rolling(20).mean().iloc[-1]
             current_volume = df['volume'].iloc[-1]
             
             # Strong momentum conditions
             strong_momentum = (
-                (side == 'long' and rsi > 55 and current_volume > avg_volume * 1.2) or
-                (side == 'short' and rsi < 45 and current_volume > avg_volume * 1.2)
+                (side == 'long' and rsi > 50 and current_volume > avg_volume * 1.0) or
+                (side == 'short' and rsi < 50 and current_volume > avg_volume * 1.0)
             )
             
-            if strong_momentum and profit_pct < 5.0:  # Let it run up to 5%!
+            if strong_momentum and profit_pct < 10.0:  # Let it run up to 10%!
                 return 'hold', 0, f"TP3+ zone - Strong momentum, trailing (RSI={rsi:.1f}, Vol={current_volume/avg_volume:.1f}x)"
-            elif profit_pct >= 5.0:
+            elif profit_pct >= 10.0:
                 # Massive winner - only exit on peak signals, not arbitrary target
                 return 'hold', 0, f"MASSIVE WINNER +{profit_pct:.2f}% - Trailing to peak"
         
@@ -244,8 +252,12 @@ class NIJATrailingSystem:
         
         return 'hold', 0, f"Trailing (+{profit_pct:.2f}%) - Stop at {new_stop:.2f}"
     
-    def open_position(self, position_id, side, entry_price, size, volatility=0.004, market_params=None):
-        """Open a new NIJA position with market-specific parameters"""
+    def open_position(self, position_id, side, entry_price, size, volatility=0.004, market_params=None, scale_in=False):
+        """Open a new NIJA position with market-specific parameters
+        
+        Args:
+            scale_in: If True, this is adding to an existing winning position (pyramiding)
+        """
         # Use market parameters if provided, otherwise use default crypto params
         if market_params:
             # Calculate stop using market-specific ranges

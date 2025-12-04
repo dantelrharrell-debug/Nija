@@ -59,18 +59,18 @@ class MarketAdapter:
         self.market_configs = {
             MarketType.CRYPTO: MarketParameters(
                 market_type=MarketType.CRYPTO,
-                sl_min=0.0035,  # 0.35%
-                sl_max=0.0050,  # 0.50%
-                tp1=0.005,      # 0.5%
-                tp2=0.010,      # 1.0%
-                tp3_min=0.015,  # 1.5%
-                tp3_max=0.020,  # 2.0%
+                sl_min=0.0075,  # 0.75% (WIDER for bigger moves)
+                sl_max=0.015,   # 1.5% (WIDER for volatility)
+                tp1=0.015,      # 1.5% (HIGHER first target)
+                tp2=0.030,      # 3.0% (HIGHER second target)
+                tp3_min=0.040,  # 4.0% (HIGHER third zone)
+                tp3_max=0.100,  # 10.0% (Let runners GO!)
                 position_min=0.02,  # 2% (HARD MINIMUM)
                 position_max=0.10,  # 10% (HARD MAXIMUM)
                 use_ema_trail=True,
                 use_percentage_trail=True,
-                percentage_trail_threshold=0.005,  # Active at TP1
-                max_daily_trades=15,
+                percentage_trail_threshold=0.015,  # Active at TP1 (1.5%)
+                max_daily_trades=20,  # More trades allowed
                 max_daily_loss=0.025  # 2.5%
             ),
             
@@ -191,29 +191,31 @@ class MarketAdapter:
         return entry_price * (1 - sl_pct)
     
     def get_position_size(self, symbol: str, signal_score: int, account_balance: float) -> float:
-        """Calculate market-adjusted position size - TARGET: 2-10% of account, MIN: $0.01"""
+        """Calculate market-adjusted position size - AGGRESSIVE: 3-15% of account, MIN: $0.01"""
         params = self.get_parameters(symbol)
         
-        # Score-based allocation within 2-10% range
-        if signal_score <= 2:
-            allocation_pct = 0.02  # Target 2% for score 2
+        # AGGRESSIVE Score-based allocation: 3-15% range (50% more than before)
+        if signal_score <= 1:
+            allocation_pct = 0.03  # 3% for score 1 (increased from 2%)
+        elif signal_score == 2:
+            allocation_pct = 0.05  # 5% for score 2 (increased from 2%)
         elif signal_score == 3:
-            allocation_pct = 0.02 + (0.10 - 0.02) * 0.3  # ~4.4%
+            allocation_pct = 0.08  # 8% for score 3 (increased from 4.4%)
         elif signal_score == 4:
-            allocation_pct = 0.02 + (0.10 - 0.02) * 0.6  # ~6.8%
+            allocation_pct = 0.12  # 12% for score 4 (increased from 6.8%)
         elif signal_score >= 5:
-            allocation_pct = 0.10  # Maximum 10% for A+ setups
+            allocation_pct = 0.15  # Maximum 15% for A+ setups (increased from 10%)
         else:
-            allocation_pct = 0.02  # Default minimum
+            allocation_pct = 0.03  # Default minimum
         
         position_size = account_balance * allocation_pct
         
         # FLEXIBLE ENFORCEMENT:
-        # - Target 2-10% of account balance
-        # - But allow minimum $0.01 for small accounts
-        # - Never exceed 10% of account
-        min_size = max(0.01, account_balance * 0.02)  # Greater of $0.01 or 2%
-        max_size = account_balance * 0.10
+        # - Target 3-15% of account balance (AGGRESSIVE)
+        # - But allow minimum $0.005 for tiny accounts (MICRO TRADES ENABLED)
+        # - Never exceed 15% of account
+        min_size = max(0.005, account_balance * 0.03)  # Greater of $0.005 or 3%
+        max_size = account_balance * 0.15
         
         return max(min_size, min(position_size, max_size))
     

@@ -24,16 +24,16 @@ class TradingStrategy:
     - Risk management and position sizing
     """
     
-    def __init__(self, client, pairs=None, base_allocation=5.0, max_exposure=0.3, max_daily_loss=0.025):
+    def __init__(self, client, pairs=None, base_allocation=5.0, max_exposure=0.5, max_daily_loss=0.025):
         self.client = client
         self.pairs = pairs or ["BTC-USD", "ETH-USD", "SOL-USD"]
         self.base_allocation = base_allocation  # % of balance per trade
-        self.max_exposure = max_exposure  # max % of account in positions
+        self.max_exposure = max_exposure  # max % of account in positions (50% - aggressive)
         self.max_daily_loss = max_daily_loss  # max daily loss % (default 2.5%)
         self.daily_pnl = 0.0
         self.start_balance = 0.0
         self.daily_trades = 0
-        self.max_daily_trades = 200  # 12+ trades per hour
+        self.max_daily_trades = 500  # Ultra high frequency (no limits)
         
         # NIJA Trailing System
         self.nija = NIJATrailingSystem()
@@ -46,13 +46,10 @@ class TradingStrategy:
         self.last_trade_time = None
         self.trade_cooldown_seconds = 0  # No cooldown for 12 trades/hour
         
-        # Smart Burn-Down Rule
+        # Aggressive Mode: No burn-down restrictions
         self.consecutive_losses = 0
-        self.burn_down_mode = False
-        self.burn_down_trades_remaining = 0
         
-        # Daily Profit Lock
-        self.daily_profit_lock_threshold = 0.03  # 3% daily profit
+        # Daily Profit Lock: Disabled for maximum opportunity
         self.profit_lock_active = False
         
     def sync_coinbase_positions(self):
@@ -242,9 +239,9 @@ class TradingStrategy:
             traceback.print_exc()
             return None
     
-    def calculate_position_size(self, product_id, signal_score=3):
+    def calculate_position_size(self, product_id, signal_score=3, df=None):
         """
-        NIJA Position Sizing Logic - Multi-Market Adaptive
+        NIJA Position Sizing Logic - Multi-Market Adaptive with Volatility Boost
         
         Auto-detects market type and adjusts sizing:
         - Crypto: 2-10%
@@ -269,21 +266,17 @@ class TradingStrategy:
         if position_size == 0:
             return 0.0
         
+        # VOLATILITY BOOST: Increase size 20% for high volatility (more profit potential)
+        volatility = df['close'].pct_change().std() if df is not None and len(df) > 5 else 0.004
+        if volatility > 0.008:  # High volatility
+            position_size *= 1.2
+            print(f"   🔥 High volatility ({volatility:.2%}) - boosting position 20%")
+        
         # Convert to percentage for logging
         allocation_pct = (position_size / usd_balance) * 100
         
-        # Smart Burn-Down Rule: 3 losses in a row → 2% for next 3 trades
-        if self.burn_down_mode:
-            allocation_pct = 2.0
-            print(f"🔥 BURN-DOWN MODE: Reduced to 2% ({self.burn_down_trades_remaining} trades remaining)")
-        
-        # Daily Profit Lock: If +3% daily profit → smaller size (2-3%), only A+ setups
-        if self.profit_lock_active:
-            if signal_score < 5:
-                print(f"🔒 PROFIT LOCK: Skipping (need A+ setup, score={signal_score})")
-                return 0.0
-            allocation_pct = min(allocation_pct, 2.5)  # Cap at 2-3%
-            print(f"🔒 PROFIT LOCK: Reduced to {allocation_pct}% (A+ only)")
+        # AGGRESSIVE MODE: No restrictions - full allocation always
+        # Let trailing stops handle risk management
         
         # Check max exposure (sum of NIJA-created positions only, not imported manual trades)
         current_exposure = sum([
@@ -293,7 +286,7 @@ class TradingStrategy:
         ])
         
         if current_exposure / usd_balance > self.max_exposure:
-            print(f"⚠️ Max exposure reached ({current_exposure/usd_balance:.1%}) - NIJA trades only")
+            print(f"⚠️ Max exposure reached ({current_exposure/usd_balance:.1%}) - waiting for exits")
             return 0.0
         
         # Check daily loss limit (2.5%)
@@ -392,19 +385,19 @@ class TradingStrategy:
         # Manage existing positions first (includes imported positions)
         self.manage_open_positions()
         
-        # Check daily profit lock
-        if self.start_balance > 0:
-            daily_profit_pct = self.daily_pnl / self.start_balance
-            if daily_profit_pct >= self.daily_profit_lock_threshold and not self.profit_lock_active:
-                self.profit_lock_active = True
-                print(f"\n🔒 DAILY PROFIT LOCK ACTIVATED: +{daily_profit_pct*100:.2f}% (threshold: +3%)")
-                print(f"   → Switching to: Smaller size (2-3%), A+ setups only")
+        # AGGRESSIVE MODE: No profit locks
         
         # Look for new entry signals
         for product_id in self.pairs:
-            # Skip if already have position in this pair
+            # PYRAMIDING: Allow adding to winning positions (if profit > 2%)
+            existing_positions = [pos for pos_id, pos in self.nija.positions.values() if pos.get('product_id') == product_id]
+            has_profitable_position = any(pos.get('profit_pct', 0) > 2.0 for pos in existing_positions)
+            
+            # Skip if already have position UNLESS it's profitable (pyramid opportunity)
             if any(pos['product_id'] == product_id for pos in self.nija.positions.values()):
-                continue
+                if not has_profitable_position:
+                    continue
+                # else: Allow pyramiding on winners
             
             # Check trade cooldown (2 minutes)
             if self.last_trade_time:
@@ -452,7 +445,12 @@ class TradingStrategy:
             # Get signal score (1-5)
             action, signal_score = self.calculate_signal_score(product_id, indicators, df)
             
-            if action == 'buy' and signal_score >= 2:
+            # AGGRESSIVE MODE: Accept score 1+ with strong momentum OR score 2+ normally
+            min_score = 1 if (indicators.get('rsi') and 
+                             ((action == 'buy' and indicators['rsi'].iloc[-1] > 50 and indicators['rsi'].iloc[-1] < 70) or
+                              (action == 'sell' and indicators['rsi'].iloc[-1] < 50 and indicators['rsi'].iloc[-1] > 30))) else 2
+            
+            if action == 'buy' and signal_score >= min_score:
                 print(f"� LONG SIGNAL DETECTED - Score: {signal_score}/5")
                 
                 # Display entry conditions
@@ -463,14 +461,14 @@ class TradingStrategy:
                 print(f"   {'✅' if long_cond['volume_confirmation'] else '❌'} Volume ≥ 50% prev 2: {long_cond['volume_confirmation']}")
                 print(f"   {'✅' if long_cond['candle_close_bullish'] else '❌'} Candle close bullish: {long_cond['candle_close_bullish']}")
                 
-                position_size = self.calculate_position_size(product_id, signal_score)
+                position_size = self.calculate_position_size(product_id, signal_score, df)
                 
-                if position_size > 0.01:  # Minimum $0.01 trade
+                if position_size > 0.005:  # Minimum $0.005 trade (AGGRESSIVE)
                     self.enter_position(product_id, 'long', position_size, df)
                     self.last_trade_time = datetime.now()
                     self.daily_trades += 1
                 else:
-                    print(f"⚠️ Position size too small: ${position_size:.2f} (minimum: $0.01)")
+                    print(f"⚠️ Position size too small: ${position_size:.4f} (minimum: $0.005)")
             
             elif action == 'sell' and signal_score >= 2:
                 print(f"📉 SHORT SIGNAL DETECTED - Score: {signal_score}/5")
@@ -608,29 +606,11 @@ class TradingStrategy:
                 # Update daily P&L
                 self.daily_pnl += profit_usd
                 
-                # Smart Burn-Down Rule: Track consecutive losses
+                # Track consecutive losses (for stats only)
                 if profit < 0:
                     self.consecutive_losses += 1
-                    print(f"   📉 Consecutive Losses: {self.consecutive_losses}")
-                    
-                    # 3 losses in a row → activate burn-down mode
-                    if self.consecutive_losses >= 3 and not self.burn_down_mode:
-                        self.burn_down_mode = True
-                        self.burn_down_trades_remaining = 3
-                        print(f"\n🔥 SMART BURN-DOWN ACTIVATED")
-                        print(f"   → Reducing allocation to 2% for next 3 trades")
                 else:
-                    # Win resets consecutive losses
                     self.consecutive_losses = 0
-                    
-                    # If in burn-down mode, count down wins
-                    if self.burn_down_mode:
-                        self.burn_down_trades_remaining -= 1
-                        print(f"   ✅ Burn-down win ({self.burn_down_trades_remaining} trades remaining)")
-                        
-                        if self.burn_down_trades_remaining <= 0:
-                            self.burn_down_mode = False
-                            print(f"\n🎉 BURN-DOWN COMPLETE - Resuming normal allocation")
                 
                 # Remove from NIJA system
                 self.nija.close_position(position_id)
