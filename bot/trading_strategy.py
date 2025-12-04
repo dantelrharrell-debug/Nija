@@ -390,7 +390,7 @@ class TradingStrategy:
         # Look for new entry signals
         for product_id in self.pairs:
             # PYRAMIDING: Allow adding to winning positions (if profit > 2%)
-            existing_positions = [pos for pos_id, pos in self.nija.positions.values() if pos.get('product_id') == product_id]
+            existing_positions = [pos for pos_id, pos in self.nija.positions.items() if pos.get('product_id') == product_id]
             has_profitable_position = any(pos.get('profit_pct', 0) > 2.0 for pos in existing_positions)
             
             # Skip if already have position UNLESS it's profitable (pyramid opportunity)

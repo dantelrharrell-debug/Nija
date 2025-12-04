@@ -19,12 +19,19 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 | Universal Management | 🟢 **All holdings tracked** |
 
 **Latest Updates** (Dec 4, 2025):
-- ✅ 8 positions executing with NIJA trailing protection (ZEC, BOBBOB, ICP, AERO, LINK pairs)
-- ✅ Universal position management: NIJA now manages ALL positions (bot-created + manual trades)
-- ✅ Market detection fixed: USDC/USDT pairs correctly identified as CRYPTO
-- ✅ Auto-compounding confirmed active
-- ✅ 30% max exposure limit (excludes manual positions from calculation)
-- ✅ Dual RSI strategy detecting both momentum and pullback opportunities
+- ✅ **PROFIT MAXIMIZATION MODE ACTIVATED**
+- ✅ 50% max exposure (increased from 30%) - deploy more capital
+- ✅ Accept 1/5 signals with momentum - catch early breakouts
+- ✅ Pyramiding enabled - add to winning positions (>2% profit)
+- ✅ Micro trades: $0.005 minimum (from $0.01) - maximize small accounts
+- ✅ Faster profit taking: TP0.5 at 0.75%, TP1 at 1.5%, TP2 at 3.0%
+- ✅ Aggressive sizing: 3-15% per trade (from 2-10%)
+- ✅ Runners to 10% (from 5%) with 3% wide trailing
+- ✅ Volatility boost: +20% size in high volatility
+- ✅ RSI no-trade zones ultra-relaxed (98/2 instead of 95/5)
+- ✅ NO burn-down mode, NO profit locks - maximum opportunities
+- ✅ Universal position management: ALL holdings protected
+- ✅ Market detection fixed: USDC/USDT pairs = CRYPTO
 
 ---
 
@@ -543,14 +550,19 @@ NIJA embodies these core principles:
 ---
 
 **Last Updated**: December 4, 2025  
-**Version**: 2.1 (Universal Position Management + Market Detection Fix)  
+**Version**: 3.0 (PROFIT MAXIMIZATION - Aggressive Mode)  
 **Status**: 🟢 Live Trading on Coinbase Advanced Trade
 
 **Recent Updates**:
+- 🚀 **AGGRESSIVE PROFIT MODE**: 50% exposure, 1/5 signals, pyramiding, micro trades
+- ✅ Faster profit capture: 4-stage exits (0.75%/1.5%/3%/10%)
+- ✅ Position sizing: 3-15% per trade (50% more aggressive)
+- ✅ Volatility boost: +20% sizing in high volatility markets
+- ✅ NO restrictions: Removed burn-down, profit locks - pure opportunity capture
+- ✅ Pyramiding: Add to winners (>2% profit)
 - ✅ Universal position management: NIJA manages ALL positions (bot + manual)
 - ✅ Market detection fixed: USDC/USDT pairs correctly identified as CRYPTO
-- ✅ Position sync improved: Handles Coinbase object/dict formats
-- ✅ Exposure calculation: Manual positions excluded from 30% limit
+- ✅ Micro trades enabled: $0.005 minimum (maximize small accounts)
 
 ---
 
