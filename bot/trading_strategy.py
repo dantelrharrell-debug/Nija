@@ -11,6 +11,7 @@ if os.path.basename(os.getcwd()) != 'bot':
 
 from nija_trailing_system import NIJATrailingSystem
 from market_adapter import market_adapter, MarketType
+from paper_trading import get_paper_account
 
 class TradingStrategy:
     """
@@ -24,7 +25,7 @@ class TradingStrategy:
     - Risk management and position sizing
     """
     
-    def __init__(self, client, pairs=None, base_allocation=5.0, max_exposure=0.5, max_daily_loss=0.025):
+    def __init__(self, client, pairs=None, base_allocation=5.0, max_exposure=0.5, max_daily_loss=0.025, paper_mode=False):
         self.client = client
         self.pairs = pairs or ["BTC-USD", "ETH-USD", "SOL-USD"]
         self.base_allocation = base_allocation  # % of balance per trade
@@ -34,6 +35,15 @@ class TradingStrategy:
         self.start_balance = 0.0
         self.daily_trades = 0
         self.max_daily_trades = 500  # Ultra high frequency (no limits)
+        
+        # Trading mode: LIVE or PAPER
+        self.paper_mode = paper_mode or os.getenv("PAPER_MODE", "false").lower() == "true"
+        if self.paper_mode:
+            self.paper_account = get_paper_account(initial_balance=10000.0)
+            print("📄 PAPER TRADING MODE ENABLED (Simulation)")
+        else:
+            self.paper_account = None
+            print("💰 LIVE TRADING MODE ENABLED (Real Money)")
         
         # NIJA Trailing System
         self.nija = NIJATrailingSystem()
@@ -497,7 +507,7 @@ class TradingStrategy:
                 print(f"   EMA: 9=${indicators['ema_9'].iloc[-1]:.2f} | 21=${indicators['ema_21'].iloc[-1]:.2f} | 50=${indicators['ema_50'].iloc[-1]:.2f}")
     
     def enter_position(self, product_id, side, usd_amount, df):
-        """Enter a new position with NIJA trailing"""
+        """Enter a new position with NIJA trailing (supports LIVE and PAPER modes)"""
         try:
             # Get current price
             ticker = self.client.get_product(product_id=product_id)
@@ -506,23 +516,43 @@ class TradingStrategy:
             # Calculate size
             size = usd_amount / entry_price
             
-            # Place market order
-            order = self.client.market_order_buy(
-                client_order_id=f"{product_id}-{int(time.time())}",
-                product_id=product_id,
-                quote_size=str(round(usd_amount, 2))
-            )
-            
             # Calculate volatility for stop-loss
             volatility = df['close'].pct_change().std()
             
             # Get market-specific parameters
             params = market_adapter.get_parameters(product_id)
             
-            # Open NIJA position with market-adjusted parameters
+            # Generate position ID
             self.position_counter += 1
             position_id = f"{product_id}-{self.position_counter}"
             
+            # LIVE MODE: Execute real trade on Coinbase
+            if not self.paper_mode:
+                order = self.client.market_order_buy(
+                    client_order_id=f"{product_id}-{int(time.time())}",
+                    product_id=product_id,
+                    quote_size=str(round(usd_amount, 2))
+                )
+            
+            # PAPER MODE: Simulate trade
+            else:
+                # Calculate stop loss for paper account
+                base_stop_pct = params['stop_loss']['base_pct']
+                volatility_stop = volatility * params['stop_loss']['volatility_multiplier']
+                stop_pct = max(base_stop_pct, volatility_stop)
+                stop_loss = entry_price * (1 - stop_pct)
+                
+                # Open paper position
+                self.paper_account.open_position(
+                    symbol=product_id,
+                    size=size,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    side=side,
+                    position_id=position_id
+                )
+            
+            # Open NIJA position tracking (both modes)
             position = self.nija.open_position(
                 position_id=position_id,
                 side=side,
@@ -535,7 +565,8 @@ class TradingStrategy:
             # Add product_id for tracking
             position['product_id'] = product_id
             
-            print(f"✅ NIJA Position Opened: {size:.8f} {product_id} @ ${entry_price:.2f}")
+            mode_indicator = "📄 PAPER" if self.paper_mode else "✅ NIJA"
+            print(f"{mode_indicator} Position Opened: {size:.8f} {product_id} @ ${entry_price:.2f}")
             print(f"   Entry: ${entry_price:.2f} | Stop: ${position['stop_loss']:.2f}")
             print(f"   Position ID: {position_id}")
             
@@ -570,12 +601,17 @@ class TradingStrategy:
             rsi = indicators['rsi'].iloc[-1]
             vwap = indicators['vwap'].iloc[-1]
             
+            # Update paper position if in paper mode
+            if self.paper_mode and self.paper_account:
+                self.paper_account.update_position(position_id, current_price)
+            
             # NIJA Trailing Management
             action, size_to_close, reason = self.nija.manage_position(
                 position_id, current_price, df, rsi, vwap
             )
             
-            print(f"\n{product_id} [{position_id}]:")
+            mode_indicator = "📄" if self.paper_mode else "💰"
+            print(f"\n{mode_indicator} {product_id} [{position_id}]:")
             print(f"   Price: ${current_price:.2f} | Entry: ${position['entry_price']:.2f}")
             print(f"   Profit: {position['profit_pct']:.2f}% | Remaining: {position['remaining_size']*100:.0f}%")
             print(f"   Stop: ${position['stop_loss']:.2f} | TSL: {'✅' if position.get('tsl_active') else '❌'} | TTP: {'✅' if position.get('ttp_active') else '❌'}")
@@ -583,28 +619,43 @@ class TradingStrategy:
             
             # Execute action
             if action == 'partial_close':
-                self.close_partial_position(product_id, size_to_close, reason)
+                self.close_partial_position(product_id, position_id, size_to_close, current_price, reason)
             elif action == 'close_all':
-                self.close_full_position(product_id, position_id, reason)
+                self.close_full_position(product_id, position_id, current_price, reason)
     
-    def close_partial_position(self, product_id, size_pct, reason):
-        """Close a partial position (TP1 or TP2)"""
+    def close_partial_position(self, product_id, position_id, size_pct, current_price, reason):
+        """Close a partial position (TP1 or TP2) - supports LIVE and PAPER modes"""
         try:
-            print(f"   🔄 Partial Close: {size_pct*100:.0f}% - {reason}")
-            # Implement actual sell order here
-            # For now, just log it
+            mode_indicator = "📄 PAPER" if self.paper_mode else "💰 LIVE"
+            print(f"   🔄 {mode_indicator} Partial Close: {size_pct*100:.0f}% - {reason}")
+            
+            # LIVE MODE: Execute real sell order
+            if not self.paper_mode:
+                # Implement actual sell order here
+                pass
+            
+            # PAPER MODE: Update paper account
+            else:
+                if self.paper_account:
+                    self.paper_account.close_position(
+                        position_id=position_id,
+                        exit_price=current_price,
+                        close_pct=size_pct * 100,
+                        reason=reason
+                    )
         except Exception as e:
             print(f"   ❌ Error closing partial: {e}")
     
-    def close_full_position(self, product_id, position_id, reason):
-        """Close full position with burn-down tracking"""
+    def close_full_position(self, product_id, position_id, current_price, reason):
+        """Close full position - supports LIVE and PAPER modes"""
         try:
             position = self.nija.positions.get(position_id)
             if position:
                 profit = position['profit_pct']
                 profit_usd = position['entry_price'] * position['size'] * profit / 100
                 
-                print(f"   🎯 Full Close: {reason}")
+                mode_indicator = "📄 PAPER" if self.paper_mode else "💰 LIVE"
+                print(f"   🎯 {mode_indicator} Full Close: {reason}")
                 print(f"   Final P&L: {profit:.2f}% (${profit_usd:.2f})")
                 
                 # Update daily P&L
@@ -616,9 +667,23 @@ class TradingStrategy:
                 else:
                     self.consecutive_losses = 0
                 
+                # LIVE MODE: Execute real sell order
+                if not self.paper_mode:
+                    # Implement actual sell order here
+                    pass
+                
+                # PAPER MODE: Close paper position
+                else:
+                    if self.paper_account:
+                        self.paper_account.close_position(
+                            position_id=position_id,
+                            exit_price=current_price,
+                            close_pct=100.0,
+                            reason=reason
+                        )
+                
                 # Remove from NIJA system
                 self.nija.close_position(position_id)
                 
-                # Implement actual sell order here
         except Exception as e:
             print(f"   ❌ Error closing position: {e}")

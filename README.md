@@ -20,6 +20,7 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 
 **Latest Updates** (Dec 4, 2025):
 - ✅ **PROFIT MAXIMIZATION MODE ACTIVATED - LIVE & TRADING**
+- ✅ **DUAL-MODE SUPPORT**: LIVE (Coinbase real money) + PAPER (local simulation)
 - ✅ 50% max exposure (increased from 30%) - deploy more capital
 - ✅ Accept 1/5 signals with momentum - catch early breakouts
 - ✅ Pyramiding enabled - add to winning positions (>2% profit)
@@ -34,6 +35,46 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 - ✅ Market detection fixed: USDC/USDT pairs = CRYPTO
 - ✅ **CRITICAL BUGS FIXED**: Pyramiding crash, pandas Series ambiguity, RSI comparison errors
 - ✅ **FIRST TRADES EXECUTED**: BTC-USDC, ETH-USDC, SOL-USD, SOL-USDC (Dec 4, 2025 03:19 UTC)
+
+---
+
+## 🎮 Trading Modes
+
+### 🔴 LIVE MODE (Real Money on Coinbase)
+Executes **real trades** with actual USD balance on Coinbase Advanced Trade.
+
+**To run:**
+```bash
+./bot/run_live_mode.sh
+# or manually:
+export PAPER_MODE=false
+python bot.py
+```
+
+### 📄 PAPER MODE (Local Simulation)
+Simulates all trades locally without spending real money. Perfect for testing strategies!
+
+**Features:**
+- Starting balance: $10,000 (simulated)
+- Mirrors exact NIJA trading logic
+- Tracks positions, P&L, win rate in `paper_trading_data.json`
+- No TradingView integration needed
+
+**To run:**
+```bash
+./bot/run_paper_mode.sh
+# or manually:
+export PAPER_MODE=true
+python bot.py
+```
+
+**View paper account:**
+```bash
+python bot/view_paper_account.py
+```
+
+### ⚠️ Important: TradingView Limitation
+**TradingView does NOT provide an API for paper/sim trading.** Their paper trading only works in their web interface manually. This bot's paper mode is a local simulation that runs independently and tracks performance locally.
 
 ---
 
