@@ -25,11 +25,11 @@ class TradingStrategy:
     - Risk management and position sizing
     """
     
-    def __init__(self, client, pairs=None, base_allocation=5.0, max_exposure=0.5, max_daily_loss=0.025, paper_mode=False):
+    def __init__(self, client, pairs=None, base_allocation=8.0, max_exposure=0.7, max_daily_loss=0.025, paper_mode=False):
         self.client = client
         self.pairs = pairs or ["BTC-USD", "ETH-USD", "SOL-USD"]
         self.base_allocation = base_allocation  # % of balance per trade
-        self.max_exposure = max_exposure  # max % of account in positions (50% - aggressive)
+        self.max_exposure = max_exposure  # max % of account in positions (70% - ultra aggressive)
         self.max_daily_loss = max_daily_loss  # max daily loss % (default 2.5%)
         self.daily_pnl = 0.0
         self.start_balance = 0.0
