@@ -446,9 +446,13 @@ class TradingStrategy:
             action, signal_score = self.calculate_signal_score(product_id, indicators, df)
             
             # AGGRESSIVE MODE: Accept score 1+ with strong momentum OR score 2+ normally
-            min_score = 1 if (indicators.get('rsi') and 
-                             ((action == 'buy' and indicators['rsi'].iloc[-1] > 50 and indicators['rsi'].iloc[-1] < 70) or
-                              (action == 'sell' and indicators['rsi'].iloc[-1] < 50 and indicators['rsi'].iloc[-1] > 30))) else 2
+            min_score = 2  # Default
+            if indicators.get('rsi') is not None:
+                rsi_val = float(indicators['rsi'].iloc[-1])
+                if action == 'buy' and 50 < rsi_val < 70:
+                    min_score = 1
+                elif action == 'sell' and 30 < rsi_val < 50:
+                    min_score = 1
             
             if action == 'buy' and signal_score >= min_score:
                 print(f"� LONG SIGNAL DETECTED - Score: {signal_score}/5")
