@@ -65,8 +65,8 @@ class MarketAdapter:
                 tp2=0.010,      # 1.0%
                 tp3_min=0.015,  # 1.5%
                 tp3_max=0.020,  # 2.0%
-                position_min=0.02,  # 2%
-                position_max=0.10,  # 10%
+                position_min=0.02,  # 2% (HARD MINIMUM)
+                position_max=0.10,  # 10% (HARD MAXIMUM)
                 use_ema_trail=True,
                 use_percentage_trail=True,
                 percentage_trail_threshold=0.005,  # Active at TP1
@@ -82,8 +82,8 @@ class MarketAdapter:
                 tp2=0.0050,     # 0.50%
                 tp3_min=0.0075, # 0.75%
                 tp3_max=0.010,  # 1.0%
-                position_min=0.01,  # 1%
-                position_max=0.05,  # 5%
+                position_min=0.02,  # 2% (HARD MINIMUM)
+                position_max=0.10,  # 10% (HARD MAXIMUM)
                 use_ema_trail=True,
                 use_percentage_trail=True,
                 percentage_trail_threshold=0.0075,  # Active above +0.75%
@@ -99,8 +99,8 @@ class MarketAdapter:
                 tp2=0.0050,     # 0.50%
                 tp3_min=0.0075, # 0.75%
                 tp3_max=0.010,  # 1.0%
-                position_min=0.0025,  # 0.25%
-                position_max=0.0075,  # 0.75%
+                position_min=0.02,  # 2% (HARD MINIMUM)
+                position_max=0.10,  # 10% (HARD MAXIMUM)
                 use_ema_trail=True,
                 use_percentage_trail=True,
                 percentage_trail_threshold=0.005,  # Active at +0.5%
@@ -116,8 +116,8 @@ class MarketAdapter:
                 tp2=0.25,       # 25%
                 tp3_min=0.40,   # 40%
                 tp3_max=0.50,   # 50%
-                position_min=0.01,  # 1%
-                position_max=0.03,  # 3%
+                position_min=0.02,  # 2% (HARD MINIMUM)
+                position_max=0.10,  # 10% (HARD MAXIMUM)
                 use_ema_trail=True,
                 use_percentage_trail=True,
                 percentage_trail_threshold=0.15,  # Active at TP1
@@ -188,26 +188,29 @@ class MarketAdapter:
         return entry_price * (1 - sl_pct)
     
     def get_position_size(self, symbol: str, signal_score: int, account_balance: float) -> float:
-        """Calculate market-adjusted position size"""
+        """Calculate market-adjusted position size - TARGET: 2-10% of account, MIN: $0.01"""
         params = self.get_parameters(symbol)
         
-        # Score-based allocation
+        # Score-based allocation within 2-10% range
         if signal_score <= 2:
-            allocation_pct = 0.0
+            allocation_pct = 0.02  # Target 2% for score 2
         elif signal_score == 3:
-            allocation_pct = params.position_min + (params.position_max - params.position_min) * 0.3
+            allocation_pct = 0.02 + (0.10 - 0.02) * 0.3  # ~4.4%
         elif signal_score == 4:
-            allocation_pct = params.position_min + (params.position_max - params.position_min) * 0.6
+            allocation_pct = 0.02 + (0.10 - 0.02) * 0.6  # ~6.8%
         elif signal_score >= 5:
-            allocation_pct = params.position_max
+            allocation_pct = 0.10  # Maximum 10% for A+ setups
         else:
-            allocation_pct = params.position_min
+            allocation_pct = 0.02  # Default minimum
         
         position_size = account_balance * allocation_pct
         
-        # Enforce market limits
-        min_size = account_balance * params.position_min
-        max_size = account_balance * params.position_max
+        # FLEXIBLE ENFORCEMENT:
+        # - Target 2-10% of account balance
+        # - But allow minimum $0.01 for small accounts
+        # - Never exceed 10% of account
+        min_size = max(0.01, account_balance * 0.02)  # Greater of $0.01 or 2%
+        max_size = account_balance * 0.10
         
         return max(min_size, min(position_size, max_size))
     

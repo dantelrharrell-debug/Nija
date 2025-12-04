@@ -39,6 +39,9 @@ class TradingStrategy:
         self.nija = NIJATrailingSystem()
         self.position_counter = 0
         
+        # Track synced positions (manual trades)
+        self.synced_positions = set()  # Track which Coinbase positions we've imported
+        
         # Trade Cooldown (removed for high frequency)
         self.last_trade_time = None
         self.trade_cooldown_seconds = 0  # No cooldown for 12 trades/hour
@@ -52,6 +55,86 @@ class TradingStrategy:
         self.daily_profit_lock_threshold = 0.03  # 3% daily profit
         self.profit_lock_active = False
         
+    def sync_coinbase_positions(self):
+        """Import ALL open positions from Coinbase (including manual trades) into NIJA management"""
+        try:
+            print(f"\n🔄 Syncing ALL Coinbase positions into NIJA management...")
+            accounts = self.client.get_accounts()
+            
+            imported_count = 0
+            for account in accounts['accounts']:
+                currency = account['currency']
+                
+                # Skip USD and stablecoins - these are cash positions
+                if currency in ['USD', 'USDC', 'USDT']:
+                    continue
+                
+                balance = float(account.get('available_balance', {}).get('value', 0))
+                
+                # If we have a balance, we have a position
+                if balance > 0:
+                    product_id = f"{currency}-USD"
+                    position_key = f"{product_id}-manual"
+                    
+                    # Skip if already synced
+                    if position_key in self.synced_positions:
+                        continue
+                    
+                    # Get current price to estimate entry (we don't know actual entry)
+                    try:
+                        ticker = self.client.get_product(product_id=product_id)
+                        current_price = float(ticker['price'])
+                        
+                        # Check if already managed by NIJA
+                        already_managed = any(
+                            pos['product_id'] == product_id 
+                            for pos in self.nija.positions.values()
+                        )
+                        
+                        if not already_managed:
+                            # Import into NIJA management
+                            # Estimate volatility from current market
+                            df = self.get_product_candles(product_id)
+                            if df is not None and len(df) > 5:
+                                volatility = df['close'].pct_change().std()
+                            else:
+                                volatility = 0.004  # Default
+                            
+                            # Get market parameters
+                            params = market_adapter.get_parameters(product_id)
+                            
+                            # Create position in NIJA system
+                            self.position_counter += 1
+                            position_id = f"{product_id}-manual-{self.position_counter}"
+                            
+                            position = self.nija.open_position(
+                                position_id=position_id,
+                                side='long',  # Assume long (we hold the asset)
+                                entry_price=current_price,  # Use current price as proxy
+                                size=balance,
+                                volatility=volatility,
+                                market_params=params
+                            )
+                            
+                            position['product_id'] = product_id
+                            position['imported'] = True  # Mark as imported (not NIJA-created)
+                            
+                            self.synced_positions.add(position_key)
+                            imported_count += 1
+                            
+                            print(f"   ✅ Imported: {balance:.8f} {currency} (${balance * current_price:.2f}) - Now managed by NIJA")
+                    
+                    except Exception as e:
+                        print(f"   ⚠️ Could not import {currency}: {e}")
+            
+            if imported_count > 0:
+                print(f"\n✅ Synced {imported_count} manual position(s) into NIJA management")
+            else:
+                print(f"   ℹ️ No new positions to sync")
+            
+        except Exception as e:
+            print(f"❌ Error syncing Coinbase positions: {e}")
+    
     def get_usd_balance(self):
         """Get USD balance from Coinbase"""
         try:
@@ -289,6 +372,9 @@ class TradingStrategy:
         print(f"🔥 NIJA Trading Cycle - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*60}")
         
+        # Sync ALL Coinbase positions (including manual trades) into NIJA management
+        self.sync_coinbase_positions()
+        
         usd_balance = self.get_usd_balance()
         
         if self.start_balance == 0:
@@ -296,9 +382,9 @@ class TradingStrategy:
         
         print(f"💰 USD Balance: ${usd_balance:.2f}")
         print(f"📊 Daily P&L: ${self.daily_pnl:.2f} ({self.daily_pnl/self.start_balance*100:.2f}%)")
-        print(f"📍 Open Positions: {len(self.nija.positions)}")
+        print(f"📍 Open Positions: {len(self.nija.positions)} (NIJA + Manual)")
         
-        # Manage existing positions first
+        # Manage existing positions first (includes imported positions)
         self.manage_open_positions()
         
         # Check daily profit lock
@@ -374,7 +460,7 @@ class TradingStrategy:
                 
                 position_size = self.calculate_position_size(product_id, signal_score)
                 
-                if position_size > 10:  # Minimum $10 trade
+                if position_size > 0.01:  # Minimum $0.01 trade
                     self.enter_position(product_id, 'long', position_size, df)
                     self.last_trade_time = datetime.now()
                     self.daily_trades += 1
