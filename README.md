@@ -19,11 +19,10 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 | Universal Management | 🟢 **All holdings tracked** |
 
 **Latest Updates** (Dec 5, 2025):
-- ✅ **SMALL ACCOUNT OPTIMIZATION** - Improved win rate for $10-50 accounts!
-- ✅ **BREAKEVEN PROTECTION** - Stop moves to entry at +0.25% (no more giving back gains!)
-- ✅ Stop-loss: **0.5-0.7%** (widened from 0.4-0.6%) - less noise stop-outs
-- ✅ Signal threshold: **3/5** (raised from 2/5) - quality over quantity
-- ✅ **Expected win rate: 65-70%** (vs previous 45%)
+- ✅ **PROFIT LOCK: Keep 95% of all gains!** - Never give back more than 5% of earned profit
+- ✅ **Win rate optimization** - 3/5 signal threshold for quality setups (65-70% win rate)
+- ✅ Stop-loss: **0.5-0.7%** - Balanced for small accounts, less noise
+- ✅ **Profit protection at +0.25%** → Stop locks 95% of gain forever
 - ✅ **TP0.5 at +0.4%** → Sell 30% (ultra-fast scalp lock)
 - ✅ **TP1 at +0.8%** → Sell 30% more (60% total out, TSL activated)
 - ✅ **TP2 at +1.5%** → Sell 20% more (80% total out, TTP activated)
@@ -37,7 +36,7 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 - ✅ Volatility boost: +20% size in high volatility
 - ✅ NO burn-down mode, NO profit locks - maximum opportunities
 - ✅ Universal position management: ALL holdings protected
-- ✅ **CRITICAL BUGS FIXED**: Sell orders, breakeven protection, signal filtering
+- ✅ **CRITICAL BUGS FIXED**: Sell orders, profit protection, signal filtering
 
 ---
 

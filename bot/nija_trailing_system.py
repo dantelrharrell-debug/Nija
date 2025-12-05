@@ -187,11 +187,21 @@ class NIJATrailingSystem:
         # Get EMA-21
         ema_21 = self.calculate_ema(df).iloc[-1]
         
-        # BREAKEVEN PROTECTION: Move stop to entry at +0.25% (prevents giving back small gains)
-        if profit_pct >= 0.25 and not position.get('breakeven_set', False):
-            position['stop_loss'] = entry_price
-            position['breakeven_set'] = True
-            print(f"   🔒 Breakeven stop activated at ${entry_price:.2f}")
+        # PROFIT LOCK: Keep 95% of all gains (never give back more than 5%)
+        if profit_pct >= 0.25:
+            # Lock in 95% of profit (give back max 5%)
+            locked_profit = profit_pct * 0.95
+            profit_lock_stop = entry_price * (1 + locked_profit / 100) if side == 'long' else entry_price * (1 - locked_profit / 100)
+            
+            # Use the better stop (initial stop or profit lock)
+            if side == 'long':
+                position['stop_loss'] = max(position['stop_loss'], profit_lock_stop)
+            else:
+                position['stop_loss'] = min(position['stop_loss'], profit_lock_stop)
+            
+            if not position.get('profit_lock_active', False):
+                position['profit_lock_active'] = True
+                print(f"   🔒 Profit lock active: Keep 95% of gains (stop at +{locked_profit:.2f}%)")
         
         # Calculate trailing stop
         new_stop = self.calculate_trailing_stop(position, current_price, ema_21, profit_pct)
