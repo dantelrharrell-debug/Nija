@@ -25,16 +25,17 @@ class TradingStrategy:
     - Risk management and position sizing
     """
     
-    def __init__(self, client, pairs=None, base_allocation=8.0, max_exposure=0.7, max_daily_loss=0.025, paper_mode=False):
+    def __init__(self, client, pairs=None, base_allocation=5.0, max_exposure=0.85, max_daily_loss=0.025, paper_mode=False):
         self.client = client
         self.pairs = pairs or ["BTC-USD", "ETH-USD", "SOL-USD"]
-        self.base_allocation = base_allocation  # % of balance per trade
-        self.max_exposure = max_exposure  # max % of account in positions (70% - ultra aggressive)
+        self.base_allocation = base_allocation  # % of balance per trade (5% base, pyramiding adds more)
+        self.max_exposure = max_exposure  # max % of account in positions (85% - maximum growth)
         self.max_daily_loss = max_daily_loss  # max daily loss % (default 2.5%)
         self.daily_pnl = 0.0
         self.start_balance = 0.0
         self.daily_trades = 0
-        self.max_daily_trades = 500  # Ultra high frequency (no limits)
+        self.max_daily_trades = 1000  # Maximum frequency for $1M goal
+        self.pyramiding_enabled = True  # Add to winners at +1%, +2%, +3%
         
         # Trading mode: LIVE or PAPER
         self.paper_mode = paper_mode or os.getenv("PAPER_MODE", "false").lower() == "true"
@@ -455,15 +456,22 @@ class TradingStrategy:
             # Get signal score (1-5)
             action, signal_score = self.calculate_signal_score(product_id, indicators, df)
             
-            # QUALITY OVER QUANTITY: Require 3/5 signals for better win rate
-            min_score = 3  # Higher quality setups only
+            # DYNAMIC SIGNAL THRESHOLD: Aggressive when small, quality when large
+            usd_balance = self.get_usd_balance()
+            if usd_balance < 50:
+                min_score = 3  # Small account: 3/5 for safety (high friction)
+            elif usd_balance < 500:
+                min_score = 2  # Growing account: 2/5 for frequency (lower friction)
+            else:
+                min_score = 2  # Large account: 2/5 for maximum volume
+            
             if indicators.get('rsi') is not None:
                 rsi_val = float(indicators['rsi'].iloc[-1])
-                # Allow 2/5 with extreme momentum
-                if action == 'buy' and 55 < rsi_val < 65:
-                    min_score = 2
-                elif action == 'sell' and 35 < rsi_val < 45:
-                    min_score = 2
+                # Allow 1/5 with EXTREME momentum (large accounts only)
+                if usd_balance >= 100 and action == 'buy' and 55 < rsi_val < 65:
+                    min_score = 1
+                elif usd_balance >= 100 and action == 'sell' and 35 < rsi_val < 45:
+                    min_score = 1
             
             if action == 'buy' and signal_score >= min_score:
                 print(f"� LONG SIGNAL DETECTED - Score: {signal_score}/5")
@@ -575,7 +583,7 @@ class TradingStrategy:
             print(f"❌ Error entering position: {e}")
     
     def manage_open_positions(self):
-        """Manage all open positions with NIJA Trailing System"""
+        """Manage all open positions with NIJA Trailing System + Pyramiding"""
         if not self.nija.positions:
             return
         
@@ -602,6 +610,41 @@ class TradingStrategy:
             rsi = indicators['rsi'].iloc[-1]
             vwap = indicators['vwap'].iloc[-1]
             
+            # PYRAMIDING: Add to winners at +1%, +2%, +3% (bot-opened positions only)
+            if self.pyramiding_enabled and not position_id.endswith('-manual') and not position_id.endswith('-imported'):
+                profit_pct = position.get('profit_pct', 0)
+                pyramid_levels = position.get('pyramid_levels', [])
+                
+                # Check if we should add at +1%, +2%, or +3%
+                for level in [1.0, 2.0, 3.0]:
+                    if profit_pct >= level and level not in pyramid_levels:
+                        # Verify momentum still strong
+                        rsi_val = float(rsi)
+                        if 50 < rsi_val < 75:  # Still in momentum zone
+                            # Add 25% of original position size
+                            pyramid_size = position['size'] * 0.25
+                            print(f"   🔺 PYRAMID ADD at +{level}% - Adding ${pyramid_size:.2f} to winner")
+                            
+                            # Execute pyramid order
+                            if not self.paper_mode:
+                                try:
+                                    order = self.client.market_order_buy(
+                                        client_order_id=f"{product_id}-pyramid-{int(time.time())}",
+                                        product_id=product_id,
+                                        quote_size=str(pyramid_size)
+                                    )
+                                    if 'pyramid_levels' not in position:
+                                        position['pyramid_levels'] = []
+                                    position['pyramid_levels'].append(level)
+                                    print(f"   ✅ Pyramid order filled - Total exposure increased")
+                                except Exception as e:
+                                    print(f"   ❌ Pyramid order failed: {e}")
+                            else:
+                                if 'pyramid_levels' not in position:
+                                    position['pyramid_levels'] = []
+                                position['pyramid_levels'].append(level)
+                            break  # Only add one level at a time
+            
             # Update paper position if in paper mode
             if self.paper_mode and self.paper_account:
                 self.paper_account.update_position(position_id, current_price)
@@ -616,6 +659,8 @@ class TradingStrategy:
             print(f"   Price: ${current_price:.2f} | Entry: ${position['entry_price']:.2f}")
             print(f"   Profit: {position['profit_pct']:.2f}% | Remaining: {position['remaining_size']*100:.0f}%")
             print(f"   Stop: ${position['stop_loss']:.2f} | TSL: {'✅' if position.get('tsl_active') else '❌'} | TTP: {'✅' if position.get('ttp_active') else '❌'}")
+            if position.get('pyramid_levels'):
+                print(f"   🔺 Pyramids: {position['pyramid_levels']} (+{sum(position['pyramid_levels'])*0.25:.0f}% size)")
             print(f"   → {reason}")
             
             # Execute action

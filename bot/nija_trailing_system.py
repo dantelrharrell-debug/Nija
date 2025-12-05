@@ -233,7 +233,7 @@ class NIJATrailingSystem:
             position['tp2_hit'] = True
             return 'partial_close', 0.20, f"TP2 hit (+{profit_pct:.2f}%) - TTP activated"
         
-        # TP3: Fast runner zone - cap at 5% for quick reinvestment
+        # TP3: Extended runner zone - let winners run to 20% with 95% lock protection
         if profit_pct >= 2.5 and position['remaining_size'] == 0.20:
             # Check momentum - if strong, keep riding
             avg_volume = df['volume'].rolling(20).mean().iloc[-1]
@@ -245,11 +245,14 @@ class NIJATrailingSystem:
                 (side == 'short' and rsi < 50 and current_volume > avg_volume * 1.0)
             )
             
-            if strong_momentum and profit_pct < 5.0:  # Cap runners at 5% for faster reinvest
+            if strong_momentum and profit_pct < 10.0:  # Let runners develop to 10%
                 return 'hold', 0, f"TP3+ zone - Strong momentum, trailing (RSI={rsi:.1f}, Vol={current_volume/avg_volume:.1f}x)"
-            elif profit_pct >= 5.0:
-                # Big winner - exit and reinvest
-                return 'hold', 0, f"BIG WINNER +{profit_pct:.2f}% - Trailing to exit"
+            elif profit_pct >= 10.0 and profit_pct < 20.0:
+                # MEGA WINNER - keep trailing with 95% lock until 20%
+                return 'hold', 0, f"🚀 MEGA WINNER +{profit_pct:.2f}% - Trailing (95% locked at +{profit_pct*0.95:.2f}%)"
+            elif profit_pct >= 20.0:
+                # Exit at 20% cap - reinvest into new opportunities
+                return 'hold', 0, f"💎 DIAMOND HAND +{profit_pct:.2f}% - Trailing to exit"
         
         # Check TTP rules if active (peak detection)
         if position.get('ttp_active', False) and len(df) >= 2:

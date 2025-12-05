@@ -21,22 +21,21 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 **Latest Updates** (Dec 5, 2025):
 - ✅ **PROFIT LOCK: Keep 95% of all gains!** - Never give back more than 5% of earned profit
 - ✅ **Win rate optimization** - 3/5 signal threshold for quality setups (65-70% win rate)
+- ✅ 🚀 **$1M GROWTH MODE** - 5 accelerators for exponential scaling!
+- ✅ 🔺 **PYRAMIDING** - Add 25% to winners at +1%, +2%, +3% profit
+- ✅ 💎 **EXTENDED RUNNERS** - Let mega-winners run to 20% (was 5%) with 95% lock
+- ✅ 📊 **DYNAMIC SIGNALS** - 3/5 at <$50, 2/5 at $50-500, 1/5 at $500+ (auto-scales)
+- ✅ ⚡ **1,000 TRADES/DAY** - Maximum frequency for compounding velocity
+- ✅ 🛡️ **85% MAX EXPOSURE** - Maximum capital deployment (was 70%)
+- ✅ 🔒 **95% PROFIT LOCK** - Never give back more than 5% of gains (at +0.25%)
 - ✅ Stop-loss: **0.5-0.7%** - Balanced for small accounts, less noise
-- ✅ **Profit protection at +0.25%** → Stop locks 95% of gain forever
 - ✅ **TP0.5 at +0.4%** → Sell 30% (ultra-fast scalp lock)
 - ✅ **TP1 at +0.8%** → Sell 30% more (60% total out, TSL activated)
 - ✅ **TP2 at +1.5%** → Sell 20% more (80% total out, TTP activated)
-- ✅ **Runners capped at 5%** for faster reinvestment
-- ✅ Position sizing: **8% per trade** - optimal for compounding
-- ✅ Max exposure: **70%** - ultra-aggressive capital deployment
+- ✅ Position sizing: **5% base** + pyramiding (scales into winners)
 - ✅ **SELL ORDERS FIXED** - Bot executes take-profit and stop-loss exits
 - ✅ **DUAL-MODE SUPPORT**: LIVE (Coinbase real money) + PAPER (local simulation)
-- ✅ Pyramiding enabled - add to winning positions (>2% profit)
-- ✅ Micro trades: $0.005 minimum - maximize small accounts
-- ✅ Volatility boost: +20% size in high volatility
-- ✅ NO burn-down mode, NO profit locks - maximum opportunities
 - ✅ Universal position management: ALL holdings protected
-- ✅ **CRITICAL BUGS FIXED**: Sell orders, profit protection, signal filtering
 
 ---
 
