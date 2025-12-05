@@ -26,12 +26,12 @@ class NIJATrailingSystem:
     
     def get_base_stop_loss(self, entry_price, side, volatility=0.004):
         """
-        Calculate base stop-loss: 0.4% - 0.6% from entry (TIGHT for fast scalps)
+        Calculate base stop-loss: 0.5% - 0.7% from entry (balanced for small accounts)
         Higher volatility = wider stop
         """
-        # Base: 0.4%, adjusts up to 0.6% based on volatility
-        stop_distance = 0.004 + (volatility * 5)  # 0.4% + volatility adjustment
-        stop_distance = min(stop_distance, 0.006)  # Cap at 0.6%
+        # Base: 0.5%, adjusts up to 0.7% based on volatility
+        stop_distance = 0.005 + (volatility * 5)  # 0.5% + volatility adjustment
+        stop_distance = min(stop_distance, 0.007)  # Cap at 0.7%
         
         if side == 'long':
             return entry_price * (1 - stop_distance)
@@ -186,6 +186,12 @@ class NIJATrailingSystem:
         
         # Get EMA-21
         ema_21 = self.calculate_ema(df).iloc[-1]
+        
+        # BREAKEVEN PROTECTION: Move stop to entry at +0.25% (prevents giving back small gains)
+        if profit_pct >= 0.25 and not position.get('breakeven_set', False):
+            position['stop_loss'] = entry_price
+            position['breakeven_set'] = True
+            print(f"   🔒 Breakeven stop activated at ${entry_price:.2f}")
         
         # Calculate trailing stop
         new_stop = self.calculate_trailing_stop(position, current_price, ema_21, profit_pct)

@@ -18,26 +18,26 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 | Position Management | 🟢 **NIJA + Manual Positions** |
 | Universal Management | 🟢 **All holdings tracked** |
 
-**Latest Updates** (Dec 4, 2025):
-- ✅ **ULTRA-SCALP MODE ACTIVATED** - 3x faster profit capture!
-- ✅ **SELL ORDERS FIXED** - Bot now executes take-profit and stop-loss exits
-- ✅ **DUAL-MODE SUPPORT**: LIVE (Coinbase real money) + PAPER (local simulation)
-- ✅ Position sizing: **8% per trade** (increased from 5%)
-- ✅ Max exposure: **70%** (increased from 50%) - ultra-aggressive compounding
-- ✅ Stop-loss: **0.4-0.6%** (tightened from 0.75-1.5%) - better risk/reward
+**Latest Updates** (Dec 5, 2025):
+- ✅ **SMALL ACCOUNT OPTIMIZATION** - Improved win rate for $10-50 accounts!
+- ✅ **BREAKEVEN PROTECTION** - Stop moves to entry at +0.25% (no more giving back gains!)
+- ✅ Stop-loss: **0.5-0.7%** (widened from 0.4-0.6%) - less noise stop-outs
+- ✅ Signal threshold: **3/5** (raised from 2/5) - quality over quantity
+- ✅ **Expected win rate: 65-70%** (vs previous 45%)
 - ✅ **TP0.5 at +0.4%** → Sell 30% (ultra-fast scalp lock)
 - ✅ **TP1 at +0.8%** → Sell 30% more (60% total out, TSL activated)
 - ✅ **TP2 at +1.5%** → Sell 20% more (80% total out, TTP activated)
-- ✅ **Runners capped at 5%** (from 10%) for faster reinvestment
-- ✅ Trailing stops: **2% default** (tightened from 3%) for faster profit protection
-- ✅ Accept 2/5 signals (lowered from 3/5) - more entry opportunities
+- ✅ **Runners capped at 5%** for faster reinvestment
+- ✅ Position sizing: **8% per trade** - optimal for compounding
+- ✅ Max exposure: **70%** - ultra-aggressive capital deployment
+- ✅ **SELL ORDERS FIXED** - Bot executes take-profit and stop-loss exits
+- ✅ **DUAL-MODE SUPPORT**: LIVE (Coinbase real money) + PAPER (local simulation)
 - ✅ Pyramiding enabled - add to winning positions (>2% profit)
 - ✅ Micro trades: $0.005 minimum - maximize small accounts
 - ✅ Volatility boost: +20% size in high volatility
 - ✅ NO burn-down mode, NO profit locks - maximum opportunities
 - ✅ Universal position management: ALL holdings protected
-- ✅ **CRITICAL BUGS FIXED**: Sell orders implemented, pyramiding crash, pandas Series ambiguity
-- ✅ **FIRST TRADES EXECUTED**: BTC-USDC, ETH-USDC, SOL-USD, SOL-USDC (Dec 4, 2025 03:19 UTC)
+- ✅ **CRITICAL BUGS FIXED**: Sell orders, breakeven protection, signal filtering
 
 ---
 

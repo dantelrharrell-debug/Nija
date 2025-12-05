@@ -455,14 +455,15 @@ class TradingStrategy:
             # Get signal score (1-5)
             action, signal_score = self.calculate_signal_score(product_id, indicators, df)
             
-            # AGGRESSIVE MODE: Accept score 1+ with strong momentum OR score 2+ normally
-            min_score = 2  # Default
+            # QUALITY OVER QUANTITY: Require 3/5 signals for better win rate
+            min_score = 3  # Higher quality setups only
             if indicators.get('rsi') is not None:
                 rsi_val = float(indicators['rsi'].iloc[-1])
-                if action == 'buy' and 50 < rsi_val < 70:
-                    min_score = 1
-                elif action == 'sell' and 30 < rsi_val < 50:
-                    min_score = 1
+                # Allow 2/5 with extreme momentum
+                if action == 'buy' and 55 < rsi_val < 65:
+                    min_score = 2
+                elif action == 'sell' and 35 < rsi_val < 45:
+                    min_score = 2
             
             if action == 'buy' and signal_score >= min_score:
                 print(f"� LONG SIGNAL DETECTED - Score: {signal_score}/5")
