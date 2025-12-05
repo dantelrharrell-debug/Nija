@@ -19,23 +19,39 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 | Universal Management | 🟢 **All holdings tracked** |
 
 **Latest Updates** (Dec 5, 2025):
-- ✅ **PROFIT LOCK: Keep 95% of all gains!** - Never give back more than 5% of earned profit
-- ✅ **Win rate optimization** - 3/5 signal threshold for quality setups (65-70% win rate)
-- ✅ 🚀 **$1M GROWTH MODE** - 5 accelerators for exponential scaling!
-- ✅ 🔺 **PYRAMIDING** - Add 25% to winners at +1%, +2%, +3% profit
-- ✅ 💎 **EXTENDED RUNNERS** - Let mega-winners run to 20% (was 5%) with 95% lock
-- ✅ 📊 **DYNAMIC SIGNALS** - 3/5 at <$50, 2/5 at $50-500, 1/5 at $500+ (auto-scales)
-- ✅ ⚡ **1,000 TRADES/DAY** - Maximum frequency for compounding velocity
-- ✅ 🛡️ **85% MAX EXPOSURE** - Maximum capital deployment (was 70%)
-- ✅ 🔒 **95% PROFIT LOCK** - Never give back more than 5% of gains (at +0.25%)
-- ✅ Stop-loss: **0.5-0.7%** - Balanced for small accounts, less noise
-- ✅ **TP0.5 at +0.4%** → Sell 30% (ultra-fast scalp lock)
-- ✅ **TP1 at +0.8%** → Sell 30% more (60% total out, TSL activated)
-- ✅ **TP2 at +1.5%** → Sell 20% more (80% total out, TTP activated)
-- ✅ Position sizing: **5% base** + pyramiding (scales into winners)
-- ✅ **SELL ORDERS FIXED** - Bot executes take-profit and stop-loss exits
-- ✅ **DUAL-MODE SUPPORT**: LIVE (Coinbase real money) + PAPER (local simulation)
-- ✅ Universal position management: ALL holdings protected
+
+### 🚀 **$1M IN 90 DAYS GROWTH MODE - DEPLOYED & LIVE!**
+
+**5 Growth Accelerators Active:**
+- 🔺 **PYRAMIDING** - Automatically adds 25% to winning positions at +1%, +2%, +3% profit
+- 💎 **EXTENDED RUNNERS** - Let mega-winners run to 20% (was 5%) with 95% profit protection
+- 📊 **DYNAMIC SIGNAL THRESHOLD** - Auto-scales with account size:
+  - <$50: 3/5 signals (quality focus, high friction protection)
+  - $50-$500: 2/5 signals (balanced frequency and quality)
+  - $500+: 1/5 signals with momentum (maximum volume)
+- ⚡ **MAXIMUM FREQUENCY** - 1,000 trades/day limit (was 500) for compounding velocity
+- 🛡️ **85% MAX EXPOSURE** - Maximum capital deployment (was 70%)
+
+**Core Protection Systems:**
+- 🔒 **95% PROFIT LOCK** - Never give back more than 5% of gains (activates at +0.25%)
+- 🛑 **Smart Stop-Loss** - 0.5-0.7% stops (balanced for small accounts, reduces noise)
+- 💰 **Fast Profit Capture**:
+  - TP0.5 at +0.4% → Sell 30% (ultra-fast scalp lock)
+  - TP1 at +0.8% → Sell 30% more (60% total out, TSL activated)
+  - TP2 at +1.5% → Sell 20% more (80% total out, TTP activated)
+  - Runners trail to 20% with 95% lock protection
+
+**Position Sizing:**
+- **5% base allocation** per trade (conservative base)
+- **Pyramiding adds 25%** at each profit milestone (+1%, +2%, +3%)
+- **Result**: Winning trades scale to 95% of original size while maintaining protection
+
+**System Status:**
+- ✅ Deployed on Railway (live 24/7)
+- ✅ Scanning 732 cryptocurrency pairs every 2.5 minutes
+- ✅ All sell orders functional (market_order_sell implemented)
+- ✅ Universal position management (bot + manual holdings protected)
+- ✅ Auto-compounding enabled (fresh balance fetch every trade)
 
 ---
 
