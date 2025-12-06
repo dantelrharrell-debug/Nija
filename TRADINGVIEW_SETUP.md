@@ -18,9 +18,9 @@ NIJA now supports **TradingView webhook alerts** for instant trade execution on 
 
 ## 📡 Webhook URL
 
-Once deployed on Railway:
+Once deployed on Render:
 ```
-https://your-nija-app.railway.app/webhook
+https://nija-trading-bot-v9xl.onrender.com/webhook
 ```
 
 **Endpoints:**
@@ -43,7 +43,7 @@ TRADINGVIEW_WEBHOOK_SECRET=nija_webhook_2025
 
 ## 📋 TradingView Alert Message Format
 
-### **Buy Signal:**
+### **Single-Symbol Alert (Legacy):**
 ```json
 {
   "secret": "nija_webhook_2025",
@@ -54,13 +54,15 @@ TRADINGVIEW_WEBHOOK_SECRET=nija_webhook_2025
 }
 ```
 
-### **Sell Signal:**
+### **Multi-Symbol Alert (NEW):**
 ```json
 {
   "secret": "nija_webhook_2025",
-  "action": "sell",
-  "symbol": "BTC-USD",
-  "message": "Exit signal triggered"
+  "orders": [
+    {"action": "buy", "symbol": "BTC-USD", "size": 10.0},
+    {"action": "sell", "symbol": "ETH-USD"},
+    {"action": "buy", "symbol": "SOL-USD", "size": 5.0}
+  ]
 }
 ```
 
@@ -69,7 +71,8 @@ TRADINGVIEW_WEBHOOK_SECRET=nija_webhook_2025
 | Field | Required | Description | Example |
 |-------|----------|-------------|---------|
 | `secret` | ✅ Yes | Webhook authentication | `"nija_webhook_2025"` |
-| `action` | ✅ Yes | Trade action | `"buy"` or `"sell"` |
+| `action` | ✅ Yes (single) | Trade action | `"buy"` or `"sell"` |
+| `orders` | ✅ Yes (multi) | List of order objects | See above |
 | `symbol` | ✅ Yes | Coinbase product ID | `"BTC-USD"`, `"ETH-USD"` |
 | `size` | ❌ No | USD position size | `10.0` (uses NIJA sizing if omitted) |
 | `message` | ❌ No | Custom message | Any string |

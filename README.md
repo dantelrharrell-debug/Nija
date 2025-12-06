@@ -32,7 +32,7 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 - 🎨 **Custom indicators** - Use ANY TradingView indicator/strategy for entries
 - 🔒 **NIJA exits** - All webhook trades get 95% profit lock + pyramiding + runners
 - 📊 **Multi-strategy** - Run multiple TradingView strategies simultaneously
-- 🎯 **Webhook URL**: `https://your-railway-app.railway.app/webhook`
+- 🎯 **Webhook URL**: `https://nija-trading-bot-v9xl.onrender.com/webhook`
 
 **Simple Alert Format:**
 ```json

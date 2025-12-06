@@ -53,32 +53,92 @@ def tradingview_webhook():
     try:
         # Parse incoming data
         data = request.get_json()
-        
         if not data:
             return jsonify({'error': 'No data received'}), 400
-        
         # Verify webhook secret
         if data.get('secret') != WEBHOOK_SECRET:
             print(f"❌ Unauthorized webhook attempt from {request.remote_addr}")
             return jsonify({'error': 'Unauthorized'}), 401
-        
-        # Extract signal data
+
+        # Multi-order support: if 'orders' is present, process each order
+        orders = data.get('orders')
+        results = []
+        if orders and isinstance(orders, list):
+            for order in orders:
+                action = order.get('action', '').lower()
+                symbol = order.get('symbol', '').upper()
+                custom_size = order.get('size')
+                message = order.get('message', '')
+                if action not in ['buy', 'sell']:
+                    results.append({'error': f'Invalid action for {symbol}: {action}'})
+                    continue
+                if not symbol:
+                    results.append({'error': 'Symbol is required'})
+                    continue
+                if '-' not in symbol:
+                    symbol = f"{symbol}-USD"
+                print(f"\n{'='*70}")
+                print(f"📡 TRADINGVIEW WEBHOOK RECEIVED - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"{'='*70}")
+                print(f"   Action: {action.upper()}")
+                print(f"   Symbol: {symbol}")
+                if custom_size:
+                    print(f"   Size: ${custom_size:.2f}")
+                if message:
+                    print(f"   Message: {message}")
+                if action == 'buy':
+                    df = strategy.get_product_candles(symbol)
+                    if df is None or len(df) < 50:
+                        results.append({'error': f'Insufficient data for {symbol}'})
+                        continue
+                    if custom_size:
+                        position_size = float(custom_size)
+                    else:
+                        position_size = strategy.calculate_position_size(symbol, signal_score=5, df=df)
+                    if position_size < 0.005:
+                        results.append({'error': f'Position size too small: ${position_size:.4f}'})
+                        continue
+                    strategy.enter_position(symbol, 'long', position_size, df)
+                    results.append({
+                        'status': 'success',
+                        'action': 'buy',
+                        'symbol': symbol,
+                        'size': position_size,
+                        'message': f'Buy order executed for {symbol}'
+                    })
+                elif action == 'sell':
+                    position_id = None
+                    for pid, pos in strategy.nija.positions.items():
+                        if pid.startswith(symbol):
+                            position_id = pid
+                            break
+                    if not position_id:
+                        results.append({'error': f'No open position found for {symbol}'})
+                        continue
+                    df = strategy.get_product_candles(symbol)
+                    if df is None or len(df) < 1:
+                        results.append({'error': f'Cannot get current price for {symbol}'})
+                        continue
+                    current_price = float(df['close'].iloc[-1])
+                    strategy.close_full_position(symbol, position_id, current_price, "TradingView sell signal")
+                    results.append({
+                        'status': 'success',
+                        'action': 'sell',
+                        'symbol': symbol,
+                        'message': f'Sell order executed for {symbol}'
+                    })
+            return jsonify({'results': results}), 200
+        # Single order fallback (backward compatible)
         action = data.get('action', '').lower()
         symbol = data.get('symbol', '').upper()
         custom_size = data.get('size')
         message = data.get('message', '')
-        
-        # Validate required fields
         if action not in ['buy', 'sell']:
             return jsonify({'error': 'Invalid action. Must be "buy" or "sell"'}), 400
-        
         if not symbol:
             return jsonify({'error': 'Symbol is required'}), 400
-        
-        # Ensure symbol format (add -USD if not present)
         if '-' not in symbol:
             symbol = f"{symbol}-USD"
-        
         print(f"\n{'='*70}")
         print(f"📡 TRADINGVIEW WEBHOOK RECEIVED - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*70}")
@@ -88,27 +148,17 @@ def tradingview_webhook():
             print(f"   Size: ${custom_size:.2f}")
         if message:
             print(f"   Message: {message}")
-        
-        # Execute based on action
         if action == 'buy':
-            # Get current candles for analysis
             df = strategy.get_product_candles(symbol)
             if df is None or len(df) < 50:
                 return jsonify({'error': f'Insufficient data for {symbol}'}), 400
-            
-            # Use custom size or calculate dynamic size
             if custom_size:
                 position_size = float(custom_size)
             else:
-                # Use NIJA's dynamic position sizing (5% base with signal score)
                 position_size = strategy.calculate_position_size(symbol, signal_score=5, df=df)
-            
             if position_size < 0.005:
                 return jsonify({'error': f'Position size too small: ${position_size:.4f}'}), 400
-            
-            # Enter position via NIJA strategy (includes NIJA position management)
             strategy.enter_position(symbol, 'long', position_size, df)
-            
             return jsonify({
                 'status': 'success',
                 'action': 'buy',
@@ -122,35 +172,25 @@ def tradingview_webhook():
                     'TP0.5/TP1/TP2 partial exits'
                 ]
             }), 200
-        
         elif action == 'sell':
-            # Find position to close
             position_id = None
             for pid, pos in strategy.nija.positions.items():
                 if pid.startswith(symbol):
                     position_id = pid
                     break
-            
             if not position_id:
                 return jsonify({'error': f'No open position found for {symbol}'}), 404
-            
-            # Get current price
             df = strategy.get_product_candles(symbol)
             if df is None or len(df) < 1:
                 return jsonify({'error': f'Cannot get current price for {symbol}'}), 400
-            
             current_price = float(df['close'].iloc[-1])
-            
-            # Close full position
             strategy.close_full_position(symbol, position_id, current_price, "TradingView sell signal")
-            
             return jsonify({
                 'status': 'success',
                 'action': 'sell',
                 'symbol': symbol,
                 'message': f'Sell order executed for {symbol}'
             }), 200
-    
     except Exception as e:
         print(f"❌ Webhook error: {e}")
         return jsonify({'error': str(e)}), 500
