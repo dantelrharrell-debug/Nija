@@ -148,15 +148,24 @@ class TradingStrategy:
             print(f"❌ Error syncing Coinbase positions: {e}")
     
     def get_usd_balance(self):
-        """Get USD balance from Coinbase"""
+        """Get USD balance from Coinbase (includes USD, USDC, USDT)"""
         try:
             accounts = self.client.get_accounts()
+            total_usd = 0.0
+            
             for account in accounts['accounts']:
-                if account['currency'] == 'USD':
-                    return float(account['available_balance']['value'])
+                currency = account['currency']
+                # Include ALL stablecoins as USD balance
+                if currency in ['USD', 'USDC', 'USDT', 'DAI', 'PYUSD']:
+                    balance = float(account['available_balance']['value'])
+                    total_usd += balance
+                    if balance > 0.01:
+                        print(f"   💵 {currency}: ${balance:.2f}")
+            
+            return total_usd
         except Exception as e:
             print(f"Error fetching USD balance: {e}")
-        return 0.0
+            return 0.0
     
     def get_product_candles(self, product_id, granularity="FIVE_MINUTE", count=100):
         """Fetch candle data for technical analysis"""
@@ -390,7 +399,14 @@ class TradingStrategy:
             self.start_balance = usd_balance
         
         print(f"💰 USD Balance: ${usd_balance:.2f}")
-        print(f"📊 Daily P&L: ${self.daily_pnl:.2f} ({self.daily_pnl/self.start_balance*100:.2f}%)")
+        
+        # Daily P&L with division by zero protection
+        if self.start_balance > 0:
+            pnl_pct = (self.daily_pnl / self.start_balance) * 100
+            print(f"📊 Daily P&L: ${self.daily_pnl:.2f} ({pnl_pct:.2f}%)")
+        else:
+            print(f"📊 Daily P&L: ${self.daily_pnl:.2f} (0.00%)")
+        
         print(f"📍 Open Positions: {len(self.nija.positions)} (NIJA + Manual)")
         
         # Manage existing positions first (includes imported positions)
