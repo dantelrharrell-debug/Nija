@@ -18,7 +18,35 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 | Position Management | 🟢 **NIJA + Manual Positions** |
 | Universal Management | 🟢 **All holdings tracked** |
 
-**Latest Updates** (Dec 5, 2025):
+**Latest Updates** (Dec 6, 2025):
+
+### 🎯 **TRADINGVIEW WEBHOOK INTEGRATION - DEPLOYED!**
+
+**Dual-Mode Trading Now Active:**
+- 🤖 **Autonomous Mode**: NIJA scans 732 Coinbase markets every 2.5 minutes
+- 📡 **TradingView Webhooks**: Instant execution when your custom alerts fire
+- 🔄 **Both modes** use the same Coinbase account and NIJA position management
+
+**TradingView Integration Features:**
+- ⚡ **Sub-5 second execution** - TradingView alert → Coinbase order filled
+- 🎨 **Custom indicators** - Use ANY TradingView indicator/strategy for entries
+- 🔒 **NIJA exits** - All webhook trades get 95% profit lock + pyramiding + runners
+- 📊 **Multi-strategy** - Run multiple TradingView strategies simultaneously
+- 🎯 **Webhook URL**: `https://your-railway-app.railway.app/webhook`
+
+**Simple Alert Format:**
+```json
+{
+  "secret": "nija_webhook_2025",
+  "action": "buy",
+  "symbol": "BTC-USD",
+  "size": 10.0
+}
+```
+
+See **[TRADINGVIEW_SETUP.md](TRADINGVIEW_SETUP.md)** for complete webhook documentation.
+
+---
 
 ### 🚀 **$1M IN 90 DAYS GROWTH MODE - DEPLOYED & LIVE!**
 
@@ -48,10 +76,12 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 
 **System Status:**
 - ✅ Deployed on Railway (live 24/7)
+- ✅ Dual-mode: Autonomous + TradingView webhooks
 - ✅ Scanning 732 cryptocurrency pairs every 2.5 minutes
 - ✅ All sell orders functional (market_order_sell implemented)
-- ✅ Universal position management (bot + manual holdings protected)
+- ✅ Universal position management (bot + manual + webhook holdings protected)
 - ✅ Auto-compounding enabled (fresh balance fetch every trade)
+- ✅ USDC/USDT included in balance calculations
 
 ---
 
@@ -60,13 +90,26 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 ### 🔴 LIVE MODE (Real Money on Coinbase)
 Executes **real trades** with actual USD balance on Coinbase Advanced Trade.
 
-**To run:**
+**Entry Sources:**
+1. **Autonomous Scanning** - NIJA scans 732 markets every 2.5 minutes
+2. **TradingView Webhooks** - Instant execution on your custom alerts
+
+**To run autonomous bot only:**
 ```bash
-./bot/run_live_mode.sh
-# or manually:
-export PAPER_MODE=false
-python bot.py
+python3 bot/live_bot_script.py
 ```
+
+**To run dual-mode (autonomous + webhooks):**
+```bash
+python3 bot/start_webhook_service.py
+```
+
+**Webhook endpoint:**
+```
+POST https://your-railway-app.railway.app/webhook
+```
+
+See [TRADINGVIEW_SETUP.md](TRADINGVIEW_SETUP.md) for complete webhook configuration.
 
 ### 📄 PAPER MODE (Local Simulation)
 Simulates all trades locally without spending real money. Perfect for testing strategies!
