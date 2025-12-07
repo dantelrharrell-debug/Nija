@@ -25,7 +25,7 @@ class TradingStrategy:
     - Risk management and position sizing
     """
     
-    def __init__(self, client, pairs=None, base_allocation=5.0, max_exposure=0.85, max_daily_loss=0.025, paper_mode=False):
+    def __init__(self, client, pairs=None, base_allocation=10.0, max_exposure=0.85, max_daily_loss=0.025, paper_mode=False):
         self.client = client
         self.pairs = pairs or ["BTC-USD", "ETH-USD", "SOL-USD"]
         self.base_allocation = base_allocation  # % of balance per trade (5% base, pyramiding adds more)
@@ -441,10 +441,9 @@ class TradingStrategy:
                 print(f"   📈 Fetching candle data...")
                 df = self.get_product_candles(product_id)
                 
-                if df is None or len(df) < 30:
+                if df is None or len(df) < 10:
                     print(f"⚠️ Insufficient data for {product_id}")
                     continue
-                    
                 print(f"   ✅ Got {len(df)} candles")
             except Exception as e:
                 print(f"❌ Error fetching candles for {product_id}: {e}")
@@ -475,7 +474,7 @@ class TradingStrategy:
             # DYNAMIC SIGNAL THRESHOLD: Aggressive when small, quality when large
             usd_balance = self.get_usd_balance()
             if usd_balance < 50:
-                min_score = 3  # Small account: 3/5 for safety (high friction)
+                min_score = 2  # Small account: 2/5 for more trades (lower friction)
             elif usd_balance < 500:
                 min_score = 2  # Growing account: 2/5 for frequency (lower friction)
             else:
