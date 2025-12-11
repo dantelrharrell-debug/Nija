@@ -658,29 +658,24 @@ class TradingStrategy:
                 print(f"   EMA: 9=${indicators['ema_9'].iloc[-1]:.2f} | 21=${indicators['ema_21'].iloc[-1]:.2f} | 50=${indicators['ema_50'].iloc[-1]:.2f}")
     
     def enter_position(self, product_id, side, usd_amount, df):
-                # Pre-trade account health check before each trade
-                if not self.check_account_health():
-                    print(f"❌ Aborting trade for {product_id} due to failed account health check.")
-                    return
         """Enter a new position with NIJA trailing (supports LIVE and PAPER modes)"""
+        # Pre-trade account health check before each trade
+        if not self.check_account_health():
+            print(f"❌ Aborting trade for {product_id} due to failed account health check.")
+            return
         try:
             # Get current price
             ticker = self.client.get_product(product_id=product_id)
             entry_price = float(ticker['price'])
-            
             # Calculate size
             size = usd_amount / entry_price
-            
             # Calculate volatility for stop-loss
             volatility = df['close'].pct_change().std()
-            
             # Get market-specific parameters
             params = market_adapter.get_parameters(product_id)
-            
             # Generate position ID
             self.position_counter += 1
             position_id = f"{product_id}-{self.position_counter}"
-            
             # LIVE MODE: Execute real trade on Coinbase
             if not self.paper_mode:
                 order = self.client.market_order_buy(
@@ -699,9 +694,8 @@ class TradingStrategy:
                     'usd_amount': usd_amount,
                     'mode': 'LIVE'
                 })
-            # PAPER MODE: Simulate trade
             else:
-                # Calculate stop loss for paper account
+                # PAPER MODE: Simulate trade
                 base_stop_pct = params['stop_loss']['base_pct']
                 volatility_stop = volatility * params['stop_loss']['volatility_multiplier']
                 stop_pct = max(base_stop_pct, volatility_stop)
@@ -726,7 +720,6 @@ class TradingStrategy:
                     'usd_amount': usd_amount,
                     'mode': 'PAPER'
                 })
-            
             # Open NIJA position tracking (both modes)
             position = self.nija.open_position(
                 position_id=position_id,
@@ -736,18 +729,14 @@ class TradingStrategy:
                 volatility=volatility,
                 market_params=params
             )
-            
             # Add product_id for tracking
             position['product_id'] = product_id
-            
             mode_indicator = "📄 PAPER" if self.paper_mode else "✅ NIJA"
             print(f"{mode_indicator} Position Opened: {size:.8f} {product_id} @ ${entry_price:.2f}")
             print(f"   Entry: ${entry_price:.2f} | Stop: ${position['stop_loss']:.2f}")
             print(f"   Position ID: {position_id}")
-            
         except Exception as e:
             print(f"❌ Error entering position: {e}")
-    
     def manage_open_positions(self):
         """Manage all open positions with NIJA Trailing System + Pyramiding"""
         if not self.nija.positions:
