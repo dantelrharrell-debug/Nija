@@ -14,9 +14,6 @@ from market_adapter import market_adapter, MarketType
 from paper_trading import get_paper_account
 
 class TradingStrategy:
-        def clear_all_positions(self):
-            """Clear all open positions before starting new trades"""
-            self.nija.clear_all_positions()
     """
     NIJA Ultimate Trading Strategy with Advanced Trailing System
     
@@ -27,6 +24,10 @@ class TradingStrategy:
     - Partial position management (50% → 25% → 25%)
     - Risk management and position sizing
     """
+
+    def clear_all_positions(self):
+        """Clear all open positions before starting new trades"""
+        self.nija.clear_all_positions()
     
     def __init__(self, client, pairs=None, base_allocation=10.0, max_exposure=0.85, max_daily_loss=0.025, paper_mode=False):
         self.client = client
