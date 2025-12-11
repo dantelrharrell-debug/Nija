@@ -14,6 +14,41 @@ from market_adapter import market_adapter, MarketType
 from paper_trading import get_paper_account
 
 class TradingStrategy:
+        def check_account_health(self):
+            """Check API connectivity and available USD balance before trading."""
+            try:
+                # Check API connectivity
+                accounts = self.client.get_accounts()
+                if not accounts or 'accounts' not in accounts:
+                    print("❌ API connectivity check failed: No accounts data returned.")
+                    return False
+                # Check available USD balance
+                usd_balance = 0.0
+                for account in accounts['accounts']:
+                    currency = account.get('currency')
+                    if currency in ['USD', 'USDC', 'USDT', 'DAI', 'PYUSD']:
+                        try:
+                            balance = float(account['available_balance']['value'])
+                            usd_balance += balance
+                        except Exception:
+                            continue
+                if usd_balance < 1.0:
+                    print(f"❌ Insufficient USD balance: ${usd_balance:.2f} (minimum $1 required)")
+                    return False
+                # Check product API (BTC-USD as a proxy)
+                try:
+                    ticker = self.client.get_product(product_id='BTC-USD')
+                    if not ticker or 'price' not in ticker:
+                        print("❌ API product check failed: No price data for BTC-USD.")
+                        return False
+                except Exception as e:
+                    print(f"❌ API product check failed: {e}")
+                    return False
+                print(f"✅ Account health check passed. USD balance: ${usd_balance:.2f}")
+                return True
+            except Exception as e:
+                print(f"❌ Account health check failed: {e}")
+                return False
     """
     NIJA Ultimate Trading Strategy with Advanced Trailing System
     
@@ -66,6 +101,43 @@ class TradingStrategy:
         
         # Daily Profit Lock: Disabled for maximum opportunity
         self.profit_lock_active = False
+
+        # Trade log and performance tracking
+        self.trade_log = []  # List of dicts: {timestamp, product_id, side, action, size, entry/exit, pnl, reason}
+        self.closed_trades = []  # For performance stats
+        self.max_equity = 0.0
+        self.max_drawdown = 0.0
+
+    def log_trade(self, trade):
+        self.trade_log.append(trade)
+        if trade['action'] == 'CLOSE':
+            self.closed_trades.append(trade)
+        # Update drawdown
+        equity = self.get_usd_balance() + sum(pos['profit_pct'] * pos['entry_price'] * pos['size'] / 100 for pos in self.nija.positions.values())
+        if equity > self.max_equity:
+            self.max_equity = equity
+        dd = (self.max_equity - equity) / max(self.max_equity, 1)
+        if dd > self.max_drawdown:
+            self.max_drawdown = dd
+
+    def print_performance_summary(self):
+        wins = [t for t in self.closed_trades if t.get('pnl', 0) > 0]
+        losses = [t for t in self.closed_trades if t.get('pnl', 0) < 0]
+        total_trades = len(self.closed_trades)
+        win_rate = (len(wins) / total_trades * 100) if total_trades else 0
+        gross_profit = sum(t.get('pnl', 0) for t in wins)
+        gross_loss = abs(sum(t.get('pnl', 0) for t in losses))
+        profit_factor = (gross_profit / gross_loss) if gross_loss else float('inf')
+        print("\n" + "="*60)
+        print("NIJA PERFORMANCE SUMMARY")
+        print("="*60)
+        print(f"Total Trades:   {total_trades}")
+        print(f"Win Rate:       {win_rate:.1f}%")
+        print(f"Profit Factor:  {profit_factor:.2f}")
+        print(f"Max Drawdown:   {self.max_drawdown*100:.2f}%")
+        print(f"Gross Profit:   ${gross_profit:.2f}")
+        print(f"Gross Loss:     ${gross_loss:.2f}")
+        print("="*60 + "\n")
         
     def sync_coinbase_positions(self):
         """Import ALL open positions from Coinbase (including manual trades) into NIJA management"""
@@ -394,6 +466,10 @@ class TradingStrategy:
         print(f"🔥 NIJA Trading Cycle - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*60}")
         
+        # Pre-trade account health check
+        if not self.check_account_health():
+            print("❌ Aborting trading cycle due to failed account health check.")
+            return
         # Clear all open positions before starting new trades
         self.clear_all_positions()
         # Sync ALL Coinbase positions (including manual trades) into NIJA management
@@ -507,16 +583,16 @@ class TradingStrategy:
                 
                 position_size = self.calculate_position_size(product_id, signal_score, df)
                 
-                if position_size > 0.005:  # Minimum $0.005 trade (AGGRESSIVE)
+                min_trade_size = 0.005
+                if position_size > min_trade_size:
                     self.enter_position(product_id, 'long', position_size, df)
                     self.last_trade_time = datetime.now()
                     self.daily_trades += 1
                 else:
-                    print(f"⚠️ Position size too small: ${position_size:.4f} (minimum: $0.005)")
+                    print(f"⚠️ Skipping {product_id}: position size ${position_size:.4f} is below exchange minimum (${min_trade_size})")
             
             elif action == 'sell' and signal_score >= 2:
                 print(f"📉 SHORT SIGNAL DETECTED - Score: {signal_score}/5")
-                
                 # Display entry conditions
                 short_cond = indicators['entry_conditions']['short']
                 print(f"   {'✅' if short_cond['price_below_vwap'] else '❌'} Price below VWAP: {short_cond['price_below_vwap']}")
@@ -524,8 +600,14 @@ class TradingStrategy:
                 print(f"   {'✅' if short_cond['rsi_favorable'] else '❌'} RSI favorable (momentum/bounce): {short_cond['rsi_favorable']}")
                 print(f"   {'✅' if short_cond['volume_confirmation'] else '❌'} Volume ≥ 50% prev 2: {short_cond['volume_confirmation']}")
                 print(f"   {'✅' if short_cond['candle_close_bearish'] else '❌'} Candle close bearish: {short_cond['candle_close_bearish']}")
-                
-                print(f"   (Shorts not enabled)")
+                position_size = self.calculate_position_size(product_id, signal_score, df)
+                min_trade_size = 0.005
+                if position_size > min_trade_size:
+                    self.enter_position(product_id, 'short', position_size, df)
+                    self.last_trade_time = datetime.now()
+                    self.daily_trades += 1
+                else:
+                    print(f"⚠️ Skipping {product_id}: position size ${position_size:.4f} is below exchange minimum (${min_trade_size})")
             
             else:
                 print(f"⏸️ No entry signal (score: {signal_score}/5)")
@@ -537,6 +619,10 @@ class TradingStrategy:
                 print(f"   EMA: 9=${indicators['ema_9'].iloc[-1]:.2f} | 21=${indicators['ema_21'].iloc[-1]:.2f} | 50=${indicators['ema_50'].iloc[-1]:.2f}")
     
     def enter_position(self, product_id, side, usd_amount, df):
+                # Pre-trade account health check before each trade
+                if not self.check_account_health():
+                    print(f"❌ Aborting trade for {product_id} due to failed account health check.")
+                    return
         """Enter a new position with NIJA trailing (supports LIVE and PAPER modes)"""
         try:
             # Get current price
@@ -563,7 +649,17 @@ class TradingStrategy:
                     product_id=product_id,
                     quote_size=str(round(usd_amount, 2))
                 )
-            
+                # Log trade
+                self.log_trade({
+                    'timestamp': datetime.now().isoformat(),
+                    'product_id': product_id,
+                    'side': side,
+                    'action': 'OPEN',
+                    'size': size,
+                    'entry': entry_price,
+                    'usd_amount': usd_amount,
+                    'mode': 'LIVE'
+                })
             # PAPER MODE: Simulate trade
             else:
                 # Calculate stop loss for paper account
@@ -571,7 +667,6 @@ class TradingStrategy:
                 volatility_stop = volatility * params['stop_loss']['volatility_multiplier']
                 stop_pct = max(base_stop_pct, volatility_stop)
                 stop_loss = entry_price * (1 - stop_pct)
-                
                 # Open paper position
                 self.paper_account.open_position(
                     symbol=product_id,
@@ -581,6 +676,17 @@ class TradingStrategy:
                     side=side,
                     position_id=position_id
                 )
+                # Log trade
+                self.log_trade({
+                    'timestamp': datetime.now().isoformat(),
+                    'product_id': product_id,
+                    'side': side,
+                    'action': 'OPEN',
+                    'size': size,
+                    'entry': entry_price,
+                    'usd_amount': usd_amount,
+                    'mode': 'PAPER'
+                })
             
             # Open NIJA position tracking (both modes)
             position = self.nija.open_position(
@@ -731,6 +837,22 @@ class TradingStrategy:
             print(f"   ❌ Error closing partial: {e}")
     
     def close_full_position(self, product_id, position_id, current_price, reason):
+                        # Log trade close
+                        self.log_trade({
+                            'timestamp': datetime.now().isoformat(),
+                            'product_id': product_id,
+                            'side': position['side'],
+                            'action': 'CLOSE',
+                            'size': position['size'],
+                            'entry': position['entry_price'],
+                            'exit': current_price,
+                            'pnl': profit_usd,
+                            'pnl_pct': profit,
+                            'reason': reason,
+                            'mode': 'PAPER' if self.paper_mode else 'LIVE'
+                        })
+            # Print performance summary at end of cycle
+            self.print_performance_summary()
         """Close full position - supports LIVE and PAPER modes"""
         try:
             position = self.nija.positions.get(position_id)

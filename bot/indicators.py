@@ -43,19 +43,23 @@ def check_no_trade_zones(df, rsi):
     if rsi.iloc[-1] < 2:
         return True, "Extreme RSI < 2"
     
-    # ❌ Low-volume consolidation
+    # ❌ Low-volume consolidation (stricter: 30% of avg)
     avg_volume = df['volume'].rolling(20).mean().iloc[-1]
-    if df['volume'].iloc[-1] < avg_volume * 0.15:  # Lower threshold - accept more trades
-        return True, "Low volume consolidation"
-    
-    # ❌ Large unpredictable wicks (wick > 2x body)
+    if df['volume'].iloc[-1] < avg_volume * 0.3:
+        return True, "Low volume consolidation (stricter)"
+
+    # ❌ Low-liquidity pair (20-period avg volume < 1000 units)
+    if avg_volume < 1000:
+        return True, "Low-liquidity pair (avg volume < 1000)"
+
+    # ❌ Large unpredictable wicks (wick > 1.5x body)
     last_candle = df.iloc[-1]
     body = abs(last_candle['close'] - last_candle['open'])
     upper_wick = last_candle['high'] - max(last_candle['close'], last_candle['open'])
     lower_wick = min(last_candle['close'], last_candle['open']) - last_candle['low']
-    
-    if body > 0 and (upper_wick > body * 2 or lower_wick > body * 2):
-        return True, "Large unpredictable wicks"
+
+    if body > 0 and (upper_wick > body * 1.5 or lower_wick > body * 1.5):
+        return True, "Large unpredictable wicks (stricter)"
     
     return False, None
 
@@ -134,8 +138,9 @@ def calculate_indicators(df):
         "candle_close_bullish": bool(current_price > prev_price)
     }
     
-    # Buy signal if 2+ conditions met (not all)
-    buy_signal = bool(sum(long_conditions.values()) >= 2)
+    # Buy signal: require 3+ conditions for entry by default
+    long_score = sum(long_conditions.values())
+    buy_signal = long_score >= 3
     
     # ═══════════════════════════════════════════════════════════
     # NIJA SHORT ENTRY CONDITIONS (Scored 1-5, need 2+ for entry)
@@ -163,8 +168,9 @@ def calculate_indicators(df):
         "candle_close_bearish": bool(current_price < prev_price)
     }
     
-    # Sell signal if 2+ conditions met (not all)
-    sell_signal = bool(sum(short_conditions.values()) >= 2)
+    # Sell signal: require 3+ conditions for entry by default
+    short_score = sum(short_conditions.values())
+    sell_signal = short_score >= 3
     
     return {
         "vwap": vwap,
@@ -178,6 +184,8 @@ def calculate_indicators(df):
         "histogram": hist,
         "buy_signal": buy_signal,
         "sell_signal": sell_signal,
+        "long_score": long_score,
+        "short_score": short_score,
         "no_trade_zone": is_no_trade,
         "no_trade_reason": reason,
         "entry_conditions": {
