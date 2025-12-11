@@ -40,11 +40,10 @@ def run_live_trading(client):
         strategy = TradingStrategy()
         logger.info("Starting main live trading loop...")
         while True:
-            logger.info("[DEBUG] About to run trading strategy cycle...")
+            logger.info("[DEBUG] About to run live trading strategy cycle...")
             try:
-                # Replace with your actual trading method and arguments as needed
-                strategy.run_trading_cycle_for_backtest('BTC-USD', None)
-                logger.info("[DEBUG] Finished trading strategy cycle.")
+                strategy.run_trading_cycle()
+                logger.info("[DEBUG] Finished live trading strategy cycle.")
             except Exception as e:
                 logger.error(f"[ERROR] Exception in trading strategy: {e}")
             time.sleep(60)  # adjust interval as needed
