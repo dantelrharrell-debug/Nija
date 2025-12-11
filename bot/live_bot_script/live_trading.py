@@ -1,3 +1,4 @@
+print("[DEBUG] End of live_trading.py script reached. If you see this, the process exited the main function.")
 # bot/live_bot_script/live_trading.py
 print("=== NIJA DEBUG: CODE UPDATED 2025-12-11 [live_bot_script/live_trading.py] ===")
 import logging
