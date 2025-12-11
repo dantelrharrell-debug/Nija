@@ -41,16 +41,22 @@ def run_live_trading(client):
         logger.info("Starting main live trading loop...")
         while True:
             logger.info(f"[DEBUG] Main loop iteration started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"[DEBUG] Main loop iteration started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             try:
                 strategy.run_trading_cycle()
                 logger.info(f"[DEBUG] Main loop iteration finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"[DEBUG] Main loop iteration finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             except Exception as e:
                 logger.error(f"[ERROR] Exception in trading strategy: {e}")
-            time.sleep(60)  # adjust interval as needed
+                print(f"[ERROR] Exception in trading strategy: {e}")
+            time.sleep(10)  # reduce interval for visibility
 
     except Exception as e:
         logger.error(f"Error in live trading: {e}")
+        print(f"Error in live trading: {e}")
         import traceback
         logger.error(traceback.format_exc())
+        print(traceback.format_exc())
     finally:
         logger.error("[DEBUG] run_live_trading() has exited unexpectedly!")
+        print("[DEBUG] run_live_trading() has exited unexpectedly!")
