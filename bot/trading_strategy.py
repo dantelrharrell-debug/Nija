@@ -155,7 +155,11 @@ class TradingStrategy:
 
     def log_trade(self, trade):
         self.trade_log.append(trade)
-        if trade['action'] == 'CLOSE':
+        # Echo trade events to stdout for Railway visibility
+        if trade['action'] == 'OPEN':
+            print(f"=== TRADE OPENED ===\nTime: {trade['timestamp']}\nProduct: {trade['product_id']}\nSide: {trade['side']}\nSize: {trade['size']:.8f}\nEntry: ${trade['entry']:.2f}\nUSD Amount: ${trade['usd_amount']:.2f}\nMode: {trade['mode']}\n====================")
+        elif trade['action'] == 'CLOSE':
+            print(f"=== TRADE CLOSED ===\nTime: {trade['timestamp']}\nProduct: {trade['product_id']}\nSide: {trade['side']}\nSize: {trade['size']:.8f}\nEntry: ${trade['entry']:.2f}\nExit: ${trade['exit']:.2f}\nPnL: ${trade['pnl']:+.2f} ({trade['pnl_pct']:+.2f}%)\nReason: {trade.get('reason','')}\nMode: {trade['mode']}\n====================")
             self.closed_trades.append(trade)
         # Update drawdown
         equity = self.get_usd_balance() + sum(pos['profit_pct'] * pos['entry_price'] * pos['size'] / 100 for pos in self.nija.positions.values())
