@@ -14,79 +14,6 @@ from market_adapter import market_adapter, MarketType
 from paper_trading import get_paper_account
 
 class TradingStrategy:
-            def run_trading_cycle_for_backtest(self, product_id, df):
-                """Run one trading cycle for a single product using historical data (for backtesting)."""
-                # No account health check, no live sync
-                if df is None or len(df) < 51:
-                    return
-                # Calculate indicators
-                try:
-                    from indicators import calculate_indicators
-                    indicators = calculate_indicators(df)
-                except Exception as e:
-                    print(f"❌ Error calculating indicators for {product_id}: {e}")
-                    return
-                # Check no-trade zones
-                if indicators.get('no_trade_zone'):
-                    return
-                # Get signal score (1-5)
-                action, signal_score = self.calculate_signal_score(product_id, indicators, df)
-                # Use same dynamic threshold as live
-                usd_balance = self.get_usd_balance() if hasattr(self, 'get_usd_balance') else 10000.0
-                min_score = 2
-                if indicators.get('rsi') is not None:
-                    rsi_val = float(indicators['rsi'].iloc[-1])
-                    if usd_balance >= 100 and action == 'buy' and 55 < rsi_val < 65:
-                        min_score = 1
-                    elif usd_balance >= 100 and action == 'sell' and 35 < rsi_val < 45:
-                        min_score = 1
-                if action == 'buy' and signal_score >= min_score:
-                    position_size = self.calculate_position_size(product_id, signal_score, df)
-                    min_trade_size = 0.005
-                    if position_size > min_trade_size:
-                        self.enter_position(product_id, 'long', position_size, df)
-                elif action == 'sell' and signal_score >= 2:
-                    position_size = self.calculate_position_size(product_id, signal_score, df)
-                    min_trade_size = 0.005
-                    if position_size > min_trade_size:
-                        self.enter_position(product_id, 'short', position_size, df)
-                # Manage open positions (simulate trailing stops, exits)
-                self.manage_open_positions()
-        def check_account_health(self):
-            """Check API connectivity and available USD balance before trading."""
-            try:
-                # Check API connectivity
-                accounts = self.client.get_accounts()
-                if not accounts or 'accounts' not in accounts:
-                    print("❌ API connectivity check failed: No accounts data returned.")
-                    return False
-                # Check available USD balance
-                usd_balance = 0.0
-                for account in accounts['accounts']:
-                    currency = account.get('currency')
-                    if currency in ['USD', 'USDC', 'USDT', 'DAI', 'PYUSD']:
-                        try:
-                            balance = float(account['available_balance']['value'])
-                            usd_balance += balance
-                        except Exception:
-                            continue
-                if usd_balance < 1.0:
-                    print(f"❌ Insufficient USD balance: ${usd_balance:.2f} (minimum $1 required)")
-                    return False
-                # Check product API (BTC-USD as a proxy)
-                try:
-                    ticker = self.client.get_product(product_id='BTC-USD')
-                    if not ticker or 'price' not in ticker:
-                        print("❌ API product check failed: No price data for BTC-USD.")
-                        return False
-                except Exception as e:
-                    print(f"❌ API product check failed: {e}")
-                    return False
-                print(f"✅ Account health check passed. USD balance: ${usd_balance:.2f}")
-                return True
-            except Exception as e:
-                print(f"❌ Account health check failed: {e}")
-                return False
     """
     NIJA Ultimate Trading Strategy with Advanced Trailing System
     
@@ -97,6 +24,80 @@ class TradingStrategy:
     - Partial position management (50% → 25% → 25%)
     - Risk management and position sizing
     """
+    def run_trading_cycle_for_backtest(self, product_id, df):
+        """Run one trading cycle for a single product using historical data (for backtesting)."""
+        # No account health check, no live sync
+        if df is None or len(df) < 51:
+            return
+        # Calculate indicators
+        try:
+            from indicators import calculate_indicators
+            indicators = calculate_indicators(df)
+        except Exception as e:
+            print(f"❌ Error calculating indicators for {product_id}: {e}")
+            return
+        # Check no-trade zones
+        if indicators.get('no_trade_zone'):
+            return
+        # Get signal score (1-5)
+        action, signal_score = self.calculate_signal_score(product_id, indicators, df)
+        # Use same dynamic threshold as live
+        usd_balance = self.get_usd_balance() if hasattr(self, 'get_usd_balance') else 10000.0
+        min_score = 2
+        if indicators.get('rsi') is not None:
+            rsi_val = float(indicators['rsi'].iloc[-1])
+            if usd_balance >= 100 and action == 'buy' and 55 < rsi_val < 65:
+                min_score = 1
+            elif usd_balance >= 100 and action == 'sell' and 35 < rsi_val < 45:
+                min_score = 1
+        if action == 'buy' and signal_score >= min_score:
+            position_size = self.calculate_position_size(product_id, signal_score, df)
+            min_trade_size = 0.005
+            if position_size > min_trade_size:
+                self.enter_position(product_id, 'long', position_size, df)
+        elif action == 'sell' and signal_score >= 2:
+            position_size = self.calculate_position_size(product_id, signal_score, df)
+            min_trade_size = 0.005
+            if position_size > min_trade_size:
+                self.enter_position(product_id, 'short', position_size, df)
+        # Manage open positions (simulate trailing stops, exits)
+        self.manage_open_positions()
+
+    def check_account_health(self):
+        """Check API connectivity and available USD balance before trading."""
+        try:
+            # Check API connectivity
+            accounts = self.client.get_accounts()
+            if not accounts or 'accounts' not in accounts:
+                print("❌ API connectivity check failed: No accounts data returned.")
+                return False
+            # Check available USD balance
+            usd_balance = 0.0
+            for account in accounts['accounts']:
+                currency = account.get('currency')
+                if currency in ['USD', 'USDC', 'USDT', 'DAI', 'PYUSD']:
+                    try:
+                        balance = float(account['available_balance']['value'])
+                        usd_balance += balance
+                    except Exception:
+                        continue
+            if usd_balance < 1.0:
+                print(f"❌ Insufficient USD balance: ${usd_balance:.2f} (minimum $1 required)")
+                return False
+            # Check product API (BTC-USD as a proxy)
+            try:
+                ticker = self.client.get_product(product_id='BTC-USD')
+                if not ticker or 'price' not in ticker:
+                    print("❌ API product check failed: No price data for BTC-USD.")
+                    return False
+            except Exception as e:
+                print(f"❌ API product check failed: {e}")
+                return False
+            print(f"✅ Account health check passed. USD balance: ${usd_balance:.2f}")
+            return True
+        except Exception as e:
+            print(f"❌ Account health check failed: {e}")
+            return False
 
     def clear_all_positions(self):
         """Clear all open positions before starting new trades"""
