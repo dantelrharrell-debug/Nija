@@ -37,7 +37,27 @@ def check_no_trade_zones(df, rsi):
     
     Returns: (is_no_trade_zone, reason)
     """
-    # All no-trade zone logic removed for testing
+    # NO-TRADE ZONE LOGIC
+    current_rsi = rsi.iloc[-1]
+    current_volume = df['volume'].iloc[-1]
+    avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
+    high = df['high'].iloc[-1]
+    low = df['low'].iloc[-1]
+    open_ = df['open'].iloc[-1]
+    close = df['close'].iloc[-1]
+    wick_size = max(high - close, close - low)
+    body_size = abs(close - open_)
+    wick_to_body = wick_size / (body_size + 1e-6)
+
+    # Extreme RSI
+    if current_rsi > 90 or current_rsi < 10:
+        return True, "Extreme RSI levels"
+    # Low volume consolidation
+    if avg_volume > 0 and current_volume < avg_volume * 0.3:
+        return True, "Low volume consolidation"
+    # Large unpredictable wicks
+    if wick_to_body > 2.0:
+        return True, "Large unpredictable wicks"
     return False, None
 
 def calculate_indicators(df):

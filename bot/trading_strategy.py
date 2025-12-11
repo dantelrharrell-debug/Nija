@@ -33,7 +33,7 @@ class TradingStrategy:
         try:
             from indicators import calculate_indicators
             indicators = calculate_indicators(df)
-        except Exception as e:
+            min_trade_size = 0.005
             print(f"❌ Error calculating indicators for {product_id}: {e}")
             return
         # Check no-trade zones
@@ -170,7 +170,7 @@ class TradingStrategy:
         total_trades = len(self.closed_trades)
         win_rate = (len(wins) / total_trades * 100) if total_trades else 0
         gross_profit = sum(t.get('pnl', 0) for t in wins)
-        gross_loss = abs(sum(t.get('pnl', 0) for t in losses))
+                min_trade_size = 0.005
         profit_factor = (gross_profit / gross_loss) if gross_loss else float('inf')
         print("\n" + "="*60)
         print("NIJA PERFORMANCE SUMMARY")
@@ -190,7 +190,7 @@ class TradingStrategy:
             accounts = self.client.get_accounts()
             
             imported_count = 0
-            for account in accounts['accounts']:
+                    min_trade_size = 0.005
                 currency = account['currency']
                 
                 # Skip USD and stablecoins - these are cash positions
@@ -644,14 +644,18 @@ class TradingStrategy:
                 print(f"   {'✅' if short_cond['rsi_favorable'] else '❌'} RSI favorable (momentum/bounce): {short_cond['rsi_favorable']}")
                 print(f"   {'✅' if short_cond['volume_confirmation'] else '❌'} Volume ≥ 50% prev 2: {short_cond['volume_confirmation']}")
                 print(f"   {'✅' if short_cond['candle_close_bearish'] else '❌'} Candle close bearish: {short_cond['candle_close_bearish']}")
-                position_size = self.calculate_position_size(product_id, signal_score, df)
-                min_trade_size = 0.001
-                if position_size > min_trade_size:
-                    self.enter_position(product_id, 'short', position_size, df)
-                    self.last_trade_time = datetime.now()
-                    self.daily_trades += 1
+                # Enable short trading if supported
+                if market_adapter.supports_shorting(product_id):
+                    position_size = self.calculate_position_size(product_id, signal_score, df)
+                    min_trade_size = 0.001
+                    if position_size > min_trade_size:
+                        self.enter_position(product_id, 'short', position_size, df)
+                        self.last_trade_time = datetime.now()
+                        self.daily_trades += 1
+                    else:
+                        print(f"⚠️ Skipping {product_id}: position size ${position_size:.4f} is below exchange minimum (${min_trade_size})")
                 else:
-                    print(f"⚠️ Skipping {product_id}: position size ${position_size:.4f} is below exchange minimum (${min_trade_size})")
+                    print(f"(Shorts not enabled for {product_id})")
             
             else:
                 print(f"⏸️ No entry signal (score: {signal_score}/5)")
