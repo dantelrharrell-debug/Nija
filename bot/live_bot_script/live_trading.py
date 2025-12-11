@@ -50,3 +50,7 @@ def run_live_trading(client):
 
     except Exception as e:
         logger.error(f"Error in live trading: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+    finally:
+        logger.error("[DEBUG] run_live_trading() has exited unexpectedly!")
