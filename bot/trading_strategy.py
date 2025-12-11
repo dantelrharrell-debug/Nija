@@ -622,7 +622,7 @@ class TradingStrategy:
                 
                 position_size = self.calculate_position_size(product_id, signal_score, df)
                 
-                min_trade_size = 0.005
+                min_trade_size = 0.001
                 if position_size > min_trade_size:
                     self.enter_position(product_id, 'long', position_size, df)
                     self.last_trade_time = datetime.now()
@@ -640,7 +640,7 @@ class TradingStrategy:
                 print(f"   {'✅' if short_cond['volume_confirmation'] else '❌'} Volume ≥ 50% prev 2: {short_cond['volume_confirmation']}")
                 print(f"   {'✅' if short_cond['candle_close_bearish'] else '❌'} Candle close bearish: {short_cond['candle_close_bearish']}")
                 position_size = self.calculate_position_size(product_id, signal_score, df)
-                min_trade_size = 0.005
+                min_trade_size = 0.001
                 if position_size > min_trade_size:
                     self.enter_position(product_id, 'short', position_size, df)
                     self.last_trade_time = datetime.now()

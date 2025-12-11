@@ -1,5 +1,14 @@
 # NIJA Trading Bot 🚀
 
+---
+
+## 🛠️ Recent Fixes (Dec 11, 2025)
+
+- Fixed persistent IndentationError in `bot/trading_strategy.py` (`close_full_position` method). All indentation is now consistent and the bot runs without syntax errors.
+- Bot successfully deployed and running LIVE as of December 11, 2025.
+
+---
+
 **Autonomous Cryptocurrency Trading with Dual RSI Strategy & Intelligent Trailing System**
 
 NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade API** that scans **732 cryptocurrency markets** and executes trades using a sophisticated **dual RSI strategy** (RSI_9 + RSI_14) with dynamic position management. The bot automatically compounds profits, manages risk, and trails positions to maximize winners while protecting capital.

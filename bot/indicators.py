@@ -37,30 +37,7 @@ def check_no_trade_zones(df, rsi):
     
     Returns: (is_no_trade_zone, reason)
     """
-    # ❌ Only extreme RSI > 98 or < 2 (ultra relaxed - almost never triggers)
-    if rsi.iloc[-1] > 98:
-        return True, "Extreme RSI > 98"
-    if rsi.iloc[-1] < 2:
-        return True, "Extreme RSI < 2"
-    
-    # ❌ Low-volume consolidation check DISABLED for testing
-    # avg_volume = df['volume'].rolling(20).mean().iloc[-1]
-    # if df['volume'].iloc[-1] < avg_volume * 0.05:
-    #     return True, "Low volume consolidation (relaxed, 5% of avg)"
-
-    # ❌ Low-liquidity pair (20-period avg volume < 500 units)
-    if avg_volume < 500:
-        return True, "Low-liquidity pair (avg volume < 500)"
-
-    # ❌ Large unpredictable wicks (wick > 1.5x body)
-    last_candle = df.iloc[-1]
-    body = abs(last_candle['close'] - last_candle['open'])
-    upper_wick = last_candle['high'] - max(last_candle['close'], last_candle['open'])
-    lower_wick = min(last_candle['close'], last_candle['open']) - last_candle['low']
-
-    if body > 0 and (upper_wick > body * 1.5 or lower_wick > body * 1.5):
-        return True, "Large unpredictable wicks (stricter)"
-    
+    # All no-trade zone logic removed for testing
     return False, None
 
 def calculate_indicators(df):
