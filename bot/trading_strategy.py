@@ -41,6 +41,7 @@ class TradingStrategy:
             return
         # Get signal score (1-5)
         action, signal_score = self.calculate_signal_score(product_id, indicators, df)
+            print(f"[DEBUG] {product_id}: action={action}, signal_score={signal_score}")
         # Use same dynamic threshold as live
         usd_balance = self.get_usd_balance() if hasattr(self, 'get_usd_balance') else 10000.0
         min_score = 2
@@ -52,13 +53,17 @@ class TradingStrategy:
                 min_score = 1
         if action == 'buy' and signal_score >= min_score:
             position_size = self.calculate_position_size(product_id, signal_score, df)
+                print(f"[DEBUG] {product_id}: position_size={position_size}, min_trade_size=0.005")
             min_trade_size = 0.005
             if position_size > min_trade_size:
+                    print(f"[DEBUG] {product_id}: Placing BUY trade, size={position_size}")
                 self.enter_position(product_id, 'long', position_size, df)
         elif action == 'sell' and signal_score >= 2:
             position_size = self.calculate_position_size(product_id, signal_score, df)
+                print(f"[DEBUG] {product_id}: position_size={position_size}, min_trade_size=0.005")
             min_trade_size = 0.005
             if position_size > min_trade_size:
+                    print(f"[DEBUG] {product_id}: Placing SELL trade, size={position_size}")
                 self.enter_position(product_id, 'short', position_size, df)
         # Manage open positions (simulate trailing stops, exits)
         self.manage_open_positions()

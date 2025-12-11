@@ -35,11 +35,18 @@ def run_live_trading(client):
         else:
             logger.warning(f"Insufficient balance for minimal order (${minimal_order_amount}).")
 
-        # 3️⃣ Main live trading loop (replace with your real strategy)
+        # 3️⃣ Main live trading loop (now calls real trading logic)
+        from trading_strategy import TradingStrategy
+        strategy = TradingStrategy()
         logger.info("Starting main live trading loop...")
         while True:
-            # Example: heartbeat log
-            logger.info("Live trading heartbeat... waiting for next iteration.")
+            logger.info("[DEBUG] About to run trading strategy cycle...")
+            try:
+                # Replace with your actual trading method and arguments as needed
+                strategy.run_trading_cycle_for_backtest('BTC-USD', None)
+                logger.info("[DEBUG] Finished trading strategy cycle.")
+            except Exception as e:
+                logger.error(f"[ERROR] Exception in trading strategy: {e}")
             time.sleep(60)  # adjust interval as needed
 
     except Exception as e:
