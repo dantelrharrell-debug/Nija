@@ -1,4 +1,5 @@
 import os
+print("=== NIJA DEBUG: CODE UPDATED 2025-12-11 ===")
 import sys
 import time
 from pathlib import Path
@@ -59,6 +60,9 @@ def run_live_trading():
 
         # Get ALL available trading pairs from Coinbase
         print("\n📡 Fetching all available trading products...")
+
+        # DEBUG: Confirm main trading loop is starting
+        print("[DEBUG] Entering main trading loop...")
         try:
             products_response = client.get_products()
             all_products = []
