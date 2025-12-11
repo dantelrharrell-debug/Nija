@@ -34,6 +34,7 @@ class TradingStrategy:
             from indicators import calculate_indicators
             indicators = calculate_indicators(df)
             min_trade_size = 0.005
+        except Exception as e:
             print(f"❌ Error calculating indicators for {product_id}: {e}")
             return
         # Check no-trade zones
@@ -170,7 +171,7 @@ class TradingStrategy:
         total_trades = len(self.closed_trades)
         win_rate = (len(wins) / total_trades * 100) if total_trades else 0
         gross_profit = sum(t.get('pnl', 0) for t in wins)
-                min_trade_size = 0.005
+        gross_loss = abs(sum(t.get('pnl', 0) for t in losses))
         profit_factor = (gross_profit / gross_loss) if gross_loss else float('inf')
         print("\n" + "="*60)
         print("NIJA PERFORMANCE SUMMARY")
@@ -188,26 +189,21 @@ class TradingStrategy:
         try:
             print(f"\n🔄 Syncing ALL Coinbase positions into NIJA management...")
             accounts = self.client.get_accounts()
-            
             imported_count = 0
-                    min_trade_size = 0.005
+            for account in accounts['accounts']:
                 currency = account['currency']
-                
                 # Skip USD and stablecoins - these are cash positions
                 if currency in ['USD', 'USDC', 'USDT']:
                     continue
-                
                 # Handle both dict and object formats
                 if hasattr(account, 'available_balance'):
                     balance = float(account.available_balance.get('value', 0)) if isinstance(account.available_balance, dict) else float(account.available_balance.value)
                 else:
                     balance = float(account.get('available_balance', {}).get('value', 0))
-                
                 # If we have a balance, we have a position
                 if balance > 0:
                     product_id = f"{currency}-USD"
                     position_key = f"{product_id}-manual"
-                    
                     # Skip if already synced
                     if position_key in self.synced_positions:
                         continue
