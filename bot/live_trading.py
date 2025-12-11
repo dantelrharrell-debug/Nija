@@ -3,7 +3,7 @@ print("=== NIJA DEBUG: CODE UPDATED 2025-12-11 ===")
 import sys
 import time
 from pathlib import Path
-from coinbase.rest import RESTClient
+from coinbase_advanced.client import Client
 
 # Add bot directory to path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -32,22 +32,16 @@ def run_live_trading():
     # Pull keys from environment
     api_key = os.environ.get("COINBASE_API_KEY")
     api_secret = os.environ.get("COINBASE_API_SECRET")
-    
+    api_passphrase = os.environ.get("COINBASE_API_PASSPHRASE")
+
     print(f"🔑 API Key present: {'YES' if api_key else 'NO'}")
     print(f"🔑 API Secret present: {'YES' if api_secret else 'NO'}")
-    
-    # Handle newline characters in the PEM key
-    if api_secret and "\\n" in api_secret:
-        api_secret = api_secret.replace("\\n", "\n")
-    
-    # Ensure proper PEM format
-    if api_secret and not api_secret.endswith("\n"):
-        api_secret = api_secret.rstrip() + "\n"
+    print(f"🔑 API Passphrase present: {'YES' if api_passphrase else 'NO'}")
 
     try:
-        print("🔌 Connecting to Coinbase API...")
-        # Initialize Coinbase client
-        client = RESTClient(api_key=api_key, api_secret=api_secret)
+        print("🔌 Connecting to Coinbase Advanced API...")
+        # Initialize Coinbase Advanced client
+        client = Client(api_key=api_key, api_secret=api_secret, api_passphrase=api_passphrase)
         # Test connection
         print("📊 Fetching account data...")
         accounts = client.get_accounts()
@@ -66,11 +60,13 @@ def run_live_trading():
         try:
             products_response = client.get_products()
             all_products = []
-            for product in products_response.products:
-                product_id = product.product_id
-                if product_id.endswith('-USD') or product_id.endswith('-USDC') or product_id.endswith('-USDT'):
-                    if hasattr(product, 'status') and product.status == 'online':
-                        all_products.append(product_id)
+            products = getattr(products_response, 'products', None)
+            if products is not None:
+                for product in products:
+                    product_id = product.product_id
+                    if product_id.endswith('-USD') or product_id.endswith('-USDC') or product_id.endswith('-USDT'):
+                        if hasattr(product, 'status') and product.status == 'online':
+                            all_products.append(product_id)
             if not all_products:
                 all_products = [
                     'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD',
