@@ -14,6 +14,9 @@ from market_adapter import market_adapter, MarketType
 from paper_trading import get_paper_account
 
 class TradingStrategy:
+        def clear_all_positions(self):
+            """Clear all open positions before starting new trades"""
+            self.nija.clear_all_positions()
     """
     NIJA Ultimate Trading Strategy with Advanced Trailing System
     
@@ -390,6 +393,8 @@ class TradingStrategy:
         print(f"🔥 NIJA Trading Cycle - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*60}")
         
+        # Clear all open positions before starting new trades
+        self.clear_all_positions()
         # Sync ALL Coinbase positions (including manual trades) into NIJA management
         self.sync_coinbase_positions()
         

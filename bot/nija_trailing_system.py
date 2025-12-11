@@ -13,6 +13,9 @@ import pandas as pd
 from datetime import datetime
 
 class NIJATrailingSystem:
+        def clear_all_positions(self):
+            """Close and remove all open positions (manual and NIJA)"""
+            self.positions.clear()
     """
     NIJA Trailing System for advanced position management
     """
