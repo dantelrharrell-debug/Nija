@@ -32,4 +32,4 @@ RUN python3 -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST c
 RUN python3 -m pip list
 
 # Default command
-CMD ["python3", "./bot/live_bot_script.py"]
+CMD ["python3", "./bot/live_bot_script/live_trading.py"]
