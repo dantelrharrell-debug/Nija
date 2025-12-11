@@ -28,8 +28,10 @@ except Exception as e:
 # ----------------------------
 # Environment / trading config
 # ----------------------------
+
 API_KEY = os.getenv("COINBASE_API_KEY")
 API_SECRET = os.getenv("COINBASE_API_SECRET")
+API_PASSPHRASE = os.getenv("COINBASE_API_PASSPHRASE")
 
 PRODUCT_ID = os.getenv("TRADE_PRODUCT_ID", "BTC-USD")
 ORDER_SIZE = float(os.getenv("TRADE_ORDER_SIZE", "0.001"))
@@ -62,8 +64,9 @@ def initialize_coinbase_client() -> Optional[Any]:
     """
     global client
 
-    if not (API_KEY and API_SECRET):
-        logger.warning("No COINBASE_API_KEY/COINBASE_API_SECRET found; Coinbase client not initialized.")
+
+    if not (API_KEY and API_SECRET and API_PASSPHRASE):
+        logger.warning("Missing COINBASE_API_KEY, COINBASE_API_SECRET, or COINBASE_API_PASSPHRASE; Coinbase client not initialized.")
         client = None
         return None
 
@@ -71,7 +74,7 @@ def initialize_coinbase_client() -> Optional[Any]:
     try:
         from coinbase_advanced_py.client import Client as AdvancedClient  # optional package
         logger.info("Found coinbase_advanced_py; initializing advanced client.")
-        client = AdvancedClient(api_key=API_KEY, api_secret=API_SECRET)
+        client = AdvancedClient(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
         logger.info("coinbase_advanced_py Client initialized.")
         return client
     except ModuleNotFoundError:
@@ -128,7 +131,9 @@ def _record_trade_log(entry: Dict[str, Any]):
         if len(_RECENT_TRADES) > _RECENT_TRADES_MAX:
             _RECENT_TRADES.pop(0)
 
-def _record_failed_order_attempt(product_id: str, side: str, size: float, error: Exception, attempts: list = None):
+from typing import Optional, List
+
+def _record_failed_order_attempt(product_id: str, side: str, size: float, error: Exception, attempts: Optional[List] = None):
     attempts = attempts or []
     entry = {
         "product_id": product_id,
@@ -159,61 +164,27 @@ def _try_place_order(product_id: str, side: str, size: float, price: Optional[fl
     logger.info("Attempting to place live order: %s", payload)
 
     attempts = []
-    # 1) coinbase_advanced_py-like
+    # Only support coinbase_advanced_py client
     try:
-        if hasattr(client, "place_order"):
-            resp = client.place_order(product_id=product_id, side=side, order_type="market" if price is None else "limit", size=size, price=price)
-            order_id = getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp))
-            entry = {"ok": True, "library": "place_order", "response": resp, "order_id": order_id, "product_id": product_id, "side": side, "size": size, "price": price}
-            _record_trade_log(entry)
-            return entry
         if hasattr(client, "create_order"):
-            resp = client.create_order(product_id=product_id, side=side, size=size, price=price)
-            order_id = getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp))
+            # coinbase_advanced_py expects order_type, price is optional for market
+            order_type = "market" if price is None else "limit"
+            kwargs = {"product_id": product_id, "side": side, "order_type": order_type, "size": size}
+            if price is not None:
+                kwargs["price"] = price
+            resp = client.create_order(**kwargs)
+            order_id = getattr(resp, "order_id", getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp)))
             entry = {"ok": True, "library": "create_order", "response": resp, "order_id": order_id, "product_id": product_id, "side": side, "size": size, "price": price}
             _record_trade_log(entry)
             return entry
-        if hasattr(client, "rest"):
-            rest = getattr(client, "rest")
-            if hasattr(rest, "place_order"):
-                resp = rest.place_order(product_id=product_id, side=side, order_type="market" if price is None else "limit", size=size, price=price)
-                order_id = getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp))
-                entry = {"ok": True, "library": "rest.place_order", "response": resp, "order_id": order_id, "product_id": product_id, "side": side, "size": size, "price": price}
-                _record_trade_log(entry)
-                return entry
-            if hasattr(rest, "create_order"):
-                resp = rest.create_order(product_id=product_id, side=side, size=size, price=price)
-                order_id = getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp))
-                entry = {"ok": True, "library": "rest.create_order", "response": resp, "order_id": order_id, "product_id": product_id, "side": side, "size": size, "price": price}
-                _record_trade_log(entry)
-                return entry
+        else:
+            raise RuntimeError("Client does not support create_order; only coinbase_advanced_py is supported in live mode.")
     except Exception as e:
         attempts.append(("advanced attempt", str(e)))
         logger.warning("Advanced client order attempt failed: %s", e)
-
-    # 2) official wallet-style
-    try:
-        if hasattr(client, "buy"):
-            base_currency = product_id.split("-")[-1]
-            resp = client.buy(amount=str(size), currency=base_currency)
-            order_id = getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp))
-            entry = {"ok": True, "library": "buy", "response": resp, "order_id": order_id, "product_id": product_id, "side": side, "size": size}
-            _record_trade_log(entry)
-            return entry
-        if hasattr(client, "create_transaction"):
-            resp = client.create_transaction(to=product_id, amount=str(size))
-            order_id = getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp))
-            entry = {"ok": True, "library": "create_transaction", "response": resp, "order_id": order_id, "product_id": product_id, "side": side, "size": size}
-            _record_trade_log(entry)
-            return entry
-    except Exception as e:
-        attempts.append(("wallet attempt", str(e)))
-        logger.warning("Wallet-style order attempt failed: %s", e)
-
-    # no supported method
-    err = RuntimeError("No supported order method found on client")
-    _record_failed_order_attempt(product_id, side, size, err, attempts=attempts)
-    raise err
+        err = RuntimeError(f"Order attempt failed: {e}")
+        _record_failed_order_attempt(product_id, side, size, err, attempts=attempts)
+        raise err
 
 # ----------------------------
 # Trading loop control
