@@ -865,59 +865,53 @@ class TradingStrategy:
             print(f"   ❌ Error closing partial: {e}")
     
     def close_full_position(self, product_id, position_id, current_price, reason):
-                        # Log trade close
-                        self.log_trade({
-                            'timestamp': datetime.now().isoformat(),
-                            'product_id': product_id,
-                            'side': position['side'],
-                            'action': 'CLOSE',
-                            'size': position['size'],
-                            'entry': position['entry_price'],
-                            'exit': current_price,
-                            'pnl': profit_usd,
-                            'pnl_pct': profit,
-                            'reason': reason,
-                            'mode': 'PAPER' if self.paper_mode else 'LIVE'
-                        })
-            # Print performance summary at end of cycle
-            self.print_performance_summary()
         """Close full position - supports LIVE and PAPER modes"""
         try:
             position = self.nija.positions.get(position_id)
             if position:
                 profit = position['profit_pct']
                 profit_usd = position['entry_price'] * position['size'] * profit / 100
-                
-                mode_indicator = "📄 PAPER" if self.paper_mode else "💰 LIVE"
-                print(f"   🎯 {mode_indicator} Full Close: {reason}")
+                # Log trade close
+                self.log_trade({
+                    'timestamp': datetime.now().isoformat(),
+                    'product_id': product_id,
+                    'side': position['side'],
+                    'action': 'CLOSE',
+                    'size': position['size'],
+                    'entry': position['entry_price'],
+                    'exit': current_price,
+                    'pnl': profit_usd,
+                    'pnl_pct': profit,
+                    'reason': reason,
+                    'mode': 'PAPER' if self.paper_mode else 'LIVE'
+                })
+                # Print performance summary at end of cycle
+                self.print_performance_summary()
+                mode_indicator = "PAPER" if self.paper_mode else "LIVE"
+                print(f"   Full Close: {reason}")
                 print(f"   Final P&L: {profit:.2f}% (${profit_usd:.2f})")
-                
                 # Update daily P&L
                 self.daily_pnl += profit_usd
-                
                 # Track consecutive losses (for stats only)
                 if profit < 0:
                     self.consecutive_losses += 1
                 else:
                     self.consecutive_losses = 0
-                
                 # LIVE MODE: Execute real sell order
                 if not self.paper_mode:
                     try:
                         # Calculate remaining crypto size to sell
                         total_crypto_size = position['size']
                         remaining_size = total_crypto_size * position['remaining_size']
-                        
                         order = self.client.market_order_sell(
                             client_order_id=f"{product_id}-sell-{int(time.time())}",
                             product_id=product_id,
                             base_size=str(remaining_size)
                         )
-                        print(f"   ✅ Sold {remaining_size:.8f} {product_id.split('-')[0]} at ${current_price:.2f}")
+                        print(f"   Sold {remaining_size:.8f} {product_id.split('-')[0]} at ${current_price:.2f}")
                     except Exception as sell_error:
-                        print(f"   ❌ Sell order failed: {sell_error}")
+                        print(f"   Sell order failed: {sell_error}")
                         return
-                
                 # PAPER MODE: Close paper position
                 else:
                     if self.paper_account:
@@ -927,9 +921,7 @@ class TradingStrategy:
                             close_pct=100.0,
                             reason=reason
                         )
-                
                 # Remove from NIJA system
                 self.nija.close_position(position_id)
-                
         except Exception as e:
-            print(f"   ❌ Error closing position: {e}")
+            print(f"   Error closing position: {e}")
