@@ -48,40 +48,55 @@ See **[TRADINGVIEW_SETUP.md](TRADINGVIEW_SETUP.md)** for complete webhook docume
 
 ---
 
-### 🚀 **$1M IN 90 DAYS GROWTH MODE - DEPLOYED & LIVE!**
+### 🚀 **$1M IN 6 MONTHS GROWTH GOAL - TRACKING STARTED (Dec 7, 2025)**
+
+**Goal:** Grow funded account to $1,000,000 in 6 months or less (by June 7, 2026)
+
+**Tracking:**
+- Start Date: Dec 7, 2025
+- Starting Balance: (see Coinbase account)
+- Progress: [Update weekly]
+
+**Strategy is now locked for review period. No further changes will be made unless security or performance issues are found.**
 
 **5 Growth Accelerators Active:**
-- 🔺 **PYRAMIDING** - Automatically adds 25% to winning positions at +1%, +2%, +3% profit
-- 💎 **EXTENDED RUNNERS** - Let mega-winners run to 20% (was 5%) with 95% profit protection
-- 📊 **DYNAMIC SIGNAL THRESHOLD** - Auto-scales with account size:
-  - <$50: 3/5 signals (quality focus, high friction protection)
-  - $50-$500: 2/5 signals (balanced frequency and quality)
-  - $500+: 1/5 signals with momentum (maximum volume)
-- ⚡ **MAXIMUM FREQUENCY** - 1,000 trades/day limit (was 500) for compounding velocity
-- 🛡️ **85% MAX EXPOSURE** - Maximum capital deployment (was 70%)
+- 🔺 **PYRAMIDING** - Adds 25% to winning positions at +1%, +2%, +3% profit
+- 💎 **EXTENDED RUNNERS** - Let mega-winners run to 20% with 95% profit protection
+- 📊 **DYNAMIC SIGNAL THRESHOLD** - 2/5 signals for small accounts, 2/5 for larger (aggressive mode)
+- ⚡ **MAXIMUM FREQUENCY** - 1,000 trades/day limit for compounding velocity
+- 🛡️ **85% MAX EXPOSURE** - Maximum capital deployment
 
 **Core Protection Systems:**
 - 🔒 **95% PROFIT LOCK** - Never give back more than 5% of gains (activates at +0.25%)
-- 🛑 **Smart Stop-Loss** - 0.5-0.7% stops (balanced for small accounts, reduces noise)
+- 🛑 **Smart Stop-Loss** - 0.5-0.7% stops
 - 💰 **Fast Profit Capture**:
-  - TP0.5 at +0.4% → Sell 30% (ultra-fast scalp lock)
-  - TP1 at +0.8% → Sell 30% more (60% total out, TSL activated)
-  - TP2 at +1.5% → Sell 20% more (80% total out, TTP activated)
+  - TP0.5 at +0.4% → Sell 30%
+  - TP1 at +0.8% → Sell 30% more (60% total out)
+  - TP2 at +1.5% → Sell 20% more (80% total out)
   - Runners trail to 20% with 95% lock protection
 
 **Position Sizing:**
-- **5% base allocation** per trade (conservative base)
+- **10% base allocation** per trade (aggressive base)
 - **Pyramiding adds 25%** at each profit milestone (+1%, +2%, +3%)
 - **Result**: Winning trades scale to 95% of original size while maintaining protection
 
-**System Status:**
-- ✅ Deployed on Railway (live 24/7)
+-**System Status:**
+- ✅ Deployed and live 24/7
 - ✅ Dual-mode: Autonomous + TradingView webhooks
 - ✅ Scanning 732 cryptocurrency pairs every 2.5 minutes
-- ✅ All sell orders functional (market_order_sell implemented)
+- ✅ All sell orders functional
 - ✅ Universal position management (bot + manual + webhook holdings protected)
-- ✅ Auto-compounding enabled (fresh balance fetch every trade)
+- ✅ Auto-compounding enabled
 - ✅ USDC/USDT included in balance calculations
+
+---
+
+
+---
+
+## 🚩 Strategy Lock Notice
+
+**As of Dec 7, 2025, the NIJA strategy is locked for a multi-week review. No further changes will be made unless required for security or performance.**
 
 ---
 
