@@ -43,14 +43,14 @@ def check_no_trade_zones(df, rsi):
     if rsi.iloc[-1] < 2:
         return True, "Extreme RSI < 2"
     
-    # ❌ Low-volume consolidation (stricter: 30% of avg)
+    # ❌ Low-volume consolidation (relaxed: 5% of avg)
     avg_volume = df['volume'].rolling(20).mean().iloc[-1]
-    if df['volume'].iloc[-1] < avg_volume * 0.3:
-        return True, "Low volume consolidation (stricter)"
+    if df['volume'].iloc[-1] < avg_volume * 0.05:
+        return True, "Low volume consolidation (relaxed, 5% of avg)"
 
-    # ❌ Low-liquidity pair (20-period avg volume < 1000 units)
-    if avg_volume < 1000:
-        return True, "Low-liquidity pair (avg volume < 1000)"
+    # ❌ Low-liquidity pair (20-period avg volume < 500 units)
+    if avg_volume < 500:
+        return True, "Low-liquidity pair (avg volume < 500)"
 
     # ❌ Large unpredictable wicks (wick > 1.5x body)
     last_candle = df.iloc[-1]
