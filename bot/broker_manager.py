@@ -16,6 +16,7 @@ class BrokerType(Enum):
     TD_AMERITRADE = "td_ameritrade"
     ALPACA = "alpaca"
     TRADIER = "tradier"
+    BINANCE = "binance"
 
 class BaseBroker(ABC):
     """Base class for all broker integrations"""
@@ -301,6 +302,16 @@ class AlpacaBroker(BaseBroker):
 
 class BinanceBroker(BaseBroker):
     """Binance integration for crypto and futures (PLACEHOLDER)"""
+    """
+    Binance integration for crypto trading (SKELETON - PLACEHOLDER)
+    
+    To implement:
+    1. Install binance-connector: pip install binance-connector
+    2. Set environment variables: BINANCE_API_KEY, BINANCE_API_SECRET
+    3. Uncomment and implement methods below
+    
+    Documentation: https://github.com/binance/binance-connector-python
+    """
     
     def __init__(self):
         super().__init__(BrokerType.BINANCE)
@@ -376,6 +387,143 @@ class BinanceBroker(BaseBroker):
     def supports_asset_class(self, asset_class: str) -> bool:
         """Binance supports crypto and futures"""
         return asset_class.lower() in ["crypto", "futures"]
+        """Connect to Binance (SKELETON)"""
+        try:
+            # TODO: Uncomment when binance-connector is installed
+            # from binance.spot import Spot
+            
+            api_key = os.getenv("BINANCE_API_KEY")
+            api_secret = os.getenv("BINANCE_API_SECRET")
+            
+            if not api_key or not api_secret:
+                print("❌ Binance credentials not found (set BINANCE_API_KEY and BINANCE_API_SECRET)")
+                return False
+            
+            # TODO: Initialize Binance client
+            # self.client = Spot(api_key=api_key, api_secret=api_secret)
+            
+            # TODO: Test connection
+            # account = self.client.account()
+            # self.connected = True
+            # print("✅ Binance connected")
+            
+            print("⚠️  Binance integration is a skeleton - implement connection logic")
+            return False
+            
+        except Exception as e:
+            print(f"❌ Binance connection failed: {e}")
+            return False
+    
+    def get_account_balance(self) -> float:
+        """Get USD balance (SKELETON)"""
+        try:
+            if not self.client:
+                return 0.0
+            
+            # TODO: Implement balance fetching
+            # account = self.client.account()
+            # for balance in account['balances']:
+            #     if balance['asset'] == 'USDT':
+            #         return float(balance['free'])
+            
+            return 0.0
+        except Exception as e:
+            print(f"Error fetching Binance balance: {e}")
+            return 0.0
+    
+    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+        """Place market order (SKELETON)"""
+        try:
+            if not self.client:
+                return {"status": "error", "error": "Not connected"}
+            
+            # TODO: Implement order placement
+            # Convert symbol format (e.g., BTC-USD -> BTCUSDT)
+            # binance_symbol = symbol.replace('-', '')
+            
+            # order = self.client.new_order(
+            #     symbol=binance_symbol,
+            #     side=side.upper(),
+            #     type='MARKET',
+            #     quantity=quantity
+            # )
+            
+            # return {"status": "filled", "order": order}
+            
+            return {"status": "error", "error": "Skeleton implementation"}
+            
+        except Exception as e:
+            print(f"Binance order error: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    def get_positions(self) -> List[Dict]:
+        """Get open positions (SKELETON)"""
+        try:
+            if not self.client:
+                return []
+            
+            # TODO: Implement position fetching
+            # account = self.client.account()
+            # positions = []
+            # for balance in account['balances']:
+            #     if float(balance['free']) > 0 and balance['asset'] != 'USDT':
+            #         positions.append({
+            #             'symbol': f"{balance['asset']}USDT",
+            #             'quantity': float(balance['free']),
+            #             'currency': balance['asset']
+            #         })
+            # return positions
+            
+            return []
+        except Exception as e:
+            print(f"Error fetching positions: {e}")
+            return []
+    
+    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
+        """Get candle data (SKELETON)"""
+        try:
+            if not self.client:
+                return []
+            
+            # TODO: Implement candle fetching
+            # Convert symbol and timeframe
+            # binance_symbol = symbol.replace('-', '')
+            # interval_map = {
+            #     "1m": "1m",
+            #     "5m": "5m",
+            #     "15m": "15m",
+            #     "1h": "1h",
+            #     "1d": "1d"
+            # }
+            
+            # klines = self.client.klines(
+            #     symbol=binance_symbol,
+            #     interval=interval_map.get(timeframe, "5m"),
+            #     limit=count
+            # )
+            
+            # candles = []
+            # for k in klines:
+            #     candles.append({
+            #         'time': k[0],
+            #         'open': float(k[1]),
+            #         'high': float(k[2]),
+            #         'low': float(k[3]),
+            #         'close': float(k[4]),
+            #         'volume': float(k[5])
+            #     })
+            
+            # return candles
+            
+            return []
+            
+        except Exception as e:
+            print(f"Error fetching candles: {e}")
+            return []
+    
+    def supports_asset_class(self, asset_class: str) -> bool:
+        """Binance supports crypto"""
+        return asset_class.lower() == "crypto"
 
 class BrokerManager:
     """Manages multiple broker connections"""
