@@ -58,29 +58,25 @@ _trading_state = {"running": False, "loops": 0, "orders_placed": 0}
 def initialize_coinbase_client() -> Optional[Any]:
     """
     Robust client init:
-     - Prefer coinbase_advanced_py (if installed)
-     - Fallback to official 'coinbase' package
-     - Do NOT require a passphrase here (support key+secret only)
+    - Use official 'coinbase.rest.RESTClient' as per README
     """
     global client
 
 
-    if not (API_KEY and API_SECRET and API_PASSPHRASE):
-        logger.warning("Missing COINBASE_API_KEY, COINBASE_API_SECRET, or COINBASE_API_PASSPHRASE; Coinbase client not initialized.")
+    if not (API_KEY and API_SECRET):
+        logger.warning("Missing COINBASE_API_KEY or COINBASE_API_SECRET; Coinbase client not initialized.")
         client = None
         return None
 
-    # Try advanced/pro client first
+    # Use official RESTClient
     try:
-        from coinbase_advanced_py.client import Client as AdvancedClient  # optional package
-        logger.info("Found coinbase_advanced_py; initializing advanced client.")
-        client = AdvancedClient(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
-        logger.info("coinbase_advanced_py Client initialized.")
+        from coinbase.rest import RESTClient
+        logger.info("Initializing official coinbase RESTClient.")
+        client = RESTClient(api_key=API_KEY, api_secret=API_SECRET)
+        logger.info("Official coinbase RESTClient initialized.")
         return client
-    except ModuleNotFoundError:
-        logger.info("coinbase_advanced_py not installed; will try official coinbase client.")
     except Exception as e:
-        logger.warning("coinbase_advanced_py import/instantiation failed: %s", e)
+        logger.error("Official coinbase RESTClient init failed: %s", e)
 
     # Fallback -> official wallet client
     try:
@@ -164,24 +160,19 @@ def _try_place_order(product_id: str, side: str, size: float, price: Optional[fl
     logger.info("Attempting to place live order: %s", payload)
 
     attempts = []
-    # Only support coinbase_advanced_py client
+    # Only support RESTClient
     try:
-        if hasattr(client, "create_order"):
-            # coinbase_advanced_py expects order_type, price is optional for market
-            order_type = "market" if price is None else "limit"
-            kwargs = {"product_id": product_id, "side": side, "order_type": order_type, "size": size}
-            if price is not None:
-                kwargs["price"] = price
-            resp = client.create_order(**kwargs)
+        if hasattr(client, "market_order_buy"):
+            resp = client.market_order_buy(product_id=product_id, quote_size=str(size))
             order_id = getattr(resp, "order_id", getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp)))
-            entry = {"ok": True, "library": "create_order", "response": resp, "order_id": order_id, "product_id": product_id, "side": side, "size": size, "price": price}
+            entry = {"ok": True, "library": "market_order_buy", "response": resp, "order_id": order_id, "product_id": product_id, "side": side, "size": size, "price": price}
             _record_trade_log(entry)
             return entry
         else:
-            raise RuntimeError("Client does not support create_order; only coinbase_advanced_py is supported in live mode.")
+            raise RuntimeError("Client does not support market_order_buy; only RESTClient is supported in live mode.")
     except Exception as e:
-        attempts.append(("advanced attempt", str(e)))
-        logger.warning("Advanced client order attempt failed: %s", e)
+        attempts.append(("rest attempt", str(e)))
+        logger.warning("RESTClient order attempt failed: %s", e)
         err = RuntimeError(f"Order attempt failed: {e}")
         _record_failed_order_attempt(product_id, side, size, err, attempts=attempts)
         raise err
