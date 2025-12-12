@@ -3,7 +3,7 @@ print("=== NIJA DEBUG: CODE UPDATED 2025-12-11 ===")
 import sys
 import time
 from pathlib import Path
-from coinbase_advanced.client import Client
+from coinbase_advanced_py.client import Client
 
 # Add bot directory to path
 sys.path.insert(0, os.path.dirname(__file__))

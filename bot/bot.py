@@ -1,6 +1,6 @@
 import os
 import logging
-from coinbase_advanced.client import Client
+from coinbase_advanced_py.client import Client
 import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
