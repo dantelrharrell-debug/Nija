@@ -1,19 +1,48 @@
 # trading_strategy.py
+
 import time
 import pandas as pd
 from datetime import datetime, timedelta
 import sys
 import os
+import logging
+from logging.handlers import RotatingFileHandler
+
 
 # Add bot directory to path if running from root
 if os.path.basename(os.getcwd()) != 'bot':
     sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+
+# Setup logging (shared with live_trading.py)
+LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'nija.log')
+LOG_FILE = os.path.abspath(LOG_FILE)
+logger = logging.getLogger("nija")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+if not logger.hasHandlers():
+    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=2)
+    file_handler.setFormatter(formatter)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 
 from nija_trailing_system import NIJATrailingSystem
 from market_adapter import market_adapter, MarketType
 from paper_trading import get_paper_account
 
 class TradingStrategy:
+        def run_trading_cycle(self):
+            logger.info(f"[DEBUG] Starting trading cycle for pairs: {self.pairs}")
+            try:
+                # Main trading logic here (simulate a cycle)
+                # For demonstration, just log the start and end
+                # Replace this with your actual trading logic
+                logger.info(f"[DEBUG] Trading cycle running for {len(self.pairs)} pairs.")
+                # ...existing trading logic...
+            except Exception as e:
+                logger.error(f"[DEBUG] Exception in trading cycle: {e}")
+            logger.info(f"[DEBUG] Finished trading cycle for pairs: {self.pairs}")
     """
     NIJA Ultimate Trading Strategy with Advanced Trailing System
     
@@ -35,14 +64,14 @@ class TradingStrategy:
             indicators = calculate_indicators(df)
             min_trade_size = 0.005
         except Exception as e:
-            print(f"❌ Error calculating indicators for {product_id}: {e}")
+            logger.error(f"❌ Error calculating indicators for {product_id}: {e}")
             return
         # Check no-trade zones
         if indicators.get('no_trade_zone'):
             return
         # Get signal score (1-5)
         action, signal_score = self.calculate_signal_score(product_id, indicators, df)
-        print(f"[DEBUG] {product_id}: action={action}, signal_score={signal_score}")
+        logger.info(f"[DEBUG] {product_id}: action={action}, signal_score={signal_score}")
         # Use same dynamic threshold as live
         usd_balance = self.get_usd_balance() if hasattr(self, 'get_usd_balance') else 10000.0
         min_score = 2
@@ -54,17 +83,17 @@ class TradingStrategy:
                 min_score = 1
         if action == 'buy' and signal_score >= min_score:
             position_size = self.calculate_position_size(product_id, signal_score, df)
-            print(f"[DEBUG] {product_id}: position_size={position_size}, min_trade_size=0.005")
+            logger.info(f"[DEBUG] {product_id}: position_size={position_size}, min_trade_size=0.005")
             min_trade_size = 0.005
             if position_size > min_trade_size:
-                print(f"[DEBUG] {product_id}: Placing BUY trade, size={position_size}")
+                logger.info(f"[DEBUG] {product_id}: Placing BUY trade, size={position_size}")
                 self.enter_position(product_id, 'long', position_size, df)
         elif action == 'sell' and signal_score >= 2:
             position_size = self.calculate_position_size(product_id, signal_score, df)
-            print(f"[DEBUG] {product_id}: position_size={position_size}, min_trade_size=0.005")
+            logger.info(f"[DEBUG] {product_id}: position_size={position_size}, min_trade_size=0.005")
             min_trade_size = 0.005
             if position_size > min_trade_size:
-                print(f"[DEBUG] {product_id}: Placing SELL trade, size={position_size}")
+                logger.info(f"[DEBUG] {product_id}: Placing SELL trade, size={position_size}")
                 self.enter_position(product_id, 'short', position_size, df)
         # Manage open positions (simulate trailing stops, exits)
         self.manage_open_positions()
@@ -75,7 +104,7 @@ class TradingStrategy:
             # Check API connectivity
             accounts = self.client.get_accounts()
             if not accounts or 'accounts' not in accounts:
-                print("❌ API connectivity check failed: No accounts data returned.")
+                logger.error("❌ API connectivity check failed: No accounts data returned.")
                 return False
             # Check available USD balance
             usd_balance = 0.0
@@ -88,21 +117,21 @@ class TradingStrategy:
                     except Exception:
                         continue
             if usd_balance < 1.0:
-                print(f"❌ Insufficient USD balance: ${usd_balance:.2f} (minimum $1 required)")
+                logger.error(f"❌ Insufficient USD balance: ${usd_balance:.2f} (minimum $1 required)")
                 return False
             # Check product API (BTC-USD as a proxy)
             try:
                 ticker = self.client.get_product(product_id='BTC-USD')
                 if not ticker or 'price' not in ticker:
-                    print("❌ API product check failed: No price data for BTC-USD.")
+                    logger.error("❌ API product check failed: No price data for BTC-USD.")
                     return False
             except Exception as e:
-                print(f"❌ API product check failed: {e}")
+                logger.error(f"❌ API product check failed: {e}")
                 return False
-            print(f"✅ Account health check passed. USD balance: ${usd_balance:.2f}")
+            logger.info(f"✅ Account health check passed. USD balance: ${usd_balance:.2f}")
             return True
         except Exception as e:
-            print(f"❌ Account health check failed: {e}")
+            logger.error(f"❌ Account health check failed: {e}")
             return False
 
     def clear_all_positions(self):
@@ -125,10 +154,10 @@ class TradingStrategy:
         self.paper_mode = paper_mode or os.getenv("PAPER_MODE", "false").lower() == "true"
         if self.paper_mode:
             self.paper_account = get_paper_account(initial_balance=10000.0)
-            print("📄 PAPER TRADING MODE ENABLED (Simulation)")
+            logger.info("📄 PAPER TRADING MODE ENABLED (Simulation)")
         else:
             self.paper_account = None
-            print("💰 LIVE TRADING MODE ENABLED (Real Money)")
+            logger.info("💰 LIVE TRADING MODE ENABLED (Real Money)")
         
         # NIJA Trailing System
         self.nija = NIJATrailingSystem()
@@ -157,9 +186,9 @@ class TradingStrategy:
         self.trade_log.append(trade)
         # Echo trade events to stdout for Railway visibility
         if trade['action'] == 'OPEN':
-            print(f"=== TRADE OPENED ===\nTime: {trade['timestamp']}\nProduct: {trade['product_id']}\nSide: {trade['side']}\nSize: {trade['size']:.8f}\nEntry: ${trade['entry']:.2f}\nUSD Amount: ${trade['usd_amount']:.2f}\nMode: {trade['mode']}\n====================")
+            logger.info(f"=== TRADE OPENED ===\nTime: {trade['timestamp']}\nProduct: {trade['product_id']}\nSide: {trade['side']}\nSize: {trade['size']:.8f}\nEntry: ${trade['entry']:.2f}\nUSD Amount: ${trade['usd_amount']:.2f}\nMode: {trade['mode']}\n====================")
         elif trade['action'] == 'CLOSE':
-            print(f"=== TRADE CLOSED ===\nTime: {trade['timestamp']}\nProduct: {trade['product_id']}\nSide: {trade['side']}\nSize: {trade['size']:.8f}\nEntry: ${trade['entry']:.2f}\nExit: ${trade['exit']:.2f}\nPnL: ${trade['pnl']:+.2f} ({trade['pnl_pct']:+.2f}%)\nReason: {trade.get('reason','')}\nMode: {trade['mode']}\n====================")
+            logger.info(f"=== TRADE CLOSED ===\nTime: {trade['timestamp']}\nProduct: {trade['product_id']}\nSide: {trade['side']}\nSize: {trade['size']:.8f}\nEntry: ${trade['entry']:.2f}\nExit: ${trade['exit']:.2f}\nPnL: ${trade['pnl']:+.2f} ({trade['pnl_pct']:+.2f}%)\nReason: {trade.get('reason','')}\nMode: {trade['mode']}\n====================")
             self.closed_trades.append(trade)
         # Update drawdown
         equity = self.get_usd_balance() + sum(pos['profit_pct'] * pos['entry_price'] * pos['size'] / 100 for pos in self.nija.positions.values())
@@ -177,10 +206,10 @@ class TradingStrategy:
         gross_profit = sum(t.get('pnl', 0) for t in wins)
         gross_loss = abs(sum(t.get('pnl', 0) for t in losses))
         profit_factor = (gross_profit / gross_loss) if gross_loss else float('inf')
-        print("\n" + "="*60)
-        print("NIJA PERFORMANCE SUMMARY")
-        print("="*60)
-        print(f"Total Trades:   {total_trades}")
+        logger.info("\n" + "="*60)
+        logger.info("NIJA PERFORMANCE SUMMARY")
+        logger.info("="*60)
+        logger.info(f"Total Trades:   {total_trades}")
         print(f"Win Rate:       {win_rate:.1f}%")
         print(f"Profit Factor:  {profit_factor:.2f}")
         print(f"Max Drawdown:   {self.max_drawdown*100:.2f}%")

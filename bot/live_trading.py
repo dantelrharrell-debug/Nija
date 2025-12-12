@@ -1,11 +1,31 @@
+
 import os
 import sys
 import time
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from coinbase.rest import RESTClient
 
+
 # Add bot directory to path
 sys.path.insert(0, os.path.dirname(__file__))
+
+# Setup logging
+LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'nija.log')
+LOG_FILE = os.path.abspath(LOG_FILE)
+logger = logging.getLogger("nija")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+
+file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=2)
+file_handler.setFormatter(formatter)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+
+if not logger.hasHandlers():
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 
 from trading_strategy import TradingStrategy
 
@@ -22,40 +42,41 @@ def load_env():
                     value = value.strip('"').strip("'")
                     os.environ[key] = value
 
-def run_live_trading():
-    print("📋 Initializing trading bot...")
-    
+
+
+    logger.info("📋 Initializing trading bot...")
+
     # Load environment variables
     load_env()
-    
+
     # Pull keys from environment
     api_key = os.environ.get("COINBASE_API_KEY")
     api_secret = os.environ.get("COINBASE_API_SECRET")
     api_passphrase = os.environ.get("COINBASE_API_PASSPHRASE")
 
-    print(f"🔑 API Key present: {'YES' if api_key else 'NO'}")
-    print(f"🔑 API Secret present: {'YES' if api_secret else 'NO'}")
-    print(f"🔑 API Passphrase present: {'YES' if api_passphrase else 'NO'}")
+    logger.info(f"🔑 API Key present: {'YES' if api_key else 'NO'}")
+    logger.info(f"🔑 API Secret present: {'YES' if api_secret else 'NO'}")
+    logger.info(f"🔑 API Passphrase present: {'YES' if api_passphrase else 'NO'}")
 
     try:
-        print("🔌 Connecting to Coinbase Advanced API...")
+        logger.info("🔌 Connecting to Coinbase Advanced API...")
         # Initialize Coinbase REST client
         client = RESTClient(api_key=api_key, api_secret=api_secret)
         # Test connection
-        print("📊 Fetching account data...")
+        logger.info("📊 Fetching account data...")
         accounts = client.get_accounts()
-        print("✅ Successfully connected to Coinbase!")
-        print(f"Found {len(accounts['accounts'])} accounts")
+        logger.info("✅ Successfully connected to Coinbase!")
+        logger.info(f"Found {len(accounts['accounts'])} accounts")
         for account in accounts['accounts']:
             balance = float(account['available_balance']['value'])
             if balance > 0:
-                print(f"  {account['currency']}: {balance} ({account['name']})")
+                logger.info(f"  {account['currency']}: {balance} ({account['name']})")
 
         # Get ALL available trading pairs from Coinbase
-        print("\n📡 Fetching all available trading products...")
+        logger.info("\n📡 Fetching all available trading products...")
 
         # DEBUG: Confirm main trading loop is starting
-        print("[DEBUG] Entering main trading loop...")
+        logger.info("[DEBUG] Entering main trading loop...")
         try:
             products_response = client.get_products()
             all_products = []
@@ -78,12 +99,12 @@ def run_live_trading():
                     'PEPE-USD', 'FLOKI-USD', 'BONK-USD',
                     'USDC-USD', 'DAI-USD', 'USDT-USD'
                 ]
-            print(f"   Found {len(all_products)} tradable products")
-            print(f"   Markets: {', '.join(all_products[:10])}{'...' if len(all_products) > 10 else ''}")
+            logger.info(f"   Found {len(all_products)} tradable products")
+            logger.info(f"   Markets: {', '.join(all_products[:10])}{'...' if len(all_products) > 10 else ''}")
         except Exception as e:
-            print(f"   ⚠️ Could not fetch products: {e}")
+            logger.error(f"   ⚠️ Could not fetch products: {e}")
             all_products = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'DOGE-USD']
-            print(f"   Using fallback: {', '.join(all_products)}")
+            logger.info(f"   Using fallback: {', '.join(all_products)}")
 
         # --- STRATEGY DIVERSIFICATION ---
         # Define multiple strategies with different configs
@@ -104,35 +125,34 @@ def run_live_trading():
             ),
             # Add more strategies here as needed
         ]
-        print(f"\n🚀 Starting 24/7 trading bot with {len(strategies)} strategies...")
-        print(f"   Pairs: {len(all_products)} markets (ALL USD-based)")
-        print("   Strategy: VWAP + RSI + MACD")
-        print("   Scan interval: 2.5 minutes")
-        print("   Signal threshold: 2/5 conditions")
-        print("   Max daily trades: 200")
-        print("   Press Ctrl+C to stop\n")
+        logger.info(f"\n🚀 Starting 24/7 trading bot with {len(strategies)} strategies...")
+        logger.info(f"   Pairs: {len(all_products)} markets (ALL USD-based)")
+        logger.info("   Strategy: VWAP + RSI + MACD")
+        logger.info("   Scan interval: 2.5 minutes")
+        logger.info("   Signal threshold: 2/5 conditions")
+        logger.info("   Max daily trades: 200")
+        logger.info("   Press Ctrl+C to stop\n")
 
         # Main trading loop
         while True:
             try:
-                print(f"🔍 [{time.strftime('%Y-%m-%d %H:%M:%S')}] Running trading cycle for all strategies...")
+                logger.info(f"🔍 [{time.strftime('%Y-%m-%d %H:%M:%S')}] Running trading cycle for all strategies...")
                 for idx, strategy in enumerate(strategies):
-                    print(f"\n--- Running Strategy {idx+1} ---")
+                    logger.info(f"\n--- Running Strategy {idx+1} ---")
                     # Optionally, update pairs dynamically if needed:
                     # strategy.pairs = all_products[:10]  # Example: rotate pairs
                     strategy.run_trading_cycle()
-                print(f"\n⏰ Waiting 2.5 minutes until next cycle...")
+                logger.info(f"\n⏰ Waiting 2.5 minutes until next cycle...")
                 time.sleep(150)
             except KeyboardInterrupt:
-                print("\n\n🛑 Stopping trading bot...")
+                logger.info("\n\n🛑 Stopping trading bot...")
                 break
             except Exception as e:
-                print(f"\n❌ Error in trading cycle: {e}")
-                print("   Retrying in 1 minute...")
+                logger.error(f"\n❌ Error in trading cycle: {e}")
+                logger.info("   Retrying in 1 minute...")
                 time.sleep(60)
     except Exception as e:
-        print(f"❌ Error connecting to Coinbase: {e}")
+        logger.error(f"❌ Error connecting to Coinbase: {e}")
         raise
-
 if __name__ == "__main__":
     run_live_trading()
