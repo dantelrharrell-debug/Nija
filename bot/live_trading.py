@@ -20,7 +20,7 @@ def run_live_trading():
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
 
-    logger.info("\ud83d\udccb Initializing trading bot...")
+    logger.info("Initializing trading bot...")
     try:
         strategy = TradingStrategy()
         while True:
