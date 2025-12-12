@@ -13,7 +13,7 @@ API_SECRET = os.environ.get("COINBASE_API_SECRET")
 API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")
 ACCOUNT_ID = os.environ.get("COINBASE_ACCOUNT_ID")
 
-client = RESTClient(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
+client = RESTClient(api_key=API_KEY, api_secret=API_SECRET)
 logging.info("✅ Coinbase RESTClient initialized")
 
 def main_loop():

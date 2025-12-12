@@ -40,7 +40,7 @@ def run_live_trading():
     try:
         print("🔌 Connecting to Coinbase Advanced API...")
         # Initialize Coinbase REST client
-        client = RESTClient(api_key=api_key, api_secret=api_secret, api_passphrase=api_passphrase)
+        client = RESTClient(api_key=api_key, api_secret=api_secret)
         # Test connection
         print("📊 Fetching account data...")
         accounts = client.get_accounts()
