@@ -115,11 +115,12 @@ def test_risk_manager():
     
     # Test stop loss calculation
     df = create_test_data(100)
-    swing_low = 95.0  # Use a fixed swing low below entry for testing
+    TEST_ENTRY_PRICE = 100.0
+    TEST_SWING_LOW = 95.0  # Swing low below entry for long position test
     atr = 1.5
-    stop = rm.calculate_stop_loss(entry_price=100, side='long', swing_level=swing_low, atr=atr)
-    assert stop < 100, "Long stop should be below entry"
-    print(f"  ✓ Stop loss calculation works (Entry=$100, Stop=${stop:.2f})")
+    stop = rm.calculate_stop_loss(entry_price=TEST_ENTRY_PRICE, side='long', swing_level=TEST_SWING_LOW, atr=atr)
+    assert stop < TEST_ENTRY_PRICE, "Long stop should be below entry"
+    print(f"  ✓ Stop loss calculation works (Entry=${TEST_ENTRY_PRICE}, Stop=${stop:.2f})")
     
     # Test take profit levels
     tp_levels = rm.calculate_take_profit_levels(entry_price=100, stop_loss=98, side='long')

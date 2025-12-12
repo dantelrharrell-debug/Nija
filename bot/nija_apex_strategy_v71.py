@@ -5,7 +5,7 @@ Unified algorithmic trading strategy with advanced market filters and risk manag
 
 Author: NIJA Trading Systems
 Version: 7.1
-Date: December 2025
+Date: December 2024
 """
 
 import pandas as pd
@@ -334,10 +334,24 @@ class NIJAApexStrategyV71:
             
             # If we have timestamp data, check if we're in first 6 seconds
             if self.last_candle_time != current_candle_time:
-                # New candle detected
-                self.last_candle_time = current_candle_time
-                # In first 6 seconds of new candle
-                return False, 'First 6 seconds of new candle - waiting for stability'
+                # New candle detected - store time and check elapsed time
+                if self.last_candle_time is None:
+                    # First run - allow trade
+                    self.last_candle_time = current_candle_time
+                else:
+                    # Calculate time since candle started
+                    if hasattr(df.index, 'to_pydatetime'):
+                        # Pandas datetime index
+                        time_since_candle = (current_time - current_candle_time.to_pydatetime()).total_seconds()
+                    else:
+                        # Estimate: if this is a fresh candle check, assume we're early
+                        time_since_candle = 0
+                    
+                    self.last_candle_time = current_candle_time
+                    
+                    # Block trade if we're in first N seconds of new candle
+                    if time_since_candle < self.candle_exclusion_seconds:
+                        return False, f'First {self.candle_exclusion_seconds}s of new candle - waiting for stability'
         
         return True, 'All smart filters passed'
     
@@ -483,7 +497,8 @@ class NIJAApexStrategyV71:
                     return {
                         'action': 'exit',
                         'reason': exit_reason,
-                        'position': position
+                        'position': position,
+                        'current_price': current_price
                     }
                 
                 # Check take profit levels
@@ -638,7 +653,7 @@ class NIJAApexStrategyV71:
             elif action == 'exit':
                 success = self.execution_engine.execute_exit(
                     symbol=symbol,
-                    exit_price=action_data['position']['entry_price'],  # Use current price in real scenario
+                    exit_price=action_data.get('current_price', action_data['position']['entry_price']),
                     size_pct=1.0,
                     reason=action_data['reason']
                 )
