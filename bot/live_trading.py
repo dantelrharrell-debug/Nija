@@ -1,158 +1,34 @@
-
 import os
 import sys
 import time
 import logging
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
-from coinbase.rest import RESTClient
-
-
-# Add bot directory to path
-sys.path.insert(0, os.path.dirname(__file__))
-
-# Setup logging
-LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'nija.log')
-LOG_FILE = os.path.abspath(LOG_FILE)
-logger = logging.getLogger("nija")
-logger.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
-
-file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=2)
-file_handler.setFormatter(formatter)
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(formatter)
-
-if not logger.hasHandlers():
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-
 from trading_strategy import TradingStrategy
 
-# Load environment variables from .env file
-def load_env():
-    env_path = Path(__file__).parent.parent / '.env'
-    if env_path.exists():
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    # Remove quotes if present
-                    value = value.strip('"').strip("'")
-                    os.environ[key] = value
+# Main trading logic and bot initialization goes here...
+def run_live_trading():
+    # Setup logging
+    LOG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'nija.log'))
+    logger = logging.getLogger("nija")
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=2)
+    file_handler.setFormatter(formatter)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    if not logger.hasHandlers():
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
 
-
-
-    logger.info("📋 Initializing trading bot...")
-
-    # Load environment variables
-    load_env()
-
-    # Pull keys from environment
-    api_key = os.environ.get("COINBASE_API_KEY")
-    api_secret = os.environ.get("COINBASE_API_SECRET")
-    api_passphrase = os.environ.get("COINBASE_API_PASSPHRASE")
-
-    logger.info(f"🔑 API Key present: {'YES' if api_key else 'NO'}")
-    logger.info(f"🔑 API Secret present: {'YES' if api_secret else 'NO'}")
-    logger.info(f"🔑 API Passphrase present: {'YES' if api_passphrase else 'NO'}")
-
+    logger.info("Initializing trading bot...")
     try:
-        logger.info("🔌 Connecting to Coinbase Advanced API...")
-        # Initialize Coinbase REST client
-        client = RESTClient(api_key=api_key, api_secret=api_secret)
-        # Test connection
-        logger.info("📊 Fetching account data...")
-        accounts = client.get_accounts()
-        logger.info("✅ Successfully connected to Coinbase!")
-        logger.info(f"Found {len(accounts['accounts'])} accounts")
-        for account in accounts['accounts']:
-            balance = float(account['available_balance']['value'])
-            if balance > 0:
-                logger.info(f"  {account['currency']}: {balance} ({account['name']})")
-
-        # Get ALL available trading pairs from Coinbase
-        logger.info("\n📡 Fetching all available trading products...")
-
-        # DEBUG: Confirm main trading loop is starting
-        logger.info("[DEBUG] Entering main trading loop...")
-        try:
-            products_response = client.get_products()
-            all_products = []
-            products = getattr(products_response, 'products', None)
-            if products is not None:
-                for product in products:
-                    product_id = product.product_id
-                    if product_id.endswith('-USD') or product_id.endswith('-USDC') or product_id.endswith('-USDT'):
-                        if hasattr(product, 'status') and product.status == 'online':
-                            all_products.append(product_id)
-            if not all_products:
-                all_products = [
-                    'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD',
-                    'DOGE-USD', 'MATIC-USD', 'LINK-USD', 'AVAX-USD', 'DOT-USD',
-                    'SHIB-USD', 'UNI-USD', 'ATOM-USD', 'LTC-USD', 'BCH-USD',
-                    'NEAR-USD', 'APT-USD', 'ARB-USD', 'OP-USD', 'FIL-USD',
-                    'ICP-USD', 'VET-USD', 'ALGO-USD', 'HBAR-USD', 'GRT-USD',
-                    'AAVE-USD', 'MKR-USD', 'SNX-USD', 'CRV-USD', 'COMP-USD',
-                    'IMX-USD', 'LRC-USD', 'MINA-USD',
-                    'PEPE-USD', 'FLOKI-USD', 'BONK-USD',
-                    'USDC-USD', 'DAI-USD', 'USDT-USD'
-                ]
-            logger.info(f"   Found {len(all_products)} tradable products")
-            logger.info(f"   Markets: {', '.join(all_products[:10])}{'...' if len(all_products) > 10 else ''}")
-        except Exception as e:
-            logger.error(f"   ⚠️ Could not fetch products: {e}")
-            all_products = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'DOGE-USD']
-            logger.info(f"   Using fallback: {', '.join(all_products)}")
-
-        # --- STRATEGY DIVERSIFICATION ---
-        # Define multiple strategies with different configs
-        strategies = [
-            TradingStrategy(
-                client=client,
-                pairs=["BTC-USD", "ETH-USD", "SOL-USD"],
-                base_allocation=5.0,
-                max_exposure=0.3,
-                max_daily_loss=0.1
-            ),
-            TradingStrategy(
-                client=client,
-                pairs=["MATIC-USD", "LINK-USD", "AVAX-USD"],
-                base_allocation=3.0,
-                max_exposure=0.2,
-                max_daily_loss=0.07
-            ),
-            # Add more strategies here as needed
-        ]
-        logger.info(f"\n🚀 Starting 24/7 trading bot with {len(strategies)} strategies...")
-        logger.info(f"   Pairs: {len(all_products)} markets (ALL USD-based)")
-        logger.info("   Strategy: VWAP + RSI + MACD")
-        logger.info("   Scan interval: 2.5 minutes")
-        logger.info("   Signal threshold: 2/5 conditions")
-        logger.info("   Max daily trades: 200")
-        logger.info("   Press Ctrl+C to stop\n")
-
-        # Main trading loop
+        strategy = TradingStrategy()
         while True:
-            try:
-                logger.info(f"🔍 [{time.strftime('%Y-%m-%d %H:%M:%S')}] Running trading cycle for all strategies...")
-                for idx, strategy in enumerate(strategies):
-                    logger.info(f"\n--- Running Strategy {idx+1} ---")
-                    # Optionally, update pairs dynamically if needed:
-                    # strategy.pairs = all_products[:10]  # Example: rotate pairs
-                    strategy.run_trading_cycle()
-                logger.info(f"\n⏰ Waiting 2.5 minutes until next cycle...")
-                time.sleep(150)
-            except KeyboardInterrupt:
-                logger.info("\n\n🛑 Stopping trading bot...")
-                break
-            except Exception as e:
-                logger.error(f"\n❌ Error in trading cycle: {e}")
-                logger.info("   Retrying in 1 minute...")
-                time.sleep(60)
+            strategy.run_trading_cycle()
+            time.sleep(150)
     except Exception as e:
-        logger.error(f"❌ Error connecting to Coinbase: {e}")
-        raise
+        logger.error(f"An error occurred: {e}", exc_info=True)
+        sys.exit(1)
+
 if __name__ == "__main__":
     run_live_trading()
