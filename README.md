@@ -2,6 +2,10 @@
 
 ---
 
+# NIJA Trading Bot 🚀
+
+---
+
 ## 🛠️ Recent Fixes (Dec 11, 2025)
 
 - Fixed persistent IndentationError in `bot/trading_strategy.py` (`close_full_position` method). All indentation is now consistent and the bot runs without syntax errors.
@@ -18,17 +22,22 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 ## 🚀 System Status
 
 | Component | Status |
+- Bot successfully deployed and running LIVE as of December 11, 2025.
+
+---
+
+**Autonomous Cryptocurrency Trading with Dual RSI Strategy & Intelligent Trailing System**
+
+NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade API** that scans **732 cryptocurrency markets** and executes trades using a sophisticated **dual RSI strategy** (RSI_9 + RSI_14) with dynamic position management. The bot automatically compounds profits, manages risk, and trails positions to maximize winners while protecting capital.
+
+---
+
+## 🚀 System Status
+
+| Component | Status |
 |-----------|--------|
-| Exchange | 🟢 **Coinbase Advanced Trade** |
-| API Connection | 🟢 Connected & Authenticated |
-| Trading Mode | 🟢 **LIVE** (Real Trades) |
 | Markets Monitored | 🟢 **732 Crypto Pairs** |
 | Auto-Compounding | 🟢 **Active** (Real-time balance) |
-| Position Management | 🟢 **NIJA + Manual Positions** |
-| Universal Management | 🟢 **All holdings tracked** |
-
-**Latest Updates** (Dec 6, 2025):
-
 ### 🎯 **TRADINGVIEW WEBHOOK INTEGRATION - DEPLOYED!**
 
 **Dual-Mode Trading Now Active:**
@@ -42,50 +51,26 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 - 🔒 **NIJA exits** - All webhook trades get 95% profit lock + pyramiding + runners
 - 📊 **Multi-strategy** - Run multiple TradingView strategies simultaneously
 - 🎯 **Webhook URL**: `https://nija-trading-bot-v9xl.onrender.com/webhook`
-
 **Simple Alert Format:**
 ```json
 {
   "secret": "nija_webhook_2025",
   "action": "buy",
   "symbol": "BTC-USD",
-  "size": 10.0
-}
-```
 
 See **[TRADINGVIEW_SETUP.md](TRADINGVIEW_SETUP.md)** for complete webhook documentation.
 
 ---
-
-### 🚀 **$1M IN 6 MONTHS GROWTH GOAL - TRACKING STARTED (Dec 7, 2025)**
-
-**Goal:** Grow funded account to $1,000,000 in 6 months or less (by June 7, 2026)
-
 **Tracking:**
 - Start Date: Dec 7, 2025
-- Starting Balance: (see Coinbase account)
-- Progress: [Update weekly]
-
 **Strategy is now locked for review period. No further changes will be made unless security or performance issues are found.**
 
 **5 Growth Accelerators Active:**
 - 🔺 **PYRAMIDING** - Adds 25% to winning positions at +1%, +2%, +3% profit
 - 💎 **EXTENDED RUNNERS** - Let mega-winners run to 20% with 95% profit protection
 - 📊 **DYNAMIC SIGNAL THRESHOLD** - 2/5 signals for small accounts, 2/5 for larger (aggressive mode)
-- ⚡ **MAXIMUM FREQUENCY** - 1,000 trades/day limit for compounding velocity
-- 🛡️ **85% MAX EXPOSURE** - Maximum capital deployment
-
 **Core Protection Systems:**
-- 🔒 **95% PROFIT LOCK** - Never give back more than 5% of gains (activates at +0.25%)
-- 🛑 **Smart Stop-Loss** - 0.5-0.7% stops
-- 💰 **Fast Profit Capture**:
-  - TP0.5 at +0.4% → Sell 30%
-  - TP1 at +0.8% → Sell 30% more (60% total out)
-  - TP2 at +1.5% → Sell 20% more (80% total out)
-  - Runners trail to 20% with 95% lock protection
-
 **Position Sizing:**
-- **10% base allocation** per trade (aggressive base)
 - **Pyramiding adds 25%** at each profit milestone (+1%, +2%, +3%)
 - **Result**: Winning trades scale to 95% of original size while maintaining protection
 

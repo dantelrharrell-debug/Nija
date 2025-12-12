@@ -1,9 +1,11 @@
+
 import os
 import logging
-from coinbase_advanced_py.client import Client
+from coinbase.rest import RESTClient
 import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
+
 
 # Load environment variables
 API_KEY = os.environ.get("COINBASE_API_KEY")
@@ -11,8 +13,8 @@ API_SECRET = os.environ.get("COINBASE_API_SECRET")
 API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")
 ACCOUNT_ID = os.environ.get("COINBASE_ACCOUNT_ID")
 
-client = Client(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
-logging.info("✅ Coinbase client initialized")
+client = RESTClient(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
+logging.info("✅ Coinbase RESTClient initialized")
 
 def main_loop():
     logging.info("⚡ Bot is now running live!")
