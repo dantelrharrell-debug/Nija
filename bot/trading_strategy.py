@@ -36,7 +36,9 @@ class TradingStrategy:
     - VWAP, RSI, MACD indicators for entry signals
     - NIJA Trailing Stop-Loss (TSL) with EMA-21 and micro-trail
     - NIJA Trailing Take-Profit (TTP) with dynamic exits
-    - Partial position management (50%  25%  25%)
+    - Partial position management (50%  25%  25%)
     - Risk management and position sizing
     """
     # The remainder of the file stays unchanged
+    def run_trading_cycle(self):
+        print('Running trading cycle (implement strategy logic here).')
