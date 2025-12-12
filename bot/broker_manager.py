@@ -11,6 +11,7 @@ import os
 
 class BrokerType(Enum):
     COINBASE = "coinbase"
+    BINANCE = "binance"
     INTERACTIVE_BROKERS = "interactive_brokers"
     TD_AMERITRADE = "td_ameritrade"
     ALPACA = "alpaca"
@@ -297,6 +298,84 @@ class AlpacaBroker(BaseBroker):
     def supports_asset_class(self, asset_class: str) -> bool:
         """Alpaca supports stocks"""
         return asset_class.lower() in ["stocks", "stock"]
+
+class BinanceBroker(BaseBroker):
+    """Binance integration for crypto and futures (PLACEHOLDER)"""
+    
+    def __init__(self):
+        super().__init__(BrokerType.BINANCE)
+        self.client = None
+    
+    def connect(self) -> bool:
+        """
+        Connect to Binance
+        
+        This is a placeholder implementation. To use Binance:
+        1. Install python-binance: pip install python-binance
+        2. Set BINANCE_API_KEY and BINANCE_API_SECRET environment variables
+        3. Uncomment and implement the connection logic below
+        """
+        print("⚠️ Binance broker is a placeholder - not yet implemented")
+        print("To enable Binance:")
+        print("  1. pip install python-binance")
+        print("  2. Set BINANCE_API_KEY and BINANCE_API_SECRET")
+        print("  3. Implement connection logic in broker_manager.py")
+        
+        # Placeholder - would implement actual connection here
+        # try:
+        #     from binance.client import Client
+        #     
+        #     api_key = os.getenv("BINANCE_API_KEY")
+        #     api_secret = os.getenv("BINANCE_API_SECRET")
+        #     
+        #     if not api_key or not api_secret:
+        #         print("❌ Binance credentials not found")
+        #         return False
+        #     
+        #     self.client = Client(api_key, api_secret)
+        #     
+        #     # Test connection
+        #     self.client.get_account()
+        #     self.connected = True
+        #     print("✅ Binance connected")
+        #     return True
+        #     
+        # except Exception as e:
+        #     print(f"❌ Binance connection failed: {e}")
+        #     return False
+        
+        return False
+    
+    def get_account_balance(self) -> float:
+        """Get USD balance (placeholder)"""
+        if not self.connected:
+            return 0.0
+        
+        # Placeholder - would fetch actual balance
+        print("⚠️ Binance get_account_balance not implemented")
+        return 0.0
+    
+    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+        """Place market order (placeholder)"""
+        print("⚠️ Binance place_market_order not implemented")
+        return {"status": "error", "error": "Binance broker not implemented"}
+    
+    def get_positions(self) -> List[Dict]:
+        """Get open positions (placeholder)"""
+        if not self.connected:
+            return []
+        
+        print("⚠️ Binance get_positions not implemented")
+        return []
+    
+    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
+        """Get candle data (placeholder)"""
+        print("⚠️ Binance get_candles not implemented")
+        return []
+    
+    def supports_asset_class(self, asset_class: str) -> bool:
+        """Binance supports crypto and futures"""
+        return asset_class.lower() in ["crypto", "futures"]
 
 class BrokerManager:
     """Manages multiple broker connections"""
