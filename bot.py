@@ -18,6 +18,8 @@ import logging
 import traceback
 from datetime import datetime, timezone
 
+API_KEY = "YOUR_COINBASE_API_KEY"
+API_SECRET = "YOUR_COINBASE_API_SECRET"
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 LOG = logging.getLogger("nija.bot")
@@ -29,6 +31,10 @@ except Exception:
     CoinbaseRESTClient = None
     LOG.info("coinbase.rest.RESTClient not available; Coinbase executor will run in simulation mode.")
 
+    client = RESTClient(
+        api_key=API_KEY,
+        api_secret=API_SECRET,
+    )
 # Try import packaged modules (created earlier). Fallbacks are provided.
 try:
     from strategies.master_strategy import NijaMasterStrategy
@@ -85,6 +91,10 @@ def make_executor(name: str, balance: float = ACCOUNT_BALANCE):
     # Prefer executor_real factory if available
     if executor_real is not None and hasattr(executor_real, "make_executor"):
         try:
+            product = client.get_product(product_id)
+            price = product.get('price', None)
+            print(f"[NIJA] Current {product_id} price: ${price}")
+            time.sleep(10)
             return executor_real.make_executor(name, account_balance=balance)
         except Exception as e:
             LOG.exception("executor_real.make_executor failed for %s: %s", name, e)
