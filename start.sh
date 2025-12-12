@@ -12,10 +12,10 @@ python3 -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST clien
 
 echo "🔄 Starting live trading bot..."
 echo "Working directory: $(pwd)"
-echo "Bot file exists: $(test -f ./bot/live_trading.py && echo 'YES' || echo 'NO')"
+echo "Bot file exists: $(test -f ./bot.py && echo 'YES' || echo 'NO')"
 
-# Start bot with full error output
-python3 -u ./bot/live_trading.py 2>&1 || {
+# Start bot.py with full error output
+python3 -u bot.py 2>&1 || {
     echo "❌ Bot crashed! Exit code: $?"
     exit 1
 }
