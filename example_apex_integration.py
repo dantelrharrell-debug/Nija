@@ -19,7 +19,8 @@ from apex_config import (
     POSITION_SIZING, TAKE_PROFIT_CONFIG, TRADING_PAIRS
 )
 
-# Import existing NIJA components (example - adjust based on actual structure)
+# TODO: Import existing NIJA components when integrating
+# Example imports for integration:
 # from broker_manager import BrokerManager
 # from live_trading import get_market_data
 

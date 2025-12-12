@@ -134,7 +134,7 @@ def calculate_macd_histogram_analysis(df, fast=12, slow=26, signal=9):
     }
 
 
-def detect_momentum_candle(df, index=-1):
+def detect_momentum_candle(df, index=-1, volume_multiplier=1.2):
     """
     Detect momentum candle patterns for high-probability entries.
     
@@ -146,6 +146,7 @@ def detect_momentum_candle(df, index=-1):
     Args:
         df: DataFrame with OHLCV data
         index: Index to check (default: -1 for latest candle)
+        volume_multiplier: Volume threshold multiplier (default: 1.2)
     
     Returns:
         dict: {
@@ -186,7 +187,7 @@ def detect_momentum_candle(df, index=-1):
         close_position = (close - low) / total_range
     
     # Volume confirmation
-    volume_strong = volume >= avg_volume * 1.2 if avg_volume > 0 else False
+    volume_strong = volume >= avg_volume * volume_multiplier if avg_volume > 0 else False
     
     # Bullish momentum: strong up candle with close near high
     is_bullish_momentum = (

@@ -176,10 +176,11 @@ class CoinbaseBrokerAdapter(BrokerInterface):
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade API."""
         try:
-            # Import existing Coinbase integration
-            # This would use the existing broker_manager.py logic
-            logger.info("Connecting to Coinbase Advanced Trade API...")
             # TODO: Implement actual connection using existing broker_manager
+            # Example:
+            # from broker_manager import BrokerManager
+            # self.client = BrokerManager()
+            logger.info("Connecting to Coinbase Advanced Trade API...")
             return True
         except Exception as e:
             logger.error(f"Failed to connect to Coinbase: {e}")
@@ -258,6 +259,7 @@ class BinanceBrokerAdapter(BrokerInterface):
         """Connect to Binance API."""
         logger.info("Connecting to Binance API...")
         # TODO: Implement Binance client initialization
+        # Example:
         # from binance.client import Client
         # self.client = Client(self.api_key, self.api_secret, testnet=self.testnet)
         return False
@@ -329,6 +331,7 @@ class AlpacaBrokerAdapter(BrokerInterface):
         """Connect to Alpaca API."""
         logger.info("Connecting to Alpaca API...")
         # TODO: Implement Alpaca client initialization
+        # Example:
         # from alpaca.trading.client import TradingClient
         # self.client = TradingClient(self.api_key, self.api_secret, paper=self.paper)
         return False
