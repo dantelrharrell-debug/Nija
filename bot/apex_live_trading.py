@@ -16,6 +16,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from apex_strategy_v7 import ApexStrategyV7
+from apex_config import EXECUTION
 from broker_manager import BrokerManager, CoinbaseBroker, AlpacaBroker, BinanceBroker
 import pandas as pd
 
@@ -69,17 +70,20 @@ class ApexLiveTrader:
         logger.info(f"Trading pairs: {', '.join(trading_pairs)}")
         logger.info(f"Timeframe: {timeframe}")
     
-    def fetch_candles(self, symbol: str, count: int = 100) -> pd.DataFrame:
+    def fetch_candles(self, symbol: str, count: int = None) -> pd.DataFrame:
         """
         Fetch candles for a symbol
         
         Args:
             symbol: Trading symbol
-            count: Number of candles to fetch
+            count: Number of candles to fetch (default from config)
             
         Returns:
             DataFrame with OHLCV data
         """
+        if count is None:
+            count = EXECUTION['min_candles_required']
+        
         broker = self.broker_manager.get_broker_for_symbol(symbol)
         
         if not broker:
@@ -114,7 +118,8 @@ class ApexLiveTrader:
             
             # Fetch candles
             df = self.fetch_candles(symbol)
-            if df is None or len(df) < 100:
+            min_candles = EXECUTION['min_candles_required']
+            if df is None or len(df) < min_candles:
                 continue
             
             # Analyze entry opportunity

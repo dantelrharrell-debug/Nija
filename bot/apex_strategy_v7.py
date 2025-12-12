@@ -36,6 +36,7 @@ from apex_config import (
     ENTRY_TRIGGERS,
     STOP_LOSS,
     EXIT_LOGIC,
+    EXECUTION,
 )
 from apex_risk_manager import ApexRiskManager
 from apex_filters import ApexSmartFilters
@@ -85,8 +86,9 @@ class ApexStrategyV7:
         Returns:
             dict: All calculated indicators
         """
-        if len(df) < 100:
-            logger.warning(f"Insufficient data: {len(df)} candles (need 100+)")
+        min_candles = EXECUTION['min_candles_required']
+        if len(df) < min_candles:
+            logger.warning(f"Insufficient data: {len(df)} candles (need {min_candles}+)")
             return None
         
         # Calculate indicators

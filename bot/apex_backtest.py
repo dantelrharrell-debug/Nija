@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import logging
 
 from apex_strategy_v7 import ApexStrategyV7
+from apex_config import EXECUTION
 
 logger = logging.getLogger("nija.apex.backtest")
 
@@ -59,8 +60,9 @@ class ApexBacktest:
         logger.info(f"Starting backtest for {symbol} with {len(df)} candles")
         
         # Ensure we have enough data
-        if len(df) < 100:
-            logger.error(f"Insufficient data: {len(df)} candles (need 100+)")
+        min_candles = EXECUTION['min_candles_required']
+        if len(df) < min_candles:
+            logger.error(f"Insufficient data: {len(df)} candles (need {min_candles}+)")
             return self._empty_results()
         
         # Reset state
@@ -70,7 +72,7 @@ class ApexBacktest:
         self.current_balance = self.initial_balance
         
         # Process each candle
-        for i in range(100, len(df)):
+        for i in range(min_candles, len(df)):
             # Get historical data up to current candle
             historical_df = df.iloc[:i+1].copy()
             current_candle = df.iloc[i]

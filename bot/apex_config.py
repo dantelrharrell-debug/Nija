@@ -208,7 +208,7 @@ AI_ENGINE = {
 EXECUTION = {
     'mode': 'live',  # 'backtest' or 'live'
     'timeframe': '5m',  # 5-minute candles
-    'candles_required': 100,  # Minimum candles needed for indicators
+    'min_candles_required': 100,  # Minimum candles needed for indicators
     'order_type': 'market',  # Market orders for entries
     'slippage_model': 'realistic',  # Account for slippage in backtest
 }
