@@ -21,7 +21,7 @@ Date: December 2024
 import pandas as pd
 import numpy as np
 from datetime import datetime, time, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import logging
 
 logger = logging.getLogger("nija.smart_filters")
