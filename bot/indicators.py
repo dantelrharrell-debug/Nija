@@ -31,6 +31,73 @@ def calculate_macd(df, fast=12, slow=26, signal=9):
     histogram = macd_line - signal_line
     return macd_line.ffill(), signal_line.ffill(), histogram.ffill()
 
+def calculate_atr(df, period=14):
+    """
+    Calculate Average True Range (ATR)
+    
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        period: ATR period (default 14)
+    
+    Returns:
+        pandas.Series: ATR values
+    """
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    # True Range calculation
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period, min_periods=period).mean()
+    
+    return atr.ffill().fillna(0)
+
+def calculate_adx(df, period=14):
+    """
+    Calculate Average Directional Index (ADX)
+    
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        period: ADX period (default 14)
+    
+    Returns:
+        tuple: (adx, plus_di, minus_di)
+    """
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    # Calculate +DM and -DM
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
+    
+    # Set values to 0 when not dominant
+    plus_dm[plus_dm < 0] = 0
+    plus_dm[(plus_dm < minus_dm)] = 0
+    minus_dm[minus_dm < 0] = 0
+    minus_dm[(minus_dm < plus_dm)] = 0
+    
+    # Calculate True Range
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    
+    # Smooth the indicators
+    atr = tr.rolling(window=period, min_periods=period).mean()
+    plus_di = 100 * (plus_dm.rolling(window=period, min_periods=period).mean() / atr)
+    minus_di = 100 * (minus_dm.rolling(window=period, min_periods=period).mean() / atr)
+    
+    # Calculate DX and ADX
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.rolling(window=period, min_periods=period).mean()
+    
+    return adx.ffill().fillna(0), plus_di.ffill().fillna(0), minus_di.ffill().fillna(0)
+
 def check_no_trade_zones(df, rsi):
     """
     Check if we're in a NO-TRADE ZONE
