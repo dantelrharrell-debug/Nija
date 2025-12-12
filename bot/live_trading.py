@@ -6,7 +6,6 @@ from logging.handlers import RotatingFileHandler
 from trading_strategy import TradingStrategy
 
 # Main trading logic and bot initialization goes here...
-# Example entrypoint:
 def run_live_trading():
     # Setup logging
     LOG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'nija.log'))
@@ -21,12 +20,9 @@ def run_live_trading():
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
 
-    logger.info("📋 Initializing trading bot...")
+    logger.info("\ud83d\udccb Initializing trading bot...")
     try:
-        # Setup API and trading strategy as per your specific bot implementation
-        # Example: create TradingStrategy and start trading loop
-        # (Replace below with your actual logic and configuration)
-        strategy = TradingStrategy(client=None)  # Replace with actual REST client
+        strategy = TradingStrategy()
         while True:
             strategy.run_trading_cycle()
             time.sleep(150)
