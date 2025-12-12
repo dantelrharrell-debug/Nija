@@ -188,7 +188,7 @@ When updating features, update relevant documentation files.
 ## Important Notes
 
 ### Critical Files
-- `bot/trading_strategy.py` - Recently fixed IndentationError (Dec 11, 2025)
+- `bot/trading_strategy.py` - Recently fixed IndentationError in close_full_position method
 - `bot/broker_integration.py` - Handles all Coinbase API interactions
 - `bot/webhook_server.py` - Receives TradingView webhooks
 
