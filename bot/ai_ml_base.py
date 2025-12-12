@@ -432,6 +432,24 @@ class EnhancedAIEngine:
         
         logger.info(f"Enhanced AI Engine initialized with {self.model.model_name}")
     
+    def _get_indicator_value(self, indicator_val, default=0):
+        """
+        Safely extract scalar value from indicator (handles Series or scalar).
+        
+        Args:
+            indicator_val: Value that may be Series, scalar, or dict
+            default: Default value if extraction fails
+        
+        Returns:
+            Scalar value
+        """
+        if hasattr(indicator_val, 'iloc'):
+            return indicator_val.iloc[-1]
+        elif isinstance(indicator_val, (int, float)):
+            return indicator_val
+        else:
+            return default
+    
     def extract_features(self, df: pd.DataFrame, indicators: Dict) -> Dict[str, float]:
         """
         Extract ML features from market data and indicators.
@@ -446,10 +464,10 @@ class EnhancedAIEngine:
         features = {}
         
         # Trend features
-        features['adx'] = indicators.get('adx', {}).iloc[-1] if hasattr(indicators.get('adx', 0), 'iloc') else indicators.get('adx', 0)
-        features['ema_9'] = indicators.get('ema_9', {}).iloc[-1] if hasattr(indicators.get('ema_9', 0), 'iloc') else indicators.get('ema_9', 0)
-        features['ema_21'] = indicators.get('ema_21', {}).iloc[-1] if hasattr(indicators.get('ema_21', 0), 'iloc') else indicators.get('ema_21', 0)
-        features['ema_50'] = indicators.get('ema_50', {}).iloc[-1] if hasattr(indicators.get('ema_50', 0), 'iloc') else indicators.get('ema_50', 0)
+        features['adx'] = self._get_indicator_value(indicators.get('adx', 0))
+        features['ema_9'] = self._get_indicator_value(indicators.get('ema_9', 0))
+        features['ema_21'] = self._get_indicator_value(indicators.get('ema_21', 0))
+        features['ema_50'] = self._get_indicator_value(indicators.get('ema_50', 0))
         
         # Calculate EMA alignment
         if features['ema_9'] > features['ema_21'] > features['ema_50']:
@@ -460,16 +478,20 @@ class EnhancedAIEngine:
             features['ema_alignment'] = 0  # Mixed
         
         # Momentum features
-        features['rsi'] = indicators.get('rsi', {}).iloc[-1] if hasattr(indicators.get('rsi', 50), 'iloc') else indicators.get('rsi', 50)
+        features['rsi'] = self._get_indicator_value(indicators.get('rsi', 50))
         
         macd = indicators.get('macd', {})
         if isinstance(macd, dict):
-            features['macd_line'] = macd.get('macd_line', {}).iloc[-1] if hasattr(macd.get('macd_line', 0), 'iloc') else 0
-            features['macd_signal'] = macd.get('signal', {}).iloc[-1] if hasattr(macd.get('signal', 0), 'iloc') else 0
-            features['macd_histogram'] = macd.get('histogram', {}).iloc[-1] if hasattr(macd.get('histogram', 0), 'iloc') else 0
+            features['macd_line'] = self._get_indicator_value(macd.get('macd_line', 0))
+            features['macd_signal'] = self._get_indicator_value(macd.get('signal', 0))
+            features['macd_histogram'] = self._get_indicator_value(macd.get('histogram', 0))
+        else:
+            features['macd_line'] = 0
+            features['macd_signal'] = 0
+            features['macd_histogram'] = 0
         
         # Volatility features
-        features['atr'] = indicators.get('atr', {}).iloc[-1] if hasattr(indicators.get('atr', 0), 'iloc') else indicators.get('atr', 0)
+        features['atr'] = self._get_indicator_value(indicators.get('atr', 0))
         current_price = df['close'].iloc[-1]
         features['atr_pct'] = features['atr'] / current_price if current_price > 0 else 0
         
@@ -483,7 +505,7 @@ class EnhancedAIEngine:
         
         # Price features
         features['close_price'] = current_price
-        features['vwap'] = indicators.get('vwap', {}).iloc[-1] if hasattr(indicators.get('vwap', current_price), 'iloc') else current_price
+        features['vwap'] = self._get_indicator_value(indicators.get('vwap', current_price))
         features['price_vs_vwap'] = (current_price - features['vwap']) / features['vwap'] if features['vwap'] > 0 else 0
         
         return features

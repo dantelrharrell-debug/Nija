@@ -429,8 +429,17 @@ class NIJAApexStrategyV8:
             side = entry_signal['side']
             indicators = entry_signal['indicators']
             
+            # Get dataframe from the signal (need full df for swing levels)
+            # In real usage, this should be passed in or stored
+            # For now, we'll create a minimal df from indicators
+            df = pd.DataFrame({
+                'close': [indicators.get('close_price', 0)],
+                'high': [indicators.get('close_price', 0) * 1.01],
+                'low': [indicators.get('close_price', 0) * 0.99]
+            })
+            
             # Get current price and ATR
-            current_price = indicators['close_price']
+            current_price = df['close'].iloc[-1]
             atr = indicators['atr'].iloc[-1] if hasattr(indicators['atr'], 'iloc') else indicators['atr']
             atr_pct = indicators['atr_pct']
             adx = indicators['adx'].iloc[-1] if hasattr(indicators['adx'], 'iloc') else indicators['adx']
@@ -458,12 +467,12 @@ class NIJAApexStrategyV8:
                 return None
             
             # Calculate stop loss and take profit
-            swing_low = self.risk_manager.find_swing_low(entry_signal['indicators']['close'].to_frame() if hasattr(indicators['close_price'], 'to_frame') else pd.DataFrame({'low': [current_price * 0.98]}))
-            swing_high = self.risk_manager.find_swing_high(entry_signal['indicators']['close'].to_frame() if hasattr(indicators['close_price'], 'to_frame') else pd.DataFrame({'high': [current_price * 1.02]}))
-            
+            # Need full DataFrame for swing level calculation
             if side == 'long':
+                swing_low = self.risk_manager.find_swing_low(df)
                 stop_loss = self.risk_manager.calculate_stop_loss(current_price, 'long', swing_low, atr)
             else:
+                swing_high = self.risk_manager.find_swing_high(df)
                 stop_loss = self.risk_manager.calculate_stop_loss(current_price, 'short', swing_high, atr)
             
             take_profit_levels = self.risk_manager.calculate_take_profit_levels(

@@ -376,19 +376,20 @@ class TradeJournal:
                 'avg_adx': wins['adx'].mean(),
                 'avg_rsi': wins['rsi'].mean(),
                 'avg_volume_ratio': wins['volume_ratio'].mean(),
-                'most_common_regime': wins['market_regime'].mode()[0] if len(wins['market_regime'].mode()) > 0 else 'unknown',
+                'most_common_regime': wins['market_regime'].mode()[0] if len(wins) > 0 and len(wins['market_regime'].mode()) > 0 else 'unknown',
                 'avg_hold_time': wins['hold_minutes'].mean()
             }
         }
         
         if len(losses) > 0:
+            loss_regime_mode = losses['market_regime'].mode()
             analysis['losing_trades'] = {
                 'avg_ai_confidence': losses['ai_confidence'].mean(),
                 'avg_ai_score': losses['ai_score'].mean(),
                 'avg_adx': losses['adx'].mean(),
                 'avg_rsi': losses['rsi'].mean(),
                 'avg_volume_ratio': losses['volume_ratio'].mean(),
-                'most_common_regime': losses['market_regime'].mode()[0] if len(losses['market_regime'].mode()) > 0 else 'unknown',
+                'most_common_regime': loss_regime_mode[0] if len(loss_regime_mode) > 0 else 'unknown',
                 'avg_hold_time': losses['hold_minutes'].mean()
             }
             

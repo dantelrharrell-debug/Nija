@@ -205,8 +205,8 @@ class VolatilityRegimeFilter:
                 result['regime'] = 'high'
                 result['trade_multiplier'] = 0.7
         
-        logger.debug(f"Volatility regime: {regime}, ATR: {atr_pct*100:.2f}%, "
-                    f"Multiplier: {multiplier:.1f}")
+        logger.debug(f"Volatility regime: {result['regime']}, ATR: {atr_pct*100:.2f}%, "
+                    f"Multiplier: {result['trade_multiplier']:.1f}")
         
         return result
     

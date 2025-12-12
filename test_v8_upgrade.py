@@ -106,7 +106,7 @@ try:
     
     print(f"  ✓ Risk Manager initialized")
     print(f"  ✓ Position size calculated: ${position_size:.2f}")
-    print(f"  ✓ ADX multiplier applied: {breakdown.get('adx', 0):.1f}")
+    print(f"  ✓ Breakdown keys: {list(breakdown.keys())}")
     print(f"  ✓ AI confidence multiplier: {breakdown.get('confidence_multiplier', 0):.2f}")
     
     # Test streak tracking
