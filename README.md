@@ -47,6 +47,46 @@ Expected correct logs after clean deploy:
 - Head of `bot.py` shows the clean main entry implementation
 - Trading cycles every 150 seconds without crashes
 
+### Troubleshooting: Startup Logs Examples
+
+Good (clean deploy from main):
+```
+==============================
+    STARTING NIJA TRADING BOT
+==============================
+Python 3.11.14
+✅ Coinbase REST client available
+Branch: main
+Commit: 1a2b3c4
+🔄 Starting live trading bot...
+Working directory: /usr/src/app
+Bot file exists: YES
+--- bot.py (head) ---
+#!/usr/bin/env python3
+# NIJA Trading Bot - Main Entry Point
+...
+----------------------
+NIJA TRADING BOT - APEX v7.1
+```
+
+Stale (cached image from PR branch):
+```
+--- bot.py (head) ---
+raise RuntimeError("🔥 NEW BOT.PY IS RUNNING 🔥")
+...
+❌ Detected stale cached image: RuntimeError banner present in bot.py
+👉 Delete the Railway service and redeploy from the main branch.
+```
+
+Or:
+```
+--- bot.py (head) ---
+from nija_strategy import NijaStrategy
+...
+❌ Detected stale cached image: old import 'nija_strategy' in bot.py
+👉 Delete the Railway service and redeploy from the main branch.
+```
+
 **Autonomous Cryptocurrency Trading with Dual RSI Strategy & Intelligent Trailing System**
 
 NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade API** that scans **732 cryptocurrency markets** and executes trades using a sophisticated **dual RSI strategy** (RSI_9 + RSI_14) with dynamic position management. The bot automatically compounds profits, manages risk, and trails positions to maximize winners while protecting capital.
