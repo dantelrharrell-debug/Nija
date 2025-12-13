@@ -9,7 +9,6 @@ import sys
 import time
 import logging
 from logging.handlers import RotatingFileHandler
-from trading_strategy import TradingStrategy
 
 # Setup paths
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
