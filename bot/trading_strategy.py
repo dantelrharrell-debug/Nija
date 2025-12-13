@@ -101,7 +101,7 @@ class TradingStrategy:
             if not raw_candles or len(raw_candles) < self.min_candles_required:
                 return None
             
-            # Normalize candles to ensure numeric types
+            # CRITICAL: Normalize candles to ensure numeric types at ingest
             candles = self._normalize_candles(raw_candles)
             df = pd.DataFrame(candles)
             
@@ -111,14 +111,9 @@ class TradingStrategy:
                 logger.warning(f"Missing required columns for {symbol}")
                 return None
 
-            # Ensure numeric types
-            df[["open","high","low","close","volume"]] = df[
-                ["open","high","low","close","volume"]
-            ].astype(float)
-            
-            # Sort by timestamp to ensure proper order
-            if 'timestamp' in df.columns:
-                df = df.sort_values('timestamp').reset_index(drop=True)
+            # Sort by time to ensure proper order
+            if 'time' in df.columns:
+                df = df.sort_values('time').reset_index(drop=True)
             
             return df
         except Exception as e:
@@ -127,25 +122,35 @@ class TradingStrategy:
     
     def _normalize_candles(self, raw_candles):
         """
-        Normalize raw candle data to ensure numeric types
+        Normalize raw candle data to ensure numeric types at ingest.
+        CRITICAL: Coinbase returns strings for OHLCV - must convert immediately.
         
         Args:
             raw_candles: Raw candle data from broker
             
         Returns:
-            List of normalized candle dictionaries
+            List of normalized candle dictionaries with numeric types
+            
+        Raises:
+            AssertionError: If candles are not properly converted to floats
         """
-        candles = []
+        clean = []
         for c in raw_candles:
-            candles.append({
+            clean.append({
+                "time": int(c["start"]),
                 "open": float(c["open"]),
                 "high": float(c["high"]),
                 "low": float(c["low"]),
                 "close": float(c["close"]),
                 "volume": float(c["volume"]),
-                "timestamp": c["start"]
             })
-        return candles
+        
+        # MANDATORY: Verify numeric conversion succeeded
+        assert isinstance(clean[-1]["close"], float), "CANDLES STILL STRINGS - NORMALIZATION FAILED"
+        assert isinstance(clean[-1]["open"], float), "OPEN PRICE NOT FLOAT"
+        assert isinstance(clean[-1]["volume"], float), "VOLUME NOT FLOAT"
+        
+        return clean
     
     def calculate_indicators(self, df: pd.DataFrame) -> dict:
         """
