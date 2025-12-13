@@ -48,6 +48,22 @@ Railway deployment:
 - On startup, [start.sh](start.sh) prints Branch/Commit using env vars. If envs are missing but `.git` is present, it falls back to `git rev-parse`.
 - If Railway caches a stale image, follow the “Stale Image Cache” steps below.
 
+### Coinbase Credentials (Railway)
+
+To avoid crash loops when credentials are misconfigured, NIJA supports multiple Coinbase auth modes and now logs which mode is used:
+
+- PEM file: set `COINBASE_PEM_PATH` to a mounted path that actually exists in the container.
+- PEM content: set `COINBASE_PEM_CONTENT` with full PEM including BEGIN/END headers. Escaped `\n` or real newlines both work.
+- Base64 PEM: set `COINBASE_PEM_BASE64` (or `COINBASE_PEM_CONTENT_BASE64`) with base64-encoded PEM.
+- JWT: set `COINBASE_API_KEY` and `COINBASE_API_SECRET`.
+
+Important:
+- If `COINBASE_PEM_PATH` is set but the file is not present, the bot now ignores the invalid path and falls back to the other credential methods above.
+- Prefer one method only. The bot uses either `key_file` (PEM) or `api_key`+`api_secret` (JWT), not both.
+- On successful initialization, logs will include:
+    - `🔐 Using PEM authentication (key_file)` or `🔐 Using API Key + Secret authentication (JWT)`
+    - Followed by `✅ Coinbase Advanced Trade connected`.
+
 ### Railway Deployment Notes (Stale Image Cache)
 
 Railway may aggressively cache Docker images built from PR branches, which can cause the runtime to use outdated files even after code updates. Typical symptoms:

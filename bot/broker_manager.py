@@ -84,6 +84,8 @@ class CoinbaseBroker(BaseBroker):
                     key_file_arg = pem_path
                 else:
                     print(f"⚠️ COINBASE_PEM_PATH is set but file not found: {pem_path}")
+                    # Explicitly ignore the invalid path to allow fallbacks
+                    pem_path = None
 
             # Fallback: allow PEM content (plain or base64) to be materialized to a temp file.
             if not key_file_arg:
@@ -106,6 +108,7 @@ class CoinbaseBroker(BaseBroker):
             # RESTClient does NOT allow both api_key and key_file. Use one OR the other.
             if key_file_arg:
                 # PEM file authentication - do NOT pass api_key/api_secret to avoid conflicts.
+                print("🔐 Using PEM authentication (key_file)")
                 self.client = RESTClient(
                     api_key=None,
                     api_secret=None,
@@ -113,6 +116,7 @@ class CoinbaseBroker(BaseBroker):
                 )
             elif api_key and api_secret:
                 # JWT authentication with api_key + api_secret
+                print("🔐 Using API Key + Secret authentication (JWT)")
                 self.client = RESTClient(
                     api_key=api_key,
                     api_secret=api_secret,
