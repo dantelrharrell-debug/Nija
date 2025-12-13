@@ -30,3 +30,5 @@ htmlcov/
 
 # Git metadata
 .git
+
+scanner.out
