@@ -27,7 +27,7 @@ if not logger.hasHandlers():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-from bot.trading_strategy import TradingStrategy
+from trading_strategy import TradingStrategy
 
 
 def main():
@@ -78,7 +78,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-if __name__ == "__main__":
-    LOG.info("Starting NIJA Master Runner")
-    main_loop()

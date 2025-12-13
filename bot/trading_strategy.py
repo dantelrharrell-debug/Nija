@@ -131,23 +131,26 @@ class TradingStrategy:
         try:
             indicators = {
                 'vwap': calculate_vwap(df),
-                'ema_9': calculate_ema(df['close'], 9),
-                'ema_21': calculate_ema(df['close'], 21),
-                'ema_50': calculate_ema(df['close'], 50),
-                'rsi': calculate_rsi(df['close'], 14),
+                'ema_9': calculate_ema(df, 9),
+                'ema_21': calculate_ema(df, 21),
+                'ema_50': calculate_ema(df, 50),
+                'rsi': calculate_rsi(df, 14),
                 'macd_line': None,
                 'signal_line': None,
                 'histogram': None,
                 'atr': calculate_atr(df),
-                'adx': calculate_adx(df)
+                'adx': None
             }
             
-            # Calculate MACD
-            macd_result = calculate_macd(df['close'])
-            if macd_result:
-                indicators['macd_line'] = macd_result.get('macd_line')
-                indicators['signal_line'] = macd_result.get('signal_line')
-                indicators['histogram'] = macd_result.get('histogram')
+            # Calculate MACD (returns tuple)
+            macd_line, signal_line, histogram = calculate_macd(df)
+            indicators['macd_line'] = macd_line
+            indicators['signal_line'] = signal_line
+            indicators['histogram'] = histogram
+            
+            # Calculate ADX (returns tuple)
+            adx, plus_di, minus_di = calculate_adx(df)
+            indicators['adx'] = adx
             
             return indicators
         except Exception as e:
