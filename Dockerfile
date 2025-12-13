@@ -7,15 +7,15 @@ WORKDIR /usr/src/app
 # Remove any old vendor folders just in case
 RUN rm -rf ./cd/vendor
 
-# Copy all project files
-COPY . .
-
-# Build provenance (optional): allow passing branch/commit at build time
+# Build provenance and cache control - MUST come BEFORE COPY
+ARG CACHE_BUST=2025-12-13-v2
 ARG GIT_BRANCH=unknown
 ARG GIT_COMMIT=unknown
-ARG CACHE_BUST=2025-12-13
 ENV GIT_BRANCH=${GIT_BRANCH}
 ENV GIT_COMMIT=${GIT_COMMIT}
+
+# Copy all project files (cache invalidated by CACHE_BUST above)
+COPY . .
 
 # Upgrade pip and install dependencies
 RUN python3 -m pip install --upgrade pip setuptools wheel
