@@ -92,9 +92,11 @@ class CoinbaseBroker(BaseBroker):
             # Use one OR the other, not both
             if key_file_arg:
                 # PEM file authentication - do NOT pass api_key
-                self.client = RESTClient(
-                    key_file=key_file_arg,
-                )
+                    self.client = RESTClient(
+                        api_key=None,
+                        api_secret=None,
+                        key_file=key_file_arg,
+                    )
             else:
                 # JWT authentication with api_key + api_secret
                 self.client = RESTClient(
