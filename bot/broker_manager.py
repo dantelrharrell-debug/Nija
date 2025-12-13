@@ -88,11 +88,18 @@ class CoinbaseBroker(BaseBroker):
                 temp_pem_file.flush()
                 key_file_arg = temp_pem_file.name
             
-            self.client = RESTClient(
-                api_key=api_key,
-                api_secret=api_secret if not key_file_arg else None,
-                key_file=key_file_arg,
-            )
+            # RESTClient does NOT allow both api_key and key_file
+            # Use one OR the other, not both
+            if key_file_arg:
+                self.client = RESTClient(
+                    api_key=api_key,
+                    key_file=key_file_arg,
+                )
+            else:
+                self.client = RESTClient(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                )
             
             # Test connection
             accounts = self.client.get_accounts()
