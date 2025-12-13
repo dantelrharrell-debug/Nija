@@ -61,6 +61,32 @@ def main():
                 logger.error(f"Error in trading cycle: {e}", exc_info=True)
                 time.sleep(10)
 
+    except RuntimeError as e:
+        if "Broker connection failed" in str(e):
+            logger.error("=" * 70)
+            logger.error("❌ BROKER CONNECTION FAILED")
+            logger.error("=" * 70)
+            logger.error("")
+            logger.error("Coinbase credentials not found or invalid. Check and set ONE of:")
+            logger.error("")
+            logger.error("1. PEM File (mounted):")
+            logger.error("   - COINBASE_PEM_PATH=/path/to/file.pem (file must exist)")
+            logger.error("")
+            logger.error("2. PEM Content (as env var):")
+            logger.error("   - COINBASE_PEM_CONTENT='-----BEGIN PRIVATE KEY-----\\n...'")
+            logger.error("")
+            logger.error("3. Base64-Encoded PEM:")
+            logger.error("   - COINBASE_PEM_BASE64='<base64-encoded-pem>'")
+            logger.error("")
+            logger.error("4. API Key + Secret (JWT):")
+            logger.error("   - COINBASE_API_KEY='<key>'")
+            logger.error("   - COINBASE_API_SECRET='<secret>'")
+            logger.error("")
+            logger.error("=" * 70)
+            sys.exit(1)
+        else:
+            logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
+            sys.exit(1)
     except Exception as e:
         logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
         sys.exit(1)

@@ -90,20 +90,24 @@ class CoinbaseBroker(BaseBroker):
             # Fallback: allow PEM content (plain or base64) to be materialized to a temp file.
             if not key_file_arg:
                 raw_pem = None
-                if pem_content:
+                if pem_content and pem_content.strip():
                     raw_pem = pem_content
-                elif pem_content_base64:
+                elif pem_content_base64 and pem_content_base64.strip():
                     try:
                         raw_pem = base64.b64decode(pem_content_base64).decode("utf-8")
                     except Exception as decode_err:
                         print(f"❌ Failed to decode COINBASE_PEM_CONTENT_BASE64: {decode_err}")
 
+                # Only accept PEM if it looks like a real PEM (has header/footer)
                 if raw_pem:
-                    normalized = raw_pem.replace("\\n", "\n")
-                    temp_pem_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".pem")
-                    temp_pem_file.write(normalized)
-                    temp_pem_file.flush()
-                    key_file_arg = temp_pem_file.name
+                    normalized = raw_pem.replace("\\n", "\n").strip()
+                    if "BEGIN" in normalized and "END" in normalized:
+                        temp_pem_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".pem")
+                        temp_pem_file.write(normalized)
+                        temp_pem_file.flush()
+                        key_file_arg = temp_pem_file.name
+                    else:
+                        print("⚠️ Provided PEM content does not contain BEGIN/END headers; ignoring.")
 
             # RESTClient does NOT allow both api_key and key_file. Use one OR the other.
             if key_file_arg:
@@ -122,7 +126,7 @@ class CoinbaseBroker(BaseBroker):
                     api_secret=api_secret,
                 )
             else:
-                print("❌ Coinbase credentials not found (set COINBASE_API_KEY+COINBASE_API_SECRET or provide PEM via COINBASE_PEM_PATH/COINBASE_PEM_CONTENT/COINBASE_PEM_CONTENT_BASE64)")
+                print("❌ No valid Coinbase credentials detected. Configure one of: \n- COINBASE_PEM_PATH (mounted file), or\n- COINBASE_PEM_CONTENT (full PEM), or\n- COINBASE_PEM_BASE64 (base64 PEM), or\n- COINBASE_API_KEY and COINBASE_API_SECRET (JWT).")
                 return False
             
             # Test connection
