@@ -1,16 +1,17 @@
 #!/bin/bash
 cd /workspaces/Nija
 
-echo "📝 Staging changes..."
-git add bot/trading_strategy.py bot/indicators.py bot/broker_manager.py
+echo "📝 Staging portfolio scanner and broker updates..."
+git add find_usd_portfolio.py bot/broker_manager.py
 
 echo "✍️  Committing..."
-git commit -m "Fix indicator calculation and balance logging
+git commit -m "Auto-detect correct Coinbase portfolio for USD balance
 
-- Add numeric coercion in fetch_candles() to prevent str/int division
-- Add _ensure_numeric() guard across all indicator helpers  
-- Add detailed balance fetch logging to debug \$0.00 issue
-- Drop invalid candle rows before indicator math"
+- Add portfolio scanner script (find_usd_portfolio.py) for diagnostics
+- Update get_account_balance() to scan all portfolios via get_portfolios()
+- Auto-detect portfolio containing USD and query with retail_portfolio_id
+- Fixes \$0.00 balance issue when USD is in non-default portfolio
+- Maintains fallback to default accounts if portfolio scan fails"
 
 echo "🚀 Pushing to origin/main..."
 git push origin main

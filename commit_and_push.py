@@ -7,8 +7,8 @@ os.chdir('/workspaces/Nija')
 
 try:
     # Stage files
-    print("📝 Staging files...")
-    subprocess.run(['git', 'add', 'bot/broker_manager.py', 'bot/trading_strategy.py'], check=True)
+    print("📝 Staging portfolio scanner and broker updates...")
+    subprocess.run(['git', 'add', 'find_usd_portfolio.py', 'bot/broker_manager.py'], check=True)
     
     # Check status
     print("\n📋 Git status:")
@@ -18,10 +18,12 @@ try:
     print("\n💾 Committing changes...")
     subprocess.run([
         'git', 'commit', '-m',
-        'Refactor balance tracking and candle normalization\n\n'
-        '- Update get_account_balance() to include USD + USDC balance\n'
-        '- Add _normalize_candles() helper for early type conversion\n'
-        '- Replace pd.to_numeric() with .astype(float) for better clarity'
+        'Auto-detect correct Coinbase portfolio for USD balance\n\n'
+        '- Add portfolio scanner script (find_usd_portfolio.py) for diagnostics\n'
+        '- Update get_account_balance() to scan all portfolios via get_portfolios()\n'
+        '- Auto-detect portfolio containing USD and query with retail_portfolio_id\n'
+        '- Fixes $0.00 balance issue when USD is in non-default portfolio\n'
+        '- Maintains fallback to default accounts if portfolio scan fails'
     ], check=True)
     
     # Push
