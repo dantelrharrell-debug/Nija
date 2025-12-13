@@ -245,7 +245,21 @@ class NIJAApexStrategyV8:
                 macd_hist > 0
             )
             
-            # Downtrend conditions
+                # HARD GUARD: Ensure numeric OHLCV before any indicator math
+                try:
+                    required_cols = ['open', 'high', 'low', 'close', 'volume']
+                    if not all(col in df.columns for col in required_cols):
+                        logger.error("Missing OHLCV columns; cannot calculate indicators (V8)")
+                        return {}
+                    df[required_cols] = df[required_cols].astype(float)
+                    logger.info(
+                        f"DEBUG[V8] candle types → close={type(df['close'].iloc[-1])}, "
+                        f"open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to normalize candle types (V8): {e}")
+                    return {}
+
             downtrend = (
                 current_price < vwap and
                 ema9 < ema21 < ema50 and

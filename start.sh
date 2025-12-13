@@ -10,8 +10,25 @@ python3 --version
 # Test Coinbase module
 python3 -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')"
 
-echo "Branch: ${GIT_BRANCH:-unknown}"
-echo "Commit: ${GIT_COMMIT:-unknown}"
+BRANCH_VAL=${GIT_BRANCH}
+COMMIT_VAL=${GIT_COMMIT}
+
+# Populate branch/commit from git if not provided
+if [ -z "$BRANCH_VAL" ] && command -v git >/dev/null 2>&1; then
+    BRANCH_VAL=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+fi
+if [ -z "$COMMIT_VAL" ] && command -v git >/dev/null 2>&1; then
+    COMMIT_VAL=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+fi
+
+echo "Branch: ${BRANCH_VAL:-unknown}"
+echo "Commit: ${COMMIT_VAL:-unknown}"
+
+# Auto-enable paper mode if credentials are missing
+if [ -z "${COINBASE_API_KEY}" ] || [ -z "${COINBASE_API_SECRET}" ]; then
+    echo "⚠️  Coinbase credentials missing — enabling PAPER_MODE for smoke test"
+    export PAPER_MODE=true
+fi
 
 echo "🔄 Starting live trading bot..."
 echo "Working directory: $(pwd)"

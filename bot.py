@@ -42,27 +42,22 @@ def main():
     logger.info(f"Working directory: {os.getcwd()}")
     
     try:
-        # Initialize trading strategy
         logger.info("Initializing trading strategy...")
         strategy = TradingStrategy()
-        
-        # Trading loop
-        logger.info("Starting main trading loop...")
+
+        logger.info("Starting main trading loop (15s cadence)...")
         cycle_count = 0
-        
+
         while True:
             try:
                 cycle_count += 1
-                logger.info(f"Cycle #{cycle_count}")
-                
-                # Run one complete trading cycle
-                strategy.run_trading_cycle()
-                
-                # Sleep before next cycle (2.5 minutes as specified)
-                sleep_time = 150  # 2.5 minutes
-                logger.info(f"Sleeping for {sleep_time} seconds until next cycle...")
+                logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
+                strategy.run_cycle()
+
+                sleep_time = 15
+                logger.info(f"Sleeping for {sleep_time} seconds...")
                 time.sleep(sleep_time)
-                
+
             except KeyboardInterrupt:
                 logger.info("Trading bot stopped by user (Ctrl+C)")
                 break
@@ -70,7 +65,7 @@ def main():
                 logger.error(f"Error in trading cycle: {e}", exc_info=True)
                 logger.info("Waiting 10 seconds before retry...")
                 time.sleep(10)
-    
+
     except Exception as e:
         logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
         sys.exit(1)
@@ -79,64 +74,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-
-LOOP_INTERVAL = 60  # seconds (1m candles)
-
-# ---------------- MAIN ----------------
-def main():
-    logging.info("🧠 Initializing NIJA Master Trading Engine")
-
-    data = DataProvider()
-    strategy = NijaStrategy()
-    safety = SafetyModule()
-    executor = CoinbaseExecutor()
-
-    logging.info("🚀 NIJA bot LIVE — awaiting signals")
-
-    while True:
-        try:
-            for symbol, exchange in SYMBOLS:
-                logging.info(f"🔍 Scanning {exchange} {symbol}")
-
-                candles = data.fetch_latest_candles(
-                    symbol=symbol,
-                    exchange=exchange,
-                    limit=strategy.required_candles
-                )
-
-                if not candles or len(candles) < strategy.required_candles:
-                    logging.warning(f"{symbol} | Not enough candle data")
-                    continue
-
-                if safety.should_halt(symbol, exchange):
-                    logging.warning(f"{symbol} | HALTED by safety module")
-                    continue
-
-                signal, meta = strategy.generate_signal_and_indicators(candles)
-                price = candles[-1]["close"]
-
-                logging.info(
-                    f"{symbol} | Price={price} | Signal={signal} | Meta={meta}"
-                )
-
-                if signal in ("buy", "sell"):
-                    result = executor.submit_order(
-                        symbol=symbol,
-                        side=signal,
-                        price=price,
-                        meta=meta
-                    )
-                    logging.info(f"{symbol} | ORDER RESULT: {result}")
-                else:
-                    logging.info(f"{symbol} | No trade")
-
-        except Exception as e:
-            logging.exception(f"🔥 Fatal loop error: {e}")
-
-        time.sleep(LOOP_INTERVAL)
-
-
-if __name__ == "__main__":
-    logging.info("⚔️ STARTING NIJA TRADING BOT ⚔️")
     main()

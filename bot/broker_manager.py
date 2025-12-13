@@ -86,26 +86,40 @@ class CoinbaseBroker(BaseBroker):
             return False
     
     def get_account_balance(self) -> float:
-        """Get total USD + USDC balance"""
+        """Get total USD balance with hard trace for debugging."""
+        print("🔥 ENTERED get_account_balance()", flush=True)
         try:
             accounts = self.client.get_accounts()
-            
-            usd_balance = 0.0
-            usdc_balance = 0.0
-            
-            for acct in accounts["accounts"]:
-                currency = acct.get("currency")
-                available = float(acct.get("available_balance", {}).get("value", 0))
-                
-                if currency == "USD":
-                    usd_balance += available
-                elif currency == "USDC":
-                    usdc_balance += available
-            
-            total_balance = usd_balance + usdc_balance
-            return round(total_balance, 2)
+            print("🔥 ACCOUNTS RESPONSE TYPE:", type(accounts), flush=True)
+
+            total_usd = 0.0
+
+            # Prefer SDK Account list via .accounts; fallback to dict/list
+            acct_list = []
+            if hasattr(accounts, "accounts"):
+                acct_list = accounts.accounts
+            elif isinstance(accounts, dict):
+                acct_list = accounts.get("accounts", [])
+            else:
+                acct_list = accounts
+
+            for acct in acct_list:
+                print("🔥 ACCOUNT OBJ:", acct, flush=True)
+                try:
+                    currency = getattr(acct, "currency", None)
+                    available_obj = getattr(acct, "available_balance", None)
+                    val = getattr(available_obj, "value", None)
+                    if val is None and isinstance(available_obj, dict):
+                        val = available_obj.get("value")
+                    if currency == "USD" and val is not None:
+                        total_usd += float(val)
+                except Exception as inner_e:
+                    print(f"🔥 SKIP account due to parse error: {inner_e}", flush=True)
+
+            print("🔥 EXIT get_account_balance():", total_usd, flush=True)
+            return total_usd
         except Exception as e:
-            logger.error(f"Error fetching account balance: {e}")
+            print(f"🔥 ERROR get_account_balance: {e}", flush=True)
             return 0.0
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:

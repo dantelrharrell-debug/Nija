@@ -27,6 +27,7 @@ if not logger.hasHandlers():
     logger.addHandler(console_handler)
 
 from broker_manager import CoinbaseBroker
+from mock_broker import MockBroker
 from nija_apex_strategy_v71 import NIJAApexStrategyV71
 from indicators import calculate_vwap, calculate_ema, calculate_rsi, calculate_macd, calculate_atr, calculate_adx
 
@@ -46,11 +47,21 @@ class TradingStrategy:
         """Initialize trading strategy with broker and APEX strategy"""
         logger.info("Initializing NIJA Trading Strategy...")
         
-        # Initialize broker connection
-        self.broker = CoinbaseBroker()
+        # Initialize broker connection (supports PAPER_MODE)
+        paper_mode = str(os.getenv("PAPER_MODE", "")).lower() in ("1", "true", "yes")
+        if paper_mode:
+            logger.info("PAPER_MODE enabled — using MockBroker")
+            self.broker = MockBroker()
+        else:
+            self.broker = CoinbaseBroker()
+
         if not self.broker.connect():
-            logger.error("Failed to connect to Coinbase broker")
-            raise RuntimeError("Broker connection failed")
+            if paper_mode:
+                logger.error("MockBroker failed to initialize")
+                raise RuntimeError("Mock broker initialization failed")
+            else:
+                logger.error("Failed to connect to Coinbase broker")
+                raise RuntimeError("Broker connection failed")
         
         # Get account balance
         self.account_balance = self.broker.get_account_balance()
@@ -379,6 +390,21 @@ class TradingStrategy:
             self.trade_history.append(trade_entry)
         except Exception as e:
             logger.warning(f"Failed to log trade: {e}")
+
+    def run_cycle(self):
+        """Run a lightweight trading cycle used by the main loop."""
+        try:
+            logger.info("🔁 Running trading loop iteration")
+            self.account_balance = self.broker.get_account_balance()
+            logger.info(f"Account Balance: ${self.account_balance:,.2f}")
+
+            for symbol in self.trading_pairs:
+                analysis = self.analyze_symbol(symbol)
+                logger.info(f"Symbol: {symbol}, Signal: {analysis.get('signal')}, Reason: {analysis.get('reason')}")
+                if analysis.get('signal') in ['BUY', 'SELL']:
+                    self.execute_trade(analysis)
+        except Exception as exc:
+            logger.error(f"run_cycle error: {exc}", exc_info=True)
     
     def run_trading_cycle(self):
         """

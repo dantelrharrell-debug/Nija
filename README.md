@@ -26,6 +26,28 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 
 This project can be deployed to platforms like Railway using the provided Dockerfile and `start.sh`.
 
+### Build Metadata (Branch/Commit) in Logs
+
+To display the current Git branch and commit in runtime logs, NIJA supports two mechanisms:
+
+- **Env vars**: `GIT_BRANCH` and `GIT_COMMIT` read by [start.sh](start.sh).
+- **Docker build args**: Passed into the image and exported as env vars in the [Dockerfile](Dockerfile).
+
+Recommended local build command:
+
+```bash
+docker build \
+    --build-arg GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD)" \
+    --build-arg GIT_COMMIT="$(git rev-parse --short HEAD)" \
+    -t nija-bot:latest .
+docker run --rm -it nija-bot:latest
+```
+
+Railway deployment:
+- Set service environment variables `GIT_BRANCH` and `GIT_COMMIT` in Railway.
+- On startup, [start.sh](start.sh) prints Branch/Commit using env vars. If envs are missing but `.git` is present, it falls back to `git rev-parse`.
+- If Railway caches a stale image, follow the “Stale Image Cache” steps below.
+
 ### Railway Deployment Notes (Stale Image Cache)
 
 Railway may aggressively cache Docker images built from PR branches, which can cause the runtime to use outdated files even after code updates. Typical symptoms:
