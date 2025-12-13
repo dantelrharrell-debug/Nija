@@ -97,10 +97,12 @@ class TradingStrategy:
             DataFrame with OHLCV data or None if fetch fails
         """
         try:
-            candles = self.broker.get_candles(symbol, self.timeframe, self.min_candles_required)
-            if not candles or len(candles) < self.min_candles_required:
+            raw_candles = self.broker.get_candles(symbol, self.timeframe, self.min_candles_required)
+            if not raw_candles or len(raw_candles) < self.min_candles_required:
                 return None
             
+            # Normalize candles to ensure numeric types
+            candles = self._normalize_candles(raw_candles)
             df = pd.DataFrame(candles)
             
             # Ensure required columns exist
@@ -109,21 +111,41 @@ class TradingStrategy:
                 logger.warning(f"Missing required columns for {symbol}")
                 return None
 
-            # Convert price/volume fields to numeric to avoid string math issues
-            df[required_cols] = df[required_cols].apply(pd.to_numeric, errors='coerce')
-            df = df.dropna(subset=required_cols)
-            if len(df) < self.min_candles_required:
-                logger.warning(f"Insufficient numeric candle data for {symbol} after cleaning")
-                return None
+            # Ensure numeric types
+            df[["open","high","low","close","volume"]] = df[
+                ["open","high","low","close","volume"]
+            ].astype(float)
             
             # Sort by timestamp to ensure proper order
-            if 'time' in df.columns:
-                df = df.sort_values('time').reset_index(drop=True)
+            if 'timestamp' in df.columns:
+                df = df.sort_values('timestamp').reset_index(drop=True)
             
             return df
         except Exception as e:
             logger.warning(f"Failed to fetch candles for {symbol}: {e}")
             return None
+    
+    def _normalize_candles(self, raw_candles):
+        """
+        Normalize raw candle data to ensure numeric types
+        
+        Args:
+            raw_candles: Raw candle data from broker
+            
+        Returns:
+            List of normalized candle dictionaries
+        """
+        candles = []
+        for c in raw_candles:
+            candles.append({
+                "open": float(c["open"]),
+                "high": float(c["high"]),
+                "low": float(c["low"]),
+                "close": float(c["close"]),
+                "volume": float(c["volume"]),
+                "timestamp": c["start"]
+            })
+        return candles
     
     def calculate_indicators(self, df: pd.DataFrame) -> dict:
         """

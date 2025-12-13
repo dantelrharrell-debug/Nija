@@ -86,23 +86,27 @@ class CoinbaseBroker(BaseBroker):
             return False
     
     def get_account_balance(self) -> float:
-        """Get USD balance"""
+        """Get total USD + USDC balance"""
         try:
             accounts = self.client.get_accounts()
-            if not accounts or 'accounts' not in accounts:
-                print(f"⚠️  Empty or malformed accounts response: {accounts}")
-                return 0.0
-            for account in accounts['accounts']:
-                if account['currency'] == 'USD':
-                    usd_balance = float(account['available_balance']['value'])
-                    print(f"✅ USD Balance fetched: ${usd_balance:,.2f}")
-                    return usd_balance
-            print("⚠️  No USD account found in response")
+            
+            usd_balance = 0.0
+            usdc_balance = 0.0
+            
+            for acct in accounts["accounts"]:
+                currency = acct.get("currency")
+                available = float(acct.get("available_balance", {}).get("value", 0))
+                
+                if currency == "USD":
+                    usd_balance += available
+                elif currency == "USDC":
+                    usdc_balance += available
+            
+            total_balance = usd_balance + usdc_balance
+            return round(total_balance, 2)
         except Exception as e:
-            print(f"❌ Error fetching Coinbase balance: {e}")
-            import traceback
-            traceback.print_exc()
-        return 0.0
+            logger.error(f"Error fetching account balance: {e}")
+            return 0.0
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Place market order"""
