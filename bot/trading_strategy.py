@@ -63,8 +63,12 @@ class TradingStrategy:
                 logger.error("Failed to connect to Coinbase broker")
                 raise RuntimeError("Broker connection failed")
         
+        logger.info("🔥 Broker connected, about to fetch balance...")
+        print("🔥 BROKER CONNECTED, CALLING get_account_balance() NEXT", flush=True)
+        
         # Get account balance
         logger.info("🔥 Starting balance fetch...")
+        print("🔥 ABOUT TO CALL self.broker.get_account_balance()", flush=True)
         try:
             balance = self.broker.get_account_balance()
             logger.info(f"🔥 Balance fetch returned: {balance} (type: {type(balance).__name__})")
