@@ -22,6 +22,31 @@ NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade AP
 
 ---
 
+## 🚀 Deployment
+
+This project can be deployed to platforms like Railway using the provided Dockerfile and `start.sh`.
+
+### Railway Deployment Notes (Stale Image Cache)
+
+Railway may aggressively cache Docker images built from PR branches, which can cause the runtime to use outdated files even after code updates. Typical symptoms:
+- Runtime `bot.py` shows a `RuntimeError("🔥 NEW BOT.PY IS RUNNING 🔥")` banner.
+- `ModuleNotFoundError: No module named 'nija_strategy'` from an old `bot.py` import.
+
+How to fix:
+- Delete the stale service in Railway (Dashboard → Service → Settings → Danger Zone → Delete Service).
+- Create a new service from the `main` branch (New → Deploy from GitHub repo → select `main`).
+- Set required environment variables: `COINBASE_API_KEY`, `COINBASE_API_SECRET`, `COINBASE_PEM_CONTENT` (optional).
+
+Startup diagnostics:
+- `start.sh` prints `GIT_BRANCH` and `GIT_COMMIT`, the working directory, and the first 10 lines of `bot.py`.
+- `start.sh` fails fast if it detects stale markers (the flame banner or `from nija_strategy ...`), exiting with guidance to redeploy from `main`.
+
+Expected correct logs after clean deploy:
+- "NIJA TRADING BOT - APEX v7.1"
+- "Branch: main" and a real commit SHA
+- Head of `bot.py` shows the clean main entry implementation
+- Trading cycles every 150 seconds without crashes
+
 **Autonomous Cryptocurrency Trading with Dual RSI Strategy & Intelligent Trailing System**
 
 NIJA is a fully autonomous trading bot connected to **Coinbase Advanced Trade API** that scans **732 cryptocurrency markets** and executes trades using a sophisticated **dual RSI strategy** (RSI_9 + RSI_14) with dynamic position management. The bot automatically compounds profits, manages risk, and trails positions to maximize winners while protecting capital.
