@@ -1,13 +1,23 @@
 # indicators.py
 import pandas as pd
 
+
+def _ensure_numeric(df: pd.DataFrame, cols) -> pd.DataFrame:
+    """Coerce selected columns to numeric and drop rows with NaN in them."""
+    numeric_df = df.copy()
+    numeric_df[cols] = numeric_df[cols].apply(pd.to_numeric, errors="coerce")
+    numeric_df = numeric_df.dropna(subset=cols)
+    return numeric_df
+
 def calculate_vwap(df):
+    df = _ensure_numeric(df, ['high', 'low', 'close', 'volume'])
     q = df['volume']
     p = (df['high'] + df['low'] + df['close']) / 3
     vwap = (p * q).cumsum() / q.cumsum()
     return vwap.ffill().fillna(df['close'])
 
 def calculate_rsi(df, period=14):
+    df = _ensure_numeric(df, ['close'])
     delta = df['close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -21,9 +31,11 @@ def calculate_rsi(df, period=14):
 
 def calculate_ema(df, period):
     """Calculate EMA for given period"""
+    df = _ensure_numeric(df, ['close'])
     return df['close'].ewm(span=period, adjust=False).mean().ffill()
 
 def calculate_macd(df, fast=12, slow=26, signal=9):
+    df = _ensure_numeric(df, ['close'])
     exp1 = df['close'].ewm(span=fast, adjust=False).mean()
     exp2 = df['close'].ewm(span=slow, adjust=False).mean()
     macd_line = exp1 - exp2
@@ -42,6 +54,7 @@ def calculate_atr(df, period=14):
     Returns:
         pandas.Series: ATR values
     """
+    df = _ensure_numeric(df, ['high', 'low', 'close'])
     high = df['high']
     low = df['low']
     close = df['close']
@@ -67,6 +80,7 @@ def calculate_adx(df, period=14):
     Returns:
         tuple: (adx, plus_di, minus_di)
     """
+    df = _ensure_numeric(df, ['high', 'low', 'close'])
     high = df['high']
     low = df['low']
     close = df['close']

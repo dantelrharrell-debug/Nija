@@ -108,6 +108,13 @@ class TradingStrategy:
             if not all(col in df.columns for col in required_cols):
                 logger.warning(f"Missing required columns for {symbol}")
                 return None
+
+            # Convert price/volume fields to numeric to avoid string math issues
+            df[required_cols] = df[required_cols].apply(pd.to_numeric, errors='coerce')
+            df = df.dropna(subset=required_cols)
+            if len(df) < self.min_candles_required:
+                logger.warning(f"Insufficient numeric candle data for {symbol} after cleaning")
+                return None
             
             # Sort by timestamp to ensure proper order
             if 'time' in df.columns:
