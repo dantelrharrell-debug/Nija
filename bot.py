@@ -34,6 +34,8 @@ def main():
     """Main entry point for NIJA trading bot"""
     logger.info("=" * 70)
     logger.info("NIJA TRADING BOT - APEX v7.1")
+    logger.info("Branch: %s", os.getenv("GIT_BRANCH", "unknown"))
+    logger.info("Commit: %s", os.getenv("GIT_COMMIT", "unknown"))
     logger.info("=" * 70)
     logger.info(f"Python version: {sys.version.split()[0]}")
     logger.info(f"Log file: {LOG_FILE}")
