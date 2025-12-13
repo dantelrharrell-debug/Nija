@@ -210,6 +210,27 @@ class CoinbaseBroker(BaseBroker):
             print(f"   Crypto holdings: ${crypto_value:.8f} worth (for sell/buy)", flush=True)
             print(f"   Stablecoins: ${stablecoin_balance:.2f} (fallback)", flush=True)
             print(f"   Trading balance: ${trading_balance:.2f}", flush=True)
+
+            # If still zero, dump a concise inventory for debugging
+            if trading_balance == 0:
+                print("🔥 DEBUG ZERO BALANCE → dumping account inventory", flush=True)
+                for acct in acct_list:
+                    try:
+                        if isinstance(acct, dict):
+                            currency = acct.get('currency')
+                            platform = acct.get('platform')
+                            avail_val = float(acct.get('available_balance', {}).get('value', 0))
+                            held_val = float(acct.get('hold', {}).get('value', 0))
+                        else:
+                            currency = getattr(acct, 'currency', None)
+                            platform = getattr(acct, 'platform', None)
+                            avail_obj = getattr(acct, 'available_balance', None)
+                            held_obj = getattr(acct, 'hold', None)
+                            avail_val = float(getattr(avail_obj, 'value', 0)) if avail_obj else 0.0
+                            held_val = float(getattr(held_obj, 'value', 0)) if held_obj else 0.0
+                        print(f"🔥   ACCT {currency} | platform={platform} | avail={avail_val} | held={held_val}", flush=True)
+                    except Exception as inv_err:
+                        print(f"🔥   ACCT dump error: {inv_err}", flush=True)
             
             return trading_balance
         except Exception as e:
@@ -221,17 +242,21 @@ class CoinbaseBroker(BaseBroker):
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Place market order"""
         try:
+            if quantity <= 0:
+                raise ValueError(f"Refusing to place {side} order with non-positive size: {quantity}")
+
             client_order_id = str(uuid.uuid4())
             
             if side.lower() == 'buy':
+                # Use positional client_order_id to avoid SDK signature mismatch
                 order = self.client.market_order_buy(
-                    client_order_id=client_order_id,
+                    client_order_id,
                     product_id=symbol,
                     quote_size=str(quantity)
                 )
             else:
                 order = self.client.market_order_sell(
-                    client_order_id=client_order_id,
+                    client_order_id,
                     product_id=symbol,
                     base_size=str(quantity)
                 )
