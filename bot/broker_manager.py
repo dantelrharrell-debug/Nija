@@ -90,21 +90,28 @@ class CoinbaseBroker(BaseBroker):
         """Get total USD balance - scan all portfolios and prioritize USD, then crypto value, then stablecoins."""
         print("🔥 ENTERED get_account_balance()", flush=True)
         try:
-            # STEP 1: Try to get all portfolios and find the one with USD
+            # STEP 1: Optional override from env (if user provides portfolio UUID explicitly)
+            env_portfolio = os.getenv("COINBASE_RETAIL_PORTFOLIO_ID")
+            portfolio_uuid = env_portfolio if env_portfolio else None
+
+            # STEP 2: Try to get all portfolios and find the one with USD (if no override)
             print("🔥 SCANNING PORTFOLIOS FOR USD...", flush=True)
-            portfolio_uuid = None
             try:
                 portfolios_response = self.client.get_portfolios()
                 if hasattr(portfolios_response, 'portfolios') and portfolios_response.portfolios:
                     print(f"🔥 FOUND {len(portfolios_response.portfolios)} PORTFOLIO(S)", flush=True)
-                    
-                    # Check each portfolio for USD
+
+                    # Check each portfolio for USD unless an override was provided
                     for portfolio in portfolios_response.portfolios:
                         p_uuid = getattr(portfolio, 'uuid', None)
                         p_name = getattr(portfolio, 'name', 'Unknown')
                         p_type = getattr(portfolio, 'type', 'Unknown')
                         print(f"🔥   Portfolio: {p_name} (UUID: {p_uuid}, Type: {p_type})", flush=True)
-                        
+
+                        # If override exists, log and skip scanning
+                        if env_portfolio:
+                            continue
+
                         if p_uuid:
                             # Get accounts for this portfolio
                             try:
@@ -122,7 +129,7 @@ class CoinbaseBroker(BaseBroker):
                                                     break
                             except Exception as portfolio_err:
                                 print(f"🔥   ⚠️ Error checking portfolio {p_name}: {portfolio_err}", flush=True)
-                        
+
                         if portfolio_uuid:
                             break
                 else:
@@ -130,7 +137,7 @@ class CoinbaseBroker(BaseBroker):
             except Exception as portfolio_scan_err:
                 print(f"🔥 PORTFOLIO SCAN FAILED: {portfolio_scan_err} - falling back to default", flush=True)
             
-            # STEP 2: Get accounts (with portfolio_uuid if found)
+            # STEP 3: Get accounts (with portfolio_uuid if found or env override)
             if portfolio_uuid:
                 print(f"🔥 QUERYING ACCOUNTS FROM PORTFOLIO: {portfolio_uuid}", flush=True)
                 accounts = self.client.get_accounts(retail_portfolio_id=portfolio_uuid)
