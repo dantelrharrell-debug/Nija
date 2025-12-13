@@ -64,8 +64,13 @@ class TradingStrategy:
                 raise RuntimeError("Broker connection failed")
         
         # Get account balance
-        self.account_balance = self.broker.get_account_balance()
-        logger.info(f"Account balance: ${self.account_balance:,.2f}")
+        try:
+            balance = self.broker.get_account_balance()
+            self.account_balance = float(balance) if balance else 0.0
+            logger.info(f"Account balance: ${self.account_balance:,.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch initial balance: {e}, continuing with 0.0")
+            self.account_balance = 0.0
         
         # Initialize APEX strategy
         self.strategy = NIJAApexStrategyV71(
