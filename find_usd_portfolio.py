@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
 Find USD Portfolio - Locate which Coinbase portfolio contains USD/USDC funds
+Self-contained: reads environment directly (no .env required).
 """
 
 import os
-from dotenv import load_dotenv
 from coinbase.rest import RESTClient
 
-# Load credentials
-load_dotenv()
-
-api_key = os.getenv("COINBASE_API_KEY")
-api_secret = os.getenv("COINBASE_API_SECRET")
+api_key = os.environ.get("COINBASE_API_KEY")
+api_secret = os.environ.get("COINBASE_API_SECRET")
 
 if not api_key or not api_secret:
-    print("❌ Missing COINBASE_API_KEY or COINBASE_API_SECRET")
-    exit(1)
+    print("❌ Missing credentials for Coinbase Advanced Trade API")
+    print("   Expected env vars:")
+    print("   - COINBASE_API_KEY")
+    print("   - COINBASE_API_SECRET")
+    # Show which relevant envs are currently set to help debugging
+    present = {k: ("<set>" if os.environ.get(k) else "<missing>") for k in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_RETAIL_PORTFOLIO_ID"]}
+    print(f"   Current env status: {present}")
+    raise SystemExit(1)
 
 try:
     client = RESTClient(api_key=api_key, api_secret=api_secret)
@@ -93,7 +96,7 @@ try:
                     
             except Exception as e:
                 print(f"  ❌ Error fetching accounts for portfolio '{portfolio_name}': {e}")
-    
+            
     else:
         print("⚠️ No portfolios found")
     
@@ -102,6 +105,33 @@ try:
     print("📊 DEFAULT ACCOUNTS (no portfolio filter)")
     print(f"{'='*80}\n")
     
+    # If an override is set, show that portfolio first
+    override = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
+    if override:
+        print(f"\nUsing override portfolio: {override}")
+        try:
+            ov_accounts = client.get_accounts(retail_portfolio_id=override)
+            if hasattr(ov_accounts, 'accounts') and ov_accounts.accounts:
+                print(f"Found {len(ov_accounts.accounts)} account(s) in override view:\n")
+                for account in ov_accounts.accounts:
+                    currency = getattr(account, 'currency', 'UNKNOWN')
+                    platform = getattr(account, 'platform', 'UNKNOWN')
+                    available_balance = getattr(account, 'available_balance', None)
+                    if available_balance:
+                        if hasattr(available_balance, 'value'):
+                            balance_value = float(available_balance.value)
+                        elif isinstance(available_balance, dict):
+                            balance_value = float(available_balance.get('value', 0))
+                        else:
+                            balance_value = 0.0
+                    else:
+                        balance_value = 0.0
+                    print(f"  {currency}: {balance_value:.8f} (platform: {platform})")
+            else:
+                print("⚠️ No accounts in override view")
+        except Exception as e:
+            print(f"❌ Error fetching override portfolio accounts: {e}")
+
     default_accounts = client.get_accounts()
     
     if hasattr(default_accounts, 'accounts') and default_accounts.accounts:
