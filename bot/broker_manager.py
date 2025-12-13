@@ -87,15 +87,15 @@ class CoinbaseBroker(BaseBroker):
             return False
     
     def get_account_balance(self) -> float:
-        """Get total USD balance (available + held)."""
+        """Get total USD balance - prioritize USD, then crypto value, then stablecoins."""
         print("🔥 ENTERED get_account_balance()", flush=True)
         try:
             accounts = self.client.get_accounts()
             print("🔥 ACCOUNTS RESPONSE TYPE:", type(accounts), flush=True)
 
-            total_usd = 0.0
-            total_available = 0.0
-            total_held = 0.0
+            usd_balance = 0.0
+            crypto_value = 0.0
+            stablecoin_balance = 0.0
 
             # Prefer SDK Account list via .accounts; fallback to dict/list
             acct_list = []
@@ -134,21 +134,37 @@ class CoinbaseBroker(BaseBroker):
                             else:
                                 held = float(getattr(held_obj, 'value', 0))
                     
-                    # Aggregate USD and stablecoin balances (USD, USDC, USDT all = $1)
-                    if currency in ["USD", "USDC", "USDT", "DAI", "BUSD"]:
-                        print(f"🔥 FOUND {currency} ACCOUNT! Available: ${available}, Held: ${held}", flush=True)
-                        total_available += available
-                        total_held += held
-                        total_usd += (available + held)
-                        print(f"🔥 Total now: ${total_usd} (available: ${total_available}, held: ${total_held})", flush=True)
+                    total_in_account = available + held
+                    
+                    # Priority 1: USD (primary entry capital)
+                    if currency == "USD":
+                        print(f"🔥 FOUND USD ACCOUNT! Available: ${available}, Held: ${held}, Total: ${total_in_account}", flush=True)
+                        usd_balance += available  # Only available for trading
+                    
+                    # Priority 2: Crypto holdings (for sell/buy)
+                    elif currency in ["BTC", "ETH", "SOL", "AVAX", "XRP", "LTC", "DOGE", "MATIC", "LINK", "ADA"]:
+                        if total_in_account > 0:
+                            print(f"🔥 FOUND {currency} CRYPTO! Amount: {total_in_account} {currency}", flush=True)
+                            crypto_value += total_in_account  # Track but don't add to balance
+                    
+                    # Priority 3: Stablecoins (fallback if no USD)
+                    elif currency in ["USDC", "USDT", "DAI", "BUSD"]:
+                        print(f"🔥 FOUND {currency} STABLECOIN! Available: ${available}, Held: ${held}", flush=True)
+                        stablecoin_balance += available
                         
                 except Exception as inner_e:
                     print(f"🔥 SKIP account due to parse error: {inner_e}", flush=True)
 
-            print(f"🔥 EXIT get_account_balance(): ${total_usd} (available: ${total_available}, held: ${total_held})", flush=True)
+            # Use USD first, fallback to stablecoins if no USD
+            trading_balance = usd_balance if usd_balance > 0 else stablecoin_balance
             
-            # Return only available balance for trading (not held funds)
-            return total_available
+            print(f"🔥 BALANCE SUMMARY:", flush=True)
+            print(f"   USD: ${usd_balance:.2f} (PRIMARY - for entry/buying)", flush=True)
+            print(f"   Crypto holdings: ${crypto_value:.8f} worth (for sell/buy)", flush=True)
+            print(f"   Stablecoins: ${stablecoin_balance:.2f} (fallback)", flush=True)
+            print(f"   Trading balance: ${trading_balance:.2f}", flush=True)
+            
+            return trading_balance
         except Exception as e:
             print(f"🔥 ERROR get_account_balance: {e}", flush=True)
             import traceback
