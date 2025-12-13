@@ -74,4 +74,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    logging.info("🚀 Entering main trading loop...")
+    try:
+        strategy = TradingStrategy()
+        while True:
+            try:
+                strategy.run_cycle()  # Run your APEX v7.1 trading logic
+                time.sleep(15)        # Adjust interval as needed
+            except Exception as e:
+                logging.exception("❌ Error in trading cycle")
+                time.sleep(30)
+    except Exception as e:
+        logging.exception("❌ Fatal error initializing strategy")
