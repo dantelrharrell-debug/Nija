@@ -421,6 +421,21 @@ class NIJAApexStrategyV71:
         Returns:
             Dictionary of indicators
         """
+        # HARD GUARD: Force numeric types before any math to avoid str/int errors
+        try:
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in required_cols):
+                logger.warning("Missing OHLCV columns; cannot calculate indicators")
+                return {}
+            df[required_cols] = df[required_cols].astype(float)
+            # Debug: confirm types are floats
+            logger.info(
+                f"DEBUG candle types → close={type(df['close'].iloc[-1])}, "
+                f"open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to normalize candle types before indicators: {e}")
+            return {}
         indicators = {
             'vwap': calculate_vwap(df),
             'ema_9': calculate_ema(df, 9),
