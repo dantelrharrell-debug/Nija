@@ -14,6 +14,9 @@ from trading_strategy import TradingStrategy
 # Setup paths
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
+# Import after path setup
+from trading_strategy import TradingStrategy
+
 # Setup logging
 LOG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'nija.log'))
 logger = logging.getLogger("nija")
