@@ -119,6 +119,11 @@ To enable trading:
         self.consecutive_losses = 0
         self.last_trade_time = None
         self.min_time_between_trades = 5  # seconds
+
+    # Alias to align with README wording
+    def get_usd_balance(self) -> float:
+        """Fetch current USD/USDC trading balance."""
+        return float(self.broker.get_account_balance())
         
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
@@ -425,8 +430,8 @@ To enable trading:
         """Run a lightweight trading cycle used by the main loop."""
         try:
             logger.info("🔁 Running trading loop iteration")
-            self.account_balance = self.broker.get_account_balance()
-            logger.info(f"Account Balance: ${self.account_balance:,.2f}")
+            self.account_balance = self.get_usd_balance()
+            logger.info(f"USD Balance (get_usd_balance): ${self.account_balance:,.2f}")
 
             # Guard: if no trading balance, do not attempt orders
             if not self.account_balance or self.account_balance <= 0:
@@ -458,11 +463,11 @@ To enable trading:
         try:
             logger.info("=" * 60)
             logger.info(f"🔄 Running trading cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            logger.info(f"   Account balance: ${self.account_balance:,.2f}")
+            logger.info(f"   USD balance (get_usd_balance): ${self.account_balance:,.2f}")
             logger.info(f"   Open positions: {len(self.open_positions)}")
             
             # Refresh account balance
-            self.account_balance = self.broker.get_account_balance()
+            self.account_balance = self.get_usd_balance()
             
             # Scan all trading pairs
             logger.info(f"📊 Scanning {len(self.trading_pairs)} trading pairs...")
