@@ -7,6 +7,7 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
+import base64
 import os
 import uuid
 import tempfile
@@ -71,38 +72,54 @@ class CoinbaseBroker(BaseBroker):
             api_key = os.getenv("COINBASE_API_KEY")
             api_secret = os.getenv("COINBASE_API_SECRET")
             pem_content = os.getenv("COINBASE_PEM_CONTENT")
+            pem_content_base64 = os.getenv("COINBASE_PEM_CONTENT_BASE64") or os.getenv("COINBASE_PEM_BASE64")
             pem_path = os.getenv("COINBASE_PEM_PATH")
             
-            if not api_key or not (api_secret or pem_content or pem_path):
-                print("❌ Coinbase credentials not found (need COINBASE_API_KEY and one of COINBASE_API_SECRET/COINBASE_PEM_CONTENT/COINBASE_PEM_PATH)")
-                return False
-
             key_file_arg = None
             temp_pem_file = None
+
+            # If a PEM path is provided, prefer it but verify the file exists.
             if pem_path:
-                key_file_arg = pem_path
-            elif pem_content:
-                normalized = pem_content.replace("\\n", "\n")
-                temp_pem_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".pem")
-                temp_pem_file.write(normalized)
-                temp_pem_file.flush()
-                key_file_arg = temp_pem_file.name
-            
-            # RESTClient does NOT allow both api_key and key_file
-            # Use one OR the other, not both
+                if os.path.isfile(pem_path):
+                    key_file_arg = pem_path
+                else:
+                    print(f"⚠️ COINBASE_PEM_PATH is set but file not found: {pem_path}")
+
+            # Fallback: allow PEM content (plain or base64) to be materialized to a temp file.
+            if not key_file_arg:
+                raw_pem = None
+                if pem_content:
+                    raw_pem = pem_content
+                elif pem_content_base64:
+                    try:
+                        raw_pem = base64.b64decode(pem_content_base64).decode("utf-8")
+                    except Exception as decode_err:
+                        print(f"❌ Failed to decode COINBASE_PEM_CONTENT_BASE64: {decode_err}")
+
+                if raw_pem:
+                    normalized = raw_pem.replace("\\n", "\n")
+                    temp_pem_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".pem")
+                    temp_pem_file.write(normalized)
+                    temp_pem_file.flush()
+                    key_file_arg = temp_pem_file.name
+
+            # RESTClient does NOT allow both api_key and key_file. Use one OR the other.
             if key_file_arg:
-                # PEM file authentication - do NOT pass api_key
-                    self.client = RESTClient(
-                        api_key=None,
-                        api_secret=None,
-                        key_file=key_file_arg,
-                    )
-            else:
+                # PEM file authentication - do NOT pass api_key/api_secret to avoid conflicts.
+                self.client = RESTClient(
+                    api_key=None,
+                    api_secret=None,
+                    key_file=key_file_arg,
+                )
+            elif api_key and api_secret:
                 # JWT authentication with api_key + api_secret
                 self.client = RESTClient(
                     api_key=api_key,
                     api_secret=api_secret,
                 )
+            else:
+                print("❌ Coinbase credentials not found (set COINBASE_API_KEY+COINBASE_API_SECRET or provide PEM via COINBASE_PEM_PATH/COINBASE_PEM_CONTENT/COINBASE_PEM_CONTENT_BASE64)")
+                return False
             
             # Test connection
             accounts = self.client.get_accounts()
