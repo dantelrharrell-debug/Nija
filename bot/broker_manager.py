@@ -87,10 +87,57 @@ class CoinbaseBroker(BaseBroker):
             return False
     
     def get_account_balance(self) -> float:
-        """Get total USD balance - prioritize USD, then crypto value, then stablecoins."""
+        """Get total USD balance - scan all portfolios and prioritize USD, then crypto value, then stablecoins."""
         print("🔥 ENTERED get_account_balance()", flush=True)
         try:
-            accounts = self.client.get_accounts()
+            # STEP 1: Try to get all portfolios and find the one with USD
+            print("🔥 SCANNING PORTFOLIOS FOR USD...", flush=True)
+            portfolio_uuid = None
+            try:
+                portfolios_response = self.client.get_portfolios()
+                if hasattr(portfolios_response, 'portfolios') and portfolios_response.portfolios:
+                    print(f"🔥 FOUND {len(portfolios_response.portfolios)} PORTFOLIO(S)", flush=True)
+                    
+                    # Check each portfolio for USD
+                    for portfolio in portfolios_response.portfolios:
+                        p_uuid = getattr(portfolio, 'uuid', None)
+                        p_name = getattr(portfolio, 'name', 'Unknown')
+                        p_type = getattr(portfolio, 'type', 'Unknown')
+                        print(f"🔥   Portfolio: {p_name} (UUID: {p_uuid}, Type: {p_type})", flush=True)
+                        
+                        if p_uuid:
+                            # Get accounts for this portfolio
+                            try:
+                                portfolio_accounts = self.client.get_accounts(retail_portfolio_id=p_uuid)
+                                if hasattr(portfolio_accounts, 'accounts') and portfolio_accounts.accounts:
+                                    for acct in portfolio_accounts.accounts:
+                                        currency = getattr(acct, 'currency', None)
+                                        if currency == "USD":
+                                            available_obj = getattr(acct, 'available_balance', None)
+                                            if available_obj:
+                                                usd_val = float(getattr(available_obj, 'value', 0)) if hasattr(available_obj, 'value') else float(available_obj.get('value', 0))
+                                                if usd_val > 0:
+                                                    print(f"🔥   ✅ FOUND USD ${usd_val:.2f} IN PORTFOLIO '{p_name}'", flush=True)
+                                                    portfolio_uuid = p_uuid
+                                                    break
+                            except Exception as portfolio_err:
+                                print(f"🔥   ⚠️ Error checking portfolio {p_name}: {portfolio_err}", flush=True)
+                        
+                        if portfolio_uuid:
+                            break
+                else:
+                    print("🔥 NO PORTFOLIOS FOUND - using default account query", flush=True)
+            except Exception as portfolio_scan_err:
+                print(f"🔥 PORTFOLIO SCAN FAILED: {portfolio_scan_err} - falling back to default", flush=True)
+            
+            # STEP 2: Get accounts (with portfolio_uuid if found)
+            if portfolio_uuid:
+                print(f"🔥 QUERYING ACCOUNTS FROM PORTFOLIO: {portfolio_uuid}", flush=True)
+                accounts = self.client.get_accounts(retail_portfolio_id=portfolio_uuid)
+            else:
+                print("🔥 QUERYING DEFAULT ACCOUNTS (no portfolio filter)", flush=True)
+                accounts = self.client.get_accounts()
+            
             print("🔥 ACCOUNTS RESPONSE TYPE:", type(accounts), flush=True)
 
             usd_balance = 0.0
