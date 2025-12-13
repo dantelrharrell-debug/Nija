@@ -163,6 +163,16 @@ class TradingStrategy:
             Dictionary of calculated indicators
         """
         try:
+            # HARD GUARD: Ensure numeric OHLCV before any indicator math
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in required_cols):
+                logger.warning("Missing OHLCV columns; cannot calculate indicators")
+                return {}
+            df[required_cols] = df[required_cols].astype(float)
+            logger.info(
+                f"DEBUG candle types → close={type(df['close'].iloc[-1])}, "
+                f"open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}"
+            )
             indicators = {
                 'vwap': calculate_vwap(df),
                 'ema_9': calculate_ema(df, 9),
