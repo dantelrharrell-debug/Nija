@@ -87,13 +87,15 @@ class CoinbaseBroker(BaseBroker):
             return False
     
     def get_account_balance(self) -> float:
-        """Get total USD balance with hard trace for debugging."""
+        """Get total USD balance (available + held)."""
         print("🔥 ENTERED get_account_balance()", flush=True)
         try:
             accounts = self.client.get_accounts()
             print("🔥 ACCOUNTS RESPONSE TYPE:", type(accounts), flush=True)
 
             total_usd = 0.0
+            total_available = 0.0
+            total_held = 0.0
 
             # Prefer SDK Account list via .accounts; fallback to dict/list
             acct_list = []
@@ -105,22 +107,52 @@ class CoinbaseBroker(BaseBroker):
                 acct_list = accounts
 
             for acct in acct_list:
-                print("🔥 ACCOUNT OBJ:", acct, flush=True)
                 try:
-                    currency = getattr(acct, "currency", None)
-                    available_obj = getattr(acct, "available_balance", None)
-                    val = getattr(available_obj, "value", None)
-                    if val is None and isinstance(available_obj, dict):
-                        val = available_obj.get("value")
-                    if currency == "USD" and val is not None:
-                        total_usd += float(val)
+                    # Handle both object and dict access
+                    if isinstance(acct, dict):
+                        currency = acct.get('currency')
+                        available = float(acct.get('available_balance', {}).get('value', 0))
+                        held = float(acct.get('hold', {}).get('value', 0))
+                    else:
+                        currency = getattr(acct, "currency", None)
+                        available_obj = getattr(acct, "available_balance", None)
+                        held_obj = getattr(acct, "hold", None)
+                        
+                        # Extract available value
+                        available = 0.0
+                        if available_obj:
+                            if isinstance(available_obj, dict):
+                                available = float(available_obj.get('value', 0))
+                            else:
+                                available = float(getattr(available_obj, 'value', 0))
+                        
+                        # Extract held value
+                        held = 0.0
+                        if held_obj:
+                            if isinstance(held_obj, dict):
+                                held = float(held_obj.get('value', 0))
+                            else:
+                                held = float(getattr(held_obj, 'value', 0))
+                    
+                    # Aggregate USD balances
+                    if currency == "USD":
+                        print(f"🔥 FOUND USD ACCOUNT! Available: ${available}, Held: ${held}", flush=True)
+                        total_available += available
+                        total_held += held
+                        total_usd += (available + held)
+                        print(f"🔥 USD total now: ${total_usd} (available: ${total_available}, held: ${total_held})", flush=True)
+                        
                 except Exception as inner_e:
                     print(f"🔥 SKIP account due to parse error: {inner_e}", flush=True)
 
-            print("🔥 EXIT get_account_balance():", total_usd, flush=True)
-            return total_usd
+            print(f"🔥 EXIT get_account_balance(): ${total_usd} (available: ${total_available}, held: ${total_held})", flush=True)
+            
+            # Return only available balance for trading (not held funds)
+            return total_available
         except Exception as e:
             print(f"🔥 ERROR get_account_balance: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
             return 0.0
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
