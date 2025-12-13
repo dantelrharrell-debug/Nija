@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 import os
 import uuid
+import tempfile
 
 class BrokerType(Enum):
     COINBASE = "coinbase"
@@ -69,12 +70,29 @@ class CoinbaseBroker(BaseBroker):
             
             api_key = os.getenv("COINBASE_API_KEY")
             api_secret = os.getenv("COINBASE_API_SECRET")
+            pem_content = os.getenv("COINBASE_PEM_CONTENT")
+            pem_path = os.getenv("COINBASE_PEM_PATH")
             
-            if not api_key or not api_secret:
-                print("❌ Coinbase credentials not found")
+            if not api_key or not (api_secret or pem_content or pem_path):
+                print("❌ Coinbase credentials not found (need COINBASE_API_KEY and one of COINBASE_API_SECRET/COINBASE_PEM_CONTENT/COINBASE_PEM_PATH)")
                 return False
+
+            key_file_arg = None
+            temp_pem_file = None
+            if pem_path:
+                key_file_arg = pem_path
+            elif pem_content:
+                normalized = pem_content.replace("\\n", "\n")
+                temp_pem_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".pem")
+                temp_pem_file.write(normalized)
+                temp_pem_file.flush()
+                key_file_arg = temp_pem_file.name
             
-            self.client = RESTClient(api_key=api_key, api_secret=api_secret)
+            self.client = RESTClient(
+                api_key=api_key,
+                api_secret=api_secret if not key_file_arg else None,
+                key_file=key_file_arg,
+            )
             
             # Test connection
             accounts = self.client.get_accounts()

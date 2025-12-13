@@ -5,19 +5,41 @@ Self-contained: reads environment directly (no .env required).
 """
 
 import os
+import tempfile
 from coinbase.rest import RESTClient
 
 api_key = os.environ.get("COINBASE_API_KEY")
 api_secret = os.environ.get("COINBASE_API_SECRET")
+pem_content = os.environ.get("COINBASE_PEM_CONTENT")
+pem_path = os.environ.get("COINBASE_PEM_PATH")
 
-if not api_key or not api_secret:
+if not api_key or not (api_secret or pem_content or pem_path):
     print("❌ Missing credentials for Coinbase Advanced Trade API")
     print("   Expected env vars:")
     print("   - COINBASE_API_KEY")
-    print("   - COINBASE_API_SECRET")
+    print("   - COINBASE_API_SECRET  (PEM private key content) OR COINBASE_PEM_CONTENT OR COINBASE_PEM_PATH")
     # Show which relevant envs are currently set to help debugging
-    present = {k: ("<set>" if os.environ.get(k) else "<missing>") for k in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_RETAIL_PORTFOLIO_ID"]}
+    present = {k: ("<set>" if os.environ.get(k) else "<missing>") for k in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_PEM_CONTENT", "COINBASE_PEM_PATH", "COINBASE_RETAIL_PORTFOLIO_ID"]}
     print(f"   Current env status: {present}")
+    raise SystemExit(1)
+
+# If PEM content is provided as a single-line env, write it to a temp file for the SDK
+temp_pem_file = None
+try:
+    key_file_arg = None
+    if pem_path:
+        key_file_arg = pem_path
+    elif pem_content:
+        # Normalize \n escapes into real newlines
+        normalized = pem_content.replace("\\n", "\n")
+        temp_pem_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".pem")
+        temp_pem_file.write(normalized)
+        temp_pem_file.flush()
+        key_file_arg = temp_pem_file.name
+
+    client = RESTClient(api_key=api_key, api_secret=api_secret if not key_file_arg else None, key_file=key_file_arg)
+except Exception as e:
+    print(f"❌ Failed to initialize RESTClient: {e}")
     raise SystemExit(1)
 
 try:
