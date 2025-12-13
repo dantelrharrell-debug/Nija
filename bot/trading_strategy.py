@@ -75,6 +75,18 @@ class TradingStrategy:
             self.account_balance = float(balance) if balance else 0.0
             logger.info(f"🔥 Balance converted to float: {self.account_balance}")
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
+            # If initial balance is zero, print a clear banner with guidance
+            if self.account_balance <= 0:
+                portfolio_override = os.getenv("COINBASE_RETAIL_PORTFOLIO_ID", "<none>")
+                logger.warning("""
+==================== BALANCE NOTICE ====================
+No USD/USDC trading balance detected via Advanced Trade API.
+Portfolio override in use: {override}
+To enable trading:
+- Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio
+- Or set COINBASE_RETAIL_PORTFOLIO_ID to the UUID of the funded portfolio.
+========================================================
+""".format(override=portfolio_override))
         except Exception as e:
             logger.exception(f"🔥 CRITICAL: Failed to fetch/convert balance")
             logger.warning(f"Continuing with 0.0 balance")
