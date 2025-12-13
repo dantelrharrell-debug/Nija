@@ -1,3 +1,5 @@
+raise RuntimeError("🔥 NEW BOT.PY IS RUNNING 🔥")
+
 #!/usr/bin/env python3
 """
 NIJA Trading Bot - Main Entry Point
