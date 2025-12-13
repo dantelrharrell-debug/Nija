@@ -7,7 +7,7 @@ from typing import Dict, List
 from datetime import datetime, timedelta
 import random
 
-from .broker_manager import BaseBroker, BrokerType
+from broker_manager import BaseBroker, BrokerType
 
 
 class MockBroker(BaseBroker):
