@@ -9,6 +9,7 @@ import sys
 import time
 import logging
 from logging.handlers import RotatingFileHandler
+from trading_strategy import TradingStrategy
 
 # Setup paths
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
@@ -27,9 +28,6 @@ if not logger.hasHandlers():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-from trading_strategy import TradingStrategy
-
-
 def main():
     """Main entry point for NIJA trading bot"""
     logger.info("=" * 70)
@@ -40,7 +38,7 @@ def main():
     logger.info(f"Python version: {sys.version.split()[0]}")
     logger.info(f"Log file: {LOG_FILE}")
     logger.info(f"Working directory: {os.getcwd()}")
-    
+
     try:
         logger.info("Initializing trading strategy...")
         strategy = TradingStrategy()
@@ -53,47 +51,19 @@ def main():
                 cycle_count += 1
                 logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
                 strategy.run_cycle()
-
-                sleep_time = 15
-                logger.info(f"Sleeping for {sleep_time} seconds...")
-                time.sleep(sleep_time)
-
+                time.sleep(15)
             except KeyboardInterrupt:
                 logger.info("Trading bot stopped by user (Ctrl+C)")
                 break
             except Exception as e:
                 logger.error(f"Error in trading cycle: {e}", exc_info=True)
-                logger.info("Waiting 10 seconds before retry...")
                 time.sleep(10)
 
     except Exception as e:
         logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
         sys.exit(1)
-    
+
     logger.info("NIJA trading bot shutdown complete")
 
-
 if __name__ == "__main__":
-    logging.info("🚀 Entering main trading loop...")
-    try:
-        strategy = TradingStrategy()
-        while True:
-            try:
-                strategy.run_cycle()  # Run your APEX v7.1 trading logic
-                time.sleep(15)        # Adjust interval as needed
-            except Exception as e:
-                logging.exception("❌ Error in trading cycle")
-                time.sleep(30)
-    except Exception as e:
-        logging.exception("❌ Fatal error initializing strategy")
-
-if __name__ == "__main__":
-    logging.info("🚀 Entering main trading loop...")
-
-    while True:
-        try:
-            strategy.run_cycle()  # Replace with your APEX v7.1 cycle method
-            time.sleep(15)        # Wait 15 seconds between cycles
-        except Exception as e:
-            logging.exception("❌ Error in trading cycle")
-            time.sleep(30)        # Wait 30 seconds on error
+    main()
