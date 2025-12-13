@@ -16,7 +16,6 @@ class BrokerType(Enum):
     TD_AMERITRADE = "td_ameritrade"
     ALPACA = "alpaca"
     TRADIER = "tradier"
-    BINANCE = "binance"
 
 class BaseBroker(ABC):
     """Base class for all broker integrations"""
