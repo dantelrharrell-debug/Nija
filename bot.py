@@ -86,3 +86,14 @@ if __name__ == "__main__":
                 time.sleep(30)
     except Exception as e:
         logging.exception("❌ Fatal error initializing strategy")
+
+if __name__ == "__main__":
+    logging.info("🚀 Entering main trading loop...")
+
+    while True:
+        try:
+            strategy.run_cycle()  # Replace with your APEX v7.1 cycle method
+            time.sleep(15)        # Wait 15 seconds between cycles
+        except Exception as e:
+            logging.exception("❌ Error in trading cycle")
+            time.sleep(30)        # Wait 30 seconds on error
