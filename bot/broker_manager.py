@@ -139,7 +139,8 @@ class CoinbaseBroker(BaseBroker):
             
             # STEP 3: Get accounts (with portfolio_uuid if found or env override)
             if portfolio_uuid:
-                print(f"🔥 QUERYING ACCOUNTS FROM PORTFOLIO: {portfolio_uuid}", flush=True)
+                source = "env override" if env_portfolio else "auto-detected"
+                print(f"🔥 QUERYING ACCOUNTS FROM PORTFOLIO: {portfolio_uuid} ({source})", flush=True)
                 accounts = self.client.get_accounts(retail_portfolio_id=portfolio_uuid)
             else:
                 print("🔥 QUERYING DEFAULT ACCOUNTS (no portfolio filter)", flush=True)
