@@ -64,23 +64,32 @@ class TradingStrategy:
                 raise RuntimeError("Broker connection failed")
         
         # Get account balance
+        logger.info("🔥 Starting balance fetch...")
         try:
             balance = self.broker.get_account_balance()
+            logger.info(f"🔥 Balance fetch returned: {balance} (type: {type(balance).__name__})")
             self.account_balance = float(balance) if balance else 0.0
+            logger.info(f"🔥 Balance converted to float: {self.account_balance}")
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
         except Exception as e:
-            logger.warning(f"Failed to fetch initial balance: {e}, continuing with 0.0")
+            logger.exception(f"🔥 CRITICAL: Failed to fetch/convert balance")
+            logger.warning(f"Continuing with 0.0 balance")
             self.account_balance = 0.0
         
-        # Initialize APEX strategy
-        self.strategy = NIJAApexStrategyV71(
-            broker_client=self.broker.client,
-            config={
-                'min_adx': 20,
-                'volume_threshold': 0.5,
-                'ai_momentum_enabled': False
-            }
-        )
+        logger.info("🔥 Initializing APEX strategy...")
+        try:
+            self.strategy = NIJAApexStrategyV71(
+                broker_client=self.broker.client,
+                config={
+                    'min_adx': 20,
+                    'volume_threshold': 0.5,
+                    'ai_momentum_enabled': False
+                }
+            )
+            logger.info("🔥 APEX strategy initialized successfully")
+        except Exception as e:
+            logger.exception("🔥 CRITICAL: Failed to initialize APEX strategy")
+            raise
         
         # Trading configuration
         self.trading_pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
