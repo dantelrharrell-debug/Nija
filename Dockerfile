@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 RUN rm -rf ./cd/vendor
 
 # Build provenance and cache control - MUST come BEFORE COPY
-ARG CACHE_BUST=2025-12-13-v2
+ARG CACHE_BUST=2025-12-13-v3-RESTClient-fix
 ARG GIT_BRANCH=unknown
 ARG GIT_COMMIT=unknown
 ENV GIT_BRANCH=${GIT_BRANCH}
