@@ -416,6 +416,17 @@ class TradingStrategy:
             self.account_balance = self.broker.get_account_balance()
             logger.info(f"Account Balance: ${self.account_balance:,.2f}")
 
+            # Guard: if no trading balance, do not attempt orders
+            if not self.account_balance or self.account_balance <= 0:
+                logger.warning("🚫 No USD/USDC trading balance detected. Skipping trade execution this cycle.")
+                logger.warning("👉 If funds are in regular Coinbase wallet, move them into Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
+                logger.warning("👉 Or set COINBASE_RETAIL_PORTFOLIO_ID to the portfolio UUID that holds USD/USDC.")
+                # Continue with analysis-only logging for visibility
+                for symbol in self.trading_pairs:
+                    analysis = self.analyze_symbol(symbol)
+                    logger.info(f"Symbol: {symbol}, Signal: {analysis.get('signal')}, Reason: {analysis.get('reason')}")
+                return
+
             for symbol in self.trading_pairs:
                 analysis = self.analyze_symbol(symbol)
                 logger.info(f"Symbol: {symbol}, Signal: {analysis.get('signal')}, Reason: {analysis.get('reason')}")
