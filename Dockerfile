@@ -13,6 +13,7 @@ COPY . .
 # Build provenance (optional): allow passing branch/commit at build time
 ARG GIT_BRANCH=unknown
 ARG GIT_COMMIT=unknown
+ARG CACHE_BUST=2025-12-13
 ENV GIT_BRANCH=${GIT_BRANCH}
 ENV GIT_COMMIT=${GIT_COMMIT}
 
