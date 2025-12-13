@@ -8,6 +8,7 @@ from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 import os
+import uuid
 
 class BrokerType(Enum):
     COINBASE = "coinbase"
@@ -125,13 +126,17 @@ class CoinbaseBroker(BaseBroker):
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Place market order"""
         try:
+            client_order_id = str(uuid.uuid4())
+            
             if side.lower() == 'buy':
                 order = self.client.market_order_buy(
+                    client_order_id=client_order_id,
                     product_id=symbol,
                     quote_size=str(quantity)
                 )
             else:
                 order = self.client.market_order_sell(
+                    client_order_id=client_order_id,
                     product_id=symbol,
                     base_size=str(quantity)
                 )
