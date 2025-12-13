@@ -134,13 +134,13 @@ class CoinbaseBroker(BaseBroker):
                             else:
                                 held = float(getattr(held_obj, 'value', 0))
                     
-                    # Aggregate USD balances
-                    if currency == "USD":
-                        print(f"🔥 FOUND USD ACCOUNT! Available: ${available}, Held: ${held}", flush=True)
+                    # Aggregate USD and stablecoin balances (USD, USDC, USDT all = $1)
+                    if currency in ["USD", "USDC", "USDT", "DAI", "BUSD"]:
+                        print(f"🔥 FOUND {currency} ACCOUNT! Available: ${available}, Held: ${held}", flush=True)
                         total_available += available
                         total_held += held
                         total_usd += (available + held)
-                        print(f"🔥 USD total now: ${total_usd} (available: ${total_available}, held: ${total_held})", flush=True)
+                        print(f"🔥 Total now: ${total_usd} (available: ${total_available}, held: ${total_held})", flush=True)
                         
                 except Exception as inner_e:
                     print(f"🔥 SKIP account due to parse error: {inner_e}", flush=True)
