@@ -2,10 +2,6 @@
 
 ---
 
-# NIJA Trading Bot 🚀
-
----
-
 ## 🛠️ Recent Fixes (Dec 11, 2025)
 
 - Fixed persistent IndentationError in `bot/trading_strategy.py` (`close_full_position` method). All indentation is now consistent and the bot runs without syntax errors.
