@@ -221,11 +221,15 @@ class CoinbaseBroker(BaseBroker):
                         currency = acct.get('currency')
                         available = float(acct.get('available_balance', {}).get('value', 0))
                         held = float(acct.get('hold', {}).get('value', 0))
+                        platform = acct.get('platform')
+                        name = acct.get('name')
                     else:
                         currency = getattr(acct, "currency", None)
                         available_obj = getattr(acct, "available_balance", None)
                         held_obj = getattr(acct, "hold", None)
-                        
+                        platform = getattr(acct, 'platform', None)
+                        name = getattr(acct, 'name', None)
+
                         # Extract available value
                         available = 0.0
                         if available_obj:
@@ -233,7 +237,7 @@ class CoinbaseBroker(BaseBroker):
                                 available = float(available_obj.get('value', 0))
                             else:
                                 available = float(getattr(available_obj, 'value', 0))
-                        
+
                         # Extract held value
                         held = 0.0
                         if held_obj:
@@ -241,13 +245,19 @@ class CoinbaseBroker(BaseBroker):
                                 held = float(held_obj.get('value', 0))
                             else:
                                 held = float(getattr(held_obj, 'value', 0))
-                    
+
                     total_in_account = available + held
-                    
-                    # Priority 1: USD (primary entry capital)
-                    if currency == "USD":
-                        print(f"🔥 FOUND USD ACCOUNT! Available: ${available}, Held: ${held}, Total: ${total_in_account}", flush=True)
-                        usd_balance += available  # Only available for trading
+
+                    # Priority 1: USD (primary entry capital) — only count eligible Advanced Trade accounts
+                    allowed_platforms = ["ACCOUNT_PLATFORM_CBI", "ACCOUNT_PLATFORM_ADVANCED"]
+                    name_str = (name or "")
+                    is_spot_name = "spot" in name_str.lower()
+                    is_allowed_platform = platform in allowed_platforms
+                    usd_eligible = (currency == "USD") and (is_spot_name or is_allowed_platform)
+
+                    if usd_eligible:
+                        print(f"🔥 FOUND USD ACCOUNT (eligible)! Available: ${available}, Held: ${held}, Total: ${total_in_account}", flush=True)
+                        usd_balance += available
                     
                     # Priority 2: Crypto holdings (for sell/buy)
                     elif currency in ["BTC", "ETH", "SOL", "AVAX", "XRP", "LTC", "DOGE", "MATIC", "LINK", "ADA"]:
