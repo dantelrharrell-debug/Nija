@@ -41,6 +41,13 @@ def main():
     logger.info(f"Log file: {LOG_FILE}")
     logger.info(f"Working directory: {os.getcwd()}")
 
+    # Portfolio override visibility at startup
+    portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
+    if portfolio_id:
+        logger.info("🔧 Portfolio override in use: %s", portfolio_id)
+    else:
+        logger.info("🔧 Portfolio override in use: <none>")
+
     try:
         logger.info("Initializing trading strategy...")
         strategy = TradingStrategy()
@@ -88,10 +95,8 @@ def main():
             logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
             sys.exit(1)
     except Exception as e:
-        logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
+        logger.error(f"Unhandled fatal error: {e}", exc_info=True)
         sys.exit(1)
-
-    logger.info("NIJA trading bot shutdown complete")
 
 if __name__ == "__main__":
     main()
