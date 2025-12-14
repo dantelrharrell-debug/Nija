@@ -263,6 +263,10 @@ class CoinbaseBroker(BaseBroker):
                         logging.info(f"   {curr} | name={nm} | platform={plat} | avail={av:.2f} | held={hd:.2f}")
                 if not found_usd_usdc:
                     logging.info("   ⚠️ NO USD/USDC ACCOUNTS FOUND in default account list")
+                    # If zero balance, also dump portfolio-level summary
+                    if trading_balance == 0:
+                        logging.info("💼 PORTFOLIO SUMMARY (all portfolios):")
+                        self._dump_portfolio_summary()
             except Exception as dump_err:
                 logging.warning(f"⚠️ Account inventory dump failed: {dump_err}")
 
@@ -282,6 +286,34 @@ class CoinbaseBroker(BaseBroker):
                 "trading_balance": 0.0,
                 "crypto": {},
             }
+    
+    def _dump_portfolio_summary(self):
+        """Diagnostic: dump all portfolios and their USD/USDC balances"""
+        try:
+            portfolios_resp = self.client.list_portfolios()
+            portfolios = getattr(portfolios_resp, 'portfolios', [])
+            for p in portfolios:
+                p_name = getattr(p, 'name', 'Unknown')
+                p_uuid = getattr(p, 'uuid', None)
+                
+                # Fetch accounts for this portfolio
+                try:
+                    accounts_resp = self.client.list_accounts(portfolio_uuid=p_uuid)
+                    accounts = getattr(accounts_resp, 'accounts', [])
+                    usd_total = 0.0
+                    usdc_total = 0.0
+                    for a in accounts:
+                        curr = getattr(a, 'currency', None)
+                        av = float(getattr(getattr(a, 'available_balance', None), 'value', 0) or 0)
+                        if curr == "USD":
+                            usd_total += av
+                        elif curr == "USDC":
+                            usdc_total += av
+                    logging.info(f"   {p_name} (UUID: {p_uuid}) | USD: ${usd_total:.2f} | USDC: ${usdc_total:.2f}")
+                except Exception as p_err:
+                    logging.warning(f"   {p_name} — error fetching accounts: {p_err}")
+        except Exception as e:
+            logging.warning(f"⚠️ Portfolio summary failed: {e}")
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Place market order"""
