@@ -1,22 +1,81 @@
 #!/usr/bin/env python3
-"""Quick balance check using NIJA's trading strategy"""
+"""Quick balance check using NIJA's trading strategy
+
+Enhancements:
+- Automatically loads credentials from a local .env if exports are not present
+- Supports PEM secret via COINBASE_PEM_CONTENT
+- Prints clearer diagnostics on auth failures
+"""
 
 import sys
 import os
+from pathlib import Path
 sys.path.insert(0, 'bot')
 
 from trading_strategy import TradingStrategy
 from coinbase.rest import RESTClient
 
-# Load credentials
+
+def load_env_from_dotenv():
+    """Load environment variables from a local .env file if present and not already set.
+
+    This avoids requiring `export COINBASE_API_KEY/SECRET` in the shell.
+    """
+    dotenv_path = Path('.env')
+    if not dotenv_path.exists():
+        return
+    try:
+        with dotenv_path.open('r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' not in line:
+                    continue
+                key, val = line.split('=', 1)
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                # Only set if not already present in env
+                if key and (os.getenv(key) is None):
+                    os.environ[key] = val
+    except Exception as e:
+        print(f"⚠️ Failed to parse .env: {e}")
+
+
+def safe_preview(value: str, max_prefix: int = 6) -> str:
+    if not value:
+        return "<empty>"
+    return f"{value[:max_prefix]}… (len={len(value)})"
+
+
+# Attempt to load from .env if not set
+if not os.getenv('COINBASE_API_KEY') or not os.getenv('COINBASE_API_SECRET'):
+    load_env_from_dotenv()
+
+# Load credentials (JWT or PEM)
 api_key = os.getenv('COINBASE_API_KEY')
 api_secret = os.getenv('COINBASE_API_SECRET')
+pem_content = os.getenv('COINBASE_PEM_CONTENT')
 
-if not api_key or not api_secret:
-    print("❌ Missing API credentials! Set COINBASE_API_KEY and COINBASE_API_SECRET")
+if not api_key:
+    print("❌ Missing COINBASE_API_KEY. Set in env or .env")
     sys.exit(1)
 
-client = RESTClient(api_key=api_key, api_secret=api_secret)
+if not api_secret and not pem_content:
+    print("❌ Missing secret. Provide COINBASE_API_SECRET (JWT) or COINBASE_PEM_CONTENT (PEM) via env or .env")
+    sys.exit(1)
+
+auth_method = 'pem' if pem_content and not api_secret else 'jwt'
+print(f"🔐 Auth method: {auth_method} | key={safe_preview(api_key)} | secret={safe_preview(api_secret or pem_content)}")
+
+client_kwargs = {'api_key': api_key}
+if auth_method == 'jwt':
+    client_kwargs['api_secret'] = api_secret
+else:
+    # coinbase-advanced-py accepts `api_secret` containing PEM content for PEM auth
+    client_kwargs['api_secret'] = pem_content
+
+client = RESTClient(**client_kwargs)
 
 # Use strategy's get_usd_balance method
 strategy = TradingStrategy(client, paper_mode=False)
@@ -25,9 +84,17 @@ print('\n' + '='*70)
 print('💰 NIJA FUNDED ACCOUNT STATUS')
 print('='*70)
 
-# Get USD balance
-usd_balance = strategy.get_usd_balance()
-print(f'\n💵 Available USD: ${usd_balance:.2f}')
+# Get USD balance with auth diagnostics
+try:
+    usd_balance = strategy.get_usd_balance()
+    print(f'\n💵 Available USD: ${usd_balance:.2f}')
+except Exception as e:
+    # Commonly 401 Unauthorized due to invalid credentials or wrong auth mode
+    msg = str(e)
+    print(f"❌ Error retrieving USD balance: {msg}")
+    print("   Tips: Verify the key/secret pair (JWT) or provide PEM via COINBASE_PEM_CONTENT."
+          " Rotate creds if previously exposed. Ensure Advanced Trade is enabled.")
+    sys.exit(1)
 
 # Get all positions
 try:
@@ -67,19 +134,22 @@ try:
     print(f'📊 TOTAL PORTFOLIO VALUE: ${total_value:.2f}')
     print(f'{"="*70}')
     
-    # Growth calculations
+    # Growth calculations (skip if zero to avoid div-by-zero)
     target = 1000000
-    remaining = target - total_value
-    growth_needed = ((target / total_value) - 1) * 100
-    daily_compound = ((target / total_value) ** (1/90) - 1) * 100
-    
-    print(f'\n🎯 $1M GROWTH TARGET:')
-    print(f'   Current: ${total_value:.2f}')
-    print(f'   Goal: ${target:,.2f}')
-    print(f'   Remaining: ${remaining:,.2f} ({growth_needed:,.0f}% growth)')
-    print(f'   Required daily compound: {daily_compound:.2f}%/day')
-    print(f'   Timeline: 90 days')
-    
+    if total_value > 0:
+        remaining = target - total_value
+        growth_needed = ((target / total_value) - 1) * 100
+        daily_compound = ((target / total_value) ** (1/90) - 1) * 100
+
+        print(f'\n🎯 $1M GROWTH TARGET:')
+        print(f'   Current: ${total_value:.2f}')
+        print(f'   Goal: ${target:,.2f}')
+        print(f'   Remaining: ${remaining:,.2f} ({growth_needed:,.0f}% growth)')
+        print(f'   Required daily compound: {daily_compound:.2f}%/day')
+        print(f'   Timeline: 90 days')
+    else:
+        print('\n🎯 $1M GROWTH TARGET: Current portfolio value is $0.00; add funds to compute growth path.')
+
     # Estimate based on current NIJA settings
     print(f'\n🚀 NIJA GROWTH ACCELERATORS ACTIVE:')
     print(f'   ✅ 95% Profit Lock (never lose gains)')
