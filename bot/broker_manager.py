@@ -65,7 +65,13 @@ class CoinbaseBroker(BaseBroker):
         super().__init__(BrokerType.COINBASE)
         self.client = None
         # Read ALLOW_CONSUMER_USD flag once during initialization
-        self.allow_consumer_usd = str(os.getenv("ALLOW_CONSUMER_USD", "")).lower() in ("1", "true", "yes")
+        # Default to True to ensure Consumer USD balances are counted unless explicitly disabled.
+        allow_flag = os.getenv("ALLOW_CONSUMER_USD")
+        if allow_flag is None:
+            self.allow_consumer_usd = True
+            logging.info("⚙️ ALLOW_CONSUMER_USD defaulted to true — Consumer USD accounts will be counted")
+        else:
+            self.allow_consumer_usd = str(allow_flag).lower() in ("1", "true", "yes")
     
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade"""
