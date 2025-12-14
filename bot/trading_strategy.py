@@ -136,7 +136,7 @@ To enable trading:
             self.strategy = NIJAApexStrategyV71(
                 broker_client=self.broker.client,
                 config={
-                    'min_adx': 20,
+                    'min_adx': 15,
                     'volume_threshold': 0.5,
                     'ai_momentum_enabled': False
                 }
