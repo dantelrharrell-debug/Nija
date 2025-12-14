@@ -7,6 +7,7 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
+import logging
 import base64
 import os
 import uuid
@@ -139,176 +140,96 @@ class CoinbaseBroker(BaseBroker):
             print(f"❌ Coinbase connection failed: {e}")
             return False
     
-    def get_account_balance(self) -> float:
-        """Get total USD balance - scan all portfolios and prioritize USD, then crypto value, then stablecoins."""
-        print("🔥 ENTERED get_account_balance()", flush=True)
+    def get_account_balance(self):
+        """Parse balances across portfolios using explicit USD/USDC rules and return a summary dict."""
+        usd_balance = 0.0
+        usdc_balance = 0.0
+        crypto_holdings: Dict[str, float] = {}
+
         try:
-            # STEP 1: Optional override from env (if user provides portfolio UUID explicitly)
-            env_portfolio = os.getenv("COINBASE_RETAIL_PORTFOLIO_ID")
-            portfolio_uuid = env_portfolio if env_portfolio else None
+            # Fetch portfolios (support both list_* and get_* depending on SDK version)
+            portfolios_resp = None
+            if hasattr(self.client, 'list_portfolios'):
+                portfolios_resp = self.client.list_portfolios()
+            else:
+                portfolios_resp = self.client.get_portfolios()
 
-            # STEP 2: Try to get all portfolios and find the one with USD (if no override)
-            print("🔥 SCANNING PORTFOLIOS FOR USD...", flush=True)
-            try:
-                portfolios_response = self.client.get_portfolios()
-                if hasattr(portfolios_response, 'portfolios') and portfolios_response.portfolios:
-                    print(f"🔥 FOUND {len(portfolios_response.portfolios)} PORTFOLIO(S)", flush=True)
+            portfolios = getattr(portfolios_resp, 'portfolios', [])
+            logging.info(f"🔥 FOUND {len(portfolios)} PORTFOLIO(S)")
 
-                    # Check each portfolio for USD unless an override was provided
-                    for portfolio in portfolios_response.portfolios:
-                        p_uuid = getattr(portfolio, 'uuid', None)
-                        p_name = getattr(portfolio, 'name', 'Unknown')
-                        p_type = getattr(portfolio, 'type', 'Unknown')
-                        print(f"🔥   Portfolio: {p_name} (UUID: {p_uuid}, Type: {p_type})", flush=True)
+            for p in portfolios:
+                name = getattr(p, 'name', 'Unknown')
+                uuid_val = getattr(p, 'uuid', None)
+                p_type = getattr(p, 'type', 'Unknown')
+                logging.info(f"🔥   Portfolio: {name} (UUID: {uuid_val}, Type: {p_type})")
 
-                        # If override exists, log and skip scanning
-                        if env_portfolio:
-                            continue
-
-                        if p_uuid:
-                            # Get accounts for this portfolio
-                            try:
-                                portfolio_accounts = self.client.get_accounts(retail_portfolio_id=p_uuid)
-                                if hasattr(portfolio_accounts, 'accounts') and portfolio_accounts.accounts:
-                                    for acct in portfolio_accounts.accounts:
-                                        currency = getattr(acct, 'currency', None)
-                                        if currency == "USD":
-                                            available_obj = getattr(acct, 'available_balance', None)
-                                            if available_obj:
-                                                usd_val = float(getattr(available_obj, 'value', 0)) if hasattr(available_obj, 'value') else float(available_obj.get('value', 0))
-                                                if usd_val > 0:
-                                                    print(f"🔥   ✅ FOUND USD ${usd_val:.2f} IN PORTFOLIO '{p_name}'", flush=True)
-                                                    portfolio_uuid = p_uuid
-                                                    break
-                            except Exception as portfolio_err:
-                                print(f"🔥   ⚠️ Error checking portfolio {p_name}: {portfolio_err}", flush=True)
-
-                        if portfolio_uuid:
-                            break
+                # Fetch accounts for each portfolio
+                accounts_resp = None
+                if hasattr(self.client, 'list_accounts'):
+                    accounts_resp = self.client.list_accounts(portfolio_uuid=uuid_val)
                 else:
-                    print("🔥 NO PORTFOLIOS FOUND - using default account query", flush=True)
-            except Exception as portfolio_scan_err:
-                print(f"🔥 PORTFOLIO SCAN FAILED: {portfolio_scan_err} - falling back to default", flush=True)
-            
-            # STEP 3: Get accounts (with portfolio_uuid if found or env override)
-            if portfolio_uuid:
-                source = "env override" if env_portfolio else "auto-detected"
-                print(f"🔥 QUERYING ACCOUNTS FROM PORTFOLIO: {portfolio_uuid} ({source})", flush=True)
-                accounts = self.client.get_accounts(retail_portfolio_id=portfolio_uuid)
-            else:
-                print("🔥 QUERYING DEFAULT ACCOUNTS (no portfolio filter)", flush=True)
-                accounts = self.client.get_accounts()
-            
-            print("🔥 ACCOUNTS RESPONSE TYPE:", type(accounts), flush=True)
+                    accounts_resp = self.client.get_accounts(retail_portfolio_id=uuid_val)
 
-            usd_balance = 0.0
-            crypto_value = 0.0
-            stablecoin_balance = 0.0
+                logging.info(f"🔥 QUERYING ACCOUNTS FROM PORTFOLIO: {uuid_val}")
+                accounts = getattr(accounts_resp, 'accounts', [])
 
-            # Prefer SDK Account list via .accounts; fallback to dict/list
-            acct_list = []
-            if hasattr(accounts, "accounts"):
-                acct_list = accounts.accounts
-            elif isinstance(accounts, dict):
-                acct_list = accounts.get("accounts", [])
-            else:
-                acct_list = accounts
+                for acct in accounts:
+                    currency = getattr(acct, 'currency', None)
+                    acct_name = (getattr(acct, 'name', '') or '').lower()
+                    platform = getattr(acct, 'platform', None)
 
-            for acct in acct_list:
-                try:
-                    # Handle both object and dict access
-                    if isinstance(acct, dict):
-                        currency = acct.get('currency')
-                        available = float(acct.get('available_balance', {}).get('value', 0))
-                        held = float(acct.get('hold', {}).get('value', 0))
-                        platform = acct.get('platform')
-                        name = acct.get('name')
-                    else:
-                        currency = getattr(acct, "currency", None)
-                        available_obj = getattr(acct, "available_balance", None)
-                        held_obj = getattr(acct, "hold", None)
-                        platform = getattr(acct, 'platform', None)
-                        name = getattr(acct, 'name', None)
+                    avail_obj = getattr(acct, 'available_balance', None)
+                    hold_obj = getattr(acct, 'hold', None)
+                    available = float(getattr(avail_obj, 'value', 0) or 0)
+                    held = float(getattr(hold_obj, 'value', 0) or 0)
 
-                        # Extract available value
-                        available = 0.0
-                        if available_obj:
-                            if isinstance(available_obj, dict):
-                                available = float(available_obj.get('value', 0))
-                            else:
-                                available = float(getattr(available_obj, 'value', 0))
+                    logging.debug(
+                        f"ACCT {currency} | name={getattr(acct, 'name', None)} | platform={platform} "
+                        f"| avail={available} | held={held}"
+                    )
 
-                        # Extract held value
-                        held = 0.0
-                        if held_obj:
-                            if isinstance(held_obj, dict):
-                                held = float(held_obj.get('value', 0))
-                            else:
-                                held = float(getattr(held_obj, 'value', 0))
+                    # ✅ USDC — PRIMARY TRADING BALANCE
+                    if currency == "USDC":
+                        usdc_balance += available
+                        logging.info(f"🔥 FOUND USDC! Available: ${available}")
 
-                    total_in_account = available + held
-
-                    # Priority 1: USD (primary entry capital) — only count eligible Advanced Trade accounts
-                    allowed_platforms = ["ACCOUNT_PLATFORM_CBI", "ACCOUNT_PLATFORM_ADVANCED"]
-                    name_str = (name or "")
-                    is_spot_name = "spot" in name_str.lower()
-                    is_allowed_platform = platform in allowed_platforms
-                    usd_eligible = (currency == "USD") and (is_spot_name or is_allowed_platform)
-
-                    if usd_eligible:
-                        print(f"🔥 FOUND USD ACCOUNT (eligible)! Available: ${available}, Held: ${held}, Total: ${total_in_account}", flush=True)
+                    # ✅ USD — ACCEPT CBI SPOT / ADVANCED
+                    elif currency == "USD" and (
+                        "spot" in acct_name or "cbi" in acct_name or platform != "ACCOUNT_PLATFORM_CONSUMER"
+                    ):
                         usd_balance += available
-                    
-                    # Priority 2: Crypto holdings (for sell/buy)
-                    elif currency in ["BTC", "ETH", "SOL", "AVAX", "XRP", "LTC", "DOGE", "MATIC", "LINK", "ADA"]:
-                        if total_in_account > 0:
-                            print(f"🔥 FOUND {currency} CRYPTO! Amount: {total_in_account} {currency}", flush=True)
-                            crypto_value += total_in_account  # Track but don't add to balance
-                    
-                    # Priority 3: Stablecoins (fallback if no USD)
-                    elif currency in ["USDC", "USDT", "DAI", "BUSD"]:
-                        print(f"🔥 FOUND {currency} STABLECOIN! Available: ${available}, Held: ${held}", flush=True)
-                        stablecoin_balance += available
-                        
-                except Exception as inner_e:
-                    print(f"🔥 SKIP account due to parse error: {inner_e}", flush=True)
+                        logging.info(f"🔥 FOUND USD (SPOT/ADV)! Available: ${available}")
 
-            # Use USD first, fallback to stablecoins if no USD
-            trading_balance = usd_balance if usd_balance > 0 else stablecoin_balance
-            
-            print(f"🔥 BALANCE SUMMARY:", flush=True)
-            print(f"   USD: ${usd_balance:.2f} (PRIMARY - for entry/buying)", flush=True)
-            print(f"   Crypto holdings: ${crypto_value:.8f} worth (for sell/buy)", flush=True)
-            print(f"   Stablecoins: ${stablecoin_balance:.2f} (fallback)", flush=True)
-            print(f"   Trading balance: ${trading_balance:.2f}", flush=True)
+                    # ✅ CRYPTO (for selling later)
+                    elif currency not in ["USD", "USDC"]:
+                        if available > 0:
+                            crypto_holdings[currency] = available
+                            logging.info(f"🔥 FOUND CRYPTO {currency}: {available}")
 
-            # If still zero, dump a concise inventory for debugging
-            if trading_balance == 0:
-                print("🔥 DEBUG ZERO BALANCE → dumping account inventory", flush=True)
-                for acct in acct_list:
-                    try:
-                        if isinstance(acct, dict):
-                            currency = acct.get('currency')
-                            platform = acct.get('platform')
-                            avail_val = float(acct.get('available_balance', {}).get('value', 0))
-                            held_val = float(acct.get('hold', {}).get('value', 0))
-                        else:
-                            currency = getattr(acct, 'currency', None)
-                            platform = getattr(acct, 'platform', None)
-                            avail_obj = getattr(acct, 'available_balance', None)
-                            held_obj = getattr(acct, 'hold', None)
-                            avail_val = float(getattr(avail_obj, 'value', 0)) if avail_obj else 0.0
-                            held_val = float(getattr(held_obj, 'value', 0)) if held_obj else 0.0
-                        print(f"🔥   ACCT {currency} | platform={platform} | avail={avail_val} | held={held_val}", flush=True)
-                    except Exception as inv_err:
-                        print(f"🔥   ACCT dump error: {inv_err}", flush=True)
-            
-            return trading_balance
+            # ✅ PRIORITY SELECTION
+            trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
+
+            logging.info("🔥 BALANCE SUMMARY:")
+            logging.info(f"   USDC: ${usdc_balance:.2f}")
+            logging.info(f"   USD:  ${usd_balance:.2f}")
+            logging.info(f"   Trading balance: ${trading_balance:.2f}")
+
+            return {
+                "usdc": usdc_balance,
+                "usd": usd_balance,
+                "trading_balance": trading_balance,
+                "crypto": crypto_holdings,
+            }
         except Exception as e:
-            print(f"🔥 ERROR get_account_balance: {e}", flush=True)
+            logging.error(f"🔥 ERROR get_account_balance: {e}")
             import traceback
             traceback.print_exc()
-            return 0.0
+            return {
+                "usdc": 0.0,
+                "usd": 0.0,
+                "trading_balance": 0.0,
+                "crypto": {},
+            }
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Place market order"""

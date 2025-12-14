@@ -72,8 +72,15 @@ class TradingStrategy:
         try:
             balance = self.broker.get_account_balance()
             logger.info(f"🔥 Balance fetch returned: {balance} (type: {type(balance).__name__})")
-            self.account_balance = float(balance) if balance else 0.0
-            logger.info(f"🔥 Balance converted to float: {self.account_balance}")
+            if isinstance(balance, dict):
+                self.account_balance = float(balance.get("trading_balance", 0.0))
+                logger.info(
+                    f"🔥 Parsed USDC=${balance.get('usdc', 0.0):.2f} USD=${balance.get('usd', 0.0):.2f} "
+                    f"→ trading_balance=${self.account_balance:.2f}"
+                )
+            else:
+                self.account_balance = float(balance) if balance else 0.0
+                logger.info(f"🔥 Balance converted to float: {self.account_balance}")
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
             # If initial balance is zero, print a clear banner with guidance
             if self.account_balance <= 0:
@@ -123,7 +130,13 @@ To enable trading:
     # Alias to align with README wording
     def get_usd_balance(self) -> float:
         """Fetch current USD/USDC trading balance."""
-        return float(self.broker.get_account_balance())
+        try:
+            bal = self.broker.get_account_balance()
+            if isinstance(bal, dict):
+                return float(bal.get("trading_balance", 0.0))
+            return float(bal) if bal else 0.0
+        except Exception:
+            return 0.0
         
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
