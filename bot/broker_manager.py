@@ -234,7 +234,15 @@ class CoinbaseBroker(BaseBroker):
             # Check for portfolio override
             portfolio_override = os.getenv("COINBASE_RETAIL_PORTFOLIO_ID")
             if portfolio_override:
-                logging.info(f"🔧 PORTFOLIO OVERRIDE: Using portfolio UUID: {portfolio_override}")
+                # Basic sanity check: override should be a bare UUID, not an API key path
+                if "/" in portfolio_override:
+                    logging.warning(
+                        "⚠️ COINBASE_RETAIL_PORTFOLIO_ID looks invalid (contains '/'). "
+                        "It must be a bare UUID like 'edee6867-c147-407c-8d6c-97e060b0a012'. Ignoring override."
+                    )
+                    portfolio_override = None
+                else:
+                    logging.info(f"🔧 PORTFOLIO OVERRIDE: Using portfolio UUID: {portfolio_override}")
             
             # Fetch portfolios (support both list_* and get_* depending on SDK version)
             portfolios_resp = None
