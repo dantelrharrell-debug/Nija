@@ -173,6 +173,17 @@ class CoinbaseBroker(BaseBroker):
                 logging.info(f"🔥 QUERYING ACCOUNTS FROM PORTFOLIO: {uuid_val}")
                 accounts = getattr(accounts_resp, 'accounts', [])
 
+                # Fallback: if portfolio-scoped query returns no accounts, also fetch default accounts
+                if not accounts:
+                    try:
+                        default_accounts_resp = self.client.get_accounts()
+                        default_accounts = getattr(default_accounts_resp, 'accounts', [])
+                        if default_accounts:
+                            logging.info("⚠️ Portfolio accounts empty; including default account list for diagnostics")
+                            accounts = default_accounts
+                    except Exception as fallback_err:
+                        logging.warning(f"⚠️ Failed default account fallback: {fallback_err}")
+
                 for acct in accounts:
                     currency = getattr(acct, 'currency', None)
                     acct_name = (getattr(acct, 'name', '') or '').lower()
