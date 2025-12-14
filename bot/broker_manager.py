@@ -222,6 +222,7 @@ class CoinbaseBroker(BaseBroker):
         usd_balance = 0.0
         usdc_balance = 0.0
         crypto_holdings: Dict[str, float] = {}
+        last_forbidden_uuid = None
 
         try:
             # Check for portfolio override
@@ -257,6 +258,9 @@ class CoinbaseBroker(BaseBroker):
                     logging.info(f"   ├─ Retrieved {len(accounts)} account(s) from portfolio {uuid_val}")
                 except Exception as acct_err:
                     logging.warning(f"   ├─ Failed to retrieve accounts from portfolio {uuid_val}: {acct_err}")
+                    # Track 403 Forbidden to aid fallback selection
+                    if '403' in str(acct_err) or 'PERMISSION_DENIED' in str(acct_err):
+                        last_forbidden_uuid = uuid_val
                     accounts = []
 
                 # Fallback: if portfolio-scoped query returns no accounts, also fetch default accounts
@@ -272,6 +276,36 @@ class CoinbaseBroker(BaseBroker):
                             logging.info(f"   └─ Fallback: No accounts in default view either")
                     except Exception as fallback_err:
                         logging.warning(f"   └─ Fallback failed: {fallback_err}")
+
+                # If still empty and we saw 403, use portfolio breakdown totals as soft balances
+                if not accounts and last_forbidden_uuid == uuid_val:
+                    try:
+                        logging.info(f"   ├─ Using portfolio breakdown as fallback for {uuid_val} (403 Forbidden)")
+                        if hasattr(self.client, 'get_portfolio_breakdown'):
+                            breakdown = self.client.get_portfolio_breakdown(portfolio_uuid=uuid_val)
+                            # SDK may return dict or object; normalize
+                            data = breakdown if isinstance(breakdown, dict) else vars(breakdown) if breakdown else {}
+                            # Attempt to read fiat totals
+                            usd_total = float(data.get('usd_total', 0) or 0)
+                            usdc_total = float(data.get('usdc_total', 0) or 0)
+                            # Some SDKs return assets list; aggregate
+                            assets = data.get('assets') or []
+                            if assets:
+                                for a in assets:
+                                    curr = a.get('currency') or a.get('asset')
+                                    amt = float(a.get('available_balance', 0) or a.get('value', 0) or 0)
+                                    if curr == 'USD':
+                                        usd_total += amt
+                                    elif curr == 'USDC':
+                                        usdc_total += amt
+                            if usd_total > 0 or usdc_total > 0:
+                                usd_balance += usd_total
+                                usdc_balance += usdc_total
+                                logging.info(f"   └─ Breakdown fallback applied: USD=${usd_total:.2f} USDC=${usdc_total:.2f}")
+                        else:
+                            logging.info("   └─ get_portfolio_breakdown not available in SDK")
+                    except Exception as bd_err:
+                        logging.warning(f"   └─ Breakdown fallback failed: {bd_err}")
 
                 for acct in accounts:
                     currency = getattr(acct, 'currency', None)

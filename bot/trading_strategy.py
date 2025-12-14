@@ -137,7 +137,7 @@ To enable trading:
                 broker_client=self.broker.client,
                 config={
                     'min_adx': 15,
-                    'volume_threshold': 0.5,
+                    'volume_threshold': 0.3,
                     'ai_momentum_enabled': False
                 }
             )
