@@ -54,3 +54,46 @@ Troubleshooting:
 - Verify your API key has Advanced Trade permissions.
 - Use production endpoints (not sandbox) for real balances.
 - Keep system clock accurate (JWT depends on time).
+
+## Railway Deployment (Recommended)
+
+Set variables in your Railway service → Variables:
+- `COINBASE_API_KEY`: organizations/<ORG_ID>/apiKeys/<API_KEY_ID>
+- `COINBASE_API_SECRET`: PEM private key with real newlines:
+
+  -----BEGIN EC PRIVATE KEY-----
+  ...
+  -----END EC PRIVATE KEY-----
+
+Save and redeploy. Verify logs:
+- "✅ Coinbase Advanced Trade connected"
+- "Account balance: $<non-zero>"
+
+Notes:
+- Do not set conflicting auth variables (avoid `COINBASE_PEM_CONTENT` or `COINBASE_PEM_BASE64` if using `COINBASE_API_SECRET`).
+- Never commit `.env` or credentials to git.
+
+## Local Environment Setup
+
+If using `.env` locally:
+- Ensure PEM has true line breaks (not `\n`).
+- Or export in shell to avoid multiline parsing:
+
+```bash
+export COINBASE_API_KEY="organizations/<ORG_ID>/apiKeys/<API_KEY_ID>"
+export COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----
+...
+-----END EC PRIVATE KEY-----"
+```
+
+## First-Trade Checklist
+- Fund your Advanced Trade portfolio with USD/USDC (https://www.coinbase.com/advanced-portfolio).
+- Logs show non-zero trading balance.
+- Trading loop runs every ~15s with per-symbol signals.
+- Orders execute on BUY/SELL signals when risk checks pass.
+
+## Troubleshooting
+- 401 Unauthorized: Rotate keys; ensure org/key IDs are correct; PEM matches key.
+- Zero balance warnings: Fund Advanced Trade or set `COINBASE_RETAIL_PORTFOLIO_ID` to a funded portfolio.
+- PEM formatting: Use real newlines; avoid `\n` unless your parser supports it.
+- Conflicting auth: Prefer a single method (JWT key + PEM secret).
