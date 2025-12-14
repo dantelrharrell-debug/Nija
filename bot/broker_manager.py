@@ -70,6 +70,7 @@ class CoinbaseBroker(BaseBroker):
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade"""
         try:
+            auth_method = "unknown"
             if self.allow_consumer_usd:
                 logging.info("⚙️ ALLOW_CONSUMER_USD enabled — Consumer USD accounts will be counted")
             from coinbase.rest import RESTClient
@@ -79,6 +80,12 @@ class CoinbaseBroker(BaseBroker):
             pem_content = os.getenv("COINBASE_PEM_CONTENT")
             pem_content_base64 = os.getenv("COINBASE_PEM_CONTENT_BASE64") or os.getenv("COINBASE_PEM_BASE64")
             pem_path = os.getenv("COINBASE_PEM_PATH")
+            
+            def _safe_preview(value: Optional[str], max_prefix: int = 16) -> str:
+                if not value:
+                    return "<missing>"
+                prefix = value[:max_prefix]
+                return f"{prefix}... (len={len(value)})"
             
             # Debug: Log credential availability
             print(f"🔍 CREDENTIAL CHECK:")
@@ -139,6 +146,7 @@ class CoinbaseBroker(BaseBroker):
             if key_file_arg:
                 # PEM file authentication - do NOT pass api_key/api_secret to avoid conflicts.
                 print("🔐 Using PEM authentication (key_file)")
+                auth_method = "pem"
                 self.client = RESTClient(
                     api_key=None,
                     api_secret=None,
@@ -147,6 +155,9 @@ class CoinbaseBroker(BaseBroker):
             elif api_key and api_secret:
                 # JWT authentication with api_key + api_secret
                 print("🔐 Using API Key + Secret authentication (JWT)")
+                auth_method = "jwt"
+                print(f"   - api_key preview: {_safe_preview(api_key, 24)}")
+                print(f"   - api_secret length: {len(api_secret)}")
                 self.client = RESTClient(
                     api_key=api_key,
                     api_secret=api_secret,
@@ -164,6 +175,28 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             error_str = str(e)
             print(f"❌ Coinbase connection failed: {e}")
+            response = getattr(e, "response", None)
+            status_code = getattr(response, "status_code", None)
+            response_text = None
+            if response is not None:
+                try:
+                    response_text = response.text
+                except Exception:
+                    response_text = None
+            if status_code or response_text:
+                print("📄 Coinbase error response detail:")
+                if status_code:
+                    print(f"   - status: {status_code}")
+                if response_text:
+                    trimmed = response_text[:500]
+                    print(f"   - body: {trimmed}")
+            if auth_method != "unknown":
+                print(f"🔑 Auth method during failure: {auth_method}")
+                if auth_method == "jwt" and api_key:
+                    print(f"   - api_key preview: {_safe_preview(api_key, 24)}")
+                    print(f"   - api_secret length: {len(api_secret) if api_secret else 0}")
+                if auth_method == "pem" and key_file_arg:
+                    print(f"   - pem file used: {key_file_arg}")
             
             # Provide specific help for 401 Unauthorized errors
             if "401" in error_str or "Unauthorized" in error_str:
