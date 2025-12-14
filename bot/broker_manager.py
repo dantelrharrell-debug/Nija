@@ -183,8 +183,9 @@ class CoinbaseBroker(BaseBroker):
                     available = float(getattr(avail_obj, 'value', 0) or 0)
                     held = float(getattr(hold_obj, 'value', 0) or 0)
 
-                    logging.debug(
-                        f"ACCT {currency} | name={getattr(acct, 'name', None)} | platform={platform} "
+                    # Log ALL accounts to diagnose filtering
+                    logging.info(
+                        f"🔍 ACCT {currency} | name={getattr(acct, 'name', None)} | platform={platform} "
                         f"| avail={available} | held={held}"
                     )
 
@@ -199,6 +200,13 @@ class CoinbaseBroker(BaseBroker):
                     ):
                         usd_balance += available
                         logging.info(f"🔥 FOUND USD (SPOT/ADV)! Available: ${available}")
+                    
+                    # Log rejected USD accounts
+                    elif currency == "USD":
+                        logging.warning(
+                            f"⚠️ SKIPPED USD ACCOUNT (Consumer platform) | name={getattr(acct, 'name', None)} "
+                            f"| platform={platform} | avail=${available}"
+                        )
 
                     # ✅ CRYPTO (for selling later)
                     elif currency not in ["USD", "USDC"]:
