@@ -68,6 +68,9 @@ class CoinbaseBroker(BaseBroker):
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade"""
         try:
+            allow_consumer_usd = str(os.getenv("ALLOW_CONSUMER_USD", "")).lower() in ("1", "true", "yes")
+            if allow_consumer_usd:
+                logging.info("⚙️ ALLOW_CONSUMER_USD enabled — Consumer USD accounts will be counted")
             from coinbase.rest import RESTClient
             
             api_key = os.getenv("COINBASE_API_KEY")
@@ -205,12 +208,22 @@ class CoinbaseBroker(BaseBroker):
                         usdc_balance += available
                         logging.info(f"🔥 FOUND USDC! Available: ${available}")
 
-                    # ✅ USD — ACCEPT CBI SPOT / ADVANCED
-                    elif currency == "USD" and (
-                        "spot" in acct_name or "cbi" in acct_name or platform != "ACCOUNT_PLATFORM_CONSUMER"
-                    ):
-                        usd_balance += available
-                        logging.info(f"🔥 FOUND USD (SPOT/ADV)! Available: ${available}")
+                    # ✅ USD — ACCEPT CBI SPOT / ADVANCED, or Consumer if toggle enabled
+                    elif currency == "USD":
+                        usd_eligible = (
+                            "spot" in acct_name or
+                            "cbi" in acct_name or
+                            platform != "ACCOUNT_PLATFORM_CONSUMER" or
+                            allow_consumer_usd
+                        )
+                        if usd_eligible:
+                            usd_balance += available
+                            logging.info(f"🔥 FOUND USD (eligible) Available: ${available} | platform={platform} | name={getattr(acct, 'name', None)}")
+                        else:
+                            logging.warning(
+                                f"⚠️ SKIPPED USD ACCOUNT (Consumer platform) | name={getattr(acct, 'name', None)} "
+                                f"| platform={platform} | avail=${available}"
+                            )
                     
                     # Log rejected USD accounts
                     elif currency == "USD":
