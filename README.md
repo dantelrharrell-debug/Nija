@@ -640,6 +640,18 @@ COINBASE_PEM_CONTENT=your_private_key_pem_base64
 LIVE_MODE=true
 ```
 
+**Optional Configuration**:
+
+```
+# Portfolio Selection
+COINBASE_RETAIL_PORTFOLIO_ID=<portfolio_uuid>  # Use specific portfolio (run find_usd_portfolio.py to find UUIDs)
+
+# Balance Detection
+ALLOW_CONSUMER_USD=false  # Set to 'true' to include consumer/retail USD accounts in trading balance
+```
+
+**Note**: By default, NIJA only counts USD from Advanced Trade/Spot portfolios. Consumer USD accounts are excluded unless `ALLOW_CONSUMER_USD=true` is set. Use `python find_usd_portfolio.py` to see all portfolios and their balances.
+
 **Security**: All keys stored in Railway's encrypted vault. Never committed to GitHub.
 
 ---
