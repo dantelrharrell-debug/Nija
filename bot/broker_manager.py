@@ -309,7 +309,7 @@ class CoinbaseBroker(BaseBroker):
     def _dump_portfolio_summary(self):
         """Diagnostic: dump all portfolios and their USD/USDC balances"""
         try:
-            portfolios_resp = self.client.list_portfolios()
+            portfolios_resp = self.client.get_portfolios()
             portfolios = getattr(portfolios_resp, 'portfolios', [])
             for p in portfolios:
                 p_name = getattr(p, 'name', 'Unknown')
@@ -317,7 +317,7 @@ class CoinbaseBroker(BaseBroker):
                 
                 # Fetch accounts for this portfolio
                 try:
-                    accounts_resp = self.client.list_accounts(portfolio_uuid=p_uuid)
+                    accounts_resp = self.client.get_accounts(retail_portfolio_id=p_uuid)
                     accounts = getattr(accounts_resp, 'accounts', [])
                     usd_total = 0.0
                     usdc_total = 0.0
