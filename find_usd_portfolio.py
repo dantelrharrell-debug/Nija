@@ -40,7 +40,7 @@ def main():
         # Show which relevant envs are currently set to help debugging
         present = {k: ("<set>" if os.environ.get(k) else "<missing>") for k in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_PEM_CONTENT", "COINBASE_PEM_PATH", "COINBASE_RETAIL_PORTFOLIO_ID"]}
         print(f"   Current env status: {present}")
-        sys.exit(1)
+        raise SystemExit(1)
     
     # Check configuration flags
     portfolio_override = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
@@ -63,7 +63,7 @@ def main():
         client = RESTClient(api_key=api_key, api_secret=api_secret if not key_file_arg else None, key_file=key_file_arg)
     except Exception as e:
         print(f"❌ Failed to initialize RESTClient: {e}")
-        sys.exit(1)
+        raise SystemExit(1)
     
     try:        
         print("\n" + "="*80)
@@ -278,7 +278,7 @@ def main():
         print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        raise SystemExit(1)
     finally:
         # Clean up temp PEM file
         if temp_pem_file:
