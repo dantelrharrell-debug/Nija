@@ -80,6 +80,14 @@ class CoinbaseBroker(BaseBroker):
             pem_content_base64 = os.getenv("COINBASE_PEM_CONTENT_BASE64") or os.getenv("COINBASE_PEM_BASE64")
             pem_path = os.getenv("COINBASE_PEM_PATH")
             
+            # Debug: Log credential availability
+            print(f"🔍 CREDENTIAL CHECK:")
+            print(f"   - COINBASE_API_KEY: {'<set>' if api_key else '<missing>'} (length: {len(api_key) if api_key else 0})")
+            print(f"   - COINBASE_API_SECRET: {'<set>' if api_secret else '<missing>'} (length: {len(api_secret) if api_secret else 0})")
+            print(f"   - COINBASE_PEM_PATH: {'<set>' if pem_path else '<missing>'}")
+            print(f"   - COINBASE_PEM_CONTENT: {'<set>' if pem_content else '<missing>'} (length: {len(pem_content) if pem_content else 0})")
+            print(f"   - COINBASE_PEM_BASE64: {'<set>' if pem_content_base64 else '<missing>'} (length: {len(pem_content_base64) if pem_content_base64 else 0})")
+            
             key_file_arg = None
             temp_pem_file = None
 

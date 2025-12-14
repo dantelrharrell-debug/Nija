@@ -24,9 +24,34 @@ fi
 echo "Branch: ${BRANCH_VAL:-unknown}"
 echo "Commit: ${COMMIT_VAL:-unknown}"
 
+# Debug: Show credential status
+echo ""
+echo "🔍 CREDENTIAL STATUS:"
+if [ -n "${COINBASE_API_KEY}" ]; then
+    echo "   ✅ COINBASE_API_KEY is set (${#COINBASE_API_KEY} chars)"
+else
+    echo "   ❌ COINBASE_API_KEY is missing or empty"
+fi
+if [ -n "${COINBASE_API_SECRET}" ]; then
+    echo "   ✅ COINBASE_API_SECRET is set (${#COINBASE_API_SECRET} chars)"
+else
+    echo "   ❌ COINBASE_API_SECRET is missing or empty"
+fi
+echo ""
+
 # Auto-enable paper mode if credentials are missing
 if [ -z "${COINBASE_API_KEY}" ] || [ -z "${COINBASE_API_SECRET}" ]; then
-    echo "⚠️  Coinbase credentials missing — enabling PAPER_MODE for smoke test"
+    echo ""
+    echo "⚠️  COINBASE CREDENTIALS MISSING — PAPER_MODE ENABLED"
+    echo ""
+    echo "📋 TO ENABLE LIVE TRADING:"
+    echo "   1. Go to Railway dashboard → Nija service → Variables"
+    echo "   2. Add these two variables:"
+    echo "      - COINBASE_API_KEY = organizations/.../apiKeys/..."
+    echo "      - COINBASE_API_SECRET = <your secret string>"
+    echo "   3. Remove old variables (COINBASE_PEM_PATH, COINBASE_API_SECRET_PATH)"
+    echo "   4. Save and redeploy/restart the service"
+    echo ""
     export PAPER_MODE=true
 fi
 
