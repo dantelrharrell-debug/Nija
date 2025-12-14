@@ -55,13 +55,45 @@ class TradingStrategy:
         else:
             self.broker = CoinbaseBroker()
 
-        if not self.broker.connect():
-            if paper_mode:
-                logger.error("MockBroker failed to initialize")
-                raise RuntimeError("Mock broker initialization failed")
+        # Try connecting with limited retries for live mode
+        if not paper_mode:
+            max_attempts = 3
+            delay = 2
+            for attempt in range(1, max_attempts + 1):
+                if self.broker.connect():
+                    break
+                logger.error(f"Coinbase connect failed (attempt {attempt}/{max_attempts})")
+                if attempt < max_attempts:
+                    time.sleep(delay)
+                    delay = min(delay * 2, 15)
             else:
                 logger.error("Failed to connect to Coinbase broker")
+                logger.error("======================================================================")
+                logger.error("❌ BROKER CONNECTION FAILED")
+                logger.error("======================================================================")
+                logger.error("")
+                logger.error("Coinbase credentials not found or invalid. Check and set ONE of:")
+                logger.error("")
+                logger.error("1. PEM File (mounted):")
+                logger.error("   - COINBASE_PEM_PATH=/path/to/file.pem (file must exist)")
+                logger.error("")
+                logger.error("2. PEM Content (as env var):")
+                logger.error("   - COINBASE_PEM_CONTENT='-----BEGIN PRIVATE KEY-----\\n...'")
+                logger.error("")
+                logger.error("3. Base64-Encoded PEM:")
+                logger.error("   - COINBASE_PEM_BASE64='<base64-encoded-pem>'")
+                logger.error("")
+                logger.error("4. API Key + Secret (JWT):")
+                logger.error("   - COINBASE_API_KEY='<key>'")
+                logger.error("   - COINBASE_API_SECRET='<secret>'")
+                logger.error("")
+                logger.error("======================================================================")
                 raise RuntimeError("Broker connection failed")
+        else:
+            # Paper mode path: ensure MockBroker connects
+            if not self.broker.connect():
+                logger.error("MockBroker failed to initialize")
+                raise RuntimeError("Mock broker initialization failed")
         
         logger.info("🔥 Broker connected, about to fetch balance...")
         print("🔥 BROKER CONNECTED, CALLING get_account_balance() NEXT", flush=True)
