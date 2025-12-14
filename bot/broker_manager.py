@@ -88,6 +88,19 @@ class CoinbaseBroker(BaseBroker):
             print(f"   - COINBASE_PEM_CONTENT: {'<set>' if pem_content else '<missing>'} (length: {len(pem_content) if pem_content else 0})")
             print(f"   - COINBASE_PEM_BASE64: {'<set>' if pem_content_base64 else '<missing>'} (length: {len(pem_content_base64) if pem_content_base64 else 0})")
             
+            # Validate JWT credentials format if using API Key + Secret
+            if api_key and api_secret:
+                print(f"\n🔐 VALIDATING JWT CREDENTIALS:")
+                # API Key should start with 'organizations/' from Coinbase Advanced Trade
+                if not api_key.startswith('organizations/'):
+                    print(f"   ⚠️ WARNING: API_KEY doesn't start with 'organizations/' - may be invalid format")
+                    print(f"   ⚠️ Expected format: organizations/[org-id]/apiKeys/[key-id]")
+                    print(f"   ⚠️ Got: {api_key[:50]}...")
+                # API Secret should be a long string (typically 128+ chars for JWT secrets)
+                if len(api_secret) < 64:
+                    print(f"   ⚠️ WARNING: API_SECRET seems too short ({len(api_secret)} chars)")
+                    print(f"   ⚠️ JWT secrets are typically 128+ characters")
+            
             key_file_arg = None
             temp_pem_file = None
 
@@ -149,7 +162,26 @@ class CoinbaseBroker(BaseBroker):
             return True
             
         except Exception as e:
+            error_str = str(e)
             print(f"❌ Coinbase connection failed: {e}")
+            
+            # Provide specific help for 401 Unauthorized errors
+            if "401" in error_str or "Unauthorized" in error_str:
+                print(f"\n🔴 AUTHENTICATION ERROR (401 Unauthorized)")
+                print(f"   The Coinbase API rejected your credentials.")
+                print(f"   This could mean:")
+                print(f"   1. API Key or Secret is invalid/expired")
+                print(f"   2. API Key/Secret format is incorrect")
+                print(f"   3. Credentials don't have the required permissions")
+                print(f"   4. API Key has restricted IP access and your IP isn't whitelisted")
+                print(f"\n   To fix:")
+                print(f"   1. Verify credentials in Railway Variables:")
+                print(f"      - COINBASE_API_KEY should be: organizations/[org-id]/apiKeys/[key-id]")
+                print(f"      - COINBASE_API_SECRET should be a long string (128+ chars)")
+                print(f"   2. Regenerate fresh API credentials from Coinbase dashboard")
+                print(f"   3. Ensure the API key has 'read' and 'trade' permissions")
+                print(f"   4. Check if your IP is whitelisted in Coinbase API settings")
+            
             return False
     
     def get_account_balance(self):
