@@ -246,22 +246,25 @@ class CoinbaseBroker(BaseBroker):
             logging.info(f"   USD:  ${usd_balance:.2f}")
             logging.info(f"   Trading balance: ${trading_balance:.2f}")
 
-            # Optional diagnostic dump of all accounts after scan
+            # Always log USD/USDC account inventory after scan for diagnostics
             try:
-                if str(os.getenv("DIAGNOSTIC_ACCOUNT_DUMP", "")).lower() in ("1", "true", "yes"):
-                    logging.info("🧪 DIAGNOSTIC_ACCOUNT_DUMP enabled — dumping full account inventory")
-                    # Fetch default accounts list to ensure coverage
-                    all_resp = self.client.get_accounts()
-                    all_accounts = getattr(all_resp, 'accounts', [])
-                    for a in all_accounts:
-                        curr = getattr(a, 'currency', None)
-                        nm = getattr(a, 'name', None)
-                        plat = getattr(a, 'platform', None)
-                        av = float(getattr(getattr(a, 'available_balance', None), 'value', 0) or 0)
-                        hd = float(getattr(getattr(a, 'hold', None), 'value', 0) or 0)
-                        logging.info(f"🧪 ACCT DUMP | {curr} | name={nm} | platform={plat} | avail={av} | held={hd}")
+                logging.info("📋 FULL ACCOUNT INVENTORY (USD/USDC only):")
+                all_resp = self.client.get_accounts()
+                all_accounts = getattr(all_resp, 'accounts', [])
+                found_usd_usdc = False
+                for a in all_accounts:
+                    curr = getattr(a, 'currency', None)
+                    nm = getattr(a, 'name', None)
+                    plat = getattr(a, 'platform', None)
+                    av = float(getattr(getattr(a, 'available_balance', None), 'value', 0) or 0)
+                    hd = float(getattr(getattr(a, 'hold', None), 'value', 0) or 0)
+                    if curr in ["USD", "USDC"]:
+                        found_usd_usdc = True
+                        logging.info(f"   {curr} | name={nm} | platform={plat} | avail={av:.2f} | held={hd:.2f}")
+                if not found_usd_usdc:
+                    logging.info("   ⚠️ NO USD/USDC ACCOUNTS FOUND in default account list")
             except Exception as dump_err:
-                logging.warning(f"⚠️ DIAGNOSTIC dump failed: {dump_err}")
+                logging.warning(f"⚠️ Account inventory dump failed: {dump_err}")
 
             return {
                 "usdc": usdc_balance,
