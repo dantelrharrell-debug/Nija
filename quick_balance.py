@@ -14,6 +14,8 @@ sys.path.insert(0, 'bot')
 
 from trading_strategy import TradingStrategy
 from coinbase.rest import RESTClient
+import tempfile
+import base64
 
 
 def load_env_from_dotenv():
@@ -56,6 +58,8 @@ if not os.getenv('COINBASE_API_KEY') or not os.getenv('COINBASE_API_SECRET'):
 api_key = os.getenv('COINBASE_API_KEY')
 api_secret = os.getenv('COINBASE_API_SECRET')
 pem_content = os.getenv('COINBASE_PEM_CONTENT')
+pem_b64 = os.getenv('COINBASE_PEM_CONTENT_BASE64') or os.getenv('COINBASE_PEM_BASE64')
+pem_path = os.getenv('COINBASE_PEM_PATH')
 
 if not api_key:
     print("❌ Missing COINBASE_API_KEY. Set in env or .env")
@@ -65,17 +69,37 @@ if not api_secret and not pem_content:
     print("❌ Missing secret. Provide COINBASE_API_SECRET (JWT) or COINBASE_PEM_CONTENT (PEM) via env or .env")
     sys.exit(1)
 
-auth_method = 'pem' if pem_content and not api_secret else 'jwt'
+auth_method = 'pem' if (not api_secret and (pem_content or pem_b64 or pem_path)) else 'jwt'
 print(f"🔐 Auth method: {auth_method} | key={safe_preview(api_key)} | secret={safe_preview(api_secret or pem_content)}")
 
-client_kwargs = {'api_key': api_key}
 if auth_method == 'jwt':
-    client_kwargs['api_secret'] = api_secret
+    client = RESTClient(api_key=api_key, api_secret=api_secret)
 else:
-    # coinbase-advanced-py accepts `api_secret` containing PEM content for PEM auth
-    client_kwargs['api_secret'] = pem_content
-
-client = RESTClient(**client_kwargs)
+    key_file_arg = None
+    if pem_path and os.path.isfile(pem_path):
+        key_file_arg = pem_path
+    else:
+        raw_pem = None
+        if pem_content and pem_content.strip():
+            raw_pem = pem_content
+        elif pem_b64 and pem_b64.strip():
+            try:
+                raw_pem = base64.b64decode(pem_b64).decode('utf-8')
+            except Exception as e:
+                print(f"❌ Failed to decode COINBASE_PEM_CONTENT_BASE64: {e}")
+        if raw_pem:
+            normalized = raw_pem.replace("\\n", "\n").strip()
+            if "BEGIN" in normalized and "END" in normalized:
+                tmp = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.pem')
+                tmp.write(normalized)
+                tmp.flush()
+                key_file_arg = tmp.name
+            else:
+                print("❌ Provided PEM content missing BEGIN/END headers")
+    if not key_file_arg:
+        print('❌ No valid PEM found: set COINBASE_PEM_PATH or COINBASE_PEM_CONTENT/BASE64')
+        sys.exit(1)
+    client = RESTClient(api_key=None, api_secret=None, key_file=key_file_arg)
 
 # Use strategy's get_usd_balance method
 strategy = TradingStrategy(client, paper_mode=False)

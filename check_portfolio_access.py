@@ -16,6 +16,8 @@ Notes:
 import os
 import sys
 from pathlib import Path
+import tempfile
+import base64
 from coinbase.rest import RESTClient
 
 
@@ -50,13 +52,16 @@ def main():
     api_key = os.getenv('COINBASE_API_KEY')
     api_secret = os.getenv('COINBASE_API_SECRET')
     pem_content = os.getenv('COINBASE_PEM_CONTENT')
+    pem_b64 = os.getenv('COINBASE_PEM_CONTENT_BASE64') or os.getenv('COINBASE_PEM_BASE64')
+    pem_path = os.getenv('COINBASE_PEM_PATH')
 
     if not api_key:
         print("❌ COINBASE_API_KEY missing. Set env or .env.")
         sys.exit(1)
 
     # Prefer JWT; allow PEM fallback if no api_secret provided
-    auth = 'jwt' if api_secret else ('pem' if pem_content else None)
+    # Determine auth method
+    auth = 'jwt' if api_secret else ('pem' if (pem_content or pem_b64 or pem_path) else None)
     if not auth:
         print("❌ Missing secret. Set COINBASE_API_SECRET (JWT) or COINBASE_PEM_CONTENT (PEM).")
         sys.exit(1)
@@ -67,13 +72,35 @@ def main():
     print(f"Auth: {auth} | key={preview(api_key, 16)} | secret={preview(api_secret or pem_content, 16)}")
     print()
 
-    client_kwargs = {'api_key': api_key}
+    # Build REST client for JWT or PEM
     if auth == 'jwt':
-        client_kwargs['api_secret'] = api_secret
+        client = RESTClient(api_key=api_key, api_secret=api_secret)
     else:
-        client_kwargs['api_secret'] = pem_content
-
-    client = RESTClient(**client_kwargs)
+        key_file_arg = None
+        if pem_path and Path(pem_path).is_file():
+            key_file_arg = pem_path
+        else:
+            raw_pem = None
+            if pem_content and pem_content.strip():
+                raw_pem = pem_content
+            elif pem_b64 and pem_b64.strip():
+                try:
+                    raw_pem = base64.b64decode(pem_b64).decode('utf-8')
+                except Exception as e:
+                    print(f"❌ Failed to decode COINBASE_PEM_CONTENT_BASE64: {e}")
+            if raw_pem:
+                normalized = raw_pem.replace("\\n", "\n").strip()
+                if "BEGIN" in normalized and "END" in normalized:
+                    tmp = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.pem')
+                    tmp.write(normalized)
+                    tmp.flush()
+                    key_file_arg = tmp.name
+                else:
+                    print("❌ Provided PEM content missing BEGIN/END headers")
+        if not key_file_arg:
+            print('❌ No valid PEM found: set COINBASE_PEM_PATH or COINBASE_PEM_CONTENT/BASE64')
+            sys.exit(1)
+        client = RESTClient(api_key=None, api_secret=None, key_file=key_file_arg)
 
     # 1) List portfolios
     print("1) Listing accessible portfolios…")
