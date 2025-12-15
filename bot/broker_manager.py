@@ -230,72 +230,56 @@ class CoinbaseBroker(BaseBroker):
         crypto_holdings: Dict[str, float] = {}
 
         try:
-            # Fetch accounts from API key's default portfolio (no overrides or iterations)
-            accounts_resp = None
-            if hasattr(self.client, 'list_accounts'):
-                accounts_resp = self.client.list_accounts()
-            else:
-                accounts_resp = self.client.get_accounts()
-            
+            accounts_resp = self.client.list_accounts() if hasattr(self.client, 'list_accounts') else self.client.get_accounts()
             accounts = getattr(accounts_resp, 'accounts', [])
             logging.info(f"📁 Retrieved {len(accounts)} account(s) from default portfolio")
-                    except Exception as bd_err:
-                        logging.warning(f"   └─ Breakdown fallback failed: {bd_err}")
 
-                for acct in accounts:
-                    currency = getattr(acct, 'currency', None)
-                    acct_name = (getattr(acct, 'name', '') or '').lower()
-                    platform = getattr(acct, 'platform', None)
+            for account in accounts:
+                currency = getattr(account, 'currency', None)
+                account_name = (getattr(account, 'name', '') or '').lower()
+                platform = getattr(account, 'platform', None)
 
-                    avail_obj = getattr(acct, 'available_balance', None)
-                    hold_obj = getattr(acct, 'hold', None)
-                    available = float(getattr(avail_obj, 'value', 0) or 0)
-                    held = float(getattr(hold_obj, 'value', 0) or 0)
+                available_obj = getattr(account, 'available_balance', None)
+                hold_obj = getattr(account, 'hold', None)
+                available = float(getattr(available_obj, 'value', 0) or 0)
+                held = float(getattr(hold_obj, 'value', 0) or 0)
 
-                    # Log ALL accounts to diagnose filtering
-                    logging.info(
-                        f"   🔍 {currency} | name={getattr(acct, 'name', None)} | platform={platform} "
-                        f"| avail={available:.2f} | held={held:.2f}"
+                logging.info(
+                    f"   🔍 {currency} | name={getattr(account, 'name', None)} | platform={platform} "
+                    f"| avail={available:.2f} | held={held:.2f}"
+                )
+
+                if currency == "USDC":
+                    usdc_balance += available
+                    logging.info(f"      ✅ USDC INCLUDED: ${available:.2f}")
+                elif currency == "USD":
+                    usd_eligible = (
+                        "spot" in account_name or
+                        "cbi" in account_name or
+                        platform != "ACCOUNT_PLATFORM_CONSUMER" or
+                        self.allow_consumer_usd
                     )
-
-                    # ✅ USDC — PRIMARY TRADING BALANCE
-                    if currency == "USDC":
-                        usdc_balance += available
-                        logging.info(f"      ✅ USDC INCLUDED: ${available:.2f}")
-
-                    # ✅ USD — ACCEPT CBI SPOT / ADVANCED, or Consumer if toggle enabled
-                    elif currency == "USD":
-                        usd_eligible = (
-                            "spot" in acct_name or
-                            "cbi" in acct_name or
-                            platform != "ACCOUNT_PLATFORM_CONSUMER" or
-                            self.allow_consumer_usd
+                    if usd_eligible:
+                        usd_balance += available
+                        reasons = []
+                        if "spot" in account_name:
+                            reasons.append("spot wallet")
+                        if "cbi" in account_name:
+                            reasons.append("CBI account")
+                        if platform != "ACCOUNT_PLATFORM_CONSUMER":
+                            reasons.append(f"platform={platform}")
+                        if self.allow_consumer_usd and platform == "ACCOUNT_PLATFORM_CONSUMER":
+                            reasons.append("ALLOW_CONSUMER_USD=true")
+                        reason_str = ", ".join(reasons) if reasons else "default"
+                        logging.info(f"      ✅ USD INCLUDED: ${available:.2f} (reason: {reason_str})")
+                    else:
+                        logging.warning(
+                            f"      ⚠️ USD SKIPPED: ${available:.2f} (Consumer platform, ALLOW_CONSUMER_USD not enabled)"
                         )
-                        if usd_eligible:
-                            usd_balance += available
-                            reason = []
-                            if "spot" in acct_name:
-                                reason.append("spot wallet")
-                            if "cbi" in acct_name:
-                                reason.append("CBI account")
-                            if platform != "ACCOUNT_PLATFORM_CONSUMER":
-                                reason.append(f"platform={platform}")
-                            if self.allow_consumer_usd and platform == "ACCOUNT_PLATFORM_CONSUMER":
-                                reason.append("ALLOW_CONSUMER_USD=true")
-                            reason_str = ", ".join(reason) if reason else "default"
-                            logging.info(f"      ✅ USD INCLUDED: ${available:.2f} (reason: {reason_str})")
-                        else:
-                            logging.warning(
-                                f"      ⚠️ USD SKIPPED: ${available:.2f} (Consumer platform, ALLOW_CONSUMER_USD not enabled)"
-                            )
+                elif currency not in ["USD", "USDC"] and available > 0:
+                    crypto_holdings[currency] = available
+                    logging.info(f"      💎 CRYPTO: {currency} = {available:.8f}")
 
-                    # ✅ CRYPTO (for selling later)
-                    elif currency not in ["USD", "USDC"]:
-                        if available > 0:
-                            crypto_holdings[currency] = available
-                            logging.info(f"      💎 CRYPTO: {currency} = {available:.8f}")
-
-            # ✅ PRIORITY SELECTION
             trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
 
             logging.info("=" * 70)
@@ -307,24 +291,22 @@ class CoinbaseBroker(BaseBroker):
                 logging.info(f"   Crypto Holdings: {len(crypto_holdings)} assets")
             logging.info("=" * 70)
 
-            # Always log USD/USDC account inventory after scan for diagnostics
             try:
                 logging.info("📋 FULL ACCOUNT INVENTORY (USD/USDC only):")
                 all_resp = self.client.get_accounts()
                 all_accounts = getattr(all_resp, 'accounts', [])
                 found_usd_usdc = False
-                for a in all_accounts:
-                    curr = getattr(a, 'currency', None)
-                    nm = getattr(a, 'name', None)
-                    plat = getattr(a, 'platform', None)
-                    av = float(getattr(getattr(a, 'available_balance', None), 'value', 0) or 0)
-                    hd = float(getattr(getattr(a, 'hold', None), 'value', 0) or 0)
+                for account in all_accounts:
+                    curr = getattr(account, 'currency', None)
+                    name = getattr(account, 'name', None)
+                    platform = getattr(account, 'platform', None)
+                    available_val = float(getattr(getattr(account, 'available_balance', None), 'value', 0) or 0)
+                    held_val = float(getattr(getattr(account, 'hold', None), 'value', 0) or 0)
                     if curr in ["USD", "USDC"]:
                         found_usd_usdc = True
-                        logging.info(f"   {curr} | name={nm} | platform={plat} | avail={av:.2f} | held={hd:.2f}")
+                        logging.info(f"   {curr} | name={name} | platform={platform} | avail={available_val:.2f} | held={held_val:.2f}")
                 if not found_usd_usdc:
                     logging.info("   ⚠️ NO USD/USDC ACCOUNTS FOUND in default account list")
-                    # If zero balance, also dump portfolio-level summary
                     if trading_balance == 0:
                         logging.info("💼 PORTFOLIO SUMMARY (all portfolios):")
                         self._dump_portfolio_summary()
@@ -351,28 +333,18 @@ class CoinbaseBroker(BaseBroker):
     def _dump_portfolio_summary(self):
         """Diagnostic: dump all portfolios and their USD/USDC balances"""
         try:
-            portfolios_resp = self.client.get_portfolios()
-            portfolios = getattr(portfolios_resp, 'portfolios', [])
-            for p in portfolios:
-                p_name = getattr(p, 'name', 'Unknown')
-                p_uuid = getattr(p, 'uuid', None)
-                
-                # Fetch accounts for this portfolio
-                try:
-                    accounts_resp = self.client.get_accounts(retail_portfolio_id=p_uuid)
-                    accounts = getattr(accounts_resp, 'accounts', [])
-                    usd_total = 0.0
-                    usdc_total = 0.0
-                    for a in accounts:
-                        curr = getattr(a, 'currency', None)
-                        av = float(getattr(getattr(a, 'available_balance', None), 'value', 0) or 0)
-                        if curr == "USD":
-                            usd_total += av
-                        elif curr == "USDC":
-                            usdc_total += av
-                    logging.info(f"   {p_name} (UUID: {p_uuid}) | USD: ${usd_total:.2f} | USDC: ${usdc_total:.2f}")
-                except Exception as p_err:
-                    logging.warning(f"   {p_name} — error fetching accounts: {p_err}")
+            accounts_resp = self.client.get_accounts()
+            accounts = getattr(accounts_resp, 'accounts', [])
+            usd_total = 0.0
+            usdc_total = 0.0
+            for a in accounts:
+                curr = getattr(a, 'currency', None)
+                av = float(getattr(getattr(a, 'available_balance', None), 'value', 0) or 0)
+                if curr == "USD":
+                    usd_total += av
+                elif curr == "USDC":
+                    usdc_total += av
+            logging.info(f"   Default portfolio | USD: ${usd_total:.2f} | USDC: ${usdc_total:.2f}")
         except Exception as e:
             logging.warning(f"⚠️ Portfolio summary failed: {e}")
     
