@@ -59,6 +59,16 @@ def main():
         print("❌ COINBASE_API_KEY missing. Set env or .env.")
         sys.exit(1)
 
+    # Normalize PEM/JWT secrets (handle escaped newlines)
+    if api_secret and "\\n" in api_secret:
+        api_secret = api_secret.replace("\\n", "\n")
+    if api_secret and not api_secret.endswith("\n"):
+        api_secret = api_secret.rstrip() + "\n"
+    if pem_content and "\\n" in pem_content:
+        pem_content = pem_content.replace("\\n", "\n")
+    if pem_content and not pem_content.endswith("\n"):
+        pem_content = pem_content.rstrip() + "\n"
+
     # Prefer JWT; allow PEM fallback if no api_secret provided
     # Determine auth method
     auth = 'jwt' if api_secret else ('pem' if (pem_content or pem_b64 or pem_path) else None)
