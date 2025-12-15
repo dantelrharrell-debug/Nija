@@ -8,10 +8,8 @@ from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 import logging
-import base64
 import os
 import uuid
-import tempfile
 
 class BrokerType(Enum):
     COINBASE = "coinbase"
@@ -74,105 +72,41 @@ class CoinbaseBroker(BaseBroker):
             self.allow_consumer_usd = str(allow_flag).lower() in ("1", "true", "yes")
     
     def connect(self) -> bool:
-        """Connect to Coinbase Advanced Trade"""
+        """Connect to Coinbase Advanced Trade using JWT authentication"""
         try:
-            auth_method = "unknown"
+            # Advanced Trade SDK uses JWT tokens signed with EC private keys
             if self.allow_consumer_usd:
                 logging.info("⚙️ ALLOW_CONSUMER_USD enabled — Consumer USD accounts will be counted")
+            
             from coinbase.rest import RESTClient
             
+            # Get credentials
             api_key = os.getenv("COINBASE_API_KEY")
             api_secret = os.getenv("COINBASE_API_SECRET")
-            pem_content = os.getenv("COINBASE_PEM_CONTENT")
-            pem_content_base64 = os.getenv("COINBASE_PEM_CONTENT_BASE64") or os.getenv("COINBASE_PEM_BASE64")
-            pem_path = os.getenv("COINBASE_PEM_PATH")
             
-            def _safe_preview(value: Optional[str], max_prefix: int = 16) -> str:
-                if not value:
-                    return "<missing>"
-                prefix = value[:max_prefix]
-                return f"{prefix}... (len={len(value)})"
-            
-            # Debug: Log credential availability
             print(f"🔍 CREDENTIAL CHECK:")
-            print(f"   - COINBASE_API_KEY: {'<set>' if api_key else '<missing>'} (length: {len(api_key) if api_key else 0})")
-            print(f"   - COINBASE_API_SECRET: {'<set>' if api_secret else '<missing>'} (length: {len(api_secret) if api_secret else 0})")
-            print(f"   - COINBASE_PEM_PATH: {'<set>' if pem_path else '<missing>'}")
-            print(f"   - COINBASE_PEM_CONTENT: {'<set>' if pem_content else '<missing>'} (length: {len(pem_content) if pem_content else 0})")
-            print(f"   - COINBASE_PEM_BASE64: {'<set>' if pem_content_base64 else '<missing>'} (length: {len(pem_content_base64) if pem_content_base64 else 0})")
+            print(f"   - COINBASE_API_KEY: {'✅ Set' if api_key else '❌ Missing'}")
+            print(f"   - COINBASE_API_SECRET: {'✅ Set' if api_secret else '❌ Missing'}")
             
-            # Validate JWT credentials format if using API Key + Secret
-            if api_key and api_secret:
-                print(f"\n🔐 VALIDATING JWT CREDENTIALS:")
-                # API Key should start with 'organizations/' from Coinbase Advanced Trade
-                if not api_key.startswith('organizations/'):
-                    print(f"   ⚠️ WARNING: API_KEY doesn't start with 'organizations/' - may be invalid format")
-                    print(f"   ⚠️ Expected format: organizations/[org-id]/apiKeys/[key-id]")
-                    print(f"   ⚠️ Got: {api_key[:50]}...")
-                # API Secret should be a long string (typically 128+ chars for JWT secrets)
-                if len(api_secret) < 64:
-                    print(f"   ⚠️ WARNING: API_SECRET seems too short ({len(api_secret)} chars)")
-                    print(f"   ⚠️ JWT secrets are typically 128+ characters")
-            
-            key_file_arg = None
-            temp_pem_file = None
-
-            # If a PEM path is provided, prefer it but verify the file exists.
-            if pem_path:
-                if os.path.isfile(pem_path):
-                    key_file_arg = pem_path
-                else:
-                    print(f"⚠️ COINBASE_PEM_PATH is set but file not found: {pem_path}")
-                    # Explicitly ignore the invalid path to allow fallbacks
-                    pem_path = None
-
-            # Fallback: allow PEM content (plain or base64) to be materialized to a temp file.
-            if not key_file_arg:
-                raw_pem = None
-                if pem_content and pem_content.strip():
-                    raw_pem = pem_content
-                elif pem_content_base64 and pem_content_base64.strip():
-                    try:
-                        raw_pem = base64.b64decode(pem_content_base64).decode("utf-8")
-                    except Exception as decode_err:
-                        print(f"❌ Failed to decode COINBASE_PEM_CONTENT_BASE64: {decode_err}")
-
-                # Only accept PEM if it looks like a real PEM (has header/footer)
-                if raw_pem:
-                    normalized = raw_pem.replace("\\n", "\n").strip()
-                    if "BEGIN" in normalized and "END" in normalized:
-                        temp_pem_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".pem")
-                        temp_pem_file.write(normalized)
-                        temp_pem_file.flush()
-                        key_file_arg = temp_pem_file.name
-                    else:
-                        print("⚠️ Provided PEM content does not contain BEGIN/END headers; ignoring.")
-
-            # RESTClient does NOT allow both api_key and key_file. Use one OR the other.
-            if key_file_arg:
-                # PEM file authentication - do NOT pass api_key/api_secret to avoid conflicts.
-                print("🔐 Using PEM authentication (key_file)")
-                auth_method = "pem"
-                self.client = RESTClient(
-                    api_key=None,
-                    api_secret=None,
-                    key_file=key_file_arg,
-                )
-            elif api_key and api_secret:
-                # JWT authentication with api_key + api_secret
-                print("🔐 Using API Key + Secret authentication (JWT)")
-                auth_method = "jwt"
-                print(f"   - api_key preview: {_safe_preview(api_key, 24)}")
-                print(f"   - api_secret length: {len(api_secret)}")
-                self.client = RESTClient(
-                    api_key=api_key,
-                    api_secret=api_secret,
-                )
-            else:
-                print("❌ No valid Coinbase credentials detected. Configure one of: \n- COINBASE_PEM_PATH (mounted file), or\n- COINBASE_PEM_CONTENT (full PEM), or\n- COINBASE_PEM_BASE64 (base64 PEM), or\n- COINBASE_API_KEY and COINBASE_API_SECRET (JWT).")
+            if not api_key or not api_secret:
+                print("❌ Missing required credentials!")
+                print("   Set COINBASE_API_KEY and COINBASE_API_SECRET")
                 return False
             
+            # Normalize PEM key if it has escaped newlines
+            if api_secret and '\\n' in api_secret:
+                api_secret = api_secret.replace('\\n', '\n')
+                print("   ℹ️  Normalized escaped newlines in API_SECRET")
+            
+            # Create RESTClient
+            print("🔐 Initializing Coinbase RESTClient...")
+            self.client = RESTClient(
+                api_key=api_key,
+                api_secret=api_secret,
+            )
+            
             # Test connection
+            print("🧪 Testing connection with GET /v3/accounts...")
             accounts = self.client.get_accounts()
             self.connected = True
             print("✅ Coinbase Advanced Trade connected")
@@ -181,45 +115,31 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             error_str = str(e)
             print(f"❌ Coinbase connection failed: {e}")
+            
+            # Show response details if available
             response = getattr(e, "response", None)
-            status_code = getattr(response, "status_code", None)
-            response_text = None
-            if response is not None:
+            if response:
+                status_code = getattr(response, "status_code", None)
+                if status_code:
+                    print(f"   HTTP Status: {status_code}")
                 try:
                     response_text = response.text
+                    if response_text:
+                        print(f"   Response: {response_text[:300]}")
                 except Exception:
-                    response_text = None
-            if status_code or response_text:
-                print("📄 Coinbase error response detail:")
-                if status_code:
-                    print(f"   - status: {status_code}")
-                if response_text:
-                    trimmed = response_text[:500]
-                    print(f"   - body: {trimmed}")
-            if auth_method != "unknown":
-                print(f"🔑 Auth method during failure: {auth_method}")
-                if auth_method == "jwt" and api_key:
-                    print(f"   - api_key preview: {_safe_preview(api_key, 24)}")
-                    print(f"   - api_secret length: {len(api_secret) if api_secret else 0}")
-                if auth_method == "pem" and key_file_arg:
-                    print(f"   - pem file used: {key_file_arg}")
+                    pass
             
-            # Provide specific help for 401 Unauthorized errors
+            # Authentication error guidance
             if "401" in error_str or "Unauthorized" in error_str:
-                print(f"\n🔴 AUTHENTICATION ERROR (401 Unauthorized)")
-                print(f"   The Coinbase API rejected your credentials.")
-                print(f"   This could mean:")
-                print(f"   1. API Key or Secret is invalid/expired")
-                print(f"   2. API Key/Secret format is incorrect")
-                print(f"   3. Credentials don't have the required permissions")
-                print(f"   4. API Key has restricted IP access and your IP isn't whitelisted")
-                print(f"\n   To fix:")
-                print(f"   1. Verify credentials in Railway Variables:")
-                print(f"      - COINBASE_API_KEY should be: organizations/[org-id]/apiKeys/[key-id]")
-                print(f"      - COINBASE_API_SECRET should be a long string (128+ chars)")
-                print(f"   2. Regenerate fresh API credentials from Coinbase dashboard")
-                print(f"   3. Ensure the API key has 'read' and 'trade' permissions")
-                print(f"   4. Check if your IP is whitelisted in Coinbase API settings")
+                print(f"\n🔴 AUTHENTICATION FAILED")
+                print(f"   Possible causes:")
+                print(f"   1. Invalid API Key or Secret")
+                print(f"   2. Incorrect credentials format")
+                print(f"   3. Expired or revoked API key")
+                print(f"   4. Missing required permissions")
+                print(f"\n   Required env variables:")
+                print(f"   - COINBASE_API_KEY")
+                print(f"   - COINBASE_API_SECRET")
             
             return False
     
@@ -347,6 +267,59 @@ class CoinbaseBroker(BaseBroker):
             logging.info(f"   Default portfolio | USD: ${usd_total:.2f} | USDC: ${usdc_total:.2f}")
         except Exception as e:
             logging.warning(f"⚠️ Portfolio summary failed: {e}")
+
+    def get_usd_usdc_inventory(self) -> list[str]:
+        """Return a formatted USD/USDC inventory for logging by callers.
+
+        This method mirrors the inventory logic used by diagnostics but returns
+        strings so the caller can log with its own logger configuration
+        (important because some apps only attach handlers to the 'nija' logger).
+        """
+        lines: list[str] = []
+        try:
+            resp = self.client.get_accounts()
+            accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
+            usd_total = 0.0
+            usdc_total = 0.0
+
+            def _as_float(v):
+                try:
+                    return float(v)
+                except Exception:
+                    return 0.0
+
+            for a in accounts:
+                if isinstance(a, dict):
+                    currency = a.get('currency')
+                    name = a.get('name')
+                    platform = a.get('platform')
+                    av = (a.get('available_balance') or {}).get('value')
+                    hd = (a.get('hold') or {}).get('value')
+                else:
+                    currency = getattr(a, 'currency', None)
+                    name = getattr(a, 'name', None)
+                    platform = getattr(a, 'platform', None)
+                    av = getattr(getattr(a, 'available_balance', None), 'value', None)
+                    hd = getattr(getattr(a, 'hold', None), 'value', None)
+
+                if currency in ("USD", "USDC"):
+                    avf = _as_float(av)
+                    hdf = _as_float(hd)
+                    lines.append(f"{currency:>4} | name={name} | platform={platform} | avail={avf:>10.2f} | held={hdf:>10.2f}")
+                    if currency == "USD":
+                        usd_total += avf
+                    else:
+                        usdc_total += avf
+
+            lines.append("-" * 70)
+            trading = usdc_total if usdc_total > 0 else usd_total
+            lines.append(f"Totals → USD: ${usd_total:.2f} | USDC: ${usdc_total:.2f} | Trading Balance: ${trading:.2f}")
+            if usd_total == 0.0 and usdc_total == 0.0:
+                lines.append("👉 Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
+        except Exception as e:
+            lines.append(f"⚠️ Failed to fetch USD/USDC inventory: {e}")
+
+        return lines
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Place market order"""

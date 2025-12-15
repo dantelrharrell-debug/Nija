@@ -123,6 +123,17 @@ To enable trading:
 - Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio
 ========================================================
 """)
+                # One-time USD/USDC inventory dump using broker helper so logs
+                # go through the configured 'nija' logger/handlers.
+                try:
+                    if hasattr(self.broker, "get_usd_usdc_inventory"):
+                        inv_lines = self.broker.get_usd_usdc_inventory()
+                        if inv_lines:
+                            logger.info("USD/USDC account inventory (Advanced Trade):")
+                            for line in inv_lines:
+                                logger.info(line)
+                except Exception as inv_err:
+                    logger.warning(f"USD/USDC inventory dump failed: {inv_err}")
         except Exception as e:
             logger.exception(f"🔥 CRITICAL: Failed to fetch/convert balance")
             logger.warning(f"Continuing with 0.0 balance")

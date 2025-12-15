@@ -1,20 +1,34 @@
 #!/bin/bash
 cd /workspaces/Nija
 
-echo "📝 Staging portfolio scanner and broker updates..."
-git add find_usd_portfolio.py bot/broker_manager.py
+echo "� Staging all changes..."
+git add -A
 
-echo "✍️  Committing..."
-git commit -m "Auto-detect correct Coinbase portfolio for USD balance
+echo "📝 Creating commit..."
+git -c commit.gpgsign=false commit -m "Add balance diagnostic tools
 
-- Add portfolio scanner script (find_usd_portfolio.py) for diagnostics
-- Update get_account_balance() to scan all portfolios via get_portfolios()
-- Auto-detect portfolio containing USD and query with retail_portfolio_id
-- Fixes \$0.00 balance issue when USD is in non-default portfolio
-- Maintains fallback to default accounts if portfolio scan fails"
+- Add diagnose_balance.py: comprehensive account diagnostic script
+- Add test_raw_api.py: raw API testing with JWT authentication
+- These scripts help diagnose \$0 balance detection issues
+- Both scripts test Coinbase Advanced Trade API connectivity
+- Show exact API responses and troubleshooting guidance"
 
-echo "🚀 Pushing to origin/main..."
+if [ $? -eq 0 ]; then
+    echo "✅ Commit created successfully"
+else
+    echo "⚠️ Nothing new to commit or commit failed"
+fi
+
+echo "🚀 Pushing to origin main..."
 git push origin main
 
-echo "✅ Done!"
-git log --oneline -1
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "✅ ============================================"
+    echo "✅  SUCCESSFULLY PUSHED TO GITHUB!"
+    echo "✅ ============================================"
+else
+    echo "❌ Push failed - check git status"
+    git status
+fi
+
