@@ -116,16 +116,13 @@ class TradingStrategy:
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
             # If initial balance is zero, print a clear banner with guidance
             if self.account_balance <= 0:
-                portfolio_override = os.getenv("COINBASE_RETAIL_PORTFOLIO_ID", "<none>")
                 logger.warning("""
 ==================== BALANCE NOTICE ====================
 No USD/USDC trading balance detected via Advanced Trade API.
-Portfolio override in use: {override}
 To enable trading:
 - Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio
-- Or set COINBASE_RETAIL_PORTFOLIO_ID to the UUID of the funded portfolio.
 ========================================================
-""".format(override=portfolio_override))
+""")
         except Exception as e:
             logger.exception(f"🔥 CRITICAL: Failed to fetch/convert balance")
             logger.warning(f"Continuing with 0.0 balance")
@@ -481,8 +478,7 @@ To enable trading:
             # Guard: if no trading balance, do not attempt orders
             if not self.account_balance or self.account_balance <= 0:
                 logger.warning("🚫 No USD/USDC trading balance detected. Skipping trade execution this cycle.")
-                logger.warning("👉 If funds are in regular Coinbase wallet, move them into Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
-                logger.warning("👉 Or set COINBASE_RETAIL_PORTFOLIO_ID to the portfolio UUID that holds USD/USDC.")
+                logger.warning("👉 Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
                 # Continue with analysis-only logging for visibility
                 for symbol in self.trading_pairs:
                     analysis = self.analyze_symbol(symbol)

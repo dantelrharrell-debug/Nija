@@ -228,96 +228,17 @@ class CoinbaseBroker(BaseBroker):
         usd_balance = 0.0
         usdc_balance = 0.0
         crypto_holdings: Dict[str, float] = {}
-        last_forbidden_uuid = None
 
         try:
-            # Check for portfolio override
-            portfolio_override = os.getenv("COINBASE_RETAIL_PORTFOLIO_ID")
-            if portfolio_override:
-                # Basic sanity check: override should be a bare UUID, not an API key path
-                if "/" in portfolio_override:
-                    logging.warning(
-                        "⚠️ COINBASE_RETAIL_PORTFOLIO_ID looks invalid (contains '/'). "
-                        "It must be a bare UUID like 'edee6867-c147-407c-8d6c-97e060b0a012'. Ignoring override."
-                    )
-                    portfolio_override = None
-                else:
-                    logging.info(f"🔧 PORTFOLIO OVERRIDE: Using portfolio UUID: {portfolio_override}")
-            
-            # Fetch portfolios (support both list_* and get_* depending on SDK version)
-            portfolios_resp = None
-            if hasattr(self.client, 'list_portfolios'):
-                portfolios_resp = self.client.list_portfolios()
+            # Fetch accounts from API key's default portfolio (no overrides or iterations)
+            accounts_resp = None
+            if hasattr(self.client, 'list_accounts'):
+                accounts_resp = self.client.list_accounts()
             else:
-                portfolios_resp = self.client.get_portfolios()
-
-            portfolios = getattr(portfolios_resp, 'portfolios', [])
-            logging.info(f"📁 FOUND {len(portfolios)} PORTFOLIO(S)")
-
-            for idx, p in enumerate(portfolios, 1):
-                name = getattr(p, 'name', 'Unknown')
-                uuid_val = getattr(p, 'uuid', None)
-                p_type = getattr(p, 'type', 'Unknown')
-                logging.info(f"📁 Portfolio {idx}/{len(portfolios)}: {name} (UUID: {uuid_val}, Type: {p_type})")
-
-                # Fetch accounts for each portfolio
-                accounts_resp = None
-                try:
-                    if hasattr(self.client, 'list_accounts'):
-                        accounts_resp = self.client.list_accounts(portfolio_uuid=uuid_val)
-                    else:
-                        accounts_resp = self.client.get_accounts(retail_portfolio_id=uuid_val)
-                    
-                    accounts = getattr(accounts_resp, 'accounts', [])
-                    logging.info(f"   ├─ Retrieved {len(accounts)} account(s) from portfolio {uuid_val}")
-                except Exception as acct_err:
-                    logging.warning(f"   ├─ Failed to retrieve accounts from portfolio {uuid_val}: {acct_err}")
-                    # Track 403 Forbidden to aid fallback selection
-                    if '403' in str(acct_err) or 'PERMISSION_DENIED' in str(acct_err):
-                        last_forbidden_uuid = uuid_val
-                    accounts = []
-
-                # Fallback: if portfolio-scoped query returns no accounts, also fetch default accounts
-                if not accounts:
-                    try:
-                        logging.info(f"   ├─ Portfolio accounts empty; trying default account list as fallback")
-                        default_accounts_resp = self.client.get_accounts()
-                        default_accounts = getattr(default_accounts_resp, 'accounts', [])
-                        if default_accounts:
-                            logging.info(f"   └─ Fallback: Found {len(default_accounts)} accounts in default view")
-                            accounts = default_accounts
-                        else:
-                            logging.info(f"   └─ Fallback: No accounts in default view either")
-                    except Exception as fallback_err:
-                        logging.warning(f"   └─ Fallback failed: {fallback_err}")
-
-                # If still empty and we saw 403, use portfolio breakdown totals as soft balances
-                if not accounts and last_forbidden_uuid == uuid_val:
-                    try:
-                        logging.info(f"   ├─ Using portfolio breakdown as fallback for {uuid_val} (403 Forbidden)")
-                        if hasattr(self.client, 'get_portfolio_breakdown'):
-                            breakdown = self.client.get_portfolio_breakdown(portfolio_uuid=uuid_val)
-                            # SDK may return dict or object; normalize
-                            data = breakdown if isinstance(breakdown, dict) else vars(breakdown) if breakdown else {}
-                            # Attempt to read fiat totals
-                            usd_total = float(data.get('usd_total', 0) or 0)
-                            usdc_total = float(data.get('usdc_total', 0) or 0)
-                            # Some SDKs return assets list; aggregate
-                            assets = data.get('assets') or []
-                            if assets:
-                                for a in assets:
-                                    curr = a.get('currency') or a.get('asset')
-                                    amt = float(a.get('available_balance', 0) or a.get('value', 0) or 0)
-                                    if curr == 'USD':
-                                        usd_total += amt
-                                    elif curr == 'USDC':
-                                        usdc_total += amt
-                            if usd_total > 0 or usdc_total > 0:
-                                usd_balance += usd_total
-                                usdc_balance += usdc_total
-                                logging.info(f"   └─ Breakdown fallback applied: USD=${usd_total:.2f} USDC=${usdc_total:.2f}")
-                        else:
-                            logging.info("   └─ get_portfolio_breakdown not available in SDK")
+                accounts_resp = self.client.get_accounts()
+            
+            accounts = getattr(accounts_resp, 'accounts', [])
+            logging.info(f"📁 Retrieved {len(accounts)} account(s) from default portfolio")
                     except Exception as bd_err:
                         logging.warning(f"   └─ Breakdown fallback failed: {bd_err}")
 
