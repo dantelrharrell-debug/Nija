@@ -24,6 +24,10 @@ fi
 echo "Branch: ${BRANCH_VAL:-unknown}"
 echo "Commit: ${COMMIT_VAL:-unknown}"
 
+# Explicitly allow counting Consumer USD unless overridden
+export ALLOW_CONSUMER_USD="${ALLOW_CONSUMER_USD:-true}"
+echo "ALLOW_CONSUMER_USD=${ALLOW_CONSUMER_USD}"
+
 # Debug: Show credential status
 echo ""
 echo "🔍 CREDENTIAL STATUS:"

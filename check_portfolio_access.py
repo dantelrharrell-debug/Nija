@@ -1,97 +1,139 @@
 #!/usr/bin/env python3
 """
-Check which portfolios the current API key can access
+Portfolio access diagnostic (no hardcoded credentials)
+
+Usage examples:
+  • Use default env creds: COINBASE_API_KEY / COINBASE_API_SECRET
+      $ ./check_portfolio_access.py
+  • Test a specific portfolio UUID (optional):
+      $ ./check_portfolio_access.py 050cfcb3-....
+
+Notes:
+  - Reads creds from environment (or .env if present).
+  - Never prints full secrets; previews only.
+  - Intended for local diagnostics only.
 """
+import os
+import sys
+from pathlib import Path
 from coinbase.rest import RESTClient
 
-# NOTE: For local diagnostics only. Do NOT commit real secrets.
-api_key = "organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/4cfe95c4-23c3-4480-a13c-1259f7320c36"
-api_secret = """-----BEGIN EC PRIVATE KEY-----
-MHcCAQEEIN8qIYi2YYF+EVw3SjBFI4vGG5s5+GK67PMtJsihiqMboAoGCCqGSM49
-AwEHoUQDQgAEyX6F9fdJ6FN8iigO3bOpAgs5rURgmpbPQulXOJhVUIQrBVvdHPz3
-KBxA/l4CdmnIbdsK4d+kTK8bNygn794vPA==
------END EC PRIVATE KEY-----"""
 
-client = RESTClient(api_key=api_key, api_secret=api_secret)
+def load_env_from_dotenv() -> None:
+    p = Path('.env')
+    if not p.exists():
+        return
+    try:
+        for line in p.read_text().splitlines():
+            s = line.strip()
+            if not s or s.startswith('#') or '=' not in s:
+                continue
+            k, v = s.split('=', 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and os.getenv(k) is None:
+                os.environ[k] = v
+    except Exception as e:
+        print(f"⚠️ Failed to parse .env: {e}")
 
-print("=" * 70)
-print("PORTFOLIO ACCESS TEST")
-print("=" * 70)
-print()
 
-print("1. Fetching all portfolios accessible to this API key...")
-print("-" * 70)
-try:
-    resp = client.get_portfolios()
-    # Coinbase SDK returns a typed response, not a dict
-    portfolios = getattr(resp, "portfolios", []) or []
-    print(f"✅ Found {len(portfolios)} portfolio(s)\n")
+def preview(val: str, n: int = 10) -> str:
+    if not val:
+        return '<empty>'
+    return f"{val[:n]}… (len={len(val)})"
 
-    for i, p in enumerate(portfolios, 1):
-        uuid = getattr(p, "uuid", "N/A")
-        name = getattr(p, "name", "N/A")
-        ptype = getattr(p, "type", "N/A")
-        print(f"Portfolio #{i}:")
-        print(f"  UUID: {uuid}")
-        print(f"  Name: {name}")
-        print(f"  Type: {ptype}")
 
-        # Try to get accounts/breakdown
-        try:
-            accts_resp = client.get_portfolio_breakdown(portfolio_uuid=uuid)
-            breakdown = getattr(accts_resp, "breakdown", None)
-            positions = []
-            total_value = 0.0
-            if breakdown:
-                positions = getattr(breakdown, "spot_positions", []) or []
-                print(f"  Positions: {len(positions)}")
-                for pos in positions:
-                    asset = getattr(pos, "asset", "N/A")
-                    fiat_value = float(getattr(pos, "total_balance_fiat", 0) or 0)
-                    available = float(getattr(pos, "available_to_trade_fiat", 0) or 0)
-                    total_value += fiat_value
-                    if fiat_value > 0.01:  # Only show non-zero balances
-                        print(f"    {asset}: ${fiat_value:.2f} (available: ${available:.2f})")
-            else:
-                print("  Positions: 0")
-            print(f"  Total Value: ${total_value:.2f}")
-        except Exception as e:
-            print(f"  ❌ Error accessing accounts: {str(e)[:200]}")
+def main():
+    # Load optional .env
+    load_env_from_dotenv()
 
-        print()
+    api_key = os.getenv('COINBASE_API_KEY')
+    api_secret = os.getenv('COINBASE_API_SECRET')
+    pem_content = os.getenv('COINBASE_PEM_CONTENT')
 
-except Exception as e:
-    print(f"❌ Failed to fetch portfolios: {e}")
+    if not api_key:
+        print("❌ COINBASE_API_KEY missing. Set env or .env.")
+        sys.exit(1)
+
+    # Prefer JWT; allow PEM fallback if no api_secret provided
+    auth = 'jwt' if api_secret else ('pem' if pem_content else None)
+    if not auth:
+        print("❌ Missing secret. Set COINBASE_API_SECRET (JWT) or COINBASE_PEM_CONTENT (PEM).")
+        sys.exit(1)
+
+    print("=" * 70)
+    print("PORTFOLIO ACCESS TEST")
+    print("=" * 70)
+    print(f"Auth: {auth} | key={preview(api_key, 16)} | secret={preview(api_secret or pem_content, 16)}")
     print()
 
-print()
-print("=" * 70)
-print("2. Testing DIRECT access to override portfolio:")
-print("   050cfcb3-6262-404a-a620-9c4437769db4")
-print("=" * 70)
-try:
-    resp = client.get_portfolio_breakdown(portfolio_uuid="050cfcb3-6262-404a-a620-9c4437769db4")
-    breakdown = getattr(resp, "breakdown", None)
-    positions = getattr(breakdown, "spot_positions", []) if breakdown else []
+    client_kwargs = {'api_key': api_key}
+    if auth == 'jwt':
+        client_kwargs['api_secret'] = api_secret
+    else:
+        client_kwargs['api_secret'] = pem_content
 
-    print(f"✅ SUCCESS! Can access this portfolio")
-    print(f"Found {len(positions)} positions:")
+    client = RESTClient(**client_kwargs)
 
-    total_value = 0.0
-    for pos in positions:
-        asset = getattr(pos, "asset", "N/A")
-        fiat_value = float(getattr(pos, "total_balance_fiat", 0) or 0)
-        available = float(getattr(pos, "available_to_trade_fiat", 0) or 0)
-        total_value += fiat_value
-        print(f"  {asset}: ${fiat_value:.2f} (available: ${available:.2f})")
+    # 1) List portfolios
+    print("1) Listing accessible portfolios…")
+    print("-" * 70)
+    try:
+        resp = client.get_portfolios()
+        portfolios = getattr(resp, 'portfolios', []) or []
+        print(f"✅ Found {len(portfolios)} portfolio(s)\n")
+        for i, p in enumerate(portfolios, 1):
+            uuid = getattr(p, 'uuid', 'N/A')
+            name = getattr(p, 'name', 'N/A')
+            ptype = getattr(p, 'type', 'N/A')
+            print(f"Portfolio #{i}:")
+            print(f"  UUID: {uuid}")
+            print(f"  Name: {name}")
+            print(f"  Type: {ptype}")
+            # Summarize USD/USDC if possible via breakdown
+            try:
+                br = client.get_portfolio_breakdown(portfolio_uuid=uuid)
+                bd = getattr(br, 'breakdown', None)
+                usd = usdc = 0.0
+                if bd:
+                    for pos in getattr(bd, 'spot_positions', []) or []:
+                        asset = getattr(pos, 'asset', '')
+                        fiat_val = float(getattr(pos, 'total_balance_fiat', 0) or 0)
+                        if asset == 'USD':
+                            usd += fiat_val
+                        elif asset == 'USDC':
+                            usdc += fiat_val
+                print(f"  USD: ${usd:.2f} | USDC: ${usdc:.2f}")
+            except Exception as be:
+                print(f"  ⚠️ Breakdown unavailable: {str(be)[:160]}")
+            print()
+    except Exception as e:
+        print(f"❌ Failed to fetch portfolios: {e}")
+        print()
 
-    print(f"\nTotal Portfolio Value: ${total_value:.2f}")
+    # 2) Optional: test a specific portfolio UUID passed as argv[1]
+    if len(sys.argv) > 1:
+        test_uuid = sys.argv[1]
+        print("=" * 70)
+        print(f"2) Testing portfolio access: {test_uuid}")
+        print("=" * 70)
+        try:
+            resp = client.get_portfolio_breakdown(portfolio_uuid=test_uuid)
+            bd = getattr(resp, 'breakdown', None)
+            positions = getattr(bd, 'spot_positions', []) if bd else []
+            print(f"✅ SUCCESS. Positions: {len(positions)}")
+            total = 0.0
+            for pos in positions:
+                asset = getattr(pos, 'asset', 'N/A')
+                fiat = float(getattr(pos, 'total_balance_fiat', 0) or 0)
+                avail = float(getattr(pos, 'available_to_trade_fiat', 0) or 0)
+                total += fiat
+                if fiat > 0:
+                    print(f"  {asset}: ${fiat:.2f} (available: ${avail:.2f})")
+            print(f"Total Value: ${total:.2f}")
+        except Exception as e:
+            print(f"❌ FAILED to access portfolio: {str(e)[:200]}")
 
-    if total_value == 0:
-        print("\n⚠️  WARNING: Portfolio is empty (no funds)")
 
-except Exception as e:
-    print(f"❌ FAILED to access portfolio: {str(e)[:200]}")
-
-print()
-print("=" * 70)
+if __name__ == '__main__':
+    main()
