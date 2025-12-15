@@ -1,99 +1,86 @@
-# NIJA Trading Bot 🚀
+# NIJA Trading Bot
 
+NIJA is an autonomous Coinbase Advanced Trade bot (APEX v7.1) that trades USD/USDC pairs using dual RSI signals and adaptive risk management.
+
+## What matters for live trading
+
+- Uses the default Advanced Trade portfolio attached to your API key; portfolio overrides are removed.
+- To trade, the key’s default Advanced Trade portfolio must hold USD/USDC. If logs show $0, the key is pointing at an unfunded portfolio.
+- If needed, recreate the API key while the funded Advanced Trade portfolio is selected, then redeploy with the new key/secret.
+- Move funds into the default Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio
+
+## Quick balance check (same auth NIJA uses)
+
+```bash
+source .venv/bin/activate  # optional: use repo venv
+export COINBASE_API_KEY="organizations/<ORG_ID>/apiKeys/<API_KEY_ID>"
+export COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----
 ...
+-----END EC PRIVATE KEY-----"
 
-## Advanced Trade Portfolio Binding (Required for Live Trading)
+python - <<'PY'
+import os
+from coinbase.rest import RESTClient
 
-NIJA trades from a Coinbase Advanced Trade portfolio. If your USD/USDC isn’t detected, bind the bot to the correct funded portfolio by setting `COINBASE_RETAIL_PORTFOLIO_ID`.
+api_key = os.environ["COINBASE_API_KEY"]
+api_secret = os.environ["COINBASE_API_SECRET"]
+if "\\n" in api_secret:
+    api_secret = api_secret.replace("\\n", "\n")
+if not api_secret.endswith("\n"):
+    api_secret = api_secret.rstrip() + "\n"
 
-What this does:
-- Forces NIJA to use the specified Advanced Trade portfolio UUID.
-- Ensures the balance fetch uses the correct portfolio so `trading_balance` is non-zero.
+client = RESTClient(api_key=api_key, api_secret=api_secret)
+resp = client.get_accounts()
+accts = getattr(resp, "accounts", []) or []
 
-How to find your portfolio UUID:
-1. Open [Coinbase Advanced Portfolio](https://www.coinbase.com/advanced-portfolio) while logged in.
-2. Open your browser DevTools → Network.
-3. Refresh the page and find a request to `/brokerage/portfolios`.
-4. In the response, locate the portfolio entry that holds your USD/USDC and copy its `id` (UUID). Example: `a3f2b6d1-9c9e-4d4b-9b92-xxxxxxxx`.
+def bal(cur):
+    return sum(
+        float(getattr(getattr(a, "available_balance", None), "value", 0) or 0)
+        for a in accts
+        if getattr(a, "currency", "") == cur
+    )
 
-Set the environment variable:
-
-Shell:
-```bash
-export COINBASE_RETAIL_PORTFOLIO_ID="a3f2b6d1-9c9e-4d4b-9b92-xxxxxxxx"
-python bot.py
+usd = bal("USD"); usdc = bal("USDC")
+print(f"USD={usd:.2f} USDC={usdc:.2f} TOTAL={usd+usdc:.2f}")
+for a in accts:
+    print(getattr(a, "currency", "?"), getattr(getattr(a, "available_balance", None), "value", 0))
+PY
 ```
 
-Docker run:
-```bash
-docker run \
-  -e COINBASE_API_KEY="..." \
-  -e COINBASE_API_SECRET="..." \
-  -e COINBASE_RETAIL_PORTFOLIO_ID="a3f2b6d1-9c9e-4d4b-9b92-xxxxxxxx" \
-  your-image:tag
-```
+## Deploy on Railway (recommended)
 
-Docker Compose (see `docker-compose.yml` in repo):
-```yaml
-services:
-  nija:
-    image: your-image:tag
-    environment:
-      COINBASE_API_KEY: "..."
-      COINBASE_API_SECRET: "..."
-      COINBASE_RETAIL_PORTFOLIO_ID: "a3f2b6d1-9c9e-4d4b-9b92-xxxxxxxx"
-```
-
-Expected log lines after a correct bind:
-- `Portfolio override in use: a3f2b6d1-9c9e-4d4b-9b92-xxxxxxxx`
-- Balance fetch returns non-zero USD/USDC and `trading_balance > 0`.
-
-Troubleshooting:
-- Ensure funds are in the Advanced Trade portfolio (not just regular wallet).
-- Confirm funds are “Available” (not on hold).
-- Verify your API key has Advanced Trade permissions.
-- Use production endpoints (not sandbox) for real balances.
-- Keep system clock accurate (JWT depends on time).
-
-## Railway Deployment (Recommended)
-
-Set variables in your Railway service → Variables:
+Set variables in Railway → Variables:
 - `COINBASE_API_KEY`: organizations/<ORG_ID>/apiKeys/<API_KEY_ID>
-- `COINBASE_API_SECRET`: PEM private key with real newlines:
+- `COINBASE_API_SECRET`: PEM private key with real newlines (no `\n` literals)
 
-  -----BEGIN EC PRIVATE KEY-----
-  ...
-  -----END EC PRIVATE KEY-----
-
-Save and redeploy. Verify logs:
-- "✅ Coinbase Advanced Trade connected"
-- "Account balance: $<non-zero>"
+Redeploy and confirm logs show:
+- `✅ Coinbase Advanced Trade connected`
+- `Account balance: $<non-zero>`
 
 Notes:
-- Do not set conflicting auth variables (avoid `COINBASE_PEM_CONTENT` or `COINBASE_PEM_BASE64` if using `COINBASE_API_SECRET`).
+- Use only one auth method; if you set `COINBASE_API_SECRET`, leave PEM path/content vars unset.
 - Never commit `.env` or credentials to git.
 
-## Local Environment Setup
+## Run locally
 
-If using `.env` locally:
-- Ensure PEM has true line breaks (not `\n`).
-- Or export in shell to avoid multiline parsing:
+- Keep PEM secrets with real line breaks; avoid `\n` unless you replace them before constructing the client.
+- Minimal shell example:
 
 ```bash
 export COINBASE_API_KEY="organizations/<ORG_ID>/apiKeys/<API_KEY_ID>"
 export COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----
 ...
 -----END EC PRIVATE KEY-----"
+python bot.py
 ```
 
-## First-Trade Checklist
-- Fund your Advanced Trade portfolio with USD/USDC (https://www.coinbase.com/advanced-portfolio).
-- Logs show non-zero trading balance.
-- Trading loop runs every ~15s with per-symbol signals.
-- Orders execute on BUY/SELL signals when risk checks pass.
+## First-trade checklist
+- USD/USDC funded in the default Advanced Trade portfolio for this API key.
+- Balance check above returns non-zero.
+- NIJA logs show non-zero trading balance and the main loop is running.
+- Orders execute when signals and risk checks pass.
 
 ## Troubleshooting
-- 401 Unauthorized: Rotate keys; ensure org/key IDs are correct; PEM matches key.
-- Zero balance warnings: Fund Advanced Trade or set `COINBASE_RETAIL_PORTFOLIO_ID` to a funded portfolio.
-- PEM formatting: Use real newlines; avoid `\n` unless your parser supports it.
-- Conflicting auth: Prefer a single method (JWT key + PEM secret).
+- 401 Unauthorized: rotate keys; confirm org/key IDs and PEM match; keep system clock accurate.
+- Zero balance: funds are not in the key’s default Advanced Trade portfolio or the key was created against a different portfolio; move funds or recreate the key while the funded portfolio is selected.
+- PEM formatting: ensure real newlines; do not mix PEM env vars.
