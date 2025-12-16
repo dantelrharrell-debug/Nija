@@ -131,13 +131,13 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= self.volume_threshold
         }
         
-        # Require at least 4 out of 5 conditions for trend confirmation
+        # EXTREMELY AGGRESSIVE: Require only 3 out of 5 conditions
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
         
-        if uptrend_score >= 4:  # Changed from 5 to 4
+        if uptrend_score >= 3:  # AGGRESSIVE: 3/5 filters
             return True, 'uptrend', f'Uptrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 4:  # Changed from 5 to 4
+        elif downtrend_score >= 3:  # AGGRESSIVE: 3/5 filters
             return True, 'downtrend', f'Downtrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
             return False, 'none', f'Mixed signals (Up:{uptrend_score}/5, Down:{downtrend_score}/5)'

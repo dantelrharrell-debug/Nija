@@ -32,15 +32,15 @@ class AdaptiveRiskManager:
     - Total portfolio exposure
     """
     
-    def __init__(self, min_position_pct=0.02, max_position_pct=0.10,
-                 max_total_exposure=0.30):
+    def __init__(self, min_position_pct=0.05, max_position_pct=0.25,
+                 max_total_exposure=0.50):
         """
-        Initialize Adaptive Risk Manager
+        Initialize Adaptive Risk Manager - AGGRESSIVE MODE
         
         Args:
-            min_position_pct: Minimum position size as % of account (default 2%)
-            max_position_pct: Maximum position size as % of account (default 10%)
-            max_total_exposure: Maximum total exposure across all positions (default 30%)
+            min_position_pct: Minimum position size as % of account (default 5% - AGGRESSIVE)
+            max_position_pct: Maximum position size as % of account (default 25% - VERY AGGRESSIVE)
+            max_total_exposure: Maximum total exposure across all positions (default 50%)
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct

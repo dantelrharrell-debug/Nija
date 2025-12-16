@@ -144,8 +144,8 @@ To enable trading:
             self.strategy = NIJAApexStrategyV71(
                 broker_client=self.broker.client,
                 config={
-                    'min_adx': 10,  # Reduced from 15 to allow choppy markets
-                    'volume_threshold': 0.15,  # Reduced from 0.3 to 0.15 (15% of avg)
+                    'min_adx': 5,  # EXTREMELY aggressive - trade in any market condition
+                    'volume_threshold': 0.05,  # Only 5% volume required (very low)
                     'ai_momentum_enabled': False
                 }
             )
@@ -154,8 +154,9 @@ To enable trading:
             logger.exception("🔥 CRITICAL: Failed to initialize APEX strategy")
             raise
         
-        # Trading configuration
-        self.trading_pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
+        # Trading configuration - SCAN ALL MARKETS
+        self.trading_pairs = None  # Will be fetched dynamically from Coinbase
+        self.all_markets_mode = True  # Trade ALL available crypto pairs
         self.timeframe = '5m'
         self.min_candles_required = 80
         self.max_consecutive_losses = 3
@@ -182,8 +183,47 @@ To enable trading:
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
         
         logger.info("Trading strategy initialized successfully")
-        logger.info(f"Trading pairs: {', '.join(self.trading_pairs)}")
+        if self.all_markets_mode:
+            logger.info("🌍 ALL MARKETS MODE: Will scan ALL available crypto pairs dynamically")
+        else:
+            logger.info(f"Trading pairs: {', '.join(self.trading_pairs) if self.trading_pairs else 'Dynamic'}")
         logger.info(f"Timeframe: {self.timeframe}")
+    
+    def _fetch_all_markets(self) -> list:
+        """
+        Fetch ALL available cryptocurrency trading pairs from Coinbase
+        
+        Returns:
+            List of trading pair symbols (e.g., ['BTC-USD', 'ETH-USD', ...])
+        """
+        try:
+            # Get all products from Coinbase
+            products = self.broker.client.get_products()
+            
+            if not products or 'products' not in products:
+                logger.warning("Failed to fetch markets, falling back to default pairs")
+                return ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
+            
+            # Filter for USD pairs only (quote currency = USD or USDC)
+            usd_pairs = []
+            for product in products['products']:
+                product_id = product.get('product_id', '')
+                quote_currency = product.get('quote_currency_id', '')
+                status = product.get('status', '')
+                
+                # Only include active USD/USDC pairs
+                if (quote_currency in ['USD', 'USDC'] and 
+                    status == 'online' and 
+                    product_id):
+                    usd_pairs.append(product_id)
+            
+            logger.info(f"✅ Fetched {len(usd_pairs)} active USD/USDC trading pairs")
+            return usd_pairs
+            
+        except Exception as e:
+            logger.error(f"Error fetching markets: {e}")
+            logger.warning("Falling back to default trading pairs")
+            return ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
     
     def fetch_candles(self, symbol: str) -> pd.DataFrame:
         """
@@ -507,7 +547,7 @@ To enable trading:
     def run_trading_cycle(self):
         """
         Execute one complete trading cycle:
-        1. Scan all trading pairs for opportunities
+        1. Fetch ALL available markets dynamically
         2. Analyze each pair with APEX strategy
         3. Execute trades based on signals
         4. Monitor open positions
@@ -520,6 +560,11 @@ To enable trading:
             
             # Refresh account balance
             self.account_balance = self.get_usd_balance()
+            
+            # Fetch ALL available trading pairs dynamically
+            if self.all_markets_mode:
+                self.trading_pairs = self._fetch_all_markets()
+                logger.info(f"🌍 ALL MARKETS MODE: Scanning {len(self.trading_pairs)} crypto pairs")
             
             # Scan all trading pairs
             logger.info(f"📊 Scanning {len(self.trading_pairs)} trading pairs...")
