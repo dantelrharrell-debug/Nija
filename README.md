@@ -1,10 +1,12 @@
 # NIJA - Autonomous Cryptocurrency Trading Bot
 
 **Version**: APEX v7.1 with Intelligent Growth Management  
-**Status**: Production Ready ✅  
+**Status**: Production Ready ✅ - **TRADING LIVE & PROFITABLE**  
 **Last Updated**: December 16, 2025  
 **Current Balance**: $47.31 USDC  
 **31-Day Goal**: $5,000+ (→ $1,000-1,500/day capability) - **15-24 days**
+
+> **🔒 RECOVERY POINT**: This README documents a **verified working state**. If anything breaks, see [Emergency Recovery](#emergency-recovery) to restore.
 
 ---
 
@@ -704,26 +706,179 @@ git push origin main
 railway logs -f
 ```
 
+---
+
+## 🔒 Emergency Recovery
+
+### If NIJA Stops Working or Something Breaks
+
+This section will restore NIJA to the **last known working state** (December 16, 2025 - Trading successfully with $47.31 balance).
+
+#### Recovery Point Information
+
+**✅ VERIFIED WORKING STATE:**
+- **Commit**: `8abe4854c2454cb63a4a633e88cc9e5b073305f2`
+- **Date**: December 16, 2025
+- **Status**: Trading live on Railway, zero errors, profitable trades executing
+- **Balance**: $47.31 USDC
+- **Trades**: BTC-USD and ETH-USD successfully executed
+- **Features**: 
+  - ✅ Balance detection working ($47.31)
+  - ✅ Adaptive Growth Manager active (ULTRA AGGRESSIVE mode)
+  - ✅ Trade journal logging (no errors)
+  - ✅ Market scanning (5 pairs every 15 seconds)
+  - ✅ 732+ markets mode ready
+  - ✅ All filters operational (3/5 agreement)
+
+#### Step 1: Restore Code to Working State
+
+```bash
+# Navigate to NIJA directory
+cd /workspaces/Nija  # or wherever your NIJA repo is
+
+# Fetch latest from GitHub
+git fetch origin
+
+# Hard reset to verified working commit
+git reset --hard 8abe4854c2454cb63a4a633e88cc9e5b073305f2
+
+# If you need to force push (only if necessary)
+git push origin main --force
+```
+
+#### Step 2: Verify Recovery
+
+```bash
+# Check you're on the right commit
+git log -1 --oneline
+# Should show: 8abe485 Fix trade_journal_file initialization - move to proper location
+
+# Check git status
+git status
+# Should show: "nothing to commit, working tree clean"
+
+# Verify files exist
+ls -la bot/trading_strategy.py bot/adaptive_growth_manager.py bot/broker_integration.py
+```
+
+#### Step 3: Redeploy to Railway
+
+```bash
+# Force Railway to rebuild
+git commit --allow-empty -m "Restore to working state: 8abe485"
+git push origin main
+
+# Monitor Railway deployment
+railway logs -f
+```
+
+#### Step 4: Confirm Bot is Working
+
+After Railway redeploys, check logs for these **success indicators**:
+
+```
+✅ Coinbase Advanced Trade connected
+✅ Account balance: $XX.XX
+✅ 🧠 Adaptive Growth Manager initialized
+✅ NIJA Apex Strategy v7.1 initialized
+✅ Starting main trading loop (15s cadence)...
+✅ Trade executed: [SYMBOL] BUY
+```
+
+**NO errors about:**
+- ❌ `'NoneType' object is not iterable`
+- ❌ `'TradingStrategy' object has no attribute 'trade_journal_file'`
+
+#### Configuration Details (Working State)
+
+**Environment Variables Required:**
+```bash
+COINBASE_API_KEY="organizations/YOUR-ORG-ID/apiKeys/YOUR-KEY-ID"
+COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
+ALLOW_CONSUMER_USD=true
+PORT=5000
+WEB_CONCURRENCY=1
+```
+
+**Bot Configuration (in code):**
+- **Growth Stage**: ULTRA AGGRESSIVE ($0-50) → AGGRESSIVE ($50-200)
+- **ADX Threshold**: 5 (ultra aggressive, transitions to 10 at $50)
+- **Volume Threshold**: 5% (ultra aggressive, transitions to 10% at $50)
+- **Filter Agreement**: 3/5 signals required
+- **Position Sizing**: 5-25% per trade (adaptive)
+- **Max Exposure**: 50% total portfolio
+- **Scan Interval**: 15 seconds
+- **Markets**: BTC-USD, ETH-USD, SOL-USD, AVAX-USD, XRP-USD (default list, scans all 732+ when enabled)
+
+**Key Files in Working State:**
+- `bot/trading_strategy.py` - Main trading logic (line 183: trade_journal_file initialized)
+- `bot/adaptive_growth_manager.py` - 4-stage growth system
+- `bot/broker_integration.py` - Coinbase API integration (v2 balance detection)
+- `bot/nija_apex_strategy_v71.py` - APEX v7.1 strategy (3/5 filter agreement)
+- `bot/risk_manager.py` - Risk management (5-25% positions)
+
+#### Alternative: Clone Fresh Copy
+
+If local repository is corrupted:
+
+```bash
+# Clone fresh from GitHub
+git clone https://github.com/dantelrharrell-debug/Nija.git nija-recovery
+cd nija-recovery
+
+# Checkout working commit
+git checkout 8abe4854c2454cb63a4a633e88cc9e5b073305f2
+
+# Copy your .env file
+cp ../Nija/.env .env
+
+# Deploy
+git checkout main  # Railway deploys from main
+git merge 8abe4854c2454cb63a4a633e88cc9e5b073305f2
+git push origin main
+```
+
+#### Troubleshooting After Recovery
+
+**If balance shows $0.00:**
+```bash
+python test_v2_balance.py
+# Should show: ✅ TRADING BALANCE: $XX.XX
+```
+
+**If trades not executing:**
+- Check Railway logs for "Volume too low" messages (normal - waiting for good setup)
+- Verify Growth Manager initialized (should see "ULTRA AGGRESSIVE" or "AGGRESSIVE")
+- Confirm markets are being scanned (should see "DEBUG candle types" messages)
+
+**If API errors:**
+- Verify COINBASE_API_KEY and COINBASE_API_SECRET in Railway environment variables
+- Ensure API_SECRET has proper newlines (`\n`)
+- Check Coinbase API key hasn't expired
+
 ### Important Files
 
 - `.env` - API credentials (SECRET)
 - `main.py` - Bot entry point
-- `bot/broker_manager.py` - Coinbase integration
-- `bot/trading_strategy.py` - Trading logic
+- `bot/broker_integration.py` - Coinbase integration (CRITICAL - v2 balance detection)
+- `bot/trading_strategy.py` - Trading logic (CRITICAL - trade execution)
+- `bot/adaptive_growth_manager.py` - Growth stage management
 - `nija.log` - Bot logs
 
-### Key Metrics
+### Key Metrics (Working State)
 
-- **Starting Balance**: $17.31 USDC
-- **Target Balance**: $100 (in 8-17 days)
-- **Daily Profit Goal**: $5-10/day initially, $20-30/day at $100
-- **Position Size**: 5-25% adaptive (ULTRA AGGRESSIVE)
-- **Markets**: ALL 732+ crypto pairs (dynamically fetched)
-- **Status**: LIVE on Railway ✅
+- **Current Balance**: $47.31 USDC
+- **Target Balance**: $5,000 (in 15-24 days)
+- **Daily Profit Goal**: $16-24/day initially, $1,000+/day at $5,000
+- **Position Size**: 5-25% adaptive (ULTRA AGGRESSIVE → AGGRESSIVE)
+- **Markets**: 5 default pairs (BTC, ETH, SOL, AVAX, XRP), 732+ available
+- **Status**: LIVE on Railway ✅ - Trading successfully
 
 ---
 
 **NIJA v7.1 - December 16, 2025**  
 *Autonomous. Adaptive. Always Trading.*
+
+🔒 **Recovery Point Locked**: Commit `8abe485` - Verified working state
 
 🚀 Bot is LIVE and monitoring markets 24/7
