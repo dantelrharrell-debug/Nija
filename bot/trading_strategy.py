@@ -474,16 +474,38 @@ To enable trading:
                     # Log trade to journal
                     self.log_trade(symbol, signal, analysis.get('price'), position_size_usd)
                     
-                    # Track position
+                    # Calculate stop loss and take profit levels
+                    entry_price = analysis.get('price')
+                    stop_loss_pct = 0.02  # 2% stop loss
+                    take_profit_pct = 0.06  # 6% take profit (3:1 risk/reward)
+                    
+                    if signal == 'BUY':
+                        stop_loss = entry_price * (1 - stop_loss_pct)
+                        take_profit = entry_price * (1 + take_profit_pct)
+                        trailing_stop = stop_loss  # Initialize trailing stop at stop loss
+                    else:  # SELL
+                        stop_loss = entry_price * (1 + stop_loss_pct)
+                        take_profit = entry_price * (1 - take_profit_pct)
+                        trailing_stop = stop_loss
+                    
+                    # Track position with risk management levels
                     self.open_positions[symbol] = {
                         'side': signal,
-                        'entry_price': analysis.get('price'),
+                        'entry_price': entry_price,
                         'size_usd': position_size_usd,
-                        'timestamp': datetime.now()
+                        'timestamp': datetime.now(),
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit,
+                        'trailing_stop': trailing_stop,
+                        'highest_price': entry_price if signal == 'BUY' else None,
+                        'lowest_price': entry_price if signal == 'SELL' else None
                     }
                     
                     self.last_trade_time = time.time()
                     logger.info(f"✅ Trade executed: {symbol} {signal}")
+                    logger.info(f"   Entry: ${entry_price:.2f}")
+                    logger.info(f"   Stop Loss: ${stop_loss:.2f} (-{stop_loss_pct*100}%)")
+                    logger.info(f"   Take Profit: ${take_profit:.2f} (+{take_profit_pct*100}%)")
                     return True
                 else:
                     logger.warning(f"Trade failed for {symbol}: {order.get('error')}")
@@ -495,6 +517,137 @@ To enable trading:
         except Exception as e:
             logger.error(f"Error executing trade: {e}")
             return False
+    
+    def manage_open_positions(self):
+        """
+        Monitor all open positions and close them when:
+        1. Stop loss hit
+        2. Trailing stop hit
+        3. Take profit hit
+        4. Exit signal from strategy
+        """
+        if not self.open_positions:
+            return
+        
+        logger.info(f"📊 Managing {len(self.open_positions)} open position(s)...")
+        
+        positions_to_close = []
+        
+        for symbol, position in self.open_positions.items():
+            try:
+                # Get current price
+                analysis = self.analyze_symbol(symbol)
+                current_price = analysis.get('price')
+                
+                if not current_price:
+                    logger.warning(f"⚠️ Could not get price for {symbol}, skipping")
+                    continue
+                
+                side = position['side']
+                entry_price = position['entry_price']
+                stop_loss = position['stop_loss']
+                take_profit = position['take_profit']
+                trailing_stop = position['trailing_stop']
+                
+                # Calculate current P&L
+                if side == 'BUY':
+                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                    pnl_usd = position['size_usd'] * (pnl_pct / 100)
+                else:  # SELL
+                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                    pnl_usd = position['size_usd'] * (pnl_pct / 100)
+                
+                logger.info(f"   {symbol}: {side} @ ${entry_price:.2f} | Current: ${current_price:.2f} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
+                
+                # Check exit conditions
+                exit_reason = None
+                
+                if side == 'BUY':
+                    # Update highest price for trailing stop
+                    if current_price > position.get('highest_price', entry_price):
+                        position['highest_price'] = current_price
+                        # Update trailing stop (lock in 50% of gains)
+                        new_trailing = entry_price + (current_price - entry_price) * 0.5
+                        if new_trailing > trailing_stop:
+                            position['trailing_stop'] = new_trailing
+                            logger.info(f"   📈 Trailing stop updated: ${new_trailing:.2f}")
+                    
+                    # Check stop loss
+                    if current_price <= stop_loss:
+                        exit_reason = f"Stop loss hit @ ${stop_loss:.2f}"
+                    # Check trailing stop
+                    elif current_price <= trailing_stop:
+                        exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
+                    # Check take profit
+                    elif current_price >= take_profit:
+                        exit_reason = f"Take profit hit @ ${take_profit:.2f}"
+                    # Check for opposite signal
+                    elif analysis.get('signal') == 'SELL':
+                        exit_reason = f"Opposite signal detected: {analysis.get('reason')}"
+                
+                else:  # SELL position
+                    # Update lowest price for trailing stop
+                    if current_price < position.get('lowest_price', entry_price):
+                        position['lowest_price'] = current_price
+                        # Update trailing stop (lock in 50% of gains)
+                        new_trailing = entry_price - (entry_price - current_price) * 0.5
+                        if new_trailing < trailing_stop:
+                            position['trailing_stop'] = new_trailing
+                            logger.info(f"   📉 Trailing stop updated: ${new_trailing:.2f}")
+                    
+                    # Check stop loss
+                    if current_price >= stop_loss:
+                        exit_reason = f"Stop loss hit @ ${stop_loss:.2f}"
+                    # Check trailing stop
+                    elif current_price >= trailing_stop:
+                        exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
+                    # Check take profit
+                    elif current_price <= take_profit:
+                        exit_reason = f"Take profit hit @ ${take_profit:.2f}"
+                    # Check for opposite signal
+                    elif analysis.get('signal') == 'BUY':
+                        exit_reason = f"Opposite signal detected: {analysis.get('reason')}"
+                
+                # Execute exit if conditions met
+                if exit_reason:
+                    logger.info(f"🔄 Closing {symbol} position: {exit_reason}")
+                    logger.info(f"   Exit price: ${current_price:.2f} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
+                    
+                    # Close position
+                    exit_signal = 'SELL' if side == 'BUY' else 'BUY'
+                    try:
+                        # Calculate quantity to close
+                        quantity = position['size_usd'] / current_price
+                        order = self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
+                        
+                        if order.get('status') == 'filled':
+                            # Log closing trade
+                            self.log_trade(symbol, exit_signal, current_price, position['size_usd'])
+                            
+                            # Update stats
+                            if pnl_usd > 0:
+                                self.winning_trades += 1
+                                logger.info(f"✅ Position closed with PROFIT: ${pnl_usd:+.2f}")
+                            else:
+                                logger.info(f"❌ Position closed with LOSS: ${pnl_usd:+.2f}")
+                            
+                            positions_to_close.append(symbol)
+                            self.total_trades_executed += 1
+                        else:
+                            logger.warning(f"Failed to close {symbol}: {order.get('error')}")
+                    
+                    except Exception as e:
+                        logger.error(f"Error closing {symbol} position: {e}")
+            
+            except Exception as e:
+                logger.error(f"Error managing position {symbol}: {e}")
+        
+        # Remove closed positions
+        for symbol in positions_to_close:
+            del self.open_positions[symbol]
+        
+        if positions_to_close:
+            logger.info(f"✅ Closed {len(positions_to_close)} position(s)")
     
     def log_trade(self, symbol: str, side: str, price: float, size_usd: float):
         """
@@ -552,6 +705,10 @@ To enable trading:
                     }
                 )
                 logger.info("✅ Strategy updated for new growth stage!")
+
+            # *** MANAGE OPEN POSITIONS FIRST ***
+            # Check all open positions for exit conditions (stop loss, take profit, trailing stops)
+            self.manage_open_positions()
 
             # Guard: if no trading balance, do not attempt orders
             if not self.account_balance or self.account_balance <= 0:
