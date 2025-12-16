@@ -566,8 +566,8 @@ To enable trading:
                     # Update highest price for trailing stop
                     if current_price > position.get('highest_price', entry_price):
                         position['highest_price'] = current_price
-                        # Update trailing stop (lock in 95% of gains - only give back 5%)
-                        new_trailing = entry_price + (current_price - entry_price) * 0.95
+                        # Update trailing stop (lock in 98% of gains - only give back 2%)
+                        new_trailing = entry_price + (current_price - entry_price) * 0.98
                         if new_trailing > trailing_stop:
                             position['trailing_stop'] = new_trailing
                             locked_profit_pct = ((new_trailing - entry_price) / entry_price) * 100
@@ -590,8 +590,8 @@ To enable trading:
                     # Update lowest price for trailing stop
                     if current_price < position.get('lowest_price', entry_price):
                         position['lowest_price'] = current_price
-                        # Update trailing stop (lock in 95% of gains - only give back 5%)
-                        new_trailing = entry_price - (entry_price - current_price) * 0.95
+                        # Update trailing stop (lock in 98% of gains - only give back 2%)
+                        new_trailing = entry_price - (entry_price - current_price) * 0.98
                         if new_trailing < trailing_stop:
                             position['trailing_stop'] = new_trailing
                             locked_profit_pct = ((entry_price - new_trailing) / entry_price) * 100
