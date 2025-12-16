@@ -29,6 +29,7 @@ if not logger.hasHandlers():
 from broker_manager import CoinbaseBroker
 from mock_broker import MockBroker
 from nija_apex_strategy_v71 import NIJAApexStrategyV71
+from adaptive_growth_manager import AdaptiveGrowthManager
 from indicators import calculate_vwap, calculate_ema, calculate_rsi, calculate_macd, calculate_atr, calculate_adx
 
 class TradingStrategy:
@@ -139,13 +140,20 @@ To enable trading:
             logger.warning(f"Continuing with 0.0 balance")
             self.account_balance = 0.0
         
-        logger.info("🔥 Initializing APEX strategy...")
+        # Initialize Adaptive Growth Manager
+        self.growth_manager = AdaptiveGrowthManager()
+        
+        logger.info("🔥 Initializing APEX strategy with adaptive growth management...")
         try:
+            # Get initial config based on current balance
+            growth_config = self.growth_manager.get_current_config()
+            logger.info(f"🧠 Growth Stage: {growth_config['description']}")
+            
             self.strategy = NIJAApexStrategyV71(
                 broker_client=self.broker.client,
                 config={
-                    'min_adx': 5,  # EXTREMELY aggressive - trade in any market condition
-                    'volume_threshold': 0.05,  # Only 5% volume required (very low)
+                    'min_adx': growth_config['min_adx'],
+                    'volume_threshold': growth_config['volume_threshold'],
                     'ai_momentum_enabled': False
                 }
             )
@@ -163,6 +171,8 @@ To enable trading:
         
         # Track open positions and trade history
         self.open_positions = {}
+        self.total_trades_executed = 0
+        self.winning_trades = 0
         self.trade_history = []
         self.consecutive_losses = 0
         self.last_trade_time = None
@@ -560,6 +570,26 @@ To enable trading:
             
             # Refresh account balance
             self.account_balance = self.get_usd_balance()
+            
+            # Check if account has grown to new stage and update strategy
+            stage_changed, new_config = self.growth_manager.update_stage(self.account_balance)
+            if stage_changed:
+                # Reinitialize strategy with new parameters
+                logger.info("🔄 Reinitializing strategy with new growth stage parameters...")
+                self.strategy = NIJAApexStrategyV71(
+                    broker_client=self.broker.client,
+                    config={
+                        'min_adx': new_config['min_adx'],
+                        'volume_threshold': new_config['volume_threshold'],
+                        'ai_momentum_enabled': False
+                    }
+                )
+                logger.info("✅ Strategy updated for new growth stage!")
+            
+            # Show progress to next milestone
+            progress = self.growth_manager.get_progress_to_next_milestone(self.account_balance)
+            if progress['next_milestone']:
+                logger.info(f"📈 Progress: {progress['progress_pct']:.1f}% to ${progress['next_milestone']:.0f} ({progress['message']})")
             
             # Fetch ALL available trading pairs dynamically
             if self.all_markets_mode:
