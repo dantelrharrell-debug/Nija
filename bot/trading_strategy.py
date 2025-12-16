@@ -566,11 +566,12 @@ To enable trading:
                     # Update highest price for trailing stop
                     if current_price > position.get('highest_price', entry_price):
                         position['highest_price'] = current_price
-                        # Update trailing stop (lock in 50% of gains)
-                        new_trailing = entry_price + (current_price - entry_price) * 0.5
+                        # Update trailing stop (lock in 95% of gains - only give back 5%)
+                        new_trailing = entry_price + (current_price - entry_price) * 0.95
                         if new_trailing > trailing_stop:
                             position['trailing_stop'] = new_trailing
-                            logger.info(f"   📈 Trailing stop updated: ${new_trailing:.2f}")
+                            locked_profit_pct = ((new_trailing - entry_price) / entry_price) * 100
+                            logger.info(f"   📈 Trailing stop updated: ${new_trailing:.2f} (locks in {locked_profit_pct:.2f}% profit)")
                     
                     # Check stop loss
                     if current_price <= stop_loss:
@@ -589,11 +590,12 @@ To enable trading:
                     # Update lowest price for trailing stop
                     if current_price < position.get('lowest_price', entry_price):
                         position['lowest_price'] = current_price
-                        # Update trailing stop (lock in 50% of gains)
-                        new_trailing = entry_price - (entry_price - current_price) * 0.5
+                        # Update trailing stop (lock in 95% of gains - only give back 5%)
+                        new_trailing = entry_price - (entry_price - current_price) * 0.95
                         if new_trailing < trailing_stop:
                             position['trailing_stop'] = new_trailing
-                            logger.info(f"   📉 Trailing stop updated: ${new_trailing:.2f}")
+                            locked_profit_pct = ((entry_price - new_trailing) / entry_price) * 100
+                            logger.info(f"   📉 Trailing stop updated: ${new_trailing:.2f} (locks in {locked_profit_pct:.2f}% profit)")
                     
                     # Check stop loss
                     if current_price >= stop_loss:
