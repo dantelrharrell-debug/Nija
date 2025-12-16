@@ -13,21 +13,52 @@ NIJA is a fully autonomous cryptocurrency trading bot that connects to Coinbase 
 
 ### Key Features
 
-- ✅ **Dual-Mode Operation**: Autonomous scanning (every 2.5 min) + TradingView webhooks (instant execution)
-- ✅ **732+ Market Coverage**: Scans all cryptocurrency pairs on Coinbase Advanced Trade  
-- ✅ **APEX v7.1 Strategy**: Advanced dual RSI with trend filters and volume confirmation
-- ✅ **Adaptive Risk Management**: Dynamic position sizing (2%-10% per trade)
+- ✅ **Dual-Mode Operation**: Autonomous scanning (every 15 sec) + TradingView webhooks (instant execution)
+- ✅ **732+ Market Coverage**: Scans ALL cryptocurrency pairs on Coinbase Advanced Trade dynamically
+- ✅ **APEX v7.1 ULTRA AGGRESSIVE**: ADX 5, Volume 5%, 3/5 filter agreement, 5-25% position sizing
+- ✅ **Adaptive Risk Management**: Dynamic position sizing with 50% max exposure
 - ✅ **Automatic Balance Detection**: v2 API support for retail/consumer accounts
 - ✅ **24/7 Autonomous Trading**: Containerized deployment on Railway
+- ✅ **Profit Compounding**: $17.31 → $100 in 8-17 days (targeting $5-10/day)
 - ✅ **Real-time Logging**: Comprehensive trade execution and strategy logs
 
-### Performance Metrics
+### Performance Metrics & Profit Targets
 
-- **Trading Balance**: $35.31 (USDC + USD)
-- **Position Sizing**: 2-10% adaptive risk
-- **Scan Frequency**: Every 15 seconds
-- **Markets Monitored**: 732+ crypto pairs
-- **Uptime**: 24/7 containerized deployment
+**Current Trading Balance**: $17.31 USDC  
+**Strategy Mode**: ULTRA AGGRESSIVE (ADX 5, Vol 5%, 3/5 filters, 5-25% positions)  
+**Markets Scanned**: ALL 732+ cryptocurrency pairs on Coinbase  
+**Scan Frequency**: Every 15 seconds  
+**Uptime**: 24/7 containerized on Railway
+
+#### Realistic Profit Expectations
+
+**Phase 1: Starting Balance ($17.31)**
+- **Daily Target**: $5-10/day (29-58% daily return)
+- **Position Sizing**: 5-25% per trade ($0.87-$4.33 per position)
+- **Time to $100**: 8-17 trading days (compounding daily)
+- **Strategy**: Very aggressive, high volume of small wins
+
+**Phase 2: $100 Account Balance**
+- **Daily Target**: $20-30/day (20-30% daily return)
+- **Position Sizing**: 5-25% per trade ($5-$25 per position)
+- **Monthly Potential**: $600-900/month
+- **Strategy**: Maintain aggressive stance, more capital to work with
+
+**Phase 3: $500+ Account Balance**
+- **Daily Target**: $50-100/day (10-20% daily return)
+- **Position Sizing**: 5-15% per trade ($25-$75 per position)
+- **Monthly Potential**: $1,500-3,000/month
+- **Strategy**: Can reduce aggressiveness, sustainable long-term gains
+
+#### Compounding Growth Chart
+
+| Starting Balance | Daily Target | Days to $100 | Days to $500 | Days to $1,000 |
+|-----------------|--------------|--------------|--------------|----------------|
+| $17.31 | $5-10/day | 8-17 days | 48-97 days | 98-197 days |
+| $100 | $20-30/day | Already there | 13-20 days | 30-45 days |
+| $500 | $50-100/day | Already there | Already there | 5-10 days |
+
+**Note**: These are aggressive targets. Actual results depend on market conditions, strategy performance, and risk management. Always expect 20-40% drawdown periods.
 
 ---
 
@@ -638,11 +669,12 @@ railway logs -f
 
 ### Key Metrics
 
-- Balance: $35.31 (USDC + USD)
-- Scan Frequency: 15 seconds
-- Markets: 732+ pairs
-- Position Size: 2-10% adaptive
-- Status: LIVE ✅
+- **Starting Balance**: $17.31 USDC
+- **Target Balance**: $100 (in 8-17 days)
+- **Daily Profit Goal**: $5-10/day initially, $20-30/day at $100
+- **Position Size**: 5-25% adaptive (ULTRA AGGRESSIVE)
+- **Markets**: ALL 732+ crypto pairs (dynamically fetched)
+- **Status**: LIVE on Railway ✅
 
 ---
 
