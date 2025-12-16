@@ -177,6 +177,9 @@ To enable trading:
         self.consecutive_losses = 0
         self.last_trade_time = None
         self.min_time_between_trades = 5  # seconds
+        
+        # Trade journal file
+        self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
 
     # Alias to align with README wording
     def get_usd_balance(self) -> float:
@@ -188,16 +191,7 @@ To enable trading:
             return float(bal) if bal else 0.0
         except Exception:
             return 0.0
-        
-        # Trade journal file
-        self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
-        
-        logger.info("Trading strategy initialized successfully")
-        if self.all_markets_mode:
-            logger.info("🌍 ALL MARKETS MODE: Will scan ALL available crypto pairs dynamically")
-        else:
-            logger.info(f"Trading pairs: {', '.join(self.trading_pairs) if self.trading_pairs else 'Dynamic'}")
-        logger.info(f"Timeframe: {self.timeframe}")
+
     
     def _fetch_all_markets(self) -> list:
         """
