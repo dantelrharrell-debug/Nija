@@ -144,30 +144,88 @@ class CoinbaseBroker(BaseBroker):
             return False
     
     def get_account_balance(self):
-        """Parse balances across portfolios using explicit USD/USDC rules and return a summary dict."""
+        """Parse balances using v2 API (shows retail balances) with v3 fallback"""
         usd_balance = 0.0
         usdc_balance = 0.0
         crypto_holdings: Dict[str, float] = {}
 
         try:
-            accounts_resp = self.client.list_accounts() if hasattr(self.client, 'list_accounts') else self.client.get_accounts()
-            accounts = getattr(accounts_resp, 'accounts', [])
-            logging.info(f"📁 Retrieved {len(accounts)} account(s) from default portfolio")
+            # Try v2 API first (shows retail/consumer balances)
+            try:
+                import requests
+                import time
+                import jwt
+                from cryptography.hazmat.primitives import serialization
+                
+                api_key = os.getenv("COINBASE_API_KEY")
+                api_secret = os.getenv("COINBASE_API_SECRET")
+                
+                # Normalize PEM
+                if '\\n' in api_secret:
+                    api_secret = api_secret.replace('\\n', '\n')
+                
+                private_key = serialization.load_pem_private_key(api_secret.encode('utf-8'), password=None)
+                
+                # Make v2 API call
+                uri = "GET api.coinbase.com/v2/accounts"
+                payload = {
+                    'sub': api_key,
+                    'iss': 'coinbase-cloud',
+                    'nbf': int(time.time()),
+                    'exp': int(time.time()) + 120,
+                    'aud': ['coinbase-apis'],
+                    'uri': uri
+                }
+                token = jwt.encode(payload, private_key, algorithm='ES256', 
+                                  headers={'kid': api_key, 'nonce': str(int(time.time()))})
+                headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+                response = requests.get(f"https://api.coinbase.com/v2/accounts", headers=headers)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    v2_accounts = data.get('data', [])
+                    logging.info(f"📋 Using v2 API - found {len(v2_accounts)} accounts")
+                    
+                    for acc in v2_accounts:
+                        currency = acc.get('currency', {}).get('code', '')
+                        balance_data = acc.get('balance', {})
+                        amount = float(balance_data.get('amount', 0))
+                        
+                        if currency == 'USD':
+                            usd_balance += amount
+                            if amount > 0:
+                                logging.info(f"   ✅ USD: ${amount:.2f} ({acc.get('name', 'Unknown')})")
+                        elif currency == 'USDC':
+                            usdc_balance += amount
+                            if amount > 0:
+                                logging.info(f"   ✅ USDC: ${amount:.2f} ({acc.get('name', 'Unknown')})")
+                        elif amount > 0:
+                            crypto_holdings[currency] = amount
+                else:
+                    logging.warning(f"v2 API returned {response.status_code}, falling back to v3")
+                    raise Exception("v2 API failed")
+                    
+            except Exception as v2_error:
+                logging.warning(f"v2 API unavailable ({v2_error}), using v3 brokerage API")
+                # Fall back to v3 API
+                accounts_resp = self.client.list_accounts() if hasattr(self.client, 'list_accounts') else self.client.get_accounts()
+                accounts = getattr(accounts_resp, 'accounts', [])
+                logging.info(f"📁 Retrieved {len(accounts)} account(s) from v3 API")
 
-            for account in accounts:
-                currency = getattr(account, 'currency', None)
-                available_obj = getattr(account, 'available_balance', None)
-                available = float(getattr(available_obj, 'value', 0) or 0)
+                for account in accounts:
+                    currency = getattr(account, 'currency', None)
+                    available_obj = getattr(account, 'available_balance', None)
+                    available = float(getattr(available_obj, 'value', 0) or 0)
 
-                # Accept ALL USD and USDC balances (including CONSUMER)
-                if currency == "USD":
-                    usd_balance += available
-                    logging.info(f"   ✅ USD: ${available:.2f}")
-                elif currency == "USDC":
-                    usdc_balance += available
-                    logging.info(f"   ✅ USDC: ${available:.2f}")
-                elif available > 0:
-                    crypto_holdings[currency] = available
+                    # Accept ALL USD and USDC balances (including CONSUMER)
+                    if currency == "USD":
+                        usd_balance += available
+                        logging.info(f"   ✅ USD: ${available:.2f}")
+                    elif currency == "USDC":
+                        usdc_balance += available
+                        logging.info(f"   ✅ USDC: ${available:.2f}")
+                    elif available > 0:
+                        crypto_holdings[currency] = available
 
             trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
 
