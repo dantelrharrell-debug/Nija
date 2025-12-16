@@ -156,82 +156,27 @@ class CoinbaseBroker(BaseBroker):
 
             for account in accounts:
                 currency = getattr(account, 'currency', None)
-                account_name = (getattr(account, 'name', '') or '').lower()
-                platform = getattr(account, 'platform', None)
-
                 available_obj = getattr(account, 'available_balance', None)
-                hold_obj = getattr(account, 'hold', None)
                 available = float(getattr(available_obj, 'value', 0) or 0)
-                held = float(getattr(hold_obj, 'value', 0) or 0)
 
-                logging.info(
-                    f"   🔍 {currency} | name={getattr(account, 'name', None)} | platform={platform} "
-                    f"| avail={available:.2f} | held={held:.2f}"
-                )
-
-                if currency == "USDC":
+                # Accept ALL USD and USDC balances (including CONSUMER)
+                if currency == "USD":
+                    usd_balance += available
+                    logging.info(f"   ✅ USD: ${available:.2f}")
+                elif currency == "USDC":
                     usdc_balance += available
-                    logging.info(f"      ✅ USDC INCLUDED: ${available:.2f}")
-                elif currency == "USD":
-                    usd_eligible = (
-                        "spot" in account_name or
-                        "cbi" in account_name or
-                        platform != "ACCOUNT_PLATFORM_CONSUMER" or
-                        self.allow_consumer_usd
-                    )
-                    if usd_eligible:
-                        usd_balance += available
-                        reasons = []
-                        if "spot" in account_name:
-                            reasons.append("spot wallet")
-                        if "cbi" in account_name:
-                            reasons.append("CBI account")
-                        if platform != "ACCOUNT_PLATFORM_CONSUMER":
-                            reasons.append(f"platform={platform}")
-                        if self.allow_consumer_usd and platform == "ACCOUNT_PLATFORM_CONSUMER":
-                            reasons.append("ALLOW_CONSUMER_USD=true")
-                        reason_str = ", ".join(reasons) if reasons else "default"
-                        logging.info(f"      ✅ USD INCLUDED: ${available:.2f} (reason: {reason_str})")
-                    else:
-                        logging.warning(
-                            f"      ⚠️ USD SKIPPED: ${available:.2f} (Consumer platform, ALLOW_CONSUMER_USD not enabled)"
-                        )
-                elif currency not in ["USD", "USDC"] and available > 0:
+                    logging.info(f"   ✅ USDC: ${available:.2f}")
+                elif available > 0:
                     crypto_holdings[currency] = available
-                    logging.info(f"      💎 CRYPTO: {currency} = {available:.8f}")
 
             trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
 
             logging.info("=" * 70)
-            logging.info("💰 FINAL BALANCE SUMMARY:")
-            logging.info(f"   USDC Balance:    ${usdc_balance:.2f}")
-            logging.info(f"   USD Balance:     ${usd_balance:.2f}")
-            logging.info(f"   Trading Balance: ${trading_balance:.2f}")
-            if crypto_holdings:
-                logging.info(f"   Crypto Holdings: {len(crypto_holdings)} assets")
+            logging.info("💰 TOTAL BALANCE:")
+            logging.info(f"   USD:  ${usd_balance:.2f}")
+            logging.info(f"   USDC: ${usdc_balance:.2f}")
+            logging.info(f"   TRADING BALANCE: ${trading_balance:.2f}")
             logging.info("=" * 70)
-
-            try:
-                logging.info("📋 FULL ACCOUNT INVENTORY (USD/USDC only):")
-                all_resp = self.client.get_accounts()
-                all_accounts = getattr(all_resp, 'accounts', [])
-                found_usd_usdc = False
-                for account in all_accounts:
-                    curr = getattr(account, 'currency', None)
-                    name = getattr(account, 'name', None)
-                    platform = getattr(account, 'platform', None)
-                    available_val = float(getattr(getattr(account, 'available_balance', None), 'value', 0) or 0)
-                    held_val = float(getattr(getattr(account, 'hold', None), 'value', 0) or 0)
-                    if curr in ["USD", "USDC"]:
-                        found_usd_usdc = True
-                        logging.info(f"   {curr} | name={name} | platform={platform} | avail={available_val:.2f} | held={held_val:.2f}")
-                if not found_usd_usdc:
-                    logging.info("   ⚠️ NO USD/USDC ACCOUNTS FOUND in default account list")
-                    if trading_balance == 0:
-                        logging.info("💼 PORTFOLIO SUMMARY (all portfolios):")
-                        self._dump_portfolio_summary()
-            except Exception as dump_err:
-                logging.warning(f"⚠️ Account inventory dump failed: {dump_err}")
 
             return {
                 "usdc": usdc_balance,

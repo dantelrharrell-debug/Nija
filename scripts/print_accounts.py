@@ -45,15 +45,21 @@ def main() -> None:
     api_secret = get_env("COINBASE_API_SECRET")
     
     # Normalize PEM key if it has escaped newlines
-    if api_secret and '\\n' in api_secret:
+    if '\\n' in api_secret:
         api_secret = api_secret.replace('\\n', '\n')
+        print("🔧 Normalized PEM newlines in API secret")
 
     print(f"🔐 Coinbase Advanced Trade Authentication")
     print(f"   API Key: {'✅ Set' if api_key else '❌ Missing'}")
-    print(f"   API Secret: {'✅ Set' if api_secret else '❌ Missing'}")
+    print(f"   API Secret: {'✅ Set ({len(api_secret)} chars)' if api_secret else '❌ Missing'}")
     print()
 
-    client = RESTClient(api_key=api_key, api_secret=api_secret)
+    try:
+        client = RESTClient(api_key=api_key, api_secret=api_secret)
+    except Exception as e:
+        print(f"ERROR: Failed to create REST client: {e}", file=sys.stderr)
+        print(f"API Secret starts with: {api_secret[:50]}...", file=sys.stderr)
+        sys.exit(2)
     
     try:
         print("📡 Calling GET /v3/accounts...")

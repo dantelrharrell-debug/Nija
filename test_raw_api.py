@@ -10,11 +10,22 @@ import json
 import time
 import jwt
 import requests
-from dotenv import load_dotenv
 from cryptography.hazmat.primitives import serialization
 
+# Load .env file manually
+if os.path.isfile(".env"):
+    with open(".env") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key not in os.environ:
+                os.environ[key] = value
+
 # Load credentials
-load_dotenv()
 api_key = os.getenv("COINBASE_API_KEY")
 api_secret = os.getenv("COINBASE_API_SECRET")
 

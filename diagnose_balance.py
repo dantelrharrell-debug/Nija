@@ -6,11 +6,22 @@ Checks all portfolios, all accounts, and raw API responses
 
 import os
 import sys
-from dotenv import load_dotenv
 from coinbase.rest import RESTClient
 
+# Load .env file manually
+if os.path.isfile(".env"):
+    with open(".env") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key not in os.environ:
+                os.environ[key] = value
+
 # Load credentials
-load_dotenv()
 api_key = os.getenv("COINBASE_API_KEY")
 api_secret = os.getenv("COINBASE_API_SECRET")
 
@@ -18,13 +29,20 @@ if not api_key or not api_secret:
     print("❌ Missing COINBASE_API_KEY or COINBASE_API_SECRET")
     sys.exit(1)
 
-# Normalize PEM newlines
-if '\\n' in api_secret:
-    api_secret = api_secret.replace('\\n', '\n')
-
 print("=" * 80)
 print("🔍 COINBASE BALANCE DIAGNOSTICS")
 print("=" * 80)
+print(f"API Key length: {len(api_key)}")
+print(f"API Secret length: {len(api_secret)}")
+print(f"API Secret preview: {api_secret[:50]}...")
+print()
+
+# Normalize PEM newlines - CRITICAL for SDK to parse the key
+if '\\n' in api_secret:
+    print("⚠️  Found escaped newlines in API_SECRET - normalizing...")
+    api_secret = api_secret.replace('\\n', '\n')
+    print(f"✅ Normalized to {api_secret.count(chr(10))} actual newlines")
+print()
 
 try:
     client = RESTClient(api_key=api_key, api_secret=api_secret)
