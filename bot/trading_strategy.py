@@ -535,15 +535,34 @@ To enable trading:
             logger.info("🔁 Running trading loop iteration")
             self.account_balance = self.get_usd_balance()
             logger.info(f"USD Balance (get_usd_balance): ${self.account_balance:,.2f}")
+            
+            # Fetch ALL available trading pairs dynamically if not set
+            if self.all_markets_mode and not self.trading_pairs:
+                self.trading_pairs = self._fetch_all_markets()
+                logger.info(f"🌍 Fetched {len(self.trading_pairs)} markets dynamically")
+            elif not self.trading_pairs:
+                # Fallback to default pairs if market fetch fails
+                self.trading_pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
+                logger.warning(f"⚠️ Using fallback trading pairs: {len(self.trading_pairs)} pairs")
+
+            # Check for growth stage changes
+            stage_changed, new_config = self.growth_manager.update_stage(self.account_balance)
+            if stage_changed:
+                logger.info("🔄 Reinitializing strategy with new growth stage parameters...")
+                self.strategy = NIJAApexStrategyV71(
+                    broker_client=self.broker.client,
+                    config={
+                        'min_adx': new_config['min_adx'],
+                        'volume_threshold': new_config['volume_threshold'],
+                        'ai_momentum_enabled': False
+                    }
+                )
+                logger.info("✅ Strategy updated for new growth stage!")
 
             # Guard: if no trading balance, do not attempt orders
             if not self.account_balance or self.account_balance <= 0:
                 logger.warning("🚫 No USD/USDC trading balance detected. Skipping trade execution this cycle.")
                 logger.warning("👉 Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
-                # Continue with analysis-only logging for visibility
-                for symbol in self.trading_pairs:
-                    analysis = self.analyze_symbol(symbol)
-                    logger.info(f"Symbol: {symbol}, Signal: {analysis.get('signal')}, Reason: {analysis.get('reason')}")
                 return
 
             for symbol in self.trading_pairs:
