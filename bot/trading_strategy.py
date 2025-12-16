@@ -163,8 +163,8 @@ To enable trading:
             raise
         
         # Trading configuration - SCAN ALL MARKETS
-        self.trading_pairs = None  # Will be fetched dynamically from Coinbase
-        self.all_markets_mode = True  # Trade ALL available crypto pairs
+        self.trading_pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']  # Initial default
+        self.all_markets_mode = True  # Trade ALL available crypto pairs (fetched dynamically)
         self.timeframe = '5m'
         self.min_candles_required = 80
         self.max_consecutive_losses = 3
@@ -530,7 +530,7 @@ To enable trading:
             logger.warning(f"Failed to log trade: {e}")
 
     def run_cycle(self):
-        """Run a lightweight trading cycle used by the main loop."""
+        """Run a lightweight trading cycle used by the main loop with dynamic market fetching."""
         try:
             logger.info("🔁 Running trading loop iteration")
             self.account_balance = self.get_usd_balance()
