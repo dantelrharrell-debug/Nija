@@ -33,44 +33,44 @@ class AdaptiveGrowthManager:
     # Define growth stages with their parameters
     GROWTH_STAGES = {
         'ultra_aggressive': {
-            'balance_range': (0, 50),
-            'min_adx': 5,
-            'volume_threshold': 0.05,  # 5% volume
-            'filter_agreement': 3,  # 3/5 filters
-            'min_position_pct': 0.05,  # 5%
-            'max_position_pct': 0.25,  # 25%
-            'max_exposure': 0.50,  # 50%
-            'description': 'ULTRA AGGRESSIVE - Maximum growth mode'
+            'balance_range': (0, 300),  # EXTENDED: Stay ultra-aggressive until $300
+            'min_adx': 0,  # REMOVED: Accept any trend strength
+            'volume_threshold': 0.0,  # REMOVED: Accept any volume
+            'filter_agreement': 2,  # LOWERED: Only 2/5 filters needed
+            'min_position_pct': 0.08,  # INCREASED: 8% minimum
+            'max_position_pct': 0.40,  # INCREASED: 40% maximum per trade
+            'max_exposure': 0.90,  # INCREASED: 90% total exposure
+            'description': 'ULTRA AGGRESSIVE - Maximum growth mode (15-DAY GOAL)'
         },
         'aggressive': {
-            'balance_range': (50, 200),
+            'balance_range': (300, 1000),
+            'min_adx': 5,  # LOWERED: More trades
+            'volume_threshold': 0.05,  # LOWERED: 5% volume
+            'filter_agreement': 2,  # LOWERED: 2/5 filters
+            'min_position_pct': 0.05,  # 5%
+            'max_position_pct': 0.30,  # INCREASED: 30%
+            'max_exposure': 0.60,  # INCREASED: 60%
+            'description': 'AGGRESSIVE - Building capital (15-DAY GOAL)'
+        },
+        'moderate': {
+            'balance_range': (1000, 3000),
             'min_adx': 10,
             'volume_threshold': 0.10,  # 10% volume
             'filter_agreement': 3,  # 3/5 filters
             'min_position_pct': 0.04,  # 4%
             'max_position_pct': 0.20,  # 20%
-            'max_exposure': 0.40,  # 40%
-            'description': 'AGGRESSIVE - Building capital'
-        },
-        'moderate': {
-            'balance_range': (200, 500),
-            'min_adx': 15,
-            'volume_threshold': 0.15,  # 15% volume
-            'filter_agreement': 4,  # 4/5 filters
-            'min_position_pct': 0.03,  # 3%
-            'max_position_pct': 0.15,  # 15%
-            'max_exposure': 0.30,  # 30%
-            'description': 'MODERATE - Protecting gains'
+            'max_exposure': 0.50,  # 50%
+            'description': 'MODERATE - Approaching goal'
         },
         'conservative': {
-            'balance_range': (500, float('inf')),
-            'min_adx': 20,
-            'volume_threshold': 0.20,  # 20% volume
-            'filter_agreement': 4,  # 4/5 filters
-            'min_position_pct': 0.02,  # 2%
-            'max_position_pct': 0.10,  # 10%
-            'max_exposure': 0.25,  # 25%
-            'description': 'CONSERVATIVE - Sustainable income'
+            'balance_range': (3000, float('inf')),
+            'min_adx': 15,
+            'volume_threshold': 0.15,  # 15% volume
+            'filter_agreement': 3,  # 3/5 filters
+            'min_position_pct': 0.03,  # 3%
+            'max_position_pct': 0.15,  # 15%
+            'max_exposure': 0.40,  # 40%
+            'description': 'CONSERVATIVE - Goal reached, protect gains'
         }
     }
     

@@ -154,7 +154,7 @@ To enable trading:
                 config={
                     'min_adx': growth_config['min_adx'],
                     'volume_threshold': growth_config['volume_threshold'],
-                    'ai_momentum_enabled': False
+                    'ai_momentum_enabled': True  # ENABLED for 15-day goal
                 }
             )
             logger.info("🔥 APEX strategy initialized successfully")
@@ -466,14 +466,19 @@ To enable trading:
                     logger.info(f"Skipping {symbol}: Too soon since last trade ({time_since_last:.1f}s)")
                     return False
             
+            # Check max concurrent positions limit
+            if len(self.open_positions) >= self.max_concurrent_positions:
+                logger.info(f"Skipping {symbol}: Max {self.max_concurrent_positions} positions already open")
+                return False
+            
+            # Skip if THIS symbol already has a position
+            if symbol in self.open_positions:
+                logger.info(f"Skipping {symbol}: Position already open for this symbol")
+                return False
+            
             # Calculate position size (2-3% of account per trade)
             position_size_pct = 0.02
             position_size_usd = self.account_balance * position_size_pct
-            
-            # Skip if position already open
-            if symbol in self.open_positions:
-                logger.info(f"Skipping {symbol}: Position already open")
-                return False
             
             logger.info(f"🔄 Executing {signal} for {symbol}")
             logger.info(f"   Price: ${analysis.get('price', 'N/A')}")
@@ -726,7 +731,7 @@ To enable trading:
                     config={
                         'min_adx': new_config['min_adx'],
                         'volume_threshold': new_config['volume_threshold'],
-                        'ai_momentum_enabled': False
+                        'ai_momentum_enabled': True  # ENABLED for 15-day goal
                     }
                 )
                 logger.info("✅ Strategy updated for new growth stage!")
@@ -776,7 +781,7 @@ To enable trading:
                     config={
                         'min_adx': new_config['min_adx'],
                         'volume_threshold': new_config['volume_threshold'],
-                        'ai_momentum_enabled': False
+                        'ai_momentum_enabled': True  # ENABLED for 15-day goal
                     }
                 )
                 logger.info("✅ Strategy updated for new growth stage!")

@@ -60,7 +60,7 @@ def main():
                 cycle_count += 1
                 logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
                 strategy.run_cycle()
-                time.sleep(30)  # Increased from 15s to reduce API rate limiting
+                time.sleep(15)  # ULTRA AGGRESSIVE: Faster scanning for 15-day goal
             except KeyboardInterrupt:
                 logger.info("Trading bot stopped by user (Ctrl+C)")
                 break
