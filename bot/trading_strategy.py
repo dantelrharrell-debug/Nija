@@ -177,7 +177,7 @@ To enable trading:
         self.trade_history = []
         self.consecutive_losses = 0
         self.last_trade_time = None
-        self.min_time_between_trades = 3  # Reduced from 5s to 3s for faster trading
+        self.min_time_between_trades = 0.5  # ULTRA AGGRESSIVE: 0.5s cooldown for rapid 5-position fills
         
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
