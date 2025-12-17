@@ -31,6 +31,8 @@ from mock_broker import MockBroker
 from nija_apex_strategy_v71 import NIJAApexStrategyV71
 from adaptive_growth_manager import AdaptiveGrowthManager
 from trade_analytics import TradeAnalytics
+from position_manager import PositionManager
+from retry_handler import retry_handler
 from indicators import calculate_vwap, calculate_ema, calculate_rsi, calculate_macd, calculate_atr, calculate_adx
 
 class TradingStrategy:
@@ -103,6 +105,10 @@ class TradingStrategy:
         # Initialize analytics tracker
         self.analytics = TradeAnalytics()
         logger.info("📊 Trade analytics initialized")
+        
+        # Initialize position manager
+        self.position_manager = PositionManager()
+        logger.info("💾 Position manager initialized")
         
         # Get account balance
         logger.info("🔥 Starting balance fetch...")
@@ -178,6 +184,15 @@ To enable trading:
         self.open_positions = {}
         self.max_concurrent_positions = 8  # ULTRA AGGRESSIVE: 8 positions for max diversification
         self.total_trades_executed = 0
+        
+        # Load saved positions from previous session
+        loaded_positions = self.position_manager.load_positions()
+        if loaded_positions:
+            logger.info(f"💾 Validating {len(loaded_positions)} saved positions...")
+            self.open_positions = self.position_manager.validate_positions(
+                loaded_positions, self.broker
+            )
+            logger.info(f"✅ Restored {len(self.open_positions)} valid positions")
         
         # Export trade history daily
         self._last_export_day = datetime.now().day
@@ -486,16 +501,26 @@ To enable trading:
             logger.info(f"   Position size: ${position_size_usd:,.2f}")
             logger.info(f"   Reason: {analysis['reason']}")
             
-            # Place market order
+            # Place market order with retry handling
             try:
                 expected_price = analysis.get('price')
                 
-                if signal == 'BUY':
-                    order = self.broker.place_market_order(symbol, 'buy', position_size_usd)
-                else:
-                    # For sell, we need quantity not USD
-                    quantity = position_size_usd / expected_price
-                    order = self.broker.place_market_order(symbol, 'sell', quantity)
+                # Wrap order placement in retry handler
+                @retry_handler.retry_on_failure(f"place_order_{symbol}_{signal}")
+                def place_order_with_retry():
+                    if signal == 'BUY':
+                        return self.broker.place_market_order(symbol, 'buy', position_size_usd)
+                    else:
+                        # For sell, we need quantity not USD
+                        quantity = position_size_usd / expected_price
+                        return self.broker.place_market_order(symbol, 'sell', quantity)
+                
+                # Execute with automatic retries
+                order = place_order_with_retry()
+                
+                # Check for partial fills
+                expected_size = position_size_usd if signal == 'BUY' else (position_size_usd / expected_price)
+                order = retry_handler.handle_partial_fill(order, expected_size)
                 
                 if order.get('status') == 'filled':
                     # Get actual fill price (use expected if not available)
@@ -545,6 +570,10 @@ To enable trading:
                     }
                     
                     self.last_trade_time = time.time()
+                    
+                    # Save positions to file (crash recovery)
+                    self.position_manager.save_positions(self.open_positions)
+                    
                     logger.info(f"✅ Trade executed: {symbol} {signal}")
                     logger.info(f"   Entry: ${entry_price:.2f}")
                     logger.info(f"   Stop Loss: ${stop_loss:.2f} (-{stop_loss_pct*100}%)")
@@ -658,14 +687,24 @@ To enable trading:
                     logger.info(f"🔄 Closing {symbol} position: {exit_reason}")
                     logger.info(f"   Exit price: ${current_price:.2f} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
                     
-                    # Close position
+                    # Close position with retry handling
                     exit_signal = 'SELL' if side == 'BUY' else 'BUY'
                     try:
                         # Calculate quantity to close
                         quantity = position['size_usd'] / current_price
-                        order = self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
                         
-                        if order.get('status') == 'filled':
+                        # Wrap exit order in retry handler
+                        @retry_handler.retry_on_failure(f"close_position_{symbol}")
+                        def close_position_with_retry():
+                            return self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
+                        
+                        # Execute with automatic retries
+                        order = close_position_with_retry()
+                        
+                        # Check for partial fills
+                        order = retry_handler.handle_partial_fill(order, quantity)
+                        
+                        if order.get('status') in ['filled', 'partial']:
                             # Record exit with analytics (includes fee calculation)
                             self.analytics.record_exit(
                                 symbol=symbol,
@@ -685,6 +724,12 @@ To enable trading:
                             
                             positions_to_close.append(symbol)
                             self.total_trades_executed += 1
+                            
+                            # Warn if partial fill
+                            if order.get('partial_fill'):
+                                logger.warning(
+                                    f"⚠️  Partial exit: {order.get('filled_pct', 0):.1f}% filled"
+                                )
                         else:
                             logger.warning(f"Failed to close {symbol}: {order.get('error')}")
                     
@@ -699,6 +744,8 @@ To enable trading:
             del self.open_positions[symbol]
         
         if positions_to_close:
+            # Save updated positions to file (crash recovery)
+            self.position_manager.save_positions(self.open_positions)
             logger.info(f"✅ Closed {len(positions_to_close)} position(s)")
     
     def log_trade(self, symbol: str, side: str, price: float, size_usd: float):
