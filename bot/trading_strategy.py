@@ -218,8 +218,8 @@ To enable trading:
             'SAND-USD', 'MANA-USD', 'AXS-USD', 'XLM-USD', 'EOS-USD',
             'FLOW-USD', 'XTZ-USD', 'CHZ-USD', 'IMX-USD', 'LRC-USD',
             'CRV-USD', 'COMP-USD', 'SNX-USD', 'MKR-USD', 'SUSHI-USD',
-            '1INCH-USD', 'BAT-USD', 'ZRX-USD', 'YFI-USD', 'TRX-USD',
-            'SHIB-USD', 'PEPE-USD', 'FET-USD', 'INJ-USD', 'RENDER-USD'
+            '1INCH-USD', 'BAT-USD', 'ZRX-USD', 'YFI-USD', 'SHIB-USD',
+            'PEPE-USD', 'FET-USD', 'INJ-USD', 'RENDER-USD'
         ]
         
         logger.info(f"✅ Using curated list of {len(top_markets)} high-volume markets")
