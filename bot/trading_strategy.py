@@ -207,19 +207,19 @@ To enable trading:
         Returns:
             List of trading pair symbols (e.g., ['BTC-USD', 'ETH-USD', ...])
         """
-        # ULTRA AGGRESSIVE: Top 50 high-volume crypto pairs for maximum opportunities
+        # ULTRA AGGRESSIVE: Top 50 verified Coinbase high-volume crypto pairs
         # Using curated list instead of API fetch to avoid timeout issues
         top_markets = [
             'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD',
-            'AVAX-USD', 'DOGE-USD', 'MATIC-USD', 'DOT-USD', 'LINK-USD',
-            'UNI-USD', 'ATOM-USD', 'LTC-USD', 'NEAR-USD', 'BCH-USD',
-            'APT-USD', 'FIL-USD', 'ARB-USD', 'OP-USD', 'ICP-USD',
-            'ALGO-USD', 'VET-USD', 'HBAR-USD', 'QNT-USD', 'AAVE-USD',
-            'GRT-USD', 'ETC-USD', 'SAND-USD', 'MANA-USD', 'AXS-USD',
-            'THETA-USD', 'XLM-USD', 'EOS-USD', 'FLOW-USD', 'XTZ-USD',
-            'CHZ-USD', 'GALA-USD', 'ENJ-USD', 'IMX-USD', 'LRC-USD',
+            'AVAX-USD', 'DOGE-USD', 'DOT-USD', 'LINK-USD', 'UNI-USD',
+            'ATOM-USD', 'LTC-USD', 'NEAR-USD', 'BCH-USD', 'APT-USD',
+            'FIL-USD', 'ARB-USD', 'OP-USD', 'ICP-USD', 'ALGO-USD',
+            'VET-USD', 'HBAR-USD', 'AAVE-USD', 'GRT-USD', 'ETC-USD',
+            'SAND-USD', 'MANA-USD', 'AXS-USD', 'XLM-USD', 'EOS-USD',
+            'FLOW-USD', 'XTZ-USD', 'CHZ-USD', 'IMX-USD', 'LRC-USD',
             'CRV-USD', 'COMP-USD', 'SNX-USD', 'MKR-USD', 'SUSHI-USD',
-            '1INCH-USD', 'BAT-USD', 'ZRX-USD', 'YFI-USD', 'RUNE-USD'
+            '1INCH-USD', 'BAT-USD', 'ZRX-USD', 'YFI-USD', 'TRX-USD',
+            'SHIB-USD', 'PEPE-USD', 'FET-USD', 'INJ-USD', 'RENDER-USD'
         ]
         
         logger.info(f"✅ Using curated list of {len(top_markets)} high-volume markets")
