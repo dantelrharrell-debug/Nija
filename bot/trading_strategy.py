@@ -30,6 +30,7 @@ from broker_manager import CoinbaseBroker
 from mock_broker import MockBroker
 from nija_apex_strategy_v71 import NIJAApexStrategyV71
 from adaptive_growth_manager import AdaptiveGrowthManager
+from trade_analytics import TradeAnalytics
 from indicators import calculate_vwap, calculate_ema, calculate_rsi, calculate_macd, calculate_atr, calculate_adx
 
 class TradingStrategy:
@@ -98,6 +99,10 @@ class TradingStrategy:
         
         logger.info("🔥 Broker connected, about to fetch balance...")
         print("🔥 BROKER CONNECTED, CALLING get_account_balance() NEXT", flush=True)
+        
+        # Initialize analytics tracker
+        self.analytics = TradeAnalytics()
+        logger.info("📊 Trade analytics initialized")
         
         # Get account balance
         logger.info("🔥 Starting balance fetch...")
@@ -173,6 +178,9 @@ To enable trading:
         self.open_positions = {}
         self.max_concurrent_positions = 8  # ULTRA AGGRESSIVE: 8 positions for max diversification
         self.total_trades_executed = 0
+        
+        # Export trade history daily
+        self._last_export_day = datetime.now().day
         self.winning_trades = 0
         self.trade_history = []
         self.consecutive_losses = 0
@@ -480,19 +488,24 @@ To enable trading:
             
             # Place market order
             try:
+                expected_price = analysis.get('price')
+                
                 if signal == 'BUY':
                     order = self.broker.place_market_order(symbol, 'buy', position_size_usd)
                 else:
                     # For sell, we need quantity not USD
-                    quantity = position_size_usd / analysis.get('price', 1.0)
+                    quantity = position_size_usd / expected_price
                     order = self.broker.place_market_order(symbol, 'sell', quantity)
                 
                 if order.get('status') == 'filled':
+                    # Get actual fill price (use expected if not available)
+                    actual_fill_price = expected_price  # TODO: Extract from order response
+                    
                     # Log trade to journal
-                    self.log_trade(symbol, signal, analysis.get('price'), position_size_usd)
+                    self.log_trade(symbol, signal, actual_fill_price, position_size_usd)
                     
                     # Calculate stop loss and take profit levels
-                    entry_price = analysis.get('price')
+                    entry_price = actual_fill_price
                     stop_loss_pct = 0.02  # 2% stop loss
                     take_profit_pct = 0.06  # 6% take profit (3:1 risk/reward)
                     
@@ -505,6 +518,18 @@ To enable trading:
                         take_profit = entry_price * (1 - take_profit_pct)
                         trailing_stop = stop_loss
                     
+                    # Record entry with analytics (includes fee tracking)
+                    trade_id = self.analytics.record_entry(
+                        symbol=symbol,
+                        side=signal,
+                        price=entry_price,
+                        size_usd=position_size_usd,
+                        expected_price=expected_price,
+                        actual_fill_price=actual_fill_price,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit
+                    )
+                    
                     # Track position with risk management levels
                     self.open_positions[symbol] = {
                         'side': signal,
@@ -515,7 +540,8 @@ To enable trading:
                         'take_profit': take_profit,
                         'trailing_stop': trailing_stop,
                         'highest_price': entry_price if signal == 'BUY' else None,
-                        'lowest_price': entry_price if signal == 'SELL' else None
+                        'lowest_price': entry_price if signal == 'SELL' else None,
+                        'trade_id': trade_id
                     }
                     
                     self.last_trade_time = time.time()
@@ -640,6 +666,13 @@ To enable trading:
                         order = self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
                         
                         if order.get('status') == 'filled':
+                            # Record exit with analytics (includes fee calculation)
+                            self.analytics.record_exit(
+                                symbol=symbol,
+                                exit_price=current_price,
+                                exit_reason=exit_reason
+                            )
+                            
                             # Log closing trade
                             self.log_trade(symbol, exit_signal, current_price, position['size_usd'])
                             
@@ -818,6 +851,25 @@ To enable trading:
                     logger.debug(f"   ⏸️ {symbol}: {analysis['signal']}")
             
             logger.info(f"✅ Trading cycle complete. Open positions: {len(self.open_positions)}")
+            
+            # Print performance report every 10 cycles (or after first trade)
+            if hasattr(self, '_cycle_count'):
+                self._cycle_count += 1
+            else:
+                self._cycle_count = 1
+            
+            if self._cycle_count % 10 == 0 or self.total_trades_executed > 0:
+                self.analytics.print_session_report()
+            
+            # Export trade history daily
+            current_day = datetime.now().day
+            if current_day != self._last_export_day:
+                try:
+                    export_path = self.analytics.export_to_csv()
+                    logger.info(f"📄 Daily export completed: {export_path}")
+                    self._last_export_day = current_day
+                except Exception as e:
+                    logger.warning(f"Daily export failed: {e}")
             logger.info("=" * 60)
             
         except Exception as e:
