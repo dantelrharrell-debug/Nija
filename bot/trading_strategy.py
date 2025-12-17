@@ -201,39 +201,29 @@ To enable trading:
     
     def _fetch_all_markets(self) -> list:
         """
-        Fetch ALL available cryptocurrency trading pairs from Coinbase
+        Fetch top cryptocurrency trading pairs from Coinbase
+        Using curated list to avoid API timeout issues
         
         Returns:
             List of trading pair symbols (e.g., ['BTC-USD', 'ETH-USD', ...])
         """
-        try:
-            # Get all products from Coinbase
-            products = self.broker.client.get_products()
-            
-            if not products or 'products' not in products:
-                logger.warning("Failed to fetch markets, falling back to default pairs")
-                return ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
-            
-            # Filter for USD pairs only (quote currency = USD or USDC)
-            usd_pairs = []
-            for product in products['products']:
-                product_id = product.get('product_id', '')
-                quote_currency = product.get('quote_currency_id', '')
-                status = product.get('status', '')
-                
-                # Only include active USD/USDC pairs
-                if (quote_currency in ['USD', 'USDC'] and 
-                    status == 'online' and 
-                    product_id):
-                    usd_pairs.append(product_id)
-            
-            logger.info(f"✅ Fetched {len(usd_pairs)} active USD/USDC trading pairs")
-            return usd_pairs
-            
-        except Exception as e:
-            logger.error(f"Error fetching markets: {e}")
-            logger.warning("Falling back to default trading pairs")
-            return ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
+        # ULTRA AGGRESSIVE: Top 50 high-volume crypto pairs for maximum opportunities
+        # Using curated list instead of API fetch to avoid timeout issues
+        top_markets = [
+            'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD',
+            'AVAX-USD', 'DOGE-USD', 'MATIC-USD', 'DOT-USD', 'LINK-USD',
+            'UNI-USD', 'ATOM-USD', 'LTC-USD', 'NEAR-USD', 'BCH-USD',
+            'APT-USD', 'FIL-USD', 'ARB-USD', 'OP-USD', 'ICP-USD',
+            'ALGO-USD', 'VET-USD', 'HBAR-USD', 'QNT-USD', 'AAVE-USD',
+            'GRT-USD', 'ETC-USD', 'SAND-USD', 'MANA-USD', 'AXS-USD',
+            'THETA-USD', 'XLM-USD', 'EOS-USD', 'FLOW-USD', 'XTZ-USD',
+            'CHZ-USD', 'GALA-USD', 'ENJ-USD', 'IMX-USD', 'LRC-USD',
+            'CRV-USD', 'COMP-USD', 'SNX-USD', 'MKR-USD', 'SUSHI-USD',
+            '1INCH-USD', 'BAT-USD', 'ZRX-USD', 'YFI-USD', 'RUNE-USD'
+        ]
+        
+        logger.info(f"✅ Using curated list of {len(top_markets)} high-volume markets")
+        return top_markets
     
     def fetch_candles(self, symbol: str) -> pd.DataFrame:
         """
