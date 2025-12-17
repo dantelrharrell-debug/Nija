@@ -718,11 +718,13 @@ To enable trading:
             if self.all_markets_mode and not self.trading_pairs:
                 logger.info("🔍 Fetching all available markets...")
                 all_markets = self._fetch_all_markets()
+                logger.info(f"✅ Market fetch complete: {len(all_markets)} markets returned")
                 
                 # ULTRA AGGRESSIVE: Scan top 50 markets for maximum opportunity
                 # Filter for active USD/USDC pairs with good liquidity
                 self.trading_pairs = all_markets[:50] if len(all_markets) > 50 else all_markets
                 logger.info(f"📊 Scanning {len(self.trading_pairs)} markets for trading opportunities")
+                logger.info(f"   Top 10 markets: {self.trading_pairs[:10]}")
             elif not self.trading_pairs:
                 # Fallback to default pairs if market fetch fails
                 self.trading_pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
@@ -752,11 +754,17 @@ To enable trading:
                 logger.warning("👉 Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
                 return
 
+            logger.info(f"🎯 Analyzing {len(self.trading_pairs)} markets for signals...")
+            signals_found = 0
             for symbol in self.trading_pairs:
                 analysis = self.analyze_symbol(symbol)
-                logger.info(f"Symbol: {symbol}, Signal: {analysis.get('signal')}, Reason: {analysis.get('reason')}")
                 if analysis.get('signal') in ['BUY', 'SELL']:
+                    signals_found += 1
+                    logger.info(f"🔥 SIGNAL: {symbol}, Signal: {analysis.get('signal')}, Reason: {analysis.get('reason')}")
                     self.execute_trade(analysis)
+            
+            if signals_found == 0:
+                logger.info(f"📭 No trade signals found in {len(self.trading_pairs)} markets this cycle")
         except Exception as exc:
             logger.error(f"run_cycle error: {exc}", exc_info=True)
     
