@@ -163,7 +163,7 @@ To enable trading:
             raise
         
         # Trading configuration - SCAN ALL MARKETS
-        self.trading_pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']  # Initial default
+        self.trading_pairs = []  # Will be populated dynamically from Coinbase
         self.all_markets_mode = True  # Trade ALL available crypto pairs (fetched dynamically)
         self.timeframe = '5m'
         self.min_candles_required = 80
@@ -171,12 +171,13 @@ To enable trading:
         
         # Track open positions and trade history
         self.open_positions = {}
+        self.max_concurrent_positions = 5  # ULTRA AGGRESSIVE: Allow 5 simultaneous positions
         self.total_trades_executed = 0
         self.winning_trades = 0
         self.trade_history = []
         self.consecutive_losses = 0
         self.last_trade_time = None
-        self.min_time_between_trades = 5  # seconds
+        self.min_time_between_trades = 3  # Reduced from 5s to 3s for faster trading
         
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
@@ -715,8 +716,13 @@ To enable trading:
             
             # Fetch ALL available trading pairs dynamically if not set
             if self.all_markets_mode and not self.trading_pairs:
-                self.trading_pairs = self._fetch_all_markets()
-                logger.info(f"🌍 Fetched {len(self.trading_pairs)} markets dynamically")
+                logger.info("🔍 Fetching all available markets...")
+                all_markets = self._fetch_all_markets()
+                
+                # ULTRA AGGRESSIVE: Scan top 50 markets for maximum opportunity
+                # Filter for active USD/USDC pairs with good liquidity
+                self.trading_pairs = all_markets[:50] if len(all_markets) > 50 else all_markets
+                logger.info(f"📊 Scanning {len(self.trading_pairs)} markets for trading opportunities")
             elif not self.trading_pairs:
                 # Fallback to default pairs if market fetch fails
                 self.trading_pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
