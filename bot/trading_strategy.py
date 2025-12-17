@@ -407,16 +407,18 @@ To enable trading:
                         'reason': long_reason
                     }
             elif direction == 'downtrend':
-                short_signal, short_score, short_reason = self.strategy.check_short_entry(df, indicators)
-                if short_signal:
-                    return {
-                        'symbol': symbol,
-                        'signal': 'SELL',
-                        'direction': 'downtrend',
-                        'score': short_score,
-                        'price': df['close'].iloc[-1],
-                        'reason': short_reason
-                    }
+                # DISABLED: Coinbase Advanced Trade doesn't support short selling on spot markets
+                # short_signal, short_score, short_reason = self.strategy.check_short_entry(df, indicators)
+                # if short_signal:
+                #     return {
+                #         'symbol': symbol,
+                #         'signal': 'SELL',
+                #         'direction': 'downtrend',
+                #         'score': short_score,
+                #         'price': df['close'].iloc[-1],
+                #         'reason': short_reason
+                #     }
+                pass  # Only BUY signals supported on Coinbase spot trading
             
             return {
                 'symbol': symbol,
