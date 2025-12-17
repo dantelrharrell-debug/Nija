@@ -505,24 +505,34 @@ To enable trading:
             try:
                 expected_price = analysis.get('price')
                 
-                # Wrap order placement in retry handler
-                @retry_handler.retry_on_failure(f"place_order_{symbol}_{signal}")
-                def place_order_with_retry():
-                    if signal == 'BUY':
-                        return self.broker.place_market_order(symbol, 'buy', position_size_usd)
-                    else:
-                        # For sell, we need quantity not USD
-                        quantity = position_size_usd / expected_price
-                        return self.broker.place_market_order(symbol, 'sell', quantity)
+                # Place order with manual retry logic
+                order = None
+                for attempt in range(1, 4):  # 3 attempts
+                    try:
+                        if signal == 'BUY':
+                            order = self.broker.place_market_order(symbol, 'buy', position_size_usd)
+                        else:
+                            # For sell, we need quantity not USD
+                            quantity = position_size_usd / expected_price
+                            order = self.broker.place_market_order(symbol, 'sell', quantity)
+                        
+                        if order:  # Success
+                            break
+                            
+                    except Exception as retry_err:
+                        if attempt < 3:
+                            logger.warning(f"Order attempt {attempt}/3 failed for {symbol}: {retry_err}")
+                            time.sleep(2 * attempt)  # Exponential backoff
+                        else:
+                            logger.error(f"All order attempts failed for {symbol}: {retry_err}")
+                            raise
                 
-                # Execute with automatic retries
-                order = place_order_with_retry()
+                # Check for partial fills if order succeeded
+                if order:
+                    expected_size = position_size_usd if signal == 'BUY' else (position_size_usd / expected_price)
+                    order = retry_handler.handle_partial_fill(order, expected_size)
                 
-                # Check for partial fills
-                expected_size = position_size_usd if signal == 'BUY' else (position_size_usd / expected_price)
-                order = retry_handler.handle_partial_fill(order, expected_size)
-                
-                if order.get('status') == 'filled':
+                if order and order.get('status') in ['filled', 'partial']:
                     # Get actual fill price (use expected if not available)
                     actual_fill_price = expected_price  # TODO: Extract from order response
                     
@@ -693,18 +703,26 @@ To enable trading:
                         # Calculate quantity to close
                         quantity = position['size_usd'] / current_price
                         
-                        # Wrap exit order in retry handler
-                        @retry_handler.retry_on_failure(f"close_position_{symbol}")
-                        def close_position_with_retry():
-                            return self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
+                        # Place exit order with manual retry
+                        order = None
+                        for attempt in range(1, 4):  # 3 attempts
+                            try:
+                                order = self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
+                                if order:  # Success
+                                    break
+                            except Exception as retry_err:
+                                if attempt < 3:
+                                    logger.warning(f"Exit order attempt {attempt}/3 failed for {symbol}: {retry_err}")
+                                    time.sleep(2 * attempt)
+                                else:
+                                    logger.error(f"All exit attempts failed for {symbol}: {retry_err}")
+                                    raise
                         
-                        # Execute with automatic retries
-                        order = close_position_with_retry()
+                        # Check for partial fills if order succeeded
+                        if order:
+                            order = retry_handler.handle_partial_fill(order, quantity)
                         
-                        # Check for partial fills
-                        order = retry_handler.handle_partial_fill(order, quantity)
-                        
-                        if order.get('status') in ['filled', 'partial']:
+                        if order and order.get('status') in ['filled', 'partial']:
                             # Record exit with analytics (includes fee calculation)
                             self.analytics.record_exit(
                                 symbol=symbol,
