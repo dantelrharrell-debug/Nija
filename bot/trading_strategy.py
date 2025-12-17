@@ -171,7 +171,7 @@ To enable trading:
         
         # Track open positions and trade history
         self.open_positions = {}
-        self.max_concurrent_positions = 5  # ULTRA AGGRESSIVE: Allow 5 simultaneous positions
+        self.max_concurrent_positions = 8  # ULTRA AGGRESSIVE: 8 positions for max diversification
         self.total_trades_executed = 0
         self.winning_trades = 0
         self.trade_history = []
