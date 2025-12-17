@@ -57,8 +57,8 @@ class NIJAApexStrategyV71:
         
         # Strategy parameters
         self.min_adx = self.config.get('min_adx', 20)
-        self.volume_threshold = self.config.get('volume_threshold', 0.5)  # 50% of 5-candle avg
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.3)  # 30% for no-trade
+        self.volume_threshold = self.config.get('volume_threshold', 0.3)  # 30% of 5-candle avg (lowered from 50%)
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.2)  # 20% for no-trade (lowered from 30%)
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
@@ -319,13 +319,13 @@ class NIJAApexStrategyV71:
         # For now, this is a placeholder that always passes
         news_clear = True  # Stub: would check upcoming news events here
         
-        # Filter 2: Volume filter (< 30% avg = no trade)
+        # Filter 2: Volume filter (< 20% avg = no trade) - Lowered threshold for better trade opportunities
         avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
         
         if volume_ratio < self.volume_min_threshold:
-            return False, f'Volume too low ({volume_ratio*100:.1f}% of avg)'
+            return False, f'Volume too low ({volume_ratio*100:.1f}% of avg) - threshold: {self.volume_min_threshold*100:.0f}%'
         
         # Filter 3: Candle timing filter (first 6 seconds)
         # Detect new candle by comparing timestamps

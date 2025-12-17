@@ -52,7 +52,7 @@ def main():
         logger.info("Initializing trading strategy...")
         strategy = TradingStrategy()
 
-        logger.info("Starting main trading loop (15s cadence)...")
+        logger.info("Starting main trading loop (30s cadence for API rate limit optimization)...")
         cycle_count = 0
 
         while True:
@@ -60,7 +60,7 @@ def main():
                 cycle_count += 1
                 logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
                 strategy.run_cycle()
-                time.sleep(15)
+                time.sleep(30)  # Increased from 15s to reduce API rate limiting
             except KeyboardInterrupt:
                 logger.info("Trading bot stopped by user (Ctrl+C)")
                 break

@@ -368,38 +368,59 @@ class CoinbaseBroker(BaseBroker):
             return []
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get candle data"""
+        """Get candle data with retry logic for rate limiting"""
         import time
-        try:
-            granularity_map = {
-                "1m": "ONE_MINUTE",
-                "5m": "FIVE_MINUTE",
-                "15m": "FIFTEEN_MINUTE",
-                "1h": "ONE_HOUR",
-                "1d": "ONE_DAY"
-            }
-            
-            granularity = granularity_map.get(timeframe, "FIVE_MINUTE")
-            
-            end = int(time.time())
-            start = end - (300 * count)  # 5 min candles
-            
-            candles = self.client.get_candles(
-                product_id=symbol,
-                start=start,
-                end=end,
-                granularity=granularity
-            )
-            
-            if hasattr(candles, 'candles'):
-                return [vars(c) for c in candles.candles]
-            elif isinstance(candles, dict) and 'candles' in candles:
-                return candles['candles']
-            return []
-            
-        except Exception as e:
-            print(f"Error fetching candles: {e}")
-            return []
+        
+        max_retries = 3
+        retry_delay = 1  # Start with 1 second
+        
+        for attempt in range(max_retries):
+            try:
+                granularity_map = {
+                    "1m": "ONE_MINUTE",
+                    "5m": "FIVE_MINUTE",
+                    "15m": "FIFTEEN_MINUTE",
+                    "1h": "ONE_HOUR",
+                    "1d": "ONE_DAY"
+                }
+                
+                granularity = granularity_map.get(timeframe, "FIVE_MINUTE")
+                
+                end = int(time.time())
+                start = end - (300 * count)  # 5 min candles
+                
+                candles = self.client.get_candles(
+                    product_id=symbol,
+                    start=start,
+                    end=end,
+                    granularity=granularity
+                )
+                
+                if hasattr(candles, 'candles'):
+                    return [vars(c) for c in candles.candles]
+                elif isinstance(candles, dict) and 'candles' in candles:
+                    return candles['candles']
+                return []
+                
+            except Exception as e:
+                error_str = str(e)
+                
+                # Check if rate limited (429 status or rate limit message)
+                is_rate_limited = '429' in error_str or 'rate limit' in error_str.lower() or 'too many' in error_str.lower()
+                
+                if is_rate_limited and attempt < max_retries - 1:
+                    logging.warning(f"Rate limited on {symbol}, retrying in {retry_delay}s (attempt {attempt+1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    if attempt == max_retries - 1:
+                        logging.error(f"Failed to fetch candles for {symbol} after {max_retries} attempts: {e}")
+                    else:
+                        logging.error(f"Error fetching candles for {symbol}: {e}")
+                    return []
+        
+        return []
     
     def supports_asset_class(self, asset_class: str) -> bool:
         """Coinbase supports crypto only"""

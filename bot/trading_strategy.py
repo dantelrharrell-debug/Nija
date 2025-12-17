@@ -180,6 +180,11 @@ To enable trading:
         
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
+        
+        # Price cache to reduce API calls (cache expires after 30 seconds)
+        self._price_cache = {}
+        self._cache_timestamp = {}
+        self._cache_ttl = 30  # seconds
 
     # Alias to align with README wording
     def get_usd_balance(self) -> float:
@@ -231,7 +236,7 @@ To enable trading:
     
     def fetch_candles(self, symbol: str) -> pd.DataFrame:
         """
-        Fetch OHLCV candles for a symbol
+        Fetch OHLCV candles for a symbol with caching to reduce API calls
         
         Args:
             symbol: Trading symbol (e.g., 'BTC-USD')
@@ -240,6 +245,15 @@ To enable trading:
             DataFrame with OHLCV data or None if fetch fails
         """
         try:
+            # Check cache first
+            current_time = time.time()
+            if symbol in self._price_cache:
+                cache_age = current_time - self._cache_timestamp.get(symbol, 0)
+                if cache_age < self._cache_ttl:
+                    logger.debug(f"Using cached data for {symbol} (age: {cache_age:.1f}s)")
+                    return self._price_cache[symbol]
+            
+            # Fetch from API
             raw_candles = self.broker.get_candles(symbol, self.timeframe, self.min_candles_required)
             if not raw_candles or len(raw_candles) < self.min_candles_required:
                 return None
@@ -257,6 +271,11 @@ To enable trading:
             # Sort by time to ensure proper order
             if 'time' in df.columns:
                 df = df.sort_values('time').reset_index(drop=True)
+            
+            # Update cache
+            self._price_cache[symbol] = df
+            self._cache_timestamp[symbol] = current_time
+            logger.debug(f"Cached price data for {symbol}")
             
             return df
         except Exception as e:
@@ -681,6 +700,10 @@ To enable trading:
     def run_cycle(self):
         """Run a lightweight trading cycle used by the main loop with dynamic market fetching."""
         try:
+            # Clear cache at start of each cycle for fresh data
+            self._price_cache.clear()
+            self._cache_timestamp.clear()
+            
             logger.info("🔁 Running trading loop iteration")
             self.account_balance = self.get_usd_balance()
             logger.info(f"USD Balance (get_usd_balance): ${self.account_balance:,.2f}")
