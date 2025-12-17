@@ -52,7 +52,7 @@ def main():
         logger.info("Initializing trading strategy...")
         strategy = TradingStrategy()
 
-        logger.info("Starting main trading loop (30s cadence for API rate limit optimization)...")
+        logger.info("🚀 Starting ULTRA AGGRESSIVE trading loop (15s cadence - 15-DAY GOAL MODE)...")
         cycle_count = 0
 
         while True:
