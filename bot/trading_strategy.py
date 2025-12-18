@@ -510,14 +510,28 @@ To enable trading:
                 for attempt in range(1, 4):  # 3 attempts
                     try:
                         if signal == 'BUY':
-                            order = self.broker.place_market_order(symbol, 'buy', position_size_usd)
+                            result = self.broker.place_market_order(symbol, 'buy', position_size_usd)
                         else:
                             # For sell, we need quantity not USD
                             quantity = position_size_usd / expected_price
-                            order = self.broker.place_market_order(symbol, 'sell', quantity)
+                            result = self.broker.place_market_order(symbol, 'sell', quantity)
                         
-                        if order:  # Success
+                        # Check if order succeeded (broker returns dict with status)
+                        if result and isinstance(result, dict) and result.get('status') == 'filled':
+                            order = result
                             break
+                        elif result and isinstance(result, dict) and result.get('status') == 'error':
+                            error_msg = result.get('error', 'Unknown error')
+                            if attempt < 3:
+                                logger.warning(f"Order attempt {attempt}/3 failed for {symbol}: {error_msg}")
+                                time.sleep(2 * attempt)  # Exponential backoff
+                            else:
+                                logger.error(f"Order failed after 3 attempts for {symbol}: {error_msg}")
+                        else:
+                            # Unexpected result format
+                            if attempt < 3:
+                                logger.warning(f"Order attempt {attempt}/3 returned unexpected result for {symbol}")
+                                time.sleep(2 * attempt)
                             
                     except Exception as retry_err:
                         if attempt < 3:
@@ -590,7 +604,11 @@ To enable trading:
                     logger.info(f"   Take Profit: ${take_profit:.2f} (+{take_profit_pct*100}%)")
                     return True
                 else:
-                    logger.warning(f"Trade failed for {symbol}: {order.get('error')}")
+                    # Extract error message for better logging
+                    error_detail = "Order returned None or failed"
+                    if order and isinstance(order, dict):
+                        error_detail = order.get('error', 'Unknown error from broker')
+                    logger.warning(f"Trade failed for {symbol}: {error_detail}")
                     return False
             except Exception as e:
                 logger.error(f"Error placing order for {symbol}: {e}")
@@ -707,9 +725,24 @@ To enable trading:
                         order = None
                         for attempt in range(1, 4):  # 3 attempts
                             try:
-                                order = self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
-                                if order:  # Success
+                                result = self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
+                                
+                                # Check if order succeeded
+                                if result and isinstance(result, dict) and result.get('status') == 'filled':
+                                    order = result
                                     break
+                                elif result and isinstance(result, dict) and result.get('status') == 'error':
+                                    error_msg = result.get('error', 'Unknown error')
+                                    if attempt < 3:
+                                        logger.warning(f"Exit order attempt {attempt}/3 failed for {symbol}: {error_msg}")
+                                        time.sleep(2 * attempt)
+                                    else:
+                                        logger.error(f"Exit order failed after 3 attempts for {symbol}: {error_msg}")
+                                else:
+                                    if attempt < 3:
+                                        logger.warning(f"Exit order attempt {attempt}/3 returned unexpected result for {symbol}")
+                                        time.sleep(2 * attempt)
+                                        
                             except Exception as retry_err:
                                 if attempt < 3:
                                     logger.warning(f"Exit order attempt {attempt}/3 failed for {symbol}: {retry_err}")
