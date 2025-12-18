@@ -32,11 +32,13 @@ class MockBroker(BaseBroker):
                 "symbol": symbol,
                 "side": side,
                 "quantity": quantity,
+                "filled_size": quantity,  # CRITICAL: retry_handler checks this field
+                "size": quantity,
                 "timestamp": datetime.now().isoformat(),
             }
             if side.lower() == "buy":
                 self._balance = max(0.0, self._balance - float(quantity))
-            return {"status": "filled", "order": filled}
+            return {"status": "filled", "order": filled, "filled_size": quantity}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
