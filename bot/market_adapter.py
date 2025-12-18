@@ -210,11 +210,11 @@ class MarketAdapter:
         
         position_size = account_balance * allocation_pct
         
-        # FLEXIBLE ENFORCEMENT:
+        # COINBASE MINIMUM ENFORCEMENT:
         # - Target 3-15% of account balance (AGGRESSIVE)
-        # - But allow minimum $0.005 for tiny accounts (MICRO TRADES ENABLED)
+        # - Coinbase Advanced Trade minimum: $5.00 per order
         # - Never exceed 15% of account
-        min_size = max(0.005, account_balance * 0.03)  # Greater of $0.005 or 3%
+        min_size = max(5.00, account_balance * 0.03)  # Greater of $5.00 or 3% (Coinbase minimum)
         max_size = account_balance * 0.15
         
         return max(min_size, min(position_size, max_size))
