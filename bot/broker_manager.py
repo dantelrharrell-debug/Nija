@@ -147,24 +147,79 @@ class CoinbaseBroker(BaseBroker):
             return False
     
     def get_account_balance(self):
-        """Parse balances using v2 API (shows retail balances) with v3 fallback"""
+        """Parse balances from BOTH v2 (Consumer) and v3 (Advanced Trade) APIs"""
         usd_balance = 0.0
         usdc_balance = 0.0
         crypto_holdings: Dict[str, float] = {}
 
         try:
-            # SKIP v2 API - it shows Consumer balances we can't trade with
-            # Go directly to v3 Advanced Trade API
+            # CRITICAL FIX: Check v2 API first for Consumer wallet balances
+            logging.info(f"💰 Checking v2 API (Consumer wallets)...")
             try:
-                raise Exception("Skipping v2 API - using only v3 Advanced Trade API for accurate balance")
+                import requests
+                import time
+                import jwt
+                from cryptography.hazmat.primitives import serialization
+                
+                api_key = os.getenv("COINBASE_API_KEY")
+                api_secret = os.getenv("COINBASE_API_SECRET")
+                
+                # Normalize PEM
+                if '\\n' in api_secret:
+                    api_secret = api_secret.replace('\\n', '\n')
+                
+                private_key = serialization.load_pem_private_key(api_secret.encode('utf-8'), password=None)
+                
+                # Make v2 API call
+                uri = "GET api.coinbase.com/v2/accounts"
+                payload = {
+                    'sub': api_key,
+                    'iss': 'coinbase-cloud',
+                    'nbf': int(time.time()),
+                    'exp': int(time.time()) + 120,
+                    'aud': ['coinbase-apis'],
+                    'uri': uri
+                }
+                token = jwt.encode(payload, private_key, algorithm='ES256', 
+                                  headers={'kid': api_key, 'nonce': str(int(time.time()))})
+                headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+                response = requests.get(f"https://api.coinbase.com/v2/accounts", headers=headers)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    v2_accounts = data.get('data', [])
+                    logging.info(f"📁 v2 Consumer API: {len(v2_accounts)} account(s)")
+                    
+                    for acc in v2_accounts:
+                        currency_obj = acc.get('currency', {})
+                        currency = currency_obj.get('code', 'N/A') if isinstance(currency_obj, dict) else currency_obj
+                        balance_obj = acc.get('balance', {})
+                        balance = float(balance_obj.get('amount', 0) if isinstance(balance_obj, dict) else balance_obj or 0)
+                        account_type = acc.get('type', 'unknown')
+                        name = acc.get('name', 'Unknown')
+                        
+                        if currency == "USD":
+                            usd_balance += balance
+                            if balance > 0:
+                                logging.info(f"   ✅ USD: ${balance:.2f} (type={account_type}, name={name})")
+                        elif currency == "USDC":
+                            usdc_balance += balance
+                            if balance > 0:
+                                logging.info(f"   ✅ USDC: ${balance:.2f} (type={account_type}, name={name})")
+                        elif balance > 0:
+                            crypto_holdings[currency] = crypto_holdings.get(currency, 0) + balance
+                else:
+                    logging.warning(f"⚠️  v2 API returned status {response.status_code}")
                     
             except Exception as v2_error:
-                logging.info(f"⏩ Skipping v2 API, using v3 Advanced Trade API only")
-                # Use v3 API - ONLY counts Advanced Trade balances
+                logging.warning(f"⚠️  v2 API check failed: {v2_error}")
+            
+            # Also check v3 Advanced Trade API
+            logging.info(f"💰 Checking v3 API (Advanced Trade)...")
+            try:
                 accounts_resp = self.client.list_accounts() if hasattr(self.client, 'list_accounts') else self.client.get_accounts()
                 accounts = getattr(accounts_resp, 'accounts', [])
                 logging.info(f"📁 v3 Advanced Trade API: {len(accounts)} account(s)")
-                logging.info(f"   These are the ONLY accounts that can be used for trading via API")
 
                 for account in accounts:
                     currency = getattr(account, 'currency', None)
@@ -178,29 +233,26 @@ class CoinbaseBroker(BaseBroker):
                         usd_balance += available
                         if available > 0:
                             logging.info(f"   ✅ USD: ${available:.2f} (name={account_name}, type={account_type})")
-                        else:
-                            logging.warning(f"   ⚠️  USD account exists but EMPTY: ${available:.2f} (name={account_name}, type={account_type})")
                     elif currency == "USDC":
                         usdc_balance += available
                         if available > 0:
                             logging.info(f"   ✅ USDC: ${available:.2f} (name={account_name}, type={account_type})")
-                        else:
-                            logging.warning(f"   ⚠️  USDC account exists but EMPTY: ${available:.2f} (name={account_name}, type={account_type})")
                     elif available > 0:
-                        crypto_holdings[currency] = available
+                        crypto_holdings[currency] = crypto_holdings.get(currency, 0) + available
+            except Exception as v3_error:
+                logging.warning(f"⚠️  v3 API check failed: {v3_error}")
 
             trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
 
             logging.info("=" * 70)
-            logging.info("💰 TOTAL BALANCE (from v3 Advanced Trade API):")
+            logging.info("💰 TOTAL BALANCE (from v2 Consumer + v3 Advanced Trade APIs):")
             logging.info(f"   USD:  ${usd_balance:.2f}")
             logging.info(f"   USDC: ${usdc_balance:.2f}")
             logging.info(f"   TRADING BALANCE: ${trading_balance:.2f}")
             logging.info("")
-            logging.info("   ⚠️  IMPORTANT: This balance comes from Advanced Trade accounts ONLY")
-            logging.info("      Consumer/Retail wallet balances are NOT included (they can't trade via API)")
             
-            # Critical diagnostic
+            # NOTE: Consumer wallet balances are included for balance calculation
+            # but trading may fail if funds need to be transferred to Advanced Trade
             if trading_balance < 5.0:
                 logging.error("=" * 70)
                 logging.error("🚨 INSUFFICIENT TRADING BALANCE IN ADVANCED TRADE!")
