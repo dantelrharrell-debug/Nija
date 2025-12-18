@@ -346,10 +346,27 @@ class CoinbaseBroker(BaseBroker):
         return lines
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
-        """Place market order"""
+        """Place market order with balance verification"""
         try:
             if quantity <= 0:
                 raise ValueError(f"Refusing to place {side} order with non-positive size: {quantity}")
+
+            # PRE-FLIGHT CHECK: Verify sufficient balance before placing order
+            if side.lower() == 'buy':
+                balance_data = self.get_account_balance()
+                trading_balance = float(balance_data.get('trading_balance', 0.0))
+                
+                if trading_balance < quantity:
+                    error_msg = f"Insufficient funds: ${trading_balance:.2f} available, ${quantity:.2f} required"
+                    logger.error(f"❌ {error_msg}")
+                    logger.error(f"   Move funds to Advanced Trade: https://www.coinbase.com/advanced-portfolio")
+                    return {
+                        "status": "unfilled",
+                        "error": "INSUFFICIENT_FUND",
+                        "message": error_msg,
+                        "partial_fill": False,
+                        "filled_pct": 0.0
+                    }
 
             client_order_id = str(uuid.uuid4())
             
@@ -368,8 +385,38 @@ class CoinbaseBroker(BaseBroker):
                     product_id=symbol,
                     base_size=str(quantity)
                 )
-            logger.info(f"✅ Order placed successfully: {symbol}")
-            return {"status": "filled", "order": order}
+            
+            # CRITICAL: Parse order response to check for success/failure
+            # Coinbase returns an object with 'success' field and 'error_response'
+            order_dict = order if isinstance(order, dict) else (
+                order.__dict__ if hasattr(order, '__dict__') else {}
+            )
+            
+            # Check for Coinbase error response
+            success = order_dict.get('success', True)
+            error_response = order_dict.get('error_response', {})
+            
+            if not success or error_response:
+                error_code = error_response.get('error', 'UNKNOWN_ERROR')
+                error_message = error_response.get('message', 'Unknown error from broker')
+                
+                logger.error(f"❌ Trade failed for {symbol}:")
+                logger.error(f"   Status: unfilled")
+                logger.error(f"   Error: {error_message}")
+                logger.error(f"   Full order response: {order_dict}")
+                
+                return {
+                    "status": "unfilled",
+                    "error": error_code,
+                    "message": error_message,
+                    "order": order_dict,
+                    "partial_fill": order_dict.get('partial_fill', False),
+                    "filled_pct": order_dict.get('filled_pct', 0.0)
+                }
+            
+            logger.info(f"✅ Order filled successfully: {symbol}")
+            return {"status": "filled", "order": order_dict}
+            
         except Exception as e:
             # Enhanced error logging with full details
             error_msg = str(e)

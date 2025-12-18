@@ -522,6 +522,21 @@ To enable trading:
                         if result and isinstance(result, dict) and result.get('status') == 'filled':
                             order = result
                             break
+                        elif result and isinstance(result, dict) and result.get('status') == 'unfilled':
+                            # Order was rejected by exchange (insufficient funds, etc.)
+                            error_code = result.get('error', 'UNKNOWN_ERROR')
+                            error_msg = result.get('message', 'Unknown error')
+                            logger.error(f"❌ Order rejected for {symbol}: {error_msg}")
+                            
+                            # Don't retry if insufficient funds or other permanent errors
+                            if error_code in ['INSUFFICIENT_FUND', 'INVALID_PRODUCT_ID', 'INVALID_SIZE']:
+                                logger.error(f"   Permanent error ({error_code}), skipping retries")
+                                break
+                            elif attempt < 3:
+                                logger.warning(f"Order attempt {attempt}/3 failed, retrying...")
+                                time.sleep(2 * attempt)
+                            else:
+                                logger.error(f"Order failed after 3 attempts for {symbol}")
                         elif result and isinstance(result, dict) and result.get('status') == 'error':
                             error_msg = result.get('error', 'Unknown error')
                             if attempt < 3:
