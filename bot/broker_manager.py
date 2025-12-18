@@ -193,15 +193,18 @@ class CoinbaseBroker(BaseBroker):
                         currency = acc.get('currency', {}).get('code', '')
                         balance_data = acc.get('balance', {})
                         amount = float(balance_data.get('amount', 0))
+                        account_type = acc.get('type', 'unknown')
                         
+                        # COUNT ALL USD/USDC regardless of account type
+                        # Log everything for diagnostics
                         if currency == 'USD':
                             usd_balance += amount
                             if amount > 0:
-                                logging.info(f"   ✅ USD: ${amount:.2f} ({acc.get('name', 'Unknown')})")
+                                logging.info(f"   ✅ USD: ${amount:.2f} ({acc.get('name', 'Unknown')}, type={account_type})")
                         elif currency == 'USDC':
                             usdc_balance += amount
                             if amount > 0:
-                                logging.info(f"   ✅ USDC: ${amount:.2f} ({acc.get('name', 'Unknown')})")
+                                logging.info(f"   ✅ USDC: ${amount:.2f} ({acc.get('name', 'Unknown')}, type={account_type})")
                         elif amount > 0:
                             crypto_holdings[currency] = amount
                 else:
@@ -210,7 +213,7 @@ class CoinbaseBroker(BaseBroker):
                     
             except Exception as v2_error:
                 logging.warning(f"v2 API unavailable ({v2_error}), using v3 brokerage API")
-                # Fall back to v3 API
+                # Fall back to v3 API - Only count Advanced Trade accounts
                 accounts_resp = self.client.list_accounts() if hasattr(self.client, 'list_accounts') else self.client.get_accounts()
                 accounts = getattr(accounts_resp, 'accounts', [])
                 logging.info(f"📁 Retrieved {len(accounts)} account(s) from v3 API")
@@ -219,14 +222,17 @@ class CoinbaseBroker(BaseBroker):
                     currency = getattr(account, 'currency', None)
                     available_obj = getattr(account, 'available_balance', None)
                     available = float(getattr(available_obj, 'value', 0) or 0)
-
-                    # Accept ALL USD and USDC balances (including CONSUMER)
+                    account_type = getattr(account, 'type', None)
+                    
+                    # COUNT ALL USD/USDC regardless of account type
                     if currency == "USD":
                         usd_balance += available
-                        logging.info(f"   ✅ USD: ${available:.2f}")
+                        if available > 0:
+                            logging.info(f"   ✅ USD: ${available:.2f} (type={account_type})")
                     elif currency == "USDC":
                         usdc_balance += available
-                        logging.info(f"   ✅ USDC: ${available:.2f}")
+                        if available > 0:
+                            logging.info(f"   ✅ USDC: ${available:.2f} (type={account_type})")
                     elif available > 0:
                         crypto_holdings[currency] = available
 
@@ -356,10 +362,21 @@ class CoinbaseBroker(BaseBroker):
                 balance_data = self.get_account_balance()
                 trading_balance = float(balance_data.get('trading_balance', 0.0))
                 
+                logger.info(f"💰 Pre-flight balance check for {symbol}:")
+                logger.info(f"   Available: ${trading_balance:.2f}")
+                logger.info(f"   Required:  ${quantity:.2f}")
+                
                 if trading_balance < quantity:
                     error_msg = f"Insufficient funds: ${trading_balance:.2f} available, ${quantity:.2f} required"
-                    logger.error(f"❌ {error_msg}")
-                    logger.error(f"   Move funds to Advanced Trade: https://www.coinbase.com/advanced-portfolio")
+                    logger.error(f"❌ PRE-FLIGHT CHECK FAILED: {error_msg}")
+                    logger.error(f"   Bot detected ${trading_balance:.2f} but needs ${quantity:.2f} for this order")
+                    
+                    # Log USD/USDC inventory for debugging
+                    logger.error(f"   Account inventory:")
+                    inventory_lines = self.get_usd_usdc_inventory()
+                    for line in inventory_lines:
+                        logger.error(f"     {line}")
+                    
                     return {
                         "status": "unfilled",
                         "error": "INSUFFICIENT_FUND",
