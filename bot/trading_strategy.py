@@ -493,8 +493,10 @@ To enable trading:
                 return False
             
             # Calculate position size (2-3% of account per trade)
+            # Enforce Coinbase Advanced Trade minimum: $5.00 per order
             position_size_pct = 0.02
-            position_size_usd = self.account_balance * position_size_pct
+            calculated_size = self.account_balance * position_size_pct
+            position_size_usd = max(5.00, calculated_size)  # Coinbase $5 minimum
             
             logger.info(f"🔄 Executing {signal} for {symbol}")
             logger.info(f"   Price: ${analysis.get('price', 'N/A')}")
