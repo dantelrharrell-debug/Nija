@@ -350,6 +350,7 @@ class CoinbaseBroker(BaseBroker):
                 )
             return {"status": "filled", "order": order}
         except Exception as e:
+            # FORCE REBUILD: Detailed error logging for debugging
             logger.error(f"🚨 Coinbase order error: {type(e).__name__}: {str(e)}")
             return {"status": "error", "error": str(e)}
     
