@@ -105,12 +105,12 @@ class NIJAApexStrategyV71:
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume_5 if avg_volume_5 > 0 else 0
         
-        # ADX filter - no trades if ADX < 20
-        if adx < self.min_adx:
+        # ADX filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
+        if self.min_adx > 0 and adx < self.min_adx:
             return False, 'none', f'ADX too low ({adx:.1f} < {self.min_adx})'
         
-        # Volume filter
-        if volume_ratio < self.volume_threshold:
+        # Volume filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
+        if self.volume_threshold > 0 and volume_ratio < self.volume_threshold:
             return False, 'none', f'Volume too low ({volume_ratio*100:.1f}% of 5-candle avg)'
         
         # Check for uptrend
@@ -131,13 +131,13 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= self.volume_threshold
         }
         
-        # EXTREMELY AGGRESSIVE: Require only 3 out of 5 conditions
+        # ULTRA AGGRESSIVE 15-DAY MODE: Require only 1 out of 5 conditions
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
         
-        if uptrend_score >= 3:  # AGGRESSIVE: 3/5 filters
+        if uptrend_score >= 1:  # ULTRA AGGRESSIVE: 1/5 filters (15-day goal)
             return True, 'uptrend', f'Uptrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 3:  # AGGRESSIVE: 3/5 filters
+        elif downtrend_score >= 1:  # ULTRA AGGRESSIVE: 1/5 filters (15-day goal)
             return True, 'downtrend', f'Downtrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
             return False, 'none', f'Mixed signals (Up:{uptrend_score}/5, Down:{downtrend_score}/5)'
@@ -214,9 +214,9 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # Require at least 3/5 conditions
+        signal = score >= 1  # ULTRA AGGRESSIVE: Only 1/5 conditions (15-day goal)
         
-        reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})"
+        reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
         return signal, score, reason
     
@@ -292,9 +292,9 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # Require at least 3/5 conditions
+        signal = score >= 1  # ULTRA AGGRESSIVE: Only 1/5 conditions (15-day goal)
         
-        reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})"
+        reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         
         return signal, score, reason
     
