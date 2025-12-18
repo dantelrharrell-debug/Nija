@@ -606,11 +606,16 @@ To enable trading:
                     logger.info(f"   Take Profit: ${take_profit:.2f} (+{take_profit_pct*100}%)")
                     return True
                 else:
-                    # Extract error message for better logging
-                    error_detail = "Order returned None or failed"
+                    # Extract and log detailed error message
                     if order and isinstance(order, dict):
                         error_detail = order.get('error', 'Unknown error from broker')
-                    logger.warning(f"Trade failed for {symbol}: {error_detail}")
+                        order_status = order.get('status', 'unknown')
+                        logger.error(f"❌ Trade failed for {symbol}:")
+                        logger.error(f"   Status: {order_status}")
+                        logger.error(f"   Error: {error_detail}")
+                        logger.error(f"   Full order response: {order}")
+                    else:
+                        logger.error(f"❌ Trade failed for {symbol}: Order returned None")
                     return False
             except Exception as e:
                 logger.error(f"Error placing order for {symbol}: {e}")

@@ -337,22 +337,37 @@ class CoinbaseBroker(BaseBroker):
             
             if side.lower() == 'buy':
                 # Use positional client_order_id to avoid SDK signature mismatch
+                logger.info(f"📤 Placing BUY order: {symbol}, quote_size=${quantity:.2f}")
                 order = self.client.market_order_buy(
                     client_order_id,
                     product_id=symbol,
                     quote_size=str(quantity)
                 )
             else:
+                logger.info(f"📤 Placing SELL order: {symbol}, base_size={quantity:.8f}")
                 order = self.client.market_order_sell(
                     client_order_id,
                     product_id=symbol,
                     base_size=str(quantity)
                 )
+            logger.info(f"✅ Order placed successfully: {symbol}")
             return {"status": "filled", "order": order}
         except Exception as e:
-            # FORCE REBUILD: Detailed error logging for debugging
-            logger.error(f"🚨 Coinbase order error: {type(e).__name__}: {str(e)}")
-            return {"status": "error", "error": str(e)}
+            # Enhanced error logging with full details
+            error_msg = str(e)
+            error_type = type(e).__name__
+            logger.error(f"🚨 Coinbase order error for {symbol}:")
+            logger.error(f"   Type: {error_type}")
+            logger.error(f"   Message: {error_msg}")
+            logger.error(f"   Side: {side}, Quantity: {quantity}")
+            
+            # Log additional context if available
+            if hasattr(e, 'response'):
+                logger.error(f"   Response: {e.response}")
+            if hasattr(e, 'status_code'):
+                logger.error(f"   Status code: {e.status_code}")
+                
+            return {"status": "error", "error": f"{error_type}: {error_msg}"}
     
     def get_positions(self) -> List[Dict]:
         """Get open positions (Coinbase doesn't track positions, returns accounts)"""
