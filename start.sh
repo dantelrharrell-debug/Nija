@@ -49,12 +49,13 @@ if [ -z "${COINBASE_API_KEY}" ] || [ -z "${COINBASE_API_SECRET}" ]; then
     echo "⚠️  COINBASE CREDENTIALS MISSING — PAPER_MODE ENABLED"
     echo ""
     echo "📋 TO ENABLE LIVE TRADING:"
-    echo "   1. Go to Railway dashboard → Nija service → Variables"
-    echo "   2. Add these two variables:"
-    echo "      - COINBASE_API_KEY = organizations/.../apiKeys/..."
-    echo "      - COINBASE_API_SECRET = <your secret string>"
-    echo "   3. Remove old variables (COINBASE_PEM_PATH, COINBASE_API_SECRET_PATH)"
-    echo "   4. Save and redeploy/restart the service"
+    echo "   1. Go to Render dashboard → Nija service → Environment"
+    echo "   2. Add these variables:"
+    echo "      - COINBASE_API_KEY"
+    echo "      - COINBASE_API_SECRET"
+    echo "      - LIVE_TRADING=1"
+    echo "      - ALLOW_CONSUMER_USD=true"
+    echo "   3. Click 'Manual Deploy' to restart with new variables"
     echo ""
     export PAPER_MODE=true
 fi
@@ -72,12 +73,12 @@ if [ -f bot.py ]; then
     # Fail-fast: detect stale cached images
     if head -n 1 bot.py | grep -q "NEW BOT.PY IS RUNNING"; then
         echo "❌ Detected stale cached image: RuntimeError banner present in bot.py"
-        echo "👉 Delete the Railway service and redeploy from the main branch."
+        echo "👉 Delete the Render service and redeploy from the main branch."
         exit 2
     fi
     if head -n 10 bot.py | grep -q "from nija_strategy"; then
         echo "❌ Detected stale cached image: old import 'nija_strategy' in bot.py"
-        echo "👉 Delete the Railway service and redeploy from the main branch."
+        echo "👉 Delete the Render service and redeploy from the main branch."
         exit 2
     fi
 fi

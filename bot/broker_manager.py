@@ -237,6 +237,24 @@ class CoinbaseBroker(BaseBroker):
             logging.info(f"   USD:  ${usd_balance:.2f}")
             logging.info(f"   USDC: ${usdc_balance:.2f}")
             logging.info(f"   TRADING BALANCE: ${trading_balance:.2f}")
+            
+            # Critical diagnostic
+            if trading_balance < 5.0:
+                logging.error("=" * 70)
+                logging.error("🚨 INSUFFICIENT TRADING BALANCE DETECTED!")
+                logging.error(f"   Available for trading: ${trading_balance:.2f}")
+                logging.error(f"   Minimum needed: $5.00")
+                logging.error("")
+                logging.error("   POSSIBLE CAUSES:")
+                logging.error("   1. USD is in Consumer/Retail wallet (not Advanced Trade)")
+                logging.error("   2. Funds need to be deposited to trading portfolio")
+                logging.error("")
+                logging.error("   HOW TO FIX:")
+                logging.error("   1. Go to https://advanced.coinbase.com")
+                logging.error("   2. Click 'Deposit' → Transfer from Coinbase account")
+                logging.error("   3. Transfer your USD to Advanced Trade portfolio")
+                logging.error("=" * 70)
+            
             logging.info("=" * 70)
 
             return {

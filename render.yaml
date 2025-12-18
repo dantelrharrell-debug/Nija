@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: nija-trading-bot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: bash start.sh
+    envVars:
+      - key: PORT
+        value: 5000
+      - key: WEB_CONCURRENCY
+        value: 1
+      - key: ALLOW_CONSUMER_USD
+        value: true
+      - key: LIVE_TRADING
+        sync: false
+      - key: COINBASE_API_KEY
+        sync: false
+      - key: COINBASE_API_SECRET
+        sync: false
