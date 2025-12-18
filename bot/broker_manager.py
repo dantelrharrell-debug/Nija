@@ -11,6 +11,9 @@ import logging
 import os
 import uuid
 
+# Configure logger for broker operations
+logger = logging.getLogger('nija.broker')
+
 class BrokerType(Enum):
     COINBASE = "coinbase"
     BINANCE = "binance"
@@ -347,7 +350,7 @@ class CoinbaseBroker(BaseBroker):
                 )
             return {"status": "filled", "order": order}
         except Exception as e:
-            print(f"Coinbase order error: {e}")
+            logger.error(f"🚨 Coinbase order error: {type(e).__name__}: {str(e)}")
             return {"status": "error", "error": str(e)}
     
     def get_positions(self) -> List[Dict]:
@@ -364,7 +367,7 @@ class CoinbaseBroker(BaseBroker):
                     })
             return positions
         except Exception as e:
-            print(f"Error fetching positions: {e}")
+            logger.error(f"Error fetching positions: {e}")
             return []
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
