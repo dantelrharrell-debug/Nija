@@ -248,44 +248,50 @@ class CoinbaseBroker(BaseBroker):
             except Exception as v3_error:
                 logging.warning(f"⚠️  v3 API check failed: {v3_error}")
 
-            # CRITICAL: Only use Advanced Trade balance
-            trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
+            # CRITICAL: Calculate trading balance based on ALLOW_CONSUMER_USD flag
+            if self.allow_consumer_usd:
+                # Include Consumer wallet balances when flag is enabled
+                total_usd = usd_balance + consumer_usd
+                total_usdc = usdc_balance + consumer_usdc
+                trading_balance = total_usdc if total_usdc > 0 else total_usd
+                logging.info(f"⚙️ ALLOW_CONSUMER_USD is ENABLED - Including Consumer wallet in trading balance")
+            else:
+                # Only use Advanced Trade balance when flag is disabled
+                trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
 
             logging.info("=" * 70)
             logging.info("💰 BALANCE SUMMARY:")
-            logging.info(f"   Consumer USD (NOT TRADABLE):  ${consumer_usd:.2f}")
-            logging.info(f"   Consumer USDC (NOT TRADABLE): ${consumer_usdc:.2f}")
+            consumer_label = "[INCLUDED IN TRADING]" if self.allow_consumer_usd else "[NOT TRADABLE]"
+            logging.info(f"   Consumer USD:  ${consumer_usd:.2f} {consumer_label}")
+            logging.info(f"   Consumer USDC: ${consumer_usdc:.2f} {consumer_label}")
             logging.info(f"   Advanced Trade USD:  ${usd_balance:.2f} [TRADABLE]")
             logging.info(f"   Advanced Trade USDC: ${usdc_balance:.2f} [TRADABLE]")
             logging.info(f"   ▶ TRADING BALANCE: ${trading_balance:.2f}")
             logging.info("")
             
-            # Warn if funds are in wrong place
+            # Warn if funds are insufficient
             if trading_balance < 5.0:
                 logging.error("=" * 70)
-                logging.error("🚨 INSUFFICIENT TRADING BALANCE IN ADVANCED TRADE!")
-                logging.error(f"   Advanced Trade balance: ${trading_balance:.2f}")
+                logging.error("🚨 INSUFFICIENT TRADING BALANCE!")
+                logging.error(f"   Trading balance: ${trading_balance:.2f}")
                 logging.error(f"   Minimum needed: $5.00")
                 logging.error("")
-                if consumer_usd > 0 or consumer_usdc > 0:
-                    logging.error("   🔍 PROBLEM FOUND: Your funds are in Consumer wallet!")
-                    logging.error(f"   Consumer wallet has ${consumer_usd + consumer_usdc:.2f} but it CANNOT be used for API trading")
+                if (consumer_usd > 0 or consumer_usdc > 0) and not self.allow_consumer_usd:
+                    logging.error("   🔍 PROBLEM: Your funds are in Consumer wallet and ALLOW_CONSUMER_USD is disabled!")
+                    logging.error(f"   Consumer wallet has ${consumer_usd + consumer_usdc:.2f}")
                     logging.error("")
-                    logging.error("   HOW TO FIX - Transfer to Advanced Trade:")
-                    logging.error("   1. Go to: https://www.coinbase.com/advanced-portfolio")
-                    logging.error("   2. Click 'Deposit' → 'From Coinbase'")
-                    logging.error("   3. Transfer your USD/USDC to Advanced Trade portfolio")
-                    logging.error("   4. The transfer is INSTANT (no waiting)")
-                else:
-                    logging.error("   YOUR FUNDS ARE LIKELY IN THE WRONG PLACE:")
-                    logging.error("   1. Funds are in Consumer/Retail wallet (NOT Advanced Trade)")
-                    logging.error("   2. Consumer wallets CANNOT be used for API trading")
+                    logging.error("   HOW TO FIX (choose one):")
+                    logging.error("   Option 1: Enable Consumer wallet trading")
+                    logging.error("      Set environment variable: ALLOW_CONSUMER_USD=true")
+                    logging.error("      This allows trading from Consumer wallet via Coinbase API")
                     logging.error("")
-                    logging.error("   HOW TO FIX - Transfer to Advanced Trade:")
-                    logging.error("   1. Go to: https://www.coinbase.com/advanced-portfolio")
-                    logging.error("   2. Click 'Deposit' → 'From Coinbase'")
-                    logging.error("   3. Transfer your USD/USDC to Advanced Trade portfolio")
-                    logging.error("   4. The transfer is INSTANT (no waiting)")
+                    logging.error("   Option 2: Transfer to Advanced Trade")
+                    logging.error("      1. Go to: https://www.coinbase.com/advanced-portfolio")
+                    logging.error("      2. Click 'Deposit' → 'From Coinbase'")
+                    logging.error("      3. Transfer your USD/USDC to Advanced Trade portfolio")
+                elif trading_balance == 0:
+                    logging.error("   No funds detected in any account")
+                    logging.error("   Add funds to your Coinbase account")
                 logging.error("=" * 70)
             else:
                 logging.info(f"   ✅ Sufficient funds in Advanced Trade for trading!")
