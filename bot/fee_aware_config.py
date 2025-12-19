@@ -33,10 +33,12 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # ============================================================================
 # At different balance levels, what's the minimum trade size?
 
-# For $10 balance: Don't trade (fees will destroy account)
-MIN_BALANCE_TO_TRADE = 50.0  # Need at least $50 to start
+# For $10-50 balance: Trade with 90% positions (maximum size to overcome fees)
+MIN_BALANCE_TO_TRADE = 10.0  # Lowered to $10 to allow micro-capital trading
+MICRO_BALANCE_THRESHOLD = 50.0
+MICRO_BALANCE_POSITION_PCT = 0.90  # 90% of account per trade (must maximize size)
 
-# For $50-100: Trade with 80-100% positions (fewer, bigger trades)
+# For $50-100: Trade with 80% positions (fewer, bigger trades)
 SMALL_BALANCE_THRESHOLD = 100.0
 SMALL_BALANCE_POSITION_PCT = 0.80  # 80% of account per trade
 
@@ -51,6 +53,9 @@ NORMAL_MAX_POSITION_PCT = 0.25  # 25%
 # ============================================================================
 # PROFIT TARGETS (Must exceed fees)
 # ============================================================================
+# For micro-balances ($10-50), fees are ~2-4% per side, need higher targets
+MICRO_BALANCE_MIN_PROFIT_TARGET = 0.035  # 3.5% minimum for tiny positions
+
 # Market orders need 1.4% to break even, add buffer:
 MARKET_ORDER_MIN_PROFIT_TARGET = 0.025  # 2.5% minimum target
 
@@ -137,24 +142,31 @@ def get_position_size_pct(account_balance: float) -> float:
     """
     if account_balance < MIN_BALANCE_TO_TRADE:
         return 0.0  # Don't trade
+    elif account_balance < MICRO_BALANCE_THRESHOLD:
+        return MICRO_BALANCE_POSITION_PCT  # 90% for $10-50
     elif account_balance < SMALL_BALANCE_THRESHOLD:
-        return SMALL_BALANCE_POSITION_PCT  # 80%
+        return SMALL_BALANCE_POSITION_PCT  # 80% for $50-100
     elif account_balance < MEDIUM_BALANCE_THRESHOLD:
-        return MEDIUM_BALANCE_POSITION_PCT  # 50%
+        return MEDIUM_BALANCE_POSITION_PCT  # 50% for $100-500
     else:
-        return NORMAL_MAX_POSITION_PCT  # 25%
+        return NORMAL_MAX_POSITION_PCT  # 25% for $500+
 
 
-def get_min_profit_target(use_limit_order: bool = True) -> float:
+def get_min_profit_target(use_limit_order: bool = True, account_balance: float = 100.0) -> float:
     """
     Get minimum profit target to overcome fees.
     
     Args:
         use_limit_order: True if using limit orders, False for market
+        account_balance: Current account balance (affects fee ratio)
     
     Returns:
         Minimum profit target as decimal (e.g., 0.02 = 2%)
     """
+    # Micro-balances need higher targets due to higher fee ratios
+    if account_balance < MICRO_BALANCE_THRESHOLD:
+        return MICRO_BALANCE_MIN_PROFIT_TARGET  # 3.5%
+    
     if use_limit_order:
         return LIMIT_ORDER_MIN_PROFIT_TARGET
     else:
