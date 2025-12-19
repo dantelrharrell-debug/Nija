@@ -270,11 +270,14 @@ class CoinbaseBroker(BaseBroker):
             logging.info("")
             
             # Warn if funds are insufficient
-            if trading_balance < 5.0:
+            MINIMUM_TRADING_BALANCE = 10.00  # Minimum to cover $5 order + fees safely
+            
+            if trading_balance < MINIMUM_TRADING_BALANCE:
                 logging.error("=" * 70)
                 logging.error("🚨 INSUFFICIENT TRADING BALANCE!")
                 logging.error(f"   Trading balance: ${trading_balance:.2f}")
-                logging.error(f"   Minimum needed: $5.00")
+                logging.error(f"   Minimum needed: ${MINIMUM_TRADING_BALANCE:.2f}")
+                logging.error(f"   Why? $5.00 order + fees (~$0.50) + safety margin")
                 logging.error("")
                 if (consumer_usd > 0 or consumer_usdc > 0) and not self.allow_consumer_usd:
                     logging.error("   🔍 PROBLEM: Your funds are in Consumer wallet and ALLOW_CONSUMER_USD is disabled!")
@@ -292,6 +295,15 @@ class CoinbaseBroker(BaseBroker):
                 elif trading_balance == 0:
                     logging.error("   No funds detected in any account")
                     logging.error("   Add funds to your Coinbase account")
+                else:
+                    logging.error("   Your balance is too low for reliable trading")
+                    logging.error("   Each trade needs ~$5.50 ($5.00 + fees)")
+                    logging.error(f"   With ${trading_balance:.2f}, you can't place ANY trades safely")
+                    logging.error("")
+                    logging.error("   🎯 RECOMMENDED: Deposit at least $50-$100")
+                    logging.error("      - Allows 10-20 trades")
+                    logging.error("      - Proper position sizing")
+                    logging.error("      - Strategy works as designed")
                 logging.error("=" * 70)
             else:
                 logging.info(f"   ✅ Sufficient funds in Advanced Trade for trading!")

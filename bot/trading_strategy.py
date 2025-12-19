@@ -36,6 +36,7 @@ from retry_handler import retry_handler
 from indicators import calculate_vwap, calculate_ema, calculate_rsi, calculate_macd, calculate_atr, calculate_adx
 
 class TradingStrategy:
+    TRADE_COOLDOWN_SECONDS = 30  # Prevent rapid-fire trades
     """
     NIJA Ultimate Trading Strategy with APEX v7.1
     
@@ -494,13 +495,23 @@ To enable trading:
             
             # Calculate position size (2-3% of account per trade)
             # Enforce Coinbase Advanced Trade minimum: $5.00 per order
+            # Account for fees (~1.5%) by requiring 7% buffer
             position_size_pct = 0.02
             calculated_size = self.account_balance * position_size_pct
-            position_size_usd = max(5.00, calculated_size)  # Coinbase $5 minimum
+            coinbase_minimum_with_fees = 10.00  # Increased from 5.50 to ensure profitability  # $5.00 + 10% buffer for fees/spread
+            position_size_usd = max(coinbase_minimum_with_fees, calculated_size)
+            
+            # Safety check: Don't trade if we can't afford minimum + fees
+            if self.account_balance < (coinbase_minimum_with_fees * 1.2):
+                logger.error(f"❌ Insufficient balance for {symbol}")
+                logger.error(f"   Balance: ${self.account_balance:.2f}")
+                logger.error(f"   Required (with fees): ${coinbase_minimum_with_fees * 1.2:.2f}")
+                logger.error(f"   Please deposit more funds to continue trading")
+                return False
             
             logger.info(f"🔄 Executing {signal} for {symbol}")
             logger.info(f"   Price: ${analysis.get('price', 'N/A')}")
-            logger.info(f"   Position size: ${position_size_usd:,.2f}")
+            logger.info(f"   Position size: ${position_size_usd:.2f}")
             logger.info(f"   Reason: {analysis['reason']}")
             
             # Place market order with retry handling
