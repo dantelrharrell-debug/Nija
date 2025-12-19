@@ -810,8 +810,13 @@ To enable trading:
                     # Close position with retry handling
                     exit_signal = 'SELL' if side == 'BUY' else 'BUY'
                     try:
-                        # Calculate quantity to close
+                        # Calculate quantity to close (crypto amount for sell)
                         quantity = position['size_usd'] / current_price
+                        
+                        logger.info(f"   🔄 Executing {exit_signal} order for {symbol}")
+                        logger.info(f"   Position size: ${position['size_usd']:.2f}")
+                        logger.info(f"   Crypto amount: {quantity:.8f}")
+                        logger.info(f"   Current price: ${current_price:.2f}")
                         
                         # Place exit order with manual retry
                         order = None
@@ -819,21 +824,26 @@ To enable trading:
                             try:
                                 result = self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
                                 
-                                # Check if order succeeded
-                                if result and isinstance(result, dict) and result.get('status') == 'filled':
-                                    order = result
-                                    break
-                                elif result and isinstance(result, dict) and result.get('status') == 'error':
-                                    error_msg = result.get('error', 'Unknown error')
-                                    if attempt < 3:
-                                        logger.warning(f"Exit order attempt {attempt}/3 failed for {symbol}: {error_msg}")
-                                        time.sleep(2 * attempt)
+                                # CRITICAL FIX: Check for both 'filled' and 'unfilled' status
+                                if result and isinstance(result, dict):
+                                    status = result.get('status', 'unknown')
+                                    logger.info(f"   Attempt {attempt}/3: Order status = {status}")
+                                    
+                                    if status == 'filled':
+                                        order = result
+                                        logger.info(f"   ✅ Order filled successfully on attempt {attempt}")
+                                        break
+                                    elif status in ['error', 'unfilled']:
+                                        error_msg = result.get('error', result.get('message', 'Unknown error'))
+                                        if attempt < 3:
+                                            logger.warning(f"   Exit order attempt {attempt}/3 failed for {symbol}: {error_msg}")
+                                            time.sleep(2 * attempt)
+                                        else:
+                                            logger.error(f"   ❌ Exit order failed after 3 attempts for {symbol}: {error_msg}")
                                     else:
-                                        logger.error(f"Exit order failed after 3 attempts for {symbol}: {error_msg}")
-                                else:
-                                    if attempt < 3:
-                                        logger.warning(f"Exit order attempt {attempt}/3 returned unexpected result for {symbol}")
-                                        time.sleep(2 * attempt)
+                                        logger.warning(f"   Unexpected status '{status}' on attempt {attempt}/3")
+                                        if attempt < 3:
+                                            time.sleep(2 * attempt)
                                         
                             except Exception as retry_err:
                                 if attempt < 3:
