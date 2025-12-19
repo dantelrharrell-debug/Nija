@@ -147,14 +147,22 @@ class CoinbaseBroker(BaseBroker):
             return False
     
     def get_account_balance(self):
-        """Parse balances from BOTH v2 (Consumer) and v3 (Advanced Trade) APIs"""
+        """
+        Parse balances from ONLY v3 Advanced Trade API
+        
+        CRITICAL: Consumer wallet balances are NOT usable for API trading.
+        Only Advanced Trade portfolio balance can be used for orders.
+        This method ONLY returns Advanced Trade balance to prevent mismatches.
+        """
         usd_balance = 0.0
         usdc_balance = 0.0
+        consumer_usd = 0.0
+        consumer_usdc = 0.0
         crypto_holdings: Dict[str, float] = {}
 
         try:
-            # CRITICAL FIX: Check v2 API first for Consumer wallet balances
-            logging.info(f"💰 Checking v2 API (Consumer wallets)...")
+            # Check v2 Consumer wallets for DIAGNOSTIC purposes only
+            logging.info(f"💰 Checking v2 API (Consumer wallets - DIAGNOSTIC ONLY)...")
             try:
                 import requests
                 import time
@@ -199,23 +207,21 @@ class CoinbaseBroker(BaseBroker):
                         name = acc.get('name', 'Unknown')
                         
                         if currency == "USD":
-                            usd_balance += balance
+                            consumer_usd += balance
                             if balance > 0:
-                                logging.info(f"   ✅ USD: ${balance:.2f} (type={account_type}, name={name})")
+                                logging.info(f"   📊 Consumer USD: ${balance:.2f} (type={account_type}, name={name}) [NOT TRADABLE VIA API]")
                         elif currency == "USDC":
-                            usdc_balance += balance
+                            consumer_usdc += balance
                             if balance > 0:
-                                logging.info(f"   ✅ USDC: ${balance:.2f} (type={account_type}, name={name})")
-                        elif balance > 0:
-                            crypto_holdings[currency] = crypto_holdings.get(currency, 0) + balance
+                                logging.info(f"   📊 Consumer USDC: ${balance:.2f} (type={account_type}, name={name}) [NOT TRADABLE VIA API]")
                 else:
                     logging.warning(f"⚠️  v2 API returned status {response.status_code}")
                     
             except Exception as v2_error:
                 logging.warning(f"⚠️  v2 API check failed: {v2_error}")
             
-            # Also check v3 Advanced Trade API
-            logging.info(f"💰 Checking v3 API (Advanced Trade)...")
+            # Check v3 Advanced Trade API - THIS IS THE ONLY TRADABLE BALANCE
+            logging.info(f"💰 Checking v3 API (Advanced Trade - TRADABLE BALANCE)...")
             try:
                 accounts_resp = self.client.list_accounts() if hasattr(self.client, 'list_accounts') else self.client.get_accounts()
                 accounts = getattr(accounts_resp, 'accounts', [])
@@ -228,46 +234,58 @@ class CoinbaseBroker(BaseBroker):
                     account_type = getattr(account, 'type', None)
                     account_name = getattr(account, 'name', 'Unknown')
                     
-                    # Log EVERY account for diagnostics
+                    # ONLY count Advanced Trade balances for trading
                     if currency == "USD":
                         usd_balance += available
                         if available > 0:
-                            logging.info(f"   ✅ USD: ${available:.2f} (name={account_name}, type={account_type})")
+                            logging.info(f"   ✅ Advanced Trade USD: ${available:.2f} (name={account_name}, type={account_type}) [TRADABLE]")
                     elif currency == "USDC":
                         usdc_balance += available
                         if available > 0:
-                            logging.info(f"   ✅ USDC: ${available:.2f} (name={account_name}, type={account_type})")
+                            logging.info(f"   ✅ Advanced Trade USDC: ${available:.2f} (name={account_name}, type={account_type}) [TRADABLE]")
                     elif available > 0:
                         crypto_holdings[currency] = crypto_holdings.get(currency, 0) + available
             except Exception as v3_error:
                 logging.warning(f"⚠️  v3 API check failed: {v3_error}")
 
+            # CRITICAL: Only use Advanced Trade balance
             trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
 
             logging.info("=" * 70)
-            logging.info("💰 TOTAL BALANCE (from v2 Consumer + v3 Advanced Trade APIs):")
-            logging.info(f"   USD:  ${usd_balance:.2f}")
-            logging.info(f"   USDC: ${usdc_balance:.2f}")
-            logging.info(f"   TRADING BALANCE: ${trading_balance:.2f}")
+            logging.info("💰 BALANCE SUMMARY:")
+            logging.info(f"   Consumer USD (NOT TRADABLE):  ${consumer_usd:.2f}")
+            logging.info(f"   Consumer USDC (NOT TRADABLE): ${consumer_usdc:.2f}")
+            logging.info(f"   Advanced Trade USD:  ${usd_balance:.2f} [TRADABLE]")
+            logging.info(f"   Advanced Trade USDC: ${usdc_balance:.2f} [TRADABLE]")
+            logging.info(f"   ▶ TRADING BALANCE: ${trading_balance:.2f}")
             logging.info("")
             
-            # NOTE: Consumer wallet balances are included for balance calculation
-            # but trading may fail if funds need to be transferred to Advanced Trade
+            # Warn if funds are in wrong place
             if trading_balance < 5.0:
                 logging.error("=" * 70)
                 logging.error("🚨 INSUFFICIENT TRADING BALANCE IN ADVANCED TRADE!")
                 logging.error(f"   Advanced Trade balance: ${trading_balance:.2f}")
                 logging.error(f"   Minimum needed: $5.00")
                 logging.error("")
-                logging.error("   YOUR FUNDS ARE LIKELY IN THE WRONG PLACE:")
-                logging.error("   1. Funds are in Consumer/Retail wallet (NOT Advanced Trade)")
-                logging.error("   2. Consumer wallets CANNOT be used for API trading")
-                logging.error("")
-                logging.error("   HOW TO FIX - Transfer to Advanced Trade:")
-                logging.error("   1. Go to: https://www.coinbase.com/advanced-portfolio")
-                logging.error("   2. Click 'Deposit' → 'From Coinbase'")
-                logging.error("   3. Transfer your USD/USDC to Advanced Trade portfolio")
-                logging.error("   4. The transfer is INSTANT (no waiting)")
+                if consumer_usd > 0 or consumer_usdc > 0:
+                    logging.error("   🔍 PROBLEM FOUND: Your funds are in Consumer wallet!")
+                    logging.error(f"   Consumer wallet has ${consumer_usd + consumer_usdc:.2f} but it CANNOT be used for API trading")
+                    logging.error("")
+                    logging.error("   HOW TO FIX - Transfer to Advanced Trade:")
+                    logging.error("   1. Go to: https://www.coinbase.com/advanced-portfolio")
+                    logging.error("   2. Click 'Deposit' → 'From Coinbase'")
+                    logging.error("   3. Transfer your USD/USDC to Advanced Trade portfolio")
+                    logging.error("   4. The transfer is INSTANT (no waiting)")
+                else:
+                    logging.error("   YOUR FUNDS ARE LIKELY IN THE WRONG PLACE:")
+                    logging.error("   1. Funds are in Consumer/Retail wallet (NOT Advanced Trade)")
+                    logging.error("   2. Consumer wallets CANNOT be used for API trading")
+                    logging.error("")
+                    logging.error("   HOW TO FIX - Transfer to Advanced Trade:")
+                    logging.error("   1. Go to: https://www.coinbase.com/advanced-portfolio")
+                    logging.error("   2. Click 'Deposit' → 'From Coinbase'")
+                    logging.error("   3. Transfer your USD/USDC to Advanced Trade portfolio")
+                    logging.error("   4. The transfer is INSTANT (no waiting)")
                 logging.error("=" * 70)
             else:
                 logging.info(f"   ✅ Sufficient funds in Advanced Trade for trading!")
@@ -279,6 +297,8 @@ class CoinbaseBroker(BaseBroker):
                 "usd": usd_balance,
                 "trading_balance": trading_balance,
                 "crypto": crypto_holdings,
+                "consumer_usd": consumer_usd,
+                "consumer_usdc": consumer_usdc,
             }
         except Exception as e:
             logging.error(f"🔥 ERROR get_account_balance: {e}")
@@ -289,6 +309,8 @@ class CoinbaseBroker(BaseBroker):
                 "usd": 0.0,
                 "trading_balance": 0.0,
                 "crypto": {},
+                "consumer_usd": 0.0,
+                "consumer_usdc": 0.0,
             }
     
     def _dump_portfolio_summary(self):
