@@ -33,8 +33,8 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # ============================================================================
 # At different balance levels, what's the minimum trade size?
 
-# For $10-50 balance: Trade with 90% positions (maximum size to overcome fees)
-MIN_BALANCE_TO_TRADE = 10.0  # Lowered to $10 to allow micro-capital trading
+# For $10.50-50 balance: Trade with 90% positions (maximum size to overcome fees)
+MIN_BALANCE_TO_TRADE = 10.50  # $10.50 minimum to leave room for Coinbase fees
 MICRO_BALANCE_THRESHOLD = 50.0
 MICRO_BALANCE_POSITION_PCT = 0.90  # 90% of account per trade (must maximize size)
 
