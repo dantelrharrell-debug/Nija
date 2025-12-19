@@ -1,0 +1,16 @@
+Enable micro-capital trading: Lower minimum balance from $50 to $10
+
+- Add MICRO_BALANCE tier ($10-50) with 90% position sizing
+- Increase profit targets to 3.5% for micro accounts (accounts for higher fee ratios)
+- Adjust get_position_size_pct() to support 4 balance tiers
+- Update get_min_profit_target() to dynamically adjust based on account size
+- Bot can now trade with balances as low as $10.67
+
+This enables aggressive compounding from very small capital while
+maintaining fee-aware position sizing to ensure profitability.
+
+Changes to bot/fee_aware_config.py:
+- MIN_BALANCE_TO_TRADE: $50 → $10
+- New MICRO_BALANCE_THRESHOLD: $50
+- New MICRO_BALANCE_POSITION_PCT: 90%
+- New MICRO_BALANCE_MIN_PROFIT_TARGET: 3.5%
