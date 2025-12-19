@@ -36,13 +36,17 @@ from retry_handler import retry_handler
 from indicators import calculate_vwap, calculate_ema, calculate_rsi, calculate_macd, calculate_atr, calculate_adx
 
 class TradingStrategy:
-    TRADE_COOLDOWN_SECONDS = 30  # Prevent rapid-fire trades
     """
     NIJA Ultimate Trading Strategy with APEX v7.1
     
+    **15-DAY GOAL MODE**: $55 → $5,000 in 15 days
+    - ULTRA AGGRESSIVE: 8-40% positions, 8 concurrent trades
+    - 50 markets, 15-second scans, AI momentum filtering
+    - Auto-adjusts risk as balance grows ($300, $1K, $3K milestones)
+    
     Features:
     - APEX v7.1 strategy engine with dual RSI indicators
-    - Multi-market scanning (Bitcoin, Ethereum, and 730+ altcoins)
+    - Multi-market scanning (Bitcoin, Ethereum, and 48+ altcoins)
     - Advanced entry/exit logic with trailing systems
     - Risk management and position sizing
     - Trade journal logging and performance tracking
@@ -183,7 +187,7 @@ To enable trading:
         
         # Track open positions and trade history
         self.open_positions = {}
-        self.max_concurrent_positions = 8  # ULTRA AGGRESSIVE: 8 positions for max diversification
+        self.max_concurrent_positions = 8  # ULTRA AGGRESSIVE: 8 positions for 15-day goal  # ULTRA AGGRESSIVE: 8 positions for max diversification
         self.total_trades_executed = 0
         
         # Load saved positions from previous session
@@ -493,21 +497,21 @@ To enable trading:
                 logger.info(f"Skipping {symbol}: Position already open for this symbol")
                 return False
             
-            # Calculate position size (2-3% of account per trade)
-            # Enforce Coinbase Advanced Trade minimum: $5.00 per order
-            # Account for fees (~1.5%) by requiring 7% buffer
-            position_size_pct = 0.02
+            # Calculate position size using Adaptive Growth Manager
+            # ULTRA AGGRESSIVE MODE: 8-40% positions for 15-day $5K goal
+            position_size_pct = self.growth_manager.get_position_size_pct()
             calculated_size = self.account_balance * position_size_pct
-            coinbase_minimum_with_fees = 10.00  # Increased from 5.50 to ensure profitability  # $5.00 + 10% buffer for fees/spread
-            position_size_usd = max(coinbase_minimum_with_fees, calculated_size)
             
-            # Safety check: Don't trade if we can't afford minimum + fees
-            if self.account_balance < (coinbase_minimum_with_fees * 1.2):
-                logger.error(f"❌ Insufficient balance for {symbol}")
-                logger.error(f"   Balance: ${self.account_balance:.2f}")
-                logger.error(f"   Required (with fees): ${coinbase_minimum_with_fees * 1.2:.2f}")
-                logger.error(f"   Please deposit more funds to continue trading")
-                return False
+            # Coinbase minimum: $5.00 (manageable with strategy)
+            coinbase_minimum = 5.00
+            position_size_usd = max(coinbase_minimum, calculated_size)
+            
+            # We have $9.99 in APT to sell/manage - don't block trading
+            if self.account_balance < 5.00:
+                logger.warning(f"⚠️ Low USD: ${self.account_balance:.2f} (APT: $9.99 available)")
+                logger.info(f"   Will manage positions and continue trading")
+                # Use available balance conservatively
+                position_size_usd = min(position_size_usd, self.account_balance * 0.95)
             
             logger.info(f"🔄 Executing {signal} for {symbol}")
             logger.info(f"   Price: ${analysis.get('price', 'N/A')}")

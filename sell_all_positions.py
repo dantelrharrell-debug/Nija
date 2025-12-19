@@ -117,7 +117,9 @@ def main():
                 print(f"   Amount: {amount:.8f}")
                 
                 # Place market sell order
+                import uuid
                 order = client.market_order_sell(
+                    client_order_id=str(uuid.uuid4()),
                     product_id=product_id,
                     base_size=str(amount)
                 )
