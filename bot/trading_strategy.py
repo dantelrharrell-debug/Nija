@@ -546,19 +546,23 @@ To enable trading:
             
             # CRITICAL: Verify sufficient balance before ANY trade
             MINIMUM_VIABLE_CAPITAL = 50.0  # $50 minimum for profitable trading
-            
-            if self.account_balance < MINIMUM_VIABLE_CAPITAL:
+
+            # Refresh balance right before sizing to avoid using stale consumer funds
+            live_balance = self.get_usd_balance()
+            self.account_balance = live_balance
+
+            if live_balance < MINIMUM_VIABLE_CAPITAL:
                 logger.error("="*80)
-                logger.error(f"🚨 TRADE BLOCKED: Insufficient capital (${self.account_balance:.2f})")
+                logger.error(f"🚨 TRADE BLOCKED: Insufficient capital (${live_balance:.2f})")
                 logger.error("="*80)
                 logger.error(f"")
                 logger.error(f"Attempted to trade {symbol} but balance too low.")
                 logger.error(f"")
-                logger.error(f"Current Balance: ${self.account_balance:.2f}")
+                logger.error(f"Current Balance: ${live_balance:.2f}")
                 logger.error(f"Minimum Required: ${MINIMUM_VIABLE_CAPITAL:.2f}")
                 logger.error(f"")
                 logger.error("❌ WHY THIS TRADE WON'T WORK:")
-                logger.error(f"   • Position size would be: ${self.account_balance * 0.1:.2f}-${self.account_balance * 0.4:.2f}")
+                logger.error(f"   • Position size would be: ${live_balance * 0.1:.2f}-${live_balance * 0.4:.2f}")
                 logger.error("   • Coinbase fees: 2-4% per trade")
                 logger.error("   • Fees will eat entire profit margin")
                 logger.error("   • Even winning trades = net loss")
@@ -573,7 +577,7 @@ To enable trading:
             # Calculate position size using Adaptive Growth Manager
             # ULTRA AGGRESSIVE MODE: 8-40% positions for 15-day $5K goal
             position_size_pct = self.growth_manager.get_position_size_pct()
-            calculated_size = self.account_balance * position_size_pct
+            calculated_size = live_balance * position_size_pct
             
             # Apply hard caps to position size
             coinbase_minimum = 5.00
@@ -581,7 +585,14 @@ To enable trading:
             
             # Enforce: min($5) <= position_size <= max($100)
             position_size_usd = max(coinbase_minimum, calculated_size)
-            position_size_usd = min(position_size_usd, max_position_hard_cap)
+            position_size_usd = min(position_size_usd, max_position_hard_cap, live_balance)
+
+            # If we don't have enough tradable balance for even the $5 minimum, stop quickly
+            if position_size_usd < coinbase_minimum or live_balance < coinbase_minimum:
+                logger.warning(
+                    f"🚫 Insufficient Advanced Trade balance (${live_balance:.2f}) for Coinbase $5 minimum — skipping {symbol}"
+                )
+                return False
             
             logger.info(f"🔄 Executing {signal} for {symbol}")
             logger.info(f"   Price: ${analysis.get('price', 'N/A')}")

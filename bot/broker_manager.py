@@ -199,90 +199,88 @@ class CoinbaseBroker(BaseBroker):
             logging.error(f"❌ Portfolio detection error: {e}")
     
     def get_account_balance(self):
+        """Return ONLY tradable Advanced Trade USD/USDC balances.
+
+        Coinbase frequently shows Consumer wallet balances that **cannot** be used
+        for Advanced Trade orders. To avoid false positives (and endless
+        INS UFFICIENT_FUND rejections), we enumerate accounts and only count
+        ones marked as Advanced Trade / crypto accounts.
+
+        Returns dict with: {"usdc", "usd", "trading_balance", "crypto", "consumer_*"}
         """
-        Get account balance using portfolio breakdown API
-        
-        UPDATED: Uses portfolio breakdown API which is the only method
-        that can actually see the funds in Default portfolio.
-        
-        Returns dict with: { "usdc": float, "usd": float, "trading_balance": float, "crypto": {}}
-        """
+        usd_balance = 0.0
+        usdc_balance = 0.0
+        consumer_usd = 0.0
+        consumer_usdc = 0.0
+        crypto_holdings = {}
+
         try:
-            logging.info("💰 Fetching account balance...")
-            
-            # Use portfolio breakdown API (the method that actually works!)
-            portfolios_resp = self.client.get_portfolios()
-            portfolios = getattr(portfolios_resp, 'portfolios', [])
-            
-            # Find Default portfolio
-            default_portfolio = None
-            for p in portfolios:
-                if p.name == 'Default':
-                    default_portfolio = p
-                    break
-            
-            if not default_portfolio:
-                logging.error("❌ Could not find Default portfolio")
-                return {
-                    "usdc": 0.0,
-                    "usd": 0.0,
-                    "trading_balance": 0.0,
-                    "crypto": {},
-                    "consumer_usd": 0.0,
-                    "consumer_usdc": 0.0,
-                }
-            
-            # Get portfolio breakdown
-            breakdown_resp = self.client.get_portfolio_breakdown(portfolio_uuid=default_portfolio.uuid)
-            breakdown = getattr(breakdown_resp, 'breakdown', None)
-            
-            if not breakdown:
-                logging.error("❌ No breakdown data returned")
-                return {
-                    "usdc": 0.0,
-                    "usd": 0.0,
-                    "trading_balance": 0.0,
-                    "crypto": {},
-                    "consumer_usd": 0.0,
-                    "consumer_usdc": 0.0,
-                }
-            
-            spot_positions = getattr(breakdown, 'spot_positions', [])
-            
-            usd_balance = 0.0
-            usdc_balance = 0.0
-            trading_balance = 0.0
-            crypto_holdings = {}
-            
+            logging.info("💰 Fetching account balance (Advanced Trade only)...")
+
+            resp = self.client.get_accounts()
+            accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
+
             logging.info("=" * 70)
-            logging.info("📊 BALANCES (via Portfolio Breakdown API):")
+            logging.info("📊 ACCOUNT BALANCES (v3 get_accounts)")
             logging.info("=" * 70)
-            
-            for position in spot_positions:
-                asset = getattr(position, 'asset', 'N/A')
-                available_fiat = getattr(position, 'available_to_trade_fiat', 0)
-                total_balance_fiat = getattr(position, 'total_balance_fiat', 0)
-                is_cash = getattr(position, 'is_cash', False)
-                
-                if total_balance_fiat > 0.001 or available_fiat > 0.001:
-                    if is_cash and asset == 'USD':
-                        usd_balance += available_fiat
-                        trading_balance += available_fiat
-                        logging.info(f"   💵 USD:  ${available_fiat:.2f} (available to trade)")
-                    elif is_cash and asset == 'USDC':
-                        usdc_balance += available_fiat
-                        trading_balance += available_fiat
-                        logging.info(f"   💵 USDC: ${available_fiat:.2f} (available to trade)")
-                    elif not is_cash and total_balance_fiat > 0.01:
-                        total_crypto = getattr(position, 'total_balance_crypto', 0)
-                        crypto_holdings[asset] = total_crypto
-                        logging.info(f"   🪙 {asset}: {total_crypto:.8f} (${total_balance_fiat:.2f})")
-            
+
+            for acc in accounts:
+                # Normalize object/dict access
+                if isinstance(acc, dict):
+                    currency = acc.get('currency')
+                    name = acc.get('name')
+                    platform = acc.get('platform')
+                    account_type = acc.get('type')
+                    available_val = (acc.get('available_balance') or {}).get('value')
+                    hold_val = (acc.get('hold') or {}).get('value')
+                else:
+                    currency = getattr(acc, 'currency', None)
+                    name = getattr(acc, 'name', None)
+                    platform = getattr(acc, 'platform', None)
+                    account_type = getattr(acc, 'type', None)
+                    available_val = getattr(getattr(acc, 'available_balance', None), 'value', None)
+                    hold_val = getattr(getattr(acc, 'hold', None), 'value', None)
+
+                try:
+                    available = float(available_val or 0)
+                    hold = float(hold_val or 0)
+                except Exception:
+                    available = 0.0
+                    hold = 0.0
+
+                is_tradeable = account_type == "ACCOUNT_TYPE_CRYPTO" or (platform and "ADVANCED_TRADE" in str(platform))
+
+                if currency in ("USD", "USDC"):
+                    location = "TRADEABLE" if is_tradeable else "CONSUMER"
+                    logging.info(
+                        f"   {currency:>4} | avail=${available:8.2f} | hold=${hold:8.2f} | type={account_type} | platform={platform} | {location}"
+                    )
+
+                    if is_tradeable:
+                        if currency == "USD":
+                            usd_balance += available
+                        else:
+                            usdc_balance += available
+                    else:
+                        if currency == "USD":
+                            consumer_usd += available
+                        else:
+                            consumer_usdc += available
+                elif currency and available > 0:
+                    # Track non-cash crypto holdings for reporting completeness
+                    crypto_holdings[currency] = available
+                    logging.info(
+                        f"   🪙 {currency}: {available} (type={account_type}, platform={platform})"
+                    )
+
+            trading_balance = usd_balance + usdc_balance
+
             logging.info("-" * 70)
-            logging.info(f"   💰 Total USD:  ${usd_balance:.2f}")
-            logging.info(f"   💰 Total USDC: ${usdc_balance:.2f}")
+            logging.info(f"   💰 Tradable USD:  ${usd_balance:.2f}")
+            logging.info(f"   💰 Tradable USDC: ${usdc_balance:.2f}")
             logging.info(f"   💰 Total Trading Balance: ${trading_balance:.2f}")
             logging.info(f"   🪙 Crypto Holdings: {len(crypto_holdings)} assets")
+            logging.info(f"   🏦 Consumer USD:  ${consumer_usd:.2f} | Consumer USDC: ${consumer_usdc:.2f}")
             logging.info("=" * 70)
 
             return {
@@ -290,20 +288,20 @@ class CoinbaseBroker(BaseBroker):
                 "usd": usd_balance,
                 "trading_balance": trading_balance,
                 "crypto": crypto_holdings,
-                "consumer_usd": 0.0,  # Not checking consumer wallets with this method
-                "consumer_usdc": 0.0,
+                "consumer_usd": consumer_usd,
+                "consumer_usdc": consumer_usdc,
             }
         except Exception as e:
             logging.error(f"🔥 ERROR get_account_balance: {e}")
             import traceback
             traceback.print_exc()
             return {
-                "usdc": 0.0,
-                "usd": 0.0,
-                "trading_balance": 0.0,
-                "crypto": {},
-                "consumer_usd": 0.0,
-                "consumer_usdc": 0.0,
+                "usdc": usdc_balance,
+                "usd": usd_balance,
+                "trading_balance": usd_balance + usdc_balance,
+                "crypto": crypto_holdings,
+                "consumer_usd": consumer_usd,
+                "consumer_usdc": consumer_usdc,
             }
     
     def get_account_balance_OLD_BROKEN_METHOD(self):
@@ -552,26 +550,32 @@ class CoinbaseBroker(BaseBroker):
                     currency = a.get('currency')
                     name = a.get('name')
                     platform = a.get('platform')
+                    account_type = a.get('type')
                     av = (a.get('available_balance') or {}).get('value')
                     hd = (a.get('hold') or {}).get('value')
                 else:
                     currency = getattr(a, 'currency', None)
                     name = getattr(a, 'name', None)
                     platform = getattr(a, 'platform', None)
+                    account_type = getattr(a, 'type', None)
                     av = getattr(getattr(a, 'available_balance', None), 'value', None)
                     hd = getattr(getattr(a, 'hold', None), 'value', None)
+
+                is_tradeable = account_type == "ACCOUNT_TYPE_CRYPTO" or (platform and "ADVANCED_TRADE" in str(platform))
 
                 if currency in ("USD", "USDC"):
                     avf = _as_float(av)
                     hdf = _as_float(hd)
-                    lines.append(f"{currency:>4} | name={name} | platform={platform} | avail={avf:>10.2f} | held={hdf:>10.2f}")
-                    if currency == "USD":
-                        usd_total += avf
-                    else:
-                        usdc_total += avf
+                    tag = "TRADEABLE" if is_tradeable else "CONSUMER"
+                    lines.append(f"{currency:>4} | name={name} | platform={platform} | type={account_type} | avail={avf:>10.2f} | held={hdf:>10.2f} | {tag}")
+                    if is_tradeable:
+                        if currency == "USD":
+                            usd_total += avf
+                        else:
+                            usdc_total += avf
 
             lines.append("-" * 70)
-            trading = usdc_total if usdc_total > 0 else usd_total
+            trading = usd_total + usdc_total
             lines.append(f"Totals → USD: ${usd_total:.2f} | USDC: ${usdc_total:.2f} | Trading Balance: ${trading:.2f}")
             if usd_total == 0.0 and usdc_total == 0.0:
                 lines.append("👉 Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
