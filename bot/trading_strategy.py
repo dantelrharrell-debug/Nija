@@ -225,8 +225,8 @@ To enable trading:
         
         # Track open positions and trade history
         self.open_positions = {}
-        # Temporarily cap concurrent positions to limit fee drag while we stabilize PnL
-        self.max_concurrent_positions = 3
+        # ULTRA AGGRESSIVE: 8 concurrent positions for 15-day $5K goal
+        self.max_concurrent_positions = 8
         self.total_trades_executed = 0
         # Risk/exit tuning
         self.stop_loss_pct = 0.02  # 2% hard stop
@@ -241,7 +241,8 @@ To enable trading:
         self.loss_cooldown_seconds = 180
         self.last_loss_time = None
         # Market selection controls
-        self.limit_to_top_liquidity = True
+        # ULTRA AGGRESSIVE: Scan all 50 markets for maximum opportunities
+        self.limit_to_top_liquidity = False
         
         # Load saved positions from previous session
         loaded_positions = self.position_manager.load_positions()
