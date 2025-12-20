@@ -1,3 +1,15 @@
-Redeploy triggered at 2025-12-19 01:52 UTC
-Reason: Funds moved to Advanced Trade portfolio
-Status: Ready for live trading
+🚨 CRITICAL REDEPLOY NEEDED - 2025-12-20 19:45 UTC
+
+REASON: Bot NOT selling at profit targets!
+- 96 BUY orders executed
+- Only 4 SELL orders (all manual)
+- User losing money on forced liquidations
+- Fixes committed but Railway hasn't deployed them
+
+FIXES TO DEPLOY:
+✅ broker_manager.py: size_type='base' for SELL orders  
+✅ trading_strategy.py: crypto_quantity tracking
+✅ 8 consecutive trade limit
+✅ Profit target logic (6%)
+
+STATUS: FORCING FRESH BUILD

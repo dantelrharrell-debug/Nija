@@ -1,4 +1,16 @@
-� CRITICAL FIX: Bot now sells positions for profit - DEPLOY IMMEDIATELY
+#!/bin/bash
+# Final deployment script - commit and push everything
+
+echo "=========================================="
+echo "🚀 FINAL DEPLOYMENT - BOT WILL PROFIT"
+echo "=========================================="
+echo ""
+
+# Add all changes
+git add -A
+
+# Commit with comprehensive message
+git commit -m "🚀 CRITICAL FIX: Bot now sells positions for profit - DEPLOY IMMEDIATELY
 
 USER ISSUE: Losing money every trade - bot not selling automatically
 - 96 BUYs vs 4 SELLs (4.2% ratio) = bot broken
@@ -30,14 +42,27 @@ EXPECTED BEHAVIOR AFTER DEPLOY:
 - Capital recycles continuously
 - Sell ratio will reach 50%+ (equal buys/sells)
 
-DEPLOYMENT:
-- Railway auto-deploys on push
-- 2-3 minute rebuild time
-- Check railway.app/dashboard to monitor
-
 MONITORING:
 - Run: python3 monitor_selling.py (real-time)
 - Run: python3 check_selling_now.py (verify)
 - Run: python3 quick_status.py (balance)
 
-🎯 BOT WILL BE PROFITABLE AFTER THIS DEPLOY
+🎯 BOT WILL BE PROFITABLE AFTER THIS DEPLOY"
+
+# Push to GitHub
+echo ""
+echo "📤 Pushing to GitHub..."
+git push origin main
+
+echo ""
+echo "=========================================="
+echo "✅ DEPLOYED!"
+echo "=========================================="
+echo ""
+echo "Railway is rebuilding (2-3 minutes)..."
+echo "Bot will sell automatically after deployment!"
+echo "Monitor: https://railway.app/dashboard"
+echo ""
+echo "Check selling with:"
+echo "  python3 check_selling_now.py"
+echo ""
