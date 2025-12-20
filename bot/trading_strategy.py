@@ -574,13 +574,17 @@ To enable trading:
             position_size_pct = self.growth_manager.get_position_size_pct()
             calculated_size = self.account_balance * position_size_pct
             
-            # Coinbase minimum: $5.00
+            # Apply hard caps to position size
             coinbase_minimum = 5.00
+            max_position_hard_cap = self.growth_manager.get_max_position_usd()  # $100 hard cap
+            
+            # Enforce: min($5) <= position_size <= max($100)
             position_size_usd = max(coinbase_minimum, calculated_size)
+            position_size_usd = min(position_size_usd, max_position_hard_cap)
             
             logger.info(f"🔄 Executing {signal} for {symbol}")
             logger.info(f"   Price: ${analysis.get('price', 'N/A')}")
-            logger.info(f"   Position size: ${position_size_usd:.2f}")
+            logger.info(f"   Position size: ${position_size_usd:.2f} (capped at $100 max)")
             logger.info(f"   Reason: {analysis['reason']}")
             
             # Place market order with retry handling

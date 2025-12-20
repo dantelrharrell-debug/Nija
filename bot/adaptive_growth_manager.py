@@ -164,6 +164,17 @@ class AdaptiveGrowthManager:
         logger.debug(f"Position size: {position_pct*100:.0f}% ({self.current_stage})")
         return position_pct
     
+    def get_max_position_usd(self) -> float:
+        """
+        Get hard maximum position size in USD (hard cap regardless of percentage)
+        
+        Returns:
+            Maximum USD amount per single position (hard limit)
+        """
+        # Hard cap: $100 maximum per position - prevents over-leveraging
+        MAX_POSITION_USD = 100.0
+        return MAX_POSITION_USD
+    
     def record_performance(self, win_rate: float, avg_profit: float, total_trades: int):
         """
         Record trading performance metrics for learning
