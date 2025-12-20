@@ -520,14 +520,16 @@ class CoinbaseBroker(BaseBroker):
                     quote_size=str(quote_size_rounded)
                 )
             else:
-                logger.info(f"📤 Placing SELL order: {symbol}, base_size={quantity:.8f}")
+                # Round base_size to 8 decimals for crypto precision (Coinbase requirement)
+                base_size_rounded = round(quantity, 8)
+                logger.info(f"📤 Placing SELL order: {symbol}, base_size={base_size_rounded:.8f}")
                 if self.portfolio_uuid:
                     logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
                 
                 order = self.client.market_order_sell(
                     client_order_id,
                     product_id=symbol,
-                    base_size=str(quantity)
+                    base_size=str(base_size_rounded)  # Use rounded value
                 )
             
             # CRITICAL: Parse order response to check for success/failure
