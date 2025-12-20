@@ -580,8 +580,19 @@ class CoinbaseBroker(BaseBroker):
 
         return lines
     
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
-        """Place market order with balance verification"""
+    def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
+        """
+        Place market order with balance verification
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USD')
+            side: 'buy' or 'sell'
+            quantity: Amount to trade
+            size_type: 'quote' for USD amount (default) or 'base' for crypto amount
+        
+        Returns:
+            Order response dictionary
+        """
         try:
             if quantity <= 0:
                 raise ValueError(f"Refusing to place {side} order with non-positive size: {quantity}")
@@ -646,17 +657,31 @@ class CoinbaseBroker(BaseBroker):
                     quote_size=str(quote_size_rounded)
                 )
             else:
-                # Round base_size to 8 decimals for crypto precision (Coinbase requirement)
-                base_size_rounded = round(quantity, 8)
-                logger.info(f"📤 Placing SELL order: {symbol}, base_size={base_size_rounded:.8f}")
-                if self.portfolio_uuid:
-                    logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
-                
-                order = self.client.market_order_sell(
-                    client_order_id,
-                    product_id=symbol,
-                    base_size=str(base_size_rounded)  # Use rounded value
-                )
+                # SELL order - use base_size (crypto amount) or quote_size (USD value)
+                if size_type == 'base':
+                    # Round base_size to 8 decimals for crypto precision (Coinbase requirement)
+                    base_size_rounded = round(quantity, 8)
+                    logger.info(f"📤 Placing SELL order: {symbol}, base_size={base_size_rounded:.8f}")
+                    if self.portfolio_uuid:
+                        logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
+                    
+                    order = self.client.market_order_sell(
+                        client_order_id,
+                        product_id=symbol,
+                        base_size=str(base_size_rounded)  # Use rounded value
+                    )
+                else:
+                    # Use quote_size for SELL (less common, but supported)
+                    quote_size_rounded = round(quantity, 2)
+                    logger.info(f"📤 Placing SELL order: {symbol}, quote_size=${quote_size_rounded:.2f}")
+                    if self.portfolio_uuid:
+                        logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
+                    
+                    order = self.client.market_order_sell(
+                        client_order_id,
+                        product_id=symbol,
+                        quote_size=str(quote_size_rounded)
+                    )
             
             # CRITICAL: Parse order response to check for success/failure
             # Coinbase returns an object with 'success' field and 'error_response'
@@ -687,7 +712,21 @@ class CoinbaseBroker(BaseBroker):
                 }
             
             logger.info(f"✅ Order filled successfully: {symbol}")
-            return {"status": "filled", "order": order_dict}
+            
+            # Extract filled size from order response if available
+            # Coinbase returns this in the success_response
+            filled_size = None
+            success_response = order_dict.get('success_response', {})
+            if success_response:
+                filled_size = success_response.get('filled_size')
+                if filled_size:
+                    logger.info(f"   Filled crypto amount: {filled_size}")
+            
+            return {
+                "status": "filled", 
+                "order": order_dict,
+                "filled_size": float(filled_size) if filled_size else None
+            }
             
         except Exception as e:
             # Enhanced error logging with full details

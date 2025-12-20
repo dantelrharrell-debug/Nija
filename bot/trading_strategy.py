@@ -666,11 +666,17 @@ To enable trading:
                         take_profit=take_profit
                     )
                     
+                    # Calculate actual crypto quantity received (accounting for fees)
+                    # For BUY orders: we spent position_size_usd and received crypto
+                    # The order response should contain filled_size, but if not available, estimate
+                    crypto_quantity = order.get('filled_size', position_size_usd / entry_price)
+                    
                     # Track position with risk management levels
                     self.open_positions[symbol] = {
                         'side': signal,
                         'entry_price': entry_price,
                         'size_usd': position_size_usd,
+                        'crypto_quantity': float(crypto_quantity),  # CRITICAL: Store actual amount of crypto
                         'timestamp': datetime.now(),
                         'stop_loss': stop_loss,
                         'take_profit': take_profit,
@@ -810,19 +816,27 @@ To enable trading:
                     # Close position with retry handling
                     exit_signal = 'SELL' if side == 'BUY' else 'BUY'
                     try:
-                        # Calculate quantity to close (crypto amount for sell)
-                        quantity = position['size_usd'] / current_price
+                        # Use the ACTUAL crypto quantity from when we opened the position
+                        # This accounts for fees paid during entry
+                        quantity = position.get('crypto_quantity', position['size_usd'] / entry_price)
                         
                         logger.info(f"   🔄 Executing {exit_signal} order for {symbol}")
                         logger.info(f"   Position size: ${position['size_usd']:.2f}")
                         logger.info(f"   Crypto amount: {quantity:.8f}")
                         logger.info(f"   Current price: ${current_price:.2f}")
+                        logger.info(f"   Estimated exit value: ${quantity * current_price:.2f}")
                         
                         # Place exit order with manual retry
                         order = None
                         for attempt in range(1, 4):  # 3 attempts
                             try:
-                                result = self.broker.place_market_order(symbol, exit_signal.lower(), quantity)
+                                # CRITICAL: When SELLING crypto, use base_size (crypto amount), not quote_size (USD)
+                                result = self.broker.place_market_order(
+                                    symbol, 
+                                    exit_signal.lower(), 
+                                    quantity,
+                                    size_type='base' if exit_signal == 'SELL' else 'quote'
+                                )
                                 
                                 # CRITICAL FIX: Check for both 'filled' and 'unfilled' status
                                 if result and isinstance(result, dict):
