@@ -152,24 +152,31 @@ class CoinbaseBroker(BaseBroker):
             return False
     
     def _detect_portfolio(self):
-        """Auto-detect which portfolio has funds and should be used for trading"""
+        """DISABLED: Always use default Advanced Trade portfolio"""
         try:
-            # Check if user specified a portfolio name
-            target_portfolio = os.getenv("COINBASE_PORTFOLIO_NAME", "").strip()
+            # CRITICAL FIX: Do NOT auto-detect portfolio
+            # The Coinbase Advanced Trade API can ONLY trade from the default trading portfolio
+            # Consumer wallets (even if they show up in accounts list) CANNOT be used for trading
+            # The SDK's market_order_buy() always routes to the default portfolio
             
-            # Try to get portfolios (this API may not be available in all SDK versions)
+            logging.info("=" * 70)
+            logging.info("🎯 PORTFOLIO ROUTING: DEFAULT ADVANCED TRADE")
+            logging.info("=" * 70)
+            logging.info("   Using default Advanced Trade portfolio (SDK default)")
+            logging.info("   Consumer wallets are NOT accessible for trading")
+            logging.info("   Transfer funds via: https://www.coinbase.com/advanced-portfolio")
+            logging.info("=" * 70)
+            
+            # Do NOT set portfolio_uuid - let SDK use default
+            self.portfolio_uuid = None
+            
+            # Still fetch accounts for balance reporting
             try:
-                # Get all accounts and find the one with USD/USDC balance
                 accounts_resp = self.client.get_accounts() if hasattr(self.client, 'get_accounts') else self.client.list_accounts()
                 accounts = getattr(accounts_resp, 'accounts', [])
                 
-                logging.info("=" * 70)
-                logging.info("🔍 PORTFOLIO DETECTION - ALL ACCOUNTS:")
-                logging.info("=" * 70)
-                
-                portfolio_balances = {}
-                total_usd = 0.0
-                total_usdc = 0.0
+                logging.info("📊 ACCOUNT BALANCES (for information only):")
+                logging.info("-" * 70)
                 
                 for account in accounts:
                     currency = getattr(account, 'currency', None)
@@ -177,46 +184,12 @@ class CoinbaseBroker(BaseBroker):
                     available = float(getattr(available_obj, 'value', 0) or 0)
                     account_name = getattr(account, 'name', 'Unknown')
                     account_type = getattr(account, 'type', 'Unknown')
-                    uuid = getattr(account, 'uuid', 'no-uuid')
                     
-                    # Log EVERY USD/USDC account found
-                    if currency in ['USD', 'USDC']:
-                        logging.info(f"   📊 {currency}: ${available:.2f} | Name: '{account_name}' | Type: {account_type} | UUID: {uuid[:12]}...")
-                        
-                        if currency == 'USD':
-                            total_usd += available
-                        else:
-                            total_usdc += available
-                        
-                        # Track by account name
-                        if account_name not in portfolio_balances:
-                            portfolio_balances[account_name] = {'balance': 0, 'uuid': uuid, 'type': account_type}
-                        portfolio_balances[account_name]['balance'] += available
+                    if currency in ['USD', 'USDC'] and available > 0:
+                        tradeable = "✅ TRADEABLE" if account_type == "ACCOUNT_TYPE_CRYPTO" else "❌ NOT TRADEABLE (Consumer)"
+                        logging.info(f"   {currency}: ${available:.2f} | {account_name} | {tradeable}")
                 
-                logging.info("-" * 70)
-                logging.info(f"   TOTALS: USD=${total_usd:.2f} | USDC=${total_usdc:.2f} | COMBINED=${total_usd + total_usdc:.2f}")
                 logging.info("=" * 70)
-                
-                # Select portfolio for trading
-                if target_portfolio:
-                    # User specified a portfolio name
-                    logging.info(f"🎯 Looking for portfolio matching: '{target_portfolio}'")
-                    for name, info in portfolio_balances.items():
-                        if target_portfolio.upper() in name.upper():
-                            self.portfolio_uuid = info['uuid']
-                            logging.info(f"✅ Selected '{name}' portfolio: ${info['balance']:.2f}")
-                            break
-                
-                # If no match or no target specified, use portfolio with most funds
-                if not self.portfolio_uuid and portfolio_balances:
-                    best_portfolio = max(portfolio_balances.items(), key=lambda x: x[1]['balance'])
-                    self.portfolio_uuid = best_portfolio[1]['uuid']
-                    logging.info(f"🎯 Auto-selected portfolio with most funds: '{best_portfolio[0]}' (${best_portfolio[1]['balance']:.2f})")
-                
-                if self.portfolio_uuid:
-                    logging.info(f"✅ Portfolio routing configured")
-                else:
-                    logging.warning("⚠️  No portfolio UUID detected - using default routing")
                     
             except Exception as e:
                 logging.warning(f"⚠️  Portfolio detection failed: {e}")
@@ -327,24 +300,23 @@ class CoinbaseBroker(BaseBroker):
             except Exception as v3_error:
                 logging.warning(f"⚠️  v3 API check failed: {v3_error}")
 
-            # CRITICAL: Calculate trading balance based on ALLOW_CONSUMER_USD flag
-            if self.allow_consumer_usd:
-                # Include Consumer wallet balances when flag is enabled
-                total_usd = usd_balance + consumer_usd
-                total_usdc = usdc_balance + consumer_usdc
-                trading_balance = total_usdc if total_usdc > 0 else total_usd
-                logging.info(f"⚙️ ALLOW_CONSUMER_USD is ENABLED - Including Consumer wallet in trading balance")
-            else:
-                # Only use Advanced Trade balance when flag is disabled
-                trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
+            # CRITICAL FIX: ONLY Advanced Trade balances are tradeable
+            # Consumer wallet balances CANNOT be used for trading via API
+            # The market_order_buy() function can ONLY access Advanced Trade portfolio
+            trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
+            
+            # IGNORE ALLOW_CONSUMER_USD flag - it's misleading
+            # Consumer wallets are simply NOT accessible for API trading
+            if self.allow_consumer_usd and (consumer_usd > 0 or consumer_usdc > 0):
+                logging.warning("⚠️  ALLOW_CONSUMER_USD is enabled, but API cannot trade from Consumer wallets!")
+                logging.warning("   This flag has no effect. Transfer funds to Advanced Trade instead.")
 
             logging.info("=" * 70)
             logging.info("💰 BALANCE SUMMARY:")
-            consumer_label = "[INCLUDED IN TRADING]" if self.allow_consumer_usd else "[NOT TRADABLE]"
-            logging.info(f"   Consumer USD:  ${consumer_usd:.2f} {consumer_label}")
-            logging.info(f"   Consumer USDC: ${consumer_usdc:.2f} {consumer_label}")
-            logging.info(f"   Advanced Trade USD:  ${usd_balance:.2f} [TRADABLE]")
-            logging.info(f"   Advanced Trade USDC: ${usdc_balance:.2f} [TRADABLE]")
+            logging.info(f"   Consumer USD:  ${consumer_usd:.2f} ❌ [NOT TRADABLE - API LIMITATION]")
+            logging.info(f"   Consumer USDC: ${consumer_usdc:.2f} ❌ [NOT TRADABLE - API LIMITATION]")
+            logging.info(f"   Advanced Trade USD:  ${usd_balance:.2f} ✅ [TRADABLE]")
+            logging.info(f"   Advanced Trade USDC: ${usdc_balance:.2f} ✅ [TRADABLE]")
             logging.info(f"   ▶ TRADING BALANCE: ${trading_balance:.2f}")
             logging.info("")
             
@@ -358,19 +330,20 @@ class CoinbaseBroker(BaseBroker):
                 logging.error(f"   Minimum needed: ${MINIMUM_TRADING_BALANCE:.2f}")
                 logging.error(f"   Why? $5.00 order + fees (~$0.50) + safety margin")
                 logging.error("")
-                if (consumer_usd > 0 or consumer_usdc > 0) and not self.allow_consumer_usd:
-                    logging.error("   🔍 PROBLEM: Your funds are in Consumer wallet and ALLOW_CONSUMER_USD is disabled!")
-                    logging.error(f"   Consumer wallet has ${consumer_usd + consumer_usdc:.2f}")
+                if (consumer_usd > 0 or consumer_usdc > 0):
+                    logging.error("   🔍 ROOT CAUSE: Your funds are in Consumer wallet!")
+                    logging.error(f"   Consumer wallet has ${consumer_usd + consumer_usdc:.2f} (NOT TRADABLE)")
+                    logging.error(f"   Advanced Trade has ${trading_balance:.2f} (TRADABLE)")
                     logging.error("")
-                    logging.error("   HOW TO FIX (choose one):")
-                    logging.error("   Option 1: Enable Consumer wallet trading")
-                    logging.error("      Set environment variable: ALLOW_CONSUMER_USD=true")
-                    logging.error("      This allows trading from Consumer wallet via Coinbase API")
-                    logging.error("")
-                    logging.error("   Option 2: Transfer to Advanced Trade")
+                    logging.error("   🔧 SOLUTION: Transfer to Advanced Trade")
                     logging.error("      1. Go to: https://www.coinbase.com/advanced-portfolio")
                     logging.error("      2. Click 'Deposit' → 'From Coinbase'")
-                    logging.error("      3. Transfer your USD/USDC to Advanced Trade portfolio")
+                    logging.error(f"      3. Transfer ${consumer_usd + consumer_usdc:.2f} USD/USDC to Advanced Trade")
+                    logging.error("      4. Instant transfer, no fees")
+                    logging.error("")
+                    logging.error("   ❌ CANNOT FIX WITH CODE:")
+                    logging.error("      The Coinbase Advanced Trade API cannot access Consumer wallets")
+                    logging.error("      This is a Coinbase API limitation, not a bot issue")
                 elif trading_balance == 0:
                     logging.error("   No funds detected in any account")
                     logging.error("   Add funds to your Coinbase account")
@@ -518,8 +491,13 @@ class CoinbaseBroker(BaseBroker):
             client_order_id = str(uuid.uuid4())
             
             if side.lower() == 'buy':
+                # CRITICAL FIX: Round quote_size to 2 decimal places for Coinbase precision requirements
+                # Floating point math can create values like 23.016000000000002
+                # Coinbase rejects these with PREVIEW_INVALID_QUOTE_SIZE_PRECISION
+                quote_size_rounded = round(quantity, 2)
+                
                 # Use positional client_order_id to avoid SDK signature mismatch
-                logger.info(f"📤 Placing BUY order: {symbol}, quote_size=${quantity:.2f}")
+                logger.info(f"📤 Placing BUY order: {symbol}, quote_size=${quote_size_rounded:.2f}")
                 logger.info(f"   Using Coinbase Advanced Trade v3 API (market_order_buy)")
                 if self.portfolio_uuid:
                     logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
@@ -530,7 +508,7 @@ class CoinbaseBroker(BaseBroker):
                 order_kwargs = {
                     'client_order_id': client_order_id,
                     'product_id': symbol,
-                    'quote_size': str(quantity)
+                    'quote_size': str(quote_size_rounded)
                 }
                 
                 # Note: The Coinbase SDK market_order_buy may not support portfolio_uuid parameter
@@ -539,7 +517,7 @@ class CoinbaseBroker(BaseBroker):
                 order = self.client.market_order_buy(
                     client_order_id,
                     product_id=symbol,
-                    quote_size=str(quantity)
+                    quote_size=str(quote_size_rounded)
                 )
             else:
                 logger.info(f"📤 Placing SELL order: {symbol}, base_size={quantity:.8f}")
