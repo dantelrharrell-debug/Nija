@@ -2,11 +2,49 @@
 
 **Version**: APEX v7.1 - ULTRA AGGRESSIVE 15-DAY GOAL MODE 🚀  
 **Status**: Production Ready ✅ - **TRADING LIVE**  
-**Last Updated**: December 17, 2025 (15-DAY OPTIMIZATION)  
-**Current Balance**: $55.81 USDC  
-**Goal**: $5,000 in 15 days (34.94% daily return required)
+**Last Updated**: December 20, 2025 (BALANCE FIX DEPLOYED)  
+**Current Balance**: $93.28 ($35.74 USD + $57.54 USDC) + $62.95 crypto (BTC, ETH, ATOM)  
+**Goal**: $5,000 in 15 days
 
-> **🚀 15-DAY OPTIMIZATION POINT**: This README documents the **ULTRA AGGRESSIVE configuration** for 15-day $5K goal. All optimizations deployed and working.
+> **🔧 CRITICAL FIX - December 20, 2025**: Fixed balance detection issue. Bot now uses Portfolio Breakdown API instead of get_accounts(). See "RECOVERY INSTRUCTIONS" section below.
+
+---
+
+## ⚠️ RECOVERY INSTRUCTIONS - READ THIS FIRST
+
+**If bot shows $0 balance or can't trade**, here's how to restore to working state:
+
+### The Problem
+- Coinbase `get_accounts()` API returns empty results ($0.00)
+- Bot cannot see funds even though they exist in web UI
+- Portfolio breakdown API works correctly
+
+### The Solution (DEPLOYED & WORKING)
+**File**: `bot/broker_manager.py`  
+**Method**: `get_account_balance()`  
+**Fix**: Switched from `get_accounts()` to `get_portfolio_breakdown()`
+
+### Quick Recovery Steps
+```bash
+# 1. Verify balance fix is in place
+python3 test_updated_bot.py
+
+# 2. Check if bot is trading
+python3 check_if_selling_now.py
+
+# 3. If showing $0, verify the code uses portfolio breakdown:
+grep -n "get_portfolio_breakdown" bot/broker_manager.py
+
+# 4. Should see line ~200-250 with portfolio breakdown logic
+# If not present, restore from this commit (Dec 20, 2025)
+```
+
+### Verification
+✅ Bot should show: **$93.28 trading balance**  
+✅ Recent activity: BTC-USD BUY orders (filled)  
+✅ Status: ACTIVELY TRADING  
+
+**Last Verified Working**: December 20, 2025 16:25 UTC
 
 ---
 
@@ -811,9 +849,145 @@ railway logs -f
 
 ---
 
-## 🔒 Emergency Recovery
+## 🔒 Emergency Recovery - December 20, 2025 BALANCE FIX
 
-### If NIJA Stops Working or Something Breaks
+### If Bot Shows $0 Balance or Stops Trading
+
+**CRITICAL FIX - December 20, 2025**: Portfolio Breakdown API implementation
+
+#### The Problem
+- Coinbase `get_accounts()` returns empty results ($0.00)
+- Funds exist in web UI but bot cannot detect them
+- Bot refuses to trade with $0 balance
+
+#### The Solution (DEPLOYED & WORKING)
+
+**File Changed**: `bot/broker_manager.py`  
+**Method**: `get_account_balance()`  
+**Fix**: Replaced `get_accounts()` with `get_portfolio_breakdown()`
+
+**Code Snippet** (lines ~200-250 in broker_manager.py):
+```python
+def get_account_balance(self):
+    """
+    Get available trading balance using Portfolio Breakdown API
+    WORKING METHOD - get_accounts() was returning $0
+    """
+    try:
+        # Get default portfolio
+        portfolios_resp = self.client.get_portfolios()
+        default_portfolio = None
+        
+        if hasattr(portfolios_resp, 'portfolios'):
+            for p in portfolios_resp.portfolios:
+                if getattr(p, 'type', '') == 'DEFAULT':
+                    default_portfolio = p
+                    break
+        
+        if not default_portfolio:
+            return {'usd': 0, 'usdc': 0, 'trading_balance': 0}
+        
+        # Get portfolio breakdown (THIS WORKS!)
+        breakdown_resp = self.client.get_portfolio_breakdown(
+            portfolio_uuid=default_portfolio.uuid
+        )
+        
+        breakdown = getattr(breakdown_resp, 'breakdown', None)
+        spot_positions = getattr(breakdown, 'spot_positions', [])
+        
+        usd_total = 0
+        usdc_total = 0
+        
+        for position in spot_positions:
+            currency = getattr(position, 'asset', '')
+            available = float(getattr(position, 'available_to_trade_fiat', 0))
+            
+            if currency == 'USD':
+                usd_total += available
+            elif currency == 'USDC':
+                usdc_total += available
+        
+        trading_balance = usd_total + usdc_total
+        
+        return {
+            'usd': usd_total,
+            'usdc': usdc_total,
+            'trading_balance': trading_balance
+        }
+    except Exception as e:
+        logger.error(f"Balance detection failed: {e}")
+        return {'usd': 0, 'usdc': 0, 'trading_balance': 0}
+```
+
+#### Quick Recovery Steps
+
+```bash
+# 1. Verify you have the fix
+grep -n "get_portfolio_breakdown" bot/broker_manager.py
+
+# 2. Test balance detection
+python3 test_updated_bot.py
+
+# 3. Check if bot is trading
+python3 check_if_selling_now.py
+
+# 4. If still showing $0, restore from this commit
+git log --oneline --all | grep "balance detection"
+git reset --hard <commit-hash>
+git push --force
+
+# 5. Verify Railway redeployed
+railway logs -f
+```
+
+#### Expected Results After Fix
+
+✅ **Balance Check**:
+```
+Trading Balance: $93.28
+  - USD:  $35.74
+  - USDC: $57.54
+✅ Bot CAN see funds!
+```
+
+✅ **Activity Check**:
+```
+🎯 RECENT ORDERS (last 60 minutes):
+🟢 1m ago - BUY BTC-USD (FILLED)
+
+✅ YES! NIJA IS ACTIVELY TRADING NOW!
+```
+
+#### Files Modified in This Fix
+
+1. **bot/broker_manager.py** - Complete rewrite of `get_account_balance()`
+2. **check_tradable_balance.py** - Fixed to use `getattr()` for API objects
+3. **test_updated_bot.py** - NEW integration test
+4. **check_if_selling_now.py** - NEW activity monitor
+
+#### Verification Commands
+
+```bash
+# Check working balance
+python3 -c "from bot.broker_manager import CoinbaseBroker; b=CoinbaseBroker(); b.connect(); print(b.get_account_balance())"
+
+# Should output:
+# {'usd': 35.74, 'usdc': 57.54, 'trading_balance': 93.28, ...}
+```
+
+#### Last Known Working State
+
+**Commit**: Latest on main branch (Dec 20, 2025)  
+**Balance**: $93.28 ($35.74 USD + $57.54 USDC)  
+**Crypto**: BTC ($61.45), ETH ($0.91), ATOM ($0.60)  
+**Status**: ACTIVELY TRADING (BTC-USD buy 1min ago)  
+**Verified**: December 20, 2025 16:25 UTC
+
+---
+
+## 🔒 Previous Recovery Point (December 16, 2025)
+
+### If New Fix Breaks, Restore to Pre-Balance-Fix State
 
 This section will restore NIJA to the **last known working state** (December 16, 2025 - Trading successfully with $47.31 balance).
 
