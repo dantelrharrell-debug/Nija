@@ -201,11 +201,13 @@ To enable trading:
             growth_config = self.growth_manager.get_current_config()
             logger.info(f"🧠 Growth Stage: {growth_config['description']}")
             
+            tuned_min_adx = growth_config['min_adx'] + 5 if 'min_adx' in growth_config else 25
+            tuned_volume = growth_config['volume_threshold'] * 1.15 if 'volume_threshold' in growth_config else 1.0
             self.strategy = NIJAApexStrategyV71(
                 broker_client=self.broker.client,
                 config={
-                    'min_adx': growth_config['min_adx'],
-                    'volume_threshold': growth_config['volume_threshold'],
+                    'min_adx': tuned_min_adx,
+                    'volume_threshold': tuned_volume,
                     'ai_momentum_enabled': True  # ENABLED for 15-day goal
                 }
             )
@@ -226,6 +228,20 @@ To enable trading:
         # Temporarily cap concurrent positions to limit fee drag while we stabilize PnL
         self.max_concurrent_positions = 3
         self.total_trades_executed = 0
+        # Risk/exit tuning
+        self.stop_loss_pct = 0.02  # 2% hard stop
+        self.base_take_profit_pct = 0.05  # initial TP
+        self.stepped_take_profit_pct = 0.08  # stepped TP after price moves in our favor
+        self.take_profit_step_trigger = 0.03  # when price moves 3% in favor, step TP
+        # Lock 55% of peak gains when trailing to reduce give-back on winners
+        self.trailing_lock_ratio = 0.55
+        # Sizing controls
+        self.max_position_cap_usd = 75.0  # cap per-trade size until balance grows
+        # Loss streak cooldown
+        self.loss_cooldown_seconds = 180
+        self.last_loss_time = None
+        # Market selection controls
+        self.limit_to_top_liquidity = True
         
         # Load saved positions from previous session
         loaded_positions = self.position_manager.load_positions()
@@ -289,6 +305,17 @@ To enable trading:
             '1INCH-USD', 'BAT-USD', 'ZRX-USD', 'YFI-USD', 'SHIB-USD',
             'PEPE-USD', 'FET-USD', 'INJ-USD', 'RENDER-USD'
         ]
+        
+        top_liquidity = [
+            'BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'LINK-USD',
+            'LTC-USD', 'ADA-USD', 'XRP-USD', 'DOGE-USD', 'DOT-USD',
+            'ATOM-USD', 'NEAR-USD', 'BCH-USD', 'APT-USD', 'UNI-USD',
+            'FIL-USD', 'ARB-USD', 'OP-USD', 'ICP-USD', 'ALGO-USD'
+        ]
+        
+        if self.limit_to_top_liquidity:
+            logger.info(f"✅ Using top-liquidity set of {len(top_liquidity)} markets")
+            return top_liquidity
         
         logger.info(f"✅ Using curated list of {len(top_markets)} high-volume markets")
         return top_markets
@@ -526,6 +553,15 @@ To enable trading:
                 if time_since_last < self.min_time_between_trades:
                     logger.info(f"Skipping {symbol}: Too soon since last trade ({time_since_last:.1f}s)")
                     return False
+
+            # Cooldown after loss streaks
+            if self.consecutive_losses >= 2 and self.last_loss_time:
+                since_loss = time.time() - self.last_loss_time
+                if since_loss < self.loss_cooldown_seconds:
+                    logger.info(
+                        f"Skipping {symbol}: Cooling down after {self.consecutive_losses} losses; {self.loss_cooldown_seconds - since_loss:.1f}s remaining"
+                    )
+                    return False
             
             # Check max concurrent positions limit
             if len(self.open_positions) >= self.max_concurrent_positions:
@@ -582,10 +618,11 @@ To enable trading:
             # Apply hard caps to position size
             coinbase_minimum = 5.00
             max_position_hard_cap = self.growth_manager.get_max_position_usd()  # $100 hard cap
+            effective_cap = min(max_position_hard_cap, self.max_position_cap_usd)
             
-            # Enforce: min($5) <= position_size <= max($100)
+            # Enforce: min($5) <= position_size <= effective cap and available balance
             position_size_usd = max(coinbase_minimum, calculated_size)
-            position_size_usd = min(position_size_usd, max_position_hard_cap, live_balance)
+            position_size_usd = min(position_size_usd, effective_cap, live_balance)
 
             # If we don't have enough tradable balance for even the $5 minimum, stop quickly
             if position_size_usd < coinbase_minimum or live_balance < coinbase_minimum:
@@ -668,17 +705,19 @@ To enable trading:
                     
                     # Calculate stop loss and take profit levels
                     entry_price = actual_fill_price
-                    stop_loss_pct = 0.02  # 2% stop loss
-                    take_profit_pct = 0.06  # 6% take profit (3:1 risk/reward)
+                    stop_loss_pct = self.stop_loss_pct
+                    take_profit_pct = self.base_take_profit_pct
                     
                     if signal == 'BUY':
                         stop_loss = entry_price * (1 - stop_loss_pct)
                         take_profit = entry_price * (1 + take_profit_pct)
                         trailing_stop = stop_loss  # Initialize trailing stop at stop loss
+                        tp_stepped = False
                     else:  # SELL
                         stop_loss = entry_price * (1 + stop_loss_pct)
                         take_profit = entry_price * (1 - take_profit_pct)
                         trailing_stop = stop_loss
+                        tp_stepped = False
                     
                     # Record entry with analytics (includes fee tracking)
                     trade_id = self.analytics.record_entry(
@@ -717,7 +756,8 @@ To enable trading:
                         'trailing_stop': trailing_stop,
                         'highest_price': entry_price if signal == 'BUY' else None,
                         'lowest_price': entry_price if signal == 'SELL' else None,
-                        'trade_id': trade_id
+                        'trade_id': trade_id,
+                        'tp_stepped': tp_stepped
                     }
                     
                     self.last_trade_time = time.time()
@@ -798,12 +838,21 @@ To enable trading:
                     # Update highest price for trailing stop
                     if current_price > position.get('highest_price', entry_price):
                         position['highest_price'] = current_price
-                        # Update trailing stop (lock in 98% of gains - only give back 2%)
-                        new_trailing = entry_price + (current_price - entry_price) * 0.98
+                        # Update trailing stop to lock in part of the move
+                        new_trailing = entry_price + (current_price - entry_price) * self.trailing_lock_ratio
                         if new_trailing > trailing_stop:
                             position['trailing_stop'] = new_trailing
                             locked_profit_pct = ((new_trailing - entry_price) / entry_price) * 100
                             logger.info(f"   📈 Trailing stop updated: ${new_trailing:.2f} (locks in {locked_profit_pct:.2f}% profit)")
+
+                        # Step take-profit once price moves sufficiently in our favor
+                        if (not position.get('tp_stepped')) and current_price >= entry_price * (1 + self.take_profit_step_trigger):
+                            stepped_tp = entry_price * (1 + self.stepped_take_profit_pct)
+                            position['take_profit'] = stepped_tp
+                            position['tp_stepped'] = True
+                            logger.info(
+                                f"   🎯 TP stepped up to ${stepped_tp:.2f} after move ≥ {self.take_profit_step_trigger*100:.1f}%"
+                            )
                     
                     # Check stop loss
                     if current_price <= stop_loss:
@@ -812,8 +861,8 @@ To enable trading:
                     elif current_price <= trailing_stop:
                         exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
                     # Check take profit
-                    elif current_price >= take_profit:
-                        exit_reason = f"Take profit hit @ ${take_profit:.2f}"
+                    elif current_price >= position['take_profit']:
+                        exit_reason = f"Take profit hit @ ${position['take_profit']:.2f}"
                     # Check for opposite signal
                     elif analysis.get('signal') == 'SELL':
                         exit_reason = f"Opposite signal detected: {analysis.get('reason')}"
@@ -822,8 +871,8 @@ To enable trading:
                     # Update lowest price for trailing stop
                     if current_price < position.get('lowest_price', entry_price):
                         position['lowest_price'] = current_price
-                        # Update trailing stop (lock in 98% of gains - only give back 2%)
-                        new_trailing = entry_price - (entry_price - current_price) * 0.98
+                        # Update trailing stop to lock in part of the move
+                        new_trailing = entry_price - (entry_price - current_price) * self.trailing_lock_ratio
                         if new_trailing < trailing_stop:
                             position['trailing_stop'] = new_trailing
                             locked_profit_pct = ((entry_price - new_trailing) / entry_price) * 100
@@ -919,10 +968,11 @@ To enable trading:
                             # Update stats
                             if pnl_usd > 0:
                                 self.winning_trades += 1
-                                logger.info(f"✅ Position closed with PROFIT: ${pnl_usd:+.2f}")
-                            else:
-                                logger.info(f"❌ Position closed with LOSS: ${pnl_usd:+.2f}")
-                            
+                        self.consecutive_losses = 0
+                        logger.info(f"✅ Position closed with PROFIT: ${pnl_usd:+.2f}")
+                    else:
+                        self.consecutive_losses += 1
+                        self.last_loss_time = time.time()
                             positions_to_close.append(symbol)
                             self.total_trades_executed += 1
                             
@@ -1013,11 +1063,13 @@ To enable trading:
             stage_changed, new_config = self.growth_manager.update_stage(self.account_balance)
             if stage_changed:
                 logger.info("🔄 Reinitializing strategy with new growth stage parameters...")
+                tuned_min_adx = new_config['min_adx'] + 5 if 'min_adx' in new_config else 25
+                tuned_volume = new_config['volume_threshold'] * 1.15 if 'volume_threshold' in new_config else 1.0
                 self.strategy = NIJAApexStrategyV71(
                     broker_client=self.broker.client,
                     config={
-                        'min_adx': new_config['min_adx'],
-                        'volume_threshold': new_config['volume_threshold'],
+                        'min_adx': tuned_min_adx,
+                        'volume_threshold': tuned_volume,
                         'ai_momentum_enabled': True  # ENABLED for 15-day goal
                     }
                 )
