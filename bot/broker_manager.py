@@ -155,7 +155,7 @@ class CoinbaseBroker(BaseBroker):
         """Auto-detect which portfolio has funds and should be used for trading"""
         try:
             # Check if user specified a portfolio name
-            target_portfolio = os.getenv("COINBASE_PORTFOLIO_NAME", "NIJA").strip()
+            target_portfolio = os.getenv("COINBASE_PORTFOLIO_NAME", "").strip()
             
             # Try to get portfolios (this API may not be available in all SDK versions)
             try:
@@ -163,34 +163,58 @@ class CoinbaseBroker(BaseBroker):
                 accounts_resp = self.client.get_accounts() if hasattr(self.client, 'get_accounts') else self.client.list_accounts()
                 accounts = getattr(accounts_resp, 'accounts', [])
                 
+                logging.info("=" * 70)
+                logging.info("🔍 PORTFOLIO DETECTION - ALL ACCOUNTS:")
+                logging.info("=" * 70)
+                
                 portfolio_balances = {}
+                total_usd = 0.0
+                total_usdc = 0.0
                 
                 for account in accounts:
                     currency = getattr(account, 'currency', None)
                     available_obj = getattr(account, 'available_balance', None)
                     available = float(getattr(available_obj, 'value', 0) or 0)
                     account_name = getattr(account, 'name', 'Unknown')
-                    uuid = getattr(account, 'uuid', None)
+                    account_type = getattr(account, 'type', 'Unknown')
+                    uuid = getattr(account, 'uuid', 'no-uuid')
                     
-                    # Track USD/USDC balances by account name
-                    if currency in ['USD', 'USDC'] and available > 0:
-                        if account_name not in portfolio_balances:
-                            portfolio_balances[account_name] = {'balance': 0, 'uuid': uuid}
-                        portfolio_balances[account_name]['balance'] += available
+                    # Log EVERY USD/USDC account found
+                    if currency in ['USD', 'USDC']:
+                        logging.info(f"   📊 {currency}: ${available:.2f} | Name: '{account_name}' | Type: {account_type} | UUID: {uuid[:12]}...")
                         
-                        # If this matches target portfolio, use it
-                        if target_portfolio.upper() in account_name.upper():
-                            self.portfolio_uuid = uuid
-                            logging.info(f"🎯 Portfolio routing: Using '{account_name}' portfolio (UUID: {uuid[:8]}...) with ${available:.2f}")
+                        if currency == 'USD':
+                            total_usd += available
+                        else:
+                            total_usdc += available
+                        
+                        # Track by account name
+                        if account_name not in portfolio_balances:
+                            portfolio_balances[account_name] = {'balance': 0, 'uuid': uuid, 'type': account_type}
+                        portfolio_balances[account_name]['balance'] += available
                 
-                # If no specific portfolio found, use the one with the most funds
+                logging.info("-" * 70)
+                logging.info(f"   TOTALS: USD=${total_usd:.2f} | USDC=${total_usdc:.2f} | COMBINED=${total_usd + total_usdc:.2f}")
+                logging.info("=" * 70)
+                
+                # Select portfolio for trading
+                if target_portfolio:
+                    # User specified a portfolio name
+                    logging.info(f"🎯 Looking for portfolio matching: '{target_portfolio}'")
+                    for name, info in portfolio_balances.items():
+                        if target_portfolio.upper() in name.upper():
+                            self.portfolio_uuid = info['uuid']
+                            logging.info(f"✅ Selected '{name}' portfolio: ${info['balance']:.2f}")
+                            break
+                
+                # If no match or no target specified, use portfolio with most funds
                 if not self.portfolio_uuid and portfolio_balances:
                     best_portfolio = max(portfolio_balances.items(), key=lambda x: x[1]['balance'])
                     self.portfolio_uuid = best_portfolio[1]['uuid']
-                    logging.info(f"🎯 Portfolio routing: Auto-selected '{best_portfolio[0]}' with ${best_portfolio[1]['balance']:.2f}")
+                    logging.info(f"🎯 Auto-selected portfolio with most funds: '{best_portfolio[0]}' (${best_portfolio[1]['balance']:.2f})")
                 
                 if self.portfolio_uuid:
-                    logging.info(f"✅ Portfolio routing configured - trades will execute from this portfolio")
+                    logging.info(f"✅ Portfolio routing configured")
                 else:
                     logging.warning("⚠️  No portfolio UUID detected - using default routing")
                     
