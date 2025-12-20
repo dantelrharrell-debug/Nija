@@ -1,10 +1,10 @@
 # NIJA - Autonomous Cryptocurrency Trading Bot
 
-**Version**: APEX v7.1 - ULTRA AGGRESSIVE 15-DAY GOAL MODE 🚀  
+**Version**: APEX v7.1 - PROFIT-FOCUSED MODE 🎯  
 **Status**: Production Ready ✅ - **TRADING LIVE**  
-**Last Updated**: December 20, 2025 (BALANCE FIX DEPLOYED)  
-**Current Balance**: $93.28 ($35.74 USD + $57.54 USDC) + $62.95 crypto (BTC, ETH, ATOM)  
-**Goal**: $5,000 in 15 days
+**Last Updated**: December 20, 2025 (PROFIT PROTECTION DEPLOYED)  
+**Current Balance**: ~$84 (in 5 open positions)  
+**Goal**: $1,000/day sustainable income
 
 > **🔧 CRITICAL FIX - December 20, 2025**: Fixed balance detection issue. Bot now uses Portfolio Breakdown API instead of get_accounts(). See "RECOVERY INSTRUCTIONS" section below.
 
@@ -48,113 +48,131 @@ grep -n "get_portfolio_breakdown" bot/broker_manager.py
 
 ---
 
-## 🎯 Mission: $5,000 in 15 Days
+## 🎯 Mission: $1,000/Day Sustainable Income
 
-NIJA is now configured for MAXIMUM GROWTH with safety intact. Deployed December 17, 2025 with full optimization suite targeting 34.94% daily returns.
+NIJA is now configured for PROFIT PROTECTION with disciplined growth. Deployed December 20, 2025 with profit-focused parameters targeting consistent daily gains.
 
-### The 15-Day ULTRA AGGRESSIVE Plan
+### The Path to Living Wage Income
 
-**Starting Balance**: $55.81 USDC  
-**Target Balance**: $5,000  
-**Timeline**: 15 days  
-**Required Daily Return**: 34.94%  
-**Current Status**: ULTRA AGGRESSIVE MODE - All optimizations live ✅
+**Starting Balance**: ~$84 (recovered from $50 loss)  
+**Target**: $1,000/day sustainable income  
+**Strategy**: Protect profits, compound wins, cut losers fast  
+**Current Status**: PROFIT-FOCUSED MODE - 80% trailing lock active ✅
 
-#### Current ULTRA AGGRESSIVE Configuration
+#### Current PROFIT-FOCUSED Configuration
 
-**PROVEN WORKING SETTINGS (December 17, 2025)**:
-- ✅ **8 Concurrent Positions** - Maximum diversification
-- ✅ **50 Markets Scanned** - Curated high-volume crypto list
+**DEPLOYED SETTINGS (December 20, 2025)**:
+- ✅ **3 Concurrent Positions** - Focused capital allocation
+- ✅ **20 Markets Scanned** - Top liquidity pairs only (BTC, ETH, SOL, etc.)
 - ✅ **15-Second Scan Cycles** - 4 scans per minute
-- ✅ **0.5-Second Trade Cooldown** - Rapid multi-position fills
-- ✅ **AI Momentum Filtering** - Enabled for quality
-- ✅ **ULTRA AGGRESSIVE to $300** - Extended threshold (was $50)
-- ✅ **40% Max Position Size** - Up from 25%
-- ✅ **90% Max Exposure** - Up from 50%
-- ✅ **Zero Entry Barriers** - ADX=0, Volume=0%, 2/5 filters
+- ✅ **180s Loss Cooldown** - Pause after 2 consecutive losses
+- ✅ **$75 Max Position Size** - Prevents oversized bets
+- ✅ **5% → 8% Take Profit** - Steps up after 3% favorable move
+- ✅ **80% Trailing Lock** - Only gives back 2% of profits
+- ✅ **2% Stop Loss** - Cuts losers immediately
+- ✅ **Quality Filters** - ADX +5, Volume +15% for better signals
 
-**First Trades Executed**: December 17, 2025 22:23 UTC
-- ETH-USD: BUY at $2,825 (4/5 signal)
-- VET-USD: BUY at $0.01023 (4/5 signal)
-- 13+ additional signals found in first scan
+**Profit Protection Active**: December 20, 2025 22:10 UTC
+- 5 open positions protected with 80% trailing
+- Win rate improvement: 31% → targeting 50%+
+- Risk per trade: Capped at $75 with 2% stop
 
 ### Key Features
 
-- ✅ **8 Concurrent Positions**: Trade up to 8 cryptos simultaneously
-- ✅ **50 Market Coverage**: Curated list of top crypto pairs (BTC, ETH, SOL, XRP, ADA, AVAX, DOGE, etc.)
-- ✅ **15-Second Scan Cycles**: 240 scans per hour for maximum opportunity capture
-- ✅ **0.5s Trade Cooldown**: Can fill all 8 positions in ~4 seconds when signals align
+- ✅ **3 Concurrent Positions**: Focused capital allocation for quality over quantity
+- ✅ **20 Market Coverage**: Top liquidity pairs only (BTC, ETH, SOL, AVAX, LINK, etc.)
+- ✅ **15-Second Scan Cycles**: 240 scans per hour for opportunity capture
+- ✅ **180s Loss Cooldown**: Automatic pause after consecutive losses
 - ✅ **APEX v7.1 Strategy**: Dual RSI (9+14), VWAP, EMA, MACD, ATR, ADX indicators
-- ✅ **AI Momentum Filtering**: Enhanced signal quality with machine learning
-- ✅ **Complete Position Management**: 2% stop loss, 6% take profit, trailing stops
+- ✅ **Enhanced Signal Filters**: ADX +5, Volume +15% for quality trades
+- ✅ **80% Profit Protection**: Locks 4 out of 5 dollars gained, trails at 2%
+- ✅ **Disciplined Risk**: 2% stop loss, 5-8% stepped take profit, $75 max position
 - ✅ **Automatic Compounding**: Every win increases position size
-- ✅ **Adaptive Risk Protection**: Auto-reduces aggressiveness as balance grows
 - ✅ **24/7 Autonomous Trading**: Never sleeps, never misses opportunities
 
 ### Performance Metrics & Growth Strategy
 
-**Current Trading Balance**: $55.81 USDC  
-**Growth Stage**: ULTRA AGGRESSIVE (Auto-adjusts at $300, $1K, $3K milestones)  
-**Markets**: 50 curated high-volume crypto pairs  
-**Position Sizing**: 8-40% per trade (adapts as balance grows)  
-**Max Concurrent Positions**: 8 (better diversification)  
+**Current Trading Balance**: ~$84 (5 open positions)  
+**Win Rate Target**: 50%+ (up from 31%)  
+**Markets**: 20 top liquidity crypto pairs  
+**Position Sizing**: $5-75 per trade (capped for safety)  
+**Max Concurrent Positions**: 3 (focused allocation)  
 **Scan Frequency**: Every 15 seconds (4x per minute)  
-**Trade Cooldown**: 0.5 seconds (rapid fills)  
-**Target**: $5,000 in 15 days → 34.94% daily return
+**Loss Cooldown**: 180s after 2 consecutive losses  
+**Profit Protection**: 80% trailing lock (only gives back 2%)  
+**Target**: $1,000/day sustainable income
 
-#### Intelligent Growth Stages (Auto-Adjusting)
+#### Realistic Path to $1,000/Day Income
 
-NIJA automatically reduces risk as your balance grows:
+**Current Status**: ~$84 balance (5 open positions)  
+**Progress**: 8.4% of minimum viable capital needed
 
-**Stage 1: $0-$300 (CURRENT) - ULTRA AGGRESSIVE**
-- **ADX**: 0 (trade any market condition)
-- **Volume**: 0% minimum (no volume filter)
-- **Filters**: 2/5 agreement (lower barrier)
-- **Position**: 8-40% per trade (8 concurrent max)
-- **Max Exposure**: 90% of account
-- **Goal**: Maximum growth, catch every opportunity
-- **Daily Target**: 34.94% compound return
-- **Status**: 🔥 Active now ($55.81 balance)
+**The Math**: To generate $1,000/day sustainably:
+- Need account size: **$10,000-$20,000**
+- Daily return: 5-10% (conservative)
+- Win rate: 50-60% (achievable)
+- Trades/day: 10-20 (selective)
 
-**Stage 2: $300-$1,000 - AGGRESSIVE**
-- **ADX**: 10 (stronger trends)
-- **Volume**: 10% minimum
-- **Filters**: 3/5 agreement  
-- **Position**: 6-30% per trade
-- **Max Exposure**: 80%
-- **Goal**: Continue rapid growth
-- **Daily Target**: 25-30%
+**Growth Milestones**:
 
-**Stage 3: $1,000-$3,000 - MODERATE**
-- **ADX**: 15 (good trends)
-- **Volume**: 15% minimum
-- **Filters**: 4/5 agreement
-- **Position**: 4-20% per trade
-- **Max Exposure**: 70%
-- **Goal**: Protect gains
-- **Daily Target**: 15-20%
+**Milestone 1: $84 → $500 (CURRENT FOCUS)**
+- **Position Size**: $5-75 per trade (3 max concurrent)
+- **Take Profit**: 5% → 8% (stepped)
+- **Stop Loss**: 2% hard stop
+- **Trailing**: 80% lock (only give back 2%)
+- **Time Estimate**: 30-60 days (with 50% win rate)
+- **Daily Target**: +$10-25/day
+- **Status**: 🎯 Active - Profit protection deployed
 
-**Stage 4: $3,000+ - CONSERVATIVE (Sustainable Income)**
-- **ADX**: 20 (strong trends only)
-- **Volume**: 20% minimum
-- **Filters**: 4/5 agreement
-- **Position**: 2-10% per trade
-- **Max Exposure**: 60%
-- **Goal**: Living wage income maintenance
-- **Daily Target**: $300-1,000/day
+**Milestone 2: $500 → $2,000**
+- **Position Size**: $25-150 per trade
+- **Daily Target**: +$50-100/day
+- **Time Estimate**: 30-45 days
+- **Focus**: Consistency over aggression
 
-#### Compounding Power: The Path to $5,000 (98% Profit Lock)
+**Milestone 3: $2,000 → $5,000**
+- **Position Size**: $100-300 per trade
+- **Daily Target**: +$100-250/day
+- **Time Estimate**: 20-30 days
+- **Focus**: Protect gains, steady compound
 
-| Day | Balance | Daily Profit | Daily Earning Power | Milestone |
-|-----|---------|--------------|---------------------|-----------||
-| 1 | $47 | $16-24 | $7-12/day | Starting point (+$30 boost!) |
-| 3 | $115 | $23-35 | $23-35/day | First $100 🎉 |
-| 8 | $501 | $100-150 | $100-150/day | First $500 |
-| 10 | $1,046 | $209-314 | $209-314/day | 4-digit account |
-| 14 | $2,938 | $588-882 | $588-882/day | Approaching goal |
-| 16 | $5,298+ | $1,060-1,590 | **$1,000-1,590/day** | **LIVING WAGE** ✅ |
+**Milestone 4: $5,000 → $10,000**
+- **Position Size**: $250-500 per trade
+- **Daily Target**: +$250-500/day
+- **Time Estimate**: 15-25 days
+- **Focus**: Risk management, capital preservation
 
-**Key Insight**: With 98% profit lock, effective daily return is 34.3% (vs 17.5% with 50% lock). This DOUBLES compounding speed! You can compound $47 to $5,000 in ~16 days. The 98% trailing stop keeps almost all gains from every winner. From there, even conservative 20% daily returns = $1,000+/day.
+**Living Wage Income: $10,000+**
+- **Position Size**: $500-1,000 per trade
+- **Daily Target**: $500-1,000/day (5-10% returns)
+- **Win Rate**: 60%+ (mature strategy)
+- **Focus**: Sustainable income generation
+- **Estimated Timeline**: 4-6 months from $84 start
+
+#### Honest Growth Timeline: $84 → $1,000/Day Income
+
+**Conservative Estimates** (50% win rate, 80% profit lock):
+
+| Month | Balance | Daily Earning | Weekly Target | Milestone |
+|-------|---------|---------------|---------------|-----------|
+| 1 | $84 → $300 | $5-15/day | +$50-100/week | Recovery phase |
+| 2 | $300 → $800 | $15-40/day | +$100-250/week | Building momentum |
+| 3 | $800 → $2,000 | $40-100/day | +$250-600/week | 4-digit account 🎉 |
+| 4 | $2,000 → $4,000 | $100-200/day | +$600-1,200/week | Accelerating |
+| 5 | $4,000 → $7,000 | $200-350/day | +$1,000-2,000/week | Approaching goal |
+| 6 | $7,000 → $10,000+ | $350-500/day | +$2,000-3,000/week | Income ready |
+| **Income Phase** | $10,000+ | **$500-1,000/day** | **$3,000-6,000/week** | **LIVING WAGE** ✅ |
+
+**Key Factors**:
+- 80% profit lock = Keep 4 out of 5 dollars gained
+- 2% stop loss = Cut losers fast, preserve capital
+- 50% win rate = 1 winner covers 2 losers (with 5-8% TP)
+- Consistent execution = 10-20 quality trades/day
+- Capital preservation > aggressive growth
+
+**You Are Here**: Month 1, $84 balance, 5 open positions
+**Next Milestone**: $300 (216% gain needed)
+**Realistic Timeline**: 4-6 months to $1,000/day sustainable income
 
 ---
 
