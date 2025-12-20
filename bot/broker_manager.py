@@ -200,6 +200,115 @@ class CoinbaseBroker(BaseBroker):
     
     def get_account_balance(self):
         """
+        Get account balance using portfolio breakdown API
+        
+        UPDATED: Uses portfolio breakdown API which is the only method
+        that can actually see the funds in Default portfolio.
+        
+        Returns dict with: { "usdc": float, "usd": float, "trading_balance": float, "crypto": {}}
+        """
+        try:
+            logging.info("💰 Fetching account balance...")
+            
+            # Use portfolio breakdown API (the method that actually works!)
+            portfolios_resp = self.client.get_portfolios()
+            portfolios = getattr(portfolios_resp, 'portfolios', [])
+            
+            # Find Default portfolio
+            default_portfolio = None
+            for p in portfolios:
+                if p.name == 'Default':
+                    default_portfolio = p
+                    break
+            
+            if not default_portfolio:
+                logging.error("❌ Could not find Default portfolio")
+                return {
+                    "usdc": 0.0,
+                    "usd": 0.0,
+                    "trading_balance": 0.0,
+                    "crypto": {},
+                    "consumer_usd": 0.0,
+                    "consumer_usdc": 0.0,
+                }
+            
+            # Get portfolio breakdown
+            breakdown_resp = self.client.get_portfolio_breakdown(portfolio_uuid=default_portfolio.uuid)
+            breakdown = getattr(breakdown_resp, 'breakdown', None)
+            
+            if not breakdown:
+                logging.error("❌ No breakdown data returned")
+                return {
+                    "usdc": 0.0,
+                    "usd": 0.0,
+                    "trading_balance": 0.0,
+                    "crypto": {},
+                    "consumer_usd": 0.0,
+                    "consumer_usdc": 0.0,
+                }
+            
+            spot_positions = getattr(breakdown, 'spot_positions', [])
+            
+            usd_balance = 0.0
+            usdc_balance = 0.0
+            trading_balance = 0.0
+            crypto_holdings = {}
+            
+            logging.info("=" * 70)
+            logging.info("📊 BALANCES (via Portfolio Breakdown API):")
+            logging.info("=" * 70)
+            
+            for position in spot_positions:
+                asset = getattr(position, 'asset', 'N/A')
+                available_fiat = getattr(position, 'available_to_trade_fiat', 0)
+                total_balance_fiat = getattr(position, 'total_balance_fiat', 0)
+                is_cash = getattr(position, 'is_cash', False)
+                
+                if total_balance_fiat > 0.001 or available_fiat > 0.001:
+                    if is_cash and asset == 'USD':
+                        usd_balance += available_fiat
+                        trading_balance += available_fiat
+                        logging.info(f"   💵 USD:  ${available_fiat:.2f} (available to trade)")
+                    elif is_cash and asset == 'USDC':
+                        usdc_balance += available_fiat
+                        trading_balance += available_fiat
+                        logging.info(f"   💵 USDC: ${available_fiat:.2f} (available to trade)")
+                    elif not is_cash and total_balance_fiat > 0.01:
+                        total_crypto = getattr(position, 'total_balance_crypto', 0)
+                        crypto_holdings[asset] = total_crypto
+                        logging.info(f"   🪙 {asset}: {total_crypto:.8f} (${total_balance_fiat:.2f})")
+            
+            logging.info("-" * 70)
+            logging.info(f"   💰 Total USD:  ${usd_balance:.2f}")
+            logging.info(f"   💰 Total USDC: ${usdc_balance:.2f}")
+            logging.info(f"   💰 Total Trading Balance: ${trading_balance:.2f}")
+            logging.info(f"   🪙 Crypto Holdings: {len(crypto_holdings)} assets")
+            logging.info("=" * 70)
+
+            return {
+                "usdc": usdc_balance,
+                "usd": usd_balance,
+                "trading_balance": trading_balance,
+                "crypto": crypto_holdings,
+                "consumer_usd": 0.0,  # Not checking consumer wallets with this method
+                "consumer_usdc": 0.0,
+            }
+        except Exception as e:
+            logging.error(f"🔥 ERROR get_account_balance: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "usdc": 0.0,
+                "usd": 0.0,
+                "trading_balance": 0.0,
+                "crypto": {},
+                "consumer_usd": 0.0,
+                "consumer_usdc": 0.0,
+            }
+    
+    def get_account_balance_OLD_BROKEN_METHOD(self):
+        """
+        OLD METHOD - DOES NOT WORK - Kept for reference
         Parse balances from ONLY v3 Advanced Trade API
         
         CRITICAL: Consumer wallet balances are NOT usable for API trading.

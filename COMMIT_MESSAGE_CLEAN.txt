@@ -1,0 +1,25 @@
+FIX: Bot balance detection via portfolio breakdown API ($155.46 detected)
+
+PROBLEM SOLVED:
+- get_accounts() API returned $0.00 despite $156.97 in web UI
+- Bot couldn't detect funds to trade with
+
+SOLUTION IMPLEMENTED:
+- Switched to portfolio breakdown API (get_portfolio_breakdown)
+- Iterates spot_positions to extract available_to_trade_fiat
+- Now successfully detects $155.46 ($97.92 USD + $57.54 USDC)
+
+CHANGES:
+- bot/broker_manager.py: Complete rewrite of get_account_balance()
+- check_tradable_balance.py: Fixed to use getattr() for API objects
+- test_updated_bot.py: Integration test confirming $155.46 visible
+
+TESTING:
+✅ test_updated_bot.py confirms bot sees $155.46
+✅ check_tradable_balance.py shows exact USD/USDC breakdown
+✅ Portfolio breakdown API returns all data correctly
+
+DEPLOYMENT:
+- Railway will auto-deploy on push
+- Bot will start trading with full $155.46 balance
+- Dual RSI strategy (RSI_9 + RSI_14) scanning 732+ markets
