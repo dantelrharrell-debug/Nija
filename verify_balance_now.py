@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
+import os
 import sys
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 sys.path.append('/workspaces/Nija/bot')
 from broker_manager import CoinbaseBroker
 
