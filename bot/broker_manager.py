@@ -198,13 +198,56 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logging.error(f"❌ Portfolio detection error: {e}")
     
+    def _is_account_tradeable(self, account_type: str, platform: str) -> bool:
+        """
+        IMPROVEMENT #3: Expanded account type matching patterns.
+        Checks multiple patterns to identify tradeable accounts.
+        
+        Args:
+            account_type: Type string from API (e.g., "ACCOUNT_TYPE_CRYPTO")
+            platform: Platform string from API (e.g., "ADVANCED_TRADE")
+            
+        Returns:
+            True if account is tradeable via Advanced Trade API
+        """
+        if not account_type:
+            return False
+            
+        account_type_str = str(account_type).upper()
+        platform_str = str(platform or "").upper()
+        
+        # Pattern 1: Explicit ACCOUNT_TYPE_CRYPTO
+        if account_type_str == "ACCOUNT_TYPE_CRYPTO":
+            return True
+        
+        # Pattern 2: Advanced Trade platform designation
+        if "ADVANCED_TRADE" in platform_str or "ADVANCED" in platform_str:
+            return True
+        
+        # Pattern 3: Trading portfolio indicators
+        if "TRADING" in platform_str or "TRADING_PORTFOLIO" in account_type_str:
+            return True
+        
+        # Pattern 4: Not explicitly a consumer/vault account
+        if "CONSUMER" not in account_type_str and "VAULT" not in account_type_str and "WALLET" not in account_type_str:
+            # If platform is not explicitly consumer, assume tradeable
+            if platform_str and "ADVANCED" in platform_str:
+                return True
+        
+        return False
+
     def get_account_balance(self):
         """Return ONLY tradable Advanced Trade USD/USDC balances.
 
         Coinbase frequently shows Consumer wallet balances that **cannot** be used
         for Advanced Trade orders. To avoid false positives (and endless
-        INS UFFICIENT_FUND rejections), we enumerate accounts and only count
+        INSUFFICIENT_FUND rejections), we enumerate accounts and only count
         ones marked as Advanced Trade / crypto accounts.
+        
+        IMPROVEMENTS:
+        1. Better consumer wallet diagnostics - tells user to transfer funds
+        2. API permission validation - checks if we can see accounts
+        3. Expanded account type matching - handles more Coinbase account types
 
         Returns dict with: {"usdc", "usd", "trading_balance", "crypto", "consumer_*"}
         """
@@ -213,6 +256,8 @@ class CoinbaseBroker(BaseBroker):
         consumer_usd = 0.0
         consumer_usdc = 0.0
         crypto_holdings = {}
+        accounts_seen = 0
+        tradeable_accounts = 0
 
         try:
             logging.info("💰 Fetching account balance (Advanced Trade only)...")
@@ -220,11 +265,29 @@ class CoinbaseBroker(BaseBroker):
             resp = self.client.get_accounts()
             accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
 
+            # IMPROVEMENT #2: Validate API permissions
+            if not accounts:
+                logging.warning("=" * 70)
+                logging.warning("⚠️  API PERMISSION CHECK: Zero accounts returned")
+                logging.warning("=" * 70)
+                logging.warning("This usually means:")
+                logging.warning("  1. ❌ API key lacks 'View account details' permission")
+                logging.warning("  2. ❌ No Advanced Trade portfolio created yet")
+                logging.warning("  3. ❌ Wrong API credentials for this account")
+                logging.warning("")
+                logging.warning("FIX:")
+                logging.warning("  1. Go to: https://portal.cloud.coinbase.com/access/api")
+                logging.warning("  2. Edit your API key → Enable 'View' permission")
+                logging.warning("  3. Or create portfolio: https://www.coinbase.com/advanced-portfolio")
+                logging.warning("=" * 70)
+
             logging.info("=" * 70)
             logging.info("📊 ACCOUNT BALANCES (v3 get_accounts)")
+            logging.info(f"📁 Total accounts returned: {len(accounts)}")
             logging.info("=" * 70)
 
             for acc in accounts:
+                accounts_seen += 1
                 # Normalize object/dict access
                 if isinstance(acc, dict):
                     currency = acc.get('currency')
@@ -248,10 +311,13 @@ class CoinbaseBroker(BaseBroker):
                     available = 0.0
                     hold = 0.0
 
-                is_tradeable = account_type == "ACCOUNT_TYPE_CRYPTO" or (platform and "ADVANCED_TRADE" in str(platform))
+                # IMPROVEMENT #3: Use expanded matching function
+                is_tradeable = self._is_account_tradeable(account_type, platform)
+                if is_tradeable:
+                    tradeable_accounts += 1
 
                 if currency in ("USD", "USDC"):
-                    location = "TRADEABLE" if is_tradeable else "CONSUMER"
+                    location = "✅ TRADEABLE" if is_tradeable else "❌ CONSUMER"
                     logging.info(
                         f"   {currency:>4} | avail=${available:8.2f} | hold=${hold:8.2f} | type={account_type} | platform={platform} | {location}"
                     )
@@ -262,6 +328,7 @@ class CoinbaseBroker(BaseBroker):
                         else:
                             usdc_balance += available
                     else:
+                        # IMPROVEMENT #1: Better consumer wallet diagnostics
                         if currency == "USD":
                             consumer_usd += available
                         else:
@@ -269,8 +336,9 @@ class CoinbaseBroker(BaseBroker):
                 elif currency and available > 0:
                     # Track non-cash crypto holdings for reporting completeness
                     crypto_holdings[currency] = available
+                    tradeable_mark = "✅" if is_tradeable else "❌"
                     logging.info(
-                        f"   🪙 {currency}: {available} (type={account_type}, platform={platform})"
+                        f"   {tradeable_mark} 🪙 {currency}: {available} (type={account_type}, platform={platform})"
                     )
 
             trading_balance = usd_balance + usdc_balance
@@ -280,7 +348,26 @@ class CoinbaseBroker(BaseBroker):
             logging.info(f"   💰 Tradable USDC: ${usdc_balance:.2f}")
             logging.info(f"   💰 Total Trading Balance: ${trading_balance:.2f}")
             logging.info(f"   🪙 Crypto Holdings: {len(crypto_holdings)} assets")
-            logging.info(f"   🏦 Consumer USD:  ${consumer_usd:.2f} | Consumer USDC: ${consumer_usdc:.2f}")
+            
+            # IMPROVEMENT #1: Enhanced consumer wallet detection and diagnosis
+            if consumer_usd > 0 or consumer_usdc > 0:
+                logging.warning("-" * 70)
+                logging.warning("⚠️  CONSUMER WALLET DETECTED:")
+                logging.warning(f"   🏦 Consumer USD:  ${consumer_usd:.2f}")
+                logging.warning(f"   🏦 Consumer USDC: ${consumer_usdc:.2f}")
+                logging.warning("")
+                logging.warning("These funds are in your Coinbase Consumer wallet and")
+                logging.warning("CANNOT be used for Advanced Trade API orders.")
+                logging.warning("")
+                logging.warning("TO FIX:")
+                logging.warning("  1. Go to: https://www.coinbase.com/advanced-portfolio")
+                logging.warning("  2. Click 'Deposit' on the Advanced Trade portfolio")
+                logging.warning(f"  3. Transfer ${consumer_usd + consumer_usdc:.2f} from Consumer wallet")
+                logging.warning("")
+                logging.warning("After transfer, bot will see funds and start trading! ✅")
+                logging.warning("-" * 70)
+            
+            logging.info(f"📊 API Status: Saw {accounts_seen} accounts, {tradeable_accounts} tradeable")
             logging.info("=" * 70)
 
             return {
@@ -293,8 +380,15 @@ class CoinbaseBroker(BaseBroker):
             }
         except Exception as e:
             logging.error(f"🔥 ERROR get_account_balance: {e}")
+            logging.error("This usually indicates:")
+            logging.error("  1. Invalid API credentials")
+            logging.error("  2. Network connectivity issue")
+            logging.error("  3. Coinbase API temporarily unavailable")
+            logging.error("")
+            logging.error("Verify your credentials at:")
+            logging.error("  https://portal.cloud.coinbase.com/access/api")
             import traceback
-            traceback.print_exc()
+            logging.error(traceback.format_exc())
             return {
                 "usdc": usdc_balance,
                 "usd": usd_balance,
