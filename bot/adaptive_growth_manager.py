@@ -149,6 +149,21 @@ class AdaptiveGrowthManager:
         """
         return self.GROWTH_STAGES[self.current_stage]
     
+    def get_position_size_pct(self) -> float:
+        """
+        Get position size percentage for current growth stage
+        
+        Returns:
+            Position size as percentage of account balance (0.08 to 0.40 for ultra aggressive)
+        """
+        config = self.GROWTH_STAGES[self.current_stage]
+        
+        # Return max position size for ultra aggressive mode to maximize growth
+        position_pct = config['max_position_pct']
+        
+        logger.debug(f"Position size: {position_pct*100:.0f}% ({self.current_stage})")
+        return position_pct
+    
     def record_performance(self, win_rate: float, avg_profit: float, total_trades: int):
         """
         Record trading performance metrics for learning
