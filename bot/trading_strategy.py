@@ -240,6 +240,9 @@ To enable trading:
         self.winning_trades = 0
         self.trade_history = []
         self.consecutive_losses = 0
+        self.consecutive_trades = 0  # Track consecutive trades in same direction
+        self.max_consecutive_trades = 8  # Stop after 8 consecutive trades (sell to reset)
+        self.last_trade_side = None  # Track last trade direction (BUY/SELL)
         self.last_trade_time = None
         self.min_time_between_trades = 0.5  # ULTRA AGGRESSIVE: 0.5s cooldown for rapid 5-position fills
         
@@ -528,6 +531,13 @@ To enable trading:
                 logger.info(f"Skipping {symbol}: Max {self.max_concurrent_positions} positions already open")
                 return False
             
+            # CRITICAL: Stop buying after 8 consecutive trades - force sell cycle
+            if self.consecutive_trades >= self.max_consecutive_trades and signal == 'BUY':
+                logger.warning(f"⚠️ Max consecutive trades ({self.max_consecutive_trades}) reached - skipping buy until positions close")
+                logger.info(f"   Current open positions: {len(self.open_positions)}")
+                logger.info(f"   Waiting for sells to reset counter...")
+                return False
+            
             # Skip if THIS symbol already has a position
             if symbol in self.open_positions:
                 logger.info(f"Skipping {symbol}: Position already open for this symbol")
@@ -671,6 +681,13 @@ To enable trading:
                     # The order response should contain filled_size, but if not available, estimate
                     crypto_quantity = order.get('filled_size', position_size_usd / entry_price)
                     
+                    # Track consecutive trades in same direction
+                    if self.last_trade_side == signal:
+                        self.consecutive_trades += 1
+                    else:
+                        self.consecutive_trades = 1
+                        self.last_trade_side = signal
+                    
                     # Track position with risk management levels
                     self.open_positions[symbol] = {
                         'side': signal,
@@ -680,6 +697,7 @@ To enable trading:
                         'timestamp': datetime.now(),
                         'stop_loss': stop_loss,
                         'take_profit': take_profit,
+                        'consecutive_count': self.consecutive_trades,  # Track which consecutive trade this is
                         'trailing_stop': trailing_stop,
                         'highest_price': entry_price if signal == 'BUY' else None,
                         'lowest_price': entry_price if signal == 'SELL' else None,
@@ -906,8 +924,14 @@ To enable trading:
             except Exception as e:
                 logger.error(f"Error managing position {symbol}: {e}")
         
-        # Remove closed positions
+        # Remove closed positions and reset consecutive counter on sells
         for symbol in positions_to_close:
+            closed_position = self.open_positions[symbol]
+            # Reset consecutive counter when we sell (close a position)
+            if closed_position.get('side') == 'BUY':
+                logger.info(f"   Resetting consecutive trade counter (was {self.consecutive_trades})")
+                self.consecutive_trades = 0
+                self.last_trade_side = 'SELL'
             del self.open_positions[symbol]
         
         if positions_to_close:
