@@ -968,11 +968,13 @@ To enable trading:
                             # Update stats
                             if pnl_usd > 0:
                                 self.winning_trades += 1
-                        self.consecutive_losses = 0
-                        logger.info(f"✅ Position closed with PROFIT: ${pnl_usd:+.2f}")
-                    else:
-                        self.consecutive_losses += 1
-                        self.last_loss_time = time.time()
+                                self.consecutive_losses = 0
+                                logger.info(f"✅ Position closed with PROFIT: ${pnl_usd:+.2f}")
+                            else:
+                                self.consecutive_losses += 1
+                                self.last_loss_time = time.time()
+                                logger.info(f"❌ Position closed with LOSS: ${pnl_usd:+.2f}")
+                            
                             positions_to_close.append(symbol)
                             self.total_trades_executed += 1
                             
