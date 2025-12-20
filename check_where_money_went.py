@@ -27,7 +27,8 @@ print("=" * 60)
 
 try:
     accounts_response = client.get_accounts()
-    accounts = accounts_response.get("accounts", [])
+    # SDK returns object with .accounts attribute, not dict
+    accounts = accounts_response.accounts if hasattr(accounts_response, 'accounts') else []
     
     print(f"\n✅ Found {len(accounts)} total accounts\n")
     

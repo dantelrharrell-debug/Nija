@@ -233,8 +233,8 @@ To enable trading:
         self.base_take_profit_pct = 0.05  # initial TP
         self.stepped_take_profit_pct = 0.08  # stepped TP after price moves in our favor
         self.take_profit_step_trigger = 0.03  # when price moves 3% in favor, step TP
-        # Lock 55% of peak gains when trailing to reduce give-back on winners
-        self.trailing_lock_ratio = 0.55
+        # Lock 80% of peak gains when trailing - only give back 2% of profits
+        self.trailing_lock_ratio = 0.80
         # Sizing controls
         self.max_position_cap_usd = 75.0  # cap per-trade size until balance grows
         # Loss streak cooldown
