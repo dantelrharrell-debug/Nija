@@ -275,9 +275,18 @@ class CoinbaseBroker(BaseBroker):
             # Check v3 Advanced Trade API - THIS IS THE ONLY TRADABLE BALANCE
             logging.info(f"💰 Checking v3 API (Advanced Trade - TRADABLE BALANCE)...")
             try:
+                logging.info(f"   🔍 Calling client.list_accounts()...")
                 accounts_resp = self.client.list_accounts() if hasattr(self.client, 'list_accounts') else self.client.get_accounts()
                 accounts = getattr(accounts_resp, 'accounts', [])
                 logging.info(f"📁 v3 Advanced Trade API: {len(accounts)} account(s)")
+                
+                # ENHANCED DEBUG: Show ALL accounts
+                if len(accounts) == 0:
+                    logging.error(f"   🚨 API returned ZERO accounts!")
+                    logging.error(f"   Response type: {type(accounts_resp)}")
+                    logging.error(f"   Response object: {accounts_resp}")
+                else:
+                    logging.info(f"   📋 Listing all {len(accounts)} accounts:")
 
                 for account in accounts:
                     currency = getattr(account, 'currency', None)
@@ -285,6 +294,10 @@ class CoinbaseBroker(BaseBroker):
                     available = float(getattr(available_obj, 'value', 0) or 0)
                     account_type = getattr(account, 'type', None)
                     account_name = getattr(account, 'name', 'Unknown')
+                    account_uuid = getattr(account, 'uuid', 'no-uuid')
+                    
+                    # DEBUG: Log EVERY account we see
+                    logging.info(f"      → {currency}: ${available:.2f} | {account_name} | {account_type} | UUID: {account_uuid[:8]}...")
                     
                     # ONLY count Advanced Trade balances for trading
                     if currency == "USD":
@@ -298,7 +311,11 @@ class CoinbaseBroker(BaseBroker):
                     elif available > 0:
                         crypto_holdings[currency] = crypto_holdings.get(currency, 0) + available
             except Exception as v3_error:
-                logging.warning(f"⚠️  v3 API check failed: {v3_error}")
+                logging.error(f"⚠️  v3 API check failed!")
+                logging.error(f"   Error type: {type(v3_error).__name__}")
+                logging.error(f"   Error message: {v3_error}")
+                import traceback
+                logging.error(f"   Traceback: {traceback.format_exc()}")
 
             # CRITICAL FIX: ONLY Advanced Trade balances are tradeable
             # Consumer wallet balances CANNOT be used for trading via API
