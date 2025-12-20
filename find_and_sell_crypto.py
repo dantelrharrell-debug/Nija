@@ -44,7 +44,7 @@ for account in accounts:
     balance = float(balance_value)
     
     if balance > 0:
-        if currency in ['USD', 'USDC']:
+        if currency in ['USD', 'USDC', 'USDT']:
             usd_balances[currency] = balance
             print(f"   💵 {currency}: ${balance:.2f}")
         else:
@@ -52,9 +52,9 @@ for account in accounts:
             crypto_found.append({
                 'currency': currency,
                 'balance': balance,
-                'account': account
+                'product_id': f"{currency}-USD"
             })
-            print(f"   🪙 {currency}: {balance:.8f}")
+            print(f"   🪙 {currency}: {balance:.8f} 🔥 CAN SELL")
 
 print("\n" + "="*80)
 print("📊 SUMMARY")
