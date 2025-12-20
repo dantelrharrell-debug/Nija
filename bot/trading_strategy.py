@@ -223,7 +223,8 @@ To enable trading:
         
         # Track open positions and trade history
         self.open_positions = {}
-        self.max_concurrent_positions = 8  # ULTRA AGGRESSIVE: 8 positions for 15-day goal  # ULTRA AGGRESSIVE: 8 positions for max diversification
+        # Temporarily cap concurrent positions to limit fee drag while we stabilize PnL
+        self.max_concurrent_positions = 3
         self.total_trades_executed = 0
         
         # Load saved positions from previous session

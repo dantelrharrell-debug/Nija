@@ -37,29 +37,29 @@ class AdaptiveGrowthManager:
             'min_adx': 0,  # REMOVED: Accept any trend strength
             'volume_threshold': 0.0,  # REMOVED: Accept any volume
             'filter_agreement': 2,  # LOWERED: Only 2/5 filters needed
-            'min_position_pct': 0.08,  # INCREASED: 8% minimum
-            'max_position_pct': 0.40,  # INCREASED: 40% maximum per trade
-            'max_exposure': 0.90,  # INCREASED: 90% total exposure
-            'description': 'ULTRA AGGRESSIVE - Maximum growth mode (15-DAY GOAL)'
+            'min_position_pct': 0.05,  # 5% minimum to reduce fee drag
+            'max_position_pct': 0.15,  # 15% maximum per trade
+            'max_exposure': 0.50,  # 50% total exposure cap
+            'description': 'ULTRA AGGRESSIVE - Controlled growth mode'
         },
         'aggressive': {
             'balance_range': (300, 1000),
             'min_adx': 5,  # LOWERED: More trades
             'volume_threshold': 0.05,  # LOWERED: 5% volume
             'filter_agreement': 2,  # LOWERED: 2/5 filters
-            'min_position_pct': 0.05,  # 5%
-            'max_position_pct': 0.30,  # INCREASED: 30%
-            'max_exposure': 0.60,  # INCREASED: 60%
-            'description': 'AGGRESSIVE - Building capital (15-DAY GOAL)'
+            'min_position_pct': 0.04,  # 4%
+            'max_position_pct': 0.12,  # 12%
+            'max_exposure': 0.45,  # 45%
+            'description': 'AGGRESSIVE - Building capital with lower exposure'
         },
         'moderate': {
             'balance_range': (1000, 3000),
             'min_adx': 10,
             'volume_threshold': 0.10,  # 10% volume
             'filter_agreement': 3,  # 3/5 filters
-            'min_position_pct': 0.04,  # 4%
-            'max_position_pct': 0.20,  # 20%
-            'max_exposure': 0.50,  # 50%
+            'min_position_pct': 0.03,  # 3%
+            'max_position_pct': 0.08,  # 8%
+            'max_exposure': 0.35,  # 35%
             'description': 'MODERATE - Approaching goal'
         },
         'conservative': {
@@ -67,9 +67,9 @@ class AdaptiveGrowthManager:
             'min_adx': 15,
             'volume_threshold': 0.15,  # 15% volume
             'filter_agreement': 3,  # 3/5 filters
-            'min_position_pct': 0.03,  # 3%
-            'max_position_pct': 0.15,  # 15%
-            'max_exposure': 0.40,  # 40%
+            'min_position_pct': 0.02,  # 2%
+            'max_position_pct': 0.05,  # 5%
+            'max_exposure': 0.30,  # 30%
             'description': 'CONSERVATIVE - Goal reached, protect gains'
         }
     }
@@ -158,8 +158,8 @@ class AdaptiveGrowthManager:
         """
         config = self.GROWTH_STAGES[self.current_stage]
         
-        # Return max position size for ultra aggressive mode to maximize growth
-        position_pct = config['max_position_pct']
+        # Use the minimum of the stage range while we stabilize profitability
+        position_pct = config['min_position_pct']
         
         logger.debug(f"Position size: {position_pct*100:.0f}% ({self.current_stage})")
         return position_pct
