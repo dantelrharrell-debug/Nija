@@ -293,7 +293,7 @@ TRADING_PAIRS = {
 RISK_LIMITS = {
     'max_daily_loss': 0.025,  # 2.5% max daily loss
     'max_exposure': 0.30,  # 30% max total exposure
-    'max_positions': 5,  # Maximum concurrent positions
+    'max_positions': 8,  # Maximum concurrent positions (ULTRA AGGRESSIVE for 15-day goal)
     'max_trades_per_day': 20,  # Maximum trades per day
 # RISK MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════
@@ -489,7 +489,7 @@ EXECUTION_CONFIG = {
     'min_time_between_trades': 120,  # 2 minutes between trades
     
     # Position Limits
-    'max_positions': 5,  # Maximum concurrent positions
+    'max_positions': 8,  # Maximum concurrent positions (ULTRA AGGRESSIVE for 15-day goal)
     'max_positions_per_symbol': 1,  # One position per symbol
 }
 
