@@ -1,0 +1,41 @@
+#!/bin/bash
+
+echo "======================================================================"
+echo "  🔍 VERIFYING RAILWAY BOT IS STOPPED"
+echo "======================================================================"
+echo ""
+echo "Testing steps:"
+echo ""
+echo "1. ✅ You turned off Railway deployment"
+echo "2. ⏳ Wait 2-3 minutes for the bot to fully stop"
+echo "3. 🧪 Test by selling a small amount ($1-5 worth of crypto)"
+echo "4. ⏱️  Wait 5 minutes and check if it got bought back"
+echo ""
+echo "If it DOESN'T get bought back = ✅ Bot is stopped!"
+echo "If it DOES get bought back = ❌ Bot still running somewhere"
+echo ""
+echo "======================================================================"
+echo ""
+echo "To manually verify on Railway:"
+echo "  1. Go to: https://railway.app/dashboard"
+echo "  2. Find NIJA project"
+echo "  3. Check status shows 'Inactive' or 'Paused'"
+echo ""
+echo "To check locally:"
+
+if pgrep -f "python.*live_trading" > /dev/null; then
+    echo "  ⚠️  Found Python process running locally!"
+    pgrep -af "python.*live_trading"
+else
+    echo "  ✅ No bot process running locally"
+fi
+
+echo ""
+echo "======================================================================"
+echo ""
+echo "Next steps:"
+echo "  1. Sell $1-5 of crypto as a test"
+echo "  2. Wait 5 minutes"
+echo "  3. If NOT bought back → ✅ You're good to sell everything"
+echo "  4. If IS bought back → Check Railway again"
+echo ""
