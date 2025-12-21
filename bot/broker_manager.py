@@ -129,21 +129,35 @@ class CoinbaseBroker(BaseBroker):
             # Get credentials
             api_key = os.getenv("COINBASE_API_KEY")
             api_secret = os.getenv("COINBASE_API_SECRET")
-            
+
             print(f"🔍 CREDENTIAL CHECK:")
             print(f"   - COINBASE_API_KEY: {'✅ Set' if api_key else '❌ Missing'}")
             print(f"   - COINBASE_API_SECRET: {'✅ Set' if api_secret else '❌ Missing'}")
-            
+
             if not api_key or not api_secret:
                 print("❌ Missing required credentials!")
                 print("   Set COINBASE_API_KEY and COINBASE_API_SECRET")
                 return False
-            
+
             # Normalize PEM key if it has escaped newlines
             if api_secret and '\\n' in api_secret:
                 api_secret = api_secret.replace('\\n', '\n')
                 print("   ℹ️  Normalized escaped newlines in API_SECRET")
-            
+
+            # Normalize API key: accept full Cloud path and extract key ID segment
+            # Expected key id format: 8-4-4-4-12 GUID (e.g., 05067708-2a5d-43a5-a4c6-732176c05e7c)
+            if "/apiKeys/" in api_key:
+                parts = api_key.split("/apiKeys/")
+                if len(parts) == 2 and parts[1]:
+                    print(f"   ℹ️  Extracted key id from Cloud path: {parts[1]}")
+                    api_key = parts[1]
+            elif "/" in api_key and len(api_key.split("/")) > 1:
+                # Fallback: take last path segment if slashes present
+                candidate = api_key.split("/")[-1]
+                if candidate:
+                    print(f"   ℹ️  Using last path segment as key id: {candidate}")
+                    api_key = candidate
+
             # Create RESTClient
             print("🔐 Initializing Coinbase RESTClient...")
             self.client = RESTClient(
