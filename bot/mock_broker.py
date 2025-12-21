@@ -25,7 +25,7 @@ class MockBroker(BaseBroker):
     def get_account_balance(self) -> float:
         return float(self._balance)
 
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+    def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
         # Simulate a filled order and adjust mock balance for buys (quote_size in USD)
         try:
             filled = {
