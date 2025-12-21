@@ -322,6 +322,75 @@ class CoinbaseBroker(BaseBroker):
         accounts_seen = 0
         tradeable_accounts = 0
 
+        # Preferred path: portfolio breakdown (more reliable than get_accounts)
+        try:
+            logging.info("💰 Fetching account balance via portfolio breakdown (preferred)...")
+            portfolios_resp = self.client.get_portfolios() if hasattr(self.client, 'get_portfolios') else None
+            portfolios = getattr(portfolios_resp, 'portfolios', [])
+            if isinstance(portfolios_resp, dict):
+                portfolios = portfolios_resp.get('portfolios', [])
+
+            default_portfolio = None
+            for pf in portfolios:
+                pf_type = getattr(pf, 'type', None) if not isinstance(pf, dict) else pf.get('type')
+                if str(pf_type).upper() == 'DEFAULT':
+                    default_portfolio = pf
+                    break
+            if not default_portfolio and portfolios:
+                default_portfolio = portfolios[0]
+
+            portfolio_uuid = None
+            if default_portfolio:
+                portfolio_uuid = getattr(default_portfolio, 'uuid', None)
+                if isinstance(default_portfolio, dict):
+                    portfolio_uuid = default_portfolio.get('uuid', portfolio_uuid)
+
+            if default_portfolio and portfolio_uuid:
+                breakdown_resp = self.client.get_portfolio_breakdown(portfolio_uuid=portfolio_uuid)
+                breakdown = getattr(breakdown_resp, 'breakdown', None)
+                if isinstance(breakdown_resp, dict):
+                    breakdown = breakdown_resp.get('breakdown', breakdown)
+
+                spot_positions = getattr(breakdown, 'spot_positions', []) if breakdown else []
+                if isinstance(breakdown, dict):
+                    spot_positions = breakdown.get('spot_positions', spot_positions)
+
+                for pos in spot_positions:
+                    asset = getattr(pos, 'asset', None) if not isinstance(pos, dict) else pos.get('asset')
+                    available_val = getattr(pos, 'available_to_trade_fiat', None) if not isinstance(pos, dict) else pos.get('available_to_trade_fiat')
+                    try:
+                        available = float(available_val or 0)
+                    except Exception:
+                        available = 0.0
+
+                    if asset == 'USD':
+                        usd_balance += available
+                    elif asset == 'USDC':
+                        usdc_balance += available
+                    elif asset:
+                        crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + available
+
+                trading_balance = usd_balance + usdc_balance
+                logging.info("-" * 70)
+                logging.info(f"   💰 Tradable USD (portfolio):  ${usd_balance:.2f}")
+                logging.info(f"   💰 Tradable USDC (portfolio): ${usdc_balance:.2f}")
+                logging.info(f"   💰 Total Trading Balance: ${trading_balance:.2f}")
+                logging.info("   (Source: get_portfolio_breakdown)")
+                logging.info("-" * 70)
+
+                return {
+                    "usdc": usdc_balance,
+                    "usd": usd_balance,
+                    "trading_balance": trading_balance,
+                    "crypto": crypto_holdings,
+                    "consumer_usd": consumer_usd,
+                    "consumer_usdc": consumer_usdc,
+                }
+            else:
+                logging.warning("⚠️  No default portfolio found; falling back to get_accounts()")
+        except Exception as e:
+            logging.warning(f"⚠️  Portfolio breakdown failed, falling back to get_accounts(): {e}")
+
         try:
             logging.info("💰 Fetching account balance (Advanced Trade only)...")
 
