@@ -61,7 +61,7 @@ class TradeAnalytics:
     COINBASE_TAKER_FEE = 0.006  # 0.6%
     COINBASE_MAKER_FEE = 0.004  # 0.4%
     
-    def __init__(self, data_dir: str = "/usr/src/app/data"):
+    def __init__(self, data_dir: str = "./data"):
         """
         Initialize analytics tracker
         
@@ -69,7 +69,7 @@ class TradeAnalytics:
             data_dir: Directory to store trade history and reports
         """
         self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(exist_ok=True)
+        self.data_dir.mkdir(exist_ok=True, parents=True)
         
         self.trades_file = self.data_dir / "trade_history.json"
         self.daily_summary_file = self.data_dir / "daily_summary.json"

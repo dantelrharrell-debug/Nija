@@ -25,7 +25,7 @@ class PositionManager:
     - Handle edge cases (positions closed externally)
     """
     
-    def __init__(self, data_dir: str = "/usr/src/app/data"):
+    def __init__(self, data_dir: str = "./data"):
         """
         Initialize position manager.
         
@@ -33,6 +33,7 @@ class PositionManager:
             data_dir: Directory for position state file
         """
         self.data_dir = Path(data_dir)
+        self.data_dir.mkdir(exist_ok=True, parents=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.positions_file = self.data_dir / "open_positions.json"
         logger.info(f"💾 Position manager initialized: {self.positions_file}")
