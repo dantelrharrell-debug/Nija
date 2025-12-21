@@ -1,0 +1,50 @@
+🔍 Add Position Import & Trading Status Tools - Portfolio Mismatch Identified
+
+CRITICAL DISCOVERY:
+❌ API credentials access WRONG Coinbase account
+   - Current API key shows: $0 balance, 0 crypto positions
+   - User reports: 10 crypto positions exist in their account
+   - Conclusion: Multiple Coinbase accounts/portfolios in use
+
+NEW DIAGNOSTIC TOOLS:
+✅ check_nija_trading_status.py - Complete trading health check
+   - Shows current positions and cash balance
+   - Lists last 20 orders (buys vs sells)
+   - Displays bot's position tracking file
+   - Analyzes if bot is trading and selling correctly
+   - Calculates sell ratio (critical metric)
+
+✅ import_existing_positions.py - Import orphaned positions
+   - Scans account for existing crypto holdings
+   - Gets current prices for each position
+   - Adds them to bot's tracking file with stops/takes
+   - Enables bot to manage previously untracked positions
+   - Conservative approach: stops set from current price
+
+✅ TRANSFER_FUNDS_INSTRUCTIONS.py - Portfolio transfer guide
+   - Step-by-step instructions for moving funds between portfolios
+   - Explains Default/Primary vs NIJA Portfolio
+   - Helps resolve API key vs holdings mismatch
+
+FINDINGS FROM TESTING:
+✅ Bot IS executing sells (1 UNI sale detected at $9.69)
+✅ Bot IS trading (19 buys + 1 sell in last session)
+❌ Sell ratio only 5% (1 sell / 20 total orders)
+❌ Account appears empty when checked via API
+❌ User reports 10 crypto held but API shows 0
+
+ROOT CAUSE IDENTIFIED:
+The user has funds in Primary/Default portfolio but API credentials
+access a different portfolio (likely NIJA Portfolio which is empty).
+
+Coinbase Advanced Trade API always routes to DEFAULT portfolio for
+trading regardless of which portfolio the API key was created in.
+
+NEXT STEPS REQUIRED:
+1. User must verify which Coinbase account holds the 10 crypto
+2. Check if they have multiple Coinbase login accounts
+3. Ensure API credentials match the account where bot is trading
+4. Transfer all funds to one portfolio for consistent access
+
+This resolves the confusion around "keep moving funds between portfolios" -
+the real issue is API key accessing wrong account entirely.
