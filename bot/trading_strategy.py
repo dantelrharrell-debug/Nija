@@ -1433,6 +1433,10 @@ To enable trading:
                 else:
                     logger.debug(f"   ⏸️ {symbol}: {analysis['signal']}")
             
+            # ✅ CRITICAL FIX: Manage open positions (close stops/takes/exits)
+            logger.info("📊 Checking open positions for exit conditions...")
+            self.manage_open_positions()
+            
             logger.info(f"✅ Trading cycle complete. Open positions: {len(self.open_positions)}")
             
             # Print performance report every 10 cycles (or after first trade)
