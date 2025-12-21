@@ -208,3 +208,8 @@ That's it. Bot handles everything else.
 **Status**: ✅ **FULLY OPERATIONAL**  
 **Next**: Start the bot  
 **Timeline**: 6-12 months to $1000/day goal
+
+cd /workspaces/Nija
+git add README.md
+git commit -m "Update README with capital gate status and Binance fork guide"
+git push origin main

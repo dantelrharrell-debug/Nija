@@ -1,24 +1,48 @@
 # NIJA - Autonomous Cryptocurrency Trading Bot
 
 **Version**: APEX v7.1 - POSITION MANAGEMENT FIXED ✅  
-**Status**: ✅ LIVE TRADING - API PERMISSIONS FIXED & FULLY OPERATIONAL  
-**Last Updated**: December 21, 2025 - **MAJOR FIX: Position Exit System Now Active**
-**Current Balance**: $128.32 (9 crypto positions + $4.17 cash)  
-**Holdings**: 9 positions (ETH, BTC, DOGE, SOL, XRP, LTC, HBAR, BCH, ICP)  
-**API Status**: ✅ FULLY CONNECTED - Can now see, track, and manage all positions  
-**Goal**: Exit management + Automatic stop loss/take profit execution
+**Status**: 🚫 Trading paused – capital below $10 minimum per trade (risk guard active)  
+**Last Updated**: December 21, 2025 - Order-response guard added; capital gate blocking new orders
+**Current Balance**: ~$3 USD available; orders blocked until ≥$10 (recommend $100-200 to cover fees)  
+**Holdings**: No new orders executing; existing positions (if any) remain under management  
+**API Status**: ✅ Connected (Coinbase Advanced Trade); order requests gated by risk check  
+**Goal**: Resume live trading once funded; maintain exit management + stop loss/take profit execution
 
 > **🚀 CRITICAL FIX DEPLOYED - December 21, 2025**: 
 > - ✅ **Position Exit System Fixed**: Added `manage_open_positions()` call to main trading loop
 > - ✅ **API Permissions Fixed**: Updated to include account:read + wallet:read permissions
-> - ✅ **Position Tracking File Fixed**: Loaded all 9 positions into `data/open_positions.json`
-> - ✅ **Bot Now Actively Manages Exits**: Stops/takes now execute automatically
-> - ✅ **All 9 Positions Under Management**: Bot can see and monitor them in real-time
-> - ✅ **BLEEDING STOPPED**: Position management now prevents indefinite losses
+> - ✅ **Order-Response Guard Added**: Defensive check when Coinbase returns unexpected responses
+> - ✅ **Position Tracking File Fixed**: Loaded open positions into `data/open_positions.json`
+> - ✅ **Bot Actively Manages Exits**: Stops/takes execute automatically for tracked positions
+> - ⚠️ **Capital Gate Active**: Orders blocked until balance ≥$10 (fees manageable at $100-200)
 
 ---
 
-## ✅ CURRENT STATUS - FULLY OPERATIONAL & POSITION MANAGEMENT ACTIVE
+## ✅ CURRENT STATUS - POSITION MANAGEMENT ACTIVE, NEW ORDERS PAUSED
+
+**Summary (December 21, 2025)**
+- Capital available: ~$3 USD; risk manager blocks new orders below $10 minimum (fees too high otherwise).
+- Open-position management remains active; existing positions (if any) still trail/stop/take-profit.
+- To resume trading: fund to ≥$10 minimum; recommended $100-200 to keep fees under 1% per trade.
+- Watch logs for `🚨 TRADE BLOCKED: Insufficient capital` messages; they clear once funded.
+
+**How to Resume Live Trading**
+1. Deposit at least $100 into Coinbase Advanced Trade (fee-optimized, clears $10 guard easily).
+2. Restart the bot: `source .venv/bin/activate && bash restart_bot.sh`.
+3. Monitor `nija.log` for successful order placements (no more capital-block messages).
+4. Keep `.env` secrets out of git; verify API permissions remain `account:read` + `wallet:read`.
+
+## 📦 BINANCE FORK STARTER (REUSE THIS SETUP)
+
+If you want to spin a Binance-based project reusing this structure:
+
+1. **Clone as new repo**: copy this workspace to a fresh repo (strip `.git`, keep folder layout and docs).
+2. **Swap broker layer**: replace Coinbase-specific code in `bot/broker_manager.py` and `bot/broker_integration.py` with Binance client calls; keep the risk manager and strategy unchanged.
+3. **Env contract**: create `.env.example` for Binance keys (API key/secret, base URL, recv window); never commit real keys.
+4. **Symbol mapping**: adjust market lists to Binance symbols (e.g., `BTCUSDT`) and update any pair filters.
+5. **Fees/min sizes**: update the risk manager to enforce Binance lot sizes, min notional, and taker/maker fees.
+6. **Tests/checks**: add quick balance + order sandbox checks (similar to `test_v2_balance.py`); run in a paper/sandbox mode first.
+7. **Deployment**: reuse the Dockerfile/start scripts; just inject Binance env vars. Verify logs before live funds.
 
 ### What Just Got Fixed (December 21, 2025)
 
