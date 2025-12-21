@@ -1058,6 +1058,7 @@ To enable trading:
 
             # Nothing to do if no crypto holdings
             if not positions:
+                logger.info("Rebalance check: no live crypto holdings found — skipping.")
                 return
 
             # Compute USD value per holding using current price
@@ -1081,6 +1082,7 @@ To enable trading:
                 })
 
             if not valued:
+                logger.info("Rebalance check: holdings valuation yielded no entries — skipping.")
                 return
 
             # Sort by USD value descending (largest first)
@@ -1108,9 +1110,17 @@ To enable trading:
                     current_cash += item.get('usd_value', 0.0)
 
             if not to_sell:
+                logger.info(
+                    f"Rebalance not required: keep={len(keep)} (≤{max_positions}) and cash=${float(self.account_balance or 0):.2f} "
+                    f"(target ${target_cash:.2f})."
+                )
                 return
 
             logger.warning(f"⚠️ Rebalancing holdings: selling {len(to_sell)} position(s) to enforce max {max_positions} and reach ${target_cash:.2f} cash")
+            logger.info(
+                f"Rebalance plan: keep={len(keep)}, sell_list={len(sell_list)}, need_cash={need_cash}, "
+                f"starting_cash=${float(self.account_balance or 0):.2f}"
+            )
 
             sold = 0
             for item in to_sell:
