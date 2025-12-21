@@ -145,6 +145,16 @@ def main():
     print(f"Positions sold: {positions_sold}")
     print(f"Est. capital freed: ${total_proceeds:.2f}")
     print()
+    # Fetch updated cash balance
+    try:
+        updated = broker.get_account_balance()
+        print("📊 UPDATED ACCOUNT:")
+        print(f"   Cash: ${updated.get('trading_balance', 0.0):.2f}")
+        if updated.get('trading_balance', 0.0) < 10.0:
+            print("   ⚠️ Cash still below trading threshold. Ensure assets are in Advanced Trade and not on hold.")
+    except Exception as e:
+        print(f"⚠️ Failed to refresh balance: {e}")
+    print()
     print("💰 NEXT STEPS:")
     print("1. Wait 30 seconds for orders to settle")
     print("2. Bot will auto-configure for 8-position trading")
