@@ -43,22 +43,22 @@ else
 fi
 echo ""
 
-# Auto-enable paper mode if credentials are missing
+# Require credentials for LIVE mode; do NOT fall back to PAPER_MODE
 if [ -z "${COINBASE_API_KEY}" ] || [ -z "${COINBASE_API_SECRET}" ]; then
     echo ""
-    echo "⚠️  COINBASE CREDENTIALS MISSING — PAPER_MODE ENABLED"
+    echo "⚠️  MISSING COINBASE CREDENTIALS — LIVE MODE REQUIRES API KEY + SECRET"
     echo ""
-    echo "📋 TO ENABLE LIVE TRADING:"
-    echo "   1. Go to Render dashboard → Nija service → Environment"
-    echo "   2. Add these variables:"
-    echo "      - COINBASE_API_KEY"
-    echo "      - COINBASE_API_SECRET"
-    echo "      - LIVE_TRADING=1"
-    echo "      - ALLOW_CONSUMER_USD=true"
-    echo "   3. Click 'Manual Deploy' to restart with new variables"
+    echo "Set these environment variables, then re-run:"
+    echo "   export COINBASE_API_KEY='organizations/...'"
+    echo "   export COINBASE_API_SECRET='-----BEGIN PRIVATE KEY-----\n...'"
     echo ""
-    export PAPER_MODE=true
+    echo "Alternatively, place them in .env so bot.py loads them automatically."
+    echo ""
+    exit 1
 fi
+
+# Enforce live mode explicitly
+export PAPER_MODE=false
 
 echo "🔄 Starting live trading bot..."
 echo "Working directory: $(pwd)"
@@ -83,7 +83,7 @@ if [ -f bot.py ]; then
     fi
 fi
 
-# Start bot.py with full error output
+# Start bot.py with full error output (LIVE)
 python3 -u bot.py 2>&1 || {
     echo "❌ Bot crashed! Exit code: $?"
     exit 1
