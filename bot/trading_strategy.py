@@ -660,8 +660,16 @@ To enable trading:
             # CRITICAL: Dynamic minimum balance reserve - scales with account growth
             # This ensures bot always has capital to continue trading as account grows
             if live_balance < 100:
-                # Small account: Keep $15 minimum
-                MINIMUM_RESERVE = 15.00
+                # Small account: ensure at least one minimum-sized trade is possible
+                # Reserve just enough to leave Coinbase minimum ($5) tradable, or use override
+                forced_reserve = os.getenv("FORCE_MIN_RESERVE_USD")
+                if forced_reserve is not None:
+                    try:
+                        MINIMUM_RESERVE = max(0.0, min(live_balance, float(forced_reserve)))
+                    except Exception:
+                        MINIMUM_RESERVE = max(0.0, live_balance - coinbase_minimum)
+                else:
+                    MINIMUM_RESERVE = max(0.0, live_balance - coinbase_minimum)
             elif live_balance < 500:
                 # Growing account ($100-500): Keep 15% reserve
                 MINIMUM_RESERVE = live_balance * 0.15
