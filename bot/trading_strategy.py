@@ -570,11 +570,13 @@ To enable trading:
             symbol = analysis['symbol']
             signal = analysis['signal']
             
-            # CHECK FOR PROTECTED POSITIONS - DO NOT TRADE THESE
-            protected_symbols = ['BTC-USD', 'XRP-USD', 'ETH-USD', 'SOL-USD', 'DOGE-USD', 'ATOM-USD']
-            if symbol in protected_symbols:
-                logger.warning(f"🚫 PROTECTED POSITION: {symbol} - CANNOT TRADE. This position is protected and will only be MONITORED for liquidation.")
-                return False
+            # Optional: previously protected positions. Allow trading unless explicitly disabled via env
+            disable_protected = str(os.getenv("DISABLE_PROTECTED_POSITIONS", "1")).lower() in ("1", "true", "yes")
+            if not disable_protected:
+                protected_symbols = ['BTC-USD', 'XRP-USD', 'ETH-USD', 'SOL-USD', 'DOGE-USD', 'ATOM-USD']
+                if symbol in protected_symbols:
+                    logger.warning(f"🚫 PROTECTED POSITION ACTIVE: {symbol} - Trade blocking enabled (set DISABLE_PROTECTED_POSITIONS=1 to allow)")
+                    return False
             
             if signal not in ['BUY', 'SELL']:
                 return False
