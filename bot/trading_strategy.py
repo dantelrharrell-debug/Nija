@@ -137,7 +137,6 @@ class TradingStrategy:
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
             
             # CRITICAL: Enforce minimum capital for Coinbase fee structure
-            import os
             try:
                 MINIMUM_VIABLE_CAPITAL = float(os.getenv("MINIMUM_VIABLE_CAPITAL", "5.0"))  # Lowered to $5 for immediate trading
             except Exception:
@@ -614,7 +613,6 @@ To enable trading:
                 return False
             
             # CRITICAL: Verify sufficient balance before ANY trade
-            import os
             try:
                 MINIMUM_VIABLE_CAPITAL = float(os.getenv("MINIMUM_VIABLE_CAPITAL", "5.0"))
             except Exception:
