@@ -110,10 +110,24 @@ for crypto in crypto_found:
             base_size=str(balance)
         )
         
-        # Check if successful
-        order_dict = order if isinstance(order, dict) else (
-            order.__dict__ if hasattr(order, '__dict__') else {}
-        )
+        # Check if successful - safely serialize Coinbase SDK response objects
+        if isinstance(order, dict):
+            order_dict = order
+        else:
+            # Convert object to dict safely
+            try:
+                import json
+                json_str = json.dumps(order, default=str)
+                order_dict = json.loads(json_str)
+            except Exception:
+                # Fallback: just try __dict__
+                order_dict = {}
+                if hasattr(order, '__dict__'):
+                    for k, v in order.__dict__.items():
+                        if isinstance(v, (dict, list, str, int, float, bool, type(None))):
+                            order_dict[k] = v
+                        else:
+                            order_dict[k] = str(v)
         
         success = order_dict.get('success', True)
         

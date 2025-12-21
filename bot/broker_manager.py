@@ -10,9 +10,51 @@ from typing import Dict, List, Optional
 import logging
 import os
 import uuid
+import json
 
 # Configure logger for broker operations
 logger = logging.getLogger('nija.broker')
+
+
+def _serialize_object_to_dict(obj) -> Dict:
+    """
+    Safely convert any object to a dictionary for JSON serialization.
+    Handles nested objects, dataclasses, and Coinbase SDK response objects.
+    
+    Args:
+        obj: Any object to convert
+        
+    Returns:
+        dict: Flattened dictionary representation
+    """
+    if obj is None:
+        return {}
+    
+    if isinstance(obj, dict):
+        return obj
+    
+    # Try JSON serialization first (handles dataclasses with json.JSONEncoder)
+    try:
+        json_str = json.dumps(obj, default=str)
+        return json.loads(json_str)
+    except Exception:
+        pass
+    
+    # Fallback: convert object attributes
+    try:
+        result = {}
+        if hasattr(obj, '__dict__'):
+            for key, value in obj.__dict__.items():
+                # Recursively serialize nested objects
+                if isinstance(value, (dict, list, str, int, float, bool, type(None))):
+                    result[key] = value
+                else:
+                    # For nested objects, convert to string representation
+                    result[key] = str(value)
+        return result
+    except Exception:
+        # Last resort: convert to string
+        return {"_object": str(obj), "_type": type(obj).__name__}
 
 class BrokerType(Enum):
     COINBASE = "coinbase"
@@ -915,9 +957,8 @@ class CoinbaseBroker(BaseBroker):
             
             # CRITICAL: Parse order response to check for success/failure
             # Coinbase returns an object with 'success' field and 'error_response'
-            order_dict = order if isinstance(order, dict) else (
-                order.__dict__ if hasattr(order, '__dict__') else {}
-            )
+            # Use helper to safely serialize the response
+            order_dict = _serialize_object_to_dict(order)
             
             # Check for Coinbase error response
             success = order_dict.get('success', True)
