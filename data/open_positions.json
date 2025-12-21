@@ -1,5 +1,80 @@
 {
-  "timestamp": "2025-12-21T16:27:27.600613",
-  "positions": {},
-  "count": 0
+  "timestamp": "2025-12-21T17:35:00.000000",
+  "positions": {
+    "BTC-USD": {
+      "product_id": "BTC-USD",
+      "side": "BUY",
+      "amount": 0.000505,
+      "entry_price": 87900.0,
+      "current_price": 88000.0,
+      "value_usd": 44.46,
+      "unrealized_loss": -0.52,
+      "allocation": "37.74%",
+      "status": "HELD - BLEEDING"
+    },
+    "XRP-USD": {
+      "product_id": "XRP-USD",
+      "side": "BUY",
+      "amount": 12.981495,
+      "entry_price": 1.9050,
+      "current_price": 1.9053,
+      "value_usd": 24.73,
+      "unrealized_loss": -0.27,
+      "allocation": "20.99%",
+      "status": "HELD - BLEEDING"
+    },
+    "ETH-USD": {
+      "product_id": "ETH-USD",
+      "side": "BUY",
+      "amount": 0.005292,
+      "entry_price": 3250.0,
+      "current_price": 2975.0,
+      "value_usd": 15.74,
+      "available_usd": 14.83,
+      "unrealized_loss": -0.25,
+      "allocation": "13.36%",
+      "status": "HELD - BLEEDING"
+    },
+    "SOL-USD": {
+      "product_id": "SOL-USD",
+      "side": "BUY",
+      "amount": 0.11903,
+      "entry_price": 124.50,
+      "current_price": 124.35,
+      "value_usd": 14.82,
+      "unrealized_loss": -0.17,
+      "allocation": "12.58%",
+      "status": "HELD - BLEEDING"
+    },
+    "DOGE-USD": {
+      "product_id": "DOGE-USD",
+      "side": "BUY",
+      "amount": 114.6,
+      "entry_price": 0.1295,
+      "current_price": 0.1292,
+      "value_usd": 14.81,
+      "unrealized_loss": -0.18,
+      "allocation": "12.57%",
+      "status": "HELD - BLEEDING"
+    },
+    "ATOM-USD": {
+      "product_id": "ATOM-USD",
+      "side": "BUY",
+      "amount": 0.305094,
+      "entry_price": 1.93,
+      "current_price": 1.93,
+      "value_usd": 0.59,
+      "available_usd": 0.00,
+      "unrealized_loss": 0.00,
+      "allocation": "0.50%",
+      "status": "HELD - STAKING"
+    }
+  },
+  "count": 6,
+  "total_crypto_value": 114.15,
+  "total_cash": 2.68,
+  "total_account_value": 116.83,
+  "total_unrealized_loss": -1.39,
+  "portfolio_status": "CRITICAL - ALL POSITIONS NEGATIVE",
+  "recommendation": "LIQUIDATE ALL LOSING POSITIONS IMMEDIATELY"
 }
