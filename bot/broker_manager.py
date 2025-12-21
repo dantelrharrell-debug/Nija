@@ -943,19 +943,44 @@ class CoinbaseBroker(BaseBroker):
             
             logger.info(f"✅ Order filled successfully: {symbol}")
             
-            # Extract filled size from order response if available
-            # Coinbase returns this in the success_response
+            # Extract or estimate filled size
+            # Coinbase API v3 doesn't return filled_size in the response,
+            # so we estimate based on what we sent
             filled_size = None
+            
+            # Try to extract from success_response
             success_response = order_dict.get('success_response', {})
             if success_response:
                 filled_size = success_response.get('filled_size')
-                if filled_size:
-                    logger.info(f"   Filled crypto amount: {filled_size}")
+            
+            # If not available, estimate based on order configuration
+            if not filled_size:
+                order_config = order_dict.get('order_configuration', {})
+                market_config = order_config.get('market_market_ioc', {})
+                
+                if side.upper() == 'BUY' and 'quote_size' in market_config:
+                    # For buy orders, estimate crypto received = quote_size / price
+                    try:
+                        quote_size = float(market_config['quote_size'])
+                        # Fetch current price to estimate
+                        price_data = self.client.get_product(symbol)
+                        if price_data and 'price' in price_data:
+                            current_price = float(price_data['price'])
+                            filled_size = quote_size / current_price
+                    except:
+                        # Fallback: use quantity as estimate
+                        filled_size = quantity
+                else:
+                    # For sell orders or unknown, use quantity as estimate
+                    filled_size = quantity
+            
+            if filled_size:
+                logger.info(f"   Filled crypto amount: {filled_size:.6f}")
             
             return {
                 "status": "filled", 
                 "order": order_dict,
-                "filled_size": float(filled_size) if filled_size else None
+                "filled_size": float(filled_size) if filled_size else 0.0
             }
             
         except Exception as e:

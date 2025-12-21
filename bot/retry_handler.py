@@ -162,8 +162,11 @@ class RetryHandler:
         
         try:
             # Extract filled size (varies by broker)
-            filled_size = float(order_response.get('filled_size', 
-                              order_response.get('size', 0)))
+            # Handle None values gracefully
+            filled_size_raw = order_response.get('filled_size')
+            if filled_size_raw is None:
+                filled_size_raw = order_response.get('size', 0)
+            filled_size = float(filled_size_raw) if filled_size_raw else 0.0
             
             if filled_size <= 0:
                 return {
