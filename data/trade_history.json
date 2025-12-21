@@ -1,0 +1,27 @@
+[
+  {
+    "timestamp": "2025-12-21T13:03:25.673635",
+    "symbol": "ETH-USD",
+    "side": "BUY",
+    "entry_price": 103.65068863847503,
+    "exit_price": 93.32424759656635,
+    "size_usd": 100.0,
+    "quantity": 0.9647789253845835,
+    "entry_fee": 0.6,
+    "exit_fee": 0.5402236038512406,
+    "total_fees": 1.1402236038512406,
+    "gross_profit": -9.962732691459905,
+    "net_profit": -11.102956295311145,
+    "profit_pct": -11.102956295311145,
+    "expected_price": 103.65068863847503,
+    "actual_fill_price": 103.65068863847503,
+    "slippage": 0.0,
+    "slippage_pct": 0.0,
+    "stop_loss": 101.57767486570553,
+    "take_profit": 108.83322307039879,
+    "exit_reason": "Stop loss hit @ $101.58",
+    "entry_time": "2025-12-21T13:03:25.673645",
+    "exit_time": "2025-12-21T13:03:40.920749",
+    "duration_seconds": 15.247104
+  }
+]
