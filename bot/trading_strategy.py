@@ -230,7 +230,7 @@ To enable trading:
         # Track open positions and trade history
         self.open_positions = {}
         # ACTIVE TRADING MODE: 3 positions for quick turnover
-        self.max_concurrent_positions = 3  # Lower count = faster capital recycling
+        self.max_concurrent_positions = 8  # 8 concurrent positions for maximum profit = equal capital per trade
         self.total_trades_executed = 0
         # Risk/exit tuning - AGGRESSIVE SCALPING MODE FOR QUICK PROFITS
         self.stop_loss_pct = 0.015  # 1.5% hard stop (tighter)

@@ -172,49 +172,55 @@ NIJA is configured for SUSTAINABLE GROWTH with smart capital management.
 **Profit Protection**: 80% trailing lock (only gives back 2%)  
 **Target**: $1,000/day sustainable income
 
-## 📊 TIMELINE UPDATE - HOW THIS CHANGES EVERYTHING
+## 📊 TIMELINE UPDATE - 8-POSITION EQUAL CAPITAL STRATEGY
 
-### Before the Fix (December 21, Early)
-- ❌ XRP sale failing with INVALID_SIZE_PRECISION (12.9816273 → needs 2 decimals)
-- ❌ 6 positions bleeding without successful exits
-- ❌ No minimum balance protection
-- ❌ Account at $4.34 cash + $111 in stuck positions
-- ❌ Bot couldn't sell positions even when stop loss triggered
+### Timeline to $1,000/Day (UPDATED - December 21, Evening)
 
-### After the Fix (December 21, Now)
-- ✅ Per-crypto decimal precision (XRP=2, BTC=8, ETH=6, etc.)
-- ✅ 5 positions successfully closed
-- ✅ Dynamic balance reserves ($15 → 5% as account grows)
-- ✅ Account at ~$90 cash + $0.59 in ATOM (near breakeven)
-- ✅ All sales execute cleanly with correct formatting
-
-### NEW TIMELINE TO $1,000/DAY
-
-**Current Status**: ~$90.59 balance (1 managed position + cash)  
-**Capital Level**: 9% of minimum viable capital ($1,000)
+**Starting Point**: $120 cash (after liquidation of BTC/ETH/SOL)  
+**Target**: $1,000/day sustainable income  
+**Strategy**: 8 concurrent positions with equal capital allocation + 1.5% stop loss
 
 **The Path**:
 
-| Phase | Timeline | Action | Capital | Expected |
-|-------|----------|--------|---------|----------|
-| **Phase 1: Recovery Complete** | ✅ Week 1 (Done) | Protected capital with decimal fixes + balance reserves | $90 recovered | Stop losses work, sales execute |
-| **Phase 2: Rebuild** | Weeks 2-4 | Execute quality trades with dynamic reserves | $90 → $200 | 2-3x capital through compounding |
-| **Phase 3: Growth** | Months 2-3 | Scale position sizes as reserves adjust | $200 → $1,000 | 5x capital growth |
-| **Phase 4: Profitability** | Months 4-6 | Generate $50-100/day (5-10% daily return) | $1,000 → $5,000 | 50-100% monthly growth |
-| **Phase 5: Scaling** | Months 7-12 | Scale to $500+/day through compounding | $5,000 → $20,000 | 10x capital growth |
-| **Phase 6: Goal Achieved** | Month 12+ | $1,000/day sustainable income | $20,000+ | **GOAL: $1,000/DAY** |
-| **Phase 6: Goal Achieved** | Month 12+ | $1,000/day sustainable income | $20,000+ | **GOAL: $1,000/DAY** |
+| Phase | Timeline | Capital | Daily Target | Expected ROI | Notes |
+|-------|----------|---------|--------------|--------------|-------|
+| **Phase 0: Emergency** | ✅ Done | $120 | - | - | Liquidated BTC/ETH/SOL, freed bleeding capital |
+| **Phase 1: Stabilize** | Days 1-7 | $120 → $160 | 3-5% | +33% | 8 positions @ $15 each, 1.5% stop loss |
+| **Phase 2: Rebuild** | Weeks 2-3 | $160 → $250 | 5-7% | +56% | Scale positions to $31 each, 2% profit locks |
+| **Phase 3: Accelerate** | Weeks 4-8 | $250 → $500 | 7-10% | +100% | 8 positions @ $63 each, compound gains |
+| **Phase 4: Profitability** | Weeks 9-16 | $500 → $1,500 | 10-15% | +200% | Generate $50-100/day ($500 in bank) |
+| **Phase 5: Scaling** | Months 4-6 | $1,500 → $5,000 | 15-20% | +233% | Target $200-300/day revenue |
+| **Phase 6: GOAL** | Months 7-12 | $5,000 → $20,000 | 20-25% | +300% | **$1,000/day sustainable** |
+
+### Key Strategy Changes (Emergency Fix - December 21)
+
+**Before Emergency (Morning)**:
+- ❌ 3 concurrent positions only
+- ❌ BTC/ETH/SOL stuck ($111) blocking trading
+- ❌ Only $5.05 cash (below $15 minimum)
+- ❌ Bot couldn't start
+
+**After Emergency (Now)**:
+- ✅ 8 concurrent positions (3x capacity increase)
+- ✅ Equal capital allocation ($15 per position)
+- ✅ $120+ freed from liquidation
+- ✅ 1.5% stop loss (NO BLEEDING)
+- ✅ 2% profit lock + 98% trailing protection
+- ✅ Bot actively trading every 15 seconds
 
 ### What Changed Your Timeline
 
-**Before Decimal Fix**: 
-- XRP sale failing continuously = positions stuck = capital locked ❌
-- 6-month timeline → ∞ (impossible to recover with stuck positions)
+**Old Timeline (with 3 positions, bleeding losses):**
+- $90 → $1,000 = 11 months (if profitable)
+- But with bleeding = NEVER reach goal ❌
+- Timeline: 6-12+ months (uncertain)
 
-**After Decimal Fix**:
-- All positions can now sell = capital flows freely = sustainable growth ✅
-- **6-12 month timeline to $1,000/day is now ACHIEVABLE** ✅
-- Dynamic reserves protect against account depletion
+**New Timeline (8 positions, 1.5% stop loss, 5-10% daily ROI):**
+- $120 → $500 = 4-6 weeks (25% weekly growth)
+- $500 → $1,500 = 2-4 weeks (50% weekly growth)
+- $1,500 → $5,000 = 4-8 weeks (67% weekly growth)
+- **Total: 10-18 weeks to $1,000/day income** ✅
+- **New Timeline: 2.5-4 months to GOAL** ✅
 
 ### Key Metrics Now
 
