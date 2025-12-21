@@ -140,12 +140,19 @@ class CoinbaseBroker(BaseBroker):
                 return False
 
             # Normalize PEM key if it has escaped newlines
-            if api_secret and '\\n' in api_secret:
-                api_secret = api_secret.replace('\\n', '\n')
-                print("   ℹ️  Normalized escaped newlines in API_SECRET")
+            # Normalize secret: handle escaped newlines and ensure final newline
+            if api_secret:
+                api_secret = api_secret.strip()
+                if '\\n' in api_secret:
+                    api_secret = api_secret.replace('\\n', '\n')
+                    print("   ℹ️  Normalized escaped newlines in API_SECRET")
+                # Ensure trailing newline for robust PEM parsing
+                if not api_secret.endswith('\n'):
+                    api_secret = api_secret + '\n'
 
             # Normalize API key: accept full Cloud path and extract key ID segment
             # Expected key id format: 8-4-4-4-12 GUID (e.g., 05067708-2a5d-43a5-a4c6-732176c05e7c)
+            api_key = (api_key or "").strip()
             if "/apiKeys/" in api_key:
                 parts = api_key.split("/apiKeys/")
                 if len(parts) == 2 and parts[1]:

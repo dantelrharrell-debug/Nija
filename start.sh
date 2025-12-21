@@ -5,10 +5,24 @@ echo "=============================="
 echo "    STARTING NIJA TRADING BOT"
 echo "=============================="
 
-python3 --version
+# Prefer workspace venv Python, fallback to system python3
+PY=""
+if [ -x ./.venv/bin/python ]; then
+    PY="./.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    PY="$(command -v python3)"
+fi
+
+if [ -z "$PY" ]; then
+    echo "❌ No Python interpreter found (venv or system)"
+    echo "   Ensure .venv exists or install python3"
+    exit 127
+fi
+
+$PY --version
 
 # Test Coinbase module
-python3 -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')"
+$PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')"
 
 BRANCH_VAL=${GIT_BRANCH}
 COMMIT_VAL=${GIT_COMMIT}
@@ -27,6 +41,15 @@ echo "Commit: ${COMMIT_VAL:-unknown}"
 # Explicitly allow counting Consumer USD unless overridden
 export ALLOW_CONSUMER_USD="${ALLOW_CONSUMER_USD:-true}"
 echo "ALLOW_CONSUMER_USD=${ALLOW_CONSUMER_USD}"
+
+# Load environment from .env if present (so bot can run live without manual exports)
+if [ -f ./.env ]; then
+    echo ""
+    echo "🧩 Loading environment variables from .env"
+    set -a
+    . ./.env
+    set +a
+fi
 
 # Debug: Show credential status
 echo ""
@@ -52,7 +75,7 @@ if [ -z "${COINBASE_API_KEY}" ] || [ -z "${COINBASE_API_SECRET}" ]; then
     echo "   export COINBASE_API_KEY='organizations/...'"
     echo "   export COINBASE_API_SECRET='-----BEGIN PRIVATE KEY-----\n...'"
     echo ""
-    echo "Alternatively, place them in .env so bot.py loads them automatically."
+    echo "Alternatively, place them in .env (now auto-loaded on start)."
     echo ""
     exit 1
 fi
@@ -84,7 +107,7 @@ if [ -f bot.py ]; then
 fi
 
 # Start bot.py with full error output (LIVE)
-python3 -u bot.py 2>&1 || {
+$PY -u bot.py 2>&1 || {
     echo "❌ Bot crashed! Exit code: $?"
     exit 1
 }
