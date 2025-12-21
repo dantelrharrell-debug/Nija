@@ -136,7 +136,7 @@ class TradingStrategy:
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
             
             # CRITICAL: Enforce minimum capital for Coinbase fee structure
-            MINIMUM_VIABLE_CAPITAL = 10.0  # $10 minimum (lowered to resume trading)
+            MINIMUM_VIABLE_CAPITAL = 15.0  # $15 minimum for safe fee coverage
             
             if self.account_balance < MINIMUM_VIABLE_CAPITAL:
                 logger.error("="*80)
@@ -239,7 +239,7 @@ To enable trading:
         # Lock 80% of peak gains when trailing - only give back 2% of profits
         self.trailing_lock_ratio = 0.80
         # Sizing controls
-        self.max_position_cap_usd = 75.0  # cap per-trade size until balance grows
+        self.max_position_cap_usd = 150.0  # cap per-trade size (increased for better capital efficiency)
         # Loss streak cooldown
         self.loss_cooldown_seconds = 180
         self.last_loss_time = None
@@ -1039,7 +1039,7 @@ To enable trading:
             self.position_manager.save_positions(self.open_positions)
             logger.info(f"✅ Closed {len(positions_to_close)} position(s)")
     
-    def rebalance_existing_holdings(self, max_positions: int = 8, target_cash: float = 10.0):
+    def rebalance_existing_holdings(self, max_positions: int = 8, target_cash: float = 15.0):
         """
         Rebuild a view of actual holdings from the broker and liquidate excess positions
         to ensure we keep at most `max_positions` and have at least `target_cash` USD.
@@ -1289,7 +1289,7 @@ To enable trading:
             # or insufficient USD, liquidate excess to restore constraints.
             if not getattr(self, 'rebalanced_once', False):
                 try:
-                    self.rebalance_existing_holdings(max_positions=8, target_cash=10.0)
+                    self.rebalance_existing_holdings(max_positions=8, target_cash=15.0)
                 except Exception as e:
                     logger.error(f"Rebalance invocation failed: {e}")
                     self.rebalanced_once = True
