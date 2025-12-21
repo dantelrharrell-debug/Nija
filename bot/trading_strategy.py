@@ -649,9 +649,36 @@ To enable trading:
             max_position_hard_cap = self.growth_manager.get_max_position_usd()  # $100 hard cap
             effective_cap = min(max_position_hard_cap, self.max_position_cap_usd)
             
-            # Enforce: min($5) <= position_size <= effective cap and available balance
+            # CRITICAL: Dynamic minimum balance reserve - scales with account growth
+            # This ensures bot always has capital to continue trading as account grows
+            if live_balance < 100:
+                # Small account: Keep $15 minimum
+                MINIMUM_RESERVE = 15.00
+            elif live_balance < 500:
+                # Growing account ($100-500): Keep 15% reserve
+                MINIMUM_RESERVE = live_balance * 0.15
+            elif live_balance < 2000:
+                # Medium account ($500-2000): Keep 10% reserve
+                MINIMUM_RESERVE = live_balance * 0.10
+            else:
+                # Large account ($2000+): Keep 5% reserve
+                MINIMUM_RESERVE = live_balance * 0.05
+            
+            tradable_balance = max(0, live_balance - MINIMUM_RESERVE)
+            
+            if tradable_balance < coinbase_minimum:
+                logger.warning(
+                    f"🚫 Not enough tradable balance (${tradable_balance:.2f}) - "
+                    f"keeping ${MINIMUM_RESERVE:.2f} minimum reserve ({MINIMUM_RESERVE/live_balance*100:.1f}%). "
+                    f"Total balance: ${live_balance:.2f}"
+                )
+                return False
+            
+            logger.info(f"💰 Dynamic reserve: ${MINIMUM_RESERVE:.2f} ({MINIMUM_RESERVE/live_balance*100:.1f}%) | Tradable: ${tradable_balance:.2f}")
+            
+            # Enforce: min($5) <= position_size <= effective cap and tradable balance (not total balance)
             position_size_usd = max(coinbase_minimum, calculated_size)
-            position_size_usd = min(position_size_usd, effective_cap, live_balance)
+            position_size_usd = min(position_size_usd, effective_cap, tradable_balance)
 
             # If we don't have enough tradable balance for even the $5 minimum, stop quickly
             if position_size_usd < coinbase_minimum or live_balance < coinbase_minimum:

@@ -965,16 +965,31 @@ class CoinbaseBroker(BaseBroker):
             else:
                 # SELL order - use base_size (crypto amount) or quote_size (USD value)
                 if size_type == 'base':
-                    # Round base_size to 8 decimals for crypto precision (Coinbase requirement)
-                    base_size_rounded = round(quantity, 8)
-                    logger.info(f"📤 Placing SELL order: {symbol}, base_size={base_size_rounded:.8f}")
+                    # Dynamic precision based on crypto - Coinbase requires specific decimal places per asset
+                    # Most cryptos: 8 decimals, but some like XRP only allow 2-4 decimals
+                    precision_map = {
+                        'XRP': 2,    # XRP allows max 2 decimals
+                        'DOGE': 2,   # DOGE allows max 2 decimals  
+                        'SHIB': 0,   # SHIB (whole numbers only)
+                        'ADA': 2,    # ADA allows max 2 decimals
+                        'ATOM': 4,   # ATOM allows max 4 decimals
+                        'SOL': 4,    # SOL allows max 4 decimals
+                        'BTC': 8,    # BTC allows full 8 decimals
+                        'ETH': 6,    # ETH allows max 6 decimals
+                    }
+                    # Extract base currency from symbol (e.g., BTC-USD -> BTC)
+                    base_currency = symbol.split('-')[0]
+                    precision = precision_map.get(base_currency, 8)  # Default to 8 if not in map
+                    
+                    base_size_rounded = round(quantity, precision)
+                    logger.info(f"📤 Placing SELL order: {symbol}, base_size={base_size_rounded} ({precision} decimals)")
                     if self.portfolio_uuid:
                         logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
                     
                     order = self.client.market_order_sell(
                         client_order_id,
                         product_id=symbol,
-                        base_size=str(base_size_rounded)  # Use rounded value
+                        base_size=str(base_size_rounded)  # Use rounded value with correct precision
                     )
                 else:
                     # Use quote_size for SELL (less common, but supported)
