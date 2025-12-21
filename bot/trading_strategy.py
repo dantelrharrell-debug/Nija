@@ -1036,6 +1036,94 @@ To enable trading:
             self.position_manager.save_positions(self.open_positions)
             logger.info(f"✅ Closed {len(positions_to_close)} position(s)")
     
+    def close_excess_positions(self, max_positions=8):
+        """
+        Close excess positions if we exceed the max concurrent limit.
+        Sells positions in order: lowest P&L first (weakest performers)
+        """
+        MAX_CONCURRENT = max_positions
+        current_count = len(self.open_positions)
+        
+        if current_count <= MAX_CONCURRENT:
+            return  # No overage to close
+        
+        excess_count = current_count - MAX_CONCURRENT
+        logger.warning(f"⚠️  OVERAGE DETECTED: {current_count} positions open, max is {MAX_CONCURRENT}")
+        logger.warning(f"   Liquidating {excess_count} weakest positions for profit...")
+        
+        # Sort positions by current P&L (lowest first)
+        positions_by_pnl = []
+        
+        for symbol, position in self.open_positions.items():
+            try:
+                analysis = self.analyze_symbol(symbol)
+                current_price = analysis.get('price')
+                if not current_price:
+                    continue
+                
+                entry_price = position['entry_price']
+                side = position['side']
+                
+                # Calculate P&L %
+                if side == 'BUY':
+                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                else:
+                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                
+                positions_by_pnl.append({
+                    'symbol': symbol,
+                    'position': position,
+                    'current_price': current_price,
+                    'pnl_pct': pnl_pct
+                })
+            except Exception as e:
+                logger.error(f"Error analyzing {symbol} for overage closure: {e}")
+        
+        # Sort by P&L (lowest first - we want to close the worst performers)
+        positions_by_pnl.sort(key=lambda x: x['pnl_pct'])
+        
+        # Close the worst performers first
+        for i in range(excess_count):
+            if i >= len(positions_by_pnl):
+                break
+            
+            p = positions_by_pnl[i]
+            symbol = p['symbol']
+            position = p['position']
+            current_price = p['current_price']
+            pnl_pct = p['pnl_pct']
+            
+            logger.info(f"🔴 CLOSING EXCESS: {symbol} (P&L: {pnl_pct:+.2f}%)")
+            
+            try:
+                # Get the crypto quantity we actually hold
+                side = position['side']
+                quantity = position.get('crypto_quantity', position['size_usd'] / position['entry_price'])
+                
+                # Exit: opposite of entry side
+                exit_signal = 'SELL' if side == 'BUY' else 'BUY'
+                
+                # Place market exit order
+                result = self.broker.place_market_order(
+                    symbol,
+                    exit_signal.lower(),
+                    quantity,
+                    size_type='base' if exit_signal == 'SELL' else 'quote'
+                )
+                
+                if result and result.get('status') == 'filled':
+                    pnl_usd = position['size_usd'] * (pnl_pct / 100)
+                    logger.info(f"✅ Excess position closed: {symbol} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
+                    
+                    # Remove from tracking
+                    del self.open_positions[symbol]
+                    self.position_manager.save_positions(self.open_positions)
+                else:
+                    logger.error(f"❌ Failed to close excess position: {symbol}")
+            
+            except Exception as e:
+                logger.error(f"Error closing excess position {symbol}: {e}")
+    
     def log_trade(self, symbol: str, side: str, price: float, size_usd: float):
         """
         Log trade to journal file
@@ -1109,6 +1197,10 @@ To enable trading:
             # *** MANAGE OPEN POSITIONS FIRST ***
             # Check all open positions for exit conditions (stop loss, take profit, trailing stops)
             self.manage_open_positions()
+            
+            # *** CLOSE EXCESS POSITIONS IF OVER LIMIT ***
+            # If we have more than 8 positions, close the weakest ones for profit
+            self.close_excess_positions(max_positions=8)
 
             # Guard: if no trading balance, do not attempt orders
             if not self.account_balance or self.account_balance <= 0:
@@ -1118,15 +1210,27 @@ To enable trading:
 
             logger.info(f"🎯 Analyzing {len(self.trading_pairs)} markets for signals...")
             signals_found = 0
+            trades_executed = 0
+            MAX_CONCURRENT_POSITIONS = 8
+            current_positions = len(self.open_positions)
+            
             for symbol in self.trading_pairs:
+                # ENFORCE: Don't open new positions if we already have 8 open
+                if current_positions + trades_executed >= MAX_CONCURRENT_POSITIONS:
+                    logger.info(f"⛔ Max {MAX_CONCURRENT_POSITIONS} concurrent positions reached ({current_positions} open + {trades_executed} just opened). Skipping new entries.")
+                    break
+                
                 analysis = self.analyze_symbol(symbol)
                 if analysis.get('signal') in ['BUY', 'SELL']:
                     signals_found += 1
                     logger.info(f"🔥 SIGNAL: {symbol}, Signal: {analysis.get('signal')}, Reason: {analysis.get('reason')}")
                     self.execute_trade(analysis)
+                    trades_executed += 1
             
             if signals_found == 0:
                 logger.info(f"📭 No trade signals found in {len(self.trading_pairs)} markets this cycle")
+            elif trades_executed > 0:
+                logger.info(f"✅ Executed {trades_executed} trades (max {MAX_CONCURRENT_POSITIONS} concurrent, currently {current_positions + trades_executed} open)")
         except Exception as exc:
             logger.error(f"run_cycle error: {exc}", exc_info=True)
     
