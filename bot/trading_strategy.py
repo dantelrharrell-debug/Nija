@@ -133,7 +133,7 @@ class TradingStrategy:
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
             
             # CRITICAL: Enforce minimum capital for Coinbase fee structure
-            MINIMUM_VIABLE_CAPITAL = 50.0  # $50 minimum for profitable trading
+            MINIMUM_VIABLE_CAPITAL = 10.0  # $10 minimum (lowered to resume trading)
             
             if self.account_balance < MINIMUM_VIABLE_CAPITAL:
                 logger.error("="*80)
@@ -600,7 +600,7 @@ To enable trading:
                 return False
             
             # CRITICAL: Verify sufficient balance before ANY trade
-            MINIMUM_VIABLE_CAPITAL = 50.0  # $50 minimum for profitable trading
+            MINIMUM_VIABLE_CAPITAL = 10.0  # $10 minimum (lowered to resume trading)
 
             # Refresh balance right before sizing to avoid using stale consumer funds
             live_balance = self.get_usd_balance()

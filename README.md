@@ -1,9 +1,9 @@
 # NIJA - Autonomous Cryptocurrency Trading Bot
 
 **Version**: APEX v7.1 - PROFIT-FOCUSED MODE 🎯  
-**Status**: Production Ready ✅ - **TRADING LIVE**  
-**Last Updated**: December 20, 2025 (PROFIT PROTECTION DEPLOYED)  
-**Current Balance**: ~$84 (in 5 open positions)  
+**Status**: ⚠️ RESTARTING - Balance Fix Deployed  
+**Last Updated**: December 21, 2025 (Portfolio Breakdown API + Lower Min Capital)  
+**Current Balance**: ~$84 (checking...)  
 **Goal**: $1,000/day sustainable income
 
 > **🔧 CRITICAL FIX - December 20, 2025**: Fixed balance detection issue. Bot now uses Portfolio Breakdown API instead of get_accounts(). See "RECOVERY INSTRUCTIONS" section below.
