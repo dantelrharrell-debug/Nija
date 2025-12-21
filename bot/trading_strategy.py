@@ -98,6 +98,9 @@ class TradingStrategy:
                 logger.error("")
                 logger.error("======================================================================")
                 raise RuntimeError("Broker connection failed")
+
+            # One-time guard to prevent repeated rebalances per process
+            self.rebalanced_once = False
         else:
             # Paper mode path: ensure MockBroker connects
             if not self.broker.connect():
@@ -1036,6 +1039,116 @@ To enable trading:
             self.position_manager.save_positions(self.open_positions)
             logger.info(f"✅ Closed {len(positions_to_close)} position(s)")
     
+    def rebalance_existing_holdings(self, max_positions: int = 8, target_cash: float = 10.0):
+        """
+        Rebuild a view of actual holdings from the broker and liquidate excess positions
+        to ensure we keep at most `max_positions` and have at least `target_cash` USD.
+
+        This is essential when the bot restarts without a saved `open_positions` file
+        but there are stray holdings on the account (e.g., 13+ assets).
+        """
+        try:
+            # Fetch real holdings from broker (Advanced Trade accounts only)
+            positions = []
+            try:
+                positions = self.broker.get_positions()  # [{'symbol': 'BTC-USD', 'quantity': 0.001, 'currency': 'BTC'}]
+            except Exception as e:
+                logger.error(f"Error fetching live positions for rebalance: {e}")
+                positions = []
+
+            # Nothing to do if no crypto holdings
+            if not positions:
+                return
+
+            # Compute USD value per holding using current price
+            valued = []
+            for p in positions:
+                symbol = p.get('symbol')
+                qty = float(p.get('quantity', 0) or 0)
+                if not symbol or qty <= 0:
+                    continue
+                try:
+                    analysis = self.analyze_symbol(symbol)
+                    price = float(analysis.get('price') or 0)
+                except Exception:
+                    price = 0.0
+                usd_value = qty * price if price > 0 else 0.0
+                valued.append({
+                    'symbol': symbol,
+                    'quantity': qty,
+                    'usd_value': usd_value,
+                    'price': price
+                })
+
+            if not valued:
+                return
+
+            # Sort by USD value descending (largest first)
+            valued.sort(key=lambda x: x['usd_value'], reverse=True)
+
+            # Determine what to keep and what to sell
+            keep = valued[:max_positions]
+            sell_list = valued[max_positions:]
+
+            # If we already have enough cash, we may skip liquidation
+            current_cash = float(self.account_balance or 0)
+            need_cash = current_cash < target_cash
+
+            to_sell = []
+            if sell_list:
+                to_sell.extend(sell_list)
+            # If we still need cash, sell from the tail of the 'keep' (smallest keeps)
+            if need_cash:
+                # Evaluate from the smallest of the kept positions
+                tail_kept = list(reversed(keep))
+                for item in tail_kept:
+                    if current_cash >= target_cash:
+                        break
+                    to_sell.append(item)
+                    current_cash += item.get('usd_value', 0.0)
+
+            if not to_sell:
+                return
+
+            logger.warning(f"⚠️ Rebalancing holdings: selling {len(to_sell)} position(s) to enforce max {max_positions} and reach ${target_cash:.2f} cash")
+
+            sold = 0
+            for item in to_sell:
+                symbol = item['symbol']
+                qty = item['quantity']
+                if qty <= 0:
+                    continue
+                try:
+                    # Sell full crypto amount (base size)
+                    result = self.broker.place_market_order(
+                        symbol,
+                        'sell',
+                        qty,
+                        size_type='base'
+                    )
+                    status = (result or {}).get('status', 'unknown')
+                    if status == 'filled':
+                        sold += 1
+                        logger.info(f"✅ Rebalance SELL filled: {symbol} qty={qty}")
+                    else:
+                        logger.error(f"❌ Rebalance SELL failed: {symbol} qty={qty} result={result}")
+                except Exception as e:
+                    logger.error(f"Error selling {symbol} during rebalance: {e}")
+
+            if sold:
+                logger.info(f"✅ Rebalance complete: sold {sold} position(s)")
+                # Refresh cash balance after liquidation
+                try:
+                    self.account_balance = self.get_usd_balance()
+                except Exception:
+                    pass
+            # Ensure we don't run this repeatedly in the same process
+            self.rebalanced_once = True
+
+        except Exception as e:
+            logger.error(f"Rebalance error: {e}")
+            self.rebalanced_once = True
+
     def close_excess_positions(self, max_positions=8):
         """
         Close excess positions if we exceed the max concurrent limit.
@@ -1161,6 +1274,15 @@ To enable trading:
             logger.info("🔁 Running trading loop iteration")
             self.account_balance = self.get_usd_balance()
             logger.info(f"USD Balance (get_usd_balance): ${self.account_balance:,.2f}")
+
+            # One-time holdings rebalance: if we restarted with >8 stray holdings
+            # or insufficient USD, liquidate excess to restore constraints.
+            if not getattr(self, 'rebalanced_once', False):
+                try:
+                    self.rebalance_existing_holdings(max_positions=8, target_cash=10.0)
+                except Exception as e:
+                    logger.error(f"Rebalance invocation failed: {e}")
+                    self.rebalanced_once = True
             
             # Fetch ALL available trading pairs dynamically if not set
             if self.all_markets_mode and not self.trading_pairs:
