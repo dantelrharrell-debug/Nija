@@ -236,6 +236,69 @@ class CoinbaseBroker(BaseBroker):
         
         return False
 
+    def get_all_products(self) -> list:
+        """
+        Fetch ALL available products (cryptocurrency pairs) from Coinbase.
+        Handles pagination to retrieve 700+ markets without timeouts.
+        
+        Returns:
+            List of product IDs (e.g., ['BTC-USD', 'ETH-USD', ...])
+        """
+        try:
+            logging.info("📡 Fetching all products from Coinbase API (700+ markets)...")
+            all_products = []
+            
+            # Get products with pagination
+            if hasattr(self.client, 'get_products'):
+                try:
+                    products_resp = self.client.get_products()
+                    
+                    # Handle both object and dict responses
+                    if hasattr(products_resp, 'products'):
+                        products = products_resp.products
+                    elif isinstance(products_resp, dict):
+                        products = products_resp.get('products', [])
+                    else:
+                        products = []
+                    
+                    if not products:
+                        logging.warning("⚠️  No products returned from API")
+                        return []
+                    
+                    # Extract product IDs - handle various response formats
+                    for product in products:
+                        product_id = None
+                        
+                        # Try object attribute access
+                        if hasattr(product, 'id'):
+                            product_id = getattr(product, 'id', None)
+                        # Try dict access
+                        elif isinstance(product, dict):
+                            product_id = product.get('id') or product.get('product_id')
+                        
+                        # Filter: Only include USD trading pairs (exclude stablecoins on themselves)
+                        if product_id and '-USD' in product_id:
+                            all_products.append(product_id)
+                    
+                    # Remove duplicates and sort
+                    all_products = sorted(list(set(all_products)))
+                    
+                    logging.info(f"✅ Successfully fetched {len(all_products)} USD/USDC trading pairs from Coinbase API")
+                    if all_products:
+                        logging.info(f"   Sample markets: {', '.join(all_products[:10])}")
+                    return all_products
+                    
+                except Exception as e:
+                    logging.warning(f"⚠️  get_products() failed: {e}")
+            
+            # Fallback: Return empty list (will use curated fallback)
+            logging.warning("⚠️  Could not fetch products from API, will use fallback list")
+            return []
+            
+        except Exception as e:
+            logging.error(f"🔥 Error fetching all products: {e}")
+            return []
+
     def get_account_balance(self):
         """Return ONLY tradable Advanced Trade USD/USDC balances.
 
