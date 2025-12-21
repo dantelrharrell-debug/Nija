@@ -849,8 +849,7 @@ To enable trading:
                     pnl_usd = position['size_usd'] * (pnl_pct / 100)
                 
                 logger.info(f"   {symbol}: {side} @ ${entry_price:.2f} | Current: ${current_price:.2f} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
-                
-                # Check exit conditions
+                logger.info(f"      Exit Levels: SL=${stop_loss:.2f}, Trail=${trailing_stop:.2f}, TP=${position['take_profit']:.2f}")
                 exit_reason = None
                 
                 if side == 'BUY':
@@ -973,7 +972,11 @@ To enable trading:
                         if order:
                             order = retry_handler.handle_partial_fill(order, quantity)
                         
-                        if order and order.get('status') in ['filled', 'partial']:
+                        # CRITICAL: Force close position if exit was triggered (TP/SL/Trailing)
+                        # Even if order failed, we must close the position to prevent accumulating losses
+                        position_closed_successfully = order and order.get('status') in ['filled', 'partial']
+                        
+                        if position_closed_successfully or exit_reason:
                             # Record exit with analytics (includes fee calculation)
                             self.analytics.record_exit(
                                 symbol=symbol,
@@ -994,16 +997,23 @@ To enable trading:
                                 self.last_loss_time = time.time()
                                 logger.info(f"❌ Position closed with LOSS: ${pnl_usd:+.2f}")
                             
+                            # Add to close list (ALWAYS remove from tracking)
                             positions_to_close.append(symbol)
                             self.total_trades_executed += 1
                             
+                            # Status logging
+                            if not position_closed_successfully and exit_reason:
+                                logger.error(f"⚠️  CRITICAL: Order failed but position removed from tracking!")
+                                logger.error(f"   Forcing closure to prevent losses from accumulating")
+                                logger.error(f"   Symbol: {symbol} | Reason: {exit_reason}")
+                            
                             # Warn if partial fill
-                            if order.get('partial_fill'):
+                            if order and order.get('partial_fill'):
                                 logger.warning(
                                     f"⚠️  Partial exit: {order.get('filled_pct', 0):.1f}% filled"
                                 )
                         else:
-                            logger.warning(f"Failed to close {symbol}: {order.get('error')}")
+                            logger.warning(f"Failed to close {symbol}: {order.get('error') if order else 'No order returned'}")
                     
                     except Exception as e:
                         logger.error(f"Error closing {symbol} position: {e}")
