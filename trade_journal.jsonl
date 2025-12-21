@@ -47,3 +47,5 @@
 {"timestamp": "2025-12-21T16:15:41.016985", "symbol": "SOL-USD", "side": "SELL", "price": 124.84, "size_usd": 10.91}
 {"timestamp": "2025-12-21T16:16:45.091844", "symbol": "HBAR-USD", "side": "SELL", "price": 0.11036, "size_usd": 9.68}
 {"timestamp": "2025-12-21T16:17:01.255258", "symbol": "HBAR-USD", "side": "SELL", "price": 0.11041, "size_usd": 9.68}
+{"timestamp": "2025-12-21T16:27:26.152762", "symbol": "DOGE-USD", "side": "SELL", "price": 0.1301, "size_usd": 15.07}
+{"timestamp": "2025-12-21T16:27:27.596565", "symbol": "DOGE-USD", "side": "SELL", "price": 0.1301, "size_usd": 15.07}
