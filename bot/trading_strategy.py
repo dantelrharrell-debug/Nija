@@ -229,20 +229,20 @@ To enable trading:
         
         # Track open positions and trade history
         self.open_positions = {}
-        # ULTRA AGGRESSIVE: 8 concurrent positions for 15-day $5K goal
-        self.max_concurrent_positions = 8
+        # ACTIVE TRADING MODE: 3 positions for quick turnover
+        self.max_concurrent_positions = 3  # Lower count = faster capital recycling
         self.total_trades_executed = 0
-        # Risk/exit tuning
-        self.stop_loss_pct = 0.02  # 2% hard stop
-        self.base_take_profit_pct = 0.05  # initial TP
-        self.stepped_take_profit_pct = 0.08  # stepped TP after price moves in our favor
-        self.take_profit_step_trigger = 0.03  # when price moves 3% in favor, step TP
-        # Lock 80% of peak gains when trailing - only give back 2% of profits
-        self.trailing_lock_ratio = 0.80
+        # Risk/exit tuning - AGGRESSIVE SCALPING MODE FOR QUICK PROFITS
+        self.stop_loss_pct = 0.015  # 1.5% hard stop (tighter)
+        self.base_take_profit_pct = 0.02  # 2% initial TP (QUICK PROFIT)
+        self.stepped_take_profit_pct = 0.03  # 3% stepped TP (was 8%)
+        self.take_profit_step_trigger = 0.015  # step TP at 1.5% move (was 3%)
+        # Lock 90% of peak gains when trailing - only give back 1% of profits
+        self.trailing_lock_ratio = 0.90  # TIGHTER TRAILING
         # Sizing controls
         self.max_position_cap_usd = 150.0  # cap per-trade size (increased for better capital efficiency)
-        # Loss streak cooldown
-        self.loss_cooldown_seconds = 180
+        # Loss streak cooldown - REDUCED FOR ACTIVE TRADING
+        self.loss_cooldown_seconds = 60  # 1 minute cooldown (was 3 minutes)
         self.last_loss_time = None
         # Market selection controls
         # ULTRA AGGRESSIVE: Scan all 50 markets for maximum opportunities
