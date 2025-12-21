@@ -143,6 +143,12 @@ class CoinbaseBroker(BaseBroker):
             # Normalize secret: handle escaped newlines and ensure final newline
             if api_secret:
                 api_secret = api_secret.strip()
+                # Remove surrounding quotes if present (from .env file)
+                if api_secret.startswith('"') and api_secret.endswith('"'):
+                    api_secret = api_secret[1:-1]
+                if api_secret.startswith("'") and api_secret.endswith("'"):
+                    api_secret = api_secret[1:-1]
+                # Convert escaped newlines to real newlines
                 if '\\n' in api_secret:
                     api_secret = api_secret.replace('\\n', '\n')
                     print("   ℹ️  Normalized escaped newlines in API_SECRET")
