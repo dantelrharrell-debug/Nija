@@ -139,9 +139,9 @@ class TradingStrategy:
             # CRITICAL: Enforce minimum capital for Coinbase fee structure
             import os
             try:
-                MINIMUM_VIABLE_CAPITAL = float(os.getenv("MINIMUM_VIABLE_CAPITAL", "10.0"))
+                MINIMUM_VIABLE_CAPITAL = float(os.getenv("MINIMUM_VIABLE_CAPITAL", "5.0"))  # Lowered to $5 for immediate trading
             except Exception:
-                MINIMUM_VIABLE_CAPITAL = 10.0  # default safeguard
+                MINIMUM_VIABLE_CAPITAL = 5.0  # default safeguard - allow trading with small balance
             
             if self.account_balance < MINIMUM_VIABLE_CAPITAL:
                 logger.error("="*80)
@@ -616,9 +616,9 @@ To enable trading:
             # CRITICAL: Verify sufficient balance before ANY trade
             import os
             try:
-                MINIMUM_VIABLE_CAPITAL = float(os.getenv("MINIMUM_VIABLE_CAPITAL", "10.0"))
+                MINIMUM_VIABLE_CAPITAL = float(os.getenv("MINIMUM_VIABLE_CAPITAL", "5.0"))
             except Exception:
-                MINIMUM_VIABLE_CAPITAL = 10.0
+                MINIMUM_VIABLE_CAPITAL = 5.0
 
             # Refresh balance right before sizing to avoid using stale consumer funds
             live_balance = self.get_usd_balance()
