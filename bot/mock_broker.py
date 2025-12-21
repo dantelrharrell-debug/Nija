@@ -26,8 +26,32 @@ class MockBroker(BaseBroker):
         return float(self._balance)
 
     def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
-        # Simulate a filled order and adjust mock balance for buys (quote_size in USD)
+        """
+        Place a market order in paper mode.
+        
+        Args:
+            symbol: Trading pair (e.g., BTC-USD)
+            side: 'buy' or 'sell'
+            quantity: Amount to trade
+            size_type: 'quote' (USD) or 'base' (crypto) - determines how quantity is interpreted
+        """
+        # Simulate a filled order and adjust mock balance
         try:
+            # For buys, deduct USD (quote currency)
+            # For sells, we'd ideally add USD back, but mock broker doesn't track holdings
+            if side.lower() == "buy":
+                self._balance = max(0.0, self._balance - float(quantity))
+            elif side.lower() == "sell":
+                # Simulate selling crypto for USD
+                # In paper mode, we estimate USD received (quantity is crypto amount if size_type='base')
+                if size_type == 'base':
+                    # quantity is crypto amount, estimate price ~$100
+                    estimated_usd = float(quantity) * 100.0
+                else:
+                    # quantity is already USD
+                    estimated_usd = float(quantity)
+                self._balance += estimated_usd
+            
             filled = {
                 "symbol": symbol,
                 "side": side,
@@ -36,8 +60,6 @@ class MockBroker(BaseBroker):
                 "size": quantity,
                 "timestamp": datetime.now().isoformat(),
             }
-            if side.lower() == "buy":
-                self._balance = max(0.0, self._balance - float(quantity))
             return {"status": "filled", "order": filled, "filled_size": quantity}
         except Exception as e:
             return {"status": "error", "error": str(e)}
