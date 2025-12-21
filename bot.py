@@ -10,6 +10,10 @@ import sys
 import time
 import logging
 from logging.handlers import RotatingFileHandler
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Setup paths
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
