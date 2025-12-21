@@ -12,6 +12,13 @@ import os
 import uuid
 import json
 
+# Try to load dotenv if available, but don't fail if not
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not available, env vars should be set externally
+
 # Configure logger for broker operations
 logger = logging.getLogger('nija.broker')
 
@@ -986,6 +993,17 @@ class CoinbaseBroker(BaseBroker):
             # Coinbase returns an object with 'success' field and 'error_response'
             # Use helper to safely serialize the response
             order_dict = _serialize_object_to_dict(order)
+
+            # Guard against SDK returning plain strings or unexpected types
+            if not isinstance(order_dict, dict):
+                logger.error("Received non-dict order response from Coinbase SDK")
+                logger.error(f"   Raw response: {order_dict}")
+                return {
+                    "status": "error",
+                    "error": "INVALID_ORDER_RESPONSE",
+                    "message": "Coinbase SDK returned non-dict response",
+                    "raw_response": str(order_dict)
+                }
             
             # Check for Coinbase error response
             success = order_dict.get('success', True)
@@ -1084,6 +1102,14 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logger.error(f"Error fetching positions: {e}")
             return []
+    
+    def get_market_data(self, symbol: str, timeframe: str = '5m', limit: int = 100) -> Dict:
+        """
+        Get market data (wrapper around get_candles for compatibility)
+        Returns dict with 'candles' key containing list of candle dicts
+        """
+        candles = self.get_candles(symbol, timeframe, limit)
+        return {'candles': candles}
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """Get candle data with retry logic for rate limiting"""

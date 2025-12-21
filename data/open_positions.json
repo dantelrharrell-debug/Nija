@@ -1,5 +1,26 @@
 {
-  "timestamp": "2025-12-21T13:03:40.952114",
-  "positions": {},
-  "count": 0
+  "timestamp": "2025-12-21T16:17:01.256422",
+  "positions": {
+    "DOGE-USD": {
+      "symbol": "DOGE-USD",
+      "side": "BUY",
+      "entry_price": 0.13,
+      "current_price": 0.12924,
+      "size": 115.9,
+      "size_usd": 15.07,
+      "crypto_quantity": 115.9,
+      "entry_time": "2025-12-21T14:30:00.000000",
+      "stop_loss": 0.1274,
+      "take_profit": 0.1365,
+      "trailing_stop": 0.1274,
+      "trailing_lock_ratio": 0.8,
+      "highest_price": 0.13,
+      "status": "OPEN",
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "tp_stepped": false,
+      "unrealized_pnl_pct": -0.5846153846153928
+    }
+  },
+  "count": 1
 }

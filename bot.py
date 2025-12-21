@@ -10,10 +10,13 @@ import sys
 import time
 import logging
 from logging.handlers import RotatingFileHandler
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Try to load dotenv if available, but don't fail if not
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not available, env vars should be set externally
 
 # Setup paths
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))

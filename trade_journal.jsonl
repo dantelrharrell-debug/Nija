@@ -36,3 +36,14 @@
 {"timestamp": "2025-12-21T13:03:25.657515", "symbol": "ETH-USD", "side": "BUY", "price": 103.65068863847503, "size_usd": 100.0}
 {"timestamp": "2025-12-21T13:03:40.922056", "symbol": "ETH-USD", "side": "SELL", "price": 93.32424759656635, "size_usd": 100.0}
 {"timestamp": "2025-12-21T13:03:40.951516", "symbol": "BTC-USD", "side": "BUY", "price": 96.19792893872764, "size_usd": 100.0}
+{"timestamp": "2025-12-21T16:04:58.729077", "symbol": "BTC-USD", "side": "SELL", "price": 88014.04, "size_usd": 9.45}
+{"timestamp": "2025-12-21T16:05:06.468045", "symbol": "XRP-USD", "side": "SELL", "price": 1.9004, "size_usd": 13.3}
+{"timestamp": "2025-12-21T16:05:37.211532", "symbol": "LTC-USD", "side": "SELL", "price": 76.0, "size_usd": 24.67}
+{"timestamp": "2025-12-21T16:06:07.808445", "symbol": "BCH-USD", "side": "SELL", "price": 579.78, "size_usd": 9.59}
+{"timestamp": "2025-12-21T16:09:51.480979", "symbol": "ICP-USD", "side": "SELL", "price": 3.072, "size_usd": 9.24}
+{"timestamp": "2025-12-21T16:14:44.534049", "symbol": "SOL-USD", "side": "SELL", "price": 124.85, "size_usd": 10.91}
+{"timestamp": "2025-12-21T16:15:20.778268", "symbol": "ETH-USD", "side": "SELL", "price": 2971.86, "size_usd": 25.48}
+{"timestamp": "2025-12-21T16:15:34.173416", "symbol": "ETH-USD", "side": "SELL", "price": 2972.25, "size_usd": 25.48}
+{"timestamp": "2025-12-21T16:15:41.016985", "symbol": "SOL-USD", "side": "SELL", "price": 124.84, "size_usd": 10.91}
+{"timestamp": "2025-12-21T16:16:45.091844", "symbol": "HBAR-USD", "side": "SELL", "price": 0.11036, "size_usd": 9.68}
+{"timestamp": "2025-12-21T16:17:01.255258", "symbol": "HBAR-USD", "side": "SELL", "price": 0.11041, "size_usd": 9.68}

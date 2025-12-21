@@ -110,8 +110,9 @@ class TradingStrategy:
         logger.info("🔥 Broker connected, about to fetch balance...")
         print("🔥 BROKER CONNECTED, CALLING get_account_balance() NEXT", flush=True)
         
-        # Initialize analytics tracker
-        self.analytics = TradeAnalytics()
+        # Initialize analytics tracker with correct path
+        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        self.analytics = TradeAnalytics(data_dir=data_dir)
         logger.info("📊 Trade analytics initialized")
         
         # Initialize position manager
