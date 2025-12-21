@@ -32,3 +32,5 @@ htmlcov/
 .git
 
 scanner.out
+
+nija.log.*
