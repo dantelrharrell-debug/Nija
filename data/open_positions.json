@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-12-21T06:04:33.917657",
+  "timestamp": "2025-12-21T06:04:55.387794",
   "positions": {
     "BTC-USD": {
       "side": "BUY",
@@ -23,14 +23,29 @@
       "crypto_quantity": 100.0,
       "timestamp": "2025-12-21 06:04:33.917651",
       "stop_loss": 94.3091317562755,
-      "take_profit": 101.04549831029519,
+      "take_profit": 103.93251254773219,
       "consecutive_count": 2,
-      "trailing_stop": 94.3091317562755,
-      "highest_price": 96.23380791456684,
+      "trailing_stop": 99.64650914536058,
+      "highest_price": 100.49968445305902,
       "lowest_price": null,
       "trade_id": "2025-12-21T06:04:33.915932",
+      "tp_stepped": true
+    },
+    "SOL-USD": {
+      "side": "BUY",
+      "entry_price": 101.5083588773381,
+      "size_usd": 100.0,
+      "crypto_quantity": 100.0,
+      "timestamp": "2025-12-21 06:04:55.387790",
+      "stop_loss": 99.47819169979134,
+      "take_profit": 106.583776821205,
+      "consecutive_count": 3,
+      "trailing_stop": 99.47819169979134,
+      "highest_price": 101.5083588773381,
+      "lowest_price": null,
+      "trade_id": "2025-12-21T06:04:55.387338",
       "tp_stepped": false
     }
   },
-  "count": 2
+  "count": 3
 }

@@ -32,3 +32,4 @@
 {"timestamp": "2025-12-20T02:32:59.842269", "symbol": "FIL-USD", "side": "SELL", "price": 95.77897432535677, "size_usd": 96.0}
 {"timestamp": "2025-12-21T06:04:12.521918", "symbol": "BTC-USD", "side": "BUY", "price": 106.17929955625098, "size_usd": 100.0}
 {"timestamp": "2025-12-21T06:04:33.915820", "symbol": "ETH-USD", "side": "BUY", "price": 96.23380791456684, "size_usd": 100.0}
+{"timestamp": "2025-12-21T06:04:55.387202", "symbol": "SOL-USD", "side": "BUY", "price": 101.5083588773381, "size_usd": 100.0}
