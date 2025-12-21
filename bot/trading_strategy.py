@@ -1351,13 +1351,23 @@ To enable trading:
                 if current_positions + trades_executed >= MAX_CONCURRENT_POSITIONS:
                     logger.info(f"⛔ Max {MAX_CONCURRENT_POSITIONS} concurrent positions reached ({current_positions} open + {trades_executed} just opened). Skipping new entries.")
                     break
-                
+
                 analysis = self.analyze_symbol(symbol)
-                if analysis.get('signal') in ['BUY', 'SELL']:
+                signal = analysis.get('signal')
+                if signal in ['BUY', 'SELL']:
                     signals_found += 1
-                    logger.info(f"🔥 SIGNAL: {symbol}, Signal: {analysis.get('signal')}, Reason: {analysis.get('reason')}")
-                    self.execute_trade(analysis)
-                    trades_executed += 1
+                    logger.info(f"🔥 SIGNAL: {symbol}, Signal: {signal}, Reason: {analysis.get('reason')}")
+
+                    # Extra guard: enforce max consecutive BUY trades at loop level
+                    if signal == 'BUY' and self.consecutive_trades >= self.max_consecutive_trades:
+                        logger.warning(f"⚠️ Max consecutive trades ({self.max_consecutive_trades}) reached - skipping buy until positions close")
+                        logger.info(f"   Current open positions: {len(self.open_positions)}")
+                        logger.info(f"   Waiting for sells to reset counter...")
+                        continue
+
+                    ok = self.execute_trade(analysis)
+                    if ok:
+                        trades_executed += 1
             
             if signals_found == 0:
                 logger.info(f"📭 No trade signals found in {len(self.trading_pairs)} markets this cycle")
