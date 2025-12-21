@@ -35,20 +35,39 @@ def main():
     print("📊 CURRENT ACCOUNT:")
     print(f"   Cash: ${balance_info['trading_balance']:.2f}")
     print()
-    
-    if 'crypto' in balance_info:
-        crypto = balance_info['crypto']
+
+    # Build actual crypto quantities from Advanced Trade accounts
+    crypto_qty = {}
+    try:
+        accounts_resp = broker.client.get_accounts()
+        accounts = getattr(accounts_resp, 'accounts', []) or (accounts_resp.get('accounts', []) if isinstance(accounts_resp, dict) else [])
+        for acc in accounts:
+            if isinstance(acc, dict):
+                currency = acc.get('currency')
+                av_val = (acc.get('available_balance') or {}).get('value')
+            else:
+                currency = getattr(acc, 'currency', None)
+                av_val = getattr(getattr(acc, 'available_balance', None), 'value', None)
+            try:
+                amount = float(av_val or 0)
+            except Exception:
+                amount = 0.0
+            if currency and currency not in ("USD", "USDC") and amount > 0:
+                crypto_qty[currency] = amount
+    except Exception as e:
+        print(f"⚠️ Failed to fetch accounts for crypto quantities: {e}")
+
+    if crypto_qty:
         print("🪙 CRYPTO HOLDINGS (WILL SELL):")
-        for symbol, amount in crypto.items():
-            if amount > 0:
-                product_id = f"{symbol}-USD"
-                try:
-                    product = broker.client.get_product(product_id)
-                    price = float(product.price)
-                    value = amount * price
-                    print(f"   • {symbol}: {amount:.8f} @ ${price:.2f} = ${value:.2f}")
-                except:
-                    print(f"   • {symbol}: {amount:.8f} (price unavailable)")
+        for symbol, amount in crypto_qty.items():
+            product_id = f"{symbol}-USD"
+            try:
+                product = broker.client.get_product(product_id)
+                price = float(getattr(product, 'price', 0) or (product.get('price') if isinstance(product, dict) else 0))
+                value = amount * price
+                print(f"   • {symbol}: {amount:.8f} @ ${price:.2f} = ${value:.2f}")
+            except Exception:
+                print(f"   • {symbol}: {amount:.8f} (price unavailable)")
     
     print()
     print("=" * 80)
@@ -65,15 +84,14 @@ def main():
         'LTC': 8, 'BCH': 8, 'ETC': 8
     }
     
-    if 'crypto' in balance_info:
-        crypto = balance_info['crypto']
-        for symbol, amount in crypto.items():
+    if crypto_qty:
+        for symbol, amount in crypto_qty.items():
             if amount > 0.00001:  # Skip dust
                 product_id = f"{symbol}-USD"
                 try:
                     # Get current price
                     product = broker.client.get_product(product_id)
-                    price = float(product.price)
+                    price = float(getattr(product, 'price', 0) or (product.get('price') if isinstance(product, dict) else 0))
                     value = amount * price
                     
                     # Format amount with correct precision
