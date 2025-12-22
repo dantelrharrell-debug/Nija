@@ -243,7 +243,7 @@ To enable trading:
         # Lock 90% of peak gains when trailing - only give back 1% of profits
         self.trailing_lock_ratio = 0.90  # TIGHTER TRAILING
         # Sizing controls
-        self.max_position_cap_usd = 150.0  # cap per-trade size (increased for better capital efficiency)
+        self.max_position_cap_usd = 15.0  # cap per-trade size (tighter to support 8 concurrent positions on small balances)
         # Loss streak cooldown - REDUCED FOR ACTIVE TRADING
         self.loss_cooldown_seconds = 60  # 1 minute cooldown (was 3 minutes)
         self.last_loss_time = None
@@ -659,6 +659,8 @@ To enable trading:
             
             # CRITICAL: Dynamic minimum balance reserve - scales with account growth
             # This ensures bot always has capital to continue trading as account grows
+            reserve_floor = 20.0
+
             if live_balance < 100:
                 # Small account: ensure at least one minimum-sized trade is possible
                 # Reserve just enough to leave Coinbase minimum ($5) tradable, or use override
@@ -680,6 +682,13 @@ To enable trading:
                 # Large account ($2000+): Keep 5% reserve
                 MINIMUM_RESERVE = live_balance * 0.05
             
+            # Enforce a $20 floor reserve once balance is at least $100, but never exceed available minus the $5 minimum tradable requirement.
+            if live_balance >= 100:
+                MINIMUM_RESERVE = max(MINIMUM_RESERVE, reserve_floor)
+
+            # Guard against over-reserving so at least the $5 minimum trade is possible
+            MINIMUM_RESERVE = min(MINIMUM_RESERVE, max(0.0, live_balance - coinbase_minimum))
+
             tradable_balance = max(0, live_balance - MINIMUM_RESERVE)
             
             if tradable_balance < coinbase_minimum:
