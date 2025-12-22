@@ -1,5 +1,7 @@
 # NIJA - Autonomous Cryptocurrency Trading Bot
 
+See Emergency Procedures: [EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)
+
 **Version**: APEX v7.1 - DECIMAL PRECISION & DYNAMIC BALANCE PROTECTION ✅  
 **Status**: ✅ Trading ACTIVE – Capital recovered, dynamic reserves protecting balance  
 **Last Updated**: December 21, 2025 - Decimal precision fix + dynamic balance protection deployed
