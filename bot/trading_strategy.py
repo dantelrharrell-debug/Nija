@@ -1637,6 +1637,9 @@ To enable trading:
                 for symbol, position in positions_to_emergency_close:
                     try:
                         current_price = self.broker.get_current_price(symbol)
+                        if not current_price or current_price <= 0:
+                            logger.error(f"❌ Emergency close skipped for {symbol}: no valid price available")
+                            continue
                         logger.warning(f"🚨 EMERGENCY CLOSE: {symbol} @ ${current_price:.4f}")
                         
                         # Execute market sell immediately

@@ -39,6 +39,17 @@ def _serialize_object_to_dict(obj) -> Dict:
     
     if isinstance(obj, dict):
         return obj
+
+    # If it's already a string that looks like JSON/dict, try to parse
+    if isinstance(obj, str):
+        try:
+            return json.loads(obj)
+        except Exception:
+            try:
+                import ast
+                return ast.literal_eval(obj)
+            except Exception:
+                return {"_raw": obj, "_type": type(obj).__name__}
     
     # Try JSON serialization first (handles dataclasses with json.JSONEncoder)
     try:
@@ -123,6 +134,7 @@ class CoinbaseBroker(BaseBroker):
             logging.info("⚙️ ALLOW_CONSUMER_USD defaulted to true — Consumer USD accounts will be counted")
         else:
             self.allow_consumer_usd = str(allow_flag).lower() in ("1", "true", "yes")
+        self._product_cache: Dict[str, Dict] = {}
     
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade using JWT authentication"""
@@ -885,6 +897,63 @@ class CoinbaseBroker(BaseBroker):
             lines.append(f"⚠️ Failed to fetch USD/USDC inventory: {e}")
 
         return lines
+
+    def _log_insufficient_fund_context(self, base_currency: str, quote_currency: str) -> None:
+        """Log available balances for base/quote/USD/USDC across portfolios for diagnostics."""
+        try:
+            resp = self.client.get_accounts()
+            accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
+
+            def _as_float(val):
+                try:
+                    return float(val)
+                except Exception:
+                    return 0.0
+
+            interesting = {base_currency, quote_currency, 'USD', 'USDC'}
+            logger.error(f"   Fund snapshot ({', '.join(sorted(interesting))})")
+            for a in accounts:
+                if isinstance(a, dict):
+                    currency = a.get('currency')
+                    platform = a.get('platform')
+                    account_type = a.get('type')
+                    av = (a.get('available_balance') or {}).get('value')
+                    hd = (a.get('hold') or {}).get('value')
+                else:
+                    currency = getattr(a, 'currency', None)
+                    platform = getattr(a, 'platform', None)
+                    account_type = getattr(a, 'type', None)
+                    av = getattr(getattr(a, 'available_balance', None), 'value', None)
+                    hd = getattr(getattr(a, 'hold', None), 'value', None)
+
+                if currency not in interesting:
+                    continue
+
+                avf = _as_float(av)
+                hdf = _as_float(hd)
+                tag = "TRADEABLE" if account_type == "ACCOUNT_TYPE_CRYPTO" or (platform and "ADVANCED_TRADE" in str(platform)) else "CONSUMER"
+                logger.error(f"     {currency:>4} | avail={avf:>14.6f} | held={hdf:>12.6f} | type={account_type} | platform={platform} | {tag}")
+        except Exception as diag_err:
+            logger.error(f"   ⚠️ fund diagnostic failed: {diag_err}")
+
+    def _get_product_metadata(self, symbol: str) -> Dict:
+        """Fetch and cache product metadata (base_increment, quote_increment)."""
+        if symbol in self._product_cache:
+            return self._product_cache[symbol]
+
+        meta: Dict = {}
+        try:
+            product = self.client.get_product(product_id=symbol)
+            if isinstance(product, dict):
+                meta = product
+            else:
+                # Serialize SDK object to dict
+                meta = _serialize_object_to_dict(product)
+        except Exception as e:
+            logger.warning(f"⚠️ Could not fetch product metadata for {symbol}: {e}")
+
+        self._product_cache[symbol] = meta
+        return meta
     
     def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
         """
@@ -902,6 +971,8 @@ class CoinbaseBroker(BaseBroker):
         try:
             if quantity <= 0:
                 raise ValueError(f"Refusing to place {side} order with non-positive size: {quantity}")
+
+            base_currency, quote_currency = (symbol.split('-') + ['USD'])[:2]
 
             # PRE-FLIGHT CHECK: Verify sufficient balance before placing order
             if side.lower() == 'buy':
@@ -965,23 +1036,56 @@ class CoinbaseBroker(BaseBroker):
             else:
                 # SELL order - use base_size (crypto amount) or quote_size (USD value)
                 if size_type == 'base':
-                    # Dynamic precision based on crypto - Coinbase requires specific decimal places per asset
-                    # Most cryptos: 8 decimals, but some like XRP only allow 2-4 decimals
-                    precision_map = {
-                        'XRP': 2,    # XRP allows max 2 decimals
-                        'DOGE': 2,   # DOGE allows max 2 decimals  
-                        'SHIB': 0,   # SHIB (whole numbers only)
-                        'ADA': 2,    # ADA allows max 2 decimals
-                        'ATOM': 4,   # ATOM allows max 4 decimals
-                        'SOL': 4,    # SOL allows max 4 decimals
-                        'BTC': 8,    # BTC allows full 8 decimals
-                        'ETH': 6,    # ETH allows max 6 decimals
-                    }
-                    # Extract base currency from symbol (e.g., BTC-USD -> BTC)
+                    # Dynamic precision based on Coinbase product metadata
                     base_currency = symbol.split('-')[0]
-                    precision = precision_map.get(base_currency, 8)  # Default to 8 if not in map
-                    
-                    base_size_rounded = round(quantity, precision)
+
+                    # Default precision fallback map (used if product metadata missing)
+                    precision_map = {
+                        'XRP': 2,
+                        'DOGE': 2,
+                        'SHIB': 0,
+                        'ADA': 2,
+                        'ATOM': 4,
+                        'SOL': 4,
+                        'BTC': 8,
+                        'ETH': 6,
+                    }
+
+                    precision = precision_map.get(base_currency, 8)
+                    base_increment = None
+
+                    meta = self._get_product_metadata(symbol)
+                    inc = meta.get('base_increment') if isinstance(meta, dict) else None
+                    if inc:
+                        try:
+                            base_increment = float(inc)
+                            if base_increment > 0:
+                                inc_str = f"{base_increment:.16f}".rstrip('0').rstrip('.')
+                                if '.' in inc_str:
+                                    precision = max(0, len(inc_str.split('.')[1]))
+                        except Exception as inc_err:
+                            logger.warning(f"⚠️ Could not parse base_increment for {symbol}: {inc_err}")
+
+                    # Quantize size DOWN to allowed increment to avoid precision errors
+                    from decimal import Decimal, ROUND_DOWN, getcontext
+                    getcontext().prec = 18
+                    if base_increment:
+                        step = Decimal(str(base_increment))
+                        qty = (Decimal(str(quantity)) / step).to_integral_value(rounding=ROUND_DOWN) * step
+                    else:
+                        qty = Decimal(str(quantity)).quantize(Decimal('1.' + '0'*precision), rounding=ROUND_DOWN)
+
+                    base_size_rounded = float(qty)
+                    logger.info(f"   Derived base_increment={base_increment} precision={precision} → rounded={base_size_rounded}")
+                    if base_size_rounded <= 0:
+                        return {
+                            "status": "unfilled",
+                            "error": "INVALID_SIZE",
+                            "message": f"Rounded base size for {symbol} became zero",
+                            "partial_fill": False,
+                            "filled_pct": 0.0
+                        }
+
                     logger.info(f"📤 Placing SELL order: {symbol}, base_size={base_size_rounded} ({precision} decimals)")
                     if self.portfolio_uuid:
                         logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
@@ -989,7 +1093,7 @@ class CoinbaseBroker(BaseBroker):
                     order = self.client.market_order_sell(
                         client_order_id,
                         product_id=symbol,
-                        base_size=str(base_size_rounded)  # Use rounded value with correct precision
+                        base_size=str(base_size_rounded)
                     )
                 else:
                     # Use quote_size for SELL (less common, but supported)
@@ -1009,10 +1113,22 @@ class CoinbaseBroker(BaseBroker):
             # Use helper to safely serialize the response
             order_dict = _serialize_object_to_dict(order)
 
+            # If SDK returns a stringified dict, coerce it to a dict to avoid false positives
+            if isinstance(order_dict, str):
+                try:
+                    order_dict = json.loads(order_dict)
+                except Exception:
+                    try:
+                        import ast
+                        order_dict = ast.literal_eval(order_dict)
+                    except Exception:
+                        pass
+
             # Guard against SDK returning plain strings or unexpected types
             if not isinstance(order_dict, dict):
                 logger.error("Received non-dict order response from Coinbase SDK")
                 logger.error(f"   Raw response: {order_dict}")
+                logger.error(f"   Response type: {type(order_dict)}")
                 return {
                     "status": "error",
                     "error": "INVALID_ORDER_RESPONSE",
@@ -1032,6 +1148,14 @@ class CoinbaseBroker(BaseBroker):
                 logger.error(f"   Status: unfilled")
                 logger.error(f"   Error: {error_message}")
                 logger.error(f"   Full order response: {order_dict}")
+
+                if error_code == 'INSUFFICIENT_FUND':
+                    self._log_insufficient_fund_context(base_currency, quote_currency)
+                elif error_code == 'INVALID_SIZE_PRECISION' and size_type == 'base' and base_increment:
+                    # Log a hint for troubleshooting
+                    logger.error(
+                        f"   Hint: base_increment={base_increment} precision={precision} quantity={quantity} rounded={base_size_rounded}"
+                    )
                 
                 return {
                     "status": "unfilled",
@@ -1125,6 +1249,31 @@ class CoinbaseBroker(BaseBroker):
         """
         candles = self.get_candles(symbol, timeframe, limit)
         return {'candles': candles}
+
+    def get_current_price(self, symbol: str) -> float:
+        """Fetch latest trade/last candle price for a product."""
+        try:
+            # Fast path: product ticker price
+            try:
+                product = self.client.get_product(symbol)
+                price_val = product.get('price') if isinstance(product, dict) else getattr(product, 'price', None)
+                if price_val:
+                    return float(price_val)
+            except Exception:
+                # Ignore and fall back to candles
+                pass
+
+            # Fallback: last close from 1m candle
+            candles = self.get_candles(symbol, '1m', 1)
+            if candles:
+                last = candles[-1]
+                close = last.get('close') if isinstance(last, dict) else getattr(last, 'close', None)
+                if close:
+                    return float(close)
+            raise RuntimeError("No price data available")
+        except Exception as e:
+            logging.error(f"⚠️ get_current_price failed for {symbol}: {e}")
+            return 0.0
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """Get candle data with retry logic for rate limiting"""
