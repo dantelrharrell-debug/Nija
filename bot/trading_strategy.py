@@ -1336,25 +1336,19 @@ To enable trading:
     def run_cycle(self):
         """Run a lightweight trading cycle used by the main loop with dynamic market fetching."""
         try:
-            # CHECK TRADING LOCK - EMERGENCY PROTECTION
+            # CHECK EMERGENCY LOCK - Only lock if TRADING_EMERGENCY_STOP.conf exists
+            # Normal TRADING_LOCKED.conf with TRADING_DISABLED=false does NOT lock
             import os
-            lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_LOCKED.conf')
-            if os.path.exists(lock_file):
-                # Read the file to check if trading is actually disabled
-                try:
-                    with open(lock_file, 'r') as f:
-                        content = f.read()
-                        # Only lock if TRADING_DISABLED=true is explicitly set
-                        if 'TRADING_DISABLED=true' in content:
-                            logger.error("="*80)
-                            logger.error("🔒 TRADING IS LOCKED - BOT CANNOT OPEN NEW POSITIONS")
-                            logger.error("="*80)
-                            logger.error("Reason: Emergency liquidation protection is active")
-                            logger.error("Action: Remove TRADING_LOCKED.conf only after authorized review")
-                            logger.error("="*80)
-                            return  # Exit cycle - do not trade
-                except:
-                    pass  # If file can't be read, allow trading to continue
+            emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+            if os.path.exists(emergency_lock_file):
+                logger.error("="*80)
+                logger.error("🔒 EMERGENCY STOP ACTIVE - BOT CANNOT OPEN NEW POSITIONS")
+                logger.error("="*80)
+                logger.error("Reason: Emergency stop protection is active")
+                logger.error("Action: Remove TRADING_EMERGENCY_STOP.conf to resume trading")
+                logger.error("="*80)
+                return  # Exit cycle - do not trade
+            # Otherwise, trading is ENABLED by default
             
             # Clear cache at start of each cycle for fresh data
             self._price_cache.clear()
