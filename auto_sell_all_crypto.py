@@ -43,8 +43,17 @@ def main():
     crypto_positions = []
     
     for account in all_accounts:
-        currency = account.get('currency', '')
-        available = float(account.get('available_balance', {}).get('value', 0))
+        # Handle both dict and object account formats
+        if hasattr(account, 'currency'):
+            currency = account.currency
+            available_bal = account.available_balance
+            if hasattr(available_bal, 'value'):
+                available = float(available_bal.value)
+            else:
+                available = float(available_bal.get('value', 0))
+        else:
+            currency = account.get('currency', '')
+            available = float(account.get('available_balance', {}).get('value', 0))
         
         if currency not in ['USD', 'USDC'] and available > 0.00000001:
             try:
