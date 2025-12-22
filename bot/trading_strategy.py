@@ -119,6 +119,12 @@ class TradingStrategy:
         self.position_manager = PositionManager()
         logger.info("💾 Position manager initialized")
         
+        # Price cache to reduce API calls (cache expires after 30 seconds)
+        # CRITICAL: Initialize BEFORE position syncing which needs price data
+        self._price_cache = {}
+        self._cache_timestamp = {}
+        self._cache_ttl = 30  # seconds
+        
         # Get account balance
         logger.info("🔥 Starting balance fetch...")
         print("🔥 ABOUT TO CALL self.broker.get_account_balance()", flush=True)
@@ -256,11 +262,6 @@ To enable trading:
         
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
-        
-        # Price cache to reduce API calls (cache expires after 30 seconds)
-        self._price_cache = {}
-        self._cache_timestamp = {}
-        self._cache_ttl = 30  # seconds
 
     # Alias to align with README wording
     def get_usd_balance(self) -> float:
