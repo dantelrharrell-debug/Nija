@@ -136,43 +136,8 @@ class TradingStrategy:
                 logger.info(f"🔥 Balance converted to float: {self.account_balance}")
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
             
-            # CRITICAL: Enforce minimum capital for Coinbase fee structure
-            try:
-                MINIMUM_VIABLE_CAPITAL = float(os.getenv("MINIMUM_VIABLE_CAPITAL", "5.0"))  # Lowered to $5 for immediate trading
-            except Exception:
-                MINIMUM_VIABLE_CAPITAL = 5.0  # default safeguard - allow trading with small balance
-            
-            if self.account_balance < MINIMUM_VIABLE_CAPITAL:
-                logger.error("="*80)
-                logger.error("🚨 INSUFFICIENT CAPITAL - BOT CANNOT TRADE")
-                logger.error("="*80)
-                logger.error(f"")
-                logger.error(f"Current Balance: ${self.account_balance:.2f}")
-                logger.error(f"Minimum Required: ${MINIMUM_VIABLE_CAPITAL:.2f}")
-                logger.error(f"")
-                logger.error("❌ WHY BOT WON'T START:")
-                logger.error("   • Coinbase fees: 2-4% per trade")
-                logger.error("   • Balance <$50 = positions too small to profit")
-                logger.error("   • Even WINNING trades lose money to fees")
-                logger.error("")
-                logger.error("📊 EXAMPLE (with $10 capital):")
-                logger.error("   • Position size: $5-8")
-                logger.error("   • Buy fee: $0.15-0.30 (3%)")
-                logger.error("   • Sell fee: $0.15-0.30 (3%)")
-                logger.error("   • Total fees: 6% → Lose money on every trade!")
-                logger.error("")
-                logger.error("✅ THE FIX:")
-                logger.error("   1. Deposit $100-200 to Coinbase Advanced Trade")
-                logger.error("   2. Bot will trade $10-80 positions")
-                logger.error("   3. Fees drop to <1% (profitable)")
-                logger.error("   4. Strategy can work properly")
-                logger.error("")
-                logger.error("🔄 ALTERNATIVE:")
-                logger.error("   • Switch to Binance/Kraken (0.1-0.5% fees)")
-                logger.error("   • Can trade profitably with $50 capital")
-                logger.error("")
-                logger.error("="*80)
-                raise RuntimeError(f"Insufficient capital: ${self.account_balance:.2f} (need ${MINIMUM_VIABLE_CAPITAL:.2f}+)")
+            # Circuit breaker will prevent trading if balance < $25
+            # No need for startup capital guard - let bot initialize and monitor
             
             # If initial balance is zero, print a clear banner with guidance
             if self.account_balance <= 0:
@@ -614,38 +579,9 @@ To enable trading:
                 logger.info(f"Skipping {symbol}: Position already open for this symbol")
                 return False
             
-            # CRITICAL: Verify sufficient balance before ANY trade
-            try:
-                MINIMUM_VIABLE_CAPITAL = float(os.getenv("MINIMUM_VIABLE_CAPITAL", "5.0"))
-            except Exception:
-                MINIMUM_VIABLE_CAPITAL = 5.0
-
             # Refresh balance right before sizing to avoid using stale consumer funds
             live_balance = self.get_usd_balance()
             self.account_balance = live_balance
-
-            if live_balance < MINIMUM_VIABLE_CAPITAL:
-                logger.error("="*80)
-                logger.error(f"🚨 TRADE BLOCKED: Insufficient capital (${live_balance:.2f})")
-                logger.error("="*80)
-                logger.error(f"")
-                logger.error(f"Attempted to trade {symbol} but balance too low.")
-                logger.error(f"")
-                logger.error(f"Current Balance: ${live_balance:.2f}")
-                logger.error(f"Minimum Required: ${MINIMUM_VIABLE_CAPITAL:.2f}")
-                logger.error(f"")
-                logger.error("❌ WHY THIS TRADE WON'T WORK:")
-                logger.error(f"   • Position size would be: ${live_balance * 0.1:.2f}-${live_balance * 0.4:.2f}")
-                logger.error("   • Coinbase fees: 2-4% per trade")
-                logger.error("   • Fees will eat entire profit margin")
-                logger.error("   • Even winning trades = net loss")
-                logger.error("")
-                logger.error("✅ SOLUTION:")
-                logger.error("   1. Deposit $100-200 to Coinbase Advanced Trade")
-                logger.error("   2. Bot will trade $10-80 positions (fees <1%)")
-                logger.error("")
-                logger.error("="*80)
-                return False
             
             # Calculate position size using Adaptive Growth Manager
             position_size_pct = self.growth_manager.get_position_size_pct()
