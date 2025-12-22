@@ -30,7 +30,15 @@ def main():
     
     # Get all accounts
     accounts_response = broker.client.get_accounts()
-    all_accounts = accounts_response.get('accounts', [])
+    
+    # Handle both dict and object responses
+    if hasattr(accounts_response, 'accounts'):
+        all_accounts = accounts_response.accounts
+    elif isinstance(accounts_response, dict):
+        all_accounts = accounts_response.get('accounts', [])
+    else:
+        print("❌ Couldn't parse accounts response")
+        return
     
     crypto_positions = []
     
@@ -42,9 +50,21 @@ def main():
             try:
                 product_id = f"{currency}-USD"
                 ticker = broker.client.get_product(product_id)
-                price = float(ticker.get('price', 0))
+                # Handle both dict and object responses
+                if hasattr(ticker, 'price'):
+                    price = float(ticker.price)
+                elif isinstance(ticker, dict):
+                    price = float(ticker.get('price', 0))
+                else:
+                    # Parse from string representation
+                    price_str = str(ticker)
+                    if "price='" in price_str:
+                        price = float(price_str.split("price='")[1].split("'")[0])
+                    else:
+                        price = 0
                 value = available * price
-            except:
+            except Exception as e:
+                print(f"   Warning: Couldn't price {currency}: {e}")
                 price = 0
                 value = 0
             
