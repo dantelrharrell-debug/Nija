@@ -1,0 +1,4 @@
+REDEPLOY TRIGGER - Force Railway to rebuild
+Created: 2025-12-22
+Purpose: Pick up TRADING_LOCKED.conf unlock and trading_strategy.py fixes
+Status: Commit this file to trigger rebuild
