@@ -1,0 +1,4 @@
+# Cache Bust Trigger
+# Force Railway fresh rebuild
+Timestamp: $(date +%s)
+Commit: Force rebuild to deploy _price_cache fix
