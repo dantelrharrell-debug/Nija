@@ -949,6 +949,14 @@ class CoinbaseBroker(BaseBroker):
             else:
                 # Serialize SDK object to dict
                 meta = _serialize_object_to_dict(product)
+            # Some SDK responses nest data under a top-level "product" key
+            if isinstance(meta, dict) and 'product' in meta and isinstance(meta['product'], dict):
+                meta = meta['product']
+            # Some responses wrap the single product in a list under "products"
+            if isinstance(meta, dict) and 'products' in meta and isinstance(meta['products'], list) and meta['products']:
+                first = meta['products'][0]
+                if isinstance(first, dict):
+                    meta = first
         except Exception as e:
             logger.warning(f"⚠️ Could not fetch product metadata for {symbol}: {e}")
 
@@ -1055,14 +1063,23 @@ class CoinbaseBroker(BaseBroker):
                     base_increment = None
 
                     meta = self._get_product_metadata(symbol)
-                    inc = meta.get('base_increment') if isinstance(meta, dict) else None
-                    if inc:
+                    inc_candidates = []
+                    if isinstance(meta, dict):
+                        inc_candidates = [
+                            meta.get('base_increment'),
+                            meta.get('base_increment_decimal'),
+                            meta.get('base_increment_value'),
+                        ]
+                    for inc in inc_candidates:
+                        if not inc:
+                            continue
                         try:
                             base_increment = float(inc)
                             if base_increment > 0:
                                 inc_str = f"{base_increment:.16f}".rstrip('0').rstrip('.')
                                 if '.' in inc_str:
                                     precision = max(0, len(inc_str.split('.')[1]))
+                                break
                         except Exception as inc_err:
                             logger.warning(f"⚠️ Could not parse base_increment for {symbol}: {inc_err}")
 
@@ -1224,6 +1241,10 @@ class CoinbaseBroker(BaseBroker):
                 logger.error(f"   Status code: {e.status_code}")
                 
             return {"status": "error", "error": f"{error_type}: {error_msg}"}
+
+    def close_position(self, symbol: str, base_size: float) -> Dict:
+        """Close a position by selling the specified base size."""
+        return self.place_market_order(symbol, 'sell', base_size, size_type='base')
     
     def get_positions(self) -> List[Dict]:
         """Get open positions (Coinbase doesn't track positions, returns accounts)"""
