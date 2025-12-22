@@ -1327,6 +1327,18 @@ To enable trading:
     def run_cycle(self):
         """Run a lightweight trading cycle used by the main loop with dynamic market fetching."""
         try:
+            # CHECK TRADING LOCK - EMERGENCY PROTECTION
+            import os
+            lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_LOCKED.conf')
+            if os.path.exists(lock_file):
+                logger.error("="*80)
+                logger.error("🔒 TRADING IS LOCKED - BOT CANNOT OPEN NEW POSITIONS")
+                logger.error("="*80)
+                logger.error("Reason: Emergency liquidation protection is active")
+                logger.error("Action: Remove TRADING_LOCKED.conf only after authorized review")
+                logger.error("="*80)
+                return  # Exit cycle - do not trade
+            
             # Clear cache at start of each cycle for fresh data
             self._price_cache.clear()
             self._cache_timestamp.clear()
