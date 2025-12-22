@@ -225,6 +225,16 @@ To enable trading:
             )
             logger.info(f"✅ Restored {len(self.open_positions)} valid positions")
         
+        # 🔥 CRITICAL: Sync any orphaned Coinbase positions into tracking
+        # This catches the 12 losing positions that aren't in open_positions.json
+        if not paper_mode:
+            try:
+                synced = self.sync_positions_from_coinbase()
+                if synced > 0:
+                    logger.info(f"🎯 NIJA now tracking {len(self.open_positions)} total positions (will auto-sell at SL/TP)")
+            except Exception as sync_err:
+                logger.error(f"⚠️ Position sync failed: {sync_err}")
+        
         # Export trade history daily
         self._last_export_day = datetime.now().day
         self.winning_trades = 0
@@ -254,6 +264,103 @@ To enable trading:
             return float(bal) if bal else 0.0
         except Exception:
             return 0.0
+
+    def sync_positions_from_coinbase(self):
+        """
+        Sync crypto holdings from Coinbase to NIJA position tracking.
+        
+        This fetches all crypto holdings (the 12 losing positions) from Coinbase
+        and adds them to NIJA's position tracker so it can auto-sell them when
+        stop loss or take profit is hit.
+        
+        NIJA is a FAST PROFIT bot - it should take profits and move on,
+        not hold losing positions forever.
+        """
+        logger.info("=" * 70)
+        logger.info("🔄 SYNCING COINBASE POSITIONS TO NIJA TRACKER")
+        logger.info("=" * 70)
+        
+        try:
+            # Get current balance info which includes crypto holdings
+            balance_info = self.broker.get_account_balance()
+            crypto_holdings = balance_info.get('crypto', {})
+            
+            if not crypto_holdings:
+                logger.info("✅ No crypto holdings found in Coinbase - portfolio is clean")
+                return 0
+            
+            logger.info(f"📊 Found {len(crypto_holdings)} crypto positions to sync:")
+            
+            synced_count = 0
+            for currency, quantity in crypto_holdings.items():
+                if quantity < 0.00000001:  # Skip dust
+                    continue
+                
+                # Get current market price
+                symbol = f"{currency}-USD"
+                try:
+                    analysis = self.analyze_symbol(symbol)
+                    current_price = analysis.get('price')
+                    
+                    if not current_price or current_price <= 0:
+                        logger.warning(f"   ⚠️ {symbol}: Cannot get price, skipping")
+                        continue
+                    
+                    # Calculate position value
+                    position_value = quantity * current_price
+                    
+                    # Since we don't know original entry price, use current price as entry
+                    # This means stop loss will trigger on ANY further decline
+                    entry_price = current_price
+                    
+                    # Set CONSERVATIVE exits for immediate protection
+                    stop_loss = entry_price * (1 - self.stop_loss_pct)  # 3% below current
+                    take_profit = entry_price * (1 + self.base_take_profit_pct)  # 5% above current
+                    trailing_stop = stop_loss  # Start trailing at SL level
+                    
+                    # Add to position tracking
+                    position = {
+                        'symbol': symbol,
+                        'side': 'BUY',  # Holding crypto = long position
+                        'entry_price': entry_price,
+                        'current_price': current_price,
+                        'size_usd': position_value,
+                        'crypto_quantity': quantity,
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit,
+                        'trailing_stop': trailing_stop,
+                        'highest_price': current_price,
+                        'tp_stepped': False,
+                        'entry_time': datetime.now().isoformat(),
+                        'synced_from_coinbase': True  # Mark as synced vs. traded by bot
+                    }
+                    
+                    # Add to open positions
+                    self.open_positions[symbol] = position
+                    synced_count += 1
+                    
+                    logger.info(f"   ✅ {symbol}: {quantity:.8f} @ ${current_price:.4f} = ${position_value:.2f}")
+                    logger.info(f"      Stop Loss: ${stop_loss:.4f} | Take Profit: ${take_profit:.4f}")
+                    
+                except Exception as e:
+                    logger.error(f"   ❌ {symbol}: Failed to sync - {e}")
+                    continue
+            
+            # Save synced positions to persistent storage
+            if synced_count > 0:
+                self.position_manager.save_positions(self.open_positions)
+                logger.info("=" * 70)
+                logger.info(f"✅ SYNCED {synced_count} POSITIONS FROM COINBASE")
+                logger.info("NIJA will now auto-sell these when SL/TP hit")
+                logger.info("=" * 70)
+            
+            return synced_count
+            
+        except Exception as e:
+            logger.error(f"❌ Position sync failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return 0
 
     
     def _fetch_all_markets(self) -> list:
