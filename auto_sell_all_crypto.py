@@ -96,7 +96,8 @@ def main():
             result = broker.place_market_order(
                 symbol=pos['product_id'],
                 side='SELL',
-                quantity=pos['quantity']
+                quantity=pos['quantity'],
+                size_type='base'  # CRITICAL: Use base_size for crypto quantity
             )
             
             if result and result.get('success'):
