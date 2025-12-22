@@ -296,14 +296,21 @@ To enable trading:
                 if quantity < 0.00000001:  # Skip dust
                     continue
                 
-                # Get current market price
+                # Get current market price using broker directly (simpler than analyze_symbol)
                 symbol = f"{currency}-USD"
                 try:
-                    analysis = self.analyze_symbol(symbol)
-                    current_price = analysis.get('price')
+                    # Fetch candles directly from broker to get current price
+                    candles = self.broker.get_candles(symbol, '5m', 10)
+                    if not candles or len(candles) == 0:
+                        logger.warning(f"   ⚠️ {symbol}: Cannot get price data, skipping")
+                        continue
+                    
+                    # Get current price from latest candle
+                    latest_candle = candles[-1]
+                    current_price = float(latest_candle.get('close', latest_candle.get('price', 0)))
                     
                     if not current_price or current_price <= 0:
-                        logger.warning(f"   ⚠️ {symbol}: Cannot get price, skipping")
+                        logger.warning(f"   ⚠️ {symbol}: Invalid price {current_price}, skipping")
                         continue
                     
                     # Calculate position value
@@ -1417,18 +1424,21 @@ To enable trading:
     def run_cycle(self):
         """Run a lightweight trading cycle used by the main loop with dynamic market fetching."""
         try:
-            # CHECK EMERGENCY LOCK - Only lock if TRADING_EMERGENCY_STOP.conf exists
-            # Normal TRADING_LOCKED.conf with TRADING_DISABLED=false does NOT lock
+            # CHECK EMERGENCY LOCK
+            # When TRADING_EMERGENCY_STOP.conf exists, run in SELL-ONLY mode:
+            # - Continue to manage and close existing positions per rules (SL/TP/Trailing)
+            # - Do NOT open new positions
             import os
             emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+            trading_locked = False
             if os.path.exists(emergency_lock_file):
+                trading_locked = True
                 logger.error("="*80)
-                logger.error("🔒 EMERGENCY STOP ACTIVE - BOT CANNOT OPEN NEW POSITIONS")
+                logger.error("🔒 EMERGENCY STOP ACTIVE - SELL-ONLY MODE ENABLED")
                 logger.error("="*80)
                 logger.error("Reason: Emergency stop protection is active")
-                logger.error("Action: Remove TRADING_EMERGENCY_STOP.conf to resume trading")
+                logger.error("Action: Remove TRADING_EMERGENCY_STOP.conf to resume opening new positions")
                 logger.error("="*80)
-                return  # Exit cycle - do not trade
             # Otherwise, trading is ENABLED by default
             
             # Clear cache at start of each cycle for fresh data
@@ -1491,10 +1501,17 @@ To enable trading:
             # If we have more than 8 positions, close the weakest ones for profit
             self.close_excess_positions(max_positions=8)
 
-            # Guard: if no trading balance, do not attempt orders
+            # Guard: if no trading balance, do not attempt NEW orders
+            # Still allow sell-only position management when locked
             if not self.account_balance or self.account_balance <= 0:
-                logger.warning("🚫 No USD/USDC trading balance detected. Skipping trade execution this cycle.")
+                logger.warning("🚫 No USD/USDC trading balance detected. Skipping new entries this cycle.")
                 logger.warning("👉 Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
+                if not trading_locked:
+                    return
+
+            # Skip new entries when trading is locked (sell-only mode)
+            if trading_locked:
+                logger.info("🛡️ Sell-only mode: skipping new entries; managing exits only.")
                 return
 
             logger.info(f"🎯 Analyzing {len(self.trading_pairs)} markets for signals...")
@@ -1549,6 +1566,21 @@ To enable trading:
             
             # Refresh account balance
             self.account_balance = self.get_usd_balance()
+
+            # SELL-ONLY mode support (same semantics as run_cycle)
+            import os
+            emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+            trading_locked = os.path.exists(emergency_lock_file)
+            if trading_locked:
+                logger.error("="*80)
+                logger.error("🔒 EMERGENCY STOP ACTIVE - SELL-ONLY MODE ENABLED")
+                logger.error("="*80)
+                logger.error("Managing open positions only; new entries are blocked.")
+                # Manage/exit existing positions using current rules
+                self.manage_open_positions()
+                # Optionally trim to target exposure
+                self.close_excess_positions(max_positions=8)
+                return
             
             # Check if account has grown to new stage and update strategy
             stage_changed, new_config = self.growth_manager.update_stage(self.account_balance)
