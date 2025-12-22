@@ -594,11 +594,32 @@ To enable trading:
             effective_cap = min(max_position_hard_cap, self.max_position_cap_usd)
             
             # CIRCUIT BREAKER: Stop all trading if balance drops below minimum viable for profitable trading
+            # CRITICAL: Check TOTAL account value (USD + crypto value), not just cash
+            # This prevents bot from "unlocking" just because user manually liquidated crypto
             MINIMUM_TRADING_BALANCE = float(os.getenv("MINIMUM_TRADING_BALANCE", "25.0"))
             
-            if live_balance < MINIMUM_TRADING_BALANCE:
+            # Get full balance info including crypto
+            balance_info = self.broker.get_account_balance()
+            crypto_holdings = balance_info.get('crypto', {})
+            
+            # Calculate total crypto value
+            total_crypto_value = 0.0
+            for currency, quantity in crypto_holdings.items():
+                if quantity > 0.00000001:
+                    try:
+                        analysis = self.analyze_symbol(f"{currency}-USD")
+                        price = float(analysis.get('price', 0))
+                        total_crypto_value += quantity * price
+                    except:
+                        pass  # Ignore pricing errors, use what we have
+            
+            # Total account value = USD cash + crypto value
+            total_account_value = live_balance + total_crypto_value
+            
+            if total_account_value < MINIMUM_TRADING_BALANCE:
                 logger.error("="*80)
-                logger.error(f"⛔ TRADING HALTED: Balance (${live_balance:.2f}) below minimum (${MINIMUM_TRADING_BALANCE:.2f})")
+                logger.error(f"⛔ TRADING HALTED: Total account value (${total_account_value:.2f}) below minimum (${MINIMUM_TRADING_BALANCE:.2f})")
+                logger.error(f"   USD Cash: ${live_balance:.2f} | Crypto Value: ${total_crypto_value:.2f}")
                 logger.error(f"   Positions would be unprofitable due to Coinbase fees (0.5-0.6%)")
                 logger.error(f"   Bot will pause and wait for deposit to resume trading")
                 logger.error("="*80)
