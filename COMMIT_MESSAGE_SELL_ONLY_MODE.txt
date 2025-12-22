@@ -10,6 +10,7 @@ Summary:
 Files changed:
 - bot/trading_strategy.py: implement sell-only in run_cycle and run_trading_cycle
 - TRADING_EMERGENCY_STOP.conf: added as the global kill switch file
+- emergency_liquidate.py: robust error handling for get_accounts and helpful diagnostics
 
 Operational notes:
 - Lock currently enabled for safety; remove file to resume buys

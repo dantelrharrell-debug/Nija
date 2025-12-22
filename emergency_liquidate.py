@@ -43,8 +43,17 @@ client = RESTClient(
 
 # Get all accounts
 print("\n🔍 Finding crypto positions...")
-accounts = client.get_accounts()
-account_list = accounts.accounts if hasattr(accounts, 'accounts') else accounts.get('accounts', [])
+try:
+    accounts = client.get_accounts()
+    account_list = accounts.accounts if hasattr(accounts, 'accounts') else accounts.get('accounts', [])
+except Exception as e:
+    print(f"❌ Failed to fetch accounts from Coinbase: {e}")
+    print("\nTroubleshooting:")
+    print("  • Verify .env contains COINBASE_API_KEY and COINBASE_API_SECRET")
+    print("  • Confirm keys have Advanced Trade permissions (read + trade)")
+    print("  • Run: python3 test_raw_api.py or python3 test_api_connection.py")
+    print("  • If using PEM-based JWT, ensure COINBASE_PEM_CONTENT or file is set")
+    exit(1)
 
 positions_to_sell = []
 
