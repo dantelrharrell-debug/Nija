@@ -200,17 +200,17 @@ To enable trading:
         # ACTIVE TRADING MODE: 3 positions for quick turnover
         self.max_concurrent_positions = 8  # 8 concurrent positions for maximum profit = equal capital per trade
         self.total_trades_executed = 0
-        # Risk/exit tuning - AGGRESSIVE SCALPING MODE FOR QUICK PROFITS
-        self.stop_loss_pct = 0.015  # 1.5% hard stop (tighter)
-        self.base_take_profit_pct = 0.02  # 2% initial TP (QUICK PROFIT)
-        self.stepped_take_profit_pct = 0.03  # 3% stepped TP (was 8%)
-        self.take_profit_step_trigger = 0.015  # step TP at 1.5% move (was 3%)
+        # Risk/exit tuning - CONSERVATIVE MODE TO STOP BLEEDING
+        self.stop_loss_pct = 0.03  # 3% stop loss (WIDER protection, less whipsaws)
+        self.base_take_profit_pct = 0.05  # 5% initial TP (higher targets)
+        self.stepped_take_profit_pct = 0.08  # 8% stepped TP (strong profit lock)
+        self.take_profit_step_trigger = 0.03  # step TP at 3% move (gives room to breathe)
         # Lock 90% of peak gains when trailing - only give back 1% of profits
         self.trailing_lock_ratio = 0.90  # TIGHTER TRAILING
         # Sizing controls
         self.max_position_cap_usd = 15.0  # cap per-trade size (tighter to support 8 concurrent positions on small balances)
         # Loss streak cooldown - REDUCED FOR ACTIVE TRADING
-        self.loss_cooldown_seconds = 60  # 1 minute cooldown (was 3 minutes)
+        self.loss_cooldown_seconds = 180  # 3 minute cooldown (was 1 minute - pause after losses)
         self.last_loss_time = None
         # Market selection controls
         # ULTRA AGGRESSIVE: Scan all 50 markets for maximum opportunities
@@ -231,10 +231,10 @@ To enable trading:
         self.trade_history = []
         self.consecutive_losses = 0
         self.consecutive_trades = 0  # Track consecutive trades in same direction
-        self.max_consecutive_trades = 8  # Stop after 8 consecutive trades (sell to reset)
+        self.max_consecutive_trades = 3  # Stop after 3 consecutive trades (was 8 - too aggressive)
         self.last_trade_side = None  # Track last trade direction (BUY/SELL)
         self.last_trade_time = None
-        self.min_time_between_trades = 0.5  # ULTRA AGGRESSIVE: 0.5s cooldown for rapid 5-position fills
+        self.min_time_between_trades = 10.0  # CONSERVATIVE: 10s cooldown (was 0.5s - reduce over-trading)
         
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
