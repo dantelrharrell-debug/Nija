@@ -648,14 +648,25 @@ To enable trading:
                 return False
             
             # Calculate position size using Adaptive Growth Manager
-            # ULTRA AGGRESSIVE MODE: 8-40% positions for 15-day $5K goal
             position_size_pct = self.growth_manager.get_position_size_pct()
             calculated_size = live_balance * position_size_pct
             
-            # Apply hard caps to position size
+            # Get hard position limits (in USD, not %)
             coinbase_minimum = 5.00
-            max_position_hard_cap = self.growth_manager.get_max_position_usd()  # $100 hard cap
+            min_position_hard_floor = self.growth_manager.get_min_position_usd()  # $2.00 minimum
+            max_position_hard_cap = self.growth_manager.get_max_position_usd()    # $100 maximum
             effective_cap = min(max_position_hard_cap, self.max_position_cap_usd)
+            
+            # CIRCUIT BREAKER: Stop all trading if balance drops below minimum viable for profitable trading
+            MINIMUM_TRADING_BALANCE = float(os.getenv("MINIMUM_TRADING_BALANCE", "25.0"))
+            
+            if live_balance < MINIMUM_TRADING_BALANCE:
+                logger.error("="*80)
+                logger.error(f"⛔ TRADING HALTED: Balance (${live_balance:.2f}) below minimum (${MINIMUM_TRADING_BALANCE:.2f})")
+                logger.error(f"   Positions would be unprofitable due to Coinbase fees (0.5-0.6%)")
+                logger.error(f"   Bot will pause and wait for deposit to resume trading")
+                logger.error("="*80)
+                return False
             
             # CRITICAL: Dynamic minimum balance reserve - scales with account growth
             # This ensures bot always has capital to continue trading as account grows
@@ -663,37 +674,30 @@ To enable trading:
 
             if live_balance < 100:
                 # Small account: ensure at least one minimum-sized trade is possible
-                # Reserve just enough to leave Coinbase minimum ($5) tradable, or use override
-                forced_reserve = os.getenv("FORCE_MIN_RESERVE_USD")
-                if forced_reserve is not None:
-                    try:
-                        MINIMUM_RESERVE = max(0.0, min(live_balance, float(forced_reserve)))
-                    except Exception:
-                        MINIMUM_RESERVE = max(0.0, live_balance - coinbase_minimum)
-                else:
-                    MINIMUM_RESERVE = max(0.0, live_balance - coinbase_minimum)
+                # Keep 50% as safety buffer on tiny accounts to avoid rapid depletion
+                MINIMUM_RESERVE = live_balance * 0.5
             elif live_balance < 500:
-                # Growing account ($100-500): Keep 15% reserve
-                MINIMUM_RESERVE = live_balance * 0.15
+                # Growing account ($100-500): Keep 30% reserve
+                MINIMUM_RESERVE = live_balance * 0.30
             elif live_balance < 2000:
-                # Medium account ($500-2000): Keep 10% reserve
-                MINIMUM_RESERVE = live_balance * 0.10
+                # Medium account ($500-2000): Keep 20% reserve
+                MINIMUM_RESERVE = live_balance * 0.20
             else:
-                # Large account ($2000+): Keep 5% reserve
-                MINIMUM_RESERVE = live_balance * 0.05
+                # Large account ($2000+): Keep 10% reserve
+                MINIMUM_RESERVE = live_balance * 0.10
             
             # Enforce a $20 floor reserve once balance is at least $100, but never exceed available minus the $5 minimum tradable requirement.
             if live_balance >= 100:
                 MINIMUM_RESERVE = max(MINIMUM_RESERVE, reserve_floor)
 
-            # Guard against over-reserving so at least the $5 minimum trade is possible
-            MINIMUM_RESERVE = min(MINIMUM_RESERVE, max(0.0, live_balance - coinbase_minimum))
+            # Guard against over-reserving so at least the minimum position size is possible
+            MINIMUM_RESERVE = min(MINIMUM_RESERVE, max(0.0, live_balance - min_position_hard_floor))
 
             tradable_balance = max(0, live_balance - MINIMUM_RESERVE)
             
-            if tradable_balance < coinbase_minimum:
+            if tradable_balance < min_position_hard_floor:
                 logger.warning(
-                    f"🚫 Not enough tradable balance (${tradable_balance:.2f}) - "
+                    f"🚫 Not enough tradable balance (${tradable_balance:.2f}) for minimum position (${min_position_hard_floor:.2f}) - "
                     f"keeping ${MINIMUM_RESERVE:.2f} minimum reserve ({MINIMUM_RESERVE/live_balance*100:.1f}%). "
                     f"Total balance: ${live_balance:.2f}"
                 )
@@ -701,20 +705,33 @@ To enable trading:
             
             logger.info(f"💰 Dynamic reserve: ${MINIMUM_RESERVE:.2f} ({MINIMUM_RESERVE/live_balance*100:.1f}%) | Tradable: ${tradable_balance:.2f}")
             
-            # Enforce: min($5) <= position_size <= effective cap and tradable balance (not total balance)
-            position_size_usd = max(coinbase_minimum, calculated_size)
+            # ENFORCE: min_position_hard_floor <= position_size <= effective cap and tradable balance
+            # This ensures positions are:
+            # 1. Large enough to profit after Coinbase fees
+            # 2. Small enough to fit within account growth stage
+            # 3. Small enough to fit within remaining tradable balance
+            position_size_usd = max(min_position_hard_floor, calculated_size)
             position_size_usd = min(position_size_usd, effective_cap, tradable_balance)
 
-            # If we don't have enough tradable balance for even the $5 minimum, stop quickly
-            if position_size_usd < coinbase_minimum or live_balance < coinbase_minimum:
+            # If we can't meet the minimum position size, skip this trade
+            if position_size_usd < min_position_hard_floor:
                 logger.warning(
-                    f"🚫 Insufficient Advanced Trade balance (${live_balance:.2f}) for Coinbase $5 minimum — skipping {symbol}"
+                    f"🚫 Cannot achieve minimum position size (${min_position_hard_floor:.2f}). "
+                    f"Calculated: ${calculated_size:.2f}, Available: ${tradable_balance:.2f} — skipping {symbol}"
+                )
+                return False
+            
+            # Final sanity check: ensure we have funds for the position
+            if position_size_usd > tradable_balance:
+                logger.warning(
+                    f"🚫 Position size (${position_size_usd:.2f}) exceeds tradable balance (${tradable_balance:.2f}) — skipping {symbol}"
                 )
                 return False
             
             logger.info(f"🔄 Executing {signal} for {symbol}")
             logger.info(f"   Price: ${analysis.get('price', 'N/A')}")
-            logger.info(f"   Position size: ${position_size_usd:.2f} (capped at $100 max)")
+            logger.info(f"   Position size: ${position_size_usd:.2f} (min: ${min_position_hard_floor:.2f}, max: ${effective_cap:.2f})")
+            logger.info(f"   Percentage of balance: {(position_size_usd/live_balance)*100:.1f}%")
             logger.info(f"   Reason: {analysis['reason']}")
             
             # Place market order with retry handling

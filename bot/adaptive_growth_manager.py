@@ -154,15 +154,32 @@ class AdaptiveGrowthManager:
         Get position size percentage for current growth stage
         
         Returns:
-            Position size as percentage of account balance (0.08 to 0.40 for ultra aggressive)
+            Position size as percentage of account balance (0.05 to 0.15 for ultra aggressive)
         """
         config = self.GROWTH_STAGES[self.current_stage]
         
-        # Use the minimum of the stage range while we stabilize profitability
-        position_pct = config['min_position_pct']
+        # Use the MAXIMUM of the stage range to ensure smaller positions on small accounts
+        # This prevents ultra-aggressive sizing that creates unprofitable micro-trades on tiny accounts
+        position_pct = config['max_position_pct']
         
         logger.debug(f"Position size: {position_pct*100:.0f}% ({self.current_stage})")
         return position_pct
+    
+    def get_min_position_usd(self) -> float:
+        """
+        Get hard minimum position size in USD to avoid Coinbase fee drag
+        
+        Positions smaller than this will lose money to trading fees (0.5-0.6%).
+        Need at least 1-2% profit margin to overcome fees on small positions.
+        
+        Returns:
+            Minimum USD amount per single position (hard floor)
+        """
+        # Hard floor: $2.00 minimum per position
+        # At $2.00: Coinbase fee (0.6%) = $0.012, need 1% gain = very achievable
+        # At $1.00: Fee = $0.006, profit margin too thin, slippage kills it
+        MIN_POSITION_USD = 2.00
+        return MIN_POSITION_USD
     
     def get_max_position_usd(self) -> float:
         """
