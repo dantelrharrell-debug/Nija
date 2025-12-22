@@ -1616,6 +1616,64 @@ To enable trading:
                 if not trading_locked:
                     return
 
+            # EMERGENCY: Force-close excess positions if over limit
+            # This handles cases where positions got stuck during bugs
+            positions_over_limit = len(self.open_positions) - self.max_concurrent_positions
+            if positions_over_limit > 0:
+                logger.error(
+                    f"🚨 EMERGENCY: {len(self.open_positions)} positions open, {positions_over_limit} over limit of {self.max_concurrent_positions}!"
+                )
+                logger.error(f"🚨 FORCE-CLOSING oldest {positions_over_limit} positions to prevent further losses...")
+                
+                # Sort positions by entry time (oldest first)
+                sorted_positions = sorted(
+                    self.open_positions.items(),
+                    key=lambda x: x[1].get('entry_time', '')
+                )
+                
+                # Force-close the oldest positions over the limit
+                positions_to_emergency_close = sorted_positions[:positions_over_limit]
+                for symbol, position in positions_to_emergency_close:
+                    try:
+                        current_price = self.broker.get_current_price(symbol)
+                        logger.warning(f"🚨 EMERGENCY CLOSE: {symbol} @ ${current_price:.4f}")
+                        
+                        # Execute market sell immediately
+                        order = self.broker.close_position(
+                            symbol=symbol,
+                            side='SELL' if position['side'] == 'BUY' else 'BUY',
+                            current_price=current_price
+                        )
+                        
+                        if order and order.get('status') in ['filled', 'partial']:
+                            # Calculate P&L
+                            entry_price = position['entry_price']
+                            if position['side'] == 'BUY':
+                                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                            else:
+                                pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                            
+                            logger.warning(f"✅ Emergency close successful: {symbol} ({pnl_pct:+.2f}% P&L)")
+                            
+                            # Record exit
+                            self.analytics.record_exit(
+                                symbol=symbol,
+                                exit_price=current_price,
+                                exit_reason="EMERGENCY: Position limit exceeded"
+                            )
+                            
+                            # Remove from tracking
+                            del self.open_positions[symbol]
+                        else:
+                            logger.error(f"❌ Emergency close FAILED for {symbol} - will retry next cycle")
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Error emergency-closing {symbol}: {e}")
+                
+                # Save updated positions
+                self.position_manager.save_positions(self.open_positions)
+                logger.warning(f"🚨 Emergency cleanup complete. Positions now: {len(self.open_positions)}/{self.max_concurrent_positions}")
+            
             # HARD POSITION LIMIT GUARD BEFORE ENTRY LOOP
             # If we're already at max, skip all new trades but still manage exits
             if len(self.open_positions) >= self.max_concurrent_positions:
