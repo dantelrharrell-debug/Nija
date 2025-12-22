@@ -245,6 +245,14 @@ To enable trading:
         self.last_trade_side = None  # Track last trade direction (BUY/SELL)
         self.last_trade_time = None
         self.min_time_between_trades = 10.0  # CONSERVATIVE: 10s cooldown (was 0.5s - reduce over-trading)
+
+        # Optional hard guard: max hold time for any position (minutes). 0 disables.
+        try:
+            self.max_hold_minutes = int(os.getenv("MAX_HOLD_MINUTES", "0") or 0)
+            if self.max_hold_minutes < 0:
+                self.max_hold_minutes = 0
+        except Exception:
+            self.max_hold_minutes = 0
         
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
@@ -676,9 +684,13 @@ To enable trading:
                     )
                     return False
             
-            # Check max concurrent positions limit
+            # Check max concurrent positions limit (double-check before each trade)
+            # Using >= so we reject at exactly max_concurrent_positions
             if len(self.open_positions) >= self.max_concurrent_positions:
-                logger.info(f"Skipping {symbol}: Max {self.max_concurrent_positions} positions already open")
+                logger.error(
+                    f"❌ POSITION LIMIT EXCEEDED: {len(self.open_positions)}/{self.max_concurrent_positions} positions open. "
+                    f"Rejecting trade for {symbol}"
+                )
                 return False
             
             # CRITICAL: Stop buying after 8 consecutive trades - force sell cycle
@@ -803,6 +815,7 @@ To enable trading:
             logger.info(f"   Price: ${analysis.get('price', 'N/A')}")
             logger.info(f"   Position size: ${position_size_usd:.2f} (min: ${min_position_hard_floor:.2f}, max: ${effective_cap:.2f})")
             logger.info(f"   Percentage of balance: {(position_size_usd/live_balance)*100:.1f}%")
+            logger.info(f"   Open positions BEFORE trade: {len(self.open_positions)}/{self.max_concurrent_positions}")
             logger.info(f"   Reason: {analysis['reason']}")
             
             # Place market order with retry handling
@@ -1001,6 +1014,23 @@ To enable trading:
                 logger.info(f"   {symbol}: {side} @ ${entry_price:.2f} | Current: ${current_price:.2f} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
                 logger.info(f"      Exit Levels: SL=${stop_loss:.2f}, Trail=${trailing_stop:.2f}, TP=${position['take_profit']:.2f}")
                 exit_reason = None
+
+                # Optional max-hold-time auto-exit
+                if self.max_hold_minutes and self.max_hold_minutes > 0:
+                    try:
+                        ts = position.get('timestamp') or position.get('entry_time')
+                        if isinstance(ts, str):
+                            try:
+                                ts_dt = datetime.fromisoformat(ts)
+                            except Exception:
+                                ts_dt = datetime.now()
+                        else:
+                            ts_dt = ts if ts else datetime.now()
+                        age_minutes = (datetime.now() - ts_dt).total_seconds() / 60.0
+                        if age_minutes >= self.max_hold_minutes:
+                            exit_reason = f"Max hold time exceeded ({age_minutes:.1f}m ≥ {self.max_hold_minutes}m)"
+                    except Exception:
+                        pass
                 
                 if side == 'BUY':
                     # Update highest price for trailing stop
@@ -1185,6 +1215,65 @@ To enable trading:
             # Save updated positions to file (crash recovery)
             self.position_manager.save_positions(self.open_positions)
             logger.info(f"✅ Closed {len(positions_to_close)} position(s)")
+
+    def force_exit_all_positions(self):
+        """Force-close all tracked positions immediately at market, regardless of signals/levels."""
+        if not self.open_positions:
+            logger.info("Force-exit requested, but no open positions are tracked.")
+            return
+
+        logger.error("=" * 80)
+        logger.error("🚨 FORCE EXIT ALL POSITIONS - MARKET ORDERS")
+        logger.error("=" * 80)
+
+        symbols = list(self.open_positions.keys())
+        closed = 0
+        for symbol in symbols:
+            position = self.open_positions.get(symbol)
+            if not position:
+                continue
+            try:
+                analysis = self.analyze_symbol(symbol)
+                current_price = analysis.get('price')
+                side = position.get('side', 'BUY')
+                exit_signal = 'SELL' if side == 'BUY' else 'BUY'
+                quantity = position.get('crypto_quantity', 0.0) or (position.get('size_usd', 0.0) / max(position.get('entry_price', 0.0), 1e-9))
+
+                logger.info(f"   Forcing exit {symbol}: side={side} -> {exit_signal}, qty={quantity:.8f}, px≈{current_price}")
+
+                order = None
+                for attempt in range(1, 4):
+                    try:
+                        result = self.broker.place_market_order(
+                            symbol,
+                            exit_signal.lower(),
+                            quantity,
+                            size_type='base' if exit_signal == 'SELL' else 'quote'
+                        )
+                        if result and isinstance(result, dict):
+                            status = result.get('status', 'unknown')
+                            if status in ['filled', 'partial']:
+                                order = result
+                                break
+                        time.sleep(1 * attempt)
+                    except Exception as e:
+                        if attempt >= 3:
+                            logger.error(f"Force-exit failed for {symbol}: {e}")
+
+                if order:
+                    self.analytics.record_exit(symbol=symbol, exit_price=current_price, exit_reason='FORCE_EXIT_ALL')
+                    self.log_trade(symbol, exit_signal, current_price, position.get('size_usd', 0.0))
+                    closed += 1
+                else:
+                    logger.error(f"Force-exit order did not confirm for {symbol}")
+
+                # Remove from tracking regardless to prevent lingering bags
+                del self.open_positions[symbol]
+            except Exception as e:
+                logger.error(f"Error during force-exit for {symbol}: {e}")
+
+        self.position_manager.save_positions(self.open_positions)
+        logger.error(f"✅ Force-exit complete: closed {closed} position(s)")
     
     def rebalance_existing_holdings(self, max_positions: int = 8, target_cash: float = 15.0):
         """
@@ -1440,6 +1529,20 @@ To enable trading:
                 logger.error("Action: Remove TRADING_EMERGENCY_STOP.conf to resume opening new positions")
                 logger.error("="*80)
             # Otherwise, trading is ENABLED by default
+
+            # FORCE EXIT ALL positions if requested via flag file
+            force_exit_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_ALL.conf')
+            if os.path.exists(force_exit_flag):
+                logger.error("="*80)
+                logger.error("🛑 FORCE_EXIT_ALL flag detected — closing all positions now")
+                logger.error("="*80)
+                self.force_exit_all_positions()
+                try:
+                    os.remove(force_exit_flag)
+                except Exception:
+                    pass
+                # After force exit, skip opening new positions this cycle
+                return
             
             # Clear cache at start of each cycle for fresh data
             self._price_cache.clear()
@@ -1509,6 +1612,14 @@ To enable trading:
                 if not trading_locked:
                     return
 
+            # HARD POSITION LIMIT GUARD BEFORE ENTRY LOOP
+            # If we're already at max, skip all new trades but still manage exits
+            if len(self.open_positions) >= self.max_concurrent_positions:
+                logger.warning(
+                    f"⛔ POSITION LIMIT {len(self.open_positions)}/{self.max_concurrent_positions} - NO NEW ENTRIES THIS CYCLE"
+                )
+                return
+
             # Skip new entries when trading is locked (sell-only mode)
             if trading_locked:
                 logger.info("🛡️ Sell-only mode: skipping new entries; managing exits only.")
@@ -1571,6 +1682,18 @@ To enable trading:
             import os
             emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
             trading_locked = os.path.exists(emergency_lock_file)
+            # FORCE EXIT ALL support
+            force_exit_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_ALL.conf')
+            if os.path.exists(force_exit_flag):
+                logger.error("="*80)
+                logger.error("🛑 FORCE_EXIT_ALL flag detected — closing all positions now")
+                logger.error("="*80)
+                self.force_exit_all_positions()
+                try:
+                    os.remove(force_exit_flag)
+                except Exception:
+                    pass
+                return
             if trading_locked:
                 logger.error("="*80)
                 logger.error("🔒 EMERGENCY STOP ACTIVE - SELL-ONLY MODE ENABLED")
