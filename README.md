@@ -2,52 +2,60 @@
 
 See Emergency Procedures: [EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)
 
-**Version**: APEX v7.1 - DECIMAL PRECISION & DYNAMIC BALANCE PROTECTION ✅  
-**Status**: ✅ Trading ACTIVE – Capital recovered, dynamic reserves protecting balance  
-**Last Updated**: December 21, 2025 - Decimal precision fix + dynamic balance protection deployed
+**Version**: APEX v7.1 - CIRCUIT BREAKER TOTAL ACCOUNT VALUE ✅  
+**Status**: ✅ Trading ACTIVE – Capital recovered, circuit breaker protecting total account value  
+**Last Updated**: December 22, 2025 - Circuit breaker now checks total account value (USD + crypto)
 **Current Balance**: ~$90+ USD recovered; 1 position remaining (ATOM -0.26%)  
 **Holdings**: 5 positions successfully closed; ATOM near breakeven with trailing stop active  
 **API Status**: ✅ Connected (Coinbase Advanced Trade); all crypto-specific precision working  
-**Goal**: Resume profitable trading with dynamic reserves (15%→5% as account grows to $1K/day)
+**Goal**: Resume profitable trading with circuit breaker protection for total account (prevent unlock on manual liquidations)
 
-> **🚀 CRITICAL FIXES DEPLOYED - December 21, 2025**: 
-> - ✅ **Decimal Precision Fix**: Per-crypto precision mapping (XRP=2, DOGE=2, BTC=8, ETH=6, SOL=4, ATOM=4)
-> - ✅ **Dynamic Balance Protection**: Scales from $15 fixed → 15% → 10% → 5% as account grows
-> - ✅ **Position Data Structure Fixed**: Added stop_loss, take_profit, highest_price, trailing_stop fields
-> - ✅ **5 Positions Recovered**: ETH, BTC, XRP, DOGE all sold successfully (~$90 recovered)
-> - ✅ **Emergency Exit Script Added**: force_exit_losing_positions.py for manual intervention
-> - ✅ **Capital Protection Active**: Minimum reserves prevent complete account depletion
-> - 📊 **Account Recovery**: From $4.34 cash + 6 bleeding positions → $90+ cash + 1 near-breakeven position
+> **🚀 CRITICAL FIXES DEPLOYED - December 22, 2025**: 
+> - ✅ **Circuit Breaker Enhancement**: Now checks total account value (USD + crypto holdings) not just cash
+> - ✅ **Prevents Unlock Exploit**: Bot won't restart trading if user manually liquidates crypto to meet threshold
+> - ✅ **Auto-Rebalance Disabled**: Removes destructive auto-liquidation that lost money to fees
+> - ✅ **Manual Position Control**: Users can now choose when to consolidate positions
+> - ✅ **Restart Script Updated**: restart_bot_fixed.sh includes circuit breaker fix
+> - ✅ **Previous Fixes**: Decimal precision (per-crypto), Dynamic balance protection (15%→5% tiers)
+> - 📊 **Total Protection**: Combines circuit breaker + dynamic reserves for robust capital safety
 
 ---
 
-## ✅ CURRENT STATUS - CAPITAL RECOVERED, TRADING READY
+## ✅ CURRENT STATUS - CAPITAL RECOVERED, CIRCUIT BREAKER ACTIVE
 
-**Summary (December 21, 2025)**
+**Summary (December 22, 2025)**
 - Capital recovered: ~$90 USD from position closures (was $4.34 cash + 6 bleeding positions)
 - Dynamic reserves: $15 minimum protected (15% of balance once above $100)
 - Active position: 1 ATOM position ($0.59) near breakeven with trailing stop at $1.9011
 - Decimal precision: Per-crypto formatting ensures clean order execution
+- **Circuit Breaker Status**: ACTIVE - Now monitors total account value (USD + crypto)
 - Bot status: Running and scanning markets every 15 seconds
 
-**Recent Fixes That Saved Your Capital**
-1. ✅ **Decimal Precision Mapping** - Fixed INVALID_SIZE_PRECISION errors blocking sales
-   - XRP, DOGE, ADA: 2 decimals
-   - BTC: 8 decimals
-   - ETH: 6 decimals  
-   - SOL, ATOM: 4 decimals
-   - SHIB: 0 decimals
+**Recent Fixes That Saved Your Capital** (December 21-22, 2025)
 
-2. ✅ **Dynamic Balance Protection** - Scales reserves as account grows
-   - < $100: $15 fixed minimum (prevents fee death spiral)
-   - $100-500: 15% reserve (protects base capital)
-   - $500-2K: 10% reserve (allows more trading)
-   - $2K+: 5% reserve (maximizes trading power)
+### Fix #1: Decimal Precision Mapping (December 21)
+- ✅ Fixed INVALID_SIZE_PRECISION errors blocking sales
+- ✅ XRP, DOGE, ADA: 2 decimals
+- ✅ BTC: 8 decimals
+- ✅ ETH: 6 decimals  
+- ✅ SOL, ATOM: 4 decimals
+- ✅ SHIB: 0 decimals
+- **Result**: 5 positions successfully liquidated
 
-3. ✅ **Position Recovery** - Successfully closed 5 losing positions
-   - ETH: -8.14% loss (sold and recovered)
-   - BTC, XRP, DOGE: All sold successfully
-   - ATOM: Still open, near breakeven with active trailing stop
+### Fix #2: Dynamic Balance Protection (December 21)
+- ✅ Scales reserves as account grows
+- ✅ < $100: $15 fixed minimum (prevents fee death spiral)
+- ✅ $100-500: 15% reserve (protects base capital)
+- ✅ $500-2K: 10% reserve (allows more trading)
+- ✅ $2K+: 5% reserve (maximizes trading power)
+- **Result**: Account protected from complete depletion
+
+### Fix #3: Circuit Breaker Enhancement (December 22)
+- ✅ Now checks **total account value** (USD cash + crypto holdings value)
+- ✅ Prevents bot from "unlocking" when user manually liquidates crypto
+- ✅ Disables destructive auto-rebalance that was losing money to fees
+- ✅ Gives users manual control over position consolidation
+- **Result**: Prevents exploit where manual liquidations could bypass trading halt
 
 **Trading Readiness**
 - Once ATOM closes: ~$90-95 cash available

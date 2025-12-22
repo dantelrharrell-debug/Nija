@@ -1332,14 +1332,17 @@ To enable trading:
             self.account_balance = self.get_usd_balance()
             logger.info(f"USD Balance (get_usd_balance): ${self.account_balance:,.2f}")
 
-            # One-time holdings rebalance: if we restarted with >8 stray holdings
-            # or insufficient USD, liquidate excess to restore constraints.
-            if not getattr(self, 'rebalanced_once', False):
-                try:
-                    self.rebalance_existing_holdings(max_positions=8, target_cash=15.0)
-                except Exception as e:
-                    logger.error(f"Rebalance invocation failed: {e}")
-                    self.rebalanced_once = True
+            # DISABLED: One-time holdings rebalance
+            # Rebalancing was liquidating crypto holdings and losing money to fees
+            # Now that circuit breaker checks total account value, we don't need auto-liquidation
+            # User can manually decide when to consolidate positions
+            # if not getattr(self, 'rebalanced_once', False):
+            #     try:
+            #         self.rebalance_existing_holdings(max_positions=8, target_cash=15.0)
+            #     except Exception as e:
+            #         logger.error(f"Rebalance invocation failed: {e}")
+            #         self.rebalanced_once = True
+            self.rebalanced_once = True  # Prevent any rebalance attempts
             
             # Fetch ALL available trading pairs dynamically if not set
             if self.all_markets_mode and not self.trading_pairs:
