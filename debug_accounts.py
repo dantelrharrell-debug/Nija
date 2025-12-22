@@ -36,13 +36,22 @@ for i, account in enumerate(all_accounts, 1):
         available_bal = account.available_balance
         if hasattr(available_bal, 'value'):
             available = float(available_bal.value)
+        elif isinstance(available_bal, dict):
+            available = float(available_bal.get('value', 0))
         else:
-            available = float(str(available_bal))
+            try:
+                available = float(str(available_bal))
+            except:
+                available = 0
         
         print(f"  Currency: {currency}")
         print(f"  Name: {name}")
         print(f"  Type: {acc_type}")
         print(f"  Available: {available}")
+        
+        # Show if it has crypto holdings
+        if currency not in ['USD', 'USDC'] and available > 0.00000001:
+            print(f"  ⚠️  HAS CRYPTO: {available}")
     else:
         print(f"  Raw: {account}")
     print()

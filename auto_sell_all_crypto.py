@@ -28,34 +28,17 @@ def main():
     
     print("✅ Connected\n")
     
-    # Get all accounts
-    accounts_response = broker.client.get_accounts()
+    # Get balance using the SAME method the bot uses (portfolio breakdown)
+    balance_info = broker.get_account_balance()
+    crypto_holdings = balance_info.get('crypto', {})
     
-    # Handle both dict and object responses
-    if hasattr(accounts_response, 'accounts'):
-        all_accounts = accounts_response.accounts
-    elif isinstance(accounts_response, dict):
-        all_accounts = accounts_response.get('accounts', [])
-    else:
-        print("❌ Couldn't parse accounts response")
-        return
+    print(f"💰 Trading Balance: ${balance_info.get('trading_balance', 0):.2f}")
+    print(f"🪙 Crypto Holdings from portfolio breakdown:\n")
     
     crypto_positions = []
     
-    for account in all_accounts:
-        # Handle both dict and object account formats
-        if hasattr(account, 'currency'):
-            currency = account.currency
-            available_bal = account.available_balance
-            if hasattr(available_bal, 'value'):
-                available = float(available_bal.value)
-            else:
-                available = float(available_bal.get('value', 0))
-        else:
-            currency = account.get('currency', '')
-            available = float(account.get('available_balance', {}).get('value', 0))
-        
-        if currency not in ['USD', 'USDC'] and available > 0.00000001:
+    for currency, quantity in crypto_holdings.items():
+        if quantity > 0.00000001:
             try:
                 product_id = f"{currency}-USD"
                 ticker = broker.client.get_product(product_id)
@@ -71,7 +54,7 @@ def main():
                         price = float(price_str.split("price='")[1].split("'")[0])
                     else:
                         price = 0
-                value = available * price
+                value = quantity * price
             except Exception as e:
                 print(f"   Warning: Couldn't price {currency}: {e}")
                 price = 0
@@ -79,7 +62,7 @@ def main():
             
             crypto_positions.append({
                 'symbol': currency,
-                'quantity': available,
+                'quantity': quantity,
                 'price': price,
                 'value': value,
                 'product_id': f"{currency}-USD"
