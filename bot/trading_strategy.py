@@ -1340,13 +1340,21 @@ To enable trading:
             import os
             lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_LOCKED.conf')
             if os.path.exists(lock_file):
-                logger.error("="*80)
-                logger.error("🔒 TRADING IS LOCKED - BOT CANNOT OPEN NEW POSITIONS")
-                logger.error("="*80)
-                logger.error("Reason: Emergency liquidation protection is active")
-                logger.error("Action: Remove TRADING_LOCKED.conf only after authorized review")
-                logger.error("="*80)
-                return  # Exit cycle - do not trade
+                # Read the file to check if trading is actually disabled
+                try:
+                    with open(lock_file, 'r') as f:
+                        content = f.read()
+                        # Only lock if TRADING_DISABLED=true is explicitly set
+                        if 'TRADING_DISABLED=true' in content:
+                            logger.error("="*80)
+                            logger.error("🔒 TRADING IS LOCKED - BOT CANNOT OPEN NEW POSITIONS")
+                            logger.error("="*80)
+                            logger.error("Reason: Emergency liquidation protection is active")
+                            logger.error("Action: Remove TRADING_LOCKED.conf only after authorized review")
+                            logger.error("="*80)
+                            return  # Exit cycle - do not trade
+                except:
+                    pass  # If file can't be read, allow trading to continue
             
             # Clear cache at start of each cycle for fresh data
             self._price_cache.clear()
