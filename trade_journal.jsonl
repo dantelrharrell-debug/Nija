@@ -54,3 +54,14 @@
 {"timestamp": "2025-12-21T19:02:34.889653", "symbol": "XRP-USD", "side": "SELL", "price": 1.9132, "size_usd": 24.73}
 {"timestamp": "2025-12-21T19:02:41.592580", "symbol": "DOGE-USD", "side": "SELL", "price": 0.12995, "size_usd": 14.84}
 {"timestamp": "2025-12-21T19:03:47.365915", "symbol": "BTC-USD", "side": "SELL", "price": 88408.01, "size_usd": 44.4}
+{"timestamp": "2025-12-22T21:14:42.666777", "symbol": "BCH-USD", "side": "SELL", "price": 589.27, "size_usd": 4733.68112295}
+{"timestamp": "2025-12-22T21:17:33.088093", "symbol": "XLM-USD", "side": "SELL", "price": 0.218876, "size_usd": 0.5604664161712}
+{"timestamp": "2025-12-22T21:17:39.769242", "symbol": "XRP-USD", "side": "SELL", "price": 1.894, "size_usd": 13.47960535}
+{"timestamp": "2025-12-22T21:20:29.654831", "symbol": "SOL-USD", "side": "SELL", "price": 124.57, "size_usd": 735.6665881399999}
+{"timestamp": "2025-12-22T21:23:12.719046", "symbol": "NEAR-USD", "side": "SELL", "price": 1.499, "size_usd": 21.69318323}
+{"timestamp": "2025-12-22T21:23:19.532457", "symbol": "CRV-USD", "side": "SELL", "price": 0.3752, "size_usd": 2.22548382}
+{"timestamp": "2025-12-22T21:23:19.686595", "symbol": "NEAR-USD", "side": "SELL", "price": 1.499, "size_usd": 21.57750542}
+{"timestamp": "2025-12-22T21:23:26.111734", "symbol": "APT-USD", "side": "SELL", "price": 1.6078, "size_usd": 14.668758096000001}
+{"timestamp": "2025-12-22T21:23:26.490842", "symbol": "CRV-USD", "side": "SELL", "price": 0.3752, "size_usd": 2.2130343900000002}
+{"timestamp": "2025-12-22T21:23:32.839821", "symbol": "XRP-USD", "side": "SELL", "price": 1.8944, "size_usd": 13.484581416}
+{"timestamp": "2025-12-22T21:23:33.038843", "symbol": "APT-USD", "side": "SELL", "price": 1.6078, "size_usd": 14.615897282}

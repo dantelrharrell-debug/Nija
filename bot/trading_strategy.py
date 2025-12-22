@@ -1152,11 +1152,11 @@ To enable trading:
                         if order:
                             order = retry_handler.handle_partial_fill(order, quantity)
                         
-                        # CRITICAL: Force close position if exit was triggered (TP/SL/Trailing)
-                        # Even if order failed, we must close the position to prevent accumulating losses
+                        # CRITICAL: ONLY close position if order ACTUALLY filled on Coinbase
+                        # Do NOT remove tracking if order failed - keep retrying until it fills
                         position_closed_successfully = order and order.get('status') in ['filled', 'partial']
                         
-                        if position_closed_successfully or exit_reason:
+                        if position_closed_successfully:
                             # Record exit with analytics (includes fee calculation)
                             self.analytics.record_exit(
                                 symbol=symbol,
@@ -1177,23 +1177,27 @@ To enable trading:
                                 self.last_loss_time = time.time()
                                 logger.info(f"❌ Position closed with LOSS: ${pnl_usd:+.2f}")
                             
-                            # Add to close list (ALWAYS remove from tracking)
+                            # Add to close list (remove from tracking ONLY if order filled)
                             positions_to_close.append(symbol)
                             self.total_trades_executed += 1
-                            
-                            # Status logging
-                            if not position_closed_successfully and exit_reason:
-                                logger.error(f"⚠️  CRITICAL: Order failed but position removed from tracking!")
-                                logger.error(f"   Forcing closure to prevent losses from accumulating")
-                                logger.error(f"   Symbol: {symbol} | Reason: {exit_reason}")
                             
                             # Warn if partial fill
                             if order and order.get('partial_fill'):
                                 logger.warning(
-                                    f"⚠️  Partial exit: {order.get('filled_pct', 0):.1f}% filled"
+                                    f"⚠️  Partial exit: {order.get('filled_pct', 0):.1f}% filled - will retry remaining {100 - order.get('filled_pct', 0):.1f}%"
                                 )
                         else:
-                            logger.warning(f"Failed to close {symbol}: {order.get('error') if order else 'No order returned'}")
+                            # Order failed or did not execute
+                            if order:
+                                error_msg = order.get('error', order.get('message', 'Unknown error'))
+                                logger.error(f"❌ Failed to close {symbol}: {error_msg}")
+                                logger.error(f"   Will retry on next cycle - position NOT removed from tracking")
+                            else:
+                                logger.error(f"❌ No order returned for {symbol} exit")
+                                logger.error(f"   Will retry on next cycle - position NOT removed from tracking")
+                            
+                            # DO NOT add to positions_to_close - keep retrying
+
                     
                     except Exception as e:
                         logger.error(f"Error closing {symbol} position: {e}")

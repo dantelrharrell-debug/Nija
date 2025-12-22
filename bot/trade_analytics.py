@@ -214,12 +214,18 @@ class TradeAnalytics:
         if not completed:
             return {
                 'trades_count': 0,
+                'wins': 0,
+                'losses': 0,
                 'win_rate': 0.0,
                 'total_pnl': 0.0,
                 'total_fees': 0.0,
                 'avg_profit': 0.0,
+                'avg_win': 0.0,
+                'avg_loss': 0.0,
                 'best_trade': 0.0,
-                'worst_trade': 0.0
+                'worst_trade': 0.0,
+                'profit_factor': 0.0,
+                'avg_duration_min': 0.0
             }
         
         wins = [t for t in completed if t.net_profit > 0]
