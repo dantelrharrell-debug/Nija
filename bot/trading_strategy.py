@@ -1674,10 +1674,26 @@ To enable trading:
         It will skip positions with API failures and continue with the next.
         """
         try:
+            # FIRST: Clean up any stale positions with zero crypto_quantity
+            # This prevents trying to fetch prices for positions that don't actually exist
+            stale_positions = []
+            for symbol, position in list(self.open_positions.items()):
+                quantity = float(position.get('crypto_quantity') or 0.0)
+                if quantity <= 0:
+                    stale_positions.append(symbol)
+            
+            if stale_positions:
+                logger.warning(f"🧹 Removing {len(stale_positions)} stale positions with zero quantity before overage check")
+                for symbol in stale_positions:
+                    logger.warning(f"   🗑️  {symbol} (quantity: 0)")
+                    del self.open_positions[symbol]
+                self.position_manager.save_positions(self.open_positions)
+            
             MAX_CONCURRENT = max_positions
             current_count = len(self.open_positions)
             
             if current_count <= MAX_CONCURRENT:
+                logger.info(f"✅ Position count OK: {current_count}/{MAX_CONCURRENT}")
                 return  # No overage to close
             
             excess_count = current_count - MAX_CONCURRENT
