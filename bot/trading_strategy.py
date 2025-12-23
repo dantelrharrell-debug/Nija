@@ -39,25 +39,25 @@ class TradingStrategy:
     """
     NIJA Ultimate Trading Strategy with APEX v7.1
     
-    **PROFITABILITY-FIRST MODE**: Only buy high-probability winning trades
-    - Strict entry filters: RSI < 70, Score >= 70, Not at recent highs
-    - Quality over quantity: Reject marginal setups
-    - 50 markets, 15-second scans, AI momentum filtering
-    - Auto-adjusts risk as balance grows ($300, $1K, $3K milestones)
+    **ACTIVE PROFITABILITY MODE**: 5-8 quality trades continuously across 700+ markets
+    - Smart filters: Avoid obvious losers, catch solid momentum
+    - Score >= 60, RSI < 80 (allows strong trends, blocks parabolic)
+    - 700+ markets scanned every 15s → Always finding opportunities
+    - Continuous cycle: Fill 8 positions → TP → Refill → Repeat 24/7
     
     Features:
     - APEX v7.1 strategy engine with dual RSI indicators
-    - Multi-market scanning (Bitcoin, Ethereum, and 48+ altcoins)
-    - Profitability filters: NO overbought entries, NO low-quality signals
+    - Multi-market scanning (700+ cryptocurrency pairs)
+    - Balanced profitability filters: Quality + Activity
     - Advanced entry/exit logic with trailing systems
     - Risk management and position sizing
     - Trade journal logging and performance tracking
     
-    **NEW: PROFITABILITY FILTERS (Dec 2025)**
-    - ❌ Block RSI > 70 (overbought - will reverse)
-    - ❌ Block score < 70 (low probability)
-    - ❌ Block buying near 20-candle high (chasing)
-    - ✅ Only buy strong dips in confirmed uptrends
+    **PROFITABILITY FILTERS (BALANCED)**
+    - ❌ Block RSI > 80 (parabolic/extreme)
+    - ❌ Block score < 60 (weak setups)
+    - ✅ Allow RSI 70-80 if score >= 75 (strong momentum)
+    - ✅ 700+ markets = Always 5-8 quality opportunities available
     """
     
     def __init__(self):
@@ -855,22 +855,14 @@ To enable trading:
             if signal not in ['BUY', 'SELL']:
                 return False
             
-            # PROFITABILITY FILTER: Only execute high-quality BUY signals
-            # Reject trades with low scores to avoid losing trades
+            # PROFITABILITY FILTER: Only execute quality BUY signals
+            # Score >= 60 balances quality with activity (700+ markets should have 5-8)
             if signal == 'BUY':
                 score = analysis.get('score', 0)
-                if score < 70:
+                if score < 60:
                     logger.warning(
-                        f"🛑 BUY blocked for {symbol}: Quality score {score:.1f} < 70. "
-                        "Only taking high-probability trades."
-                    )
-                    return False
-                
-                # Additional check: Verify the reason contains positive indicators
-                reason = analysis.get('reason', '').lower()
-                if 'overbought' in reason or 'high' in reason:
-                    logger.warning(
-                        f"🛑 BUY blocked for {symbol}: Negative signal in reason: {analysis.get('reason')}"
+                        f"🛑 BUY blocked for {symbol}: Quality score {score:.1f} < 60. "
+                        "Need better setup."
                     )
                     return False
             
@@ -949,15 +941,15 @@ To enable trading:
             self.account_balance = live_balance
 
             # BUY GUARD: Require a minimum USD cash threshold before allowing any BUY
-            # Prevents immediate re-use of tiny freed cash amounts after manual sells
+            # $6 allows faster rotation while preventing dust trades
             try:
-                min_cash_to_buy = float(os.getenv("MIN_CASH_TO_BUY", "10.0"))  # Raised to $10 for better entries
+                min_cash_to_buy = float(os.getenv("MIN_CASH_TO_BUY", "6.0"))
             except Exception:
-                min_cash_to_buy = 10.0
+                min_cash_to_buy = 6.0
             if signal == 'BUY' and live_balance < min_cash_to_buy:
-                logger.warning(
-                    f"🛑 BUY blocked: USD balance ${live_balance:.2f} < min ${min_cash_to_buy:.2f}. "
-                    f"Waiting to accumulate before opening new positions."
+                logger.info(
+                    f"⏸️  BUY blocked: USD balance ${live_balance:.2f} < min ${min_cash_to_buy:.2f}. "
+                    f"Waiting to accumulate."
                 )
                 return False
             
