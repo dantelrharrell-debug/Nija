@@ -131,13 +131,14 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= self.volume_threshold
         }
         
-        # ULTRA AGGRESSIVE 15-DAY MODE: Require only 1 out of 5 conditions
+        # PROFITABILITY MODE: Require strong trend confirmation (3 out of 5 conditions)
+        # This prevents buying weak/choppy markets that lose money
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
         
-        if uptrend_score >= 1:  # ULTRA AGGRESSIVE: 1/5 filters (15-day goal)
+        if uptrend_score >= 3:  # PROFITABILITY: 3/5 filters (strong trend required)
             return True, 'uptrend', f'Uptrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 1:  # ULTRA AGGRESSIVE: 1/5 filters (15-day goal)
+        elif downtrend_score >= 3:  # PROFITABILITY: 3/5 filters (strong trend required)
             return True, 'downtrend', f'Downtrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
             return False, 'none', f'Mixed signals (Up:{uptrend_score}/5, Down:{downtrend_score}/5)'
@@ -214,7 +215,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # HIGH CONVICTION: Minimum 3/5 conditions (Profitability Mode v7.2)
+        signal = score >= 4  # STRICT: Minimum 4/5 conditions for profitable entries
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
