@@ -1189,6 +1189,53 @@ class BaseBroker(ABC):
                                 logger.error(f"   Retry failed: {order_dict2}")
                         except Exception as retry_err:
                             logger.error(f"   Retry with stricter increment failed: {retry_err}")
+
+                # Generic fallback: decrement by one increment and retry a few times
+                if size_type == 'base' and base_increment and error_code in ('INVALID_SIZE_PRECISION', 'INSUFFICIENT_FUND', 'PREVIEW_INVALID_SIZE_PRECISION', 'PREVIEW_INSUFFICIENT_FUND'):
+                    try:
+                        from decimal import Decimal, ROUND_DOWN, getcontext
+                        getcontext().prec = 18
+                        step = Decimal(str(base_increment))
+
+                        max_attempts = 5
+                        current_qty = Decimal(str(base_size_rounded if 'base_size_rounded' in locals() else quantity))
+                        for attempt in range(1, max_attempts + 1):
+                            # Reduce by one increment per attempt and quantize down
+                            reduced = current_qty - step * attempt
+                            if reduced <= Decimal('0'):
+                                break
+                            qtry = (reduced / step).to_integral_value(rounding=ROUND_DOWN) * step
+                            new_size = float(qtry)
+                            logger.info(f"   Fallback attempt {attempt}/{max_attempts}: base_size → {new_size} (decrement by {attempt}×{base_increment})")
+
+                            order_try = self.client.market_order_sell(
+                                client_order_id,
+                                product_id=symbol,
+                                base_size=str(new_size)
+                            )
+                            od_try = _serialize_object_to_dict(order_try)
+                            if isinstance(od_try, str):
+                                try:
+                                    od_try = json.loads(od_try)
+                                except Exception:
+                                    try:
+                                        import ast
+                                        od_try = ast.literal_eval(od_try)
+                                    except Exception:
+                                        pass
+
+                            if isinstance(od_try, dict) and od_try.get('success', True) and not od_try.get('error_response'):
+                                logger.info(f"✅ Order filled successfully (fallback attempt {attempt}): {symbol}")
+                                return {
+                                    "status": "filled",
+                                    "order": od_try,
+                                    "filled_size": new_size
+                                }
+                            else:
+                                emsg = od_try.get('error_response', {}).get('message') if isinstance(od_try, dict) else str(od_try)
+                                logger.error(f"   Fallback attempt {attempt} failed: {emsg}")
+                    except Exception as fb_err:
+                        logger.error(f"   Fallback decrement retry failed: {fb_err}")
                 
                 return {
                     "status": "unfilled",
