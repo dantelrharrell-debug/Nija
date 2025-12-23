@@ -96,148 +96,7 @@ class BaseBroker(ABC):
     
     @abstractmethod
     def get_account_balance(self) -> float:
-        """Get USD account balance"""
         pass
-    
-    @abstractmethod
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
-        """Place market order (buy/sell)"""
-        pass
-    
-    @abstractmethod
-    def get_positions(self) -> List[Dict]:
-        """Get all open positions"""
-        pass
-    
-    @abstractmethod
-    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get historical candle data"""
-        pass
-    
-    @abstractmethod
-    def supports_asset_class(self, asset_class: str) -> bool:
-        """Check if broker supports asset class (crypto, stocks, futures, options)"""
-        pass
-
-class CoinbaseBroker(BaseBroker):
-    """Coinbase Advanced Trade integration"""
-    
-    def __init__(self):
-        super().__init__(BrokerType.COINBASE)
-        self.client = None
-        self.portfolio_uuid = None  # Will be auto-detected
-        # Read ALLOW_CONSUMER_USD flag once during initialization
-        # Default to True to ensure Consumer USD balances are counted unless explicitly disabled.
-        allow_flag = os.getenv("ALLOW_CONSUMER_USD")
-        if allow_flag is None:
-            self.allow_consumer_usd = True
-            logging.info("⚙️ ALLOW_CONSUMER_USD defaulted to true — Consumer USD accounts will be counted")
-        else:
-            self.allow_consumer_usd = str(allow_flag).lower() in ("1", "true", "yes")
-        self._product_cache: Dict[str, Dict] = {}
-    
-    def connect(self) -> bool:
-        """Connect to Coinbase Advanced Trade using JWT authentication"""
-        try:
-            # Advanced Trade SDK uses JWT tokens signed with EC private keys
-            if self.allow_consumer_usd:
-                logging.info("⚙️ ALLOW_CONSUMER_USD enabled — Consumer USD accounts will be counted")
-            
-            from coinbase.rest import RESTClient
-            
-            # Get credentials
-            api_key = os.getenv("COINBASE_API_KEY")
-            api_secret = os.getenv("COINBASE_API_SECRET")
-
-            print(f"🔍 CREDENTIAL CHECK:")
-            print(f"   - COINBASE_API_KEY: {'✅ Set' if api_key else '❌ Missing'}")
-            print(f"   - COINBASE_API_SECRET: {'✅ Set' if api_secret else '❌ Missing'}")
-
-            if not api_key or not api_secret:
-                print("❌ Missing required credentials!")
-                print("   Set COINBASE_API_KEY and COINBASE_API_SECRET")
-                return False
-
-            # Normalize PEM key if it has escaped newlines
-            # Normalize secret: handle escaped newlines and ensure final newline
-            if api_secret:
-                api_secret = api_secret.strip()
-                # Remove surrounding quotes if present (from .env file)
-                if api_secret.startswith('"') and api_secret.endswith('"'):
-                    api_secret = api_secret[1:-1]
-                if api_secret.startswith("'") and api_secret.endswith("'"):
-                    api_secret = api_secret[1:-1]
-                # Convert escaped newlines to real newlines
-                if '\\n' in api_secret:
-                    api_secret = api_secret.replace('\\n', '\n')
-                    print("   ℹ️  Normalized escaped newlines in API_SECRET")
-                # Ensure trailing newline for robust PEM parsing
-                if not api_secret.endswith('\n'):
-                    api_secret = api_secret + '\n'
-
-            # Normalize API key: accept full Cloud path and extract key ID segment
-            # Expected key id format: 8-4-4-4-12 GUID (e.g., 05067708-2a5d-43a5-a4c6-732176c05e7c)
-            api_key = (api_key or "").strip()
-            if "/apiKeys/" in api_key:
-                parts = api_key.split("/apiKeys/")
-                if len(parts) == 2 and parts[1]:
-                    print(f"   ℹ️  Extracted key id from Cloud path: {parts[1]}")
-                    api_key = parts[1]
-            elif "/" in api_key and len(api_key.split("/")) > 1:
-                # Fallback: take last path segment if slashes present
-                candidate = api_key.split("/")[-1]
-                if candidate:
-                    print(f"   ℹ️  Using last path segment as key id: {candidate}")
-                    api_key = candidate
-
-            # Create RESTClient
-            print("🔐 Initializing Coinbase RESTClient...")
-            self.client = RESTClient(
-                api_key=api_key,
-                api_secret=api_secret,
-            )
-            
-            # Test connection
-            print("🧪 Testing connection with GET /v3/accounts...")
-            accounts = self.client.get_accounts()
-            
-            # Auto-detect portfolio with funds
-            self._detect_portfolio()
-            
-            self.connected = True
-            print("✅ Coinbase Advanced Trade connected")
-            return True
-            
-        except Exception as e:
-            error_str = str(e)
-            print(f"❌ Coinbase connection failed: {e}")
-            
-            # Show response details if available
-            response = getattr(e, "response", None)
-            if response:
-                status_code = getattr(response, "status_code", None)
-                if status_code:
-                    print(f"   HTTP Status: {status_code}")
-                try:
-                    response_text = response.text
-                    if response_text:
-                        print(f"   Response: {response_text[:300]}")
-                except Exception:
-                    pass
-            
-            # Authentication error guidance
-            if "401" in error_str or "Unauthorized" in error_str:
-                print(f"\n🔴 AUTHENTICATION FAILED")
-                print(f"   Possible causes:")
-                print(f"   1. Invalid API Key or Secret")
-                print(f"   2. Incorrect credentials format")
-                print(f"   3. Expired or revoked API key")
-                print(f"   4. Missing required permissions")
-                print(f"\n   Required env variables:")
-                print(f"   - COINBASE_API_KEY")
-                print(f"   - COINBASE_API_SECRET")
-            
-            return False
     
     def _detect_portfolio(self):
         """DISABLED: Always use default Advanced Trade portfolio"""
@@ -1151,11 +1010,17 @@ class CoinbaseBroker(BaseBroker):
                     if base_increment is None:
                         base_increment = 10 ** (-precision)
 
+                    # Adjust requested quantity against available balance with a small safety margin
+                    requested_qty = float(quantity)
+                    safety_epsilon = max(base_increment, 1e-6)
+                    safe_available = max(0.0, available_base - safety_epsilon)
+                    trade_qty = min(requested_qty, safe_available)
+
                     # Quantize size DOWN to allowed increment to avoid precision errors
                     from decimal import Decimal, ROUND_DOWN, getcontext
                     getcontext().prec = 18
                     step = Decimal(str(base_increment))
-                    qty = (Decimal(str(quantity)) / step).to_integral_value(rounding=ROUND_DOWN) * step
+                    qty = (Decimal(str(trade_qty)) / step).to_integral_value(rounding=ROUND_DOWN) * step
 
                     base_size_rounded = float(qty)
                     logger.info(f"   Derived base_increment={base_increment} precision={precision} → rounded={base_size_rounded}")
@@ -1233,11 +1098,64 @@ class CoinbaseBroker(BaseBroker):
 
                 if error_code == 'INSUFFICIENT_FUND':
                     self._log_insufficient_fund_context(base_currency, quote_currency)
-                elif error_code == 'INVALID_SIZE_PRECISION' and size_type == 'base' and base_increment:
-                    # Log a hint for troubleshooting
+                elif error_code == 'INVALID_SIZE_PRECISION' and size_type == 'base':
+                    # One-shot degradation retry: use stricter per-asset increment if available
                     logger.error(
                         f"   Hint: base_increment={base_increment} precision={precision} quantity={quantity} rounded={base_size_rounded}"
                     )
+                    stricter_map = {
+                        'APT': 0.001,
+                        'NEAR': 0.0001,
+                        'ICP': 0.0001,
+                        'AAVE': 0.01,
+                    }
+                    base_currency = symbol.split('-')[0].upper()
+                    alt_inc = stricter_map.get(base_currency)
+                    if alt_inc and (base_increment is None or alt_inc != base_increment):
+                        try:
+                            from decimal import Decimal, ROUND_DOWN, getcontext
+                            getcontext().prec = 18
+                            step2 = Decimal(str(alt_inc))
+
+                            # Recompute safe trade qty based on same available snapshot
+                            safety_epsilon2 = max(alt_inc, 1e-6)
+                            safe_available2 = max(0.0, (available_base if 'available_base' in locals() else 0.0) - safety_epsilon2)
+                            trade_qty2 = min(float(quantity), safe_available2)
+
+                            qty2 = (Decimal(str(trade_qty2)) / step2).to_integral_value(rounding=ROUND_DOWN) * step2
+                            base_size_rounded2 = float(qty2)
+                            inc_str2 = f"{alt_inc:.16f}".rstrip('0').rstrip('.')
+                            precision2 = len(inc_str2.split('.')[1]) if '.' in inc_str2 else 0
+                            logger.info(f"   Retry with alt increment {alt_inc} (precision {precision2}) → {base_size_rounded2}")
+
+                            order2 = self.client.market_order_sell(
+                                client_order_id,
+                                product_id=symbol,
+                                base_size=str(base_size_rounded2)
+                            )
+                            order_dict2 = _serialize_object_to_dict(order2)
+                            if isinstance(order_dict2, str):
+                                try:
+                                    order_dict2 = json.loads(order_dict2)
+                                except Exception:
+                                    try:
+                                        import ast
+                                        order_dict2 = ast.literal_eval(order_dict2)
+                                    except Exception:
+                                        pass
+
+                            success2 = isinstance(order_dict2, dict) and order_dict2.get('success', True) and not order_dict2.get('error_response')
+                            if success2:
+                                logger.info(f"✅ Order filled successfully (retry): {symbol}")
+                                return {
+                                    "status": "filled",
+                                    "order": order_dict2,
+                                    "filled_size": base_size_rounded2
+                                }
+                            else:
+                                logger.error(f"   Retry failed: {order_dict2}")
+                        except Exception as retry_err:
+                            logger.error(f"   Retry with stricter increment failed: {retry_err}")
                 
                 return {
                     "status": "unfilled",
