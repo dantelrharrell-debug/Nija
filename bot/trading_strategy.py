@@ -753,6 +753,27 @@ To enable trading:
                 logger.info(f"Skipping {symbol}: Position already open for this symbol")
                 return False
             
+            # CRITICAL POSITION LIMIT ENFORCEMENT (BUYs only)
+            # Count ACTUAL crypto holdings on Coinbase, not just in-memory tracker
+            # This prevents the bot from buying when user manually sold positions
+            if signal == 'BUY':
+                try:
+                    balance_info = self.broker.get_account_balance()
+                    actual_crypto_holdings = balance_info.get('crypto', {})
+                    # Count holdings with non-dust quantities
+                    actual_position_count = sum(1 for qty in actual_crypto_holdings.values() if qty > 0.00000001)
+                    
+                    if actual_position_count >= self.max_concurrent_positions:
+                        logger.warning(
+                            f"🛑 BUY BLOCKED: {actual_position_count} actual crypto positions on Coinbase, "
+                            f"max is {self.max_concurrent_positions}. Waiting for sells."
+                        )
+                        return False
+                except Exception as e:
+                    logger.error(f"⚠️ Could not verify position count from Coinbase: {e}")
+                    # If we can't verify, block the buy to be safe
+                    return False
+            
             # Refresh balance right before sizing to avoid using stale consumer funds
             live_balance = self.get_usd_balance()
             self.account_balance = live_balance
