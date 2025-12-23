@@ -1,4 +1,5 @@
-DEPLOYMENT TRIGGER - Force Render to deploy dual API balance fix
-Timestamp: 2025-12-18 23:40:00 UTC
-Commit: Force deployment of broker_manager.py v2+v3 API changes
-Expected: Balance detection showing $30.64 instead of $25.81
+DEPLOYMENT TRIGGER - Force Render rebuild
+Timestamp: 2025-12-23 00:15:22 UTC (1766448922)
+Commit: Project rebuild trigger
+Purpose: Force fresh deployment with all current fixes
+Status: All core systems operational
