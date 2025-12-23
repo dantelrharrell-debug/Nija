@@ -756,6 +756,7 @@ To enable trading:
             # CRITICAL POSITION LIMIT ENFORCEMENT (BUYs only)
             # Count ACTUAL crypto holdings on Coinbase, not just in-memory tracker
             # This prevents the bot from buying when user manually sold positions
+            # IMPORTANT: Block when count would EXCEED limit after the buy (>= check, not >)
             if signal == 'BUY':
                 try:
                     balance_info = self.broker.get_account_balance()
@@ -763,10 +764,21 @@ To enable trading:
                     # Count holdings with non-dust quantities
                     actual_position_count = sum(1 for qty in actual_crypto_holdings.values() if qty > 0.00000001)
                     
+                    # Block if we're AT or ABOVE the limit (don't allow buying the 8th position)
+                    # This means we allow up to 7 positions, block when trying to buy #8
                     if actual_position_count >= self.max_concurrent_positions:
                         logger.warning(
                             f"🛑 BUY BLOCKED: {actual_position_count} actual crypto positions on Coinbase, "
                             f"max is {self.max_concurrent_positions}. Waiting for sells."
+                        )
+                        return False
+                    
+                    # ADDITIONAL CHECK: Don't buy if we're at max-1 (one away from limit)
+                    # This prevents buying the position that would take us TO the limit
+                    if actual_position_count >= (self.max_concurrent_positions - 1):
+                        logger.warning(
+                            f"🛑 BUY BLOCKED: {actual_position_count} positions (max-1 safety guard). "
+                            f"Keeping 1 slot free for better entries. Max is {self.max_concurrent_positions}."
                         )
                         return False
                 except Exception as e:
