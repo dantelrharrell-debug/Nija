@@ -956,22 +956,36 @@ class BaseBroker(ABC):
 
                     # Balance guard: skip if holdings are below requested size (allow small epsilon)
                     try:
+                        # CRITICAL: Get FRESH balance immediately before placing sell order
+                        # This avoids stale data from position sync (holds, fees, locked funds)
                         balance_snapshot = self.get_account_balance()
                         holdings = (balance_snapshot or {}).get('crypto', {}) or {}
                         available_base = float(holdings.get(base_currency, 0.0))
+                        
+                        logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} available")
+                        
                         epsilon = 1e-8
-                        if available_base + epsilon < quantity:
+                        if available_base <= epsilon:
                             logger.error(
-                                f"❌ PRE-FLIGHT CHECK FAILED: Insufficient {base_currency} balance "
-                                f"({available_base} < {quantity})"
+                                f"❌ PRE-FLIGHT CHECK FAILED: Zero {base_currency} balance "
+                                f"(available: {available_base:.8f})"
                             )
                             return {
                                 "status": "unfilled",
                                 "error": "INSUFFICIENT_FUND",
-                                "message": f"Insufficient {base_currency} balance {available_base} for sell size {quantity}",
+                                "message": f"No {base_currency} balance available for sell (requested {quantity})",
                                 "partial_fill": False,
                                 "filled_pct": 0.0
                             }
+                        
+                        # CRITICAL FIX: If available balance < requested quantity, USE AVAILABLE BALANCE
+                        # This handles holds, fees, and stale position sync data
+                        if available_base < quantity:
+                            logger.warning(
+                                f"⚠️ Available balance ({available_base:.8f}) < requested ({quantity:.8f})"
+                            )
+                            logger.warning(f"   Adjusting sell size to actual available balance")
+                            quantity = available_base  # USE ACTUAL AVAILABLE AMOUNT
                     except Exception as bal_err:
                         logger.warning(f"⚠️ Could not pre-check balance for {base_currency}: {bal_err}")
 
@@ -1015,10 +1029,11 @@ class BaseBroker(ABC):
                         base_increment = 10 ** (-precision)
 
                     # Adjust requested quantity against available balance with a small safety margin
-                    requested_qty = float(quantity)
-                    safety_epsilon = max(base_increment, 1e-6)
-                    safe_available = max(0.0, available_base - safety_epsilon)
-                    trade_qty = min(requested_qty, safe_available)
+                    # Use the (potentially adjusted) quantity and add safety margin
+                    requested_qty = float(quantity)  # Already adjusted to available if needed
+                    safety_epsilon = max(base_increment if base_increment else 1e-6, 1e-6)
+                    # Subtract epsilon to avoid edge-case balance rounding issues
+                    trade_qty = max(0.0, requested_qty - safety_epsilon)
 
                     # Quantize size DOWN to allowed increment to avoid precision errors
                     from decimal import Decimal, ROUND_DOWN, getcontext
