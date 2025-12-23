@@ -854,10 +854,14 @@ class BaseBroker(ABC):
                 logger.info(f"   Available: ${trading_balance:.2f}")
                 logger.info(f"   Required:  ${quantity:.2f}")
                 
-                if trading_balance < quantity:
-                    error_msg = f"Insufficient funds: ${trading_balance:.2f} available, ${quantity:.2f} required"
+                # ADD FIX #2: Add 2% safety buffer for fees/rounding (Coinbase typically takes 0.5-1%)
+                safety_buffer = quantity * 0.02  # 2% buffer
+                required_with_buffer = quantity + safety_buffer
+                
+                if trading_balance < required_with_buffer:
+                    error_msg = f"Insufficient funds: ${trading_balance:.2f} available, ${required_with_buffer:.2f} required (with 2% fee buffer)"
                     logger.error(f"❌ PRE-FLIGHT CHECK FAILED: {error_msg}")
-                    logger.error(f"   Bot detected ${trading_balance:.2f} but needs ${quantity:.2f} for this order")
+                    logger.error(f"   Bot detected ${trading_balance:.2f} but needs ${required_with_buffer:.2f} for this order")
                     
                     # Log USD/USDC inventory for debugging
                     logger.error(f"   Account inventory:")
@@ -963,6 +967,7 @@ class BaseBroker(ABC):
                         available_base = float(holdings.get(base_currency, 0.0))
                         
                         logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} available")
+                        logger.info(f"   Tracked position size: {quantity:.8f} {base_currency}")
                         
                         epsilon = 1e-8
                         if available_base <= epsilon:
@@ -978,14 +983,16 @@ class BaseBroker(ABC):
                                 "filled_pct": 0.0
                             }
                         
-                        # CRITICAL FIX: If available balance < requested quantity, USE AVAILABLE BALANCE
-                        # This handles holds, fees, and stale position sync data
+                        # FIX #1: If available balance < requested quantity, USE AVAILABLE BALANCE
+                        # This handles partial fills, holds, fees, and stale position sync data
                         if available_base < quantity:
+                            diff = quantity - available_base
                             logger.warning(
-                                f"⚠️ Available balance ({available_base:.8f}) < requested ({quantity:.8f})"
+                                f"⚠️ Balance mismatch: tracked {quantity:.8f} but only {available_base:.8f} available"
                             )
-                            logger.warning(f"   Adjusting sell size to actual available balance")
-                            quantity = available_base  # USE ACTUAL AVAILABLE AMOUNT
+                            logger.warning(f"   Difference: {diff:.8f} {base_currency} (likely from partial fills or fees)")
+                            logger.warning(f"   SOLUTION: Adjusting sell size to actual available balance")
+                            quantity = available_base  # FIX #1: USE ACTUAL AVAILABLE AMOUNT
                     except Exception as bal_err:
                         logger.warning(f"⚠️ Could not pre-check balance for {base_currency}: {bal_err}")
 
@@ -1028,12 +1035,19 @@ class BaseBroker(ABC):
                     if base_increment is None:
                         base_increment = 10 ** (-precision)
 
-                    # Adjust requested quantity against available balance with a small safety margin
-                    # Use the (potentially adjusted) quantity and add safety margin
+                    # Adjust requested quantity against available balance with a safety margin
+                    # FIX #3: Use a larger safety margin to account for fees and rounding
+                    # Coinbase typically charges 0.5-1% in trading fees, plus potential precision rounding
                     requested_qty = float(quantity)  # Already adjusted to available if needed
-                    safety_epsilon = max(base_increment if base_increment else 1e-6, 1e-6)
-                    # Subtract epsilon to avoid edge-case balance rounding issues
-                    trade_qty = max(0.0, requested_qty - safety_epsilon)
+                    
+                    # Use 0.5% margin (more conservative than 2% from pre-flight)
+                    safety_margin = max(requested_qty * 0.005, 0.00000001)  # 0.5% or minimum epsilon
+                    
+                    # Subtract safety margin to leave room for fees and rounding
+                    trade_qty = max(0.0, requested_qty - safety_margin)
+                    
+                    logger.info(f"   Safety margin: {safety_margin:.8f} {base_currency} (0.5%)")
+                    logger.info(f"   Final trade qty: {trade_qty:.8f} {base_currency}")
 
                     # Quantize size DOWN to allowed increment to avoid precision errors
                     from decimal import Decimal, ROUND_DOWN, getcontext
