@@ -413,12 +413,18 @@ class BaseBroker(ABC):
                         else:
                             consumer_usdc += available
                 elif currency and available > 0:
-                    # Track non-cash crypto holdings for reporting completeness
-                    crypto_holdings[currency] = available
-                    tradeable_mark = "✅" if is_tradeable else "❌"
-                    logging.info(
-                        f"   {tradeable_mark} 🪙 {currency}: {available} (type={account_type}, platform={platform})"
-                    )
+                    # Track non-cash crypto holdings ONLY if tradeable via API
+                    # Consumer wallet positions cannot be traded and will cause INSUFFICIENT_FUND errors
+                    if is_tradeable:
+                        crypto_holdings[currency] = available
+                        logging.info(
+                            f"   ✅ 🪙 {currency}: {available} (type={account_type}, platform={platform})"
+                        )
+                    else:
+                        # Log consumer wallet holdings separately but don't add to crypto_holdings
+                        logging.info(
+                            f"   ⏭️  {currency}: {available} in CONSUMER wallet (not API-tradeable, skipping)"
+                        )
 
             trading_balance = usd_balance + usdc_balance
 
@@ -447,6 +453,7 @@ class BaseBroker(ABC):
                 logging.warning("-" * 70)
             
             logging.info(f"📊 API Status: Saw {accounts_seen} accounts, {tradeable_accounts} tradeable")
+            logging.info(f"   💎 Tradeable crypto holdings: {len(crypto_holdings)} assets")
             logging.info("=" * 70)
 
             return {
