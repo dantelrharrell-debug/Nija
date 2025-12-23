@@ -1,15 +1,16 @@
-🚨 CRITICAL REDEPLOY NEEDED - 2025-12-20 19:45 UTC
+🚀 PROJECT REBUILD TRIGGERED - 2025-12-23 00:14 UTC
 
-REASON: Bot NOT selling at profit targets!
-- 96 BUY orders executed
-- Only 4 SELL orders (all manual)
-- User losing money on forced liquidations
-- Fixes committed but Railway hasn't deployed them
+REASON: Manual rebuild requested
 
-FIXES TO DEPLOY:
-✅ broker_manager.py: size_type='base' for SELL orders  
-✅ trading_strategy.py: crypto_quantity tracking
-✅ 8 consecutive trade limit
-✅ Profit target logic (6%)
+Current Status:
+✅ All systems operational
+✅ Circuit breaker v2 active (total account value monitoring)
+✅ Dynamic balance protection enabled
+✅ Decimal precision mapping deployed
+
+REBUILD TRIGGER:
+- Timestamp: 1766448841
+- Purpose: Force fresh deployment
+- Platform: Railway/Render
 
 STATUS: FORCING FRESH BUILD

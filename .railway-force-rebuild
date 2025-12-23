@@ -1,4 +1,5 @@
 # Cache Bust Trigger
 # Force Railway fresh rebuild
-Timestamp: $(date +%s)
-Commit: Force rebuild to deploy _price_cache fix
+Timestamp: 1766448841
+Commit: Force rebuild - Project structure rebuild trigger
+Date: 2025-12-23 00:14:01 UTC
