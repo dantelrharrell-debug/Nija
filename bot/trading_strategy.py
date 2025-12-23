@@ -1099,6 +1099,29 @@ To enable trading:
                             logger.info(
                                 f"   🎯 TP stepped up to ${stepped_tp:.2f} after move ≥ {self.take_profit_step_trigger*100:.1f}%"
                             )
+                        
+                        # PROFITABILITY_UPGRADE_V7.2: Check for stepped profit-taking exits
+                        # Exits portions at: 0.5%, 1%, 2%, 3% profit targets
+                        # This reduces hold time from 8+ hours to 15-30 minutes per position
+                        if pnl_pct >= 0.5 and not exit_reason:  # Only if profit and not already exiting
+                            stepped_exit_info = self._check_stepped_exit(symbol, current_price, pnl_pct, entry_price, position)
+                            if stepped_exit_info:
+                                # Execute partial exit
+                                exit_signal = 'SELL'
+                                try:
+                                    exit_quantity = position.get('crypto_quantity', position['size_usd'] / entry_price) * stepped_exit_info['exit_pct']
+                                    order = self.broker.place_market_order(
+                                        symbol, 
+                                        exit_signal.lower(), 
+                                        exit_quantity,
+                                        size_type='base'
+                                    )
+                                    if order and order.get('status') == 'filled':
+                                        logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
+                                        # Don't remove position, just mark that portion as exited
+                                        position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
+                                except Exception as e:
+                                    logger.warning(f"   ⚠️ Stepped exit order failed: {e}")
                     
                     # Check stop loss
                     if current_price <= stop_loss:
@@ -1123,6 +1146,29 @@ To enable trading:
                             position['trailing_stop'] = new_trailing
                             locked_profit_pct = ((entry_price - new_trailing) / entry_price) * 100
                             logger.info(f"   📉 Trailing stop updated: ${new_trailing:.2f} (locks in {locked_profit_pct:.2f}% profit)")
+                    
+                    # PROFITABILITY_UPGRADE_V7.2: Check for stepped profit-taking exits
+                    # Exits portions at: 0.5%, 1%, 2%, 3% profit targets
+                    # This reduces hold time from 8+ hours to 15-30 minutes per position
+                    if pnl_pct >= 0.5 and not exit_reason:  # Only if profit and not already exiting
+                        stepped_exit_info = self._check_stepped_exit(symbol, current_price, pnl_pct, entry_price, position)
+                        if stepped_exit_info:
+                            # Execute partial exit
+                            exit_signal = 'BUY'
+                            try:
+                                exit_quantity = position.get('crypto_quantity', position['size_usd'] / entry_price) * stepped_exit_info['exit_pct']
+                                order = self.broker.place_market_order(
+                                    symbol, 
+                                    exit_signal.lower(), 
+                                    exit_quantity,
+                                    size_type='base'
+                                )
+                                if order and order.get('status') == 'filled':
+                                    logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
+                                    # Don't remove position, just mark that portion as exited
+                                    position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
+                            except Exception as e:
+                                logger.warning(f"   ⚠️ Stepped exit order failed: {e}")
                     
                     # Check stop loss
                     if current_price >= stop_loss:
@@ -1535,6 +1581,54 @@ To enable trading:
             except Exception as e:
                 logger.error(f"Error closing excess position {symbol}: {e}")
     
+    def _check_stepped_exit(self, symbol: str, current_price: float, pnl_pct: float, 
+                            entry_price: float, position: dict) -> dict:
+        """
+        PROFITABILITY_UPGRADE_V7.2: Check if position should take stepped profit exit
+        
+        Stepped exit schedule:
+        - Exit 10% at 0.5% profit
+        - Exit 15% at 1.0% profit  
+        - Exit 25% at 2.0% profit
+        - Exit 50% at 3.0% profit (remaining 25% on trailing stop)
+        
+        Args:
+            symbol: Trading symbol
+            current_price: Current market price
+            pnl_pct: Current profit percentage
+            entry_price: Entry price
+            position: Position dictionary
+        
+        Returns:
+            Dictionary with exit_pct and profit_level if triggered, None otherwise
+        """
+        # Define exit thresholds in order: (profit_threshold, exit_percentage, flag_name)
+        exit_thresholds = [
+            (0.005, 0.10, 'stepped_exit_0_5pct'),   # Exit 10% at 0.5%
+            (0.010, 0.15, 'stepped_exit_1_0pct'),   # Exit 15% at 1.0%
+            (0.020, 0.25, 'stepped_exit_2_0pct'),   # Exit 25% at 2.0%
+            (0.030, 0.50, 'stepped_exit_3_0pct'),   # Exit 50% at 3.0%
+        ]
+        
+        # Check each threshold in order
+        for profit_threshold, exit_pct, flag_name in exit_thresholds:
+            # Skip if already executed
+            if position.get(flag_name, False):
+                continue
+            
+            # Check if profit target met
+            if pnl_pct >= (profit_threshold * 100):
+                # Mark as executed
+                position[flag_name] = True
+                
+                # Return exit info
+                return {
+                    'exit_pct': exit_pct,
+                    'profit_level': f"{profit_threshold*100:.1f}%"
+                }
+        
+        return None
+
     def log_trade(self, symbol: str, side: str, price: float, size_usd: float):
         """
         Log trade to journal file

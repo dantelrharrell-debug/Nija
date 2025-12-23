@@ -52,15 +52,15 @@ class AdaptiveRiskManager:
     - FEE AWARENESS (NEW - prevents unprofitable small trades)
     """
     
-    def __init__(self, min_position_pct=0.05, max_position_pct=0.25,
-                 max_total_exposure=0.50):
+    def __init__(self, min_position_pct=0.02, max_position_pct=0.05,
+                 max_total_exposure=0.80):
         """
-        Initialize Adaptive Risk Manager - FEE-AWARE PROFITABILITY MODE
+        Initialize Adaptive Risk Manager - PROFITABILITY MODE v7.2
         
         Args:
-            min_position_pct: Minimum position size as % of account (default 5%)
-            max_position_pct: Maximum position size as % of account (default 25%)
-            max_total_exposure: Maximum total exposure across all positions (default 50%)
+            min_position_pct: Minimum position size as % of account (default 2% - upgraded from 5%)
+            max_position_pct: Maximum position size as % of account (default 5% - upgraded from 25%)
+            max_total_exposure: Maximum total exposure across all positions (default 80% - upgraded from 50%)
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct
@@ -374,7 +374,7 @@ class AdaptiveRiskManager:
         Returns:
             Stop loss price
         """
-        atr_buffer = atr * 0.5  # 0.5 * ATR buffer
+        atr_buffer = atr * 1.5  # 1.5x ATR buffer (upgraded from 0.5x - reduces stop-hunts)
         
         if side == 'long':
             # Stop below swing low with ATR buffer

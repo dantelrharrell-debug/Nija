@@ -214,7 +214,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 1  # ULTRA AGGRESSIVE: Only 1/5 conditions (15-day goal)
+        signal = score >= 3  # HIGH CONVICTION: Minimum 3/5 conditions (Profitability Mode v7.2)
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
@@ -292,7 +292,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 1  # ULTRA AGGRESSIVE: Only 1/5 conditions (15-day goal)
+        signal = score >= 3  # HIGH CONVICTION: Minimum 3/5 conditions (Profitability Mode v7.2)
         
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         
