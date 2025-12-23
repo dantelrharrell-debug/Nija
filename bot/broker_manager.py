@@ -1376,6 +1376,7 @@ class CoinbaseBroker(BaseBroker):
         super().__init__(BrokerType.COINBASE)
         self.client = None
         self.portfolio_uuid = None
+        self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
     
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade API"""
