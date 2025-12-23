@@ -1044,10 +1044,8 @@ class CoinbaseBroker(BaseBroker):
             else:
                 # SELL order - use base_size (crypto amount) or quote_size (USD value)
                 if size_type == 'base':
-                    # Dynamic precision based on Coinbase product metadata
-                    base_currency = symbol.split('-')[0]
+                    base_currency = symbol.split('-')[0].upper()
 
-                    # Default precision fallback map (used if product metadata missing)
                     precision_map = {
                         'XRP': 2,
                         'DOGE': 2,
@@ -1093,6 +1091,27 @@ class CoinbaseBroker(BaseBroker):
                     precision = max(0, min(precision_map.get(base_currency, 2), 8))
                     base_increment = None
 
+                    # Balance guard: skip if holdings are below requested size (allow small epsilon)
+                    try:
+                        balance_snapshot = self.get_account_balance()
+                        holdings = (balance_snapshot or {}).get('crypto', {}) or {}
+                        available_base = float(holdings.get(base_currency, 0.0))
+                        epsilon = 1e-8
+                        if available_base + epsilon < quantity:
+                            logger.error(
+                                f"❌ PRE-FLIGHT CHECK FAILED: Insufficient {base_currency} balance "
+                                f"({available_base} < {quantity})"
+                            )
+                            return {
+                                "status": "unfilled",
+                                "error": "INSUFFICIENT_FUND",
+                                "message": f"Insufficient {base_currency} balance {available_base} for sell size {quantity}",
+                                "partial_fill": False,
+                                "filled_pct": 0.0
+                            }
+                    except Exception as bal_err:
+                        logger.warning(f"⚠️ Could not pre-check balance for {base_currency}: {bal_err}")
+
                     meta = self._get_product_metadata(symbol)
                     inc_candidates = []
                     if isinstance(meta, dict):
@@ -1128,14 +1147,15 @@ class CoinbaseBroker(BaseBroker):
                         if '.' in inc_str:
                             precision = max(0, min(len(inc_str.split('.')[1]), 8))
 
+                    # Final safety: ensure we have an increment so we do not emit too many decimals
+                    if base_increment is None:
+                        base_increment = 10 ** (-precision)
+
                     # Quantize size DOWN to allowed increment to avoid precision errors
                     from decimal import Decimal, ROUND_DOWN, getcontext
                     getcontext().prec = 18
-                    if base_increment:
-                        step = Decimal(str(base_increment))
-                        qty = (Decimal(str(quantity)) / step).to_integral_value(rounding=ROUND_DOWN) * step
-                    else:
-                        qty = Decimal(str(quantity)).quantize(Decimal('1.' + '0'*precision), rounding=ROUND_DOWN)
+                    step = Decimal(str(base_increment))
+                    qty = (Decimal(str(quantity)) / step).to_integral_value(rounding=ROUND_DOWN) * step
 
                     base_size_rounded = float(qty)
                     logger.info(f"   Derived base_increment={base_increment} precision={precision} → rounded={base_size_rounded}")
