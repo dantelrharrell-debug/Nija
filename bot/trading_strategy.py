@@ -225,21 +225,34 @@ To enable trading:
         # Load saved positions from previous session
         loaded_positions = self.position_manager.load_positions()
         if loaded_positions:
-            logger.info(f"💾 Validating {len(loaded_positions)} saved positions...")
-            self.open_positions = self.position_manager.validate_positions(
-                loaded_positions, self.broker
-            )
-            logger.info(f"✅ Restored {len(self.open_positions)} valid positions")
+            logger.info(f"💾 Found {len(loaded_positions)} saved positions from previous session")
+            # DON'T validate yet - validation can remove positions if market data fails
+            # Just load them directly
+            self.open_positions = loaded_positions
+            logger.info(f"✅ Loaded {len(self.open_positions)} positions from file")
         
         # 🔥 CRITICAL: Sync any orphaned Coinbase positions into tracking
-        # This catches the 12 losing positions that aren't in open_positions.json
+        # This catches losing positions that aren't in open_positions.json
+        # This runs AFTER loading saved positions, so it ADDS to them (doesn't replace)
         if not paper_mode:
             try:
+                logger.info("🔄 Syncing actual Coinbase holdings into position tracker...")
                 synced = self.sync_positions_from_coinbase()
                 if synced > 0:
-                    logger.info(f"🎯 NIJA now tracking {len(self.open_positions)} total positions (will auto-sell at SL/TP)")
+                    logger.info("=" * 70)
+                    logger.info(f"✅ POSITION SYNC COMPLETE")
+                    logger.info(f"📊 NIJA now tracking {len(self.open_positions)} total positions")
+                    logger.info(f"🛡️  Will auto-exit at stop loss ({self.stop_loss_pct*100}%) or take profit ({self.base_take_profit_pct*100}%)")
+                    logger.info(f"⏰ Checks every 2.5 minutes")
+                    logger.info("=" * 70)
+                elif len(self.open_positions) == 0:
+                    logger.info("✅ No positions to sync - portfolio is clean")
+                else:
+                    logger.info(f"✅ No new positions to sync - tracking {len(self.open_positions)} from file")
             except Exception as sync_err:
                 logger.error(f"⚠️ Position sync failed: {sync_err}")
+                import traceback
+                logger.error(traceback.format_exc())
         
         # Export trade history daily
         self._last_export_day = datetime.now().day
@@ -278,12 +291,14 @@ To enable trading:
         """
         Sync crypto holdings from Coinbase to NIJA position tracking.
         
-        This fetches all crypto holdings (the 12 losing positions) from Coinbase
-        and adds them to NIJA's position tracker so it can auto-sell them when
-        stop loss or take profit is hit.
+        This fetches all crypto holdings from Coinbase and adds them to NIJA's
+        position tracker so it can auto-sell them when stop loss or take profit is hit.
         
-        NIJA is a FAST PROFIT bot - it should take profits and move on,
-        not hold losing positions forever.
+        CRITICAL: This is called on EVERY startup to ensure bot knows about all positions.
+        Without this, the bot can't manage positions it doesn't know about.
+        
+        Returns:
+            int: Number of NEW positions synced (doesn't count existing tracked positions)
         """
         logger.info("=" * 70)
         logger.info("🔄 SYNCING COINBASE POSITIONS TO NIJA TRACKER")
@@ -298,15 +313,35 @@ To enable trading:
                 logger.info("✅ No crypto holdings found in Coinbase - portfolio is clean")
                 return 0
             
-            logger.info(f"📊 Found {len(crypto_holdings)} crypto positions to sync:")
+            logger.info(f"📊 Found {len(crypto_holdings)} crypto holdings in Coinbase")
+            
+            # Check which ones are already tracked
+            already_tracked = []
+            for currency in crypto_holdings.keys():
+                symbol = f"{currency}-USD"
+                if symbol in self.open_positions:
+                    already_tracked.append(symbol)
+            
+            if already_tracked:
+                logger.info(f"   ✅ Already tracking {len(already_tracked)} positions: {', '.join(already_tracked)}")
+            
+            if already_tracked:
+                logger.info(f"   ✅ Already tracking {len(already_tracked)} positions: {', '.join(already_tracked)}")
             
             synced_count = 0
             for currency, quantity in crypto_holdings.items():
                 if quantity < 0.00000001:  # Skip dust
                     continue
                 
-                # Get current market price using broker directly (simpler than analyze_symbol)
                 symbol = f"{currency}-USD"
+                
+                # Skip if already tracked
+                if symbol in self.open_positions:
+                    existing = self.open_positions[symbol]
+                    logger.info(f"   ⏭️  {symbol}: Already tracked @ ${existing.get('entry_price', 0):.2f}")
+                    continue
+                
+                # Get current market price using broker directly (simpler than analyze_symbol)
                 try:
                     # Fetch candles directly from broker to get current price
                     candles = self.broker.get_candles(symbol, '5m', 10)
@@ -324,6 +359,11 @@ To enable trading:
                     
                     # Calculate position value
                     position_value = quantity * current_price
+                    
+                    # Skip very small positions (< $0.50 - too small to manage)
+                    if position_value < 0.50:
+                        logger.info(f"   ⏭️  {symbol}: Position too small (${position_value:.4f}), skipping")
+                        continue
                     
                     # Since we don't know original entry price, use current price as entry
                     # This means stop loss will trigger on ANY further decline
@@ -348,27 +388,34 @@ To enable trading:
                         'highest_price': current_price,
                         'tp_stepped': False,
                         'entry_time': datetime.now().isoformat(),
-                        'synced_from_coinbase': True  # Mark as synced vs. traded by bot
+                        'timestamp': datetime.now().isoformat(),
+                        'synced_from_coinbase': True,  # Mark as synced vs. traded by bot
+                        'note': 'Auto-synced from Coinbase holdings'
                     }
                     
                     # Add to open positions
                     self.open_positions[symbol] = position
                     synced_count += 1
                     
-                    logger.info(f"   ✅ {symbol}: {quantity:.8f} @ ${current_price:.4f} = ${position_value:.2f}")
-                    logger.info(f"      Stop Loss: ${stop_loss:.4f} | Take Profit: ${take_profit:.4f}")
+                    logger.info(f"   ✅ {symbol}: {quantity:.8f} {currency} @ ${current_price:.4f} = ${position_value:.2f}")
+                    logger.info(f"      Stop Loss: ${stop_loss:.4f} (-{self.stop_loss_pct*100}%) | Take Profit: ${take_profit:.4f} (+{self.base_take_profit_pct*100}%)")
                     
                 except Exception as e:
                     logger.error(f"   ❌ {symbol}: Failed to sync - {e}")
                     continue
             
-            # Save synced positions to persistent storage
-            if synced_count > 0:
-                self.position_manager.save_positions(self.open_positions)
-                logger.info("=" * 70)
-                logger.info(f"✅ SYNCED {synced_count} POSITIONS FROM COINBASE")
-                logger.info("NIJA will now auto-sell these when SL/TP hit")
-                logger.info("=" * 70)
+            # Save ALL positions to persistent storage (both synced and previously tracked)
+            if len(self.open_positions) > 0:
+                saved = self.position_manager.save_positions(self.open_positions)
+                if saved:
+                    logger.info("=" * 70)
+                    if synced_count > 0:
+                        logger.info(f"✅ SYNCED {synced_count} NEW POSITIONS FROM COINBASE")
+                    logger.info(f"💾 Total positions tracked: {len(self.open_positions)}")
+                    logger.info(f"🛡️  NIJA will auto-exit when SL/TP hit (checks every 2.5 min)")
+                    logger.info("=" * 70)
+                else:
+                    logger.error("❌ Failed to save positions to file!")
             
             return synced_count
             
@@ -1749,6 +1796,22 @@ To enable trading:
             
             # Refresh account balance
             self.account_balance = self.get_usd_balance()
+            
+            # 🔥 CRITICAL: Re-sync positions every 10 cycles to catch orphaned positions
+            # This ensures positions opened manually or lost during restarts are tracked
+            if not hasattr(self, '_cycle_sync_counter'):
+                self._cycle_sync_counter = 0
+            self._cycle_sync_counter += 1
+            
+            if self._cycle_sync_counter >= 10:  # Every 10 cycles (25 minutes)
+                logger.info("🔄 Periodic position sync (every 10 cycles)...")
+                try:
+                    synced = self.sync_positions_from_coinbase()
+                    if synced > 0:
+                        logger.info(f"🎯 Found and synced {synced} orphaned positions!")
+                except Exception as e:
+                    logger.error(f"Periodic sync failed: {e}")
+                self._cycle_sync_counter = 0
 
             # SELL-ONLY mode support (same semantics as run_cycle)
             import os
