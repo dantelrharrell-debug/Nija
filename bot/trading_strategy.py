@@ -1743,6 +1743,19 @@ To enable trading:
             self._price_cache.clear()
             self._cache_timestamp.clear()
             
+            # CRITICAL: Auto-liquidate excess positions BEFORE scanning for new trades
+            # This ensures we never accumulate more than max_concurrent_positions
+            try:
+                current_position_count = len(self.open_positions)
+                if current_position_count > self.max_concurrent_positions:
+                    logger.error("=" * 80)
+                    logger.error(f"🚨 EMERGENCY: {current_position_count} positions exceed limit of {self.max_concurrent_positions}")
+                    logger.error("   Auto-liquidating excess positions NOW before continuing...")
+                    logger.error("=" * 80)
+                    self.close_excess_positions(max_positions=self.max_concurrent_positions)
+            except Exception as e:
+                logger.error(f"Error during emergency position check: {e}")
+            
             logger.info("🔁 Running trading loop iteration")
             self.account_balance = self.get_usd_balance()
             logger.info(f"USD Balance (get_usd_balance): ${self.account_balance:,.2f}")
