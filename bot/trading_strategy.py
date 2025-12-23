@@ -356,8 +356,10 @@ To enable trading:
                 logger.info(f"   ✅ Already tracking {len(already_tracked)} positions: {', '.join(already_tracked)}")
             
             synced_count = 0
-            for currency, quantity in crypto_holdings.items():
-                if quantity < 0.00000001:  # Skip dust
+            for currency, usd_value in crypto_holdings.items():
+                # CRITICAL FIX: crypto_holdings contains USD VALUES, not crypto quantities!
+                # Example: {'BTC': 17.70} means $17.70 worth of BTC, not 17.7 BTC
+                if usd_value < 0.00000001:  # Skip dust
                     continue
                 
                 symbol = f"{currency}-USD"
@@ -384,8 +386,10 @@ To enable trading:
                         logger.warning(f"   ⚠️ {symbol}: Invalid price {current_price}, skipping")
                         continue
                     
-                    # Calculate position value
-                    position_value = quantity * current_price
+                    # CRITICAL FIX: Calculate actual crypto quantity from USD value
+                    # crypto_holdings gives us USD value, we need to convert to quantity
+                    quantity = usd_value / current_price  # e.g., $17.70 / $87,000 = 0.0002034 BTC
+                    position_value = usd_value  # Use the USD value we already have
                     
                     # Skip very small positions (< $0.50 - too small to manage)
                     if position_value < 0.50:
