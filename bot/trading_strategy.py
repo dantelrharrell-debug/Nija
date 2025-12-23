@@ -203,8 +203,8 @@ To enable trading:
         
         # Track open positions and trade history
         self.open_positions = {}
-        # ACTIVE TRADING MODE: 3 positions for quick turnover
-        self.max_concurrent_positions = 8  # 8 concurrent positions for maximum profit = equal capital per trade
+        # ACTIVE TRADING MODE: tighter cap to stop runaway accumulation
+        self.max_concurrent_positions = 7  # hard cap; emergency close and buy guards enforce this
         self.total_trades_executed = 0
         # Risk/exit tuning - CONSERVATIVE MODE TO STOP BLEEDING
         self.stop_loss_pct = 0.03  # 3% stop loss (WIDER protection, less whipsaws)
@@ -249,6 +249,20 @@ To enable trading:
                     logger.info("✅ No positions to sync - portfolio is clean")
                 else:
                     logger.info(f"✅ No new positions to sync - tracking {len(self.open_positions)} from file")
+
+                # Immediately enforce position cap after sync to avoid runaway holdings on startup
+                try:
+                    current_count = len(self.open_positions)
+                    if current_count > self.max_concurrent_positions:
+                        logger.error("=" * 80)
+                        logger.error(
+                            f"🚨 STARTUP OVERAGE: {current_count} positions exceed cap of {self.max_concurrent_positions}. "
+                            "Auto-closing extras now."
+                        )
+                        logger.error("=" * 80)
+                        self.close_excess_positions(max_positions=self.max_concurrent_positions)
+                except Exception as e:
+                    logger.error(f"Error during startup overage enforcement: {e}")
             except Exception as sync_err:
                 logger.error(f"⚠️ Position sync failed: {sync_err}")
                 import traceback
@@ -1542,6 +1556,40 @@ To enable trading:
             logger.error(f"Rebalance error: {e}")
             self.rebalanced_once = True
 
+    def _get_price_with_retry(self, symbol: str, attempts: int = 3, base_delay: float = 1.0):
+        """Best-effort price fetch for emergency liquidation paths.
+
+        Tries analysis-derived price first (uses cached candles), then falls back
+        to broker.get_current_price. Returns None if all attempts fail.
+        """
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                analysis = self.analyze_symbol(symbol)
+                price = float(analysis.get('price') or 0)
+                if price > 0:
+                    return price
+            except Exception as e:
+                last_error = e
+                logger.debug(f"Price fetch via analysis failed for {symbol} (attempt {attempt}/{attempts}): {e}")
+
+            try:
+                price = float(self.broker.get_current_price(symbol) or 0)
+                if price > 0:
+                    return price
+            except Exception as e:
+                last_error = e
+                logger.debug(f"Price fetch via broker failed for {symbol} (attempt {attempt}/{attempts}): {e}")
+
+            if attempt < attempts:
+                time.sleep(base_delay * attempt)
+
+        if last_error:
+            logger.warning(f"⚠️ Unable to fetch price for {symbol} after {attempts} attempts: {last_error}")
+        else:
+            logger.warning(f"⚠️ Unable to fetch price for {symbol} after {attempts} attempts (no error raised)")
+        return None
+
     def close_excess_positions(self, max_positions=8):
         """
         Close excess positions if we exceed the max concurrent limit.
@@ -1562,25 +1610,29 @@ To enable trading:
         
         for symbol, position in self.open_positions.items():
             try:
-                analysis = self.analyze_symbol(symbol)
-                current_price = analysis.get('price')
-                if not current_price:
-                    continue
+                current_price = self._get_price_with_retry(symbol)
+                price_known = current_price is not None and current_price > 0
                 
                 entry_price = position['entry_price']
                 side = position['side']
                 
                 # Calculate P&L %
-                if side == 'BUY':
-                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                if price_known:
+                    if side == 'BUY':
+                        pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                    else:
+                        pnl_pct = ((entry_price - current_price) / entry_price) * 100
                 else:
-                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                    # If price is unknown, force-close these first by treating P&L as very low
+                    pnl_pct = -999.0
+                    current_price = None
                 
                 positions_by_pnl.append({
                     'symbol': symbol,
                     'position': position,
                     'current_price': current_price,
-                    'pnl_pct': pnl_pct
+                    'pnl_pct': pnl_pct,
+                    'price_known': price_known
                 })
             except Exception as e:
                 logger.error(f"Error analyzing {symbol} for overage closure: {e}")
@@ -1598,8 +1650,12 @@ To enable trading:
             position = p['position']
             current_price = p['current_price']
             pnl_pct = p['pnl_pct']
+            price_known = p.get('price_known', False)
             
-            logger.info(f"🔴 CLOSING EXCESS: {symbol} (P&L: {pnl_pct:+.2f}%)")
+            if price_known:
+                logger.info(f"🔴 CLOSING EXCESS: {symbol} (P&L: {pnl_pct:+.2f}%)")
+            else:
+                logger.warning(f"🔴 CLOSING EXCESS WITHOUT PRICE: {symbol} (P&L unknown; proceeding with market exit)")
             
             try:
                 # Get the crypto quantity we actually hold
@@ -1609,17 +1665,36 @@ To enable trading:
                 # Exit: opposite of entry side
                 exit_signal = 'SELL' if side == 'BUY' else 'BUY'
                 
-                # Place market exit order
-                result = self.broker.place_market_order(
-                    symbol,
-                    exit_signal.lower(),
-                    quantity,
-                    size_type='base' if exit_signal == 'SELL' else 'quote'
-                )
+                # Place market exit order with retries
+                result = None
+                for attempt in range(1, 4):
+                    try:
+                        result = self.broker.place_market_order(
+                            symbol,
+                            exit_signal.lower(),
+                            quantity,
+                            size_type='base' if exit_signal == 'SELL' else 'quote'
+                        )
+                        status = (result or {}).get('status', 'unknown')
+                        if status in ['filled', 'partial']:
+                            break
+                        logger.warning(
+                            f"⚠️ Excess close attempt {attempt}/3 for {symbol} returned status={status}; retrying..."
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"⚠️ Excess close attempt {attempt}/3 for {symbol} failed: {e}"
+                        )
+                    if attempt < 3:
+                        time.sleep(1 * attempt)
                 
-                if result and result.get('status') == 'filled':
-                    pnl_usd = position['size_usd'] * (pnl_pct / 100)
-                    logger.info(f"✅ Excess position closed: {symbol} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
+                if result and result.get('status') in ['filled', 'partial']:
+                    pnl_usd = None
+                    if price_known:
+                        pnl_usd = position['size_usd'] * (pnl_pct / 100)
+                        logger.info(f"✅ Excess position closed: {symbol} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
+                    else:
+                        logger.info(f"✅ Excess position closed: {symbol} | P&L unknown (price unavailable)")
                     
                     # Remove from tracking
                     del self.open_positions[symbol]
