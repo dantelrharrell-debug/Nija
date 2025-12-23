@@ -1059,14 +1059,35 @@ class CoinbaseBroker(BaseBroker):
                         'ATOM': 4,
                         'LTC': 8,
                         'BCH': 8,
-                        'LINK': 6,
-                        'IMX': 6,
-                        'XLM': 6,
-                        'CRV': 6,
+                        'LINK': 4,
+                        'IMX': 4,
+                        'XLM': 4,
+                        'CRV': 4,
                         'APT': 4,
-                        'ICP': 6,
+                        'ICP': 5,
                         'NEAR': 5,
-                        'AAVE': 6,
+                        'AAVE': 4,
+                    }
+
+                    fallback_increment_map = {
+                        'XRP': 0.01,
+                        'DOGE': 0.01,
+                        'ADA': 0.01,
+                        'SHIB': 1.0,
+                        'BTC': 0.00000001,
+                        'ETH': 0.000001,
+                        'SOL': 0.0001,
+                        'ATOM': 0.0001,
+                        'LTC': 0.00000001,
+                        'BCH': 0.00000001,
+                        'LINK': 0.001,
+                        'IMX': 0.0001,
+                        'XLM': 0.0001,
+                        'CRV': 0.0001,
+                        'APT': 0.0001,
+                        'ICP': 0.00001,
+                        'NEAR': 0.00001,
+                        'AAVE': 0.0001,
                     }
 
                     precision = max(0, min(precision_map.get(base_currency, 2), 8))
@@ -1099,6 +1120,13 @@ class CoinbaseBroker(BaseBroker):
                                 break
                         except Exception as inc_err:
                             logger.warning(f"⚠️ Could not parse base_increment for {symbol}: {inc_err}")
+
+                    # If API metadata did not provide an increment, use a conservative fallback per asset
+                    if base_increment is None and base_currency in fallback_increment_map:
+                        base_increment = fallback_increment_map[base_currency]
+                        inc_str = f"{base_increment:.16f}".rstrip('0').rstrip('.')
+                        if '.' in inc_str:
+                            precision = max(0, min(len(inc_str.split('.')[1]), 8))
 
                     # Quantize size DOWN to allowed increment to avoid precision errors
                     from decimal import Decimal, ROUND_DOWN, getcontext
@@ -1259,9 +1287,37 @@ class CoinbaseBroker(BaseBroker):
                 
             return {"status": "error", "error": f"{error_type}: {error_msg}"}
 
-    def close_position(self, symbol: str, base_size: float) -> Dict:
-        """Close a position by selling the specified base size."""
-        return self.place_market_order(symbol, 'sell', base_size, size_type='base')
+    def close_position(
+        self,
+        symbol: str,
+        base_size: Optional[float] = None,
+        *,
+        side: str = 'sell',
+        quantity: Optional[float] = None,
+        size_type: str = 'base',
+        **_: Dict
+    ) -> Dict:
+        """Close a position by submitting a market order.
+
+        Accepts both legacy (symbol, base_size) calls and newer keyword-based
+        calls that provide ``side``/``quantity``/``size_type``. Defaults to
+        selling a base-size amount when only ``base_size`` is provided.
+        """
+        # Prefer explicitly provided quantity; fall back to legacy base_size
+        size = quantity if quantity is not None else base_size
+        if size is None:
+            raise ValueError("close_position requires a quantity or base_size")
+
+        try:
+            return self.place_market_order(
+                symbol,
+                side.lower() if side else 'sell',
+                size,
+                size_type=size_type or 'base'
+            )
+        except TypeError:
+            # Graceful fallback if upstream signatures drift
+            return self.place_market_order(symbol, 'sell', size, size_type='base')
     
     def get_positions(self) -> List[Dict]:
         """Get open positions (Coinbase doesn't track positions, returns accounts)"""
