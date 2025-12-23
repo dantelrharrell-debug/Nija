@@ -938,6 +938,10 @@ class CoinbaseBroker(BaseBroker):
 
     def _get_product_metadata(self, symbol: str) -> Dict:
         """Fetch and cache product metadata (base_increment, quote_increment)."""
+        # Ensure cache exists (defensive programming)
+        if not hasattr(self, '_product_cache'):
+            self._product_cache = {}
+        
         if symbol in self._product_cache:
             return self._product_cache[symbol]
 
