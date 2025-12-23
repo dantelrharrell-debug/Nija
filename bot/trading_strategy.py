@@ -39,17 +39,25 @@ class TradingStrategy:
     """
     NIJA Ultimate Trading Strategy with APEX v7.1
     
-    **15-DAY GOAL MODE**: $55 → $5,000 in 15 days
-    - ULTRA AGGRESSIVE: 8-40% positions, 8 concurrent trades
+    **PROFITABILITY-FIRST MODE**: Only buy high-probability winning trades
+    - Strict entry filters: RSI < 70, Score >= 70, Not at recent highs
+    - Quality over quantity: Reject marginal setups
     - 50 markets, 15-second scans, AI momentum filtering
     - Auto-adjusts risk as balance grows ($300, $1K, $3K milestones)
     
     Features:
     - APEX v7.1 strategy engine with dual RSI indicators
     - Multi-market scanning (Bitcoin, Ethereum, and 48+ altcoins)
+    - Profitability filters: NO overbought entries, NO low-quality signals
     - Advanced entry/exit logic with trailing systems
     - Risk management and position sizing
     - Trade journal logging and performance tracking
+    
+    **NEW: PROFITABILITY FILTERS (Dec 2025)**
+    - ❌ Block RSI > 70 (overbought - will reverse)
+    - ❌ Block score < 70 (low probability)
+    - ❌ Block buying near 20-candle high (chasing)
+    - ✅ Only buy strong dips in confirmed uptrends
     """
     
     def __init__(self):
@@ -732,13 +740,46 @@ To enable trading:
             if direction == 'uptrend':
                 long_signal, long_score, long_reason = self.strategy.check_long_entry(df, indicators)
                 if long_signal:
+                    # PROFITABILITY FILTER: Don't buy if RSI is overbought (> 70)
+                    # This prevents buying at tops that will immediately reverse
+                    rsi_14 = indicators.get('rsi_14', 50)
+                    if rsi_14 > 70:
+                        return {
+                            'symbol': symbol,
+                            'signal': 'HOLD',
+                            'direction': 'uptrend',
+                            'reason': f'RSI overbought ({rsi_14:.1f} > 70) - waiting for pullback'
+                        }
+                    
+                    # PROFITABILITY FILTER: Require minimum score for entry
+                    # Only buy trades with score >= 70 (high probability)
+                    if long_score < 70:
+                        return {
+                            'symbol': symbol,
+                            'signal': 'HOLD',
+                            'direction': 'uptrend',
+                            'reason': f'Score too low ({long_score:.1f} < 70) - waiting for stronger signal'
+                        }
+                    
+                    # PROFITABILITY FILTER: Check price is not at recent high
+                    # Don't buy if price is within 2% of 20-candle high (avoid chasing)
+                    recent_high = df['high'].tail(20).max()
+                    current_price = df['close'].iloc[-1]
+                    if current_price >= recent_high * 0.98:
+                        return {
+                            'symbol': symbol,
+                            'signal': 'HOLD',
+                            'direction': 'uptrend',
+                            'reason': f'Too close to recent high (${current_price:.4f} vs ${recent_high:.4f}) - waiting for dip'
+                        }
+                    
                     return {
                         'symbol': symbol,
                         'signal': 'BUY',
                         'direction': 'uptrend',
                         'score': long_score,
-                        'price': df['close'].iloc[-1],
-                        'reason': long_reason
+                        'price': current_price,
+                        'reason': f'{long_reason} | RSI:{rsi_14:.1f} | Score:{long_score:.1f}'
                     }
             elif direction == 'downtrend':
                 # DISABLED: Coinbase Advanced Trade doesn't support short selling on spot markets
@@ -813,6 +854,25 @@ To enable trading:
             
             if signal not in ['BUY', 'SELL']:
                 return False
+            
+            # PROFITABILITY FILTER: Only execute high-quality BUY signals
+            # Reject trades with low scores to avoid losing trades
+            if signal == 'BUY':
+                score = analysis.get('score', 0)
+                if score < 70:
+                    logger.warning(
+                        f"🛑 BUY blocked for {symbol}: Quality score {score:.1f} < 70. "
+                        "Only taking high-probability trades."
+                    )
+                    return False
+                
+                # Additional check: Verify the reason contains positive indicators
+                reason = analysis.get('reason', '').lower()
+                if 'overbought' in reason or 'high' in reason:
+                    logger.warning(
+                        f"🛑 BUY blocked for {symbol}: Negative signal in reason: {analysis.get('reason')}"
+                    )
+                    return False
             
             # Check time between trades
             if self.last_trade_time:
@@ -891,12 +951,12 @@ To enable trading:
             # BUY GUARD: Require a minimum USD cash threshold before allowing any BUY
             # Prevents immediate re-use of tiny freed cash amounts after manual sells
             try:
-                min_cash_to_buy = float(os.getenv("MIN_CASH_TO_BUY", "5.0"))
+                min_cash_to_buy = float(os.getenv("MIN_CASH_TO_BUY", "10.0"))  # Raised to $10 for better entries
             except Exception:
-                min_cash_to_buy = 5.0
+                min_cash_to_buy = 10.0
             if signal == 'BUY' and live_balance < min_cash_to_buy:
-                logger.info(
-                    f"⏸️  BUY blocked: USD balance ${live_balance:.2f} < min ${min_cash_to_buy:.2f}. "
+                logger.warning(
+                    f"🛑 BUY blocked: USD balance ${live_balance:.2f} < min ${min_cash_to_buy:.2f}. "
                     f"Waiting to accumulate before opening new positions."
                 )
                 return False
