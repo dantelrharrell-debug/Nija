@@ -1641,14 +1641,20 @@ To enable trading:
                             logger.error(f"❌ Emergency close skipped for {symbol}: no valid price available")
                             continue
                         logger.warning(f"🚨 EMERGENCY CLOSE: {symbol} @ ${current_price:.4f}")
-                        
-                        # Execute market sell immediately
-                        order = self.broker.close_position(
+
+                        # Execute market sell immediately using stored crypto quantity
+                        crypto_amount = position.get('crypto_quantity') or position.get('quantity') or 0.0
+                        if crypto_amount <= 0:
+                            logger.error(f"❌ Emergency close skipped for {symbol}: missing crypto_quantity")
+                            continue
+
+                        order = self.broker.place_market_order(
                             symbol=symbol,
-                            side='SELL' if position['side'] == 'BUY' else 'BUY',
-                            current_price=current_price
+                            side='sell',
+                            quantity=crypto_amount,
+                            size_type='base'
                         )
-                        
+
                         if order and order.get('status') in ['filled', 'partial']:
                             # Calculate P&L
                             entry_price = position['entry_price']
@@ -1656,16 +1662,16 @@ To enable trading:
                                 pnl_pct = ((current_price - entry_price) / entry_price) * 100
                             else:
                                 pnl_pct = ((entry_price - current_price) / entry_price) * 100
-                            
+
                             logger.warning(f"✅ Emergency close successful: {symbol} ({pnl_pct:+.2f}% P&L)")
-                            
+
                             # Record exit
                             self.analytics.record_exit(
                                 symbol=symbol,
                                 exit_price=current_price,
                                 exit_reason="EMERGENCY: Position limit exceeded"
                             )
-                            
+
                             # Remove from tracking
                             del self.open_positions[symbol]
                         else:

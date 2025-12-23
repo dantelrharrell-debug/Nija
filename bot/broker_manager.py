@@ -1051,15 +1051,25 @@ class CoinbaseBroker(BaseBroker):
                     precision_map = {
                         'XRP': 2,
                         'DOGE': 2,
-                        'SHIB': 0,
                         'ADA': 2,
-                        'ATOM': 4,
-                        'SOL': 4,
+                        'SHIB': 0,
                         'BTC': 8,
                         'ETH': 6,
+                        'SOL': 4,
+                        'ATOM': 4,
+                        'LTC': 8,
+                        'BCH': 8,
+                        'LINK': 6,
+                        'IMX': 6,
+                        'XLM': 6,
+                        'CRV': 6,
+                        'APT': 4,
+                        'ICP': 6,
+                        'NEAR': 5,
+                        'AAVE': 6,
                     }
 
-                    precision = precision_map.get(base_currency, 8)
+                    precision = max(0, min(precision_map.get(base_currency, 2), 8))
                     base_increment = None
 
                     meta = self._get_product_metadata(symbol)
@@ -1069,7 +1079,14 @@ class CoinbaseBroker(BaseBroker):
                             meta.get('base_increment'),
                             meta.get('base_increment_decimal'),
                             meta.get('base_increment_value'),
+                            meta.get('base_min_size'),
                         ]
+                        if meta.get('base_increment_exponent') is not None:
+                            try:
+                                exp_val = float(meta.get('base_increment_exponent'))
+                                inc_candidates.append(10 ** exp_val)
+                            except Exception as exp_err:
+                                logger.warning(f"⚠️ Could not parse base_increment_exponent for {symbol}: {exp_err}")
                     for inc in inc_candidates:
                         if not inc:
                             continue
@@ -1078,7 +1095,7 @@ class CoinbaseBroker(BaseBroker):
                             if base_increment > 0:
                                 inc_str = f"{base_increment:.16f}".rstrip('0').rstrip('.')
                                 if '.' in inc_str:
-                                    precision = max(0, len(inc_str.split('.')[1]))
+                                    precision = max(0, min(len(inc_str.split('.')[1]), 8))
                                 break
                         except Exception as inc_err:
                             logger.warning(f"⚠️ Could not parse base_increment for {symbol}: {inc_err}")
