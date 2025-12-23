@@ -203,8 +203,11 @@ To enable trading:
         
         # Track open positions and trade history
         self.open_positions = {}
-        # ACTIVE TRADING MODE: tighter cap to stop runaway accumulation
-        self.max_concurrent_positions = 7  # hard cap; emergency close and buy guards enforce this
+        # ACTIVE TRADING MODE: configurable cap to stop runaway accumulation
+        try:
+            self.max_concurrent_positions = int(os.getenv("MAX_CONCURRENT_POSITIONS", "8") or 8)
+        except Exception:
+            self.max_concurrent_positions = 8
         self.total_trades_executed = 0
         # Risk/exit tuning - CONSERVATIVE MODE TO STOP BLEEDING
         self.stop_loss_pct = 0.03  # 3% stop loss (WIDER protection, less whipsaws)
@@ -222,6 +225,14 @@ To enable trading:
         # ULTRA AGGRESSIVE: Scan all 50 markets for maximum opportunities
         self.limit_to_top_liquidity = False
         
+        # Manual-sell reentry protection
+        try:
+            self.reentry_cooldown_minutes = int(os.getenv("REENTRY_COOLDOWN_MINUTES", "60") or 60)
+        except Exception:
+            self.reentry_cooldown_minutes = 60
+        self.recent_manual_sells = {}  # symbol -> iso timestamp of last detected manual sell
+        self._last_holdings_snapshot = {}
+
         # Load saved positions from previous session
         loaded_positions = self.position_manager.load_positions()
         if loaded_positions:
@@ -323,7 +334,7 @@ To enable trading:
         try:
             # Get current balance info which includes crypto holdings
             balance_info = self.broker.get_account_balance()
-            crypto_holdings = balance_info.get('crypto', {})
+            crypto_holdings = balance_info.get('crypto', {}) if isinstance(balance_info, dict) else {}
             
             if not crypto_holdings:
                 logger.info("✅ No crypto holdings found in Coinbase - portfolio is clean")
@@ -440,6 +451,53 @@ To enable trading:
             import traceback
             logger.error(traceback.format_exc())
             return 0
+
+    def _update_manual_sell_snapshot(self):
+        """
+        Detect manual sells by comparing current Coinbase holdings to the last snapshot.
+        When a previously-held symbol's quantity drops below dust threshold without a bot-driven exit,
+        record a cooldown to prevent immediate re-entry.
+
+        Cooldown duration is controlled by REENTRY_COOLDOWN_MINUTES.
+        """
+        try:
+            balance_info = self.broker.get_account_balance()
+            crypto_holdings = balance_info.get('crypto', {}) if isinstance(balance_info, dict) else {}
+
+            # Housekeeping: remove expired cooldowns
+            now = datetime.now()
+            expired = []
+            for sym, ts in self.recent_manual_sells.items():
+                try:
+                    t = datetime.fromisoformat(ts)
+                except Exception:
+                    expired.append(sym)
+                    continue
+                if (now - t) > timedelta(minutes=self.reentry_cooldown_minutes):
+                    expired.append(sym)
+            for sym in expired:
+                self.recent_manual_sells.pop(sym, None)
+
+            # Compare snapshot to current
+            DUST = 0.00000001
+            for currency, prev_qty in (self._last_holdings_snapshot or {}).items():
+                if prev_qty > DUST:
+                    current_qty = float(crypto_holdings.get(currency, 0.0) or 0.0)
+                    if current_qty <= DUST:
+                        symbol = f"{currency}-USD"
+                        # If bot still tracks the position, skip (it will manage the exit)
+                        if symbol in self.open_positions:
+                            continue
+                        # Record manual sell cooldown
+                        self.recent_manual_sells[symbol] = now.isoformat()
+                        logger.warning(
+                            f"🛡️ Manual sell detected for {symbol}. Blocking re-entry for {self.reentry_cooldown_minutes} minutes."
+                        )
+
+            # Update snapshot with current holdings
+            self._last_holdings_snapshot = {k: float(v) for k, v in crypto_holdings.items()}
+        except Exception as e:
+            logger.debug(f"Manual sell snapshot update failed: {e}")
 
     
     def _fetch_all_markets(self) -> list:
@@ -720,6 +778,21 @@ To enable trading:
         try:
             symbol = analysis['symbol']
             signal = analysis['signal']
+
+            # Re-entry cooldown after manual sells
+            if signal == 'BUY' and symbol in self.recent_manual_sells:
+                try:
+                    last = datetime.fromisoformat(self.recent_manual_sells[symbol])
+                    remaining = self.reentry_cooldown_minutes - int((time.time() - last.timestamp())/60)
+                    if remaining > 0:
+                        logger.info(
+                            f"⏸️ BUY blocked for {symbol}: manual sell cooldown active ({remaining} min remaining)."
+                        )
+                        return False
+                except Exception:
+                    # If parsing fails, be safe and block this cycle
+                    logger.info(f"⏸️ BUY blocked for {symbol}: manual sell cooldown active.")
+                    return False
             
             # Optional: previously protected positions. Allow trading unless explicitly disabled via env
             disable_protected = str(os.getenv("DISABLE_PROTECTED_POSITIONS", "1")).lower() in ("1", "true", "yes")
@@ -776,7 +849,7 @@ To enable trading:
             if signal == 'BUY':
                 try:
                     balance_info = self.broker.get_account_balance()
-                    actual_crypto_holdings = balance_info.get('crypto', {})
+                    actual_crypto_holdings = balance_info.get('crypto', {}) if isinstance(balance_info, dict) else {}
                     # Count holdings with non-dust quantities
                     actual_position_count = sum(1 for qty in actual_crypto_holdings.values() if qty > 0.00000001)
                     
@@ -1675,7 +1748,23 @@ To enable trading:
                 try:
                     # Get the crypto quantity we actually hold
                     side = position['side']
-                    quantity = position.get('crypto_quantity', position['size_usd'] / position['entry_price'])
+                    # Prefer stored crypto_quantity; if missing or zero, fetch from Coinbase holdings
+                    quantity = float(position.get('crypto_quantity') or 0.0)
+                    if quantity <= 0:
+                        try:
+                            bal = self.broker.get_account_balance()
+                            holdings = bal.get('crypto', {}) if isinstance(bal, dict) else {}
+                            base = symbol.split('-')[0]
+                            quantity = float(holdings.get(base, 0.0) or 0.0)
+                        except Exception as qerr:
+                            logger.warning(f"⚠️ Could not resolve quantity for {symbol} from holdings: {qerr}")
+                    # If still zero, this is likely a stale tracked position — drop it from tracking
+                    if quantity <= 0:
+                        logger.warning(f"🧹 Removing stale tracked position with zero holdings: {symbol}")
+                        del self.open_positions[symbol]
+                        self.position_manager.save_positions(self.open_positions)
+                        successfully_closed += 1
+                        continue
                     
                     # Exit: opposite of entry side
                     exit_signal = 'SELL' if side == 'BUY' else 'BUY'
@@ -1860,6 +1949,13 @@ To enable trading:
             self.account_balance = self.get_usd_balance()
             logger.info(f"USD Balance (get_usd_balance): ${self.account_balance:,.2f}")
 
+            # SELL-ONLY emergency lock support
+            emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+            trading_locked = os.path.exists(emergency_lock_file)
+
+            # Update manual sell snapshot to enforce re-entry cooldowns
+            self._update_manual_sell_snapshot()
+
             # DISABLED: One-time holdings rebalance
             # Rebalancing was liquidating crypto holdings and losing money to fees
             # Now that circuit breaker checks total account value, we don't need auto-liquidation
@@ -1910,7 +2006,7 @@ To enable trading:
             
             # *** CLOSE EXCESS POSITIONS IF OVER LIMIT ***
             # If we have more than 8 positions, close the weakest ones for profit
-            self.close_excess_positions(max_positions=8)
+            self.close_excess_positions(max_positions=self.max_concurrent_positions)
 
             # Guard: if no trading balance, do not attempt NEW orders
             # Still allow sell-only position management when locked
@@ -2006,11 +2102,11 @@ To enable trading:
             logger.info(f"🎯 Analyzing {len(self.trading_pairs)} markets for signals...")
             signals_found = 0
             trades_executed = 0
-            MAX_CONCURRENT_POSITIONS = 8
+            MAX_CONCURRENT_POSITIONS = self.max_concurrent_positions
             current_positions = len(self.open_positions)
             
             for symbol in self.trading_pairs:
-                # ENFORCE: Don't open new positions if we already have 8 open
+                # ENFORCE: Don't open new positions if we already have max open
                 if current_positions + trades_executed >= MAX_CONCURRENT_POSITIONS:
                     logger.info(f"⛔ Max {MAX_CONCURRENT_POSITIONS} concurrent positions reached ({current_positions} open + {trades_executed} just opened). Skipping new entries.")
                     break
@@ -2055,6 +2151,9 @@ To enable trading:
             
             # Refresh account balance
             self.account_balance = self.get_usd_balance()
+
+            # Update manual sell snapshot to enforce re-entry cooldowns
+            self._update_manual_sell_snapshot()
             
             # 🔥 CRITICAL: Re-sync positions every 10 cycles to catch orphaned positions
             # This ensures positions opened manually or lost during restarts are tracked
@@ -2096,7 +2195,7 @@ To enable trading:
                 # Manage/exit existing positions using current rules
                 self.manage_open_positions()
                 # Optionally trim to target exposure
-                self.close_excess_positions(max_positions=8)
+                self.close_excess_positions(max_positions=self.max_concurrent_positions)
                 return
             
             # Check if account has grown to new stage and update strategy
