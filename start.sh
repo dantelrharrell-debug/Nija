@@ -111,7 +111,17 @@ if [ -f bot.py ]; then
 fi
 
 # Start bot.py with full error output (LIVE)
-$PY -u bot.py 2>&1 || {
-    echo "❌ Bot crashed! Exit code: $?"
-    exit 1
-}
+$PY -u bot.py 2>&1
+status=$?
+
+# Treat SIGTERM (143) as graceful to avoid restart loops during platform stop/redeploy
+if [ "$status" -eq 0 ]; then
+    exit 0
+fi
+if [ "$status" -eq 143 ]; then
+    echo "⚠️ Bot received SIGTERM (143). Treating as graceful stop."
+    exit 0
+fi
+
+echo "❌ Bot crashed! Exit code: $status"
+exit 1

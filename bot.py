@@ -10,6 +10,7 @@ import sys
 import time
 import logging
 from logging.handlers import RotatingFileHandler
+import signal
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -38,8 +39,17 @@ if not logger.hasHandlers():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
+def _handle_signal(sig, frame):
+    logger.info(f"Received signal {sig}, shutting down gracefully")
+    sys.exit(0)
+
+
 def main():
     """Main entry point for NIJA trading bot"""
+    # Graceful shutdown handlers to avoid non-zero exits on platform terminations
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     logger.info("=" * 70)
     logger.info("NIJA TRADING BOT - APEX v7.1")
     logger.info("Branch: %s", os.getenv("GIT_BRANCH", "unknown"))
