@@ -1366,6 +1366,57 @@ class BaseBroker(ABC):
         """Coinbase supports crypto only"""
         return asset_class.lower() == "crypto"
 
+
+# Coinbase Broker - extends BaseBroker which has all Coinbase implementation
+class CoinbaseBroker(BaseBroker):
+    """Coinbase Advanced Trade broker implementation"""
+    
+    def __init__(self):
+        """Initialize Coinbase broker"""
+        super().__init__(BrokerType.COINBASE)
+        self.client = None
+        self.portfolio_uuid = None
+    
+    def connect(self) -> bool:
+        """Connect to Coinbase Advanced Trade API"""
+        try:
+            from coinbase.rest import RESTClient
+            import os
+            
+            # Get credentials from environment
+            api_key = os.getenv("COINBASE_API_KEY")
+            api_secret = os.getenv("COINBASE_API_SECRET")
+            
+            if not api_key or not api_secret:
+                logging.error("❌ Coinbase API credentials not found")
+                return False
+            
+            # Initialize REST client
+            self.client = RESTClient(api_key=api_key, api_secret=api_secret)
+            
+            # Test connection by fetching accounts
+            try:
+                accounts_resp = self.client.get_accounts()
+                self.connected = True
+                logging.info("✅ Connected to Coinbase Advanced Trade API")
+                
+                # Portfolio detection (uses inherited method from BaseBroker)
+                self._detect_portfolio()
+                
+                return True
+                
+            except Exception as e:
+                logging.error(f"❌ Failed to verify Coinbase connection: {e}")
+                return False
+                
+        except ImportError:
+            logging.error("❌ Coinbase SDK not installed. Run: pip install coinbase-advanced-py")
+            return False
+        except Exception as e:
+            logging.error(f"❌ Coinbase connection error: {e}")
+            return False
+
+
 class AlpacaBroker(BaseBroker):
     """Alpaca integration for stocks"""
     

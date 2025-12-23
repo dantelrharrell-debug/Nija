@@ -26,7 +26,7 @@ if not logger.hasHandlers():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-from broker_integration import CoinbaseBrokerAdapter as CoinbaseBroker
+from broker_manager import CoinbaseBroker
 from mock_broker import MockBroker
 from nija_apex_strategy_v71 import NIJAApexStrategyV71
 from adaptive_growth_manager import AdaptiveGrowthManager
