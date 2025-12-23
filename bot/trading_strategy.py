@@ -756,6 +756,19 @@ To enable trading:
             # Refresh balance right before sizing to avoid using stale consumer funds
             live_balance = self.get_usd_balance()
             self.account_balance = live_balance
+
+            # BUY GUARD: Require a minimum USD cash threshold before allowing any BUY
+            # Prevents immediate re-use of tiny freed cash amounts after manual sells
+            try:
+                min_cash_to_buy = float(os.getenv("MIN_CASH_TO_BUY", "5.0"))
+            except Exception:
+                min_cash_to_buy = 5.0
+            if signal == 'BUY' and live_balance < min_cash_to_buy:
+                logger.info(
+                    f"⏸️  BUY blocked: USD balance ${live_balance:.2f} < min ${min_cash_to_buy:.2f}. "
+                    f"Waiting to accumulate before opening new positions."
+                )
+                return False
             
             # Calculate position size using Adaptive Growth Manager
             position_size_pct = self.growth_manager.get_position_size_pct()
@@ -790,12 +803,15 @@ To enable trading:
             # Total account value = USD cash + crypto value
             total_account_value = live_balance + total_crypto_value
             
-            if total_account_value < MINIMUM_TRADING_BALANCE:
+            # Apply the minimum-account-value circuit breaker ONLY to BUYs; allow SELLs to always proceed
+            if total_account_value < MINIMUM_TRADING_BALANCE and signal == 'BUY':
                 logger.error("="*80)
-                logger.error(f"⛔ TRADING HALTED: Total account value (${total_account_value:.2f}) below minimum (${MINIMUM_TRADING_BALANCE:.2f})")
+                logger.error(
+                    f"⛔ BUY HALTED: Total account value (${total_account_value:.2f}) below minimum "
+                    f"(${MINIMUM_TRADING_BALANCE:.2f})"
+                )
                 logger.error(f"   USD Cash: ${live_balance:.2f} | Crypto Value: ${total_crypto_value:.2f}")
-                logger.error(f"   Positions would be unprofitable due to Coinbase fees (0.5-0.6%)")
-                logger.error(f"   Bot will pause and wait for deposit to resume trading")
+                logger.error(f"   BUYs paused to avoid fee drag; waiting for additional funds")
                 logger.error("="*80)
                 return False
             
@@ -1779,9 +1795,9 @@ To enable trading:
                     try:
                         current_price = self.broker.get_current_price(symbol)
                         if not current_price or current_price <= 0:
-                            logger.error(f"❌ Emergency close skipped for {symbol}: no valid price available")
-                            continue
-                        logger.warning(f"🚨 EMERGENCY CLOSE: {symbol} @ ${current_price:.4f}")
+                            logger.warning(f"🚨 EMERGENCY CLOSE: {symbol} @ price unknown (proceeding market sell)")
+                        else:
+                            logger.warning(f"🚨 EMERGENCY CLOSE: {symbol} @ ${current_price:.4f}")
 
                         # Execute market sell immediately using stored crypto quantity
                         crypto_amount = position.get('crypto_quantity') or position.get('quantity') or 0.0
@@ -1797,21 +1813,24 @@ To enable trading:
                         )
 
                         if order and order.get('status') in ['filled', 'partial']:
-                            # Calculate P&L
-                            entry_price = position['entry_price']
-                            if position['side'] == 'BUY':
-                                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                            # Calculate P&L only if price is known
+                            entry_price = position.get('entry_price')
+                            if current_price and current_price > 0 and entry_price:
+                                if position['side'] == 'BUY':
+                                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                                else:
+                                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                                logger.warning(f"✅ Emergency close successful: {symbol} ({pnl_pct:+.2f}% P&L)")
                             else:
-                                pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                                logger.warning(f"✅ Emergency close successful: {symbol} (P&L unknown; price unavailable)")
 
-                            logger.warning(f"✅ Emergency close successful: {symbol} ({pnl_pct:+.2f}% P&L)")
-
-                            # Record exit
-                            self.analytics.record_exit(
-                                symbol=symbol,
-                                exit_price=current_price,
-                                exit_reason="EMERGENCY: Position limit exceeded"
-                            )
+                            # Record exit only if we have a valid price
+                            if current_price and current_price > 0:
+                                self.analytics.record_exit(
+                                    symbol=symbol,
+                                    exit_price=current_price,
+                                    exit_reason="EMERGENCY: Position limit exceeded"
+                                )
 
                             # Remove from tracking
                             del self.open_positions[symbol]

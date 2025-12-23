@@ -65,6 +65,10 @@ else
     echo "   ❌ COINBASE_API_SECRET is missing or empty"
 fi
 echo ""
+echo "🔧 Trading Guards:"
+echo "   MIN_CASH_TO_BUY=${MIN_CASH_TO_BUY:-5.0}"
+echo "   MINIMUM_TRADING_BALANCE=${MINIMUM_TRADING_BALANCE:-25.0}"
+echo ""
 
 # Require credentials for LIVE mode; do NOT fall back to PAPER_MODE
 if [ -z "${COINBASE_API_KEY}" ] || [ -z "${COINBASE_API_SECRET}" ]; then
