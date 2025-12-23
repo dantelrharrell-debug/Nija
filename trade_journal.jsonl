@@ -65,3 +65,4 @@
 {"timestamp": "2025-12-22T21:23:26.490842", "symbol": "CRV-USD", "side": "SELL", "price": 0.3752, "size_usd": 2.2130343900000002}
 {"timestamp": "2025-12-22T21:23:32.839821", "symbol": "XRP-USD", "side": "SELL", "price": 1.8944, "size_usd": 13.484581416}
 {"timestamp": "2025-12-22T21:23:33.038843", "symbol": "APT-USD", "side": "SELL", "price": 1.6078, "size_usd": 14.615897282}
+{"timestamp": "2025-12-23T05:44:11.418808", "symbol": "BAT-USD", "side": "SELL", "price": 0.21196, "size_usd": 1.2391766981999999}
