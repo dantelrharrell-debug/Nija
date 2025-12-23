@@ -785,13 +785,18 @@ To enable trading:
                     last = datetime.fromisoformat(self.recent_manual_sells[symbol])
                     remaining = self.reentry_cooldown_minutes - int((time.time() - last.timestamp())/60)
                     if remaining > 0:
-                        logger.info(
-                            f"⏸️ BUY blocked for {symbol}: manual sell cooldown active ({remaining} min remaining)."
+                        logger.warning(
+                            f"🛡️ BUY BLOCKED for {symbol}: Manual sell cooldown active ({remaining} min remaining of {self.reentry_cooldown_minutes}m)"
                         )
+                        logger.warning(f"   Last manual sell: {last.strftime('%Y-%m-%d %H:%M:%S')}")
                         return False
-                except Exception:
+                    else:
+                        # Cooldown expired, remove from list
+                        logger.info(f"✅ Cooldown expired for {symbol}, allowing re-entry")
+                        del self.recent_manual_sells[symbol]
+                except Exception as e:
                     # If parsing fails, be safe and block this cycle
-                    logger.info(f"⏸️ BUY blocked for {symbol}: manual sell cooldown active.")
+                    logger.warning(f"⏸️ BUY blocked for {symbol}: manual sell cooldown active (parse error: {e})")
                     return False
             
             # Optional: previously protected positions. Allow trading unless explicitly disabled via env
@@ -1199,6 +1204,17 @@ To enable trading:
                 
                 logger.info(f"   {symbol}: {side} @ ${entry_price:.2f} | Current: ${current_price:.2f} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
                 logger.info(f"      Exit Levels: SL=${stop_loss:.2f}, Trail=${trailing_stop:.2f}, TP=${position['take_profit']:.2f}")
+                
+                # Log exit condition checks for debugging
+                if side == 'BUY':
+                    logger.debug(f"      Exit checks: price={current_price:.2f}, SL={stop_loss:.2f}, Trail={trailing_stop:.2f}, TP={position['take_profit']:.2f}")
+                    if current_price >= position['take_profit']:
+                        logger.info(f"      ✅ TAKE PROFIT TRIGGERED: ${current_price:.2f} >= ${position['take_profit']:.2f}")
+                    elif current_price <= stop_loss:
+                        logger.info(f"      🛑 STOP LOSS TRIGGERED: ${current_price:.2f} <= ${stop_loss:.2f}")
+                    elif current_price <= trailing_stop:
+                        logger.info(f"      🔻 TRAILING STOP TRIGGERED: ${current_price:.2f} <= ${trailing_stop:.2f}")
+                
                 exit_reason = None
 
                 # Optional max-hold-time auto-exit
@@ -1270,9 +1286,11 @@ To enable trading:
                     # Check take profit
                     elif current_price >= position['take_profit']:
                         exit_reason = f"Take profit hit @ ${position['take_profit']:.2f}"
+                        logger.info(f"      💰 PROFIT TARGET HIT: Closing {symbol} with {pnl_pct:+.2f}% gain")
                     # Check for opposite signal
                     elif analysis.get('signal') == 'SELL':
                         exit_reason = f"Opposite signal detected: {analysis.get('reason')}"
+                        logger.info(f"      🔄 REVERSAL SIGNAL: Closing {symbol} on opposite signal")
                 
                 else:  # SELL position
                     # Update lowest price for trailing stop
@@ -1317,9 +1335,11 @@ To enable trading:
                     # Check take profit
                     elif current_price <= take_profit:
                         exit_reason = f"Take profit hit @ ${take_profit:.2f}"
+                        logger.info(f"      💰 PROFIT TARGET HIT: Closing {symbol} with {pnl_pct:+.2f}% gain")
                     # Check for opposite signal
                     elif analysis.get('signal') == 'BUY':
                         exit_reason = f"Opposite signal detected: {analysis.get('reason')}"
+                        logger.info(f"      🔄 REVERSAL SIGNAL: Closing {symbol} on opposite signal")
                 
                 # Execute exit if conditions met
                 if exit_reason:
