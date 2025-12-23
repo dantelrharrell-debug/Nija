@@ -972,7 +972,30 @@ class BaseBroker(ABC):
                         balance_snapshot = self.get_account_balance()
                         holdings = (balance_snapshot or {}).get('crypto', {}) or {}
                         available_base = float(holdings.get(base_currency, 0.0))
-                        
+
+                        # Deduct held funds to avoid over-requesting
+                        try:
+                            accounts = self.client.get_accounts()
+                            hold_amount = 0.0
+                            for a in accounts:
+                                if isinstance(a, dict):
+                                    currency = a.get('currency')
+                                    hd = (a.get('hold') or {}).get('value')
+                                else:
+                                    currency = getattr(a, 'currency', None)
+                                    hd = getattr(getattr(a, 'hold', None), 'value', None)
+                                if currency == base_currency and hd is not None:
+                                    try:
+                                        hold_amount = float(hd)
+                                    except Exception:
+                                        hold_amount = 0.0
+                                    break
+                            if hold_amount > 0:
+                                available_base = max(0.0, available_base - hold_amount)
+                                logger.info(f"   Adjusted for holds: {hold_amount:.8f} {base_currency} held → usable {available_base:.8f}")
+                        except Exception as hold_err:
+                            logger.warning(f"⚠️ Could not read holds for {base_currency}: {hold_err}")
+
                         logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} available")
                         logger.info(f"   Tracked position size: {quantity:.8f} {base_currency}")
                         
@@ -1010,7 +1033,7 @@ class BaseBroker(ABC):
                             meta.get('base_increment'),
                             meta.get('base_increment_decimal'),
                             meta.get('base_increment_value'),
-                            meta.get('base_min_size'),
+                            # base_min_size is a minimum size, not an increment; exclude from precision detection
                         ]
                         if meta.get('base_increment_exponent') is not None:
                             try:
@@ -1076,12 +1099,27 @@ class BaseBroker(ABC):
                     logger.info(f"📤 Placing SELL order: {symbol}, base_size={base_size_rounded} ({precision} decimals)")
                     if self.portfolio_uuid:
                         logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
-                    
-                    order = self.client.market_order_sell(
-                        client_order_id,
-                        product_id=symbol,
-                        base_size=str(base_size_rounded)
-                    )
+
+                    # Prefer create_order to set reduce_only for safe exits; fallback to market_order_sell
+                    try:
+                        order = self.client.create_order(
+                            client_order_id=client_order_id,
+                            product_id=symbol,
+                            order_configuration={
+                                'market_market_ioc': {
+                                    'base_size': str(base_size_rounded),
+                                    'reduce_only': True
+                                }
+                            },
+                            **({'portfolio_id': self.portfolio_uuid} if getattr(self, 'portfolio_uuid', None) else {})
+                        )
+                    except Exception as co_err:
+                        logger.warning(f"⚠️ create_order failed, falling back to market_order_sell: {co_err}")
+                        order = self.client.market_order_sell(
+                            client_order_id,
+                            product_id=symbol,
+                            base_size=str(base_size_rounded)
+                        )
                 else:
                     # Use quote_size for SELL (less common, but supported)
                     quote_size_rounded = round(quantity, 2)
