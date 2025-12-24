@@ -1425,11 +1425,21 @@ To enable trading:
         
         for symbol, position in self.open_positions.items():
             try:
-                # Get current price
+                # Get current price - try analysis first, fallback to broker price
                 analysis = self.analyze_symbol(symbol)
                 current_price = analysis.get('price')
                 
                 if not current_price:
+                    # Fallback: get price directly from latest candle
+                    try:
+                        df = self.fetch_candles(symbol)
+                        if df is not None and len(df) > 0:
+                            current_price = float(df['close'].iloc[-1])
+                            logger.debug(f"   Using fallback price for {symbol}: ${current_price:.2f}")
+                    except Exception as e:
+                        logger.debug(f"   Fallback price fetch failed for {symbol}: {e}")
+                
+                if not current_price or current_price <= 0:
                     logger.warning(f"⚠️ Could not get price for {symbol}, skipping")
                     continue
                 
