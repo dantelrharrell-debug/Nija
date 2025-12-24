@@ -1431,13 +1431,16 @@ To enable trading:
                 
                 if not current_price:
                     # Fallback: get price directly from latest candle
+                    logger.info(f"   🔄 No price from analysis for {symbol}, trying fallback...")
                     try:
                         df = self.fetch_candles(symbol)
                         if df is not None and len(df) > 0:
                             current_price = float(df['close'].iloc[-1])
-                            logger.debug(f"   Using fallback price for {symbol}: ${current_price:.2f}")
+                            logger.info(f"   ✅ Fallback price for {symbol}: ${current_price:.2f}")
+                        else:
+                            logger.warning(f"   ❌ Fallback failed: no candle data for {symbol}")
                     except Exception as e:
-                        logger.debug(f"   Fallback price fetch failed for {symbol}: {e}")
+                        logger.warning(f"   ❌ Fallback price fetch failed for {symbol}: {e}")
                 
                 if not current_price or current_price <= 0:
                     logger.warning(f"⚠️ Could not get price for {symbol}, skipping")
