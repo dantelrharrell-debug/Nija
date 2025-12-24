@@ -854,6 +854,7 @@ To enable trading:
                 return {
                     'symbol': symbol,
                     'signal': 'SKIP',
+                    'price': None,  # Explicitly set price=None when no data
                     'reason': 'Insufficient candle data'
                 }
             
@@ -1439,7 +1440,7 @@ To enable trading:
                 current_price = analysis.get('price')
                 
                 if not current_price:
-                    # Fallback: get price directly from latest candle
+                    # Fallback: get price directly from latest candle (only if analyze_symbol returned None/False)
                     logger.info(f"   🔄 No price from analysis for {symbol}, trying fallback...")
                     try:
                         df = self.fetch_candles(symbol)
