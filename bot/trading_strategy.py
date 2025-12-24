@@ -1711,33 +1711,26 @@ To enable trading:
             logger.error(f"Rebalance error: {e}")
             self.rebalanced_once = True
 
-    def _get_price_with_retry(self, symbol: str, attempts: int = 3, base_delay: float = 1.0):
-        """Best-effort price fetch for emergency liquidation paths.
+    def _get_price_with_retry(self, symbol: str, attempts: int = 2, base_delay: float = 0.5):
+        """Lean price fetch for emergency liquidation paths.
 
-        Tries analysis-derived price first (uses cached candles), then falls back
-        to broker.get_current_price. Returns None if all attempts fail.
+        Only uses broker.get_current_price to avoid heavy candle analysis during
+        Railway-constrained startup. Returns None if all attempts fail.
         """
         last_error = None
         for attempt in range(1, attempts + 1):
-            try:
-                analysis = self.analyze_symbol(symbol)
-                price = float(analysis.get('price') or 0)
-                if price > 0:
-                    return price
-            except Exception as e:
-                last_error = e
-                logger.debug(f"Price fetch via analysis failed for {symbol} (attempt {attempt}/{attempts}): {e}")
-
             try:
                 price = float(self.broker.get_current_price(symbol) or 0)
                 if price > 0:
                     return price
             except Exception as e:
                 last_error = e
-                logger.debug(f"Price fetch via broker failed for {symbol} (attempt {attempt}/{attempts}): {e}")
+                logger.debug(
+                    f"Price fetch via broker failed for {symbol} (attempt {attempt}/{attempts}): {e}"
+                )
 
             if attempt < attempts:
-                time.sleep(base_delay * attempt)
+                time.sleep(base_delay)
 
         if last_error:
             logger.warning(f"⚠️ Unable to fetch price for {symbol} after {attempts} attempts: {last_error}")
