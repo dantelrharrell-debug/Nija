@@ -1872,6 +1872,11 @@ To enable trading:
                     
                     # Exit: opposite of entry side
                     exit_signal = 'SELL' if side == 'BUY' else 'BUY'
+
+                    # Pre-order debug logging for visibility
+                    logger.info(
+                        f"   🔄 Placing market {exit_signal} for {symbol} | qty={quantity:.8f} (base)"
+                    )
                     
                     # Place market exit order with LIMITED retries to avoid Railway timeout
                     # During startup liquidation, speed is critical - don't hang on slow API
@@ -1885,6 +1890,7 @@ To enable trading:
                                 size_type='base' if exit_signal == 'SELL' else 'quote'
                             )
                             status = (result or {}).get('status', 'unknown')
+                            logger.info(f"   Attempt {attempt}/2 → order status: {status}")
                             if status in ['filled', 'partial']:
                                 break
                             logger.warning(
