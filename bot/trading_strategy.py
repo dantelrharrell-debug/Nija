@@ -358,6 +358,22 @@ To enable trading:
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
 
+        # 🚨 CRITICAL EMERGENCY CHECK: If lockfile exists, force ZERO new positions
+        emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+        if os.path.exists(emergency_lock_file):
+            logger.error("=" * 80)
+            logger.error("🚨 EMERGENCY STOP FILE DETECTED")
+            logger.error("=" * 80)
+            logger.error("File: TRADING_EMERGENCY_STOP.conf")
+            logger.error("Status: SELL-ONLY MODE ACTIVE")
+            logger.error("Effect: MAX_CONCURRENT_POSITIONS forced to 0")
+            logger.error("Action: Bot will ONLY manage/close existing positions")
+            logger.error("To resume: Delete TRADING_EMERGENCY_STOP.conf and restart bot")
+            logger.error("=" * 80)
+            # Force max concurrent positions to 0 - absolutely NO new positions allowed
+            self.max_concurrent_positions = 0
+            logger.error(f"🔒 BUYING DISABLED: max_concurrent_positions = {self.max_concurrent_positions}")
+
     # Alias to align with README wording
     def get_usd_balance(self) -> float:
         """Fetch current USD/USDC trading balance."""
@@ -934,6 +950,18 @@ To enable trading:
         try:
             symbol = analysis['symbol']
             signal = analysis['signal']
+
+            # 🚨 CRITICAL EMERGENCY STOP: BLOCK ALL BUY TRADES IMMEDIATELY
+            # Check for emergency stop file FIRST before any other logic
+            emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+            if signal == 'BUY' and os.path.exists(emergency_lock_file):
+                logger.error("=" * 80)
+                logger.error("🛑 EMERGENCY STOP: BUY BLOCKED - SELL-ONLY MODE ACTIVE")
+                logger.error(f"   Symbol: {symbol}")
+                logger.error(f"   Lockfile: TRADING_EMERGENCY_STOP.conf exists")
+                logger.error(f"   Action: Delete lockfile to resume buying")
+                logger.error("=" * 80)
+                return False
 
             # EMERGENCY FIX: Prevent re-buying positions that were just sold within cooldown period
             if signal == 'BUY' and symbol in self.recently_sold_positions:
