@@ -862,10 +862,20 @@ To enable trading:
             
             # Check if we have minimum candles required
             if df is None or len(df) < self.min_candles_required:
+                # Fallback: Try to get current price directly from broker when candles unavailable
+                # This ensures ARB/VET positions can still be managed even if candle data is insufficient
+                if current_price is None:
+                    try:
+                        current_price = self.broker.get_current_price(symbol)
+                        if current_price:
+                            current_price = float(current_price)
+                    except Exception:
+                        current_price = None
+                
                 return {
                     'symbol': symbol,
                     'signal': 'SKIP',
-                    'price': current_price,  # Return whatever price we could extract
+                    'price': current_price,  # Return whatever price we could extract (candles or direct fetch)
                     'reason': 'Insufficient candle data'
                 }
             
