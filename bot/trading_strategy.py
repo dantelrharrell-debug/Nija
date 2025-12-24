@@ -150,6 +150,31 @@ class TradingStrategy:
                 logger.info(f"🔥 Balance converted to float: {self.account_balance}")
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
             
+            # EMERGENCY CHECK: Warn if balance is critically low
+            MINIMUM_TRADING_BALANCE = float(os.getenv("MINIMUM_TRADING_BALANCE", "25.0"))
+            
+            # Get total account value including crypto
+            balance_dict = self.broker.get_account_balance()
+            crypto_holdings = balance_dict.get('crypto', {}) if isinstance(balance_dict, dict) else {}
+            total_crypto_value = sum(
+                qty for qty in crypto_holdings.values() if isinstance(qty, (int, float)) and qty > 0
+            )
+            total_account_value = self.account_balance + total_crypto_value
+            
+            if total_account_value < MINIMUM_TRADING_BALANCE:
+                logger.error("=" * 80)
+                logger.error("🚨 CRITICAL WARNING: ACCOUNT BALANCE SEVERELY DEPLETED")
+                logger.error("=" * 80)
+                logger.error(f"   USD Cash: ${self.account_balance:.2f}")
+                logger.error(f"   Crypto Value: ${total_crypto_value:.2f}")
+                logger.error(f"   Total Account: ${total_account_value:.2f}")
+                logger.error(f"   Minimum Required: ${MINIMUM_TRADING_BALANCE:.2f}")
+                logger.error("")
+                logger.error("   ⚠️  BUYING IS DISABLED - SELL-ONLY MODE ACTIVE")
+                logger.error("   ⚠️  Bot will manage existing positions but NOT open new ones")
+                logger.error("   ⚠️  Add funds to resume normal trading")
+                logger.error("=" * 80)
+            
             # Circuit breaker will prevent trading if balance < $25
             # No need for startup capital guard - let bot initialize and monitor
             
@@ -232,6 +257,10 @@ To enable trading:
         # Market selection controls
         # ULTRA AGGRESSIVE: Scan all 50 markets for maximum opportunities
         self.limit_to_top_liquidity = False
+        
+        # EMERGENCY FIX: Track recently sold positions to prevent immediate re-buying
+        self.recently_sold_positions = {}  # {symbol: timestamp}
+        self.recently_sold_cooldown_minutes = 60  # 1 hour cooldown
         
         # Manual-sell reentry protection
         try:
@@ -828,6 +857,32 @@ To enable trading:
             symbol = analysis['symbol']
             signal = analysis['signal']
 
+            # EMERGENCY FIX: Prevent re-buying positions that were just sold within cooldown period
+            if signal == 'BUY' and symbol in self.recently_sold_positions:
+                try:
+                    from datetime import datetime, timedelta
+                    last_sell_time = self.recently_sold_positions[symbol]
+                    cooldown_expires = last_sell_time + timedelta(minutes=self.recently_sold_cooldown_minutes)
+                    now = datetime.now()
+                    
+                    if now < cooldown_expires:
+                        remaining_minutes = int((cooldown_expires - now).total_seconds() / 60)
+                        logger.error("=" * 80)
+                        logger.error(f"🚨 BUY BLOCKED: {symbol} was just sold - COOLDOWN ACTIVE")
+                        logger.error(f"   Last sold: {last_sell_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                        logger.error(f"   Cooldown: {self.recently_sold_cooldown_minutes} minutes")
+                        logger.error(f"   Time remaining: {remaining_minutes} minutes")
+                        logger.error(f"   This prevents immediate re-buying (bleeding fix)")
+                        logger.error("=" * 80)
+                        return False
+                    else:
+                        # Cooldown expired, remove from list
+                        logger.info(f"✅ Sell cooldown expired for {symbol}, allowing new entry")
+                        del self.recently_sold_positions[symbol]
+                except Exception as e:
+                    logger.error(f"⚠️ BUY blocked for {symbol}: recently sold cooldown active (error: {e})")
+                    return False
+
             # Re-entry cooldown after manual sells
             if signal == 'BUY' and symbol in self.recent_manual_sells:
                 try:
@@ -991,6 +1046,7 @@ To enable trading:
             total_account_value = live_balance + total_crypto_value
             
             # Apply the minimum-account-value circuit breaker ONLY to BUYs; allow SELLs to always proceed
+            # EMERGENCY FIX: Hard stop at $25 to prevent bleeding
             if total_account_value < MINIMUM_TRADING_BALANCE and signal == 'BUY':
                 logger.error("="*80)
                 logger.error(
@@ -999,6 +1055,15 @@ To enable trading:
                 )
                 logger.error(f"   USD Cash: ${live_balance:.2f} | Crypto Value: ${total_crypto_value:.2f}")
                 logger.error(f"   BUYs paused to avoid fee drag; waiting for additional funds")
+                logger.error(f"   🚨 EMERGENCY STOP: Account severely depleted - NO BUYING until funded")
+                logger.error("="*80)
+                return False
+            
+            # ADDITIONAL EMERGENCY CHECK: Block buying if USD cash alone is below $6
+            if signal == 'BUY' and live_balance < 6.0:
+                logger.error("="*80)
+                logger.error(f"🚨 EMERGENCY: USD cash ${live_balance:.2f} < $6.00 - BUY BLOCKED")
+                logger.error("   Waiting for funds or position liquidation to free up cash")
                 logger.error("="*80)
                 return False
             
@@ -1848,6 +1913,11 @@ To enable trading:
                     logger.info(f"🔴 CLOSING EXCESS: {symbol} (P&L: {pnl_pct:+.2f}%)")
                 else:
                     logger.warning(f"🔴 CLOSING EXCESS WITHOUT PRICE: {symbol} (P&L unknown; proceeding with market exit)")
+                
+                # EMERGENCY FIX: Add to recently sold list to prevent immediate re-buying
+                from datetime import datetime
+                self.recently_sold_positions[symbol] = datetime.now()
+                logger.info(f"⏸️  {symbol} added to cooldown list (1 hour) - will not re-buy immediately")
                 
                 try:
                     # Get the crypto quantity we actually hold

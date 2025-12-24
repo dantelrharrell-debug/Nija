@@ -70,7 +70,7 @@ def main():
         logger.info("Initializing trading strategy...")
         strategy = TradingStrategy()
 
-        logger.info("🚀 Starting ULTRA AGGRESSIVE trading loop (15s cadence - 15-DAY GOAL MODE)...")
+        logger.info("🚀 Starting trading loop (2.5 minute cadence - EMERGENCY BLEEDING FIX)...")
         cycle_count = 0
 
         while True:
@@ -78,7 +78,7 @@ def main():
                 cycle_count += 1
                 logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
                 strategy.run_cycle()
-                time.sleep(15)  # ULTRA AGGRESSIVE: Faster scanning for 15-day goal
+                time.sleep(150)  # 2.5 minutes - EMERGENCY FIX: Prevent overtrading and immediate re-buying
             except KeyboardInterrupt:
                 logger.info("Trading bot stopped by user (Ctrl+C)")
                 break
