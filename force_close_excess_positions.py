@@ -9,8 +9,10 @@ import os
 import json
 from datetime import datetime
 
-# Add bot directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+# Add bot directory to path (handle both script and exec contexts)
+bot_dir = '/workspaces/Nija/bot'
+if bot_dir not in sys.path:
+    sys.path.insert(0, bot_dir)
 
 from broker_manager import BrokerManager
 import logging
