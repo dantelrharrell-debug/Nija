@@ -358,21 +358,21 @@ To enable trading:
         # Trade journal file
         self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
 
-        # 🚨 CRITICAL EMERGENCY CHECK: If lockfile exists, force ZERO new positions
+        # 🚨 CRITICAL EMERGENCY CHECK: If lockfile exists, set flag to block NEW entries only
         emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
-        if os.path.exists(emergency_lock_file):
+        self.emergency_stop_active = os.path.exists(emergency_lock_file)
+        
+        if self.emergency_stop_active:
             logger.error("=" * 80)
             logger.error("🚨 EMERGENCY STOP FILE DETECTED")
             logger.error("=" * 80)
             logger.error("File: TRADING_EMERGENCY_STOP.conf")
             logger.error("Status: SELL-ONLY MODE ACTIVE")
-            logger.error("Effect: MAX_CONCURRENT_POSITIONS forced to 0")
-            logger.error("Action: Bot will ONLY manage/close existing positions")
+            logger.error("Effect: NO NEW BUY ENTRIES ALLOWED")
+            logger.error("Action: Existing positions WILL be managed (can exit via SL/TP/trailing)")
             logger.error("To resume: Delete TRADING_EMERGENCY_STOP.conf and restart bot")
             logger.error("=" * 80)
-            # Force max concurrent positions to 0 - absolutely NO new positions allowed
-            self.max_concurrent_positions = 0
-            logger.error(f"🔒 BUYING DISABLED: max_concurrent_positions = {self.max_concurrent_positions}")
+            logger.error(f"🔒 BUYING DISABLED: New entries blocked by emergency stop")
 
     # Alias to align with README wording
     def get_usd_balance(self) -> float:
@@ -2496,7 +2496,10 @@ To enable trading:
             # Re-check lock after potential auto-unlock above
             trading_locked = os.path.exists(emergency_lock_file)
             if trading_locked:
-                logger.info("🛡️ Sell-only mode: skipping new entries; managing exits only.")
+                logger.info("🛡️ Sell-only mode: skipping new market scan and entry analysis.")
+                logger.info("   ✅ Existing positions WILL be managed (exits via SL/TP/trailing)")
+                logger.info("   ❌ NO new BUY entries will be opened")
+                # IMPORTANT: Return ONLY skips new entry scan, does NOT close existing positions
                 return
 
             logger.info(f"🎯 Analyzing {len(self.trading_pairs)} markets for signals...")
