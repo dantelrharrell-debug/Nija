@@ -289,6 +289,11 @@ To enable trading:
             try:
                 logger.info("🔄 Syncing actual Coinbase holdings into position tracker...")
                 synced = self.sync_positions_from_coinbase()
+                # After syncing, prune dust-sized positions so they don't count toward caps
+                try:
+                    self._prune_dust_positions()
+                except Exception as prune_err:
+                    logger.warning(f"Dust prune failed: {prune_err}")
                 if synced > 0:
                     logger.info("=" * 70)
                     logger.info(f"✅ POSITION SYNC COMPLETE")
@@ -314,6 +319,15 @@ To enable trading:
                         current_count - self.max_concurrent_positions
                     ))
                     logger.warning("=" * 80)
+                    # Auto-enable SELL-ONLY lock to prevent re-entries during cleanup
+                    try:
+                        lock_path = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+                        if not os.path.exists(lock_path):
+                            with open(lock_path, 'w') as f:
+                                f.write('AUTO-LOCK: Over-cap at startup')
+                            logger.error("🔒 Enabled SELL-ONLY mode during startup overage cleanup")
+                    except Exception as lock_err:
+                        logger.warning(f"Failed to set SELL-ONLY lock: {lock_err}")
                     # Set flag to trigger liquidation in first run_cycle() call
                     self._startup_sync_pending = True
                     logger.info("🔄 Deferring overage liquidation to first trading cycle (Railway startup timeout workaround)")
@@ -496,6 +510,70 @@ To enable trading:
             import traceback
             logger.error(traceback.format_exc())
             return 0
+
+    def _estimate_position_value_usd(self, symbol: str, position: dict, fallback_price: float = None) -> float:
+        """Estimate current USD value for a tracked position.
+
+        Uses stored `crypto_quantity` if present; otherwise attempts to read live holdings.
+        Falls back to provided price or cached/latest price fetch.
+        """
+        try:
+            qty = float(position.get('crypto_quantity') or 0.0)
+            price = None
+            if fallback_price and fallback_price > 0:
+                price = float(fallback_price)
+            if (qty <= 0) or (price is None):
+                # Try to fill missing qty from live holdings
+                try:
+                    bal = self.broker.get_account_balance()
+                    holdings = bal.get('crypto', {}) if isinstance(bal, dict) else {}
+                    base = symbol.split('-')[0]
+                    if qty <= 0:
+                        qty = float(holdings.get(base, 0.0) or 0.0)
+                except Exception:
+                    pass
+            if price is None:
+                try:
+                    price = self._get_price_with_retry(symbol) or 0.0
+                except Exception:
+                    price = 0.0
+            return max(0.0, float(qty) * float(price or 0.0))
+        except Exception:
+            return 0.0
+
+    def _prune_dust_positions(self):
+        """Remove or mark dust positions so they don't count against caps.
+
+        Any position with estimated USD value < MIN_SELL_USD is treated as dust
+        and removed from tracking (can't be sold due to Coinbase min order size).
+        """
+        try:
+            try:
+                min_sell_usd = float(os.getenv('MIN_SELL_USD', os.getenv('MIN_CASH_TO_BUY', '5.0')))
+            except Exception:
+                min_sell_usd = 5.0
+            dust_threshold = max(0.0, min_sell_usd - 0.01)
+
+            if not getattr(self, 'open_positions', None):
+                return
+            to_remove = []
+            for symbol, pos in self.open_positions.items():
+                est = self._estimate_position_value_usd(symbol, pos)
+                if est < dust_threshold:
+                    to_remove.append((symbol, est))
+
+            if to_remove:
+                logger.warning("🧹 Pruning dust positions below sell minimum:")
+                for symbol, est in to_remove:
+                    logger.warning(f"   • {symbol}: est ${est:.2f} < ${dust_threshold:.2f} → removing from tracker")
+                    self.open_positions.pop(symbol, None)
+                # Persist
+                try:
+                    self.position_manager.save_positions(self.open_positions)
+                except Exception as e:
+                    logger.warning(f"Failed to save after dust prune: {e}")
+        except Exception as e:
+            logger.warning(f"Dust prune error: {e}")
 
     def _update_manual_sell_snapshot(self):
         """
@@ -1940,6 +2018,21 @@ To enable trading:
                     if quantity <= 0:
                         logger.warning(f"🧹 Removing stale tracked position with zero holdings: {symbol}")
                         del self.open_positions[symbol]
+                        self.position_manager.save_positions(self.open_positions)
+                        successfully_closed += 1
+                        continue
+
+                    # DUST-SAFE GUARD: Skip selling if est value < minimum sell USD
+                    try:
+                        min_sell_usd = float(os.getenv('MIN_SELL_USD', os.getenv('MIN_CASH_TO_BUY', '5.0')))
+                    except Exception:
+                        min_sell_usd = 5.0
+                    est_value = (current_price or 0.0) * quantity if price_known else self._estimate_position_value_usd(symbol, position)
+                    if est_value < (min_sell_usd - 0.01):
+                        logger.warning(
+                            f"⏭️  Skipping sell for dust: {symbol} est ${est_value:.2f} < ${min_sell_usd:.2f} (min). Removing from tracker."
+                        )
+                        self.open_positions.pop(symbol, None)
                         self.position_manager.save_positions(self.open_positions)
                         successfully_closed += 1
                         continue
