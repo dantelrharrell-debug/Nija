@@ -1803,7 +1803,7 @@ To enable trading:
             logger.warning(f"⚠️ Unable to fetch price for {symbol} after {attempts} attempts (no error raised)")
         return None
 
-    def close_excess_positions(self, max_positions=8):
+    def close_excess_positions(self, max_positions=8, timeout_seconds=5):
         """
         Close excess positions if we exceed the max concurrent limit.
         Sells positions in order: lowest P&L first (weakest performers)
@@ -1812,11 +1812,15 @@ To enable trading:
         It will skip positions with API failures and continue with the next.
         
         CRITICAL: Railway has platform timeouts. This function limits itself to
-        30 seconds total to avoid being killed mid-execution.
+        a short timeout to avoid being killed mid-execution.
+        
+        Args:
+            max_positions: Maximum concurrent positions allowed
+            timeout_seconds: Maximum time to spend liquidating (default 5s for startup safety)
         """
         import time as time_module
         liquidation_start = time_module.time()
-        MAX_LIQUIDATION_TIME = 30  # seconds
+        MAX_LIQUIDATION_TIME = timeout_seconds  # Use parameter, default to 5 seconds
         
         try:
             # FIRST: Clean up any stale positions with zero crypto_quantity
@@ -2159,7 +2163,8 @@ To enable trading:
                             "Auto-closing extras now."
                         )
                         logger.error("=" * 80)
-                        self.close_excess_positions(max_positions=self.max_concurrent_positions)
+                        # Use longer timeout (20s) for first liquidation since we're now in main loop
+                        self.close_excess_positions(max_positions=self.max_concurrent_positions, timeout_seconds=20)
                         logger.info(f"✅ Startup overage enforcement complete (now tracking {len(self.open_positions)} positions)")
                 except Exception as e:
                     logger.error(f"Error during startup overage enforcement: {e}", exc_info=True)
@@ -2209,7 +2214,8 @@ To enable trading:
                     logger.error(f"🚨 EMERGENCY: {current_position_count} positions exceed limit of {self.max_concurrent_positions}")
                     logger.error("   Auto-liquidating excess positions NOW before continuing...")
                     logger.error("=" * 80)
-                    self.close_excess_positions(max_positions=self.max_concurrent_positions)
+                    # Use 10s timeout for mid-cycle liquidation to keep bot responsive
+                    self.close_excess_positions(max_positions=self.max_concurrent_positions, timeout_seconds=10)
             except Exception as e:
                 logger.error(f"Error during emergency position check: {e}")
             
