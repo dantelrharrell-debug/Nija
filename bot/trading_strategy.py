@@ -2339,17 +2339,21 @@ To enable trading:
                     logger.error("   Set ALLOW_FORCE_EXIT_DURING_EMERGENCY=1 or create FORCE_EXIT_OVERRIDE.conf to proceed.")
                     logger.error("="*80)
                     # Do not remove the flag; keep for when emergency ends or override is set
+                    # CRITICAL FIX: Don't return early - continue to manage existing positions
+                    # Position management will handle exits via SL/TP even in emergency mode
+                    pass  # Continue to position management instead of returning
+                else:
+                    # Force exit is allowed - execute it
+                    logger.error("="*80)
+                    logger.error("🛑 FORCE_EXIT_ALL flag detected — closing all positions now")
+                    logger.error("="*80)
+                    self.force_exit_all_positions()
+                    try:
+                        os.remove(force_exit_flag)
+                    except Exception:
+                        pass
+                    # After force exit, skip opening new positions this cycle
                     return
-                logger.error("="*80)
-                logger.error("🛑 FORCE_EXIT_ALL flag detected — closing all positions now")
-                logger.error("="*80)
-                self.force_exit_all_positions()
-                try:
-                    os.remove(force_exit_flag)
-                except Exception:
-                    pass
-                # After force exit, skip opening new positions this cycle
-                return
             
             # Clear cache at start of each cycle for fresh data
             self._price_cache.clear()
