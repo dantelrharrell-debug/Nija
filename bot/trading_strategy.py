@@ -1762,6 +1762,10 @@ To enable trading:
                                 exit_price=current_price,
                                 exit_reason=exit_reason
                             )
+
+                            # Block immediate re-entry after any exit
+                            from datetime import datetime
+                            self.recently_sold_positions[symbol] = datetime.now()
                             
                             # Log closing trade
                             self.log_trade(symbol, exit_signal, current_price, position['size_usd'])
@@ -1871,6 +1875,9 @@ To enable trading:
                 if order:
                     self.analytics.record_exit(symbol=symbol, exit_price=current_price, exit_reason='FORCE_EXIT_ALL')
                     self.log_trade(symbol, exit_signal, current_price, position.get('size_usd', 0.0))
+                    # Block immediate re-entry after forced exits
+                    from datetime import datetime
+                    self.recently_sold_positions[symbol] = datetime.now()
                     closed += 1
                 else:
                     logger.error(f"Force-exit order did not confirm for {symbol}")
@@ -2279,8 +2286,16 @@ To enable trading:
             bool: True if the lock was removed this call, else False.
         """
         try:
+            # Disable auto-unlock unless explicitly allowed. In emergencies we want
+            # the lock to be manual-only so the bot never resumes buying on its own.
+            allow_auto_unlock = os.getenv("ALLOW_AUTO_UNLOCK_SELL_ONLY", "0") in ("1", "true", "True")
+
             lock_path = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
             if not os.path.exists(lock_path):
+                return False
+
+            if not allow_auto_unlock:
+                logger.info("🔒 SELL-only lock held (manual control required); set ALLOW_AUTO_UNLOCK_SELL_ONLY=1 to enable auto-unlock")
                 return False
 
             within_cap = len(self.open_positions) <= self.max_concurrent_positions

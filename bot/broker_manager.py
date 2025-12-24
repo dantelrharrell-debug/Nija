@@ -847,6 +847,26 @@ class BaseBroker(ABC):
             Order response dictionary
         """
         try:
+            # Global BUY guard: block all buys when emergency stop is active or HARD_BUY_OFF=1
+            try:
+                import os as _os
+                lock_path = _os.path.join(_os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+                hard_buy_off = (_os.getenv('HARD_BUY_OFF', '0') in ('1', 'true', 'True'))
+                if side.lower() == 'buy' and (hard_buy_off or _os.path.exists(lock_path)):
+                    logger.error("🛑 BUY BLOCKED at broker layer: SELL-ONLY mode or HARD_BUY_OFF active")
+                    logger.error(f"   Symbol: {symbol}")
+                    logger.error(f"   Reason: {'HARD_BUY_OFF' if hard_buy_off else 'TRADING_EMERGENCY_STOP.conf present'}")
+                    return {
+                        "status": "unfilled",
+                        "error": "BUY_BLOCKED",
+                        "message": "Global buy guard active (sell-only mode)",
+                        "partial_fill": False,
+                        "filled_pct": 0.0
+                    }
+            except Exception:
+                # If guard check fails, proceed but log later if needed
+                pass
+
             if quantity <= 0:
                 raise ValueError(f"Refusing to place {side} order with non-positive size: {quantity}")
 
