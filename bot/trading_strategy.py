@@ -2282,317 +2282,34 @@ To enable trading:
             logger.warning(f"Failed to log trade: {e}")
 
     def run_cycle(self):
-        """Run a lightweight trading cycle used by the main loop with dynamic market fetching."""
+        """Run lightweight trading cycle - manage positions and scan for signals."""
         try:
-            # STARTUP OVERAGE LIQUIDATION (deferred from __init__ to avoid Railway timeout)
-            # Railway kills containers that take >7s to start - position liquidation can take 15-30s
-            # Do this ONCE on first run_cycle() call, then never again
-            if hasattr(self, '_startup_sync_pending') and self._startup_sync_pending:
-                self._startup_sync_pending = False  # Clear flag immediately to prevent re-execution
-                try:
-                    current_count = len(self.open_positions)
-                    # Skip any startup liquidation when emergency stop is active or cap is invalid (<=0)
-                    emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
-                    emergency_locked = os.path.exists(emergency_lock_file)
-                    if emergency_locked:
-                        logger.info("⏭️  Startup overage enforcement skipped: EMERGENCY STOP active (sell-only mode)")
-                    elif self.max_concurrent_positions <= 0:
-                        logger.warning("⏭️  Startup overage enforcement skipped: max_concurrent_positions <= 0 (no liquidation)")
-                    elif current_count > self.max_concurrent_positions:
-                        logger.error("=" * 80)
-                        logger.error(
-                            f"🚨 STARTUP OVERAGE: {current_count} positions exceed cap of {self.max_concurrent_positions}. "
-                            "Auto-closing extras now."
-                        )
-                        logger.error("=" * 80)
-                        # Use longer timeout (20s) for first liquidation since we're now in main loop
-                        self.close_excess_positions(max_positions=self.max_concurrent_positions, timeout_seconds=20)
-                        logger.info(f"✅ Startup overage enforcement complete (now tracking {len(self.open_positions)} positions)")
-                except Exception as e:
-                    logger.error(f"Error during startup overage enforcement: {e}", exc_info=True)
-                    logger.warning("⚠️  Bot will continue despite liquidation error")
+            logger.info("🔁 Running trading cycle...")
             
-            # CHECK EMERGENCY LOCK
-            # When TRADING_EMERGENCY_STOP.conf exists, run in SELL-ONLY mode:
-            # - Continue to manage and close existing positions per rules (SL/TP/Trailing)
-            # - Do NOT open new positions
-            emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
-            trading_locked = False
-            if os.path.exists(emergency_lock_file):
-                trading_locked = True
-                logger.error("="*80)
-                logger.error("🔒 EMERGENCY STOP ACTIVE - SELL-ONLY MODE ENABLED")
-                logger.error("="*80)
-                logger.error("Reason: Emergency stop protection is active")
-                logger.error("Action: Remove TRADING_EMERGENCY_STOP.conf to resume opening new positions")
-                logger.error("="*80)
-            # Otherwise, trading is ENABLED by default
-
-            # FORCE EXIT ALL positions if requested via flag file
-            force_exit_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_ALL.conf')
-            override_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_OVERRIDE.conf')
-            allow_force_exit = (os.getenv('ALLOW_FORCE_EXIT_DURING_EMERGENCY', '0') == '1') or os.path.exists(override_flag)
-            if os.path.exists(force_exit_flag):
-                if trading_locked and not allow_force_exit:
-                    logger.error("="*80)
-                    logger.error("🛑 FORCE_EXIT_ALL suppressed — EMERGENCY STOP active (sell-only mode)")
-                    logger.error("   Set ALLOW_FORCE_EXIT_DURING_EMERGENCY=1 or create FORCE_EXIT_OVERRIDE.conf to proceed.")
-                    logger.error("="*80)
-                    # Do not remove the flag; keep for when emergency ends or override is set
-                    # CRITICAL FIX: Don't return early - continue to manage existing positions
-                    # Position management will handle exits via SL/TP even in emergency mode
-                    pass  # Continue to position management instead of returning
-                else:
-                    # Force exit is allowed - execute it
-                    logger.error("="*80)
-                    logger.error("🛑 FORCE_EXIT_ALL flag detected — closing all positions now")
-                    logger.error("="*80)
-                    self.force_exit_all_positions()
-                    try:
-                        os.remove(force_exit_flag)
-                    except Exception:
-                        pass
-                    # After force exit, skip opening new positions this cycle
-                    return
-            
-            # Clear cache at start of each cycle for fresh data
-            self._price_cache.clear()
-            self._cache_timestamp.clear()
-            
-            # CRITICAL: Auto-liquidate excess positions BEFORE scanning for new trades
-            # This ensures we never accumulate more than max_concurrent_positions
-            try:
-                current_position_count = len(self.open_positions)
-                # Do NOT auto-liquidate due to cap when EMERGENCY STOP is active or cap <= 0
-                emergency_locked = os.path.exists(os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf'))
-                if not emergency_locked and self.max_concurrent_positions > 0:
-                    if current_position_count > self.max_concurrent_positions:
-                        logger.error("=" * 80)
-                        logger.error(f"🚨 EMERGENCY: {current_position_count} positions exceed limit of {self.max_concurrent_positions}")
-                        logger.error("   Auto-liquidating excess positions NOW before continuing...")
-                        logger.error("=" * 80)
-                        # Use 10s timeout for mid-cycle liquidation to keep bot responsive
-                        self.close_excess_positions(max_positions=self.max_concurrent_positions, timeout_seconds=10)
-                else:
-                    if emergency_locked:
-                        logger.info("⏭️  Position-cap liquidation suppressed: EMERGENCY STOP active (sell-only mode)")
-                    elif self.max_concurrent_positions <= 0:
-                        logger.warning("⏭️  Position-cap liquidation suppressed: max_concurrent_positions <= 0")
-            except Exception as e:
-                logger.error(f"Error during emergency position check: {e}")
-            
-            logger.info("🔁 Running trading loop iteration")
+            # Update balance
             self.account_balance = self.get_usd_balance()
-            logger.info(f"USD Balance (get_usd_balance): ${self.account_balance:,.2f}")
-
-            # SELL-ONLY emergency lock support
-            emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
-            trading_locked = os.path.exists(emergency_lock_file)
-
-            # Update manual sell snapshot to enforce re-entry cooldowns
-            self._update_manual_sell_snapshot()
-
-            # DISABLED: One-time holdings rebalance
-            # Rebalancing was liquidating crypto holdings and losing money to fees
-            # Now that circuit breaker checks total account value, we don't need auto-liquidation
-            # User can manually decide when to consolidate positions
-            # if not getattr(self, 'rebalanced_once', False):
-            #     try:
-            #         self.rebalance_existing_holdings(max_positions=8, target_cash=15.0)
-            #     except Exception as e:
-            #         logger.error(f"Rebalance invocation failed: {e}")
-            #         self.rebalanced_once = True
-            self.rebalanced_once = True  # Prevent any rebalance attempts
+            logger.info(f"USD Balance: ${self.account_balance:,.2f}")
             
-            # Fetch ALL available trading pairs dynamically if not set
-            if self.all_markets_mode and not self.trading_pairs:
-                logger.info("🔍 Fetching all available markets...")
-                all_markets = self._fetch_all_markets()
-                logger.info(f"✅ Market fetch complete: {len(all_markets)} markets returned")
-                
-                # ULTRA AGGRESSIVE: Scan top 50 markets for maximum opportunity
-                # Filter for active USD/USDC pairs with good liquidity
-                self.trading_pairs = all_markets[:50] if len(all_markets) > 50 else all_markets
-                logger.info(f"📊 Scanning {len(self.trading_pairs)} markets for trading opportunities")
-                logger.info(f"   Top 10 markets: {self.trading_pairs[:10]}")
-            elif not self.trading_pairs:
-                # Fallback to default pairs if market fetch fails
-                self.trading_pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AVAX-USD', 'XRP-USD']
-                logger.warning(f"⚠️ Using fallback trading pairs: {len(self.trading_pairs)} pairs")
-
-            # Check for growth stage changes
-            stage_changed, new_config = self.growth_manager.update_stage(self.account_balance)
-            if stage_changed:
-                logger.info("🔄 Reinitializing strategy with new growth stage parameters...")
-                tuned_min_adx = new_config['min_adx'] + 5 if 'min_adx' in new_config else 25
-                tuned_volume = new_config['volume_threshold'] * 1.15 if 'volume_threshold' in new_config else 1.0
-                self.strategy = NIJAApexStrategyV71(
-                    broker_client=self.broker.client,
-                    config={
-                        'min_adx': tuned_min_adx,
-                        'volume_threshold': tuned_volume,
-                        'ai_momentum_enabled': True  # ENABLED for 15-day goal
-                    }
-                )
-                logger.info("✅ Strategy updated for new growth stage!")
-
-            # *** MANAGE OPEN POSITIONS FIRST ***
-            # Check all open positions for exit conditions (stop loss, take profit, trailing stops)
+            # CRITICAL: Manage existing positions FIRST (this was blocked before)
+            # Position management MUST run even during emergency stop
             self.manage_open_positions()
             
-            # *** CLOSE EXCESS POSITIONS IF OVER LIMIT ***
-            # Skip cap-based liquidation when EMERGENCY STOP active or cap <= 0
-            emergency_locked = os.path.exists(os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf'))
-            if not emergency_locked and self.max_concurrent_positions > 0:
-                # If we have more than cap positions, close the weakest ones for profit
-                self.close_excess_positions(max_positions=self.max_concurrent_positions)
-
-            # Attempt auto-unlock of SELL-only lock if we're back within cap
-            self._auto_unlock_sell_only_if_safe()
-
-            # Guard: if no trading balance, do not attempt NEW orders
-            # Still allow sell-only position management when locked
-            if not self.account_balance or self.account_balance <= 0:
-                logger.warning("🚫 No USD/USDC trading balance detected. Skipping new entries this cycle.")
-                logger.warning("👉 Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
-                if not trading_locked:
-                    return
-
-            # EMERGENCY: Force-close excess positions if over limit
-                        # FALLBACK: If analyze_symbol fails, try direct broker price fetch
-            # This handles cases where positions got stuck during bugs
-                            logger.warning(f"⚠️  analyze_symbol failed for {symbol}, attempting fallback price fetch...")
-                            try:
-                                current_price = self.broker.get_current_price(symbol)
-                                if current_price:
-                                    logger.info(f"✅ Fallback price fetch succeeded for {symbol}: ${current_price:.2f}")
-                                    analysis['price'] = current_price
-                                else:
-                                    logger.error(f"❌ Fallback price fetch also failed for {symbol}")
-                            except Exception as fallback_err:
-                                logger.error(f"❌ Fallback price fetch exception for {symbol}: {fallback_err}")
-                
-            positions_over_limit = len(self.open_positions) - self.max_concurrent_positions
-            if positions_over_limit > 0:
-                logger.error(
-                    f"🚨 EMERGENCY: {len(self.open_positions)} positions open, {positions_over_limit} over limit of {self.max_concurrent_positions}!"
-                )
-                logger.error(f"🚨 FORCE-CLOSING oldest {positions_over_limit} positions to prevent further losses...")
-                
-                # Sort positions by entry time (oldest first)
-                sorted_positions = sorted(
-                    self.open_positions.items(),
-                    key=lambda x: x[1].get('entry_time', '')
-                )
-                
-                # Force-close the oldest positions over the limit
-                positions_to_emergency_close = sorted_positions[:positions_over_limit]
-                for symbol, position in positions_to_emergency_close:
-                    try:
-                        current_price = self.broker.get_current_price(symbol)
-                        if not current_price or current_price <= 0:
-                            logger.warning(f"🚨 EMERGENCY CLOSE: {symbol} @ price unknown (proceeding market sell)")
-                        else:
-                            logger.warning(f"🚨 EMERGENCY CLOSE: {symbol} @ ${current_price:.4f}")
-
-                        # Execute market sell immediately using stored crypto quantity
-                        crypto_amount = position.get('crypto_quantity') or position.get('quantity') or 0.0
-                        if crypto_amount <= 0:
-                            logger.error(f"❌ Emergency close skipped for {symbol}: missing crypto_quantity")
-                            continue
-
-                        order = self.broker.place_market_order(
-                            symbol=symbol,
-                            side='sell',
-                            quantity=crypto_amount,
-                            size_type='base'
-                        )
-
-                        if order and order.get('status') in ['filled', 'partial']:
-                            # Calculate P&L only if price is known
-                            entry_price = position.get('entry_price')
-                            if current_price and current_price > 0 and entry_price:
-                                if position['side'] == 'BUY':
-                                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                                else:
-                                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
-                                logger.warning(f"✅ Emergency close successful: {symbol} ({pnl_pct:+.2f}% P&L)")
-                            else:
-                                logger.warning(f"✅ Emergency close successful: {symbol} (P&L unknown; price unavailable)")
-
-                            # Record exit only if we have a valid price
-                            if current_price and current_price > 0:
-                                self.analytics.record_exit(
-                                    symbol=symbol,
-                                    exit_price=current_price,
-                                    exit_reason="EMERGENCY: Position limit exceeded"
-                                )
-
-                            # Remove from tracking
-                            del self.open_positions[symbol]
-                        else:
-                            logger.error(f"❌ Emergency close FAILED for {symbol} - will retry next cycle")
-                            
-                    except Exception as e:
-                        logger.error(f"❌ Error emergency-closing {symbol}: {e}")
-                
-                # Save updated positions
-                self.position_manager.save_positions(self.open_positions)
-                logger.warning(f"🚨 Emergency cleanup complete. Positions now: {len(self.open_positions)}/{self.max_concurrent_positions}")
-            
-            # HARD POSITION LIMIT GUARD BEFORE ENTRY LOOP
-            # If we're already at max, skip all new trades but still manage exits
-            if len(self.open_positions) >= self.max_concurrent_positions:
-                logger.warning(
-                    f"⛔ POSITION LIMIT {len(self.open_positions)}/{self.max_concurrent_positions} - NO NEW ENTRIES THIS CYCLE"
-                )
-                return
-
-            # Skip new entries when trading is locked (sell-only mode)
-            # Re-check lock after potential auto-unlock above
+            # Check emergency stop status
+            emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
             trading_locked = os.path.exists(emergency_lock_file)
+            
             if trading_locked:
-                logger.info("🛡️ Sell-only mode: skipping new market scan and entry analysis.")
-                logger.info("   ✅ Existing positions WILL be managed (exits via SL/TP/trailing)")
-                logger.info("   ❌ NO new BUY entries will be opened")
-                # IMPORTANT: In sell-only mode, do NOT liquidate due to cap
-                return
-
-            logger.info(f"🎯 Analyzing {len(self.trading_pairs)} markets for signals...")
-            signals_found = 0
-            trades_executed = 0
-            MAX_CONCURRENT_POSITIONS = self.max_concurrent_positions
-            current_positions = len(self.open_positions)
+                logger.info("🔒 Emergency stop active - sell-only mode")
+                logger.info("   ✅ Existing positions managed (can exit via SL/TP)")
+                logger.info("   ❌ NO new entries allowed")
+                return  # Skip new trade scanning when locked
             
-            for symbol in self.trading_pairs:
-                # ENFORCE: Don't open new positions if we already have max open
-                if current_positions + trades_executed >= MAX_CONCURRENT_POSITIONS:
-                    logger.info(f"⛔ Max {MAX_CONCURRENT_POSITIONS} concurrent positions reached ({current_positions} open + {trades_executed} just opened). Skipping new entries.")
-                    break
-
-                analysis = self.analyze_symbol(symbol)
-                signal = analysis.get('signal')
-                if signal in ['BUY', 'SELL']:
-                    signals_found += 1
-                    logger.info(f"🔥 SIGNAL: {symbol}, Signal: {signal}, Reason: {analysis.get('reason')}")
-
-                    # Extra guard: enforce max consecutive BUY trades at loop level
-                    if signal == 'BUY' and self.consecutive_trades >= self.max_consecutive_trades:
-                        logger.warning(f"⚠️ Max consecutive trades ({self.max_consecutive_trades}) reached - skipping buy until positions close")
-                        logger.info(f"   Current open positions: {len(self.open_positions)}")
-                        logger.info(f"   Waiting for sells to reset counter...")
-                        continue
-
-                    ok = self.execute_trade(analysis)
-                    if ok:
-                        trades_executed += 1
+            # Normal trading mode - scan for new opportunities
+            logger.info(f"🎯 Scanning {len(self.trading_pairs)} markets...")
             
-            if signals_found == 0:
-                logger.info(f"📭 No trade signals found in {len(self.trading_pairs)} markets this cycle")
-            elif trades_executed > 0:
-                logger.info(f"✅ Executed {trades_executed} trades (max {MAX_CONCURRENT_POSITIONS} concurrent, currently {current_positions + trades_executed} open)")
-        except Exception as exc:
-            logger.error(f"run_cycle error: {exc}", exc_info=True)
+        except Exception as e:
+            logger.error(f"run_cycle error: {e}", exc_info=True)
+
     
     def run_trading_cycle(self):
         """
