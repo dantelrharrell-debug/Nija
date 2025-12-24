@@ -2443,9 +2443,10 @@ To enable trading:
                 # If we have more than cap positions, close the weakest ones for profit
                 self.close_excess_positions(max_positions=self.max_concurrent_positions)
 
+                    logger.warning("⚠️  manage_open_positions: No open positions to manage")
             # Attempt auto-unlock of SELL-only lock if we're back within cap
             self._auto_unlock_sell_only_if_safe()
-
+                logger.info(f"📊 Managing {len(self.open_positions)} open position(s): {list(self.open_positions.keys())}")
             # Guard: if no trading balance, do not attempt NEW orders
             # Still allow sell-only position management when locked
             if not self.account_balance or self.account_balance <= 0:
@@ -2455,7 +2456,19 @@ To enable trading:
                     return
 
             # EMERGENCY: Force-close excess positions if over limit
+                        # FALLBACK: If analyze_symbol fails, try direct broker price fetch
             # This handles cases where positions got stuck during bugs
+                            logger.warning(f"⚠️  analyze_symbol failed for {symbol}, attempting fallback price fetch...")
+                            try:
+                                current_price = self.broker.get_current_price(symbol)
+                                if current_price:
+                                    logger.info(f"✅ Fallback price fetch succeeded for {symbol}: ${current_price:.2f}")
+                                    analysis['price'] = current_price
+                                else:
+                                    logger.error(f"❌ Fallback price fetch also failed for {symbol}")
+                            except Exception as fallback_err:
+                                logger.error(f"❌ Fallback price fetch exception for {symbol}: {fallback_err}")
+                
             positions_over_limit = len(self.open_positions) - self.max_concurrent_positions
             if positions_over_limit > 0:
                 logger.error(
@@ -2615,13 +2628,13 @@ To enable trading:
                 self._cycle_sync_counter = 0
 
             # SELL-ONLY mode support (same semantics as run_cycle)
-            emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
-            trading_locked = os.path.exists(emergency_lock_file)
+            emergency_lock_file = _os.path.join(_os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+            trading_locked = _os.path.exists(emergency_lock_file)
             # FORCE EXIT ALL support with emergency override protection
-            force_exit_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_ALL.conf')
-            override_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_OVERRIDE.conf')
-            allow_force_exit = (os.getenv('ALLOW_FORCE_EXIT_DURING_EMERGENCY', '0') == '1') or os.path.exists(override_flag)
-            if os.path.exists(force_exit_flag):
+            force_exit_flag = _os.path.join(_os.path.dirname(__file__), '..', 'FORCE_EXIT_ALL.conf')
+            override_flag = _os.path.join(_os.path.dirname(__file__), '..', 'FORCE_EXIT_OVERRIDE.conf')
+            allow_force_exit = (_os.getenv('ALLOW_FORCE_EXIT_DURING_EMERGENCY', '0') == '1') or _os.path.exists(override_flag)
+            if _os.path.exists(force_exit_flag):
                 if trading_locked and not allow_force_exit:
                     logger.error("="*80)
                     logger.error("🛑 FORCE_EXIT_ALL suppressed — EMERGENCY STOP active (sell-only mode)")
