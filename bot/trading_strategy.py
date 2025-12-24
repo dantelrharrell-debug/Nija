@@ -1748,7 +1748,14 @@ To enable trading:
         
         NOTE: This method is designed to NOT crash the bot even if API errors occur.
         It will skip positions with API failures and continue with the next.
+        
+        CRITICAL: Railway has platform timeouts. This function limits itself to
+        30 seconds total to avoid being killed mid-execution.
         """
+        import time as time_module
+        liquidation_start = time_module.time()
+        MAX_LIQUIDATION_TIME = 30  # seconds
+        
         try:
             # FIRST: Clean up any stale positions with zero crypto_quantity
             # This prevents trying to fetch prices for positions that don't actually exist
@@ -1822,6 +1829,14 @@ To enable trading:
             # Close the worst performers first
             successfully_closed = 0
             for i in range(excess_count):
+                # Timeout protection: Stop liquidation if we're approaching platform limits
+                elapsed = time_module.time() - liquidation_start
+                if elapsed > MAX_LIQUIDATION_TIME:
+                    logger.warning(f"⏰ Liquidation timeout after {elapsed:.1f}s - pausing to avoid Railway kill")
+                    logger.warning(f"   Closed {successfully_closed}/{excess_count} positions this cycle")
+                    logger.warning(f"   Remaining {excess_count - successfully_closed} will be handled in next run")
+                    break
+                
                 if i >= len(positions_by_pnl):
                     break
                 
@@ -1861,9 +1876,10 @@ To enable trading:
                     # Exit: opposite of entry side
                     exit_signal = 'SELL' if side == 'BUY' else 'BUY'
                     
-                    # Place market exit order with retries
+                    # Place market exit order with LIMITED retries to avoid Railway timeout
+                    # During startup liquidation, speed is critical - don't hang on slow API
                     result = None
-                    for attempt in range(1, 4):
+                    for attempt in range(1, 3):  # Reduced to 2 attempts max
                         try:
                             result = self.broker.place_market_order(
                                 symbol,
@@ -1875,14 +1891,14 @@ To enable trading:
                             if status in ['filled', 'partial']:
                                 break
                             logger.warning(
-                                f"⚠️ Excess close attempt {attempt}/3 for {symbol} returned status={status}; retrying..."
+                                f"⚠️ Excess close attempt {attempt}/2 for {symbol} returned status={status}; retrying..."
                             )
                         except Exception as e:
                             logger.warning(
-                                f"⚠️ Excess close attempt {attempt}/3 for {symbol} failed: {e}"
+                                f"⚠️ Excess close attempt {attempt}/2 for {symbol} failed: {e}"
                             )
-                        if attempt < 3:
-                            time.sleep(1 * attempt)
+                        if attempt < 2:
+                            time.sleep(0.5)  # Reduced delay: 0.5s instead of scaling
                     
                     if result and result.get('status') in ['filled', 'partial']:
                         pnl_usd = None
