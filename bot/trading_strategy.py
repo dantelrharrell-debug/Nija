@@ -1952,6 +1952,23 @@ To enable trading:
             logger.error(f"🚨 CRITICAL: Error in close_excess_positions: {e}", exc_info=True)
             logger.error("⚠️  Bot will continue despite liquidation error")
     
+    def _auto_unlock_sell_only_if_safe(self) -> bool:
+        """Remove SELL-only lock when within position cap.
+
+        Returns:
+            bool: True if the lock was removed this call, else False.
+        """
+        try:
+            lock_path = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+            # Only attempt if lock exists and we are at/below the cap
+            if os.path.exists(lock_path) and len(self.open_positions) <= self.max_concurrent_positions:
+                os.remove(lock_path)
+                logger.info("🔓 SELL-only lock removed: positions within cap; new entries enabled")
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to auto-unlock SELL-only mode: {e}")
+        return False
+    
     def _check_stepped_exit(self, symbol: str, current_price: float, pnl_pct: float, 
                             entry_price: float, position: dict) -> dict:
         """
@@ -2161,6 +2178,9 @@ To enable trading:
             # If we have more than 8 positions, close the weakest ones for profit
             self.close_excess_positions(max_positions=self.max_concurrent_positions)
 
+            # Attempt auto-unlock of SELL-only lock if we're back within cap
+            self._auto_unlock_sell_only_if_safe()
+
             # Guard: if no trading balance, do not attempt NEW orders
             # Still allow sell-only position management when locked
             if not self.account_balance or self.account_balance <= 0:
@@ -2248,6 +2268,8 @@ To enable trading:
                 return
 
             # Skip new entries when trading is locked (sell-only mode)
+            # Re-check lock after potential auto-unlock above
+            trading_locked = os.path.exists(emergency_lock_file)
             if trading_locked:
                 logger.info("🛡️ Sell-only mode: skipping new entries; managing exits only.")
                 return
@@ -2347,9 +2369,13 @@ To enable trading:
                 logger.error("Managing open positions only; new entries are blocked.")
                 # Manage/exit existing positions using current rules
                 self.manage_open_positions()
-                # Optionally trim to target exposure
+                # Trim to exposure cap if needed
                 self.close_excess_positions(max_positions=self.max_concurrent_positions)
-                return
+                # Attempt auto-unlock: if within cap, remove lock and continue
+                if self._auto_unlock_sell_only_if_safe():
+                    logger.info("🔓 SELL-only auto-unlock engaged: resuming normal entries.")
+                else:
+                    return
             
             # Check if account has grown to new stage and update strategy
             stage_changed, new_config = self.growth_manager.update_stage(self.account_balance)
