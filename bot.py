@@ -11,6 +11,48 @@ import time
 import logging
 from logging.handlers import RotatingFileHandler
 import signal
+import threading
+
+# Minimal HTTP health server to satisfy platforms expecting $PORT
+def _start_health_server():
+    try:
+        port_env = os.getenv("PORT")
+        if not port_env:
+            return
+        try:
+            port = int(port_env)
+        except Exception:
+            return
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class HealthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                try:
+                    # Simple health endpoint
+                    if self.path in ("/", "/health", "/healthz", "/status"):
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/plain")
+                        self.end_headers()
+                        self.wfile.write(b"OK")
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                except Exception:
+                    try:
+                        self.send_response(500)
+                        self.end_headers()
+                    except Exception:
+                        pass
+            def log_message(self, format, *args):
+                # Silence default HTTP server logging
+                return
+
+        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        logger.info(f"🌐 Health server listening on port {port}")
+    except Exception as e:
+        logger.warning(f"Health server failed to start: {e}")
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -68,6 +110,8 @@ def main():
 
     try:
         logger.info("Initializing trading strategy...")
+        # Start health server if PORT is provided by platform (e.g., Railway)
+        _start_health_server()
         strategy = TradingStrategy()
 
         logger.info("🚀 Starting trading loop (2.5 minute cadence - EMERGENCY BLEEDING FIX)...")
