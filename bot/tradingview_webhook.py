@@ -51,6 +51,22 @@ def tradingview_webhook():
     }
     """
     try:
+        # 🚨 CRITICAL: Check for emergency stop BEFORE processing ANY orders
+        emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+        if os.path.exists(emergency_lock_file):
+            print(f"\n{'='*70}")
+            print(f"🛑 WEBHOOK BLOCKED - EMERGENCY STOP ACTIVE")
+            print(f"{'='*70}")
+            print(f"TRADING_EMERGENCY_STOP.conf exists")
+            print(f"BUY orders are blocked in SELL-ONLY mode")
+            print(f"Delete lockfile to resume buying")
+            print(f"{'='*70}\n")
+            return jsonify({
+                'error': 'Trading is in SELL-ONLY mode - no BUY orders allowed',
+                'reason': 'TRADING_EMERGENCY_STOP.conf is active',
+                'action': 'Delete lockfile to resume buying'
+            }), 503
+        
         # Parse incoming data
         data = request.get_json()
         if not data:
@@ -87,6 +103,16 @@ def tradingview_webhook():
                 if message:
                     print(f"   Message: {message}")
                 if action == 'buy':
+                    # 🚨 CRITICAL: Block BUY if emergency stop is active
+                    if os.path.exists(emergency_lock_file):
+                        print(f"🛑 BUY BLOCKED for {symbol} - EMERGENCY STOP ACTIVE (SELL-ONLY MODE)")
+                        results.append({
+                            'error': f'BUY blocked for {symbol} - EMERGENCY STOP active',
+                            'reason': 'TRADING_EMERGENCY_STOP.conf is active (SELL-ONLY mode)',
+                            'action': 'Delete lockfile to resume buying'
+                        })
+                        continue
+                    
                     df = strategy.get_product_candles(symbol)
                     if df is None or len(df) < 50:
                         results.append({'error': f'Insufficient data for {symbol}'})
@@ -149,6 +175,21 @@ def tradingview_webhook():
         if message:
             print(f"   Message: {message}")
         if action == 'buy':
+            # 🚨 CRITICAL: Block BUY if emergency stop is active
+            if os.path.exists(emergency_lock_file):
+                print(f"\n{'='*70}")
+                print(f"🛑 BUY BLOCKED - EMERGENCY STOP ACTIVE (SELL-ONLY MODE)")
+                print(f"{'='*70}")
+                print(f"Symbol: {symbol}")
+                print(f"Reason: TRADING_EMERGENCY_STOP.conf exists")
+                print(f"Action: Delete lockfile to resume buying")
+                print(f"{'='*70}\n")
+                return jsonify({
+                    'error': f'BUY blocked for {symbol} - EMERGENCY STOP active',
+                    'reason': 'TRADING_EMERGENCY_STOP.conf is active (SELL-ONLY mode)',
+                    'action': 'Delete lockfile to resume buying'
+                }), 503
+            
             df = strategy.get_product_candles(symbol)
             if df is None or len(df) < 50:
                 return jsonify({'error': f'Insufficient data for {symbol}'}), 400
