@@ -16,13 +16,13 @@ import threading
 # Minimal HTTP health server to satisfy platforms expecting $PORT
 def _start_health_server():
     try:
-        port_env = os.getenv("PORT")
-        if not port_env:
-            return
+        # Resolve port with a safe default if env is missing
+        port_env = os.getenv("PORT", "")
+        default_port = 8080
         try:
-            port = int(port_env)
+            port = int(port_env) if port_env else default_port
         except Exception:
-            return
+            port = default_port
         from http.server import BaseHTTPRequestHandler, HTTPServer
 
         class HealthHandler(BaseHTTPRequestHandler):
@@ -111,6 +111,7 @@ def main():
     try:
         logger.info("Initializing trading strategy...")
         # Start health server if PORT is provided by platform (e.g., Railway)
+        logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
         _start_health_server()
         strategy = TradingStrategy()
 
