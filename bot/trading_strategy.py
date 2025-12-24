@@ -8,6 +8,9 @@ import logging
 import json
 from logging.handlers import RotatingFileHandler
 
+# Safe alias to avoid function-scope shadowing of os
+_os = os
+
 # Add bot directory to path if running from root
 if os.path.basename(os.getcwd()) != 'bot':
     sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
@@ -34,6 +37,9 @@ from trade_analytics import TradeAnalytics
 from position_manager import PositionManager
 from retry_handler import retry_handler
 from indicators import calculate_vwap, calculate_ema, calculate_rsi, calculate_macd, calculate_atr, calculate_adx
+
+# Unique build signature for deployment verification
+STRATEGY_BUILD_ID = "TradingStrategy v7.1 init-hardened _os alias - 2025-12-24T17:40Z"
 
 class TradingStrategy:
     """
@@ -63,9 +69,10 @@ class TradingStrategy:
     def __init__(self):
         """Initialize trading strategy with broker and APEX strategy"""
         logger.info("Initializing NIJA Trading Strategy...")
+        logger.info(f"BUILD SIGNATURE: {STRATEGY_BUILD_ID}")
         
         # Initialize broker connection (supports PAPER_MODE)
-        paper_mode = str(os.getenv("PAPER_MODE", "")).lower() in ("1", "true", "yes")
+        paper_mode = str(_os.getenv("PAPER_MODE", "")).lower() in ("1", "true", "yes")
         if paper_mode:
             logger.info("PAPER_MODE enabled — using MockBroker")
             self.broker = MockBroker()
@@ -119,7 +126,7 @@ class TradingStrategy:
         print("🔥 BROKER CONNECTED, CALLING get_account_balance() NEXT", flush=True)
         
         # Initialize analytics tracker with correct path
-        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        data_dir = _os.path.join(_os.path.dirname(__file__), '..', 'data')
         self.analytics = TradeAnalytics(data_dir=data_dir)
         logger.info("📊 Trade analytics initialized")
         
@@ -151,7 +158,7 @@ class TradingStrategy:
             logger.info(f"Account balance: ${self.account_balance:,.2f}")
             
             # EMERGENCY CHECK: Warn if balance is critically low
-            MINIMUM_TRADING_BALANCE = float(os.getenv("MINIMUM_TRADING_BALANCE", "25.0"))
+            MINIMUM_TRADING_BALANCE = float(_os.getenv("MINIMUM_TRADING_BALANCE", "25.0"))
             
             # Get total account value including crypto
             balance_dict = self.broker.get_account_balance()
@@ -238,7 +245,7 @@ To enable trading:
         self.open_positions = {}
         # ACTIVE TRADING MODE: configurable cap to stop runaway accumulation
         try:
-            self.max_concurrent_positions = int(os.getenv("MAX_CONCURRENT_POSITIONS", "8") or 8)
+            self.max_concurrent_positions = int(_os.getenv("MAX_CONCURRENT_POSITIONS", "8") or 8)
         except Exception:
             self.max_concurrent_positions = 8
         self.total_trades_executed = 0
@@ -264,7 +271,7 @@ To enable trading:
         
         # Manual-sell reentry protection
         try:
-            self.reentry_cooldown_minutes = int(os.getenv("REENTRY_COOLDOWN_MINUTES", "60") or 60)
+            self.reentry_cooldown_minutes = int(_os.getenv("REENTRY_COOLDOWN_MINUTES", "60") or 60)
         except Exception:
             self.reentry_cooldown_minutes = 60
         self.recent_manual_sells = {}  # symbol -> iso timestamp of last detected manual sell
@@ -311,8 +318,8 @@ To enable trading:
                 # __init__ cause Railway to kill container after ~7 seconds
                 current_count = len(self.open_positions)
                 if current_count > self.max_concurrent_positions:
-                    lock_path = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
-                    emergency_locked = os.path.exists(lock_path)
+                    lock_path = _os.path.join(_os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+                    emergency_locked = _os.path.exists(lock_path)
                     if emergency_locked:
                         logger.info("⏭️  Overage detected at startup, but EMERGENCY STOP is active — not liquidating.")
                         logger.info("🔄 Deferring and suppressing startup liquidation while in sell-only mode.")
@@ -329,7 +336,7 @@ To enable trading:
                         logger.warning("=" * 80)
                         # Auto-enable SELL-ONLY lock to prevent re-entries during cleanup
                         try:
-                            if not os.path.exists(lock_path):
+                            if not _os.path.exists(lock_path):
                                 with open(lock_path, 'w') as f:
                                     f.write('AUTO-LOCK: Over-cap at startup')
                                 logger.error("🔒 Enabled SELL-ONLY mode during startup overage cleanup")
@@ -356,18 +363,18 @@ To enable trading:
 
         # Optional hard guard: max hold time for any position (minutes). 0 disables.
         try:
-            self.max_hold_minutes = int(os.getenv("MAX_HOLD_MINUTES", "0") or 0)
+            self.max_hold_minutes = int(_os.getenv("MAX_HOLD_MINUTES", "0") or 0)
             if self.max_hold_minutes < 0:
                 self.max_hold_minutes = 0
         except Exception:
             self.max_hold_minutes = 0
         
         # Trade journal file
-        self.trade_journal_file = os.path.join(os.path.dirname(__file__), '..', 'trade_journal.jsonl')
+        self.trade_journal_file = _os.path.join(_os.path.dirname(__file__), '..', 'trade_journal.jsonl')
 
         # 🚨 CRITICAL EMERGENCY CHECK: If lockfile exists, set flag to block NEW entries only
-        emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
-        self.emergency_stop_active = os.path.exists(emergency_lock_file)
+        emergency_lock_file = _os.path.join(_os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+        self.emergency_stop_active = _os.path.exists(emergency_lock_file)
         
         if self.emergency_stop_active:
             logger.error("=" * 80)
@@ -2285,7 +2292,6 @@ To enable trading:
                 try:
                     current_count = len(self.open_positions)
                     # Skip any startup liquidation when emergency stop is active or cap is invalid (<=0)
-                    import os
                     emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
                     emergency_locked = os.path.exists(emergency_lock_file)
                     if emergency_locked:
@@ -2310,7 +2316,6 @@ To enable trading:
             # When TRADING_EMERGENCY_STOP.conf exists, run in SELL-ONLY mode:
             # - Continue to manage and close existing positions per rules (SL/TP/Trailing)
             # - Do NOT open new positions
-            import os
             emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
             trading_locked = False
             if os.path.exists(emergency_lock_file):
@@ -2610,7 +2615,6 @@ To enable trading:
                 self._cycle_sync_counter = 0
 
             # SELL-ONLY mode support (same semantics as run_cycle)
-            import os
             emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
             trading_locked = os.path.exists(emergency_lock_file)
             # FORCE EXIT ALL support with emergency override protection
