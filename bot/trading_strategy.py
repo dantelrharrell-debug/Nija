@@ -2447,10 +2447,9 @@ To enable trading:
                 # If we have more than cap positions, close the weakest ones for profit
                 self.close_excess_positions(max_positions=self.max_concurrent_positions)
 
-                    logger.warning("⚠️  manage_open_positions: No open positions to manage")
             # Attempt auto-unlock of SELL-only lock if we're back within cap
             self._auto_unlock_sell_only_if_safe()
-                logger.info(f"📊 Managing {len(self.open_positions)} open position(s): {list(self.open_positions.keys())}")
+
             # Guard: if no trading balance, do not attempt NEW orders
             # Still allow sell-only position management when locked
             if not self.account_balance or self.account_balance <= 0:
