@@ -1,14 +1,20 @@
-Harden TradingStrategy init; add build signature; force rebuild
+Broker buy guard + sell-only hardening: block buys, prevent re-entry
 
-Fix: Use _os for env/path in __init__ to avoid local os shadowing that caused UnboundLocalError at startup.
-Add: BUILD SIGNATURE log to verify the deployed image in Railway logs.
-Chore: Bump Dockerfile CACHE_BUST to guarantee a fresh Railway rebuild.
+Why:
+- Bot was buying immediately after sells and during emergency stop; account bleeding persisted.
 
-Impact:
-- Removes UnboundLocalError during TradingStrategy initialization.
-- Provides clear log marker to confirm the running image version.
-- Forces Railway to build and deploy the updated code.
+What changed:
+- Add broker-layer BUY guard: blocks any BUY when TRADING_EMERGENCY_STOP.conf exists or HARD_BUY_OFF=1. [bot/broker_manager.py](bot/broker_manager.py#L792-L812)
+- Disable auto-unlock of SELL-only mode unless ALLOW_AUTO_UNLOCK_SELL_ONLY=1 (manual-only lock). [bot/trading_strategy.py](bot/trading_strategy.py#L2265-L2290)
+- Record recently_sold on every successful exit (normal/forced) to enforce cooldown and prevent immediate re-buys. [bot/trading_strategy.py](bot/trading_strategy.py#L1699-L1720), [bot/trading_strategy.py](bot/trading_strategy.py#L2060-L2070)
 
-Files:
-- bot/trading_strategy.py
-- Dockerfile
+Operational notes:
+- Set HARD_BUY_OFF=1 in Railway env to hard-disable buys at broker.
+- Keep TRADING_EMERGENCY_STOP.conf present until you explicitly want to resume entries.
+- Redeploy/restart service for changes to take effect.
+
+Verification:
+- Logs should show "BUY BLOCKED at broker layer" on any attempted buy.
+- python check_bleeding_status.py and python monitor_selling.py should show 0 new buys.
+
+Refs: Emergency bleeding fix (2025-12-24), sell-only mode & cooldown enforcement.
