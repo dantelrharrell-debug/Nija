@@ -2277,7 +2277,15 @@ To enable trading:
                 self._startup_sync_pending = False  # Clear flag immediately to prevent re-execution
                 try:
                     current_count = len(self.open_positions)
-                    if current_count > self.max_concurrent_positions:
+                    # Skip any startup liquidation when emergency stop is active or cap is invalid (<=0)
+                    import os
+                    emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+                    emergency_locked = os.path.exists(emergency_lock_file)
+                    if emergency_locked:
+                        logger.info("⏭️  Startup overage enforcement skipped: EMERGENCY STOP active (sell-only mode)")
+                    elif self.max_concurrent_positions <= 0:
+                        logger.warning("⏭️  Startup overage enforcement skipped: max_concurrent_positions <= 0 (no liquidation)")
+                    elif current_count > self.max_concurrent_positions:
                         logger.error("=" * 80)
                         logger.error(
                             f"🚨 STARTUP OVERAGE: {current_count} positions exceed cap of {self.max_concurrent_positions}. "
@@ -2330,13 +2338,21 @@ To enable trading:
             # This ensures we never accumulate more than max_concurrent_positions
             try:
                 current_position_count = len(self.open_positions)
-                if current_position_count > self.max_concurrent_positions:
-                    logger.error("=" * 80)
-                    logger.error(f"🚨 EMERGENCY: {current_position_count} positions exceed limit of {self.max_concurrent_positions}")
-                    logger.error("   Auto-liquidating excess positions NOW before continuing...")
-                    logger.error("=" * 80)
-                    # Use 10s timeout for mid-cycle liquidation to keep bot responsive
-                    self.close_excess_positions(max_positions=self.max_concurrent_positions, timeout_seconds=10)
+                # Do NOT auto-liquidate due to cap when EMERGENCY STOP is active or cap <= 0
+                emergency_locked = os.path.exists(os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf'))
+                if not emergency_locked and self.max_concurrent_positions > 0:
+                    if current_position_count > self.max_concurrent_positions:
+                        logger.error("=" * 80)
+                        logger.error(f"🚨 EMERGENCY: {current_position_count} positions exceed limit of {self.max_concurrent_positions}")
+                        logger.error("   Auto-liquidating excess positions NOW before continuing...")
+                        logger.error("=" * 80)
+                        # Use 10s timeout for mid-cycle liquidation to keep bot responsive
+                        self.close_excess_positions(max_positions=self.max_concurrent_positions, timeout_seconds=10)
+                else:
+                    if emergency_locked:
+                        logger.info("⏭️  Position-cap liquidation suppressed: EMERGENCY STOP active (sell-only mode)")
+                    elif self.max_concurrent_positions <= 0:
+                        logger.warning("⏭️  Position-cap liquidation suppressed: max_concurrent_positions <= 0")
             except Exception as e:
                 logger.error(f"Error during emergency position check: {e}")
             
@@ -2400,8 +2416,11 @@ To enable trading:
             self.manage_open_positions()
             
             # *** CLOSE EXCESS POSITIONS IF OVER LIMIT ***
-            # If we have more than 8 positions, close the weakest ones for profit
-            self.close_excess_positions(max_positions=self.max_concurrent_positions)
+            # Skip cap-based liquidation when EMERGENCY STOP active or cap <= 0
+            emergency_locked = os.path.exists(os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf'))
+            if not emergency_locked and self.max_concurrent_positions > 0:
+                # If we have more than cap positions, close the weakest ones for profit
+                self.close_excess_positions(max_positions=self.max_concurrent_positions)
 
             # Attempt auto-unlock of SELL-only lock if we're back within cap
             self._auto_unlock_sell_only_if_safe()
@@ -2499,7 +2518,7 @@ To enable trading:
                 logger.info("🛡️ Sell-only mode: skipping new market scan and entry analysis.")
                 logger.info("   ✅ Existing positions WILL be managed (exits via SL/TP/trailing)")
                 logger.info("   ❌ NO new BUY entries will be opened")
-                # IMPORTANT: Return ONLY skips new entry scan, does NOT close existing positions
+                # IMPORTANT: In sell-only mode, do NOT liquidate due to cap
                 return
 
             logger.info(f"🎯 Analyzing {len(self.trading_pairs)} markets for signals...")
@@ -2597,9 +2616,7 @@ To enable trading:
                 logger.error("Managing open positions only; new entries are blocked.")
                 # Manage/exit existing positions using current rules
                 self.manage_open_positions()
-                # Trim to exposure cap if needed
-                self.close_excess_positions(max_positions=self.max_concurrent_positions)
-                # Attempt auto-unlock: if within cap, remove lock and continue
+                # In sell-only mode, do NOT liquidate due to cap; only auto-unlock when safe
                 if self._auto_unlock_sell_only_if_safe():
                     logger.info("🔓 SELL-only auto-unlock engaged: resuming normal entries.")
                 else:
