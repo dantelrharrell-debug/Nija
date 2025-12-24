@@ -311,26 +311,34 @@ To enable trading:
                 # __init__ cause Railway to kill container after ~7 seconds
                 current_count = len(self.open_positions)
                 if current_count > self.max_concurrent_positions:
-                    logger.warning("=" * 80)
-                    logger.warning(
-                        f"⚠️  OVERAGE DETECTED: {current_count} positions open, max is {self.max_concurrent_positions}"
-                    )
-                    logger.warning("   Liquidating {0} weakest positions for profit...".format(
-                        current_count - self.max_concurrent_positions
-                    ))
-                    logger.warning("=" * 80)
-                    # Auto-enable SELL-ONLY lock to prevent re-entries during cleanup
-                    try:
-                        lock_path = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
-                        if not os.path.exists(lock_path):
-                            with open(lock_path, 'w') as f:
-                                f.write('AUTO-LOCK: Over-cap at startup')
-                            logger.error("🔒 Enabled SELL-ONLY mode during startup overage cleanup")
-                    except Exception as lock_err:
-                        logger.warning(f"Failed to set SELL-ONLY lock: {lock_err}")
-                    # Set flag to trigger liquidation in first run_cycle() call
-                    self._startup_sync_pending = True
-                    logger.info("🔄 Deferring overage liquidation to first trading cycle (Railway startup timeout workaround)")
+                    import os
+                    lock_path = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+                    emergency_locked = os.path.exists(lock_path)
+                    if emergency_locked:
+                        logger.info("⏭️  Overage detected at startup, but EMERGENCY STOP is active — not liquidating.")
+                        logger.info("🔄 Deferring and suppressing startup liquidation while in sell-only mode.")
+                        # Still set the pending flag so run_cycle can re-check and avoid long init work
+                        self._startup_sync_pending = True
+                    else:
+                        logger.warning("=" * 80)
+                        logger.warning(
+                            f"⚠️  OVERAGE DETECTED: {current_count} positions open, max is {self.max_concurrent_positions}"
+                        )
+                        logger.warning("   Liquidating {0} weakest positions for profit...".format(
+                            current_count - self.max_concurrent_positions
+                        ))
+                        logger.warning("=" * 80)
+                        # Auto-enable SELL-ONLY lock to prevent re-entries during cleanup
+                        try:
+                            if not os.path.exists(lock_path):
+                                with open(lock_path, 'w') as f:
+                                    f.write('AUTO-LOCK: Over-cap at startup')
+                                logger.error("🔒 Enabled SELL-ONLY mode during startup overage cleanup")
+                        except Exception as lock_err:
+                            logger.warning(f"Failed to set SELL-ONLY lock: {lock_err}")
+                        # Set flag to trigger liquidation in first run_cycle() call
+                        self._startup_sync_pending = True
+                        logger.info("🔄 Deferring overage liquidation to first trading cycle (Railway startup timeout workaround)")
             except Exception as sync_err:
                 logger.error(f"⚠️ Position sync failed: {sync_err}")
                 import traceback
@@ -2318,7 +2326,16 @@ To enable trading:
 
             # FORCE EXIT ALL positions if requested via flag file
             force_exit_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_ALL.conf')
+            override_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_OVERRIDE.conf')
+            allow_force_exit = (os.getenv('ALLOW_FORCE_EXIT_DURING_EMERGENCY', '0') == '1') or os.path.exists(override_flag)
             if os.path.exists(force_exit_flag):
+                if trading_locked and not allow_force_exit:
+                    logger.error("="*80)
+                    logger.error("🛑 FORCE_EXIT_ALL suppressed — EMERGENCY STOP active (sell-only mode)")
+                    logger.error("   Set ALLOW_FORCE_EXIT_DURING_EMERGENCY=1 or create FORCE_EXIT_OVERRIDE.conf to proceed.")
+                    logger.error("="*80)
+                    # Do not remove the flag; keep for when emergency ends or override is set
+                    return
                 logger.error("="*80)
                 logger.error("🛑 FORCE_EXIT_ALL flag detected — closing all positions now")
                 logger.error("="*80)
@@ -2597,9 +2614,18 @@ To enable trading:
             import os
             emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
             trading_locked = os.path.exists(emergency_lock_file)
-            # FORCE EXIT ALL support
+            # FORCE EXIT ALL support with emergency override protection
             force_exit_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_ALL.conf')
+            override_flag = os.path.join(os.path.dirname(__file__), '..', 'FORCE_EXIT_OVERRIDE.conf')
+            allow_force_exit = (os.getenv('ALLOW_FORCE_EXIT_DURING_EMERGENCY', '0') == '1') or os.path.exists(override_flag)
             if os.path.exists(force_exit_flag):
+                if trading_locked and not allow_force_exit:
+                    logger.error("="*80)
+                    logger.error("🛑 FORCE_EXIT_ALL suppressed — EMERGENCY STOP active (sell-only mode)")
+                    logger.error("   Set ALLOW_FORCE_EXIT_DURING_EMERGENCY=1 or create FORCE_EXIT_OVERRIDE.conf to proceed.")
+                    logger.error("="*80)
+                    # Keep the flag for later processing once emergency ends or override set
+                    return
                 logger.error("="*80)
                 logger.error("🛑 FORCE_EXIT_ALL flag detected — closing all positions now")
                 logger.error("="*80)
