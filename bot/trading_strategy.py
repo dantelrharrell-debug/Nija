@@ -7,9 +7,43 @@ import os
 import logging
 import json
 from logging.handlers import RotatingFileHandler
+from threading import Thread
+import queue
 
 # Safe alias to avoid function-scope shadowing of os
 _os = os
+
+# Timeout wrapper for broker API calls to prevent indefinite hangs
+def call_with_timeout(func, args=(), kwargs={}, timeout_seconds=10):
+    """
+    Execute function with timeout. Returns (result, error).
+    If timeout occurs, returns (None, TimeoutError).
+    """
+    result_queue = queue.Queue()
+    
+    def worker():
+        try:
+            result = func(*args, **kwargs)
+            result_queue.put(('success', result))
+        except Exception as e:
+            result_queue.put(('error', e))
+    
+    thread = Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    
+    if thread.is_alive():
+        # Timeout occurred - thread is still running
+        return None, TimeoutError(f"Operation timed out after {timeout_seconds}s")
+    
+    try:
+        status, value = result_queue.get_nowait()
+        if status == 'success':
+            return value, None
+        else:
+            return None, value
+    except queue.Empty:
+        return None, Exception("Thread completed but no result available")
 
 # Add bot directory to path if running from root
 if os.path.basename(os.getcwd()) != 'bot':
@@ -1565,23 +1599,29 @@ To enable trading:
                                 exit_signal = 'SELL'
                                 try:
                                     exit_quantity = position.get('crypto_quantity', position['size_usd'] / entry_price) * stepped_exit_info['exit_pct']
-                                    order = self.broker.place_market_order(
-                                        symbol, 
-                                        exit_signal.lower(), 
-                                        exit_quantity,
-                                        size_type='base'
+                                    
+                                    # CRITICAL: Add 10s timeout to prevent broker API hang from blocking entire loop
+                                    logger.info(f"   📤 Attempting stepped exit order with 10s timeout...")
+                                    order, error = call_with_timeout(
+                                        self.broker.place_market_order,
+                                        args=(symbol, exit_signal.lower(), exit_quantity),
+                                        kwargs={'size_type': 'base'},
+                                        timeout_seconds=10
                                     )
-                                    if order and order.get('status') == 'filled':
+                                    
+                                    if error:
+                                        if isinstance(error, TimeoutError):
+                                            logger.warning(f"   ⏰ Stepped exit order TIMED OUT after 10s - skipping to prevent loop hang")
+                                        else:
+                                            logger.warning(f"   ⚠️ Stepped exit order failed: {error}")
+                                    elif order and order.get('status') == 'filled':
                                         logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
                                         # Don't remove position, just mark that portion as exited
                                         position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
+                                    else:
+                                        logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
                                 except Exception as e:
-                                    logger.warning(f"   ⚠️ Stepped exit order failed: {e}")
-                    
-                    # Check stop loss
-                    if current_price <= stop_loss:
-                        exit_reason = f"Stop loss hit @ ${stop_loss:.2f}"
-                    # Check trailing stop
+                                    logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
                     elif current_price <= trailing_stop:
                         exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
                     # Check take profit
@@ -1614,23 +1654,29 @@ To enable trading:
                             exit_signal = 'BUY'
                             try:
                                 exit_quantity = position.get('crypto_quantity', position['size_usd'] / entry_price) * stepped_exit_info['exit_pct']
-                                order = self.broker.place_market_order(
-                                    symbol, 
-                                    exit_signal.lower(), 
-                                    exit_quantity,
-                                    size_type='base'
+                                
+                                # CRITICAL: Add 10s timeout to prevent broker API hang from blocking entire loop
+                                logger.info(f"   📤 Attempting stepped exit order with 10s timeout...")
+                                order, error = call_with_timeout(
+                                    self.broker.place_market_order,
+                                    args=(symbol, exit_signal.lower(), exit_quantity),
+                                    kwargs={'size_type': 'base'},
+                                    timeout_seconds=10
                                 )
-                                if order and order.get('status') == 'filled':
+                                
+                                if error:
+                                    if isinstance(error, TimeoutError):
+                                        logger.warning(f"   ⏰ Stepped exit order TIMED OUT after 10s - skipping to prevent loop hang")
+                                    else:
+                                        logger.warning(f"   ⚠️ Stepped exit order failed: {error}")
+                                elif order and order.get('status') == 'filled':
                                     logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
                                     # Don't remove position, just mark that portion as exited
                                     position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
+                                else:
+                                    logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
                             except Exception as e:
-                                logger.warning(f"   ⚠️ Stepped exit order failed: {e}")
-                    
-                    # Check stop loss
-                    if current_price >= stop_loss:
-                        exit_reason = f"Stop loss hit @ ${stop_loss:.2f}"
-                    # Check trailing stop
+                                logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
                     elif current_price >= trailing_stop:
                         exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
                     # Check take profit
