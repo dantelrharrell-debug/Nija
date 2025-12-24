@@ -850,16 +850,28 @@ To enable trading:
         try:
             # Fetch candle data
             df = self.fetch_candles(symbol)
+            
+            # If we have ANY candle data, extract the current price immediately
+            # This ensures price is always available for position management
+            current_price = None
+            if df is not None and len(df) > 0:
+                try:
+                    current_price = float(df['close'].iloc[-1])
+                except (ValueError, KeyError, TypeError):
+                    current_price = None
+            
+            # Check if we have minimum candles required
             if df is None or len(df) < self.min_candles_required:
                 return {
                     'symbol': symbol,
                     'signal': 'SKIP',
-                    'price': None,  # Explicitly set price=None when no data
+                    'price': current_price,  # Return whatever price we could extract
                     'reason': 'Insufficient candle data'
                 }
             
-            # Extract current price (always available if we have candles)
-            current_price = float(df['close'].iloc[-1])
+            # current_price already extracted above - re-verify it's a float for the next steps
+            if current_price is None:
+                current_price = float(df['close'].iloc[-1])
             
             # Calculate indicators
             indicators = self.calculate_indicators(df)
