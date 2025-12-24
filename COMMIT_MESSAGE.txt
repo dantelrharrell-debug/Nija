@@ -1,47 +1,14 @@
-Add comprehensive selling verification and diagnostic tools
+Harden TradingStrategy init; add build signature; force rebuild
 
-Critical Issue Investigation:
-- Bot bought 30 positions ($94.92) but executed 0 sells
-- All positions and cash missing from account
-- Added diagnostic tools to track money and verify selling logic
+Fix: Use _os for env/path in __init__ to avoid local os shadowing that caused UnboundLocalError at startup.
+Add: BUILD SIGNATURE log to verify the deployed image in Railway logs.
+Chore: Bump Dockerfile CACHE_BUST to guarantee a fresh Railway rebuild.
 
-New Diagnostic Scripts:
-- verify_nija_selling_now.py: Comprehensive selling & profit verification
-- quick_profit_check.py: One-command status check (simple yes/no)
-- is_nija_selling.py: Simple answer to "is NIJA selling?"
-- deep_diagnostic_buys.py: Track what happened to purchased positions
-- emergency_money_check.py: Find missing funds across all accounts
-- check_current_positions.py: Detailed position and balance check
-- check_selling_status.sh: Full diagnostic workflow
-- full_diagnostic.sh: Complete diagnostic runner
+Impact:
+- Removes UnboundLocalError during TradingStrategy initialization.
+- Provides clear log marker to confirm the running image version.
+- Forces Railway to build and deploy the updated code.
 
-Documentation:
-- SELLING_VERIFICATION.md: Complete guide to selling logic and verification
-- CRITICAL_FINDINGS.md: Analysis of current critical issues
-
-Previous Files:
-- check_balance_output.py: Balance check with file output logging
-
-Selling Logic Verification:
-✅ Code analysis confirms selling IS implemented correctly:
-  - Take profit: +6% (bot/trading_strategy.py line 646)
-  - Stop loss: -2% (bot/trading_strategy.py line 645)
-  - Trailing stops: 98% gain lock (lines 751-762)
-  - Position management: lines 680-900
-  - Retry logic: 3 attempts per order
-
-Critical Findings:
-❌ 30 BUY orders executed, 0 SELL orders found
-❌ $94.92 spent, $0.00 cash remaining
-❌ 0 crypto positions currently held
-⚠️  Money unaccounted for - requires immediate investigation
-
-Root Cause Analysis:
-- Selling logic IS implemented in code ✅
-- Problem is NOT the code - it's deployment/execution
-- Bot may not be running continuously on Railway
-- OR positions were sold manually outside bot
-- OR bot crashed after buying, never monitored positions
-
-Key Issue: Bot can only sell if it's actively running and monitoring.
-Selling logic exists but requires continuous 24/7 execution to work.
+Files:
+- bot/trading_strategy.py
+- Dockerfile
