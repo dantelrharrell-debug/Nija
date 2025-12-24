@@ -1456,10 +1456,21 @@ To enable trading:
         positions_to_close = []
         
         for symbol, position in self.open_positions.items():
+            # CRITICAL: Wrap each position in try/except to prevent one failure from blocking entire loop
             try:
+                logger.info(f"   🔍 Checking {symbol}...")
+                
                 # Get current price - try analysis first, fallback to broker price
-                analysis = self.analyze_symbol(symbol)
-                current_price = analysis.get('price')
+                analysis = None
+                current_price = None
+                
+                try:
+                    analysis = self.analyze_symbol(symbol)
+                    if analysis:
+                        current_price = analysis.get('price')
+                except Exception as e:
+                    logger.warning(f"   ⚠️ analyze_symbol() failed for {symbol}: {e}")
+                    analysis = {'signal': 'HOLD', 'reason': 'Analysis failed'}
                 
                 if not current_price:
                     # Fallback: get price directly from latest candle (only if analyze_symbol returned None/False)
@@ -1742,10 +1753,15 @@ To enable trading:
 
                     
                     except Exception as e:
-                        logger.error(f"Error closing {symbol} position: {e}")
+                        logger.error(f"❌ Error closing {symbol} position: {e}")
+                        logger.exception(f"Full traceback for {symbol} exit error:")
             
             except Exception as e:
-                logger.error(f"Error managing position {symbol}: {e}")
+                # CRITICAL: Catch ALL errors per position to prevent loop blockage
+                logger.error(f"❌ Error managing position {symbol}: {e}")
+                logger.exception(f"Full traceback for {symbol} management error:")
+                # Continue to next position - don't let one failure stop the entire loop
+                continue
         
         # Remove closed positions and reset consecutive counter on sells
         for symbol in positions_to_close:
