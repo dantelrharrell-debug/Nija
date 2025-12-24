@@ -253,6 +253,9 @@ To enable trading:
         # 🔥 CRITICAL: Sync any orphaned Coinbase positions into tracking
         # This catches losing positions that aren't in open_positions.json
         # This runs AFTER loading saved positions, so it ADDS to them (doesn't replace)
+        # DEFER heavy work (position sync + liquidation) to AFTER initialization completes
+        # Railway kills containers that take >7s to init - sync can take 15s+
+        self._startup_sync_pending = False
         if not paper_mode:
             try:
                 logger.info("🔄 Syncing actual Coinbase holdings into position tracker...")
@@ -269,21 +272,22 @@ To enable trading:
                 else:
                     logger.info(f"✅ No new positions to sync - tracking {len(self.open_positions)} from file")
 
-                # Immediately enforce position cap after sync to avoid runaway holdings on startup
-                try:
-                    current_count = len(self.open_positions)
-                    if current_count > self.max_concurrent_positions:
-                        logger.error("=" * 80)
-                        logger.error(
-                            f"🚨 STARTUP OVERAGE: {current_count} positions exceed cap of {self.max_concurrent_positions}. "
-                            "Auto-closing extras now."
-                        )
-                        logger.error("=" * 80)
-                        self.close_excess_positions(max_positions=self.max_concurrent_positions)
-                        logger.info(f"✅ Startup overage enforcement complete (now tracking {len(self.open_positions)} positions)")
-                except Exception as e:
-                    logger.error(f"Error during startup overage enforcement: {e}", exc_info=True)
-                    logger.warning("⚠️  Bot will continue despite liquidation error")
+                # DEFER overage liquidation to first run_cycle() call to avoid Railway startup timeout
+                # Railway expects app to signal "ready" quickly - long blocking operations during
+                # __init__ cause Railway to kill container after ~7 seconds
+                current_count = len(self.open_positions)
+                if current_count > self.max_concurrent_positions:
+                    logger.warning("=" * 80)
+                    logger.warning(
+                        f"⚠️  OVERAGE DETECTED: {current_count} positions open, max is {self.max_concurrent_positions}"
+                    )
+                    logger.warning("   Liquidating {0} weakest positions for profit...".format(
+                        current_count - self.max_concurrent_positions
+                    ))
+                    logger.warning("=" * 80)
+                    # Set flag to trigger liquidation in first run_cycle() call
+                    self._startup_sync_pending = True
+                    logger.info("🔄 Deferring overage liquidation to first trading cycle (Railway startup timeout workaround)")
             except Exception as sync_err:
                 logger.error(f"⚠️ Position sync failed: {sync_err}")
                 import traceback
@@ -2005,6 +2009,26 @@ To enable trading:
     def run_cycle(self):
         """Run a lightweight trading cycle used by the main loop with dynamic market fetching."""
         try:
+            # STARTUP OVERAGE LIQUIDATION (deferred from __init__ to avoid Railway timeout)
+            # Railway kills containers that take >7s to start - position liquidation can take 15-30s
+            # Do this ONCE on first run_cycle() call, then never again
+            if hasattr(self, '_startup_sync_pending') and self._startup_sync_pending:
+                self._startup_sync_pending = False  # Clear flag immediately to prevent re-execution
+                try:
+                    current_count = len(self.open_positions)
+                    if current_count > self.max_concurrent_positions:
+                        logger.error("=" * 80)
+                        logger.error(
+                            f"🚨 STARTUP OVERAGE: {current_count} positions exceed cap of {self.max_concurrent_positions}. "
+                            "Auto-closing extras now."
+                        )
+                        logger.error("=" * 80)
+                        self.close_excess_positions(max_positions=self.max_concurrent_positions)
+                        logger.info(f"✅ Startup overage enforcement complete (now tracking {len(self.open_positions)} positions)")
+                except Exception as e:
+                    logger.error(f"Error during startup overage enforcement: {e}", exc_info=True)
+                    logger.warning("⚠️  Bot will continue despite liquidation error")
+            
             # CHECK EMERGENCY LOCK
             # When TRADING_EMERGENCY_STOP.conf exists, run in SELL-ONLY mode:
             # - Continue to manage and close existing positions per rules (SL/TP/Trailing)
