@@ -311,7 +311,6 @@ To enable trading:
                 # __init__ cause Railway to kill container after ~7 seconds
                 current_count = len(self.open_positions)
                 if current_count > self.max_concurrent_positions:
-                    import os
                     lock_path = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
                     emergency_locked = os.path.exists(lock_path)
                     if emergency_locked:
