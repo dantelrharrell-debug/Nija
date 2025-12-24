@@ -1953,18 +1953,46 @@ To enable trading:
             logger.error("⚠️  Bot will continue despite liquidation error")
     
     def _auto_unlock_sell_only_if_safe(self) -> bool:
-        """Remove SELL-only lock when within position cap.
+        """Remove SELL-only lock when it's safe to resume entries.
+
+        Conditions required:
+        - Tracked positions are at/below `max_concurrent_positions`
+        - USD cash balance is at least `MIN_CASH_TO_BUY`
 
         Returns:
             bool: True if the lock was removed this call, else False.
         """
         try:
             lock_path = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
-            # Only attempt if lock exists and we are at/below the cap
-            if os.path.exists(lock_path) and len(self.open_positions) <= self.max_concurrent_positions:
+            if not os.path.exists(lock_path):
+                return False
+
+            within_cap = len(self.open_positions) <= self.max_concurrent_positions
+
+            try:
+                min_cash_to_buy = float(os.getenv("MIN_CASH_TO_BUY", "6.0"))
+            except Exception:
+                min_cash_to_buy = 6.0
+            live_balance = self.get_usd_balance()
+            cash_ok = live_balance >= min_cash_to_buy
+
+            if within_cap and cash_ok:
                 os.remove(lock_path)
-                logger.info("🔓 SELL-only lock removed: positions within cap; new entries enabled")
+                logger.info(
+                    f"🔓 SELL-only lock removed: positions within cap ({len(self.open_positions)}/" \
+                    f"{self.max_concurrent_positions}) and cash ${live_balance:.2f} ≥ min ${min_cash_to_buy:.2f}"
+                )
                 return True
+            else:
+                if not within_cap:
+                    logger.info(
+                        f"🔒 SELL-only remains: positions {len(self.open_positions)}/" \
+                        f"{self.max_concurrent_positions} exceed cap"
+                    )
+                if not cash_ok:
+                    logger.info(
+                        f"🔒 SELL-only remains: cash ${live_balance:.2f} < min ${min_cash_to_buy:.2f}"
+                    )
         except Exception as e:
             logger.warning(f"Failed to auto-unlock SELL-only mode: {e}")
         return False
