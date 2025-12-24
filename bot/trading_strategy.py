@@ -1924,6 +1924,28 @@ To enable trading:
                     continue
             
             logger.warning(f"🔄 Liquidation cycle complete: {successfully_closed}/{excess_count} positions closed")
+
+            # One-shot summary banner for clarity in constrained startup logs
+            try:
+                current_after = len(self.open_positions)
+                if current_after > MAX_CONCURRENT:
+                    over = current_after - MAX_CONCURRENT
+                    logger.error("=" * 80)
+                    logger.error(
+                        f"🚨 Liquidation summary: {successfully_closed}/{excess_count} closed; still {over} over limit."
+                    )
+                    logger.error(f"   Positions now: {current_after}/{MAX_CONCURRENT}")
+                    logger.error("   Remaining will be handled in next run.")
+                    logger.error("=" * 80)
+                else:
+                    logger.info("=" * 80)
+                    logger.info(
+                        f"✅ Liquidation summary: {successfully_closed}/{excess_count} closed."
+                    )
+                    logger.info(f"   Positions now: {current_after}/{MAX_CONCURRENT} (within limit)")
+                    logger.info("=" * 80)
+            except Exception:
+                pass
         
         except Exception as e:
             # Catch-all to prevent entire bot crash
