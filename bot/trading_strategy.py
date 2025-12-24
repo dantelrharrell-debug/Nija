@@ -857,12 +857,16 @@ To enable trading:
                     'reason': 'Insufficient candle data'
                 }
             
+            # Extract current price (always available if we have candles)
+            current_price = float(df['close'].iloc[-1])
+            
             # Calculate indicators
             indicators = self.calculate_indicators(df)
             if not indicators:
                 return {
                     'symbol': symbol,
                     'signal': 'SKIP',
+                    'price': current_price,  # Include price even when skipping
                     'reason': 'Failed to calculate indicators'
                 }
             
@@ -874,6 +878,7 @@ To enable trading:
                     'symbol': symbol,
                     'signal': 'HOLD',
                     'direction': 'none',
+                    'price': current_price,  # Include price for position management
                     'reason': f'Market filter: {filter_reason}'
                 }
             
@@ -889,6 +894,7 @@ To enable trading:
                             'symbol': symbol,
                             'signal': 'HOLD',
                             'direction': 'uptrend',
+                            'price': current_price,  # Include price for position management
                             'reason': f'RSI overbought ({rsi_14:.1f} > 70) - waiting for pullback'
                         }
                     
@@ -899,6 +905,7 @@ To enable trading:
                             'symbol': symbol,
                             'signal': 'HOLD',
                             'direction': 'uptrend',
+                            'price': current_price,  # Include price for position management
                             'reason': f'Score too low ({long_score:.1f} < 70) - waiting for stronger signal'
                         }
                     
@@ -911,6 +918,7 @@ To enable trading:
                             'symbol': symbol,
                             'signal': 'HOLD',
                             'direction': 'uptrend',
+                            'price': current_price,  # Include price for position management
                             'reason': f'Too close to recent high (${current_price:.4f} vs ${recent_high:.4f}) - waiting for dip'
                         }
                     
@@ -940,6 +948,7 @@ To enable trading:
                 'symbol': symbol,
                 'signal': 'HOLD',
                 'direction': direction,
+                'price': current_price,  # Include price for position management
                 'reason': 'No entry conditions met'
             }
             
