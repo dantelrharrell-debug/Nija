@@ -1461,6 +1461,11 @@ class BaseBroker(ABC):
 
                 for pos in spot_positions:
                     asset = getattr(pos, 'asset', None) if not isinstance(pos, dict) else pos.get('asset')
+
+                    # Skip fiat assets; we only return crypto positions
+                    if not asset or asset in ['USD', 'USDC']:
+                        continue
+
                     # Try to fetch base available to trade; if not present, derive from fiat value
                     base_avail = None
                     if isinstance(pos, dict):
@@ -1477,7 +1482,7 @@ class BaseBroker(ABC):
                         else:
                             # Derive base qty from fiat using current price
                             fiat_val = float(fiat_avail or 0)
-                            if asset and fiat_val > 0:
+                            if fiat_val > 0:
                                 symbol = f"{asset}-USD"
                                 price = self.get_current_price(symbol)
                                 if price > 0:
@@ -1485,7 +1490,7 @@ class BaseBroker(ABC):
                     except Exception:
                         quantity = 0.0
 
-                    if asset and asset not in ['USD', 'USDC'] and quantity > 0:
+                    if quantity > 0:
                         positions.append({
                             'symbol': f"{asset}-USD",
                             'quantity': quantity,
