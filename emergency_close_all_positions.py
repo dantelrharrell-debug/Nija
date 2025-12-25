@@ -7,6 +7,7 @@ import os
 import sys
 from coinbase.rest import RESTClient
 import json
+import time
 
 def emergency_close_all():
     """Close all positions on Coinbase immediately"""
@@ -32,7 +33,7 @@ def emergency_close_all():
         # Get all accounts
         print("📊 Fetching all accounts...")
         accounts_response = client.get_accounts()
-        accounts = accounts_response.get('accounts', [])
+        accounts = getattr(accounts_response, 'accounts', [])
         
         print(f"\n✅ Found {len(accounts)} accounts\n")
         
@@ -68,7 +69,6 @@ def emergency_close_all():
         print("\n⚠️  WARNING: This will sell ALL crypto positions immediately")
         print("    Continuing in 3 seconds...")
         
-        import time
         time.sleep(3)
         
         # Sell each holding
