@@ -107,6 +107,44 @@ class TradingStrategy:
         5. Log cycle summary
         """
         try:
+            # 🚨 EMERGENCY: Check if LIQUIDATE_ALL mode is active
+            liquidate_all_file = os.path.join(os.path.dirname(__file__), '..', 'LIQUIDATE_ALL_NOW.conf')
+            if os.path.exists(liquidate_all_file):
+                logger.error("🚨 EMERGENCY LIQUIDATION MODE ACTIVE")
+                logger.error("   SELLING ALL POSITIONS IMMEDIATELY")
+                
+                if self.broker:
+                    positions = self.broker.get_positions()
+                    logger.error(f"   Found {len(positions)} positions to liquidate")
+                    
+                    for i, pos in enumerate(positions, 1):
+                        symbol = pos.get('symbol', 'UNKNOWN')
+                        currency = pos.get('currency', symbol.split('-')[0])
+                        balance = pos.get('balance', 0)
+                        
+                        logger.error(f"   [{i}/{len(positions)}] FORCE SELLING {currency}...")
+                        
+                        try:
+                            result = self.broker.market_order_sell(
+                                product_id=symbol,
+                                base_size=str(balance)
+                            )
+                            if result and result.get('success'):
+                                logger.error(f"   ✅ SOLD {currency}")
+                            else:
+                                logger.error(f"   ❌ Failed to sell {currency}")
+                        except Exception as e:
+                            logger.error(f"   ❌ Error selling {currency}: {e}")
+                    
+                    # Remove the emergency file after execution
+                    try:
+                        os.remove(liquidate_all_file)
+                        logger.error("✅ Emergency liquidation complete - removed LIQUIDATE_ALL_NOW.conf")
+                    except:
+                        pass
+                
+                return  # Skip normal trading cycle
+            
             # CRITICAL: Enforce position cap first
             if self.enforcer:
                 logger.info("🔍 Enforcing position cap (max 8)...")
@@ -140,6 +178,11 @@ class TradingStrategy:
             
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
+            
+            # CRITICAL FIX: Identify ALL positions that need to exit first
+            # Then sell them ALL concurrently, not one at a time
+            positions_to_exit = []
+            
             for position in current_positions:
                 try:
                     symbol = position.get('symbol')
@@ -187,28 +230,49 @@ class TradingStrategy:
                     # This doesn't require knowing entry price
                     allow_trade, trend, market_reason = self.apex.check_market_filter(df, indicators)
                     
-                    # If market conditions deteriorate, consider selling
+                    # If market conditions deteriorate, mark for exit
                     if not allow_trade:
                         logger.info(f"   ⚠️ Market conditions weak: {market_reason}")
-                        logger.info(f"   💰 SELLING {symbol} due to weak market conditions")
-                        
-                        # Place sell order via broker
-                        try:
-                            result = self.broker.place_market_order(
-                                symbol=symbol,
-                                side='sell',
-                                quantity=quantity,
-                                size_type='base'
-                            )
-                            if result.get('status') != 'error':
-                                logger.info(f"   ✅ Position closed successfully")
-                            else:
-                                logger.error(f"   ❌ Failed to close position: {result.get('error')}")
-                        except Exception as sell_err:
-                            logger.error(f"   ❌ Error closing position: {sell_err}")
+                        logger.info(f"   💰 MARKING {symbol} for concurrent exit")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': market_reason
+                        })
                     
                 except Exception as e:
-                    logger.error(f"   Error managing position {symbol}: {e}", exc_info=True)
+                    logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
+            
+            # CRITICAL FIX: Now sell ALL positions concurrently (not one at a time)
+            if positions_to_exit:
+                logger.info(f"")
+                logger.info(f"🔴 CONCURRENT EXIT: Selling {len(positions_to_exit)} positions NOW")
+                logger.info(f"="*80)
+                
+                for i, pos_data in enumerate(positions_to_exit, 1):
+                    symbol = pos_data['symbol']
+                    quantity = pos_data['quantity']
+                    reason = pos_data['reason']
+                    
+                    logger.info(f"[{i}/{len(positions_to_exit)}] Selling {symbol} ({reason})")
+                    
+                    try:
+                        result = self.broker.place_market_order(
+                            symbol=symbol,
+                            side='sell',
+                            quantity=quantity,
+                            size_type='base'
+                        )
+                        if result.get('status') != 'error':
+                            logger.info(f"  ✅ {symbol} SOLD successfully!")
+                        else:
+                            logger.error(f"  ❌ {symbol} failed: {result.get('error')}")
+                    except Exception as sell_err:
+                        logger.error(f"  ❌ {symbol} error: {sell_err}")
+                
+                logger.info(f"="*80)
+                logger.info(f"✅ Concurrent exit complete: {len(positions_to_exit)} positions processed")
+                logger.info(f"")
             
             # STEP 2: Look for new entry opportunities (only if entries allowed)
             if not entries_blocked and len(current_positions) < 8 and account_balance >= 25.0:

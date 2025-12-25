@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """EMERGENCY: Sell ALL crypto positions immediately"""
 import sys
-sys.path.insert(0, 'bot')
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
-from broker_manager import BrokerManager
+from broker_manager import CoinbaseBroker
 import time
 
 print("\n" + "="*70)
 print("🚨 EMERGENCY LIQUIDATION - SELLING ALL CRYPTO NOW")
 print("="*70)
 
-broker = BrokerManager()
-balance = broker.get_account_balance()
+broker = CoinbaseBroker()
+broker.connect()
 
-print(f"\n💵 Starting USD: ${balance['usd']:.2f}")
-print("\n📊 Crypto Holdings to Sell:")
-for symbol, amount in balance['crypto'].items():
-    if amount > 0:
-        print(f"   {symbol}: {amount:.8f}")
+# Get current positions
+positions = broker.get_positions()
+
+print(f"\n📊 Crypto Holdings to Sell: {len(positions)} positions")
+for pos in positions:
+    symbol = pos.get('symbol', 'UNKNOWN')
+    balance = pos.get('balance', 0)
+    print(f"   {symbol}: {balance:.8f}")
 
 total_sold_value = 0
 successful = 0
@@ -27,27 +31,28 @@ print("\n" + "="*70)
 print("🔴 EXECUTING MARKET SELLS...")
 print("="*70)
 
-for symbol, amount in balance['crypto'].items():
-    if amount > 0 and symbol != "ATOM":  # Skip ATOM if 0
-        pair = f"{symbol}-USD"
-        try:
-            print(f"\n🔄 Selling {amount:.8f} {symbol}...")
-            
-            # Place market sell order
-            result = broker.place_market_order(
-                symbol=pair,
-                side="sell",
-                size=amount,
-                size_type="base"  # Sell by crypto amount, not USD
-            )
-            
-            if result and result.get("status") in ["filled", "partial"]:
-                filled_value = float(result.get("filled_value", 0))
-                total_sold_value += filled_value
-                successful += 1
-                print(f"   ✅ SOLD for ${filled_value:.2f}")
-            else:
-                failed += 1
+for pos in positions:
+    symbol = pos.get('symbol', 'UNKNOWN')
+    currency = pos.get('currency', symbol.split('-')[0] if '-' in symbol else symbol)
+    balance = pos.get('balance', 0)
+    
+    if balance <= 0:
+        continue
+        
+    try:
+        print(f"\n🔄 Selling {balance:.8f} {currency}...")
+        
+        # Place market sell order
+        result = broker.market_order_sell(
+            product_id=symbol,
+            base_size=str(balance)
+        )
+        
+        if result and result.get("success"):
+            successful += 1
+            print(f"   ✅ SOLD {currency}!")
+        else:
+            failed += 1
                 error_msg = result.get("error", result.get("message", "Unknown error"))
                 print(f"   ❌ FAILED: {error_msg}")
                 
