@@ -120,15 +120,19 @@ class TradingStrategy:
                     for i, pos in enumerate(positions, 1):
                         symbol = pos.get('symbol', 'UNKNOWN')
                         currency = pos.get('currency', symbol.split('-')[0])
-                        balance = pos.get('balance', 0)
+                        quantity = pos.get('quantity', 0)
                         
-                        logger.error(f"   [{i}/{len(positions)}] FORCE SELLING {currency}...")
+                        if quantity <= 0:
+                            logger.error(f"   [{i}/{len(positions)}] SKIPPING {currency} (quantity={quantity})")
+                            continue
+                        
+                        logger.error(f"   [{i}/{len(positions)}] FORCE SELLING {quantity:.8f} {currency}...")
                         
                         try:
                             result = self.broker.place_market_order(
                                 symbol=symbol,
                                 side='sell',
-                                quantity=balance,
+                                quantity=quantity,
                                 size_type='base'
                             )
                             if result and result.get('status') not in ['error', 'unfilled']:
