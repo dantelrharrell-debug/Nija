@@ -7,9 +7,44 @@ import os
 import logging
 import json
 from logging.handlers import RotatingFileHandler
+from threading import Thread
+import queue
 
 # Safe alias to avoid function-scope shadowing of os
 _os = os
+
+# Timeout wrapper for broker API calls to prevent indefinite hangs
+def call_with_timeout(func, args=(), kwargs={}, timeout_seconds=30):
+    """
+    Execute function with timeout. Returns (result, error).
+    If timeout occurs, returns (None, TimeoutError).
+    Increased default to 30s for production API latency.
+    """
+    result_queue = queue.Queue()
+    
+    def worker():
+        try:
+            result = func(*args, **kwargs)
+            result_queue.put(('success', result))
+        except Exception as e:
+            result_queue.put(('error', e))
+    
+    thread = Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    
+    if thread.is_alive():
+        # Timeout occurred - thread is still running
+        return None, TimeoutError(f"Operation timed out after {timeout_seconds}s")
+    
+    try:
+        status, value = result_queue.get_nowait()
+        if status == 'success':
+            return value, None
+        else:
+            return None, value
+    except queue.Empty:
+        return None, Exception("Thread completed but no result available")
 
 # Add bot directory to path if running from root
 if os.path.basename(os.getcwd()) != 'bot':
@@ -446,79 +481,114 @@ To enable trading:
                 # Example: {'BTC': 17.70} means $17.70 worth of BTC, not 17.7 BTC
                 if usd_value < 0.00000001:  # Skip dust
                     continue
-                
+
                 symbol = f"{currency}-USD"
-                
-                # Skip if already tracked
-                if symbol in self.open_positions:
-                    existing = self.open_positions[symbol]
-                    logger.info(f"   ⏭️  {symbol}: Already tracked @ ${existing.get('entry_price', 0):.2f}")
-                    continue
-                
+
                 # Get current market price using broker directly (simpler than analyze_symbol)
                 try:
-                    # Fetch candles directly from broker to get current price
                     candles = self.broker.get_candles(symbol, '5m', 10)
                     if not candles or len(candles) == 0:
                         logger.warning(f"   ⚠️ {symbol}: Cannot get price data, skipping")
                         continue
-                    
-                    # Get current price from latest candle
+
                     latest_candle = candles[-1]
                     current_price = float(latest_candle.get('close', latest_candle.get('price', 0)))
-                    
+
                     if not current_price or current_price <= 0:
                         logger.warning(f"   ⚠️ {symbol}: Invalid price {current_price}, skipping")
                         continue
-                    
-                    # CRITICAL FIX: Calculate actual crypto quantity from USD value
-                    # crypto_holdings gives us USD value, we need to convert to quantity
-                    quantity = usd_value / current_price  # e.g., $17.70 / $87,000 = 0.0002034 BTC
-                    position_value = usd_value  # Use the USD value we already have
-                    
-                    # Skip very small positions (< $0.50 - too small to manage)
-                    if position_value < 0.50:
-                        logger.info(f"   ⏭️  {symbol}: Position too small (${position_value:.4f}), skipping")
-                        continue
-                    
-                    # Since we don't know original entry price, use current price as entry
-                    # This means stop loss will trigger on ANY further decline
+
+                    quantity = usd_value / current_price  # USD value → crypto size
+                    position_value = usd_value
                     entry_price = current_price
-                    
-                    # Set CONSERVATIVE exits for immediate protection
-                    stop_loss = entry_price * (1 - self.stop_loss_pct)  # 3% below current
-                    take_profit = entry_price * (1 + self.base_take_profit_pct)  # 5% above current
-                    trailing_stop = stop_loss  # Start trailing at SL level
-                    
-                    # Add to position tracking
-                    position = {
-                        'symbol': symbol,
-                        'side': 'BUY',  # Holding crypto = long position
-                        'entry_price': entry_price,
-                        'current_price': current_price,
-                        'size_usd': position_value,
-                        'crypto_quantity': quantity,
-                        'stop_loss': stop_loss,
-                        'take_profit': take_profit,
-                        'trailing_stop': trailing_stop,
-                        'highest_price': current_price,
-                        'tp_stepped': False,
-                        'entry_time': datetime.now().isoformat(),
-                        'timestamp': datetime.now().isoformat(),
-                        'synced_from_coinbase': True,  # Mark as synced vs. traded by bot
-                        'note': 'Auto-synced from Coinbase holdings'
-                    }
-                    
-                    # Add to open positions
-                    self.open_positions[symbol] = position
-                    synced_count += 1
-                    
-                    logger.info(f"   ✅ {symbol}: {quantity:.8f} {currency} @ ${current_price:.4f} = ${position_value:.2f}")
-                    logger.info(f"      Stop Loss: ${stop_loss:.4f} (-{self.stop_loss_pct*100}%) | Take Profit: ${take_profit:.4f} (+{self.base_take_profit_pct*100}%)")
-                    
+
                 except Exception as e:
-                    logger.error(f"   ❌ {symbol}: Failed to sync - {e}")
+                    logger.warning(f"   ⚠️ {symbol}: Failed to fetch price data - {e}")
                     continue
+
+                # Refresh tracked positions that are missing size/quantity before skipping
+                if symbol in self.open_positions:
+                    existing = self.open_positions[symbol]
+                    refreshed = []
+
+                    if float(existing.get('crypto_quantity', 0) or 0) <= 0:
+                        existing['crypto_quantity'] = quantity
+                        refreshed.append('crypto_quantity')
+
+                    if float(existing.get('size_usd', 0) or 0) <= 0:
+                        existing['size_usd'] = position_value
+                        refreshed.append('size_usd')
+
+                    if float(existing.get('entry_price', 0) or 0) <= 0:
+                        existing['entry_price'] = entry_price
+                        refreshed.append('entry_price')
+
+                    # Backfill protective levels if missing
+                    if float(existing.get('stop_loss', 0) or 0) <= 0:
+                        existing['stop_loss'] = entry_price * (1 - self.stop_loss_pct)
+                        refreshed.append('stop_loss')
+                    if float(existing.get('take_profit', 0) or 0) <= 0:
+                        existing['take_profit'] = entry_price * (1 + self.base_take_profit_pct)
+                        refreshed.append('take_profit')
+                    if float(existing.get('trailing_stop', 0) or 0) <= 0:
+                        existing['trailing_stop'] = existing.get('stop_loss', entry_price * (1 - self.stop_loss_pct))
+                        refreshed.append('trailing_stop')
+
+                    existing.setdefault('highest_price', existing.get('entry_price', entry_price))
+                    existing.setdefault('tp_stepped', False)
+                    existing.setdefault('synced_from_coinbase', True)
+                    existing.setdefault('timestamp', datetime.now().isoformat())
+                    existing.setdefault('entry_time', datetime.now().isoformat())
+
+                    if refreshed:
+                        logger.info(f"   🔄 {symbol}: refreshed {', '.join(refreshed)} from live holdings")
+                        try:
+                            self.position_manager.save_positions(self.open_positions)
+                        except Exception:
+                            pass
+                    else:
+                        logger.info(f"   ⏭️  {symbol}: Already tracked @ ${existing.get('entry_price', 0):.2f}")
+                    continue
+
+                # Skip very small positions (< $0.50 - too small to manage)
+                if position_value < 0.50:
+                    logger.info(f"   ⏭️  {symbol}: Position too small (${position_value:.4f}), skipping")
+                    continue
+
+                # Since we don't know original entry price, use current price as entry
+                # This means stop loss will trigger on ANY further decline
+                entry_price = current_price
+
+                # Set CONSERVATIVE exits for immediate protection
+                stop_loss = entry_price * (1 - self.stop_loss_pct)  # 3% below current
+                take_profit = entry_price * (1 + self.base_take_profit_pct)  # 5% above current
+                trailing_stop = stop_loss  # Start trailing at SL level
+
+                # Add to position tracking
+                position = {
+                    'symbol': symbol,
+                    'side': 'BUY',  # Holding crypto = long position
+                    'entry_price': entry_price,
+                    'current_price': current_price,
+                    'size_usd': position_value,
+                    'crypto_quantity': quantity,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'trailing_stop': trailing_stop,
+                    'highest_price': current_price,
+                    'tp_stepped': False,
+                    'entry_time': datetime.now().isoformat(),
+                    'timestamp': datetime.now().isoformat(),
+                    'synced_from_coinbase': True,  # Mark as synced vs. traded by bot
+                    'note': 'Auto-synced from Coinbase holdings'
+                }
+
+                # Add to open positions
+                self.open_positions[symbol] = position
+                synced_count += 1
+
+                logger.info(f"   ✅ {symbol}: {quantity:.8f} {currency} @ ${current_price:.4f} = ${position_value:.2f}")
+                logger.info(f"      Stop Loss: ${stop_loss:.4f} (-{self.stop_loss_pct*100}%) | Take Profit: ${take_profit:.4f} (+{self.base_take_profit_pct*100}%)")
             
             # Save ALL positions to persistent storage (both synced and previously tracked)
             if len(self.open_positions) > 0:
@@ -850,15 +920,38 @@ To enable trading:
         try:
             # Fetch candle data
             df = self.fetch_candles(symbol)
+            
+            # If we have ANY candle data, extract the current price immediately
+            # This ensures price is always available for position management
+            current_price = None
+            if df is not None and len(df) > 0:
+                try:
+                    current_price = float(df['close'].iloc[-1])
+                except (ValueError, KeyError, TypeError):
+                    current_price = None
+            
+            # Check if we have minimum candles required
             if df is None or len(df) < self.min_candles_required:
+                # Fallback: Try to get current price directly from broker when candles unavailable
+                # This ensures ARB/VET positions can still be managed even if candle data is insufficient
+                if current_price is None:
+                    try:
+                        current_price = self.broker.get_current_price(symbol)
+                        if current_price:
+                            current_price = float(current_price)
+                    except Exception:
+                        current_price = None
+                
                 return {
                     'symbol': symbol,
                     'signal': 'SKIP',
+                    'price': current_price,  # Return whatever price we could extract (candles or direct fetch)
                     'reason': 'Insufficient candle data'
                 }
             
-            # Extract current price (always available if we have candles)
-            current_price = float(df['close'].iloc[-1])
+            # current_price already extracted above - re-verify it's a float for the next steps
+            if current_price is None:
+                current_price = float(df['close'].iloc[-1])
             
             # Calculate indicators
             indicators = self.calculate_indicators(df)
@@ -1433,13 +1526,24 @@ To enable trading:
         positions_to_close = []
         
         for symbol, position in self.open_positions.items():
+            # CRITICAL: Wrap each position in try/except to prevent one failure from blocking entire loop
             try:
+                logger.info(f"   🔍 Checking {symbol}...")
+                
                 # Get current price - try analysis first, fallback to broker price
-                analysis = self.analyze_symbol(symbol)
-                current_price = analysis.get('price')
+                analysis = None
+                current_price = None
+                
+                try:
+                    analysis = self.analyze_symbol(symbol)
+                    if analysis:
+                        current_price = analysis.get('price')
+                except Exception as e:
+                    logger.warning(f"   ⚠️ analyze_symbol() failed for {symbol}: {e}")
+                    analysis = {'signal': 'HOLD', 'reason': 'Analysis failed'}
                 
                 if not current_price:
-                    # Fallback: get price directly from latest candle
+                    # Fallback: get price directly from latest candle (only if analyze_symbol returned None/False)
                     logger.info(f"   🔄 No price from analysis for {symbol}, trying fallback...")
                     try:
                         df = self.fetch_candles(symbol)
@@ -1530,24 +1634,42 @@ To enable trading:
                                 # Execute partial exit
                                 exit_signal = 'SELL'
                                 try:
-                                    exit_quantity = position.get('crypto_quantity', position['size_usd'] / entry_price) * stepped_exit_info['exit_pct']
-                                    order = self.broker.place_market_order(
-                                        symbol, 
-                                        exit_signal.lower(), 
-                                        exit_quantity,
-                                        size_type='base'
+                                    base_qty = position.get('crypto_quantity', position['size_usd'] / entry_price)
+                                    exit_quantity = base_qty * stepped_exit_info['exit_pct']
+                                    if exit_quantity <= 0:
+                                        logger.warning(f"   ⚠️ Stepped exit skipped for {symbol}: zero quantity")
+                                        continue
+                                    
+                                    # CRITICAL: Add timeout to prevent broker API hang from blocking entire loop
+                                    # Track retry attempts for this position
+                                    retry_count = position.get('exit_retry_count', 0)
+                                    timeout_duration = 30 + (retry_count * 15)  # Increase timeout on retries: 30s, 45s, 60s
+                                    logger.info(f"   📤 Attempting stepped exit order (timeout: {timeout_duration}s, retry #{retry_count})...")
+                                    order, error = call_with_timeout(
+                                        self.broker.place_market_order,
+                                        args=(symbol, exit_signal.lower(), exit_quantity),
+                                        kwargs={'size_type': 'base'},
+                                        timeout_seconds=timeout_duration
                                     )
-                                    if order and order.get('status') == 'filled':
+                                    
+                                    if error:
+                                        if isinstance(error, TimeoutError):
+                                            position['exit_retry_count'] = retry_count + 1
+                                            logger.warning(f"   ⏰ Stepped exit order TIMED OUT after {timeout_duration}s - will retry next cycle (attempt #{retry_count + 1})")
+                                        else:
+                                            logger.warning(f"   ⚠️ Stepped exit order failed: {error}")
+                                    elif order and order.get('status') == 'filled':
                                         logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
+                                        # Clear retry counter on success
+                                        position.pop('exit_retry_count', None)
                                         # Don't remove position, just mark that portion as exited
                                         position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
+                                        if 'crypto_quantity' in position:
+                                            position['crypto_quantity'] *= (1.0 - stepped_exit_info['exit_pct'])
+                                    else:
+                                        logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
                                 except Exception as e:
-                                    logger.warning(f"   ⚠️ Stepped exit order failed: {e}")
-                    
-                    # Check stop loss
-                    if current_price <= stop_loss:
-                        exit_reason = f"Stop loss hit @ ${stop_loss:.2f}"
-                    # Check trailing stop
+                                    logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
                     elif current_price <= trailing_stop:
                         exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
                     # Check take profit
@@ -1579,24 +1701,42 @@ To enable trading:
                             # Execute partial exit
                             exit_signal = 'BUY'
                             try:
-                                exit_quantity = position.get('crypto_quantity', position['size_usd'] / entry_price) * stepped_exit_info['exit_pct']
-                                order = self.broker.place_market_order(
-                                    symbol, 
-                                    exit_signal.lower(), 
-                                    exit_quantity,
-                                    size_type='base'
+                                base_qty = position.get('crypto_quantity', position['size_usd'] / entry_price)
+                                exit_quantity = base_qty * stepped_exit_info['exit_pct']
+                                if exit_quantity <= 0:
+                                    logger.warning(f"   ⚠️ Stepped exit skipped for {symbol}: zero quantity")
+                                    continue
+                                
+                                # CRITICAL: Add timeout to prevent broker API hang from blocking entire loop
+                                # Track retry attempts for this position
+                                retry_count = position.get('exit_retry_count', 0)
+                                timeout_duration = 30 + (retry_count * 15)  # Increase timeout on retries: 30s, 45s, 60s
+                                logger.info(f"   📤 Attempting stepped exit order (timeout: {timeout_duration}s, retry #{retry_count})...")
+                                order, error = call_with_timeout(
+                                    self.broker.place_market_order,
+                                    args=(symbol, exit_signal.lower(), exit_quantity),
+                                    kwargs={'size_type': 'base'},
+                                    timeout_seconds=timeout_duration
                                 )
-                                if order and order.get('status') == 'filled':
+                                
+                                if error:
+                                    if isinstance(error, TimeoutError):
+                                        position['exit_retry_count'] = retry_count + 1
+                                        logger.warning(f"   ⏰ Stepped exit order TIMED OUT after {timeout_duration}s - will retry next cycle (attempt #{retry_count + 1})")
+                                    else:
+                                        logger.warning(f"   ⚠️ Stepped exit order failed: {error}")
+                                elif order and order.get('status') == 'filled':
                                     logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
+                                    # Clear retry counter on success
+                                    position.pop('exit_retry_count', None)
                                     # Don't remove position, just mark that portion as exited
                                     position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
+                                    if 'crypto_quantity' in position:
+                                        position['crypto_quantity'] *= (1.0 - stepped_exit_info['exit_pct'])
+                                else:
+                                    logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
                             except Exception as e:
-                                logger.warning(f"   ⚠️ Stepped exit order failed: {e}")
-                    
-                    # Check stop loss
-                    if current_price >= stop_loss:
-                        exit_reason = f"Stop loss hit @ ${stop_loss:.2f}"
-                    # Check trailing stop
+                                logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
                     elif current_price >= trailing_stop:
                         exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
                     # Check take profit
@@ -1619,6 +1759,27 @@ To enable trading:
                         # Use the ACTUAL crypto quantity from when we opened the position
                         # This accounts for fees paid during entry
                         quantity = position.get('crypto_quantity', position['size_usd'] / entry_price)
+                        if quantity is None or quantity <= 0:
+                            try:
+                                bal = self.broker.get_account_balance()
+                                holdings = bal.get('crypto', {}) if isinstance(bal, dict) else {}
+                                base_cur = symbol.split('-')[0]
+                                live_qty = float(holdings.get(base_cur, 0.0) or 0.0)
+                                if live_qty > 0:
+                                    quantity = live_qty
+                                    position['crypto_quantity'] = live_qty
+                                    logger.info(f"   ↻ Refilled quantity for {symbol} from live holdings: {live_qty:.8f}")
+                            except Exception as qty_err:
+                                logger.warning(f"   ⚠️ Could not refresh quantity for {symbol}: {qty_err}")
+
+                        if (quantity is None or quantity <= 0) and position.get('size_usd', 0) > 0 and current_price > 0:
+                            quantity = position['size_usd'] / current_price
+                            position['crypto_quantity'] = quantity
+                            logger.info(f"   ↻ Derived quantity for {symbol} from size_usd/current_price: {quantity:.8f}")
+
+                        if quantity is None or quantity <= 0:
+                            logger.error(f"❌ Cannot exit {symbol}: quantity missing (tracked ${position.get('size_usd', 0):.2f})")
+                            continue
                         
                         logger.info(f"   🔄 Executing {exit_signal} order for {symbol}")
                         logger.info(f"   Position size: ${position['size_usd']:.2f}")
@@ -1682,6 +1843,10 @@ To enable trading:
                                 exit_price=current_price,
                                 exit_reason=exit_reason
                             )
+
+                            # Block immediate re-entry after any exit
+                            from datetime import datetime
+                            self.recently_sold_positions[symbol] = datetime.now()
                             
                             # Log closing trade
                             self.log_trade(symbol, exit_signal, current_price, position['size_usd'])
@@ -1719,10 +1884,15 @@ To enable trading:
 
                     
                     except Exception as e:
-                        logger.error(f"Error closing {symbol} position: {e}")
+                        logger.error(f"❌ Error closing {symbol} position: {e}")
+                        logger.exception(f"Full traceback for {symbol} exit error:")
             
             except Exception as e:
-                logger.error(f"Error managing position {symbol}: {e}")
+                # CRITICAL: Catch ALL errors per position to prevent loop blockage
+                logger.error(f"❌ Error managing position {symbol}: {e}")
+                logger.exception(f"Full traceback for {symbol} management error:")
+                # Continue to next position - don't let one failure stop the entire loop
+                continue
         
         # Remove closed positions and reset consecutive counter on sells
         for symbol in positions_to_close:
@@ -1786,6 +1956,9 @@ To enable trading:
                 if order:
                     self.analytics.record_exit(symbol=symbol, exit_price=current_price, exit_reason='FORCE_EXIT_ALL')
                     self.log_trade(symbol, exit_signal, current_price, position.get('size_usd', 0.0))
+                    # Block immediate re-entry after forced exits
+                    from datetime import datetime
+                    self.recently_sold_positions[symbol] = datetime.now()
                     closed += 1
                 else:
                     logger.error(f"Force-exit order did not confirm for {symbol}")
@@ -2194,8 +2367,16 @@ To enable trading:
             bool: True if the lock was removed this call, else False.
         """
         try:
+            # Disable auto-unlock unless explicitly allowed. In emergencies we want
+            # the lock to be manual-only so the bot never resumes buying on its own.
+            allow_auto_unlock = os.getenv("ALLOW_AUTO_UNLOCK_SELL_ONLY", "0") in ("1", "true", "True")
+
             lock_path = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
             if not os.path.exists(lock_path):
+                return False
+
+            if not allow_auto_unlock:
+                logger.info("🔒 SELL-only lock held (manual control required); set ALLOW_AUTO_UNLOCK_SELL_ONLY=1 to enable auto-unlock")
                 return False
 
             within_cap = len(self.open_positions) <= self.max_concurrent_positions
@@ -2376,6 +2557,18 @@ To enable trading:
             force_exit_flag = _os.path.join(_os.path.dirname(__file__), '..', 'FORCE_EXIT_ALL.conf')
             override_flag = _os.path.join(_os.path.dirname(__file__), '..', 'FORCE_EXIT_OVERRIDE.conf')
             allow_force_exit = (_os.getenv('ALLOW_FORCE_EXIT_DURING_EMERGENCY', '0') == '1') or _os.path.exists(override_flag)
+
+            # 🔻 Hard cap: keep concurrent positions at/below max_concurrent_positions even in sell-only mode
+            try:
+                if len(self.open_positions) > self.max_concurrent_positions:
+                    logger.warning(
+                        f"⚠️ Position overage: {len(self.open_positions)}/{self.max_concurrent_positions} — pruning weakest to stop bleeding"
+                    )
+                    # Allow a bit more time than startup for orderly liquidation
+                    self.close_excess_positions(max_positions=self.max_concurrent_positions, timeout_seconds=12)
+            except Exception as overcap_err:
+                logger.warning(f"Over-cap liquidation check failed: {overcap_err}")
+
             if _os.path.exists(force_exit_flag):
                 if trading_locked and not allow_force_exit:
                     logger.error("="*80)

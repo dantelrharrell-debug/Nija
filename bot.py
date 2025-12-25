@@ -13,6 +13,16 @@ from logging.handlers import RotatingFileHandler
 import signal
 import threading
 
+# EMERGENCY STOP CHECK
+if os.path.exists('EMERGENCY_STOP'):
+    print("\n" + "="*80)
+    print("🚨 EMERGENCY STOP ACTIVE")
+    print("="*80)
+    print("Bot is disabled. See EMERGENCY_STOP file for details.")
+    print("Delete EMERGENCY_STOP file to resume trading.")
+    print("="*80 + "\n")
+    sys.exit(0)
+
 # Minimal HTTP health server to satisfy platforms expecting $PORT
 def _start_health_server():
     try:
