@@ -42,18 +42,28 @@ print("\n" + "="*80)
 print("Starting NIJA with position management...")
 print("="*80 + "\n")
 
+# EMERGENCY STOP CHECK
+if os.path.exists('EMERGENCY_STOP'):
+    print("\n" + "="*80)
+    print("🚨 EMERGENCY STOP ACTIVE")
+    print("="*80)
+    print("Bot is disabled. See EMERGENCY_STOP file for details.")
+    print("Delete EMERGENCY_STOP file to resume trading.")
+    print("="*80 + "\n")
+    sys.exit(0)
+
 # Load environment and run the main bot
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    try:
-        # Import bot module and run main
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-        import bot as bot_module
-        
-        # Run the main bot
-        bot_module.main()
-        
+from dotenv import load_dotenv
+load_dotenv()
+
+try:
+    # Import bot module and run main
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+    import bot as bot_module
+
+    # Run the main bot
+    bot_module.main()
+
 except ImportError as e:
     print(f"❌ Import error: {e}")
     print("\nMake sure you're in the right directory with the venv activated")
