@@ -88,7 +88,11 @@ STRATEGY_BUILD_ID = "TradingStrategy v7.1 init-hardened _os alias - 2025-12-24T1
 TRAILING_STOP_BUFFER_BUY = 0.997   # 0.3% buffer below trail for BUY positions
 TRAILING_STOP_BUFFER_SELL = 1.003  # 0.3% buffer above trail for SELL positions
 PNL_CALCULATION_THRESHOLD = 0.01   # Threshold to switch between calculation methods ($0.01)
-MINIMUM_USD_WITH_POSITIONS = 5.0   # Minimum USD cash when holding positions
+
+# Balance threshold constants
+# Note: MINIMUM_BALANCE_PROTECTION is imported from broker_manager and applies to TOTAL account value
+# MINIMUM_USD_WITH_POSITIONS applies only to USD cash when positions are open
+MINIMUM_USD_WITH_POSITIONS = 5.0   # Minimum USD cash when holding positions (sell-only mode)
 
 class TradingStrategy:
     """
@@ -2586,7 +2590,11 @@ To enable trading:
                             if market_data and market_data.get('candles'):
                                 price = float(market_data['candles'][-1]['close'])
                                 crypto_value += quantity * price
-                    except Exception:
+                    except (KeyError, ValueError, TypeError, IndexError) as e:
+                        logger.debug(f"   ⚠️ Could not price {asset}: {e}")
+                        pass  # Skip assets we can't price
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ Unexpected error pricing {asset}: {e}")
                         pass  # Skip assets we can't price
                 
                 total_account_value = usd_balance + crypto_value

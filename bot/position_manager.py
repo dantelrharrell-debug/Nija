@@ -13,6 +13,9 @@ from datetime import datetime
 
 logger = logging.getLogger("nija.positions")
 
+# Position validation constants
+POSITION_BALANCE_MISMATCH_THRESHOLD = 20  # Flag positions if total > balance * this value
+
 
 class PositionManager:
     """
@@ -228,7 +231,10 @@ class PositionManager:
     def validate_position_sizes(self, positions: Dict, current_balance: float) -> None:
         """
         Validate that tracked positions match actual account state.
-        Remove stale/invalid positions.
+        Report on stale/invalid positions.
+        
+        Note: This method reports issues but doesn't remove positions.
+        Position removal should be handled by the trading strategy based on broker validation.
         
         Args:
             positions: Dictionary of open positions
@@ -244,19 +250,29 @@ class PositionManager:
         logger.info(f"   Current USD balance: ${current_balance:.2f}")
         
         # If positions >> balance, likely stale data
-        if total_position_value > current_balance * 20:  # 20x mismatch
+        if total_position_value > current_balance * POSITION_BALANCE_MISMATCH_THRESHOLD:
             logger.error(f"⚠️  POSITION MISMATCH: Tracked ${total_position_value:.2f} >> Balance ${current_balance:.2f}")
             logger.error(f"   This indicates stale position data - recommending sync with broker")
         
-        # Validate each position
-        for symbol in list(positions.keys()):
+        # Report on each position for diagnostics
+        zero_size_positions = []
+        small_positions = []
+        
+        for symbol in positions.keys():
             position = positions[symbol]
             size = self._get_position_size(position)
             
             if size <= 0:
-                logger.warning(f"   Removing zero-size position: {symbol}")
+                zero_size_positions.append(symbol)
             elif size < 1.0:
-                logger.warning(f"   Position {symbol} very small: ${size:.2f}")
+                small_positions.append(symbol)
+        
+        if zero_size_positions:
+            logger.warning(f"   Found {len(zero_size_positions)} zero-size position(s): {', '.join(zero_size_positions)}")
+            logger.warning(f"   These should be validated against broker or removed")
+        
+        if small_positions:
+            logger.info(f"   Found {len(small_positions)} small position(s) (< $1.00): {', '.join(small_positions)}")
     
     def clear_positions(self) -> bool:
         """
