@@ -78,16 +78,31 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 # Import after path setup
 from trading_strategy import TradingStrategy
 
-# Setup logging
+# Setup logging - configure ONCE to prevent duplicates
 LOG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'nija.log'))
+
+# Remove any existing handlers first
+root = logging.getLogger()
+if root.handlers:
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+
+# Get nija logger
 logger = logging.getLogger("nija")
 logger.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+logger.propagate = False  # Prevent propagation to root logger
 
+# Single formatter with consistent timestamp format
+formatter = logging.Formatter(
+    '%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Add handlers only if not already present
 if not logger.hasHandlers():
     file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=2)
     file_handler.setFormatter(formatter)
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)

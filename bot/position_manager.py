@@ -225,6 +225,39 @@ class PositionManager:
         logger.info(f"✅ Validated {len(validated)} positions")
         return validated
     
+    def validate_position_sizes(self, positions: Dict, current_balance: float) -> None:
+        """
+        Validate that tracked positions match actual account state.
+        Remove stale/invalid positions.
+        
+        Args:
+            positions: Dictionary of open positions
+            current_balance: Current USD balance
+        """
+        if not positions:
+            return
+        
+        total_position_value = sum(self._get_position_size(p) for p in positions.values())
+        
+        logger.info(f"📊 Position Size Validation:")
+        logger.info(f"   Total tracked value: ${total_position_value:.2f}")
+        logger.info(f"   Current USD balance: ${current_balance:.2f}")
+        
+        # If positions >> balance, likely stale data
+        if total_position_value > current_balance * 20:  # 20x mismatch
+            logger.error(f"⚠️  POSITION MISMATCH: Tracked ${total_position_value:.2f} >> Balance ${current_balance:.2f}")
+            logger.error(f"   This indicates stale position data - recommending sync with broker")
+        
+        # Validate each position
+        for symbol in list(positions.keys()):
+            position = positions[symbol]
+            size = self._get_position_size(position)
+            
+            if size <= 0:
+                logger.warning(f"   Removing zero-size position: {symbol}")
+            elif size < 1.0:
+                logger.warning(f"   Position {symbol} very small: ${size:.2f}")
+    
     def clear_positions(self) -> bool:
         """
         Clear all saved positions (e.g., manual reset).

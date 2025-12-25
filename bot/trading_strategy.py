@@ -54,11 +54,15 @@ LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'nija.log')
 LOG_FILE = os.path.abspath(LOG_FILE)
 logger = logging.getLogger("nija")
 logger.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+logger.propagate = False  # Prevent duplicate messages from propagating to root
+formatter = logging.Formatter(
+    '%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 if not logger.hasHandlers():
     file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=2)
     file_handler.setFormatter(formatter)
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
@@ -1569,13 +1573,36 @@ To enable trading:
                 take_profit = position['take_profit']
                 trailing_stop = position['trailing_stop']
                 
-                # Calculate current P&L
+                # Calculate current P&L - use both methods for accuracy
+                position_size_usd = position.get('size_usd', position.get('position_size_usd', 0))
+                crypto_quantity = position.get('crypto_quantity', 0)
+                
                 if side == 'BUY':
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                    pnl_usd = position['size_usd'] * (pnl_pct / 100)
+                    pnl_usd = position_size_usd * (pnl_pct / 100)
+                    
+                    # Alternative: Use crypto quantity (more accurate if available)
+                    if crypto_quantity > 0:
+                        current_value = crypto_quantity * current_price
+                        entry_value = crypto_quantity * entry_price
+                        pnl_usd_alt = current_value - entry_value
+                        
+                        # Use quantity-based calc if it differs significantly
+                        if abs(pnl_usd_alt - pnl_usd) > 0.01:
+                            pnl_usd = pnl_usd_alt
                 else:  # SELL
                     pnl_pct = ((entry_price - current_price) / entry_price) * 100
-                    pnl_usd = position['size_usd'] * (pnl_pct / 100)
+                    pnl_usd = position_size_usd * (pnl_pct / 100)
+                    
+                    # Alternative: Use crypto quantity (more accurate if available)
+                    if crypto_quantity > 0:
+                        entry_value = crypto_quantity * entry_price
+                        current_value = crypto_quantity * current_price
+                        pnl_usd_alt = entry_value - current_value
+                        
+                        # Use quantity-based calc if it differs significantly
+                        if abs(pnl_usd_alt - pnl_usd) > 0.01:
+                            pnl_usd = pnl_usd_alt
                 
                 logger.info(f"   {symbol}: {side} @ ${entry_price:.2f} | Current: ${current_price:.2f} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
                 logger.info(f"      Exit Levels: SL=${stop_loss:.2f}, Trail=${trailing_stop:.2f}, TP=${position['take_profit']:.2f}")
@@ -1669,8 +1696,15 @@ To enable trading:
                                         logger.warning(f"   ⚠️ Stepped exit order incomplete: {order} - will retry on next cycle")
                                 except Exception as e:
                                     logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
-                    elif current_price <= trailing_stop:
-                        exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
+                    elif trailing_stop > 0:
+                        # Trailing stop with buffer to prevent premature exits at breakeven
+                        TRAILING_STOP_BUFFER = 0.997  # 0.3% buffer - only exit on clear drop
+                        buffer_price = trailing_stop * TRAILING_STOP_BUFFER
+                        
+                        if current_price < buffer_price:
+                            drop_pct = ((trailing_stop - current_price) / trailing_stop) * 100
+                            exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f} (dropped {drop_pct:.2f}%)"
+                            logger.info(f"      🔻 TRAILING STOP TRIGGERED: ${current_price:.2f} dropped {drop_pct:.2f}% below ${trailing_stop:.2f}")
                     # Check take profit
                     elif current_price >= position['take_profit']:
                         exit_reason = f"Take profit hit @ ${position['take_profit']:.2f}"
@@ -1731,8 +1765,15 @@ To enable trading:
                                     logger.warning(f"   ⚠️ Stepped exit order incomplete: {order} - will retry on next cycle")
                             except Exception as e:
                                 logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
-                    elif current_price >= trailing_stop:
-                        exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
+                    elif trailing_stop > 0:
+                        # Trailing stop with buffer to prevent premature exits at breakeven (SELL positions)
+                        TRAILING_STOP_BUFFER = 1.003  # 0.3% buffer - only exit on clear rise
+                        buffer_price = trailing_stop * TRAILING_STOP_BUFFER
+                        
+                        if current_price > buffer_price:
+                            rise_pct = ((current_price - trailing_stop) / trailing_stop) * 100
+                            exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f} (rose {rise_pct:.2f}%)"
+                            logger.info(f"      🔻 TRAILING STOP TRIGGERED: ${current_price:.2f} rose {rise_pct:.2f}% above ${trailing_stop:.2f}")
                     # Check take profit
                     elif current_price <= take_profit:
                         exit_reason = f"Take profit hit @ ${take_profit:.2f}"
@@ -2481,17 +2522,56 @@ To enable trading:
         try:
             logger.info("🔁 Running trading cycle...")
             
-            # Update balance
-            self.account_balance = self.get_usd_balance()
-            logger.info(f"USD Balance: ${self.account_balance:,.2f}")
+            # Update balance and check total account value (USD + crypto holdings)
+            balance_data = self.broker.get_account_balance()
+            if isinstance(balance_data, dict):
+                usd_balance = float(balance_data.get('usd', 0) or balance_data.get('trading_balance', 0))
+                crypto_holdings = balance_data.get('crypto', {})
+                # Calculate total crypto value (we'll use current market prices)
+                crypto_value = 0.0
+                for asset, quantity in crypto_holdings.items():
+                    try:
+                        if quantity > 0:
+                            symbol = f"{asset}-USD"
+                            market_data = self.broker.get_market_data(symbol, timeframe='1m', limit=1)
+                            if market_data and market_data.get('candles'):
+                                price = float(market_data['candles'][-1]['close'])
+                                crypto_value += quantity * price
+                    except Exception:
+                        pass  # Skip assets we can't price
+                
+                total_account_value = usd_balance + crypto_value
+                self.account_balance = usd_balance
+            else:
+                # Fallback if balance is just a float
+                usd_balance = float(balance_data)
+                crypto_value = 0.0
+                total_account_value = usd_balance
+                self.account_balance = usd_balance
+            
+            logger.info(f"💰 Account Value: USD=${usd_balance:.2f}, Crypto=${crypto_value:.2f}, Total=${total_account_value:.2f}")
+            
+            # Validate position sizes to detect stale data
+            if self.open_positions:
+                self.position_manager.validate_position_sizes(self.open_positions, usd_balance)
             
             # CRITICAL: Manage existing positions FIRST (this was blocked before)
             # Position management MUST run even during emergency stop
             self.manage_open_positions()
             
-            # Check emergency stop status
+            # Check emergency stop status - use total account value, not just USD
             emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
             trading_locked = os.path.exists(emergency_lock_file)
+            
+            # Dynamic emergency stop based on account value
+            from broker_manager import MINIMUM_BALANCE_PROTECTION
+            if total_account_value < MINIMUM_BALANCE_PROTECTION:
+                trading_locked = True
+                logger.error(f"🚨 EMERGENCY STOP: Total account value ${total_account_value:.2f} < ${MINIMUM_BALANCE_PROTECTION}")
+            elif usd_balance < 5.0 and len(self.open_positions) > 0:
+                # Low cash but have positions - sell-only mode
+                trading_locked = True
+                logger.warning(f"🔒 SELL-ONLY MODE: USD balance ${usd_balance:.2f} too low, waiting for positions to close")
             
             if trading_locked:
                 logger.info("🔒 Emergency stop active - sell-only mode")
