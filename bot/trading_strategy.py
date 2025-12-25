@@ -125,14 +125,17 @@ class TradingStrategy:
                         logger.error(f"   [{i}/{len(positions)}] FORCE SELLING {currency}...")
                         
                         try:
-                            result = self.broker.market_order_sell(
-                                product_id=symbol,
-                                base_size=str(balance)
+                            result = self.broker.place_market_order(
+                                symbol=symbol,
+                                side='sell',
+                                quantity=balance,
+                                size_type='base'
                             )
-                            if result and result.get('success'):
+                            if result and result.get('status') not in ['error', 'unfilled']:
                                 logger.error(f"   ✅ SOLD {currency}")
                             else:
-                                logger.error(f"   ❌ Failed to sell {currency}")
+                                error_msg = result.get('error', result.get('message', 'Unknown'))
+                                logger.error(f"   ❌ Failed to sell {currency}: {error_msg}")
                         except Exception as e:
                             logger.error(f"   ❌ Error selling {currency}: {e}")
                     
@@ -263,10 +266,11 @@ class TradingStrategy:
                             quantity=quantity,
                             size_type='base'
                         )
-                        if result.get('status') != 'error':
+                        if result and result.get('status') not in ['error', 'unfilled']:
                             logger.info(f"  ✅ {symbol} SOLD successfully!")
                         else:
-                            logger.error(f"  ❌ {symbol} failed: {result.get('error')}")
+                            error_msg = result.get('error', result.get('message', 'Unknown')) if result else 'No response'
+                            logger.error(f"  ❌ {symbol} failed: {error_msg}")
                     except Exception as sell_err:
                         logger.error(f"  ❌ {symbol} error: {sell_err}")
                 
