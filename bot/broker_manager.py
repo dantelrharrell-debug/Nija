@@ -1420,25 +1420,99 @@ class BaseBroker(ABC):
             return self.place_market_order(symbol, 'sell', size, size_type='base')
     
     def get_positions(self) -> List[Dict]:
-        """Get open positions (Coinbase doesn't track positions, returns accounts)"""
+        """Return tradable crypto positions with base quantities.
+
+        Prefers portfolio breakdown (Advanced Trade) for accurate, tradable amounts.
+        Falls back to get_accounts() if breakdown is unavailable.
+        """
+        positions: List[Dict] = []
+
+        # Preferred: Use portfolio breakdown to derive base quantities
+        try:
+            portfolios_resp = self.client.get_portfolios() if hasattr(self.client, 'get_portfolios') else None
+            portfolios = getattr(portfolios_resp, 'portfolios', [])
+            if isinstance(portfolios_resp, dict):
+                portfolios = portfolios_resp.get('portfolios', [])
+
+            default_portfolio = None
+            for pf in portfolios:
+                pf_type = getattr(pf, 'type', None) if not isinstance(pf, dict) else pf.get('type')
+                if str(pf_type).upper() == 'DEFAULT':
+                    default_portfolio = pf
+                    break
+            if not default_portfolio and portfolios:
+                default_portfolio = portfolios[0]
+
+            portfolio_uuid = None
+            if default_portfolio:
+                portfolio_uuid = getattr(default_portfolio, 'uuid', None)
+                if isinstance(default_portfolio, dict):
+                    portfolio_uuid = default_portfolio.get('uuid', portfolio_uuid)
+
+            if default_portfolio and portfolio_uuid:
+                breakdown_resp = self.client.get_portfolio_breakdown(portfolio_uuid=portfolio_uuid)
+                breakdown = getattr(breakdown_resp, 'breakdown', None)
+                if isinstance(breakdown_resp, dict):
+                    breakdown = breakdown_resp.get('breakdown', breakdown)
+
+                spot_positions = getattr(breakdown, 'spot_positions', []) if breakdown else []
+                if isinstance(breakdown, dict):
+                    spot_positions = breakdown.get('spot_positions', spot_positions)
+
+                for pos in spot_positions:
+                    asset = getattr(pos, 'asset', None) if not isinstance(pos, dict) else pos.get('asset')
+                    # Try to fetch base available to trade; if not present, derive from fiat value
+                    base_avail = None
+                    if isinstance(pos, dict):
+                        base_avail = pos.get('available_to_trade') or pos.get('available_to_trade_base')
+                        fiat_avail = pos.get('available_to_trade_fiat')
+                    else:
+                        base_avail = getattr(pos, 'available_to_trade', None) or getattr(pos, 'available_to_trade_base', None)
+                        fiat_avail = getattr(pos, 'available_to_trade_fiat', None)
+
+                    quantity = 0.0
+                    try:
+                        if base_avail is not None:
+                            quantity = float(base_avail or 0)
+                        else:
+                            # Derive base qty from fiat using current price
+                            fiat_val = float(fiat_avail or 0)
+                            if asset and fiat_val > 0:
+                                symbol = f"{asset}-USD"
+                                price = self.get_current_price(symbol)
+                                if price > 0:
+                                    quantity = fiat_val / price
+                    except Exception:
+                        quantity = 0.0
+
+                    if asset and asset not in ['USD', 'USDC'] and quantity > 0:
+                        positions.append({
+                            'symbol': f"{asset}-USD",
+                            'quantity': quantity,
+                            'currency': asset
+                        })
+
+                # If we built positions from breakdown, return them
+                if positions:
+                    return positions
+        except Exception as e:
+            logger.warning(f"⚠️ Portfolio breakdown unavailable, falling back to get_accounts(): {e}")
+
+        # Fallback: Use get_accounts available balances
         try:
             accounts = self.client.get_accounts()
-            positions = []
-            
             # Handle both dict and object responses from Coinbase SDK
             accounts_list = accounts.get('accounts') if isinstance(accounts, dict) else getattr(accounts, 'accounts', [])
-            
+
             for account in accounts_list:
-                # Handle both dict and object account formats
                 if isinstance(account, dict):
                     currency = account.get('currency')
                     balance = float(account.get('available_balance', {}).get('value', 0)) if account.get('available_balance') else 0
                 else:
-                    # Account object from Coinbase SDK
                     currency = getattr(account, 'currency', None)
                     balance_obj = getattr(account, 'available_balance', {})
                     balance = float(balance_obj.get('value', 0)) if isinstance(balance_obj, dict) else float(getattr(balance_obj, 'value', 0)) if balance_obj else 0
-                
+
                 if currency and currency not in ['USD', 'USDC'] and balance > 0:
                     positions.append({
                         'symbol': f"{currency}-USD",
