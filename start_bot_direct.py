@@ -58,6 +58,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
+    # Import bot module and run main
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+    import bot as bot_module
+
     # Import the root-level bot.py file (not the bot/ module)
     # We need to import it as a module by reading and executing it
     import importlib.util

@@ -14,6 +14,10 @@ import queue
 _os = os
 
 # Timeout wrapper for broker API calls to prevent indefinite hangs
+def call_with_timeout(func, args=(), kwargs={}, timeout_seconds=10):
+    """
+    Execute function with timeout. Returns (result, error).
+    If timeout occurs, returns (None, TimeoutError).
 def call_with_timeout(func, args=(), kwargs={}, timeout_seconds=30):
     """
     Execute function with timeout. Returns (result, error).
@@ -55,16 +59,20 @@ LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'nija.log')
 LOG_FILE = os.path.abspath(LOG_FILE)
 logger = logging.getLogger("nija")
 logger.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+logger.propagate = False  # Prevent duplicate messages from propagating to root
+formatter = logging.Formatter(
+    '%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 if not logger.hasHandlers():
     file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=2)
     file_handler.setFormatter(formatter)
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-from broker_manager import CoinbaseBroker
+from broker_manager import CoinbaseBroker, MINIMUM_BALANCE_PROTECTION
 from mock_broker import MockBroker
 from nija_apex_strategy_v71 import NIJAApexStrategyV71
 from adaptive_growth_manager import AdaptiveGrowthManager
@@ -75,6 +83,16 @@ from indicators import calculate_vwap, calculate_ema, calculate_rsi, calculate_m
 
 # Unique build signature for deployment verification
 STRATEGY_BUILD_ID = "TradingStrategy v7.1 init-hardened _os alias - 2025-12-24T17:40Z"
+
+# Trading constants
+TRAILING_STOP_BUFFER_BUY = 0.997   # 0.3% buffer below trail for BUY positions
+TRAILING_STOP_BUFFER_SELL = 1.003  # 0.3% buffer above trail for SELL positions
+PNL_CALCULATION_THRESHOLD = 0.01   # Threshold to switch between calculation methods ($0.01)
+
+# Balance threshold constants
+# Note: MINIMUM_BALANCE_PROTECTION is imported from broker_manager and applies to TOTAL account value
+# MINIMUM_USD_WITH_POSITIONS applies only to USD cash when positions are open
+MINIMUM_USD_WITH_POSITIONS = 5.0   # Minimum USD cash when holding positions (sell-only mode)
 
 class TradingStrategy:
     """
@@ -204,6 +222,7 @@ class TradingStrategy:
             total_account_value = self.account_balance + total_crypto_value
             
             if total_account_value < MINIMUM_TRADING_BALANCE:
+                funding_needed = MINIMUM_TRADING_BALANCE - total_account_value
                 logger.error("=" * 80)
                 logger.error("🚨 CRITICAL WARNING: ACCOUNT BALANCE SEVERELY DEPLETED")
                 logger.error("=" * 80)
@@ -211,10 +230,14 @@ class TradingStrategy:
                 logger.error(f"   Crypto Value: ${total_crypto_value:.2f}")
                 logger.error(f"   Total Account: ${total_account_value:.2f}")
                 logger.error(f"   Minimum Required: ${MINIMUM_TRADING_BALANCE:.2f}")
+                logger.error(f"   💵 Funding Needed: ${funding_needed:.2f}")
                 logger.error("")
                 logger.error("   ⚠️  BUYING IS DISABLED - SELL-ONLY MODE ACTIVE")
                 logger.error("   ⚠️  Bot will manage existing positions but NOT open new ones")
-                logger.error("   ⚠️  Add funds to resume normal trading")
+                logger.error("   ⚠️  Add funds to resume normal trading OR wait for positions to close")
+                logger.error("")
+                logger.error("   📊 Open Positions: Monitoring for take-profit/stop-loss triggers")
+                logger.error("   💡 Note: Funds will become available as positions are sold")
                 logger.error("=" * 80)
             
             # Circuit breaker will prevent trading if balance < $25
@@ -1565,13 +1588,36 @@ To enable trading:
                 take_profit = position['take_profit']
                 trailing_stop = position['trailing_stop']
                 
-                # Calculate current P&L
+                # Calculate current P&L - use both methods for accuracy
+                position_size_usd = position.get('size_usd', position.get('position_size_usd', 0))
+                crypto_quantity = position.get('crypto_quantity', 0)
+                
                 if side == 'BUY':
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                    pnl_usd = position['size_usd'] * (pnl_pct / 100)
+                    pnl_usd = position_size_usd * (pnl_pct / 100)
+                    
+                    # Alternative: Use crypto quantity (more accurate if available)
+                    if crypto_quantity > 0:
+                        current_value = crypto_quantity * current_price
+                        entry_value = crypto_quantity * entry_price
+                        pnl_usd_alt = current_value - entry_value
+                        
+                        # Use quantity-based calc if it differs significantly
+                        if abs(pnl_usd_alt - pnl_usd) > PNL_CALCULATION_THRESHOLD:
+                            pnl_usd = pnl_usd_alt
                 else:  # SELL
                     pnl_pct = ((entry_price - current_price) / entry_price) * 100
-                    pnl_usd = position['size_usd'] * (pnl_pct / 100)
+                    pnl_usd = position_size_usd * (pnl_pct / 100)
+                    
+                    # Alternative: Use crypto quantity (more accurate if available)
+                    if crypto_quantity > 0:
+                        entry_value = crypto_quantity * entry_price
+                        current_value = crypto_quantity * current_price
+                        pnl_usd_alt = entry_value - current_value
+                        
+                        # Use quantity-based calc if it differs significantly
+                        if abs(pnl_usd_alt - pnl_usd) > PNL_CALCULATION_THRESHOLD:
+                            pnl_usd = pnl_usd_alt
                 
                 logger.info(f"   {symbol}: {side} @ ${entry_price:.2f} | Current: ${current_price:.2f} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
                 logger.info(f"      Exit Levels: SL=${stop_loss:.2f}, Trail=${trailing_stop:.2f}, TP=${position['take_profit']:.2f}")
@@ -1640,6 +1686,8 @@ To enable trading:
                                         logger.warning(f"   ⚠️ Stepped exit skipped for {symbol}: zero quantity")
                                         continue
                                     
+                                    # CRITICAL: Add 10s timeout to prevent broker API hang from blocking entire loop
+                                    logger.info(f"   📤 Attempting stepped exit order with 10s timeout...")
                                     # CRITICAL: Add timeout to prevent broker API hang from blocking entire loop
                                     # Track retry attempts for this position
                                     retry_count = position.get('exit_retry_count', 0)
@@ -1649,11 +1697,19 @@ To enable trading:
                                         self.broker.place_market_order,
                                         args=(symbol, exit_signal.lower(), exit_quantity),
                                         kwargs={'size_type': 'base'},
+                                        timeout_seconds=10
                                         timeout_seconds=timeout_duration
                                     )
                                     
                                     if error:
                                         if isinstance(error, TimeoutError):
+                                            logger.warning(f"   ⏰ Stepped exit order TIMED OUT after 10s - will retry on next cycle")
+                                        else:
+                                            logger.warning(f"   ⚠️ Stepped exit order failed: {error} - will retry on next cycle")
+                                    elif order and order.get('status') == 'filled':
+                                        logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
+                                        # Mark exit as completed and reduce position size
+                                        position[stepped_exit_info['flag_name']] = True
                                             position['exit_retry_count'] = retry_count + 1
                                             logger.warning(f"   ⏰ Stepped exit order TIMED OUT after {timeout_duration}s - will retry next cycle (attempt #{retry_count + 1})")
                                         else:
@@ -1667,6 +1723,17 @@ To enable trading:
                                         if 'crypto_quantity' in position:
                                             position['crypto_quantity'] *= (1.0 - stepped_exit_info['exit_pct'])
                                     else:
+                                        logger.warning(f"   ⚠️ Stepped exit order incomplete: {order} - will retry on next cycle")
+                                except Exception as e:
+                                    logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
+                    elif trailing_stop > 0:
+                        # Trailing stop with buffer to prevent premature exits at breakeven
+                        buffer_price = trailing_stop * TRAILING_STOP_BUFFER_BUY
+                        
+                        if current_price < buffer_price:
+                            drop_pct = ((trailing_stop - current_price) / trailing_stop) * 100
+                            exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f} (dropped {drop_pct:.2f}%)"
+                            logger.info(f"      🔻 TRAILING STOP TRIGGERED: ${current_price:.2f} dropped {drop_pct:.2f}% below ${trailing_stop:.2f}")
                                         logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
                                 except Exception as e:
                                     logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
@@ -1707,6 +1774,8 @@ To enable trading:
                                     logger.warning(f"   ⚠️ Stepped exit skipped for {symbol}: zero quantity")
                                     continue
                                 
+                                # CRITICAL: Add 10s timeout to prevent broker API hang from blocking entire loop
+                                logger.info(f"   📤 Attempting stepped exit order with 10s timeout...")
                                 # CRITICAL: Add timeout to prevent broker API hang from blocking entire loop
                                 # Track retry attempts for this position
                                 retry_count = position.get('exit_retry_count', 0)
@@ -1716,11 +1785,19 @@ To enable trading:
                                     self.broker.place_market_order,
                                     args=(symbol, exit_signal.lower(), exit_quantity),
                                     kwargs={'size_type': 'base'},
+                                    timeout_seconds=10
                                     timeout_seconds=timeout_duration
                                 )
                                 
                                 if error:
                                     if isinstance(error, TimeoutError):
+                                        logger.warning(f"   ⏰ Stepped exit order TIMED OUT after 10s - will retry on next cycle")
+                                    else:
+                                        logger.warning(f"   ⚠️ Stepped exit order failed: {error} - will retry on next cycle")
+                                elif order and order.get('status') == 'filled':
+                                    logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
+                                    # Mark exit as completed and reduce position size
+                                    position[stepped_exit_info['flag_name']] = True
                                         position['exit_retry_count'] = retry_count + 1
                                         logger.warning(f"   ⏰ Stepped exit order TIMED OUT after {timeout_duration}s - will retry next cycle (attempt #{retry_count + 1})")
                                     else:
@@ -1734,6 +1811,17 @@ To enable trading:
                                     if 'crypto_quantity' in position:
                                         position['crypto_quantity'] *= (1.0 - stepped_exit_info['exit_pct'])
                                 else:
+                                    logger.warning(f"   ⚠️ Stepped exit order incomplete: {order} - will retry on next cycle")
+                            except Exception as e:
+                                logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
+                    elif trailing_stop > 0:
+                        # Trailing stop with buffer to prevent premature exits at breakeven (SELL positions)
+                        buffer_price = trailing_stop * TRAILING_STOP_BUFFER_SELL
+                        
+                        if current_price > buffer_price:
+                            rise_pct = ((current_price - trailing_stop) / trailing_stop) * 100
+                            exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f} (rose {rise_pct:.2f}%)"
+                            logger.info(f"      🔻 TRAILING STOP TRIGGERED: ${current_price:.2f} rose {rise_pct:.2f}% above ${trailing_stop:.2f}")
                                     logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
                             except Exception as e:
                                 logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
@@ -2446,13 +2534,11 @@ To enable trading:
             
             # Check if profit target met
             if pnl_pct >= (profit_threshold * 100):
-                # Mark as executed
-                position[flag_name] = True
-                
-                # Return exit info
+                # Return exit info (flag will be set AFTER successful order fill)
                 return {
                     'exit_pct': exit_pct,
-                    'profit_level': f"{profit_threshold*100:.1f}%"
+                    'profit_level': f"{profit_threshold*100:.1f}%",
+                    'flag_name': flag_name
                 }
         
         return None
@@ -2489,17 +2575,59 @@ To enable trading:
         try:
             logger.info("🔁 Running trading cycle...")
             
-            # Update balance
-            self.account_balance = self.get_usd_balance()
-            logger.info(f"USD Balance: ${self.account_balance:,.2f}")
+            # Update balance and check total account value (USD + crypto holdings)
+            balance_data = self.broker.get_account_balance()
+            if isinstance(balance_data, dict):
+                usd_balance = float(balance_data.get('usd', 0) or balance_data.get('trading_balance', 0))
+                crypto_holdings = balance_data.get('crypto', {})
+                # Calculate total crypto value (we'll use current market prices)
+                crypto_value = 0.0
+                for asset, quantity in crypto_holdings.items():
+                    try:
+                        if quantity > 0:
+                            symbol = f"{asset}-USD"
+                            market_data = self.broker.get_market_data(symbol, timeframe='1m', limit=1)
+                            if market_data and market_data.get('candles'):
+                                price = float(market_data['candles'][-1]['close'])
+                                crypto_value += quantity * price
+                    except (KeyError, ValueError, TypeError, IndexError) as e:
+                        logger.debug(f"   ⚠️ Could not price {asset}: {e}")
+                        pass  # Skip assets we can't price
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ Unexpected error pricing {asset}: {e}")
+                        pass  # Skip assets we can't price
+                
+                total_account_value = usd_balance + crypto_value
+                self.account_balance = usd_balance
+            else:
+                # Fallback if balance is just a float
+                usd_balance = float(balance_data)
+                crypto_value = 0.0
+                total_account_value = usd_balance
+                self.account_balance = usd_balance
+            
+            logger.info(f"💰 Account Value: USD=${usd_balance:.2f}, Crypto=${crypto_value:.2f}, Total=${total_account_value:.2f}")
+            
+            # Validate position sizes to detect stale data
+            if self.open_positions:
+                self.position_manager.validate_position_sizes(self.open_positions, usd_balance)
             
             # CRITICAL: Manage existing positions FIRST (this was blocked before)
             # Position management MUST run even during emergency stop
             self.manage_open_positions()
             
-            # Check emergency stop status
+            # Check emergency stop status - use total account value, not just USD
             emergency_lock_file = os.path.join(os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
             trading_locked = os.path.exists(emergency_lock_file)
+            
+            # Dynamic emergency stop based on account value
+            if total_account_value < MINIMUM_BALANCE_PROTECTION:
+                trading_locked = True
+                logger.error(f"🚨 EMERGENCY STOP: Total account value ${total_account_value:.2f} < ${MINIMUM_BALANCE_PROTECTION}")
+            elif usd_balance < MINIMUM_USD_WITH_POSITIONS and len(self.open_positions) > 0:
+                # Low cash but have positions - sell-only mode
+                trading_locked = True
+                logger.warning(f"🔒 SELL-ONLY MODE: USD balance ${usd_balance:.2f} too low, waiting for positions to close")
             
             if trading_locked:
                 logger.info("🔒 Emergency stop active - sell-only mode")

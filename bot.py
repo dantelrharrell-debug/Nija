@@ -12,6 +12,17 @@ import logging
 from logging.handlers import RotatingFileHandler
 import signal
 import threading
+import subprocess
+
+# EMERGENCY STOP CHECK
+if os.path.exists('EMERGENCY_STOP'):
+    print("\n" + "="*80)
+    print("🚨 EMERGENCY STOP ACTIVE")
+    print("="*80)
+    print("Bot is disabled. See EMERGENCY_STOP file for details.")
+    print("Delete EMERGENCY_STOP file to resume trading.")
+    print("="*80 + "\n")
+    sys.exit(0)
 
 # EMERGENCY STOP CHECK
 if os.path.exists('EMERGENCY_STOP'):
@@ -77,16 +88,31 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 # Import after path setup
 from trading_strategy import TradingStrategy
 
-# Setup logging
+# Setup logging - configure ONCE to prevent duplicates
 LOG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'nija.log'))
+
+# Remove any existing handlers first
+root = logging.getLogger()
+if root.handlers:
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+
+# Get nija logger
 logger = logging.getLogger("nija")
 logger.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+logger.propagate = False  # Prevent propagation to root logger
 
+# Single formatter with consistent timestamp format
+formatter = logging.Formatter(
+    '%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Add handlers only if not already present
 if not logger.hasHandlers():
     file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=2)
     file_handler.setFormatter(formatter)
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
@@ -102,10 +128,37 @@ def main():
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
+    # Get git metadata - try env vars first, then git commands
+    git_branch = os.getenv("GIT_BRANCH", "")
+    git_commit = os.getenv("GIT_COMMIT", "")
+    
+    # Fallback to git commands if env vars not set
+    if not git_branch:
+        try:
+            git_branch = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=os.path.dirname(__file__),
+                stderr=subprocess.DEVNULL,
+                timeout=5
+            ).decode().strip()
+        except Exception:
+            git_branch = "unknown"
+    
+    if not git_commit:
+        try:
+            git_commit = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=os.path.dirname(__file__),
+                stderr=subprocess.DEVNULL,
+                timeout=5
+            ).decode().strip()
+        except Exception:
+            git_commit = "unknown"
+
     logger.info("=" * 70)
     logger.info("NIJA TRADING BOT - APEX v7.1")
-    logger.info("Branch: %s", os.getenv("GIT_BRANCH", "unknown"))
-    logger.info("Commit: %s", os.getenv("GIT_COMMIT", "unknown"))
+    logger.info("Branch: %s", git_branch)
+    logger.info("Commit: %s", git_commit)
     logger.info("=" * 70)
     logger.info(f"Python version: {sys.version.split()[0]}")
     logger.info(f"Log file: {LOG_FILE}")

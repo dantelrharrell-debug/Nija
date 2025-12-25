@@ -13,6 +13,9 @@ from datetime import datetime
 
 logger = logging.getLogger("nija.positions")
 
+# Position validation constants
+POSITION_BALANCE_MISMATCH_THRESHOLD = 20  # Flag positions if total > balance * this value
+
 
 class PositionManager:
     """
@@ -37,6 +40,20 @@ class PositionManager:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.positions_file = self.data_dir / "open_positions.json"
         logger.info(f"💾 Position manager initialized: {self.positions_file}")
+    
+    @staticmethod
+    def _get_position_size(position: Dict) -> float:
+        """
+        Get position size from dict, handling both old and new key formats.
+        
+        Args:
+            position: Position dictionary
+        
+        Returns:
+            float: Position size in USD
+        """
+        # Try new key first, fallback to old key for backward compatibility
+        return float(position.get('size_usd') or position.get('position_size_usd', 0))
     
     def save_positions(self, positions: Dict) -> bool:
         """
@@ -92,12 +109,48 @@ class PositionManager:
             
             logger.info(f"💾 Loaded {count} positions from {timestamp}")
             
+            # Track zero-size positions for summary
+            zero_size_count = 0
+            valid_positions = 0
+            
             # Log each restored position
             for symbol, pos in positions.items():
-                logger.info(
-                    f"  ↳ {symbol}: {pos.get('side')} @ ${pos.get('entry_price', 0):.4f} "
-                    f"(Size: ${pos.get('position_size_usd', 0):.2f})"
-                )
+                # Use helper method for consistent key handling
+                size = self._get_position_size(pos)
+                
+                # Warn if position has zero size (data integrity issue)
+                if size == 0:
+                    zero_size_count += 1
+                    logger.warning(
+                        f"  ⚠️ {symbol}: {pos.get('side')} @ ${pos.get('entry_price', 0):.4f} "
+                        f"(Size: $0.00 - INVALID POSITION)"
+                    )
+                else:
+                    valid_positions += 1
+                    logger.info(
+                        f"  ↳ {symbol}: {pos.get('side')} @ ${pos.get('entry_price', 0):.4f} "
+                        f"(Size: ${size:.2f})"
+                    )
+            
+            # Summary of position data integrity
+            if zero_size_count > 0:
+                logger.warning("")
+                logger.warning("=" * 70)
+                logger.warning("⚠️  POSITION DATA INTEGRITY WARNING")
+                logger.warning(f"   Found {zero_size_count} position(s) with $0.00 size")
+                logger.warning(f"   Valid positions: {valid_positions}")
+                logger.warning("")
+                logger.warning("   Possible causes:")
+                logger.warning("   - Positions were synced from Coinbase but size not calculated")
+                logger.warning("   - Data corruption in open_positions.json")
+                logger.warning("   - Positions were closed externally")
+                logger.warning("")
+                logger.warning("   Recommendation:")
+                logger.warning("   - These positions will be validated against Coinbase API")
+                logger.warning("   - If they don't exist in Coinbase, they will be removed")
+                logger.warning("   - If they exist, size will be recalculated from holdings")
+                logger.warning("=" * 70)
+                logger.warning("")
             
             return positions
             
@@ -148,7 +201,8 @@ class PositionManager:
                 
                 # Calculate current P&L
                 entry_price = float(pos.get('entry_price', 0))
-                size_usd = float(pos.get('position_size_usd', 0))
+                # Use helper method for consistent key handling
+                size_usd = self._get_position_size(pos)
                 
                 if pos.get('side') == 'BUY':
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100
@@ -173,6 +227,52 @@ class PositionManager:
         
         logger.info(f"✅ Validated {len(validated)} positions")
         return validated
+    
+    def validate_position_sizes(self, positions: Dict, current_balance: float) -> None:
+        """
+        Validate that tracked positions match actual account state.
+        Report on stale/invalid positions.
+        
+        Note: This method reports issues but doesn't remove positions.
+        Position removal should be handled by the trading strategy based on broker validation.
+        
+        Args:
+            positions: Dictionary of open positions
+            current_balance: Current USD balance
+        """
+        if not positions:
+            return
+        
+        total_position_value = sum(self._get_position_size(p) for p in positions.values())
+        
+        logger.info(f"📊 Position Size Validation:")
+        logger.info(f"   Total tracked value: ${total_position_value:.2f}")
+        logger.info(f"   Current USD balance: ${current_balance:.2f}")
+        
+        # If positions >> balance, likely stale data
+        if total_position_value > current_balance * POSITION_BALANCE_MISMATCH_THRESHOLD:
+            logger.error(f"⚠️  POSITION MISMATCH: Tracked ${total_position_value:.2f} >> Balance ${current_balance:.2f}")
+            logger.error(f"   This indicates stale position data - recommending sync with broker")
+        
+        # Report on each position for diagnostics
+        zero_size_positions = []
+        small_positions = []
+        
+        for symbol in positions.keys():
+            position = positions[symbol]
+            size = self._get_position_size(position)
+            
+            if size <= 0:
+                zero_size_positions.append(symbol)
+            elif size < 1.0:
+                small_positions.append(symbol)
+        
+        if zero_size_positions:
+            logger.warning(f"   Found {len(zero_size_positions)} zero-size position(s): {', '.join(zero_size_positions)}")
+            logger.warning(f"   These should be validated against broker or removed")
+        
+        if small_positions:
+            logger.info(f"   Found {len(small_positions)} small position(s) (< $1.00): {', '.join(small_positions)}")
     
     def clear_positions(self) -> bool:
         """
