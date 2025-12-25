@@ -67,7 +67,7 @@ if not logger.hasHandlers():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-from broker_manager import CoinbaseBroker
+from broker_manager import CoinbaseBroker, MINIMUM_BALANCE_PROTECTION
 from mock_broker import MockBroker
 from nija_apex_strategy_v71 import NIJAApexStrategyV71
 from adaptive_growth_manager import AdaptiveGrowthManager
@@ -78,6 +78,12 @@ from indicators import calculate_vwap, calculate_ema, calculate_rsi, calculate_m
 
 # Unique build signature for deployment verification
 STRATEGY_BUILD_ID = "TradingStrategy v7.1 init-hardened _os alias - 2025-12-24T17:40Z"
+
+# Trading constants
+TRAILING_STOP_BUFFER_BUY = 0.997   # 0.3% buffer below trail for BUY positions
+TRAILING_STOP_BUFFER_SELL = 1.003  # 0.3% buffer above trail for SELL positions
+PNL_CALCULATION_THRESHOLD = 0.01   # Threshold to switch between calculation methods ($0.01)
+MINIMUM_USD_WITH_POSITIONS = 5.0   # Minimum USD cash when holding positions
 
 class TradingStrategy:
     """
@@ -1588,7 +1594,7 @@ To enable trading:
                         pnl_usd_alt = current_value - entry_value
                         
                         # Use quantity-based calc if it differs significantly
-                        if abs(pnl_usd_alt - pnl_usd) > 0.01:
+                        if abs(pnl_usd_alt - pnl_usd) > PNL_CALCULATION_THRESHOLD:
                             pnl_usd = pnl_usd_alt
                 else:  # SELL
                     pnl_pct = ((entry_price - current_price) / entry_price) * 100
@@ -1601,7 +1607,7 @@ To enable trading:
                         pnl_usd_alt = entry_value - current_value
                         
                         # Use quantity-based calc if it differs significantly
-                        if abs(pnl_usd_alt - pnl_usd) > 0.01:
+                        if abs(pnl_usd_alt - pnl_usd) > PNL_CALCULATION_THRESHOLD:
                             pnl_usd = pnl_usd_alt
                 
                 logger.info(f"   {symbol}: {side} @ ${entry_price:.2f} | Current: ${current_price:.2f} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
@@ -1698,8 +1704,7 @@ To enable trading:
                                     logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
                     elif trailing_stop > 0:
                         # Trailing stop with buffer to prevent premature exits at breakeven
-                        TRAILING_STOP_BUFFER = 0.997  # 0.3% buffer - only exit on clear drop
-                        buffer_price = trailing_stop * TRAILING_STOP_BUFFER
+                        buffer_price = trailing_stop * TRAILING_STOP_BUFFER_BUY
                         
                         if current_price < buffer_price:
                             drop_pct = ((trailing_stop - current_price) / trailing_stop) * 100
@@ -1767,8 +1772,7 @@ To enable trading:
                                 logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
                     elif trailing_stop > 0:
                         # Trailing stop with buffer to prevent premature exits at breakeven (SELL positions)
-                        TRAILING_STOP_BUFFER = 1.003  # 0.3% buffer - only exit on clear rise
-                        buffer_price = trailing_stop * TRAILING_STOP_BUFFER
+                        buffer_price = trailing_stop * TRAILING_STOP_BUFFER_SELL
                         
                         if current_price > buffer_price:
                             rise_pct = ((current_price - trailing_stop) / trailing_stop) * 100
@@ -2564,11 +2568,10 @@ To enable trading:
             trading_locked = os.path.exists(emergency_lock_file)
             
             # Dynamic emergency stop based on account value
-            from broker_manager import MINIMUM_BALANCE_PROTECTION
             if total_account_value < MINIMUM_BALANCE_PROTECTION:
                 trading_locked = True
                 logger.error(f"🚨 EMERGENCY STOP: Total account value ${total_account_value:.2f} < ${MINIMUM_BALANCE_PROTECTION}")
-            elif usd_balance < 5.0 and len(self.open_positions) > 0:
+            elif usd_balance < MINIMUM_USD_WITH_POSITIONS and len(self.open_positions) > 0:
                 # Low cash but have positions - sell-only mode
                 trading_locked = True
                 logger.warning(f"🔒 SELL-ONLY MODE: USD balance ${usd_balance:.2f} too low, waiting for positions to close")
