@@ -29,11 +29,12 @@ INDICATORS = {
     'rsi_bullish_max': 70,  # RSI bullish zone maximum
     'rsi_bearish_min': 30,  # RSI bearish zone minimum
     'rsi_bearish_max': 60,  # RSI bearish zone maximum
-NIJA Apex Strategy v7.1 - Configuration File
-
-Centralized configuration for all strategy parameters.
-No API keys or secrets - use environment variables for credentials.
-"""
+    'macd_fast': 12,
+    'macd_slow': 26,
+    'macd_signal': 9,
+    'adx_period': 14,
+    'atr_period': 14,
+}
 
 # ═══════════════════════════════════════════════════════════════════
 # MARKET STATE FILTERING
@@ -160,20 +161,20 @@ TAKE_PROFIT = {
     'stages': [
         {
             'name': 'TP1',
-            'profit_r': 1.0,  # 1R (1x risk)
-            'exit_percentage': 0.33,  # Exit 33% of position
+            'profit_r': 0.5,  # 0.5R (quick scalp - 1% profit)
+            'exit_percentage': 0.50,  # Exit 50% of position
             'action': 'move_stop_to_breakeven',
         },
         {
             'name': 'TP2',
-            'profit_r': 2.0,  # 2R
-            'exit_percentage': 0.33,  # Exit another 33% (66% total)
+            'profit_r': 1.0,  # 1R (2% profit)
+            'exit_percentage': 0.30,  # Exit another 30% (80% total)
             'action': 'activate_trailing',
         },
         {
             'name': 'TP3',
-            'profit_r': 3.0,  # 3R
-            'exit_percentage': 0.34,  # Exit remaining 34% (100% total)
+            'profit_r': 1.5,  # 1.5R (3% profit)
+            'exit_percentage': 0.20,  # Exit remaining 20% (100% total)
             'action': 'final_exit',
         },
     ],
@@ -293,8 +294,11 @@ TRADING_PAIRS = {
 RISK_LIMITS = {
     'max_daily_loss': 0.025,  # 2.5% max daily loss
     'max_exposure': 0.30,  # 30% max total exposure
-    'max_positions': 5,  # Maximum concurrent positions
-    'max_trades_per_day': 20,  # Maximum trades per day
+    'max_positions': 3,  # 3 positions for ACTIVE TRADING (quick turnover)
+    'max_trades_per_day': 30,  # 30 trades per day (more active)
+}
+
+# ═══════════════════════════════════════════════════════════════════
 # RISK MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════
 
@@ -484,12 +488,12 @@ EXECUTION_CONFIG = {
     'max_scans_per_hour': 12,  # Limit API calls
     
     # Trade Limits
-    'max_trades_per_day': 15,
-    'max_trades_per_hour': 5,
-    'min_time_between_trades': 120,  # 2 minutes between trades
+    'max_trades_per_day': 30,  # 30 trades per day (more active)
+    'max_trades_per_hour': 10,  # 10 per hour (faster trading)
+    'min_time_between_trades': 30,  # 30 seconds between trades (was 2 min)
     
     # Position Limits
-    'max_positions': 5,  # Maximum concurrent positions
+    'max_positions': 3,  # 3 positions for ACTIVE TRADING (quick turnover)
     'max_positions_per_symbol': 1,  # One position per symbol
 }
 

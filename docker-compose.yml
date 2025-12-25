@@ -1,0 +1,13 @@
+version: "3.9"
+services:
+  nija:
+    image: your-image:tag
+    restart: unless-stopped
+    environment:
+      COINBASE_API_KEY: "${COINBASE_API_KEY}"
+      COINBASE_API_SECRET: "${COINBASE_API_SECRET}"
+      COINBASE_RETAIL_PORTFOLIO_ID: "${COINBASE_RETAIL_PORTFOLIO_ID}"
+    # Optional:
+    # volumes:
+    #   - ./logs:/usr/src/app/logs
+    # command: ["python", "bot.py"]

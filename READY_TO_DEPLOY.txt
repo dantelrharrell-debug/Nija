@@ -1,0 +1,128 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                      NIJA BOT - CAPITAL GUARD FIX                               ║
+║                            STATUS: ✅ COMPLETE                                  ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+┌─ PROBLEM ────────────────────────────────────────────────────────────────────────┐
+│                                                                                  │
+│  Bot was COMPLETELY BLOCKED from trading despite generating valid signals        │
+│  Reason: Capital guard set too high ($10.00) while balance was low ($5.05)      │
+│                                                                                  │
+│  ❌ Account Balance:        $5.05 USD                                            │
+│  ❌ Capital Guard:          $10.00                                               │
+│  ❌ Result:                 NO TRADES POSSIBLE                                   │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ SOLUTION ────────────────────────────────────────────────────────────────────────┐
+│                                                                                  │
+│  Lowered capital guards from $10.00 → $5.00 in two locations:                   │
+│                                                                                  │
+│  ✅ Line 144:   MINIMUM_VIABLE_CAPITAL = 5.0  (Startup Guard)                   │
+│  ✅ Line 621:   MINIMUM_VIABLE_CAPITAL = 5.0  (Trade Entry Guard)               │
+│                                                                                  │
+│  Both also read from environment:                                               │
+│    os.getenv("MINIMUM_VIABLE_CAPITAL", "5.0")                                   │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ RESULT AFTER RESTART ────────────────────────────────────────────────────────────┐
+│                                                                                  │
+│  ✅ Account Balance:        $5.05 USD                                            │
+│  ✅ Capital Guard:          $5.00                                                │
+│  ✅ Trading Status:         ENABLED ($5.05 >= $5.00)                             │
+│                                                                                  │
+│  Position Configuration:                                                        │
+│    • Max Concurrent:        8 positions (code: max_concurrent_positions = 8)    │
+│    • Size Per Position:     $0.50-$2.00 (10-40% of balance)                     │
+│    • Stop-Loss:             1.5% hard (code: stop_loss_pct = 0.015)             │
+│    • Take-Profit:           2% base + 3% stepped                                │
+│    • Trailing Stop:         Locks ~98% of gains                                 │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ DEPLOYMENT ──────────────────────────────────────────────────────────────────────┐
+│                                                                                  │
+│  Step 1: Kill existing bot process                                              │
+│    $ pkill -f "python.*bot" || true                                             │
+│    $ sleep 2                                                                    │
+│                                                                                  │
+│  Step 2: Start bot with new capital guard                                       │
+│    $ cd /workspaces/Nija                                                        │
+│    $ nohup ./.venv/bin/python bot.py > nija_output.log 2>&1 &                  │
+│                                                                                  │
+│  Step 3: Monitor for trading                                                    │
+│    $ tail -f nija_output.log | grep -E 'SIGNAL|ORDER PLACED|positions'         │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ EXPECTED BEHAVIOR ───────────────────────────────────────────────────────────────┐
+│                                                                                  │
+│  ✅ Bot starts successfully (no startup guard error)                             │
+│  ✅ Market scanning begins (signals detected)                                    │
+│  ✅ Trades enter at micro sizes ($0.50-$2.00)                                    │
+│  ✅ Stop-loss enforced at 1.5% (prevents further bleeding)                       │
+│  ✅ Up to 8 positions can be open simultaneously                                 │
+│  ✅ Protected holdings (BTC/ETH/SOL/DOGE) monitored (not liquidated)             │
+│                                                                                  │
+│  Timeline: All visible within 5-10 minutes of restart                           │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ VERIFICATION ────────────────────────────────────────────────────────────────────┐
+│                                                                                  │
+│  Code Changes Verified:                                                         │
+│    ✅ Line 144 = 5.0                                                            │
+│    ✅ Line 621 = 5.0                                                            │
+│    ✅ Both read from environment                                                │
+│    ✅ Position sizing logic intact                                              │
+│    ✅ Stop-loss enforcement intact                                              │
+│    ✅ 8-position concurrency limit intact                                       │
+│                                                                                  │
+│  Support Files Created:                                                         │
+│    ✅ CAPITAL_GUARD_FIX.md (detailed explanation)                               │
+│    ✅ CAPITAL_GUARD_CHANGES.txt (change summary)                                │
+│    ✅ CAPITAL_GUARD_DEPLOYMENT_READY.txt (this file)                            │
+│    ✅ verify_capital_guard.py (verification script)                             │
+│    ✅ restart_bot_with_guard.sh (automated restart)                             │
+│    ✅ deploy_capital_guard_fix.sh (full workflow)                               │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ CRITICAL NOTES ──────────────────────────────────────────────────────────────────┐
+│                                                                                  │
+│  ⚠️  Protected Positions (BTC/ETH/SOL/DOGE)                                      │
+│     • Bot cannot sell these (likely on hold at Coinbase)                         │
+│     • Will not block new trading                                                │
+│     • Can be liquidated manually via Coinbase UI                                │
+│     • Or cleared by profits from new positions                                  │
+│                                                                                  │
+│  💡 Position Sizing                                                              │
+│     • $0.50-$2.00 per trade is small but sufficient for backtesting            │
+│     • Fees will be ~5% round-trip (high but necessary at low balance)           │
+│     • Consider depositing $100-200 once trading resumes                         │
+│                                                                                  │
+│  🎯 Next Milestone                                                               │
+│     • Get 8 positions deployed                                                  │
+│     • Verify 1.5% stops work                                                    │
+│     • Accumulate capital to reduce trading frequency                             │
+│     • Eventually liquidate protected holdings                                    │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ QUICK START COMMAND ─────────────────────────────────────────────────────────────┐
+│                                                                                  │
+│  Copy and paste this command to deploy:                                         │
+│                                                                                  │
+│  pkill -f "python.*bot" || true; sleep 2; cd /workspaces/Nija && \              │
+│  nohup ./.venv/bin/python bot.py > nija_output.log 2>&1 & \                     │
+│  echo "✅ Bot started" && sleep 3 && tail -20 nija_output.log                   │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+╔════════════════════════════════════════════════════════════════════════════════╗
+║  DEPLOYMENT STATUS: ✅ READY                                                   ║
+║  CODE CHANGES:     ✅ VERIFIED (2/2 locations)                                 ║
+║  DOCUMENTATION:    ✅ COMPLETE (6 files created)                               ║
+║  ACTION REQUIRED:  🔄 RESTART BOT                                              ║
+╚════════════════════════════════════════════════════════════════════════════════╝

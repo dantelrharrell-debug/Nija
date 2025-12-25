@@ -77,12 +77,52 @@ class MyBrokerAdapter(BrokerInterface):
 export COINBASE_API_KEY="your_api_key"
 export COINBASE_API_SECRET="your_api_secret"
 export COINBASE_PEM_CONTENT="$(cat cdp_api_key.pem | base64)"
+
+# Optional: Select specific portfolio
+export COINBASE_RETAIL_PORTFOLIO_ID="<portfolio_uuid>"
+
+# Optional: Include consumer USD accounts (default: false)
+export ALLOW_CONSUMER_USD="true"
 ```
 
 3. **Install Required Packages:**
 ```bash
 pip install coinbase-advanced-py
 ```
+
+### Portfolio Selection & Balance Detection
+
+**Finding Your Portfolios:**
+
+Use the provided CLI tool to scan your portfolios and find where your funds are located:
+
+```bash
+python find_usd_portfolio.py
+```
+
+This will display:
+- All portfolios with their UUIDs and types
+- USD/USDC balances in each portfolio
+- Which portfolio is currently selected (if override is set)
+- Whether consumer USD is being included or excluded
+
+**Portfolio Override:**
+
+By default, NIJA scans all portfolios. To use a specific portfolio, set:
+
+```bash
+export COINBASE_RETAIL_PORTFOLIO_ID="<uuid-from-scanner>"
+```
+
+**Consumer USD Accounts:**
+
+By default, USD accounts on the consumer platform are excluded from the trading balance (only Advanced Trade and Spot portfolios are counted). To include consumer USD:
+
+```bash
+export ALLOW_CONSUMER_USD="true"
+```
+
+This is useful if you have funds in a retail/consumer portfolio and want to use them for trading.
 
 ### Example Usage
 

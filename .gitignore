@@ -30,3 +30,7 @@ htmlcov/
 
 # Git metadata
 .git
+
+scanner.out
+
+nija.log.*

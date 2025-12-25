@@ -1,0 +1,87 @@
+==========================================
+COMMIT HISTORY (Last 5)
+==========================================
+493183e Complete API optimization deployment - caching + retry + volume filters
+3138bea Fix API rate limiting and volume filters
+63d75d7 Fix API rate limiting and volume filters
+02d811e Fix API rate limiting and volume filters - scan 15s->30s, add caching, retry logic, lower thresholds
+8ee2fdd 📊 TIMELINE UPGRADE: 16 days to $5K with 98% profit lock (45% faster!)
+
+==========================================
+CURRENT GIT STATUS
+==========================================
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	new file:   quick_verify.sh
+	new file:   verify_deployment.sh
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	analyze_git.sh
+	check_commits.sh
+	git_analysis.txt
+	git_status_check.sh
+
+
+==========================================
+WHAT'S IN LAST COMMIT?
+==========================================
+commit 493183ec194e3c6c82ac8dd5fbf330f2c572a6ba
+Author: dantelrharrell-debug <dantelrharrell@users.noreply.github.com>
+Date:   Wed Dec 17 17:58:44 2025 +0000
+
+    Complete API optimization deployment - caching + retry + volume filters
+    
+    PRIMARY FIXES:
+    ✅ Price caching (30s TTL) - reduces redundant API calls
+    ✅ Exponential backoff retry (1s→2s→4s, 3 attempts) - handles rate limits gracefully
+    ✅ Volume filter optimization (50%→30%, 30%→20%) - captures more opportunities
+    ✅ Scan interval 30s (already deployed) - 50% fewer API calls
+    
+    TECHNICAL CHANGES:
+    - bot/trading_strategy.py: Added _price_cache, _cache_timestamp, _cache_ttl
+    - bot/trading_strategy.py: Modified fetch_candles() to check cache before API call
+    - bot/trading_strategy.py: Cache cleared at start of each run_cycle()
+    - bot/broker_manager.py: Wrapped get_candles() in retry loop with exponential backoff
+    - bot/nija_apex_strategy_v71.py: volume_threshold 0.5→0.3, volume_min_threshold 0.3→0.2
+    
+    EXPECTED OUTCOMES:
+    - Eliminate 'Could not get price' errors via retry mechanism
+    - Reduce API call frequency by ~60-70% via caching + 30s interval
+    - Increase trade signal capture rate by 2-3x via lower volume thresholds
+    - Graceful degradation during API rate limit periods
+    
+    Resolves: API rate limiting blocking 70%+ of Day 1 trades
+
+ check_git_status.sh   | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ deploy_all_changes.sh | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 90 insertions(+)
+
+==========================================
+DIFF: Local vs Git Repository
+==========================================
+Checking bot.py:
+
+Checking trading_strategy.py:
+
+Checking broker_manager.py:
+
+Checking nija_apex_strategy_v71.py:
+
+==========================================
+VERIFICATION: What's actually in git repo?
+==========================================
+bot.py line 59 (from git):
+            try:
+
+trading_strategy.py line 185 (from git):
+        self._price_cache = {}
+
+broker_manager.py line 374 (from git):
+        max_retries = 3
+
+nija_apex_strategy_v71.py line 60 (from git):
+        self.volume_threshold = self.config.get('volume_threshold', 0.3)  # 30% of 5-candle avg (lowered from 50%)

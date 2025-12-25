@@ -1,0 +1,113 @@
+# NIJA BOT - CAPITAL GUARD FIX SUMMARY
+
+## Changes Made ✅
+
+### File: `bot/trading_strategy.py`
+
+#### Change 1: Line 144 (Startup Capital Guard)
+**Location**: `TradingStrategy.__init__()`  
+**Previous**: `MINIMUM_VIABLE_CAPITAL = 10.0`  
+**New**: `MINIMUM_VIABLE_CAPITAL = 5.0`  
+**Purpose**: Allow bot startup when balance is $5.00+  
+**Status**: ✅ **VERIFIED CHANGED**
+
+#### Change 2: Line 621 (Trade Entry Capital Guard)
+**Location**: `TradingStrategy.should_trade()`  
+**Previous**: `MINIMUM_VIABLE_CAPITAL = 10.0`  
+**New**: `MINIMUM_VIABLE_CAPITAL = 5.0`  
+**Purpose**: Allow new positions when balance is $5.00+  
+**Status**: ✅ **VERIFIED CHANGED**
+
+---
+
+## Impact Analysis
+
+### Before Fix
+```
+Account Balance:           $5.05
+Capital Guard:             $10.00
+Trading Status:            🚫 BLOCKED
+Reason:                    $5.05 < $10.00
+```
+
+### After Fix
+```
+Account Balance:           $5.05
+Capital Guard:             $5.00
+Trading Status:            ✅ ACTIVE
+Reason:                    $5.05 >= $5.00
+Position Size:             $0.50-$2.00 (10-40% of balance)
+Max Concurrent:            8 positions
+Stop-Loss:                 1.5% (hard)
+Take-Profit:               2% base + 3% stepped
+```
+
+---
+
+## Code Verification
+
+### Both Guards Now Read from Environment
+```python
+import os
+try:
+    MINIMUM_VIABLE_CAPITAL = float(os.getenv("MINIMUM_VIABLE_CAPITAL", "5.0"))
+except Exception:
+    MINIMUM_VIABLE_CAPITAL = 5.0
+```
+
+### Environment Override
+Can override via environment:
+```bash
+export MINIMUM_VIABLE_CAPITAL=3.0  # Lower guard to $3.00
+python bot.py
+```
+
+---
+
+## Testing Checklist
+
+- [x] Line 144 guard set to 5.0
+- [x] Line 621 guard set to 5.0
+- [x] Both guards read from environment MINIMUM_VIABLE_CAPITAL
+- [x] Fallback defaults to 5.0
+- [x] Position sizing logic unchanged (still 8 max concurrent)
+- [x] Stop-loss logic unchanged (still 1.5%)
+- [x] Take-profit logic unchanged (still 2%+3%)
+- [ ] Bot restarted (awaiting terminal)
+- [ ] Trading signals detected in logs
+- [ ] Positions opened successfully
+- [ ] Stop-loss working correctly
+- [ ] No "TRADE BLOCKED" errors for balance
+
+---
+
+## Deployment Ready ✅
+
+The code changes are complete and verified. The bot is ready to:
+1. Start with $5.05 balance (> $5.00 guard)
+2. Enter positions at $0.50-$2.00 sizes
+3. Place up to 8 concurrent positions
+4. Apply 1.5% stop-loss to all entries
+5. Use trailing stops and take-profit targets
+
+### Next Step
+Restart the bot:
+```bash
+pkill -f "python.*bot.py" || true
+sleep 2
+cd /workspaces/Nija
+nohup ./.venv/bin/python bot.py > nija_output.log 2>&1 &
+```
+
+Monitor for trading:
+```bash
+tail -f nija_output.log | grep -E "SIGNAL|Opening|ORDER|positions"
+```
+
+---
+
+**Prepared**: December 21, 2025
+**Status**: Ready for Deployment
+**Capital Guard**: $5.00 (both locations verified)
+**Account Balance**: $5.05
+**Expected Action**: Bot should resume trading immediately after restart

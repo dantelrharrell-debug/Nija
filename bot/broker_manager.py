@@ -7,7 +7,72 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
+import logging
 import os
+import uuid
+import json
+
+# Try to load dotenv if available, but don't fail if not
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not available, env vars should be set externally
+
+# Configure logger for broker operations
+logger = logging.getLogger('nija.broker')
+
+
+def _serialize_object_to_dict(obj) -> Dict:
+    """
+    Safely convert any object to a dictionary for JSON serialization.
+    Handles nested objects, dataclasses, and Coinbase SDK response objects.
+    
+    Args:
+        obj: Any object to convert
+        
+    Returns:
+        dict: Flattened dictionary representation
+    """
+    if obj is None:
+        return {}
+    
+    if isinstance(obj, dict):
+        return obj
+
+    # If it's already a string that looks like JSON/dict, try to parse
+    if isinstance(obj, str):
+        try:
+            return json.loads(obj)
+        except Exception:
+            try:
+                import ast
+                return ast.literal_eval(obj)
+            except Exception:
+                return {"_raw": obj, "_type": type(obj).__name__}
+    
+    # Try JSON serialization first (handles dataclasses with json.JSONEncoder)
+    try:
+        json_str = json.dumps(obj, default=str)
+        return json.loads(json_str)
+    except Exception:
+        pass
+    
+    # Fallback: convert object attributes
+    try:
+        result = {}
+        if hasattr(obj, '__dict__'):
+            for key, value in obj.__dict__.items():
+                # Recursively serialize nested objects
+                if isinstance(value, (dict, list, str, int, float, bool, type(None))):
+                    result[key] = value
+                else:
+                    # For nested objects, convert to string representation
+                    result[key] = str(value)
+        return result
+    except Exception:
+        # Last resort: convert to string
+        return {"_object": str(obj), "_type": type(obj).__name__}
 
 class BrokerType(Enum):
     COINBASE = "coinbase"
@@ -16,7 +81,6 @@ class BrokerType(Enum):
     TD_AMERITRADE = "td_ameritrade"
     ALPACA = "alpaca"
     TRADIER = "tradier"
-    BINANCE = "binance"
 
 class BaseBroker(ABC):
     """Base class for all broker integrations"""
@@ -32,88 +96,1311 @@ class BaseBroker(ABC):
     
     @abstractmethod
     def get_account_balance(self) -> float:
-        """Get USD account balance"""
         pass
     
-    @abstractmethod
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
-        """Place market order (buy/sell)"""
-        pass
-    
-    @abstractmethod
-    def get_positions(self) -> List[Dict]:
-        """Get all open positions"""
-        pass
-    
-    @abstractmethod
-    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get historical candle data"""
-        pass
-    
-    @abstractmethod
-    def supports_asset_class(self, asset_class: str) -> bool:
-        """Check if broker supports asset class (crypto, stocks, futures, options)"""
-        pass
-
-class CoinbaseBroker(BaseBroker):
-    """Coinbase Advanced Trade integration"""
-    
-    def __init__(self):
-        super().__init__(BrokerType.COINBASE)
-        self.client = None
-    
-    def connect(self) -> bool:
-        """Connect to Coinbase Advanced Trade"""
+    def _detect_portfolio(self):
+        """DISABLED: Always use default Advanced Trade portfolio"""
         try:
-            from coinbase.rest import RESTClient
+            # CRITICAL FIX: Do NOT auto-detect portfolio
+            # The Coinbase Advanced Trade API can ONLY trade from the default trading portfolio
+            # Consumer wallets (even if they show up in accounts list) CANNOT be used for trading
+            # The SDK's market_order_buy() always routes to the default portfolio
             
-            api_key = os.getenv("COINBASE_API_KEY")
-            api_secret = os.getenv("COINBASE_API_SECRET")
+            logging.info("=" * 70)
+            logging.info("🎯 PORTFOLIO ROUTING: DEFAULT ADVANCED TRADE")
+            logging.info("=" * 70)
+            logging.info("   Using default Advanced Trade portfolio (SDK default)")
+            logging.info("   Consumer wallets are NOT accessible for trading")
+            logging.info("   Transfer funds via: https://www.coinbase.com/advanced-portfolio")
+            logging.info("=" * 70)
             
-            if not api_key or not api_secret:
-                print("❌ Coinbase credentials not found")
-                return False
+            # Do NOT set portfolio_uuid - let SDK use default
+            self.portfolio_uuid = None
             
-            self.client = RESTClient(api_key=api_key, api_secret=api_secret)
-            
-            # Test connection
-            accounts = self.client.get_accounts()
-            self.connected = True
-            print("✅ Coinbase Advanced Trade connected")
-            return True
-            
+            # Still fetch accounts for balance reporting
+            try:
+                accounts_resp = self.client.get_accounts() if hasattr(self.client, 'get_accounts') else self.client.list_accounts()
+                accounts = getattr(accounts_resp, 'accounts', [])
+                
+                logging.info("📊 ACCOUNT BALANCES (for information only):")
+                logging.info("-" * 70)
+                
+                for account in accounts:
+                    currency = getattr(account, 'currency', None)
+                    available_obj = getattr(account, 'available_balance', None)
+                    available = float(getattr(available_obj, 'value', 0) or 0)
+                    account_name = getattr(account, 'name', 'Unknown')
+                    account_type = getattr(account, 'type', 'Unknown')
+                    
+                    if currency in ['USD', 'USDC'] and available > 0:
+                        tradeable = "✅ TRADEABLE" if account_type == "ACCOUNT_TYPE_CRYPTO" else "❌ NOT TRADEABLE (Consumer)"
+                        logging.info(f"   {currency}: ${available:.2f} | {account_name} | {tradeable}")
+                
+                logging.info("=" * 70)
+                    
+            except Exception as e:
+                logging.warning(f"⚠️  Portfolio detection failed: {e}")
+                logging.info("   Will use default portfolio routing")
+                
         except Exception as e:
-            print(f"❌ Coinbase connection failed: {e}")
+            logging.error(f"❌ Portfolio detection error: {e}")
+    
+    def _is_account_tradeable(self, account_type: str, platform: str) -> bool:
+        """
+        IMPROVEMENT #3: Expanded account type matching patterns.
+        Checks multiple patterns to identify tradeable accounts.
+        
+        Args:
+            account_type: Type string from API (e.g., "ACCOUNT_TYPE_CRYPTO")
+            platform: Platform string from API (e.g., "ADVANCED_TRADE")
+            
+        Returns:
+            True if account is tradeable via Advanced Trade API
+        """
+        if not account_type:
             return False
-    
-    def get_account_balance(self) -> float:
-        """Get USD balance"""
+            
+        account_type_str = str(account_type).upper()
+        platform_str = str(platform or "").upper()
+        
+        # Pattern 1: Explicit ACCOUNT_TYPE_CRYPTO
+        if account_type_str == "ACCOUNT_TYPE_CRYPTO":
+            return True
+        
+        # Pattern 2: Advanced Trade platform designation
+        if "ADVANCED_TRADE" in platform_str or "ADVANCED" in platform_str:
+            return True
+        
+        # Pattern 3: Trading portfolio indicators
+        if "TRADING" in platform_str or "TRADING_PORTFOLIO" in account_type_str:
+            return True
+        
+        # Pattern 4: Not explicitly a consumer/vault account
+        if "CONSUMER" not in account_type_str and "VAULT" not in account_type_str and "WALLET" not in account_type_str:
+            # If platform is not explicitly consumer, assume tradeable
+            if platform_str and "ADVANCED" in platform_str:
+                return True
+        
+        return False
+
+    def get_all_products(self) -> list:
+        """
+        Fetch ALL available products (cryptocurrency pairs) from Coinbase.
+        Handles pagination to retrieve 700+ markets without timeouts.
+        
+        Returns:
+            List of product IDs (e.g., ['BTC-USD', 'ETH-USD', ...])
+        """
         try:
-            accounts = self.client.get_accounts()
-            for account in accounts['accounts']:
-                if account['currency'] == 'USD':
-                    return float(account['available_balance']['value'])
+            logging.info("📡 Fetching all products from Coinbase API (700+ markets)...")
+            all_products = []
+            
+            # Get products with pagination
+            if hasattr(self.client, 'get_products'):
+                try:
+                    products_resp = self.client.get_products()
+                    
+                    # Handle both object and dict responses
+                    if hasattr(products_resp, 'products'):
+                        products = products_resp.products
+                    elif isinstance(products_resp, dict):
+                        products = products_resp.get('products', [])
+                    else:
+                        products = []
+                    
+                    if not products:
+                        logging.warning("⚠️  No products returned from API")
+                        return []
+                    
+                    # Extract product IDs - handle various response formats
+                    for product in products:
+                        product_id = None
+                        
+                        # Try object attribute access
+                        if hasattr(product, 'id'):
+                            product_id = getattr(product, 'id', None)
+                        # Try dict access
+                        elif isinstance(product, dict):
+                            product_id = product.get('id') or product.get('product_id')
+                        
+                        # Filter: Only include USD trading pairs (exclude stablecoins on themselves)
+                        if product_id and '-USD' in product_id:
+                            all_products.append(product_id)
+                    
+                    # Remove duplicates and sort
+                    all_products = sorted(list(set(all_products)))
+                    
+                    logging.info(f"✅ Successfully fetched {len(all_products)} USD/USDC trading pairs from Coinbase API")
+                    if all_products:
+                        logging.info(f"   Sample markets: {', '.join(all_products[:10])}")
+                    return all_products
+                    
+                except Exception as e:
+                    logging.warning(f"⚠️  get_products() failed: {e}")
+            
+            # Fallback: Return empty list (will use curated fallback)
+            logging.warning("⚠️  Could not fetch products from API, will use fallback list")
+            return []
+            
         except Exception as e:
-            print(f"Error fetching Coinbase balance: {e}")
-        return 0.0
-    
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
-        """Place market order"""
+            logging.error(f"🔥 Error fetching all products: {e}")
+            return []
+
+    def get_account_balance(self):
+        """Return ONLY tradable Advanced Trade USD/USDC balances.
+
+        Coinbase frequently shows Consumer wallet balances that **cannot** be used
+        for Advanced Trade orders. To avoid false positives (and endless
+        INSUFFICIENT_FUND rejections), we enumerate accounts and only count
+        ones marked as Advanced Trade / crypto accounts.
+        
+        IMPROVEMENTS:
+        1. Better consumer wallet diagnostics - tells user to transfer funds
+        2. API permission validation - checks if we can see accounts
+        3. Expanded account type matching - handles more Coinbase account types
+
+        Returns dict with: {"usdc", "usd", "trading_balance", "crypto", "consumer_*"}
+        """
+        usd_balance = 0.0
+        usdc_balance = 0.0
+        consumer_usd = 0.0
+        consumer_usdc = 0.0
+        crypto_holdings = {}
+        accounts_seen = 0
+        tradeable_accounts = 0
+
+        # Preferred path: portfolio breakdown (more reliable than get_accounts)
         try:
+            logging.info("💰 Fetching account balance via portfolio breakdown (preferred)...")
+            portfolios_resp = self.client.get_portfolios() if hasattr(self.client, 'get_portfolios') else None
+            portfolios = getattr(portfolios_resp, 'portfolios', [])
+            if isinstance(portfolios_resp, dict):
+                portfolios = portfolios_resp.get('portfolios', [])
+
+            default_portfolio = None
+            for pf in portfolios:
+                pf_type = getattr(pf, 'type', None) if not isinstance(pf, dict) else pf.get('type')
+                if str(pf_type).upper() == 'DEFAULT':
+                    default_portfolio = pf
+                    break
+            if not default_portfolio and portfolios:
+                default_portfolio = portfolios[0]
+
+            portfolio_uuid = None
+            if default_portfolio:
+                portfolio_uuid = getattr(default_portfolio, 'uuid', None)
+                if isinstance(default_portfolio, dict):
+                    portfolio_uuid = default_portfolio.get('uuid', portfolio_uuid)
+
+            if default_portfolio and portfolio_uuid:
+                breakdown_resp = self.client.get_portfolio_breakdown(portfolio_uuid=portfolio_uuid)
+                breakdown = getattr(breakdown_resp, 'breakdown', None)
+                if isinstance(breakdown_resp, dict):
+                    breakdown = breakdown_resp.get('breakdown', breakdown)
+
+                spot_positions = getattr(breakdown, 'spot_positions', []) if breakdown else []
+                if isinstance(breakdown, dict):
+                    spot_positions = breakdown.get('spot_positions', spot_positions)
+
+                for pos in spot_positions:
+                    asset = getattr(pos, 'asset', None) if not isinstance(pos, dict) else pos.get('asset')
+                    available_val = getattr(pos, 'available_to_trade_fiat', None) if not isinstance(pos, dict) else pos.get('available_to_trade_fiat')
+                    try:
+                        available = float(available_val or 0)
+                    except Exception:
+                        available = 0.0
+
+                    if asset == 'USD':
+                        usd_balance += available
+                    elif asset == 'USDC':
+                        usdc_balance += available
+                    elif asset:
+                        crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + available
+
+                trading_balance = usd_balance + usdc_balance
+                logging.info("-" * 70)
+                logging.info(f"   💰 Tradable USD (portfolio):  ${usd_balance:.2f}")
+                logging.info(f"   💰 Tradable USDC (portfolio): ${usdc_balance:.2f}")
+                logging.info(f"   💰 Total Trading Balance: ${trading_balance:.2f}")
+                logging.info("   (Source: get_portfolio_breakdown)")
+                logging.info("-" * 70)
+
+                return {
+                    "usdc": usdc_balance,
+                    "usd": usd_balance,
+                    "trading_balance": trading_balance,
+                    "crypto": crypto_holdings,
+                    "consumer_usd": consumer_usd,
+                    "consumer_usdc": consumer_usdc,
+                }
+            else:
+                logging.warning("⚠️  No default portfolio found; falling back to get_accounts()")
+        except Exception as e:
+            logging.warning(f"⚠️  Portfolio breakdown failed, falling back to get_accounts(): {e}")
+
+        try:
+            logging.info("💰 Fetching account balance (Advanced Trade only)...")
+
+            resp = self.client.get_accounts()
+            accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
+
+            # IMPROVEMENT #2: Validate API permissions
+            if not accounts:
+                logging.warning("=" * 70)
+                logging.warning("⚠️  API PERMISSION CHECK: Zero accounts returned")
+                logging.warning("=" * 70)
+                logging.warning("This usually means:")
+                logging.warning("  1. ❌ API key lacks 'View account details' permission")
+                logging.warning("  2. ❌ No Advanced Trade portfolio created yet")
+                logging.warning("  3. ❌ Wrong API credentials for this account")
+                logging.warning("")
+                logging.warning("FIX:")
+                logging.warning("  1. Go to: https://portal.cloud.coinbase.com/access/api")
+                logging.warning("  2. Edit your API key → Enable 'View' permission")
+                logging.warning("  3. Or create portfolio: https://www.coinbase.com/advanced-portfolio")
+                logging.warning("=" * 70)
+
+            logging.info("=" * 70)
+            logging.info("📊 ACCOUNT BALANCES (v3 get_accounts)")
+            logging.info(f"📁 Total accounts returned: {len(accounts)}")
+            logging.info("=" * 70)
+
+            for acc in accounts:
+                accounts_seen += 1
+                # Normalize object/dict access
+                if isinstance(acc, dict):
+                    currency = acc.get('currency')
+                    name = acc.get('name')
+                    platform = acc.get('platform')
+                    account_type = acc.get('type')
+                    available_val = (acc.get('available_balance') or {}).get('value')
+                    hold_val = (acc.get('hold') or {}).get('value')
+                else:
+                    currency = getattr(acc, 'currency', None)
+                    name = getattr(acc, 'name', None)
+                    platform = getattr(acc, 'platform', None)
+                    account_type = getattr(acc, 'type', None)
+                    available_val = getattr(getattr(acc, 'available_balance', None), 'value', None)
+                    hold_val = getattr(getattr(acc, 'hold', None), 'value', None)
+
+                try:
+                    available = float(available_val or 0)
+                    hold = float(hold_val or 0)
+                except Exception:
+                    available = 0.0
+                    hold = 0.0
+
+                # IMPROVEMENT #3: Use expanded matching function
+                is_tradeable = self._is_account_tradeable(account_type, platform)
+                if is_tradeable:
+                    tradeable_accounts += 1
+
+                if currency in ("USD", "USDC"):
+                    location = "✅ TRADEABLE" if is_tradeable else "❌ CONSUMER"
+                    logging.info(
+                        f"   {currency:>4} | avail=${available:8.2f} | hold=${hold:8.2f} | type={account_type} | platform={platform} | {location}"
+                    )
+
+                    if is_tradeable:
+                        if currency == "USD":
+                            usd_balance += available
+                        else:
+                            usdc_balance += available
+                    else:
+                        # IMPROVEMENT #1: Better consumer wallet diagnostics
+                        if currency == "USD":
+                            consumer_usd += available
+                        else:
+                            consumer_usdc += available
+                elif currency and available > 0:
+                    # Track non-cash crypto holdings ONLY if tradeable via API
+                    # Consumer wallet positions cannot be traded and will cause INSUFFICIENT_FUND errors
+                    if is_tradeable:
+                        crypto_holdings[currency] = available
+                        logging.info(
+                            f"   ✅ 🪙 {currency}: {available} (type={account_type}, platform={platform})"
+                        )
+                    else:
+                        # Log consumer wallet holdings separately but don't add to crypto_holdings
+                        logging.info(
+                            f"   ⏭️  {currency}: {available} in CONSUMER wallet (not API-tradeable, skipping)"
+                        )
+
+            trading_balance = usd_balance + usdc_balance
+
+            logging.info("-" * 70)
+            logging.info(f"   💰 Tradable USD:  ${usd_balance:.2f}")
+            logging.info(f"   💰 Tradable USDC: ${usdc_balance:.2f}")
+            logging.info(f"   💰 Total Trading Balance: ${trading_balance:.2f}")
+            logging.info(f"   🪙 Crypto Holdings: {len(crypto_holdings)} assets")
+            
+            # IMPROVEMENT #1: Enhanced consumer wallet detection and diagnosis
+            if consumer_usd > 0 or consumer_usdc > 0:
+                logging.warning("-" * 70)
+                logging.warning("⚠️  CONSUMER WALLET DETECTED:")
+                logging.warning(f"   🏦 Consumer USD:  ${consumer_usd:.2f}")
+                logging.warning(f"   🏦 Consumer USDC: ${consumer_usdc:.2f}")
+                logging.warning("")
+                logging.warning("These funds are in your Coinbase Consumer wallet and")
+                logging.warning("CANNOT be used for Advanced Trade API orders.")
+                logging.warning("")
+                logging.warning("TO FIX:")
+                logging.warning("  1. Go to: https://www.coinbase.com/advanced-portfolio")
+                logging.warning("  2. Click 'Deposit' on the Advanced Trade portfolio")
+                logging.warning(f"  3. Transfer ${consumer_usd + consumer_usdc:.2f} from Consumer wallet")
+                logging.warning("")
+                logging.warning("After transfer, bot will see funds and start trading! ✅")
+                logging.warning("-" * 70)
+            
+            logging.info(f"📊 API Status: Saw {accounts_seen} accounts, {tradeable_accounts} tradeable")
+            logging.info(f"   💎 Tradeable crypto holdings: {len(crypto_holdings)} assets")
+            logging.info("=" * 70)
+
+            return {
+                "usdc": usdc_balance,
+                "usd": usd_balance,
+                "trading_balance": trading_balance,
+                "crypto": crypto_holdings,
+                "consumer_usd": consumer_usd,
+                "consumer_usdc": consumer_usdc,
+            }
+        except Exception as e:
+            logging.error(f"🔥 ERROR get_account_balance: {e}")
+            logging.error("This usually indicates:")
+            logging.error("  1. Invalid API credentials")
+            logging.error("  2. Network connectivity issue")
+            logging.error("  3. Coinbase API temporarily unavailable")
+            logging.error("")
+            logging.error("Verify your credentials at:")
+            logging.error("  https://portal.cloud.coinbase.com/access/api")
+            import traceback
+            logging.error(traceback.format_exc())
+            return {
+                "usdc": usdc_balance,
+                "usd": usd_balance,
+                "trading_balance": usd_balance + usdc_balance,
+                "crypto": crypto_holdings,
+                "consumer_usd": consumer_usd,
+                "consumer_usdc": consumer_usdc,
+            }
+    
+    def get_account_balance_OLD_BROKEN_METHOD(self):
+        """
+        OLD METHOD - DOES NOT WORK - Kept for reference
+        Parse balances from ONLY v3 Advanced Trade API
+        
+        CRITICAL: Consumer wallet balances are NOT usable for API trading.
+        Only Advanced Trade portfolio balance can be used for orders.
+        This method ONLY returns Advanced Trade balance to prevent mismatches.
+        """
+        usd_balance = 0.0
+        usdc_balance = 0.0
+        consumer_usd = 0.0
+        consumer_usdc = 0.0
+        crypto_holdings: Dict[str, float] = {}
+
+        try:
+            # Check v2 Consumer wallets for DIAGNOSTIC purposes only
+            logging.info(f"💰 Checking v2 API (Consumer wallets - DIAGNOSTIC ONLY)...")
+            try:
+                import requests
+                import time
+                import jwt
+                from cryptography.hazmat.primitives import serialization
+                
+                api_key = os.getenv("COINBASE_API_KEY")
+                api_secret = os.getenv("COINBASE_API_SECRET")
+                
+                # Normalize PEM
+                if '\\n' in api_secret:
+                    api_secret = api_secret.replace('\\n', '\n')
+                
+                private_key = serialization.load_pem_private_key(api_secret.encode('utf-8'), password=None)
+                
+                # Make v2 API call
+                uri = "GET api.coinbase.com/v2/accounts"
+                payload = {
+                    'sub': api_key,
+                    'iss': 'coinbase-cloud',
+                    'nbf': int(time.time()),
+                    'exp': int(time.time()) + 120,
+                    'aud': ['coinbase-apis'],
+                    'uri': uri
+                }
+                token = jwt.encode(payload, private_key, algorithm='ES256', 
+                                  headers={'kid': api_key, 'nonce': str(int(time.time()))})
+                headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+                response = requests.get(f"https://api.coinbase.com/v2/accounts", headers=headers)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    v2_accounts = data.get('data', [])
+                    logging.info(f"📁 v2 Consumer API: {len(v2_accounts)} account(s)")
+                    
+                    for acc in v2_accounts:
+                        currency_obj = acc.get('currency', {})
+                        currency = currency_obj.get('code', 'N/A') if isinstance(currency_obj, dict) else currency_obj
+                        balance_obj = acc.get('balance', {})
+                        balance = float(balance_obj.get('amount', 0) if isinstance(balance_obj, dict) else balance_obj or 0)
+                        account_type = acc.get('type', 'unknown')
+                        name = acc.get('name', 'Unknown')
+                        
+                        if currency == "USD":
+                            consumer_usd += balance
+                            if balance > 0:
+                                logging.info(f"   📊 Consumer USD: ${balance:.2f} (type={account_type}, name={name}) [NOT TRADABLE VIA API]")
+                        elif currency == "USDC":
+                            consumer_usdc += balance
+                            if balance > 0:
+                                logging.info(f"   📊 Consumer USDC: ${balance:.2f} (type={account_type}, name={name}) [NOT TRADABLE VIA API]")
+                else:
+                    logging.warning(f"⚠️  v2 API returned status {response.status_code}")
+                    
+            except Exception as v2_error:
+                logging.warning(f"⚠️  v2 API check failed: {v2_error}")
+            
+            # Check v3 Advanced Trade API - THIS IS THE ONLY TRADABLE BALANCE
+            logging.info(f"💰 Checking v3 API (Advanced Trade - TRADABLE BALANCE)...")
+            try:
+                logging.info(f"   🔍 Calling client.list_accounts()...")
+                accounts_resp = self.client.list_accounts() if hasattr(self.client, 'list_accounts') else self.client.get_accounts()
+                accounts = getattr(accounts_resp, 'accounts', [])
+                logging.info(f"📁 v3 Advanced Trade API: {len(accounts)} account(s)")
+                
+                # ENHANCED DEBUG: Show ALL accounts
+                if len(accounts) == 0:
+                    logging.error(f"   🚨 API returned ZERO accounts!")
+                    logging.error(f"   Response type: {type(accounts_resp)}")
+                    logging.error(f"   Response object: {accounts_resp}")
+                else:
+                    logging.info(f"   📋 Listing all {len(accounts)} accounts:")
+
+                for account in accounts:
+                    currency = getattr(account, 'currency', None)
+                    available_obj = getattr(account, 'available_balance', None)
+                    available = float(getattr(available_obj, 'value', 0) or 0)
+                    account_type = getattr(account, 'type', None)
+                    account_name = getattr(account, 'name', 'Unknown')
+                    account_uuid = getattr(account, 'uuid', 'no-uuid')
+                    
+                    # DEBUG: Log EVERY account we see
+                    logging.info(f"      → {currency}: ${available:.2f} | {account_name} | {account_type} | UUID: {account_uuid[:8]}...")
+                    
+                    # ONLY count Advanced Trade balances for trading
+                    if currency == "USD":
+                        usd_balance += available
+                        if available > 0:
+                            logging.info(f"   ✅ Advanced Trade USD: ${available:.2f} (name={account_name}, type={account_type}) [TRADABLE]")
+                    elif currency == "USDC":
+                        usdc_balance += available
+                        if available > 0:
+                            logging.info(f"   ✅ Advanced Trade USDC: ${available:.2f} (name={account_name}, type={account_type}) [TRADABLE]")
+                    elif available > 0:
+                        crypto_holdings[currency] = crypto_holdings.get(currency, 0) + available
+            except Exception as v3_error:
+                logging.error(f"⚠️  v3 API check failed!")
+                logging.error(f"   Error type: {type(v3_error).__name__}")
+                logging.error(f"   Error message: {v3_error}")
+                import traceback
+                logging.error(f"   Traceback: {traceback.format_exc()}")
+
+            # CRITICAL FIX: ONLY Advanced Trade balances are tradeable
+            # Consumer wallet balances CANNOT be used for trading via API
+            # The market_order_buy() function can ONLY access Advanced Trade portfolio
+            trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
+            
+            # IGNORE ALLOW_CONSUMER_USD flag - it's misleading
+            # Consumer wallets are simply NOT accessible for API trading
+            if self.allow_consumer_usd and (consumer_usd > 0 or consumer_usdc > 0):
+                logging.warning("⚠️  ALLOW_CONSUMER_USD is enabled, but API cannot trade from Consumer wallets!")
+                logging.warning("   This flag has no effect. Transfer funds to Advanced Trade instead.")
+
+            logging.info("=" * 70)
+            logging.info("💰 BALANCE SUMMARY:")
+            logging.info(f"   Consumer USD:  ${consumer_usd:.2f} ❌ [NOT TRADABLE - API LIMITATION]")
+            logging.info(f"   Consumer USDC: ${consumer_usdc:.2f} ❌ [NOT TRADABLE - API LIMITATION]")
+            logging.info(f"   Advanced Trade USD:  ${usd_balance:.2f} ✅ [TRADABLE]")
+            logging.info(f"   Advanced Trade USDC: ${usdc_balance:.2f} ✅ [TRADABLE]")
+            logging.info(f"   ▶ TRADING BALANCE: ${trading_balance:.2f}")
+            logging.info("")
+            
+            # Warn if funds are insufficient
+            MINIMUM_TRADING_BALANCE = 10.00  # Minimum to cover $5 order + fees safely
+            
+            if trading_balance < MINIMUM_TRADING_BALANCE:
+                logging.error("=" * 70)
+                logging.error("🚨 INSUFFICIENT TRADING BALANCE!")
+                logging.error(f"   Trading balance: ${trading_balance:.2f}")
+                logging.error(f"   Minimum needed: ${MINIMUM_TRADING_BALANCE:.2f}")
+                logging.error(f"   Why? $5.00 order + fees (~$0.50) + safety margin")
+                logging.error("")
+                if (consumer_usd > 0 or consumer_usdc > 0):
+                    logging.error("   🔍 ROOT CAUSE: Your funds are in Consumer wallet!")
+                    logging.error(f"   Consumer wallet has ${consumer_usd + consumer_usdc:.2f} (NOT TRADABLE)")
+                    logging.error(f"   Advanced Trade has ${trading_balance:.2f} (TRADABLE)")
+                    logging.error("")
+                    logging.error("   🔧 SOLUTION: Transfer to Advanced Trade")
+                    logging.error("      1. Go to: https://www.coinbase.com/advanced-portfolio")
+                    logging.error("      2. Click 'Deposit' → 'From Coinbase'")
+                    logging.error(f"      3. Transfer ${consumer_usd + consumer_usdc:.2f} USD/USDC to Advanced Trade")
+                    logging.error("      4. Instant transfer, no fees")
+                    logging.error("")
+                    logging.error("   ❌ CANNOT FIX WITH CODE:")
+                    logging.error("      The Coinbase Advanced Trade API cannot access Consumer wallets")
+                    logging.error("      This is a Coinbase API limitation, not a bot issue")
+                elif trading_balance == 0:
+                    logging.error("   No funds detected in any account")
+                    logging.error("   Add funds to your Coinbase account")
+                else:
+                    logging.error("   Your balance is too low for reliable trading")
+                    logging.error("   Each trade needs ~$5.50 ($5.00 + fees)")
+                    logging.error(f"   With ${trading_balance:.2f}, you can't place ANY trades safely")
+                    logging.error("")
+                    logging.error("   🎯 RECOMMENDED: Deposit at least $50-$100")
+                    logging.error("      - Allows 10-20 trades")
+                    logging.error("      - Proper position sizing")
+                    logging.error("      - Strategy works as designed")
+                logging.error("=" * 70)
+            else:
+                logging.info(f"   ✅ Sufficient funds in Advanced Trade for trading!")
+            
+            logging.info("=" * 70)
+
+            return {
+                "usdc": usdc_balance,
+                "usd": usd_balance,
+                "trading_balance": trading_balance,
+                "crypto": crypto_holdings,
+                "consumer_usd": consumer_usd,
+                "consumer_usdc": consumer_usdc,
+            }
+        except Exception as e:
+            logging.error(f"🔥 ERROR get_account_balance: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "usdc": 0.0,
+                "usd": 0.0,
+                "trading_balance": 0.0,
+                "crypto": {},
+                "consumer_usd": 0.0,
+                "consumer_usdc": 0.0,
+            }
+    
+    def _dump_portfolio_summary(self):
+        """Diagnostic: dump all portfolios and their USD/USDC balances"""
+        try:
+            accounts_resp = self.client.get_accounts()
+            accounts = getattr(accounts_resp, 'accounts', [])
+            usd_total = 0.0
+            usdc_total = 0.0
+            for a in accounts:
+                curr = getattr(a, 'currency', None)
+                av = float(getattr(getattr(a, 'available_balance', None), 'value', 0) or 0)
+                if curr == "USD":
+                    usd_total += av
+                elif curr == "USDC":
+                    usdc_total += av
+            logging.info(f"   Default portfolio | USD: ${usd_total:.2f} | USDC: ${usdc_total:.2f}")
+        except Exception as e:
+            logging.warning(f"⚠️ Portfolio summary failed: {e}")
+
+    def get_usd_usdc_inventory(self) -> list[str]:
+        """Return a formatted USD/USDC inventory for logging by callers.
+
+        This method mirrors the inventory logic used by diagnostics but returns
+        strings so the caller can log with its own logger configuration
+        (important because some apps only attach handlers to the 'nija' logger).
+        """
+        lines: list[str] = []
+        try:
+            resp = self.client.get_accounts()
+            accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
+            usd_total = 0.0
+            usdc_total = 0.0
+
+            def _as_float(v):
+                try:
+                    return float(v)
+                except Exception:
+                    return 0.0
+
+            for a in accounts:
+                if isinstance(a, dict):
+                    currency = a.get('currency')
+                    name = a.get('name')
+                    platform = a.get('platform')
+                    account_type = a.get('type')
+                    av = (a.get('available_balance') or {}).get('value')
+                    hd = (a.get('hold') or {}).get('value')
+                else:
+                    currency = getattr(a, 'currency', None)
+                    name = getattr(a, 'name', None)
+                    platform = getattr(a, 'platform', None)
+                    account_type = getattr(a, 'type', None)
+                    av = getattr(getattr(a, 'available_balance', None), 'value', None)
+                    hd = getattr(getattr(a, 'hold', None), 'value', None)
+
+                is_tradeable = account_type == "ACCOUNT_TYPE_CRYPTO" or (platform and "ADVANCED_TRADE" in str(platform))
+
+                if currency in ("USD", "USDC"):
+                    avf = _as_float(av)
+                    hdf = _as_float(hd)
+                    tag = "TRADEABLE" if is_tradeable else "CONSUMER"
+                    lines.append(f"{currency:>4} | name={name} | platform={platform} | type={account_type} | avail={avf:>10.2f} | held={hdf:>10.2f} | {tag}")
+                    if is_tradeable:
+                        if currency == "USD":
+                            usd_total += avf
+                        else:
+                            usdc_total += avf
+
+            lines.append("-" * 70)
+            trading = usd_total + usdc_total
+            lines.append(f"Totals → USD: ${usd_total:.2f} | USDC: ${usdc_total:.2f} | Trading Balance: ${trading:.2f}")
+            if usd_total == 0.0 and usdc_total == 0.0:
+                lines.append("👉 Move funds into your Advanced Trade portfolio: https://www.coinbase.com/advanced-portfolio")
+        except Exception as e:
+            lines.append(f"⚠️ Failed to fetch USD/USDC inventory: {e}")
+
+        return lines
+
+    def _log_insufficient_fund_context(self, base_currency: str, quote_currency: str) -> None:
+        """Log available balances for base/quote/USD/USDC across portfolios for diagnostics."""
+        try:
+            resp = self.client.get_accounts()
+            accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
+
+            def _as_float(val):
+                try:
+                    return float(val)
+                except Exception:
+                    return 0.0
+
+            interesting = {base_currency, quote_currency, 'USD', 'USDC'}
+            logger.error(f"   Fund snapshot ({', '.join(sorted(interesting))})")
+            for a in accounts:
+                if isinstance(a, dict):
+                    currency = a.get('currency')
+                    platform = a.get('platform')
+                    account_type = a.get('type')
+                    av = (a.get('available_balance') or {}).get('value')
+                    hd = (a.get('hold') or {}).get('value')
+                else:
+                    currency = getattr(a, 'currency', None)
+                    platform = getattr(a, 'platform', None)
+                    account_type = getattr(a, 'type', None)
+                    av = getattr(getattr(a, 'available_balance', None), 'value', None)
+                    hd = getattr(getattr(a, 'hold', None), 'value', None)
+
+                if currency not in interesting:
+                    continue
+
+                avf = _as_float(av)
+                hdf = _as_float(hd)
+                tag = "TRADEABLE" if account_type == "ACCOUNT_TYPE_CRYPTO" or (platform and "ADVANCED_TRADE" in str(platform)) else "CONSUMER"
+                logger.error(f"     {currency:>4} | avail={avf:>14.6f} | held={hdf:>12.6f} | type={account_type} | platform={platform} | {tag}")
+        except Exception as diag_err:
+            logger.error(f"   ⚠️ fund diagnostic failed: {diag_err}")
+
+    def _get_product_metadata(self, symbol: str) -> Dict:
+        """Fetch and cache product metadata (base_increment, quote_increment)."""
+        # Ensure cache exists (defensive programming)
+        if not hasattr(self, '_product_cache'):
+            self._product_cache = {}
+        
+        if symbol in self._product_cache:
+            return self._product_cache[symbol]
+
+        meta: Dict = {}
+        try:
+            product = self.client.get_product(product_id=symbol)
+            if isinstance(product, dict):
+                meta = product
+            else:
+                # Serialize SDK object to dict
+                meta = _serialize_object_to_dict(product)
+            # Some SDK responses nest data under a top-level "product" key
+            if isinstance(meta, dict) and 'product' in meta and isinstance(meta['product'], dict):
+                meta = meta['product']
+            # Some responses wrap the single product in a list under "products"
+            if isinstance(meta, dict) and 'products' in meta and isinstance(meta['products'], list) and meta['products']:
+                first = meta['products'][0]
+                if isinstance(first, dict):
+                    meta = first
+        except Exception as e:
+            logger.warning(f"⚠️ Could not fetch product metadata for {symbol}: {e}")
+
+        self._product_cache[symbol] = meta
+        return meta
+    
+    def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
+        """
+        Place market order with balance verification
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USD')
+            side: 'buy' or 'sell'
+            quantity: Amount to trade
+            size_type: 'quote' for USD amount (default) or 'base' for crypto amount
+        
+        Returns:
+            Order response dictionary
+        """
+        try:
+            # Global BUY guard: block all buys when emergency stop is active or HARD_BUY_OFF=1
+            try:
+                import os as _os
+                lock_path = _os.path.join(_os.path.dirname(__file__), '..', 'TRADING_EMERGENCY_STOP.conf')
+                hard_buy_off = (_os.getenv('HARD_BUY_OFF', '0') in ('1', 'true', 'True'))
+                if side.lower() == 'buy' and (hard_buy_off or _os.path.exists(lock_path)):
+                    logger.error("🛑 BUY BLOCKED at broker layer: SELL-ONLY mode or HARD_BUY_OFF active")
+                    logger.error(f"   Symbol: {symbol}")
+                    logger.error(f"   Reason: {'HARD_BUY_OFF' if hard_buy_off else 'TRADING_EMERGENCY_STOP.conf present'}")
+                    return {
+                        "status": "unfilled",
+                        "error": "BUY_BLOCKED",
+                        "message": "Global buy guard active (sell-only mode)",
+                        "partial_fill": False,
+                        "filled_pct": 0.0
+                    }
+            except Exception:
+                # If guard check fails, proceed but log later if needed
+                pass
+
+            if quantity <= 0:
+                raise ValueError(f"Refusing to place {side} order with non-positive size: {quantity}")
+
+            base_currency, quote_currency = (symbol.split('-') + ['USD'])[:2]
+
+            # PRE-FLIGHT CHECK: Verify sufficient balance before placing order
             if side.lower() == 'buy':
+                balance_data = self.get_account_balance()
+                trading_balance = float(balance_data.get('trading_balance', 0.0))
+                
+                logger.info(f"💰 Pre-flight balance check for {symbol}:")
+                logger.info(f"   Available: ${trading_balance:.2f}")
+                logger.info(f"   Required:  ${quantity:.2f}")
+                
+                # ADD FIX #2: Add 2% safety buffer for fees/rounding (Coinbase typically takes 0.5-1%)
+                safety_buffer = quantity * 0.02  # 2% buffer
+                required_with_buffer = quantity + safety_buffer
+                
+                if trading_balance < required_with_buffer:
+                    error_msg = f"Insufficient funds: ${trading_balance:.2f} available, ${required_with_buffer:.2f} required (with 2% fee buffer)"
+                    logger.error(f"❌ PRE-FLIGHT CHECK FAILED: {error_msg}")
+                    logger.error(f"   Bot detected ${trading_balance:.2f} but needs ${required_with_buffer:.2f} for this order")
+                    
+                    # Log USD/USDC inventory for debugging
+                    logger.error(f"   Account inventory:")
+                    inventory_lines = self.get_usd_usdc_inventory()
+                    for line in inventory_lines:
+                        logger.error(f"     {line}")
+                    
+                    return {
+                        "status": "unfilled",
+                        "error": "INSUFFICIENT_FUND",
+                        "message": error_msg,
+                        "partial_fill": False,
+                        "filled_pct": 0.0
+                    }
+
+            client_order_id = str(uuid.uuid4())
+            
+            if side.lower() == 'buy':
+                # CRITICAL FIX: Round quote_size to 2 decimal places for Coinbase precision requirements
+                # Floating point math can create values like 23.016000000000002
+                # Coinbase rejects these with PREVIEW_INVALID_QUOTE_SIZE_PRECISION
+                quote_size_rounded = round(quantity, 2)
+                
+                # Use positional client_order_id to avoid SDK signature mismatch
+                logger.info(f"📤 Placing BUY order: {symbol}, quote_size=${quote_size_rounded:.2f}")
+                logger.info(f"   Using Coinbase Advanced Trade v3 API (market_order_buy)")
+                if self.portfolio_uuid:
+                    logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
+                else:
+                    logger.info(f"   This API can ONLY trade from Advanced Trade portfolio, NOT Consumer wallets")
+                
+                # Include portfolio_uuid if we have it
+                order_kwargs = {
+                    'client_order_id': client_order_id,
+                    'product_id': symbol,
+                    'quote_size': str(quote_size_rounded)
+                }
+                
+                # Note: The Coinbase SDK market_order_buy may not support portfolio_uuid parameter
+                # It routes to the default portfolio automatically
+                # The real fix is to ensure funds are in the default trading portfolio
                 order = self.client.market_order_buy(
+                    client_order_id,
                     product_id=symbol,
-                    quote_size=str(quantity)
+                    quote_size=str(quote_size_rounded)
                 )
             else:
-                order = self.client.market_order_sell(
-                    product_id=symbol,
-                    base_size=str(quantity)
-                )
-            return {"status": "filled", "order": order}
+                # SELL order - use base_size (crypto amount) or quote_size (USD value)
+                if size_type == 'base':
+                    base_currency = symbol.split('-')[0].upper()
+
+                    precision_map = {
+                        'XRP': 2,
+                        'DOGE': 2,
+                        'ADA': 2,
+                        'SHIB': 0,
+                        'BTC': 8,
+                        'ETH': 6,
+                        'SOL': 4,
+                        'ATOM': 4,
+                        'LTC': 8,
+                        'BCH': 8,
+                        'LINK': 4,
+                        'IMX': 4,
+                        'XLM': 4,
+                        'CRV': 4,
+                        'APT': 4,
+                        'ICP': 5,
+                        'NEAR': 5,
+                        'AAVE': 4,
+                    }
+
+                    fallback_increment_map = {
+                        'XRP': 0.01,
+                        'DOGE': 0.01,
+                        'ADA': 0.01,
+                        'SHIB': 1.0,
+                        'BTC': 0.00000001,
+                        'ETH': 0.000001,
+                        'SOL': 0.0001,
+                        'ATOM': 0.0001,
+                        'LTC': 0.00000001,
+                        'BCH': 0.00000001,
+                        'LINK': 0.001,
+                        'IMX': 0.0001,
+                        'XLM': 0.0001,
+                        'CRV': 0.0001,
+                        'APT': 0.0001,
+                        'ICP': 0.00001,
+                        'NEAR': 0.00001,
+                        'AAVE': 0.0001,
+                    }
+
+                    precision = max(0, min(precision_map.get(base_currency, 2), 8))
+                    base_increment = None
+
+                    # Balance guard: skip if holdings are below requested size (allow small epsilon)
+                    try:
+                        # CRITICAL: Get FRESH balance immediately before placing sell order
+                        # This avoids stale data from position sync (holds, fees, locked funds)
+                        balance_snapshot = self.get_account_balance()
+                        holdings = (balance_snapshot or {}).get('crypto', {}) or {}
+                        available_base = float(holdings.get(base_currency, 0.0))
+
+                        # Deduct held funds to avoid over-requesting
+                        try:
+                            accounts = self.client.get_accounts()
+                            hold_amount = 0.0
+                            for a in accounts:
+                                if isinstance(a, dict):
+                                    currency = a.get('currency')
+                                    hd = (a.get('hold') or {}).get('value')
+                                else:
+                                    currency = getattr(a, 'currency', None)
+                                    hd = getattr(getattr(a, 'hold', None), 'value', None)
+                                if currency == base_currency and hd is not None:
+                                    try:
+                                        hold_amount = float(hd)
+                                    except Exception:
+                                        hold_amount = 0.0
+                                    break
+                            if hold_amount > 0:
+                                available_base = max(0.0, available_base - hold_amount)
+                                logger.info(f"   Adjusted for holds: {hold_amount:.8f} {base_currency} held → usable {available_base:.8f}")
+                        except Exception as hold_err:
+                            logger.warning(f"⚠️ Could not read holds for {base_currency}: {hold_err}")
+
+                        logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} available")
+                        logger.info(f"   Tracked position size: {quantity:.8f} {base_currency}")
+                        
+                        epsilon = 1e-8
+                        if available_base <= epsilon:
+                            logger.error(
+                                f"❌ PRE-FLIGHT CHECK FAILED: Zero {base_currency} balance "
+                                f"(available: {available_base:.8f})"
+                            )
+                            return {
+                                "status": "unfilled",
+                                "error": "INSUFFICIENT_FUND",
+                                "message": f"No {base_currency} balance available for sell (requested {quantity})",
+                                "partial_fill": False,
+                                "filled_pct": 0.0
+                            }
+                        
+                        # FIX #1: If available balance < requested quantity, USE AVAILABLE BALANCE
+                        # This handles partial fills, holds, fees, and stale position sync data
+                        if available_base < quantity:
+                            diff = quantity - available_base
+                            logger.warning(
+                                f"⚠️ Balance mismatch: tracked {quantity:.8f} but only {available_base:.8f} available"
+                            )
+                            logger.warning(f"   Difference: {diff:.8f} {base_currency} (likely from partial fills or fees)")
+                            logger.warning(f"   SOLUTION: Adjusting sell size to actual available balance")
+                            quantity = available_base  # FIX #1: USE ACTUAL AVAILABLE AMOUNT
+                    except Exception as bal_err:
+                        logger.warning(f"⚠️ Could not pre-check balance for {base_currency}: {bal_err}")
+
+                    meta = self._get_product_metadata(symbol)
+                    inc_candidates = []
+                    if isinstance(meta, dict):
+                        inc_candidates = [
+                            meta.get('base_increment'),
+                            meta.get('base_increment_decimal'),
+                            meta.get('base_increment_value'),
+                            # base_min_size is a minimum size, not an increment; exclude from precision detection
+                        ]
+                        if meta.get('base_increment_exponent') is not None:
+                            try:
+                                exp_val = float(meta.get('base_increment_exponent'))
+                                inc_candidates.append(10 ** exp_val)
+                            except Exception as exp_err:
+                                logger.warning(f"⚠️ Could not parse base_increment_exponent for {symbol}: {exp_err}")
+                    for inc in inc_candidates:
+                        if not inc:
+                            continue
+                        try:
+                            base_increment = float(inc)
+                            if base_increment > 0:
+                                inc_str = f"{base_increment:.16f}".rstrip('0').rstrip('.')
+                                if '.' in inc_str:
+                                    precision = max(0, min(len(inc_str.split('.')[1]), 8))
+                                break
+                        except Exception as inc_err:
+                            logger.warning(f"⚠️ Could not parse base_increment for {symbol}: {inc_err}")
+
+                    # If API metadata did not provide an increment, use a conservative fallback per asset
+                    if base_increment is None and base_currency in fallback_increment_map:
+                        base_increment = fallback_increment_map[base_currency]
+                        inc_str = f"{base_increment:.16f}".rstrip('0').rstrip('.')
+                        if '.' in inc_str:
+                            precision = max(0, min(len(inc_str.split('.')[1]), 8))
+
+                    # Final safety: ensure we have an increment so we do not emit too many decimals
+                    if base_increment is None:
+                        base_increment = 10 ** (-precision)
+
+                    # Adjust requested quantity against available balance with a safety margin
+                    # FIX #3: Use a larger safety margin to account for fees and rounding
+                    # Coinbase typically charges 0.5-1% in trading fees, plus potential precision rounding
+                    requested_qty = float(quantity)  # Already adjusted to available if needed
+                    
+                    # Use 0.5% margin (more conservative than 2% from pre-flight)
+                    safety_margin = max(requested_qty * 0.005, 0.00000001)  # 0.5% or minimum epsilon
+                    
+                    # Subtract safety margin to leave room for fees and rounding
+                    trade_qty = max(0.0, requested_qty - safety_margin)
+                    
+                    logger.info(f"   Safety margin: {safety_margin:.8f} {base_currency} (0.5%)")
+                    logger.info(f"   Final trade qty: {trade_qty:.8f} {base_currency}")
+
+                    # Quantize size DOWN to allowed increment to avoid precision errors
+                    from decimal import Decimal, ROUND_DOWN, getcontext
+                    getcontext().prec = 18
+                    step = Decimal(str(base_increment))
+                    qty = (Decimal(str(trade_qty)) / step).to_integral_value(rounding=ROUND_DOWN) * step
+
+                    base_size_rounded = float(qty)
+                    logger.info(f"   Derived base_increment={base_increment} precision={precision} → rounded={base_size_rounded}")
+                    if base_size_rounded <= 0:
+                        return {
+                            "status": "unfilled",
+                            "error": "INVALID_SIZE",
+                            "message": f"Rounded base size for {symbol} became zero",
+                            "partial_fill": False,
+                            "filled_pct": 0.0
+                        }
+
+                    logger.info(f"📤 Placing SELL order: {symbol}, base_size={base_size_rounded} ({precision} decimals)")
+                    if self.portfolio_uuid:
+                        logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
+
+                    # Prefer create_order to set reduce_only for safe exits; fallback to market_order_sell
+                    try:
+                        order = self.client.create_order(
+                            client_order_id=client_order_id,
+                            product_id=symbol,
+                            order_configuration={
+                                'market_market_ioc': {
+                                    'base_size': str(base_size_rounded),
+                                    'reduce_only': True
+                                }
+                            },
+                            **({'portfolio_id': self.portfolio_uuid} if getattr(self, 'portfolio_uuid', None) else {})
+                        )
+                    except Exception as co_err:
+                        logger.warning(f"⚠️ create_order failed, falling back to market_order_sell: {co_err}")
+                        order = self.client.market_order_sell(
+                            client_order_id,
+                            product_id=symbol,
+                            base_size=str(base_size_rounded)
+                        )
+                else:
+                    # Use quote_size for SELL (less common, but supported)
+                    quote_size_rounded = round(quantity, 2)
+                    logger.info(f"📤 Placing SELL order: {symbol}, quote_size=${quote_size_rounded:.2f}")
+                    if self.portfolio_uuid:
+                        logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
+                    
+                    order = self.client.market_order_sell(
+                        client_order_id,
+                        product_id=symbol,
+                        quote_size=str(quote_size_rounded)
+                    )
+            
+            # CRITICAL: Parse order response to check for success/failure
+            # Coinbase returns an object with 'success' field and 'error_response'
+            # Use helper to safely serialize the response
+            order_dict = _serialize_object_to_dict(order)
+
+            # If SDK returns a stringified dict, coerce it to a dict to avoid false positives
+            if isinstance(order_dict, str):
+                try:
+                    order_dict = json.loads(order_dict)
+                except Exception:
+                    try:
+                        import ast
+                        order_dict = ast.literal_eval(order_dict)
+                    except Exception:
+                        pass
+
+            # Guard against SDK returning plain strings or unexpected types
+            if not isinstance(order_dict, dict):
+                logger.error("Received non-dict order response from Coinbase SDK")
+                logger.error(f"   Raw response: {order_dict}")
+                logger.error(f"   Response type: {type(order_dict)}")
+                return {
+                    "status": "error",
+                    "error": "INVALID_ORDER_RESPONSE",
+                    "message": "Coinbase SDK returned non-dict response",
+                    "raw_response": str(order_dict)
+                }
+            
+            # Check for Coinbase error response
+            success = order_dict.get('success', True)
+            error_response = order_dict.get('error_response', {})
+            
+            if not success or error_response:
+                error_code = error_response.get('error', 'UNKNOWN_ERROR')
+                error_message = error_response.get('message', 'Unknown error from broker')
+                
+                logger.error(f"❌ Trade failed for {symbol}:")
+                logger.error(f"   Status: unfilled")
+                logger.error(f"   Error: {error_message}")
+                logger.error(f"   Full order response: {order_dict}")
+
+                if error_code == 'INSUFFICIENT_FUND':
+                    self._log_insufficient_fund_context(base_currency, quote_currency)
+                elif error_code == 'INVALID_SIZE_PRECISION' and size_type == 'base':
+                    # One-shot degradation retry: use stricter per-asset increment if available
+                    logger.error(
+                        f"   Hint: base_increment={base_increment} precision={precision} quantity={quantity} rounded={base_size_rounded}"
+                    )
+                    stricter_map = {
+                        'APT': 0.001,
+                        'NEAR': 0.0001,
+                        'ICP': 0.0001,
+                        'AAVE': 0.01,
+                    }
+                    base_currency = symbol.split('-')[0].upper()
+                    alt_inc = stricter_map.get(base_currency)
+                    if alt_inc and (base_increment is None or alt_inc != base_increment):
+                        try:
+                            from decimal import Decimal, ROUND_DOWN, getcontext
+                            getcontext().prec = 18
+                            step2 = Decimal(str(alt_inc))
+
+                            # Recompute safe trade qty based on same available snapshot
+                            safety_epsilon2 = max(alt_inc, 1e-6)
+                            safe_available2 = max(0.0, (available_base if 'available_base' in locals() else 0.0) - safety_epsilon2)
+                            trade_qty2 = min(float(quantity), safe_available2)
+
+                            qty2 = (Decimal(str(trade_qty2)) / step2).to_integral_value(rounding=ROUND_DOWN) * step2
+                            base_size_rounded2 = float(qty2)
+                            inc_str2 = f"{alt_inc:.16f}".rstrip('0').rstrip('.')
+                            precision2 = len(inc_str2.split('.')[1]) if '.' in inc_str2 else 0
+                            logger.info(f"   Retry with alt increment {alt_inc} (precision {precision2}) → {base_size_rounded2}")
+
+                            order2 = self.client.market_order_sell(
+                                client_order_id,
+                                product_id=symbol,
+                                base_size=str(base_size_rounded2)
+                            )
+                            order_dict2 = _serialize_object_to_dict(order2)
+                            if isinstance(order_dict2, str):
+                                try:
+                                    order_dict2 = json.loads(order_dict2)
+                                except Exception:
+                                    try:
+                                        import ast
+                                        order_dict2 = ast.literal_eval(order_dict2)
+                                    except Exception:
+                                        pass
+
+                            success2 = isinstance(order_dict2, dict) and order_dict2.get('success', True) and not order_dict2.get('error_response')
+                            if success2:
+                                logger.info(f"✅ Order filled successfully (retry): {symbol}")
+                                return {
+                                    "status": "filled",
+                                    "order": order_dict2,
+                                    "filled_size": base_size_rounded2
+                                }
+                            else:
+                                logger.error(f"   Retry failed: {order_dict2}")
+                        except Exception as retry_err:
+                            logger.error(f"   Retry with stricter increment failed: {retry_err}")
+
+                # Generic fallback: decrement by one increment and retry a few times
+                if size_type == 'base' and base_increment and error_code in ('INVALID_SIZE_PRECISION', 'INSUFFICIENT_FUND', 'PREVIEW_INVALID_SIZE_PRECISION', 'PREVIEW_INSUFFICIENT_FUND'):
+                    try:
+                        from decimal import Decimal, ROUND_DOWN, getcontext
+                        getcontext().prec = 18
+                        step = Decimal(str(base_increment))
+
+                        max_attempts = 5
+                        current_qty = Decimal(str(base_size_rounded if 'base_size_rounded' in locals() else quantity))
+                        for attempt in range(1, max_attempts + 1):
+                            # Reduce by one increment per attempt and quantize down
+                            reduced = current_qty - step * attempt
+                            if reduced <= Decimal('0'):
+                                break
+                            qtry = (reduced / step).to_integral_value(rounding=ROUND_DOWN) * step
+                            new_size = float(qtry)
+                            logger.info(f"   Fallback attempt {attempt}/{max_attempts}: base_size → {new_size} (decrement by {attempt}×{base_increment})")
+
+                            order_try = self.client.market_order_sell(
+                                client_order_id,
+                                product_id=symbol,
+                                base_size=str(new_size)
+                            )
+                            od_try = _serialize_object_to_dict(order_try)
+                            if isinstance(od_try, str):
+                                try:
+                                    od_try = json.loads(od_try)
+                                except Exception:
+                                    try:
+                                        import ast
+                                        od_try = ast.literal_eval(od_try)
+                                    except Exception:
+                                        pass
+
+                            if isinstance(od_try, dict) and od_try.get('success', True) and not od_try.get('error_response'):
+                                logger.info(f"✅ Order filled successfully (fallback attempt {attempt}): {symbol}")
+                                return {
+                                    "status": "filled",
+                                    "order": od_try,
+                                    "filled_size": new_size
+                                }
+                            else:
+                                emsg = od_try.get('error_response', {}).get('message') if isinstance(od_try, dict) else str(od_try)
+                                logger.error(f"   Fallback attempt {attempt} failed: {emsg}")
+                    except Exception as fb_err:
+                        logger.error(f"   Fallback decrement retry failed: {fb_err}")
+                
+                return {
+                    "status": "unfilled",
+                    "error": error_code,
+                    "message": error_message,
+                    "order": order_dict,
+                    "partial_fill": order_dict.get('partial_fill', False),
+                    "filled_pct": order_dict.get('filled_pct', 0.0)
+                }
+            
+            logger.info(f"✅ Order filled successfully: {symbol}")
+            
+            # Extract or estimate filled size
+            # Coinbase API v3 doesn't return filled_size in the response,
+            # so we estimate based on what we sent
+            filled_size = None
+            
+            # Try to extract from success_response
+            success_response = order_dict.get('success_response', {})
+            if success_response:
+                filled_size = success_response.get('filled_size')
+            
+            # If not available, estimate based on order configuration
+            if not filled_size:
+                order_config = order_dict.get('order_configuration', {})
+                market_config = order_config.get('market_market_ioc', {})
+                
+                if side.upper() == 'BUY' and 'quote_size' in market_config:
+                    # For buy orders, estimate crypto received = quote_size / price
+                    try:
+                        quote_size = float(market_config['quote_size'])
+                        # Fetch current price to estimate
+                        price_data = self.client.get_product(symbol)
+                        if price_data and 'price' in price_data:
+                            current_price = float(price_data['price'])
+                            filled_size = quote_size / current_price
+                    except:
+                        # Fallback: use quantity as estimate
+                        filled_size = quantity
+                else:
+                    # For sell orders or unknown, use quantity as estimate
+                    filled_size = quantity
+            
+            if filled_size:
+                logger.info(f"   Filled crypto amount: {filled_size:.6f}")
+            
+            return {
+                "status": "filled", 
+                "order": order_dict,
+                "filled_size": float(filled_size) if filled_size else 0.0
+            }
+            
         except Exception as e:
-            print(f"Coinbase order error: {e}")
-            return {"status": "error", "error": str(e)}
+            # Enhanced error logging with full details
+            error_msg = str(e)
+            error_type = type(e).__name__
+            logger.error(f"🚨 Coinbase order error for {symbol}:")
+            logger.error(f"   Type: {error_type}")
+            logger.error(f"   Message: {error_msg}")
+            logger.error(f"   Side: {side}, Quantity: {quantity}")
+            
+            # Log additional context if available
+            if hasattr(e, 'response'):
+                logger.error(f"   Response: {e.response}")
+            if hasattr(e, 'status_code'):
+                logger.error(f"   Status code: {e.status_code}")
+                
+            return {"status": "error", "error": f"{error_type}: {error_msg}"}
+
+    def close_position(
+        self,
+        symbol: str,
+        base_size: Optional[float] = None,
+        *,
+        side: str = 'sell',
+        quantity: Optional[float] = None,
+        size_type: str = 'base',
+        **_: Dict
+    ) -> Dict:
+        """Close a position by submitting a market order.
+
+        Accepts both legacy (symbol, base_size) calls and newer keyword-based
+        calls that provide ``side``/``quantity``/``size_type``. Defaults to
+        selling a base-size amount when only ``base_size`` is provided.
+        """
+        # Prefer explicitly provided quantity; fall back to legacy base_size
+        size = quantity if quantity is not None else base_size
+        if size is None:
+            raise ValueError("close_position requires a quantity or base_size")
+
+        try:
+            return self.place_market_order(
+                symbol,
+                side.lower() if side else 'sell',
+                size,
+                size_type=size_type or 'base'
+            )
+        except TypeError:
+            # Graceful fallback if upstream signatures drift
+            return self.place_market_order(symbol, 'sell', size, size_type='base')
     
     def get_positions(self) -> List[Dict]:
         """Get open positions (Coinbase doesn't track positions, returns accounts)"""
@@ -129,46 +1416,152 @@ class CoinbaseBroker(BaseBroker):
                     })
             return positions
         except Exception as e:
-            print(f"Error fetching positions: {e}")
+            logger.error(f"Error fetching positions: {e}")
             return []
     
-    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get candle data"""
-        import time
+    def get_market_data(self, symbol: str, timeframe: str = '5m', limit: int = 100) -> Dict:
+        """
+        Get market data (wrapper around get_candles for compatibility)
+        Returns dict with 'candles' key containing list of candle dicts
+        """
+        candles = self.get_candles(symbol, timeframe, limit)
+        return {'candles': candles}
+
+    def get_current_price(self, symbol: str) -> float:
+        """Fetch latest trade/last candle price for a product."""
         try:
-            granularity_map = {
-                "1m": "ONE_MINUTE",
-                "5m": "FIVE_MINUTE",
-                "15m": "FIFTEEN_MINUTE",
-                "1h": "ONE_HOUR",
-                "1d": "ONE_DAY"
-            }
-            
-            granularity = granularity_map.get(timeframe, "FIVE_MINUTE")
-            
-            end = int(time.time())
-            start = end - (300 * count)  # 5 min candles
-            
-            candles = self.client.get_candles(
-                product_id=symbol,
-                start=start,
-                end=end,
-                granularity=granularity
-            )
-            
-            if hasattr(candles, 'candles'):
-                return [vars(c) for c in candles.candles]
-            elif isinstance(candles, dict) and 'candles' in candles:
-                return candles['candles']
-            return []
-            
+            # Fast path: product ticker price
+            try:
+                product = self.client.get_product(symbol)
+                price_val = product.get('price') if isinstance(product, dict) else getattr(product, 'price', None)
+                if price_val:
+                    return float(price_val)
+            except Exception:
+                # Ignore and fall back to candles
+                pass
+
+            # Fallback: last close from 1m candle
+            candles = self.get_candles(symbol, '1m', 1)
+            if candles:
+                last = candles[-1]
+                close = last.get('close') if isinstance(last, dict) else getattr(last, 'close', None)
+                if close:
+                    return float(close)
+            raise RuntimeError("No price data available")
         except Exception as e:
-            print(f"Error fetching candles: {e}")
-            return []
+            logging.error(f"⚠️ get_current_price failed for {symbol}: {e}")
+            return 0.0
+    
+    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
+        """Get candle data with retry logic for rate limiting"""
+        import time
+        
+        max_retries = 3
+        retry_delay = 1  # Start with 1 second
+        
+        for attempt in range(max_retries):
+            try:
+                granularity_map = {
+                    "1m": "ONE_MINUTE",
+                    "5m": "FIVE_MINUTE",
+                    "15m": "FIFTEEN_MINUTE",
+                    "1h": "ONE_HOUR",
+                    "1d": "ONE_DAY"
+                }
+                
+                granularity = granularity_map.get(timeframe, "FIVE_MINUTE")
+                
+                end = int(time.time())
+                start = end - (300 * count)  # 5 min candles
+                
+                candles = self.client.get_candles(
+                    product_id=symbol,
+                    start=start,
+                    end=end,
+                    granularity=granularity
+                )
+                
+                if hasattr(candles, 'candles'):
+                    return [vars(c) for c in candles.candles]
+                elif isinstance(candles, dict) and 'candles' in candles:
+                    return candles['candles']
+                return []
+                
+            except Exception as e:
+                error_str = str(e)
+                
+                # Check if rate limited (429 status or rate limit message)
+                is_rate_limited = '429' in error_str or 'rate limit' in error_str.lower() or 'too many' in error_str.lower()
+                
+                if is_rate_limited and attempt < max_retries - 1:
+                    logging.warning(f"Rate limited on {symbol}, retrying in {retry_delay}s (attempt {attempt+1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    if attempt == max_retries - 1:
+                        logging.error(f"Failed to fetch candles for {symbol} after {max_retries} attempts: {e}")
+                    else:
+                        logging.error(f"Error fetching candles for {symbol}: {e}")
+                    return []
+        
+        return []
     
     def supports_asset_class(self, asset_class: str) -> bool:
         """Coinbase supports crypto only"""
         return asset_class.lower() == "crypto"
+
+
+# Coinbase Broker - extends BaseBroker which has all Coinbase implementation
+class CoinbaseBroker(BaseBroker):
+    """Coinbase Advanced Trade broker implementation"""
+    
+    def __init__(self):
+        """Initialize Coinbase broker"""
+        super().__init__(BrokerType.COINBASE)
+        self.client = None
+        self.portfolio_uuid = None
+        self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
+    
+    def connect(self) -> bool:
+        """Connect to Coinbase Advanced Trade API"""
+        try:
+            from coinbase.rest import RESTClient
+            import os
+            
+            # Get credentials from environment
+            api_key = os.getenv("COINBASE_API_KEY")
+            api_secret = os.getenv("COINBASE_API_SECRET")
+            
+            if not api_key or not api_secret:
+                logging.error("❌ Coinbase API credentials not found")
+                return False
+            
+            # Initialize REST client
+            self.client = RESTClient(api_key=api_key, api_secret=api_secret)
+            
+            # Test connection by fetching accounts
+            try:
+                accounts_resp = self.client.get_accounts()
+                self.connected = True
+                logging.info("✅ Connected to Coinbase Advanced Trade API")
+                
+                # Portfolio detection (uses inherited method from BaseBroker)
+                self._detect_portfolio()
+                
+                return True
+                
+            except Exception as e:
+                logging.error(f"❌ Failed to verify Coinbase connection: {e}")
+                return False
+                
+        except ImportError:
+            logging.error("❌ Coinbase SDK not installed. Run: pip install coinbase-advanced-py")
+            return False
+        except Exception as e:
+            logging.error(f"❌ Coinbase connection error: {e}")
+            return False
+
 
 class AlpacaBroker(BaseBroker):
     """Alpaca integration for stocks"""

@@ -9,16 +9,35 @@ Features:
 - Winning/losing streak tracking
 - Volatility-based exposure management
 - Dynamic max exposure limits
+- FEE-AWARE PROFITABILITY (v2.1 - Dec 19, 2025)
 
-Version: 2.0 (Enhanced for AI integration)
+Version: 2.1 (Enhanced for profitability and fee awareness)
 """
 
 import pandas as pd
 from typing import Dict, Tuple, List
 from datetime import datetime
+import time
 import logging
 
 logger = logging.getLogger("nija.risk_manager")
+
+# Import fee-aware configuration
+try:
+    from fee_aware_config import (
+        MIN_BALANCE_TO_TRADE,
+        get_position_size_pct,
+        get_min_profit_target,
+        should_trade,
+        get_fee_adjusted_targets,
+        MAX_TRADES_PER_DAY
+    )
+    FEE_AWARE_MODE = True
+    logger.info("✅ Fee-aware configuration loaded - PROFITABILITY MODE ACTIVE")
+except ImportError:
+    FEE_AWARE_MODE = False
+    MIN_BALANCE_TO_TRADE = 10.0
+    logger.warning("⚠️ Fee-aware config not found - using legacy mode")
 
 
 class AdaptiveRiskManager:
@@ -30,17 +49,18 @@ class AdaptiveRiskManager:
     - Recent trade performance (streaks)
     - Market volatility
     - Total portfolio exposure
+    - FEE AWARENESS (NEW - prevents unprofitable small trades)
     """
     
-    def __init__(self, min_position_pct=0.02, max_position_pct=0.10,
-                 max_total_exposure=0.30):
+    def __init__(self, min_position_pct=0.02, max_position_pct=0.05,
+                 max_total_exposure=0.80):
         """
-        Initialize Adaptive Risk Manager
+        Initialize Adaptive Risk Manager - PROFITABILITY MODE v7.2
         
         Args:
-            min_position_pct: Minimum position size as % of account (default 2%)
-            max_position_pct: Maximum position size as % of account (default 10%)
-            max_total_exposure: Maximum total exposure across all positions (default 30%)
+            min_position_pct: Minimum position size as % of account (default 2% - upgraded from 5%)
+            max_position_pct: Maximum position size as % of account (default 5% - upgraded from 25%)
+            max_total_exposure: Maximum total exposure across all positions (default 80% - upgraded from 50%)
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct
@@ -53,7 +73,20 @@ class AdaptiveRiskManager:
         # Current exposure tracking
         self.current_exposure = 0.0
         
-        logger.info(f"Adaptive Risk Manager initialized: {min_position_pct*100}%-{max_position_pct*100}% position sizing")
+        # Trade frequency tracking (for fee awareness)
+        self.trades_today = 0
+        self.last_trade_time = 0
+        self.daily_reset_date = datetime.now().date()
+        
+        # Fee-aware mode status
+        self.fee_aware_mode = FEE_AWARE_MODE
+        
+        if self.fee_aware_mode:
+            logger.info(f"✅ Adaptive Risk Manager initialized - FEE-AWARE PROFITABILITY MODE")
+            logger.info(f"   Minimum balance: ${MIN_BALANCE_TO_TRADE}")
+            logger.info(f"   Max trades/day: {MAX_TRADES_PER_DAY}")
+        else:
+            logger.info(f"Adaptive Risk Manager initialized: {min_position_pct*100}%-{max_position_pct*100}% position sizing")
     
     def record_trade(self, outcome: str, pnl: float, hold_time_minutes: int) -> None:
         """
@@ -136,7 +169,7 @@ class AdaptiveRiskManager:
     
     def calculate_position_size(self, account_balance: float, adx: float, 
                                signal_strength: int = 3, ai_confidence: float = 0.5,
-                               volatility_pct: float = 0.01) -> Tuple[float, Dict[str, float]]:
+                               volatility_pct: float = 0.01) -> Tuple[float, Dict]:
         """
         Calculate adaptive position size based on multiple factors.
         
@@ -251,9 +284,46 @@ class AdaptiveRiskManager:
         breakdown['volatility_pct'] = volatility_pct
         breakdown['volatility_multiplier'] = volatility_multiplier
         
-        # Calculate final position size
-        final_pct = (base_pct * strength_multiplier * confidence_multiplier * 
-                    streak_multiplier * volatility_multiplier)
+        # FEE-AWARE POSITION SIZING (NEW)
+        # Override percentage calculation with fee-aware sizing for small accounts
+        if self.fee_aware_mode:
+            # Check daily reset
+            current_date = datetime.now().date()
+            if current_date != self.daily_reset_date:
+                self.trades_today = 0
+                self.daily_reset_date = current_date
+                logger.info(f"Daily reset: trades_today = 0")
+            
+            # Check if we should trade
+            can_trade, trade_reason = should_trade(
+                account_balance, 
+                self.trades_today,
+                self.last_trade_time
+            )
+            
+            if not can_trade:
+                logger.warning(f"❌ Trade blocked: {trade_reason}")
+                return 0.0, {'reason': trade_reason, 'fee_aware_block': True}
+            
+            # Use fee-aware position sizing
+            fee_aware_pct = get_position_size_pct(account_balance)
+            
+            # Apply our quality multipliers to the fee-aware base
+            quality_multiplier = (strength_multiplier * confidence_multiplier * 
+                                streak_multiplier * volatility_multiplier)
+            
+            final_pct = fee_aware_pct * quality_multiplier
+            
+            breakdown['fee_aware_base_pct'] = fee_aware_pct
+            breakdown['quality_multiplier'] = quality_multiplier
+            
+            logger.info(f"💰 Fee-aware sizing: {fee_aware_pct*100:.1f}% base → {final_pct*100:.1f}% final")
+        
+        else:
+            # Legacy sizing
+            # Calculate final position size
+            final_pct = (base_pct * strength_multiplier * confidence_multiplier * 
+                        streak_multiplier * volatility_multiplier)
         
         # Clamp to min/max
         final_pct = max(self.min_position_pct, min(final_pct, self.max_position_pct))
@@ -304,7 +374,7 @@ class AdaptiveRiskManager:
         Returns:
             Stop loss price
         """
-        atr_buffer = atr * 0.5  # 0.5 * ATR buffer
+        atr_buffer = atr * 1.5  # 1.5x ATR buffer (upgraded from 0.5x - reduces stop-hunts)
         
         if side == 'long':
             # Stop below swing low with ATR buffer

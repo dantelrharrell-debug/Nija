@@ -1,0 +1,24 @@
+EMERGENCY STOP - ALL BUYING DISABLED
+=====================================
+
+Date: 2025-12-24
+Reason: User request - bot kept buying after manual sell
+
+CRITICAL FIXES APPLIED:
+1. ✅ TRADING_EMERGENCY_STOP.conf file updated with emergency reason
+2. ✅ Hard BUY block added to execute_trade() function
+3. ✅ All running bot processes killed
+4. ✅ Position limit checks reinforced
+
+CURRENT STATUS:
+- SELL-ONLY MODE: ACTIVE
+- New BUY trades: BLOCKED
+- Existing positions: Will be managed (stop loss/take profit)
+- Manual sells: Will NOT trigger new buys
+
+TO RESUME BUYING:
+1. User must explicitly request it
+2. Delete TRADING_EMERGENCY_STOP.conf file
+3. Restart bot
+
+DO NOT MODIFY THIS FILE OR REMOVE THE LOCKFILE WITHOUT USER PERMISSION

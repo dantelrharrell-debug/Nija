@@ -57,8 +57,8 @@ class NIJAApexStrategyV71:
         
         # Strategy parameters
         self.min_adx = self.config.get('min_adx', 20)
-        self.volume_threshold = self.config.get('volume_threshold', 0.5)  # 50% of 5-candle avg
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.3)  # 30% for no-trade
+        self.volume_threshold = self.config.get('volume_threshold', 0.3)  # 30% of 5-candle avg (lowered from 50%)
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.2)  # 20% for no-trade (lowered from 30%)
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
@@ -105,12 +105,12 @@ class NIJAApexStrategyV71:
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume_5 if avg_volume_5 > 0 else 0
         
-        # ADX filter - no trades if ADX < 20
-        if adx < self.min_adx:
+        # ADX filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
+        if self.min_adx > 0 and adx < self.min_adx:
             return False, 'none', f'ADX too low ({adx:.1f} < {self.min_adx})'
         
-        # Volume filter
-        if volume_ratio < self.volume_threshold:
+        # Volume filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
+        if self.volume_threshold > 0 and volume_ratio < self.volume_threshold:
             return False, 'none', f'Volume too low ({volume_ratio*100:.1f}% of 5-candle avg)'
         
         # Check for uptrend
@@ -131,13 +131,14 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= self.volume_threshold
         }
         
-        # Require all conditions for trend confirmation
+        # PROFITABILITY MODE: Require strong trend confirmation (3 out of 5 conditions)
+        # This prevents buying weak/choppy markets that lose money
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
         
-        if uptrend_score == 5:
+        if uptrend_score >= 3:  # PROFITABILITY: 3/5 filters (strong trend required)
             return True, 'uptrend', f'Uptrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score == 5:
+        elif downtrend_score >= 3:  # PROFITABILITY: 3/5 filters (strong trend required)
             return True, 'downtrend', f'Downtrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
             return False, 'none', f'Mixed signals (Up:{uptrend_score}/5, Down:{downtrend_score}/5)'
@@ -214,9 +215,9 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # Require at least 3/5 conditions
+        signal = score >= 4  # STRICT: Minimum 4/5 conditions for profitable entries
         
-        reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})"
+        reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
         return signal, score, reason
     
@@ -292,9 +293,9 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # Require at least 3/5 conditions
+        signal = score >= 3  # HIGH CONVICTION: Minimum 3/5 conditions (Profitability Mode v7.2)
         
-        reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})"
+        reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         
         return signal, score, reason
     
@@ -319,13 +320,13 @@ class NIJAApexStrategyV71:
         # For now, this is a placeholder that always passes
         news_clear = True  # Stub: would check upcoming news events here
         
-        # Filter 2: Volume filter (< 30% avg = no trade)
+        # Filter 2: Volume filter (< 20% avg = no trade) - Lowered threshold for better trade opportunities
         avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
         
         if volume_ratio < self.volume_min_threshold:
-            return False, f'Volume too low ({volume_ratio*100:.1f}% of avg)'
+            return False, f'Volume too low ({volume_ratio*100:.1f}% of avg) - threshold: {self.volume_min_threshold*100:.0f}%'
         
         # Filter 3: Candle timing filter (first 6 seconds)
         # Detect new candle by comparing timestamps
@@ -421,6 +422,21 @@ class NIJAApexStrategyV71:
         Returns:
             Dictionary of indicators
         """
+        # HARD GUARD: Force numeric types before any math to avoid str/int errors
+        try:
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in required_cols):
+                logger.warning("Missing OHLCV columns; cannot calculate indicators")
+                return {}
+            df[required_cols] = df[required_cols].astype(float)
+            # Debug: confirm types are floats
+            logger.info(
+                f"DEBUG candle types → close={type(df['close'].iloc[-1])}, "
+                f"open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to normalize candle types before indicators: {e}")
+            return {}
         indicators = {
             'vwap': calculate_vwap(df),
             'ema_9': calculate_ema(df, 9),

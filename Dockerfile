@@ -7,7 +7,14 @@ WORKDIR /usr/src/app
 # Remove any old vendor folders just in case
 RUN rm -rf ./cd/vendor
 
-# Copy all project files
+# Build provenance and cache control - MUST come BEFORE COPY
+ARG CACHE_BUST=2025-12-24-v7-rebuild-trigger-1748
+ARG GIT_BRANCH=unknown
+ARG GIT_COMMIT=unknown
+ENV GIT_BRANCH=${GIT_BRANCH}
+ENV GIT_COMMIT=${GIT_COMMIT}
+
+# Copy all project files (cache invalidated by CACHE_BUST above)
 COPY . .
 
 # Upgrade pip and install dependencies
@@ -31,5 +38,5 @@ RUN python3 -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST c
 # Optional: show installed packages for debug
 RUN python3 -m pip list
 
-# Default command
-CMD ["python3", "./bot/live_bot_script/live_trading.py"]
+# Default command: use repo start script to launch bot.py
+CMD ["bash", "start.sh"]

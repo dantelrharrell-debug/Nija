@@ -1,0 +1,50 @@
+🔧 Add Coinbase API Diagnostics & Credential Fix
+
+CREDENTIALS FIX:
+✅ Fixed .env EC private key formatting
+   - Issue: Newlines were escaped as literal \n instead of actual line breaks
+   - Fix: Converted to proper multi-line format
+   - Result: API authentication now works correctly
+   - Test: debug_api.py confirms successful connection
+
+NEW DIAGNOSTIC TOOLS:
+✅ debug_api.py - Complete API connection test
+   - Validates .env file exists
+   - Checks credentials are loaded properly
+   - Tests Coinbase client initialization
+   - Attempts to fetch account list
+   - Shows detailed error info if anything fails
+
+✅ find_crypto_holdings.py - Locate all crypto across portfolios
+   - Scans all 49 accounts
+   - Groups holdings by portfolio
+   - Shows platform type (ADVANCED_TRADE vs CONSUMER)
+   - Identifies where holdings are located
+
+✅ test_api_connection.py - Validate API credentials
+   - Simpler version of debug_api.py
+   - Shows any crypto holdings with positive balance
+   - Helps identify which accounts have funds
+
+✅ check_advanced_trade.py - Advanced Trade portfolio analysis
+   - Filters accounts by platform type
+   - Separates Advanced Trade from Consumer wallets
+   - Shows available balance vs hold balance
+   - Reports total crypto positions found
+
+INVESTIGATION RESULTS:
+- All API tests confirm: No crypto visible with this API key
+- All accounts show $0 balance across 49 wallets
+- No holdings detected in Advanced Trade platform
+- Conclusion: Holdings are either:
+  1. In a DIFFERENT Coinbase account (different API key needed)
+  2. In Consumer wallet (needs transfer to Advanced Trade)
+  3. Already sold/transferred elsewhere
+  4. Visible only in Coinbase web interface
+
+NEXT STEP:
+User must verify in Coinbase web interface:
+- Login to coinbase.com
+- Check both "Spot Wallet" (Advanced Trade) and "Wallet" (Consumer)
+- Confirm location and total value of 11 crypto holdings
+- Provide API key for the correct account if necessary
