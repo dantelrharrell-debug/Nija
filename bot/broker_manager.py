@@ -978,25 +978,35 @@ class BaseBroker(ABC):
                         'AAVE': 4,
                     }
 
+                    # CRITICAL FIX: Use ACTUAL Coinbase increment values
+                    # Many coins only accept WHOLE numbers (increment=1) despite supporting decimal balances
                     fallback_increment_map = {
-                        'XRP': 0.01,
-                        'DOGE': 0.01,
-                        'ADA': 0.01,
-                        'SHIB': 1.0,
-                        'BTC': 0.00000001,
-                        'ETH': 0.000001,
-                        'SOL': 0.0001,
-                        'ATOM': 0.0001,
-                        'LTC': 0.00000001,
-                        'BCH': 0.00000001,
-                        'LINK': 0.001,
-                        'IMX': 0.0001,
-                        'XLM': 0.0001,
-                        'CRV': 0.0001,
-                        'APT': 0.0001,
-                        'ICP': 0.00001,
-                        'NEAR': 0.00001,
-                        'AAVE': 0.0001,
+                        'BTC': 0.00000001,  # 8 decimals
+                        'ETH': 0.000001,    # 6 decimals
+                        'ADA': 1,           # WHOLE NUMBERS ONLY
+                        'SOL': 0.001,       # 3 decimals
+                        'XRP': 1,           # WHOLE NUMBERS ONLY
+                        'DOGE': 1,          # WHOLE NUMBERS ONLY
+                        'AVAX': 0.001,      # 3 decimals
+                        'DOT': 0.1,         # 1 decimal
+                        'LINK': 0.01,       # 2 decimals
+                        'LTC': 0.00000001,  # 8 decimals
+                        'UNI': 0.01,        # 2 decimals
+                        'XLM': 1,           # WHOLE NUMBERS ONLY
+                        'HBAR': 1,          # WHOLE NUMBERS ONLY
+                        'APT': 0.01,        # 2 decimals
+                        'ICP': 0.01,        # 2 decimals
+                        'RENDER': 0.1,      # 1 decimal
+                        'ZRX': 1,           # WHOLE NUMBERS ONLY
+                        'CRV': 1,           # WHOLE NUMBERS ONLY
+                        'FET': 1,           # WHOLE NUMBERS ONLY
+                        'AAVE': 0.001,      # 3 decimals
+                        'VET': 1,           # WHOLE NUMBERS ONLY
+                        'SHIB': 1,          # WHOLE NUMBERS ONLY
+                        'BCH': 0.00000001,  # 8 decimals
+                        'ATOM': 0.0001,     # 4 decimals
+                        'IMX': 0.0001,      # 4 decimals
+                        'NEAR': 0.00001,    # 5 decimals
                     }
 
                     precision = max(0, min(precision_map.get(base_currency, 2), 8))
@@ -1085,9 +1095,6 @@ class BaseBroker(ABC):
                         try:
                             base_increment = float(inc)
                             if base_increment > 0:
-                                inc_str = f"{base_increment:.16f}".rstrip('0').rstrip('.')
-                                if '.' in inc_str:
-                                    precision = max(0, min(len(inc_str.split('.')[1]), 8))
                                 break
                         except Exception as inc_err:
                             logger.warning(f"⚠️ Could not parse base_increment for {symbol}: {inc_err}")
@@ -1095,13 +1102,18 @@ class BaseBroker(ABC):
                     # If API metadata did not provide an increment, use a conservative fallback per asset
                     if base_increment is None and base_currency in fallback_increment_map:
                         base_increment = fallback_increment_map[base_currency]
-                        inc_str = f"{base_increment:.16f}".rstrip('0').rstrip('.')
-                        if '.' in inc_str:
-                            precision = max(0, min(len(inc_str.split('.')[1]), 8))
-
-                    # Final safety: ensure we have an increment so we do not emit too many decimals
+                    
+                    # Final safety: ensure we have an increment
                     if base_increment is None:
-                        base_increment = 10 ** (-precision)
+                        base_increment = 0.01  # Default to 2 decimal places
+                    
+                    # Calculate precision from increment CORRECTLY
+                    import math
+                    if base_increment >= 1:
+                        precision = 0  # Whole numbers only
+                    else:
+                        # Count decimal places: 0.001 → 3, 0.0001 → 4, etc.
+                        precision = int(abs(math.floor(math.log10(base_increment))))
 
                     # Adjust requested quantity against available balance with a safety margin
                     # FIX #3: Use a larger safety margin to account for fees and rounding
@@ -1117,19 +1129,23 @@ class BaseBroker(ABC):
                     logger.info(f"   Safety margin: {safety_margin:.8f} {base_currency} (0.5%)")
                     logger.info(f"   Final trade qty: {trade_qty:.8f} {base_currency}")
 
-                    # Quantize size DOWN to allowed increment to avoid precision errors
-                    from decimal import Decimal, ROUND_DOWN, getcontext
-                    getcontext().prec = 18
-                    step = Decimal(str(base_increment))
-                    qty = (Decimal(str(trade_qty)) / step).to_integral_value(rounding=ROUND_DOWN) * step
-
-                    base_size_rounded = float(qty)
+                    # Quantize size DOWN to allowed increment using floor division
+                    # This is more reliable than Decimal arithmetic
+                    import math
+                    
+                    # Calculate how many increments fit into trade_qty (floor division)
+                    num_increments = math.floor(trade_qty / base_increment)
+                    base_size_rounded = num_increments * base_increment
+                    
+                    # Round to the correct decimal places to avoid floating point artifacts
+                    base_size_rounded = round(base_size_rounded, precision)
+                    
                     logger.info(f"   Derived base_increment={base_increment} precision={precision} → rounded={base_size_rounded}")
-                    if base_size_rounded <= 0:
+                    if base_size_rounded <= 0 or base_size_rounded < base_increment:
                         return {
                             "status": "unfilled",
                             "error": "INVALID_SIZE",
-                            "message": f"Rounded base size for {symbol} became zero",
+                            "message": f"Rounded base size for {symbol} ({base_size_rounded}) is below minimum increment ({base_increment})",
                             "partial_fill": False,
                             "filled_pct": 0.0
                         }

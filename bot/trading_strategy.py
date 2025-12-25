@@ -251,9 +251,8 @@ class TradingStrategy:
                     
                     logger.info(f"   {symbol}: {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
                     
-                    # Simple sell logic based on market conditions
-                    # We check for trend deterioration and sell when market filter fails
-                    # This protects capital even without knowing original entry prices
+                    # PROFITABILITY MODE: Aggressive exit on weak markets
+                    # Exit positions when market conditions deteriorate to prevent bleeding
                     
                     # Get market data for analysis
                     candles = self.broker.get_candles(symbol, '5m', 100)
@@ -270,12 +269,13 @@ class TradingStrategy:
                             df[col] = pd.to_numeric(df[col], errors='coerce')
                     
                     # Calculate indicators for exit signal detection
+                    logger.info(f"   DEBUG candle types → close={type(df['close'].iloc[-1])}, open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}")
                     indicators = self.apex.calculate_indicators(df)
                     if not indicators:
                         continue
                     
-                    # Check for opposite signal (trend reversal)
-                    # This doesn't require knowing entry price
+                    # Check for weak market conditions (exit signal)
+                    # This protects capital even without knowing entry price
                     allow_trade, trend, market_reason = self.apex.check_market_filter(df, indicators)
                     
                     # If market conditions deteriorate, mark for exit
@@ -287,6 +287,18 @@ class TradingStrategy:
                             'quantity': quantity,
                             'reason': market_reason
                         })
+                    else:
+                        # Market is still good - check for emergency stop loss (5% below current)
+                        # This prevents unlimited downside even in trending markets
+                        stop_loss_pct = 0.05  # 5% stop loss
+                        if position_value < current_price * quantity * (1 - stop_loss_pct):
+                            logger.info(f"   🛑 EMERGENCY STOP HIT: Position down >{stop_loss_pct*100:.0f}%")
+                            logger.info(f"   💰 MARKING {symbol} for concurrent exit")
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': f'Emergency stop loss (-{stop_loss_pct*100:.0f}%)'
+                            })
                     
                 except Exception as e:
                     logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)

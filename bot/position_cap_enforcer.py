@@ -120,9 +120,10 @@ class PositionCapEnforcer:
     
     def rank_positions_for_liquidation(self, positions: List[Dict]) -> List[Dict]:
         """
-        Rank positions by priority for liquidation (lowest momentum first).
+        Rank positions by priority for liquidation.
         
-        Strategy: Sell weakest/losing positions first to preserve winners.
+        Strategy: Prioritize smallest positions to minimize capital impact.
+        Future: Consider P&L, momentum, RSI when entry price tracking is available.
         
         Args:
             positions: List of position dicts
@@ -130,8 +131,8 @@ class PositionCapEnforcer:
         Returns:
             Ranked list (highest-priority-to-sell first)
         """
-        # For now: rank by smallest USD value (easier to exit, less slippage)
-        # In future: rank by RSI (oversold), momentum, or drawdown
+        # Rank by smallest USD value (minimal capital impact, easier to exit)
+        # This prevents force-selling large winning positions
         ranked = sorted(positions, key=lambda p: p['usd_value'])
         
         logger.info(f"Ranked {len(ranked)} positions for liquidation (smallest first):")
@@ -142,7 +143,7 @@ class PositionCapEnforcer:
     
     def sell_position(self, position: Dict) -> bool:
         """
-        Market-sell a single position.
+        Market-sell a single position using the corrected broker.place_order method.
         
         Args:
             position: Position dict with 'symbol', 'balance', etc.
@@ -157,17 +158,21 @@ class PositionCapEnforcer:
         try:
             logger.info(f"🔴 ENFORCER: Selling {currency}... (${position['usd_value']:.2f})")
             
-            # Market sell by base_size (crypto quantity) - this is the correct way
-            adjusted = balance * 0.995  # Account for fee slippage
-            client_order_id = f"enforcer_{currency}_{int(__import__('time').time())}"
-            order = self.broker.client.market_order_sell(
-                client_order_id,
-                product_id=symbol,
-                base_size=str(adjusted)  # Use base_size for crypto quantity
+            # Use broker.place_order with corrected precision logic
+            result = self.broker.place_order(
+                symbol=symbol,
+                side='sell',
+                quantity=balance,  # Full balance
+                size_type='base'  # Sell by crypto amount
             )
             
-            logger.info(f"✅ SOLD {currency}! Order placed.")
-            return True
+            if result and result.get('status') == 'filled':
+                logger.info(f"✅ SOLD {currency}! Order placed.")
+                return True
+            else:
+                error = result.get('error') if result else 'Unknown'
+                logger.error(f"❌ Sell failed for {currency}: {error}")
+                return False
         
         except Exception as e:
             logger.error(f"❌ Error selling {symbol}: {e}")
