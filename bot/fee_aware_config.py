@@ -32,23 +32,24 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # MINIMUM VIABLE POSITION SIZING
 # ============================================================================
 # At different balance levels, what's the minimum trade size?
+# UPDATED: Added capital preservation buffer to prevent fund depletion
 
-# For $10.50-50 balance: Trade with 90% positions (maximum size to overcome fees)
+# For $10.50-50 balance: Trade with 60% positions (leave 40% reserve)
 MIN_BALANCE_TO_TRADE = 10.50  # $10.50 minimum to leave room for Coinbase fees
 MICRO_BALANCE_THRESHOLD = 50.0
-MICRO_BALANCE_POSITION_PCT = 0.90  # 90% of account per trade (must maximize size)
+MICRO_BALANCE_POSITION_PCT = 0.60  # 60% max per position (leave 40% buffer)
 
-# For $50-100: Trade with 80% positions (fewer, bigger trades)
+# For $50-100: Trade with 50% positions (leave 50% reserve for safety)
 SMALL_BALANCE_THRESHOLD = 100.0
-SMALL_BALANCE_POSITION_PCT = 0.80  # 80% of account per trade
+SMALL_BALANCE_POSITION_PCT = 0.50  # 50% max per position (leave 50% buffer)
 
-# For $100-500: Trade with 40-60% positions
+# For $100-500: Trade with 40% positions (leave 60% reserve)
 MEDIUM_BALANCE_THRESHOLD = 500.0
-MEDIUM_BALANCE_POSITION_PCT = 0.50  # 50% of account per trade
+MEDIUM_BALANCE_POSITION_PCT = 0.40  # 40% max per position (leave 60% buffer)
 
-# For $500+: Normal position sizing (10-25%)
+# For $500+: Normal position sizing (20-25% with reserves)
 NORMAL_MIN_POSITION_PCT = 0.10  # 10%
-NORMAL_MAX_POSITION_PCT = 0.25  # 25%
+NORMAL_MAX_POSITION_PCT = 0.20  # 20% (reduced from 25%, more conservative)
 
 # ============================================================================
 # PROFIT TARGETS (Must exceed fees)
@@ -122,9 +123,9 @@ MAX_OPEN_POSITIONS_SMALL = 1      # Only 1 position if balance < $100
 MAX_OPEN_POSITIONS_MEDIUM = 2     # Max 2 positions if balance < $500
 MAX_OPEN_POSITIONS_NORMAL = 3     # Max 3 positions if balance > $500
 
-# Maximum total exposure
-MAX_TOTAL_EXPOSURE_SMALL = 0.80   # 80% max for small accounts
-MAX_TOTAL_EXPOSURE_NORMAL = 0.50  # 50% max for normal accounts
+# Maximum total exposure (updated with capital preservation)
+MAX_TOTAL_EXPOSURE_SMALL = 0.60   # 60% max for small accounts (leave 40% reserve)
+MAX_TOTAL_EXPOSURE_NORMAL = 0.40  # 40% max for normal accounts (leave 60% reserve)
 
 # ============================================================================
 # HELPER FUNCTIONS

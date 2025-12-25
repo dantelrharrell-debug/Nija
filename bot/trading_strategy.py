@@ -111,12 +111,28 @@ class TradingStrategy:
                     logger.warning(f"⚠️ Excess positions detected: {result['excess']} over cap")
                     logger.info(f"   Sold {result['sold']} positions")
             
-            # Run APEX strategy if available
-            if self.apex:
+            # CRITICAL: Check if new entries are blocked
+            current_positions = len(self.broker.get_positions()) if self.broker else 0
+            stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
+            entries_blocked = os.path.exists(stop_entries_file)
+            
+            if entries_blocked:
+                logger.error("🛑 ALL NEW ENTRIES BLOCKED: STOP_ALL_ENTRIES.conf is active")
+                logger.info("   Exiting positions only (no new buys)")
+            elif current_positions >= 8:
+                logger.warning(f"🛑 ENTRY BLOCKED: Position cap reached ({current_positions}/8)")
+                logger.info("   Closing positions only until below cap")
+            else:
+                logger.info(f"✅ Position cap OK ({current_positions}/8) - entries enabled")
+            
+            # Run APEX strategy if available AND entries are allowed
+            if self.apex and not entries_blocked and current_positions < 8:
                 logger.info("🚀 Running APEX v7.1 cycle...")
                 # TODO: Wire full cycle (market scan, entry, exit, risk management)
                 # For now: placeholder that logs safe operation
                 logger.info("   Market scan complete; opportunity assessment in progress")
+            elif self.apex:
+                logger.info("📡 Position management mode (new entries blocked)")
             else:
                 logger.info("📡 Monitor mode (strategy not loaded; no trades)")
             

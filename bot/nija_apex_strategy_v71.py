@@ -13,6 +13,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple, List
 import logging
+import os
 
 from indicators import (
     calculate_vwap, calculate_ema, calculate_rsi, calculate_macd,
@@ -640,6 +641,15 @@ class NIJAApexStrategyV71:
         action = action_data.get('action')
         
         try:
+            # EMERGENCY: Check if entries are blocked via STOP_ALL_ENTRIES.conf
+            stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
+            entries_blocked = os.path.exists(stop_entries_file)
+            
+            if entries_blocked and ('enter_long' in action or 'enter_short' in action):
+                logger.error("🛑 BUY BLOCKED: STOP_ALL_ENTRIES.conf active")
+                logger.error(f"   Position cap may be exceeded. Fix required before new entries allowed.")
+                return False
+            
             if action == 'enter_long':
                 position = self.execution_engine.execute_entry(
                     symbol=symbol,
