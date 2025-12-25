@@ -5,10 +5,14 @@ import queue
 import logging
 from threading import Thread
 from dotenv import load_dotenv
+import pandas as pd
 
 load_dotenv()
 
 logger = logging.getLogger("nija")
+
+# Configuration constants
+MARKET_SCAN_LIMIT = 20  # Number of markets to scan per cycle (reduced from 732+ to prevent timeouts)
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
@@ -156,11 +160,9 @@ class TradingStrategy:
                     
                     logger.info(f"   {symbol}: {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
                     
-                    # Simple profit-taking logic (sell if profitable)
-                    # Since we don't have entry price tracking, we'll use a conservative approach:
-                    # - Hold positions for now
-                    # - Let position_cap_enforcer handle excess positions
-                    # - Future: Import position entry prices from trade history
+                    # Simple sell logic based on market conditions
+                    # We check for trend deterioration and sell when market filter fails
+                    # This protects capital even without knowing original entry prices
                     
                     # Get market data for analysis
                     candles = self.broker.get_candles(symbol, '5m', 100)
@@ -169,7 +171,6 @@ class TradingStrategy:
                         continue
                     
                     # Convert to DataFrame
-                    import pandas as pd
                     df = pd.DataFrame(candles)
                     
                     # CRITICAL: Ensure numeric types for OHLCV data
@@ -221,8 +222,8 @@ class TradingStrategy:
                         logger.warning("   No products available for scanning")
                         return
                     
-                    # Scan top 20 markets (reduce from full 732+ to prevent timeout)
-                    scan_limit = min(20, len(all_products))
+                    # Scan top markets (limit to prevent timeouts)
+                    scan_limit = min(MARKET_SCAN_LIMIT, len(all_products))
                     logger.info(f"   Scanning {scan_limit} markets...")
                     
                     for i, symbol in enumerate(all_products[:scan_limit]):
@@ -233,7 +234,6 @@ class TradingStrategy:
                                 continue
                             
                             # Convert to DataFrame
-                            import pandas as pd
                             df = pd.DataFrame(candles)
                             
                             # CRITICAL: Ensure numeric types
