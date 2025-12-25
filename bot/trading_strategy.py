@@ -480,9 +480,31 @@ To enable trading:
                 # Example: {'BTC': 17.70} means $17.70 worth of BTC, not 17.7 BTC
                 if usd_value < 0.00000001:  # Skip dust
                     continue
-                
+
                 symbol = f"{currency}-USD"
-                
+
+                # Get current market price using broker directly (simpler than analyze_symbol)
+                try:
+                    candles = self.broker.get_candles(symbol, '5m', 10)
+                    if not candles or len(candles) == 0:
+                        logger.warning(f"   ⚠️ {symbol}: Cannot get price data, skipping")
+                        continue
+
+                    latest_candle = candles[-1]
+                    current_price = float(latest_candle.get('close', latest_candle.get('price', 0)))
+
+                    if not current_price or current_price <= 0:
+                        logger.warning(f"   ⚠️ {symbol}: Invalid price {current_price}, skipping")
+                        continue
+
+                    quantity = usd_value / current_price  # USD value → crypto size
+                    position_value = usd_value
+                    entry_price = current_price
+
+                except Exception as e:
+                    logger.warning(f"   ⚠️ {symbol}: Failed to fetch price data - {e}")
+                    continue
+
                 # Refresh tracked positions that are missing size/quantity before skipping
                 if symbol in self.open_positions:
                     existing = self.open_positions[symbol]
@@ -519,7 +541,6 @@ To enable trading:
 
                     if refreshed:
                         logger.info(f"   🔄 {symbol}: refreshed {', '.join(refreshed)} from live holdings")
-                        # Persist updates so exits have real sizes
                         try:
                             self.position_manager.save_positions(self.open_positions)
                         except Exception:
@@ -527,71 +548,46 @@ To enable trading:
                     else:
                         logger.info(f"   ⏭️  {symbol}: Already tracked @ ${existing.get('entry_price', 0):.2f}")
                     continue
-                
-                # Get current market price using broker directly (simpler than analyze_symbol)
-                try:
-                    # Fetch candles directly from broker to get current price
-                    candles = self.broker.get_candles(symbol, '5m', 10)
-                    if not candles or len(candles) == 0:
-                        logger.warning(f"   ⚠️ {symbol}: Cannot get price data, skipping")
-                        continue
-                    
-                    # Get current price from latest candle
-                    latest_candle = candles[-1]
-                    current_price = float(latest_candle.get('close', latest_candle.get('price', 0)))
-                    
-                    if not current_price or current_price <= 0:
-                        logger.warning(f"   ⚠️ {symbol}: Invalid price {current_price}, skipping")
-                        continue
-                    
-                    # CRITICAL FIX: Calculate actual crypto quantity from USD value
-                    # crypto_holdings gives us USD value, we need to convert to quantity
-                    quantity = usd_value / current_price  # e.g., $17.70 / $87,000 = 0.0002034 BTC
-                    position_value = usd_value  # Use the USD value we already have
-                    
-                    # Skip very small positions (< $0.50 - too small to manage)
-                    if position_value < 0.50:
-                        logger.info(f"   ⏭️  {symbol}: Position too small (${position_value:.4f}), skipping")
-                        continue
-                    
-                    # Since we don't know original entry price, use current price as entry
-                    # This means stop loss will trigger on ANY further decline
-                    entry_price = current_price
-                    
-                    # Set CONSERVATIVE exits for immediate protection
-                    stop_loss = entry_price * (1 - self.stop_loss_pct)  # 3% below current
-                    take_profit = entry_price * (1 + self.base_take_profit_pct)  # 5% above current
-                    trailing_stop = stop_loss  # Start trailing at SL level
-                    
-                    # Add to position tracking
-                    position = {
-                        'symbol': symbol,
-                        'side': 'BUY',  # Holding crypto = long position
-                        'entry_price': entry_price,
-                        'current_price': current_price,
-                        'size_usd': position_value,
-                        'crypto_quantity': quantity,
-                        'stop_loss': stop_loss,
-                        'take_profit': take_profit,
-                        'trailing_stop': trailing_stop,
-                        'highest_price': current_price,
-                        'tp_stepped': False,
-                        'entry_time': datetime.now().isoformat(),
-                        'timestamp': datetime.now().isoformat(),
-                        'synced_from_coinbase': True,  # Mark as synced vs. traded by bot
-                        'note': 'Auto-synced from Coinbase holdings'
-                    }
-                    
-                    # Add to open positions
-                    self.open_positions[symbol] = position
-                    synced_count += 1
-                    
-                    logger.info(f"   ✅ {symbol}: {quantity:.8f} {currency} @ ${current_price:.4f} = ${position_value:.2f}")
-                    logger.info(f"      Stop Loss: ${stop_loss:.4f} (-{self.stop_loss_pct*100}%) | Take Profit: ${take_profit:.4f} (+{self.base_take_profit_pct*100}%)")
-                    
-                except Exception as e:
-                    logger.error(f"   ❌ {symbol}: Failed to sync - {e}")
+
+                # Skip very small positions (< $0.50 - too small to manage)
+                if position_value < 0.50:
+                    logger.info(f"   ⏭️  {symbol}: Position too small (${position_value:.4f}), skipping")
                     continue
+
+                # Since we don't know original entry price, use current price as entry
+                # This means stop loss will trigger on ANY further decline
+                entry_price = current_price
+
+                # Set CONSERVATIVE exits for immediate protection
+                stop_loss = entry_price * (1 - self.stop_loss_pct)  # 3% below current
+                take_profit = entry_price * (1 + self.base_take_profit_pct)  # 5% above current
+                trailing_stop = stop_loss  # Start trailing at SL level
+
+                # Add to position tracking
+                position = {
+                    'symbol': symbol,
+                    'side': 'BUY',  # Holding crypto = long position
+                    'entry_price': entry_price,
+                    'current_price': current_price,
+                    'size_usd': position_value,
+                    'crypto_quantity': quantity,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'trailing_stop': trailing_stop,
+                    'highest_price': current_price,
+                    'tp_stepped': False,
+                    'entry_time': datetime.now().isoformat(),
+                    'timestamp': datetime.now().isoformat(),
+                    'synced_from_coinbase': True,  # Mark as synced vs. traded by bot
+                    'note': 'Auto-synced from Coinbase holdings'
+                }
+
+                # Add to open positions
+                self.open_positions[symbol] = position
+                synced_count += 1
+
+                logger.info(f"   ✅ {symbol}: {quantity:.8f} {currency} @ ${current_price:.4f} = ${position_value:.2f}")
+                logger.info(f"      Stop Loss: ${stop_loss:.4f} (-{self.stop_loss_pct*100}%) | Take Profit: ${take_profit:.4f} (+{self.base_take_profit_pct*100}%)")
             
             # Save ALL positions to persistent storage (both synced and previously tracked)
             if len(self.open_positions) > 0:
