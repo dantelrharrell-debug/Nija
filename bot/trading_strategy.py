@@ -1611,15 +1611,16 @@ To enable trading:
                                     
                                     if error:
                                         if isinstance(error, TimeoutError):
-                                            logger.warning(f"   ⏰ Stepped exit order TIMED OUT after 10s - skipping to prevent loop hang")
+                                            logger.warning(f"   ⏰ Stepped exit order TIMED OUT after 10s - will retry on next cycle")
                                         else:
-                                            logger.warning(f"   ⚠️ Stepped exit order failed: {error}")
+                                            logger.warning(f"   ⚠️ Stepped exit order failed: {error} - will retry on next cycle")
                                     elif order and order.get('status') == 'filled':
                                         logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
-                                        # Don't remove position, just mark that portion as exited
+                                        # Mark exit as completed and reduce position size
+                                        position[stepped_exit_info['flag_name']] = True
                                         position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
                                     else:
-                                        logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
+                                        logger.warning(f"   ⚠️ Stepped exit order incomplete: {order} - will retry on next cycle")
                                 except Exception as e:
                                     logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
                     elif current_price <= trailing_stop:
@@ -1666,15 +1667,16 @@ To enable trading:
                                 
                                 if error:
                                     if isinstance(error, TimeoutError):
-                                        logger.warning(f"   ⏰ Stepped exit order TIMED OUT after 10s - skipping to prevent loop hang")
+                                        logger.warning(f"   ⏰ Stepped exit order TIMED OUT after 10s - will retry on next cycle")
                                     else:
-                                        logger.warning(f"   ⚠️ Stepped exit order failed: {error}")
+                                        logger.warning(f"   ⚠️ Stepped exit order failed: {error} - will retry on next cycle")
                                 elif order and order.get('status') == 'filled':
                                     logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
-                                    # Don't remove position, just mark that portion as exited
+                                    # Mark exit as completed and reduce position size
+                                    position[stepped_exit_info['flag_name']] = True
                                     position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
                                 else:
-                                    logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
+                                    logger.warning(f"   ⚠️ Stepped exit order incomplete: {order} - will retry on next cycle")
                             except Exception as e:
                                 logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
                     elif current_price >= trailing_stop:
@@ -2365,13 +2367,11 @@ To enable trading:
             
             # Check if profit target met
             if pnl_pct >= (profit_threshold * 100):
-                # Mark as executed
-                position[flag_name] = True
-                
-                # Return exit info
+                # Return exit info (flag will be set AFTER successful order fill)
                 return {
                     'exit_pct': exit_pct,
-                    'profit_level': f"{profit_threshold*100:.1f}%"
+                    'profit_level': f"{profit_threshold*100:.1f}%",
+                    'flag_name': flag_name
                 }
         
         return None
