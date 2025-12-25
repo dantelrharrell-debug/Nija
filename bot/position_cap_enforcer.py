@@ -85,6 +85,11 @@ class PositionCapEnforcer:
                     product = self.broker.client.get_product(symbol)
                     price = float(product.price)
                     usd_value = balance * price
+
+                    # Skip dust/zero-value positions to avoid repeated sell loops
+                    if balance <= 0 or usd_value < 0.01:
+                        logger.info(f"Skipping dust position {symbol}: balance={balance}, usd_value={usd_value:.4f}")
+                        continue
                     
                     positions.append({
                         'symbol': symbol,
