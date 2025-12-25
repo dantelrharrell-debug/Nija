@@ -62,10 +62,20 @@ class PositionCapEnforcer:
             accounts = self.broker.client.get_accounts()
             positions = []
             
-            for account in accounts['accounts']:
-                currency = account.get('currency')
-                balance_obj = account.get('available_balance', {})
-                balance = float(balance_obj.get('value', 0)) if balance_obj else 0
+            # Handle both dict and object responses from Coinbase SDK
+            accounts_list = accounts.get('accounts') if isinstance(accounts, dict) else getattr(accounts, 'accounts', [])
+            
+            for account in accounts_list:
+                # Handle both dict and object account formats
+                if isinstance(account, dict):
+                    currency = account.get('currency')
+                    balance_obj = account.get('available_balance', {})
+                    balance = float(balance_obj.get('value', 0)) if balance_obj else 0
+                else:
+                    # Account object from Coinbase SDK
+                    currency = getattr(account, 'currency', None)
+                    balance_obj = getattr(account, 'available_balance', {})
+                    balance = float(balance_obj.get('value', 0)) if isinstance(balance_obj, dict) else float(getattr(balance_obj, 'value', 0)) if balance_obj else 0
                 
                 if not currency or balance <= 0 or currency in ['USD', 'USDC']:
                     continue

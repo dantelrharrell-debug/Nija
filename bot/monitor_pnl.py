@@ -29,12 +29,22 @@ def get_total_portfolio_value(client):
     try:
         accounts = client.get_accounts()
         
-        for account in accounts['accounts']:
-            currency = account['currency']
-            balance = float(account['available_balance']['value'])
+        # Handle both dict and object responses from Coinbase SDK
+        accounts_list = accounts.get('accounts') if isinstance(accounts, dict) else getattr(accounts, 'accounts', [])
+        
+        for account in accounts_list:
+            # Handle both dict and object account formats
+            if isinstance(account, dict):
+                currency = account.get('currency')
+                balance = float(account.get('available_balance', {}).get('value', 0)) if account.get('available_balance') else 0
+            else:
+                # Account object from Coinbase SDK
+                currency = getattr(account, 'currency', None)
+                balance_obj = getattr(account, 'available_balance', {})
+                balance = float(balance_obj.get('value', 0)) if isinstance(balance_obj, dict) else float(getattr(balance_obj, 'value', 0)) if balance_obj else 0
             
             if balance > 0:
-                if currency == 'USD' or currency == 'USDC' or currency == 'USDT':
+                if currency in ['USD', 'USDC', 'USDT']:
                     # Already in USD
                     total_usd += balance
                     if balance > 0.01:

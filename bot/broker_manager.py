@@ -1424,12 +1424,26 @@ class BaseBroker(ABC):
         try:
             accounts = self.client.get_accounts()
             positions = []
-            for account in accounts['accounts']:
-                if account['currency'] != 'USD' and float(account['available_balance']['value']) > 0:
+            
+            # Handle both dict and object responses from Coinbase SDK
+            accounts_list = accounts.get('accounts') if isinstance(accounts, dict) else getattr(accounts, 'accounts', [])
+            
+            for account in accounts_list:
+                # Handle both dict and object account formats
+                if isinstance(account, dict):
+                    currency = account.get('currency')
+                    balance = float(account.get('available_balance', {}).get('value', 0)) if account.get('available_balance') else 0
+                else:
+                    # Account object from Coinbase SDK
+                    currency = getattr(account, 'currency', None)
+                    balance_obj = getattr(account, 'available_balance', {})
+                    balance = float(balance_obj.get('value', 0)) if isinstance(balance_obj, dict) else float(getattr(balance_obj, 'value', 0)) if balance_obj else 0
+                
+                if currency and currency not in ['USD', 'USDC'] and balance > 0:
                     positions.append({
-                        'symbol': f"{account['currency']}-USD",
-                        'quantity': float(account['available_balance']['value']),
-                        'currency': account['currency']
+                        'symbol': f"{currency}-USD",
+                        'quantity': balance,
+                        'currency': currency
                     })
             return positions
         except Exception as e:
