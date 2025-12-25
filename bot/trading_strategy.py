@@ -112,29 +112,157 @@ class TradingStrategy:
                     logger.info(f"   Sold {result['sold']} positions")
             
             # CRITICAL: Check if new entries are blocked
-            current_positions = len(self.broker.get_positions()) if self.broker else 0
+            current_positions = self.broker.get_positions() if self.broker else []
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
             
             if entries_blocked:
                 logger.error("🛑 ALL NEW ENTRIES BLOCKED: STOP_ALL_ENTRIES.conf is active")
                 logger.info("   Exiting positions only (no new buys)")
-            elif current_positions >= 8:
-                logger.warning(f"🛑 ENTRY BLOCKED: Position cap reached ({current_positions}/8)")
+            elif len(current_positions) >= 8:
+                logger.warning(f"🛑 ENTRY BLOCKED: Position cap reached ({len(current_positions)}/8)")
                 logger.info("   Closing positions only until below cap")
             else:
-                logger.info(f"✅ Position cap OK ({current_positions}/8) - entries enabled")
+                logger.info(f"✅ Position cap OK ({len(current_positions)}/8) - entries enabled")
             
-            # Run APEX strategy if available AND entries are allowed
-            if self.apex and not entries_blocked and current_positions < 8:
-                logger.info("🚀 Running APEX v7.1 cycle...")
-                # TODO: Wire full cycle (market scan, entry, exit, risk management)
-                # For now: placeholder that logs safe operation
-                logger.info("   Market scan complete; opportunity assessment in progress")
-            elif self.apex:
-                logger.info("📡 Position management mode (new entries blocked)")
-            else:
+            # Get account balance for position sizing
+            if not self.broker or not self.apex:
                 logger.info("📡 Monitor mode (strategy not loaded; no trades)")
+                return
+            
+            balance_data = self.broker.get_account_balance()
+            account_balance = balance_data.get('trading_balance', 0.0)
+            logger.info(f"💰 Trading balance: ${account_balance:.2f}")
+            
+            # STEP 1: Manage existing positions (check for exits/profit taking)
+            logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
+            for position in current_positions:
+                try:
+                    symbol = position.get('symbol')
+                    if not symbol:
+                        continue
+                    
+                    logger.info(f"   Analyzing {symbol}...")
+                    
+                    # Get current price
+                    current_price = self.broker.get_current_price(symbol)
+                    if not current_price or current_price == 0:
+                        logger.warning(f"   ⚠️ Could not get price for {symbol}")
+                        continue
+                    
+                    # Get position value
+                    quantity = position.get('quantity', 0)
+                    position_value = current_price * quantity
+                    
+                    logger.info(f"   {symbol}: {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
+                    
+                    # Simple profit-taking logic (sell if profitable)
+                    # Since we don't have entry price tracking, we'll use a conservative approach:
+                    # - Hold positions for now
+                    # - Let position_cap_enforcer handle excess positions
+                    # - Future: Import position entry prices from trade history
+                    
+                    # Get market data for analysis
+                    candles = self.broker.get_candles(symbol, '5m', 100)
+                    if not candles or len(candles) < 100:
+                        logger.warning(f"   ⚠️ Insufficient data for {symbol} ({len(candles) if candles else 0} candles)")
+                        continue
+                    
+                    # Convert to DataFrame
+                    import pandas as pd
+                    df = pd.DataFrame(candles)
+                    
+                    # CRITICAL: Ensure numeric types for OHLCV data
+                    for col in ['open', 'high', 'low', 'close', 'volume']:
+                        if col in df.columns:
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                    
+                    # Calculate indicators for exit signal detection
+                    indicators = self.apex.calculate_indicators(df)
+                    if not indicators:
+                        continue
+                    
+                    # Check for opposite signal (trend reversal)
+                    # This doesn't require knowing entry price
+                    allow_trade, trend, market_reason = self.apex.check_market_filter(df, indicators)
+                    
+                    # If market conditions deteriorate, consider selling
+                    if not allow_trade:
+                        logger.info(f"   ⚠️ Market conditions weak: {market_reason}")
+                        logger.info(f"   💰 SELLING {symbol} due to weak market conditions")
+                        
+                        # Place sell order via broker
+                        try:
+                            result = self.broker.place_market_order(
+                                symbol=symbol,
+                                side='sell',
+                                quantity=quantity,
+                                size_type='base'
+                            )
+                            if result.get('status') != 'error':
+                                logger.info(f"   ✅ Position closed successfully")
+                            else:
+                                logger.error(f"   ❌ Failed to close position: {result.get('error')}")
+                        except Exception as sell_err:
+                            logger.error(f"   ❌ Error closing position: {sell_err}")
+                    
+                except Exception as e:
+                    logger.error(f"   Error managing position {symbol}: {e}", exc_info=True)
+            
+            # STEP 2: Look for new entry opportunities (only if entries allowed)
+            if not entries_blocked and len(current_positions) < 8 and account_balance >= 25.0:
+                logger.info("🔍 Scanning for new opportunities...")
+                
+                # Get top market candidates (limit scan to prevent timeouts)
+                try:
+                    # Get list of all products
+                    all_products = self.broker.get_all_products()
+                    if not all_products:
+                        logger.warning("   No products available for scanning")
+                        return
+                    
+                    # Scan top 20 markets (reduce from full 732+ to prevent timeout)
+                    scan_limit = min(20, len(all_products))
+                    logger.info(f"   Scanning {scan_limit} markets...")
+                    
+                    for i, symbol in enumerate(all_products[:scan_limit]):
+                        try:
+                            # Get candles
+                            candles = self.broker.get_candles(symbol, '5m', 100)
+                            if not candles or len(candles) < 100:
+                                continue
+                            
+                            # Convert to DataFrame
+                            import pandas as pd
+                            df = pd.DataFrame(candles)
+                            
+                            # CRITICAL: Ensure numeric types
+                            for col in ['open', 'high', 'low', 'close', 'volume']:
+                                if col in df.columns:
+                                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                            
+                            # Analyze for entry
+                            analysis = self.apex.analyze_market(df, symbol, account_balance)
+                            action = analysis.get('action', 'hold')
+                            
+                            # Execute buy actions
+                            if action in ['enter_long', 'enter_short']:
+                                logger.info(f"   🎯 BUY SIGNAL: {symbol} - {analysis.get('reason', '')}")
+                                success = self.apex.execute_action(analysis, symbol)
+                                if success:
+                                    logger.info(f"   ✅ Position opened successfully")
+                                    break  # Only open one position per cycle
+                                else:
+                                    logger.error(f"   ❌ Failed to open position")
+                        
+                        except Exception as e:
+                            logger.debug(f"   Error scanning {symbol}: {e}")
+                            continue
+                
+                except Exception as e:
+                    logger.error(f"Error during market scan: {e}", exc_info=True)
+            else:
+                logger.info("   Skipping new entries (blocked or insufficient balance)")
             
         except Exception as e:
             # Never raise to keep bot loop alive
