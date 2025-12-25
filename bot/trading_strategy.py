@@ -18,6 +18,11 @@ def call_with_timeout(func, args=(), kwargs={}, timeout_seconds=10):
     """
     Execute function with timeout. Returns (result, error).
     If timeout occurs, returns (None, TimeoutError).
+def call_with_timeout(func, args=(), kwargs={}, timeout_seconds=30):
+    """
+    Execute function with timeout. Returns (result, error).
+    If timeout occurs, returns (None, TimeoutError).
+    Increased default to 30s for production API latency.
     """
     result_queue = queue.Queue()
     
@@ -1679,11 +1684,17 @@ To enable trading:
                                     
                                     # CRITICAL: Add 10s timeout to prevent broker API hang from blocking entire loop
                                     logger.info(f"   📤 Attempting stepped exit order with 10s timeout...")
+                                    # CRITICAL: Add timeout to prevent broker API hang from blocking entire loop
+                                    # Track retry attempts for this position
+                                    retry_count = position.get('exit_retry_count', 0)
+                                    timeout_duration = 30 + (retry_count * 15)  # Increase timeout on retries: 30s, 45s, 60s
+                                    logger.info(f"   📤 Attempting stepped exit order (timeout: {timeout_duration}s, retry #{retry_count})...")
                                     order, error = call_with_timeout(
                                         self.broker.place_market_order,
                                         args=(symbol, exit_signal.lower(), exit_quantity),
                                         kwargs={'size_type': 'base'},
                                         timeout_seconds=10
+                                        timeout_seconds=timeout_duration
                                     )
                                     
                                     if error:
@@ -1695,6 +1706,15 @@ To enable trading:
                                         logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
                                         # Mark exit as completed and reduce position size
                                         position[stepped_exit_info['flag_name']] = True
+                                            position['exit_retry_count'] = retry_count + 1
+                                            logger.warning(f"   ⏰ Stepped exit order TIMED OUT after {timeout_duration}s - will retry next cycle (attempt #{retry_count + 1})")
+                                        else:
+                                            logger.warning(f"   ⚠️ Stepped exit order failed: {error}")
+                                    elif order and order.get('status') == 'filled':
+                                        logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
+                                        # Clear retry counter on success
+                                        position.pop('exit_retry_count', None)
+                                        # Don't remove position, just mark that portion as exited
                                         position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
                                         if 'crypto_quantity' in position:
                                             position['crypto_quantity'] *= (1.0 - stepped_exit_info['exit_pct'])
@@ -1710,6 +1730,11 @@ To enable trading:
                             drop_pct = ((trailing_stop - current_price) / trailing_stop) * 100
                             exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f} (dropped {drop_pct:.2f}%)"
                             logger.info(f"      🔻 TRAILING STOP TRIGGERED: ${current_price:.2f} dropped {drop_pct:.2f}% below ${trailing_stop:.2f}")
+                                        logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
+                                except Exception as e:
+                                    logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
+                    elif current_price <= trailing_stop:
+                        exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
                     # Check take profit
                     elif current_price >= position['take_profit']:
                         exit_reason = f"Take profit hit @ ${position['take_profit']:.2f}"
@@ -1747,11 +1772,17 @@ To enable trading:
                                 
                                 # CRITICAL: Add 10s timeout to prevent broker API hang from blocking entire loop
                                 logger.info(f"   📤 Attempting stepped exit order with 10s timeout...")
+                                # CRITICAL: Add timeout to prevent broker API hang from blocking entire loop
+                                # Track retry attempts for this position
+                                retry_count = position.get('exit_retry_count', 0)
+                                timeout_duration = 30 + (retry_count * 15)  # Increase timeout on retries: 30s, 45s, 60s
+                                logger.info(f"   📤 Attempting stepped exit order (timeout: {timeout_duration}s, retry #{retry_count})...")
                                 order, error = call_with_timeout(
                                     self.broker.place_market_order,
                                     args=(symbol, exit_signal.lower(), exit_quantity),
                                     kwargs={'size_type': 'base'},
                                     timeout_seconds=10
+                                    timeout_seconds=timeout_duration
                                 )
                                 
                                 if error:
@@ -1763,6 +1794,15 @@ To enable trading:
                                     logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
                                     # Mark exit as completed and reduce position size
                                     position[stepped_exit_info['flag_name']] = True
+                                        position['exit_retry_count'] = retry_count + 1
+                                        logger.warning(f"   ⏰ Stepped exit order TIMED OUT after {timeout_duration}s - will retry next cycle (attempt #{retry_count + 1})")
+                                    else:
+                                        logger.warning(f"   ⚠️ Stepped exit order failed: {error}")
+                                elif order and order.get('status') == 'filled':
+                                    logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
+                                    # Clear retry counter on success
+                                    position.pop('exit_retry_count', None)
+                                    # Don't remove position, just mark that portion as exited
                                     position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
                                     if 'crypto_quantity' in position:
                                         position['crypto_quantity'] *= (1.0 - stepped_exit_info['exit_pct'])
@@ -1778,6 +1818,11 @@ To enable trading:
                             rise_pct = ((current_price - trailing_stop) / trailing_stop) * 100
                             exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f} (rose {rise_pct:.2f}%)"
                             logger.info(f"      🔻 TRAILING STOP TRIGGERED: ${current_price:.2f} rose {rise_pct:.2f}% above ${trailing_stop:.2f}")
+                                    logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
+                            except Exception as e:
+                                logger.warning(f"   ⚠️ Stepped exit order exception: {e}")
+                    elif current_price >= trailing_stop:
+                        exit_reason = f"Trailing stop hit @ ${trailing_stop:.2f}"
                     # Check take profit
                     elif current_price <= take_profit:
                         exit_reason = f"Take profit hit @ ${take_profit:.2f}"

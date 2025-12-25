@@ -7,6 +7,7 @@ Simply loads positions and starts the trading strategy
 import os
 import sys
 import json
+import importlib.util
 from pathlib import Path
 
 # Add bot to path
@@ -61,6 +62,15 @@ try:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
     import bot as bot_module
 
+    # Import the root-level bot.py file (not the bot/ module)
+    # We need to import it as a module by reading and executing it
+    import importlib.util
+    bot_path = os.path.join(os.path.dirname(__file__), 'bot.py')
+    
+    spec = importlib.util.spec_from_file_location("bot_main", bot_path)
+    bot_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bot_module)
+    
     # Run the main bot
     bot_module.main()
 
