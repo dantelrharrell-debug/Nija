@@ -1002,66 +1002,67 @@ class BaseBroker(ABC):
                     precision = max(0, min(precision_map.get(base_currency, 2), 8))
                     base_increment = None
 
-                    # Balance guard: skip if holdings are below requested size (allow small epsilon)
-                    try:
-                        # CRITICAL: Get FRESH balance immediately before placing sell order
-                        # This avoids stale data from position sync (holds, fees, locked funds)
-                        balance_snapshot = self.get_account_balance()
-                        holdings = (balance_snapshot or {}).get('crypto', {}) or {}
-                        available_base = float(holdings.get(base_currency, 0.0))
+                    # Emergency mode: skip preflight balance calls to reduce API 429s
+                    emergency_file = os.path.join(os.path.dirname(__file__), '..', 'LIQUIDATE_ALL_NOW.conf')
+                    skip_preflight = side.lower() == 'sell' and os.path.exists(emergency_file)
 
-                        # Deduct held funds to avoid over-requesting
+                    if not skip_preflight:
                         try:
-                            accounts = self.client.get_accounts()
-                            hold_amount = 0.0
-                            for a in accounts:
-                                if isinstance(a, dict):
-                                    currency = a.get('currency')
-                                    hd = (a.get('hold') or {}).get('value')
-                                else:
-                                    currency = getattr(a, 'currency', None)
-                                    hd = getattr(getattr(a, 'hold', None), 'value', None)
-                                if currency == base_currency and hd is not None:
-                                    try:
-                                        hold_amount = float(hd)
-                                    except Exception:
-                                        hold_amount = 0.0
-                                    break
-                            if hold_amount > 0:
-                                available_base = max(0.0, available_base - hold_amount)
-                                logger.info(f"   Adjusted for holds: {hold_amount:.8f} {base_currency} held → usable {available_base:.8f}")
-                        except Exception as hold_err:
-                            logger.warning(f"⚠️ Could not read holds for {base_currency}: {hold_err}")
+                            balance_snapshot = self.get_account_balance()
+                            holdings = (balance_snapshot or {}).get('crypto', {}) or {}
+                            available_base = float(holdings.get(base_currency, 0.0))
 
-                        logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} available")
-                        logger.info(f"   Tracked position size: {quantity:.8f} {base_currency}")
-                        
-                        epsilon = 1e-8
-                        if available_base <= epsilon:
-                            logger.error(
-                                f"❌ PRE-FLIGHT CHECK FAILED: Zero {base_currency} balance "
-                                f"(available: {available_base:.8f})"
-                            )
-                            return {
-                                "status": "unfilled",
-                                "error": "INSUFFICIENT_FUND",
-                                "message": f"No {base_currency} balance available for sell (requested {quantity})",
-                                "partial_fill": False,
-                                "filled_pct": 0.0
-                            }
-                        
-                        # FIX #1: If available balance < requested quantity, USE AVAILABLE BALANCE
-                        # This handles partial fills, holds, fees, and stale position sync data
-                        if available_base < quantity:
-                            diff = quantity - available_base
-                            logger.warning(
-                                f"⚠️ Balance mismatch: tracked {quantity:.8f} but only {available_base:.8f} available"
-                            )
-                            logger.warning(f"   Difference: {diff:.8f} {base_currency} (likely from partial fills or fees)")
-                            logger.warning(f"   SOLUTION: Adjusting sell size to actual available balance")
-                            quantity = available_base  # FIX #1: USE ACTUAL AVAILABLE AMOUNT
-                    except Exception as bal_err:
-                        logger.warning(f"⚠️ Could not pre-check balance for {base_currency}: {bal_err}")
+                            try:
+                                accounts = self.client.get_accounts()
+                                hold_amount = 0.0
+                                for a in accounts:
+                                    if isinstance(a, dict):
+                                        currency = a.get('currency')
+                                        hd = (a.get('hold') or {}).get('value')
+                                    else:
+                                        currency = getattr(a, 'currency', None)
+                                        hd = getattr(getattr(a, 'hold', None), 'value', None)
+                                    if currency == base_currency and hd is not None:
+                                        try:
+                                            hold_amount = float(hd)
+                                        except Exception:
+                                            hold_amount = 0.0
+                                        break
+                                if hold_amount > 0:
+                                    available_base = max(0.0, available_base - hold_amount)
+                                    logger.info(f"   Adjusted for holds: {hold_amount:.8f} {base_currency} held → usable {available_base:.8f}")
+                            except Exception as hold_err:
+                                logger.warning(f"⚠️ Could not read holds for {base_currency}: {hold_err}")
+
+                            logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} available")
+                            logger.info(f"   Tracked position size: {quantity:.8f} {base_currency}")
+                            
+                            epsilon = 1e-8
+                            if available_base <= epsilon:
+                                logger.error(
+                                    f"❌ PRE-FLIGHT CHECK FAILED: Zero {base_currency} balance "
+                                    f"(available: {available_base:.8f})"
+                                )
+                                return {
+                                    "status": "unfilled",
+                                    "error": "INSUFFICIENT_FUND",
+                                    "message": f"No {base_currency} balance available for sell (requested {quantity})",
+                                    "partial_fill": False,
+                                    "filled_pct": 0.0
+                                }
+                            
+                            if available_base < quantity:
+                                diff = quantity - available_base
+                                logger.warning(
+                                    f"⚠️ Balance mismatch: tracked {quantity:.8f} but only {available_base:.8f} available"
+                                )
+                                logger.warning(f"   Difference: {diff:.8f} {base_currency} (likely from partial fills or fees)")
+                                logger.warning(f"   SOLUTION: Adjusting sell size to actual available balance")
+                                quantity = available_base
+                        except Exception as bal_err:
+                            logger.warning(f"⚠️ Could not pre-check balance for {base_currency}: {bal_err}")
+                    else:
+                        logger.info("   EMERGENCY MODE: Skipping pre-flight balance checks")
 
                     meta = self._get_product_metadata(symbol)
                     inc_candidates = []
@@ -1137,9 +1138,25 @@ class BaseBroker(ABC):
                     if self.portfolio_uuid:
                         logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
 
-                    # Prefer create_order to set reduce_only for safe exits; fallback to market_order_sell
+                    # Prefer create_order; fallback to market_order_sell, with 429 backoff
+                    def _with_backoff(fn, *args, **kwargs):
+                        import time
+                        delays = [1, 2, 4]
+                        for i, d in enumerate(delays):
+                            try:
+                                return fn(*args, **kwargs)
+                            except Exception as err:
+                                msg = str(err)
+                                if 'Too Many Requests' in msg or '429' in msg:
+                                    logger.warning(f"⚠️ Rate limited, retrying in {d}s (attempt {i+1}/{len(delays)})")
+                                    time.sleep(d)
+                                    continue
+                                raise
+                        return fn(*args, **kwargs)
+
                     try:
-                        order = self.client.create_order(
+                        order = _with_backoff(
+                            self.client.create_order,
                             client_order_id=client_order_id,
                             product_id=symbol,
                             order_configuration={
@@ -1152,7 +1169,8 @@ class BaseBroker(ABC):
                         )
                     except Exception as co_err:
                         logger.warning(f"⚠️ create_order failed, falling back to market_order_sell: {co_err}")
-                        order = self.client.market_order_sell(
+                        order = _with_backoff(
+                            self.client.market_order_sell,
                             client_order_id,
                             product_id=symbol,
                             base_size=str(base_size_rounded)
@@ -1164,7 +1182,8 @@ class BaseBroker(ABC):
                     if self.portfolio_uuid:
                         logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
                     
-                    order = self.client.market_order_sell(
+                    order = _with_backoff(
+                        self.client.market_order_sell,
                         client_order_id,
                         product_id=symbol,
                         quote_size=str(quote_size_rounded)

@@ -142,6 +142,12 @@ class TradingStrategy:
                                 logger.error(f"   ❌ Failed to sell {currency}: {error_msg}")
                         except Exception as e:
                             logger.error(f"   ❌ Error selling {currency}: {e}")
+
+                        # Throttle to avoid Coinbase 429 rate limits
+                        try:
+                            time.sleep(1.0)
+                        except Exception:
+                            pass
                     
                     # Remove the emergency file after execution
                     try:
