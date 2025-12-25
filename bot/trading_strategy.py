@@ -1,57 +1,51 @@
-import time
-from typing import Dict, List, Optional
+import asyncio
 import logging
+from typing import Callable, Any, Optional
+from functools import wraps
 
 logger = logging.getLogger(__name__)
 
-class TradingStrategy:
-    """Advanced trading strategy with multiple indicators and risk management."""
+
+class TimeoutError(Exception):
+    """Raised when a function call times out."""
+    pass
+
+
+def call_with_timeout(
+    func: Callable,
+    timeout_seconds: int = 30,
+    *args,
+    **kwargs
+) -> Any:
+    """
+    Call a function with a timeout.
+    Increased default to 30s for production API latency
     
-    def __init__(self, config: Dict):
-        self.config = config
-        self.position_size = config.get('position_size', 0.1)
-        self.stop_loss_pct = config.get('stop_loss', 0.02)
-        self.take_profit_pct = config.get('take_profit', 0.05)
-        self.max_positions = config.get('max_positions', 3)
-        self.current_positions = []
-        
-    def analyze_market(self, market_data: Dict) -> Optional[str]:
-        """
-        Analyze market data and return trading signal.
-        
-        Returns:
-            'BUY', 'SELL', or None
-        """
-        
-        # Implementation of market analysis logic
-        signal = self._generate_signal(market_data)
-        return signal
+    Args:
+        func: The function to call
+        timeout_seconds: Maximum time to wait for the function to complete
+        *args: Positional arguments to pass to the function
+        **kwargs: Keyword arguments to pass to the function
     
-    def _generate_signal(self, data: Dict) -> Optional[str]:
-        """Generate trading signal based on technical indicators."""
-        # Placeholder for signal generation logic
-        return None
+    Returns:
+        The result of the function call
     
-    def calculate_position_size(self, balance: float) -> float:
-        """Calculate position size based on account balance and risk parameters."""
-        return balance * self.position_size
+    Raises:
+        TimeoutError: If the function doesn't complete within the timeout
+    """
+    import signal
     
-    def should_close_position(self, position: Dict, current_price: float) -> bool:
-        """Determine if a position should be closed based on stop-loss or take-profit."""
-        entry_price = position.get('entry_price', 0)
-        if entry_price == 0:
-            return False
-            
-        price_change_pct = (current_price - entry_price) / entry_price
-        
-        # Check stop-loss
-        if price_change_pct <= -self.stop_loss_pct:
-            logger.info(f"Stop-loss triggered at {price_change_pct:.2%}")
-            return True
-            
-        # Check take-profit
-        if price_change_pct >= self.take_profit_pct:
-            logger.info(f"Take-profit triggered at {price_change_pct:.2%}")
-            return True
-            
-        return False
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"Function call timed out after {timeout_seconds} seconds")
+    
+    # Set the signal handler and alarm
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(timeout_seconds)
+    
+    try:
+        result = func(*args, **kwargs)
+        signal.alarm(0)  # Cancel the alarm
+        return result
+    except TimeoutError:
+        logger.error(f"Timeout calling {func.__name__}")
+        raise
