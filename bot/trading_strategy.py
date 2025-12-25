@@ -203,6 +203,7 @@ class TradingStrategy:
             total_account_value = self.account_balance + total_crypto_value
             
             if total_account_value < MINIMUM_TRADING_BALANCE:
+                funding_needed = MINIMUM_TRADING_BALANCE - total_account_value
                 logger.error("=" * 80)
                 logger.error("🚨 CRITICAL WARNING: ACCOUNT BALANCE SEVERELY DEPLETED")
                 logger.error("=" * 80)
@@ -210,10 +211,14 @@ class TradingStrategy:
                 logger.error(f"   Crypto Value: ${total_crypto_value:.2f}")
                 logger.error(f"   Total Account: ${total_account_value:.2f}")
                 logger.error(f"   Minimum Required: ${MINIMUM_TRADING_BALANCE:.2f}")
+                logger.error(f"   💵 Funding Needed: ${funding_needed:.2f}")
                 logger.error("")
                 logger.error("   ⚠️  BUYING IS DISABLED - SELL-ONLY MODE ACTIVE")
                 logger.error("   ⚠️  Bot will manage existing positions but NOT open new ones")
-                logger.error("   ⚠️  Add funds to resume normal trading")
+                logger.error("   ⚠️  Add funds to resume normal trading OR wait for positions to close")
+                logger.error("")
+                logger.error("   📊 Open Positions: Monitoring for take-profit/stop-loss triggers")
+                logger.error("   💡 Note: Funds will become available as positions are sold")
                 logger.error("=" * 80)
             
             # Circuit breaker will prevent trading if balance < $25

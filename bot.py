@@ -12,6 +12,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import signal
 import threading
+import subprocess
 
 # EMERGENCY STOP CHECK
 if os.path.exists('EMERGENCY_STOP'):
@@ -102,10 +103,37 @@ def main():
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
+    # Get git metadata - try env vars first, then git commands
+    git_branch = os.getenv("GIT_BRANCH", "")
+    git_commit = os.getenv("GIT_COMMIT", "")
+    
+    # Fallback to git commands if env vars not set
+    if not git_branch:
+        try:
+            git_branch = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=os.path.dirname(__file__),
+                stderr=subprocess.DEVNULL,
+                timeout=5
+            ).decode().strip()
+        except Exception:
+            git_branch = "unknown"
+    
+    if not git_commit:
+        try:
+            git_commit = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=os.path.dirname(__file__),
+                stderr=subprocess.DEVNULL,
+                timeout=5
+            ).decode().strip()
+        except Exception:
+            git_commit = "unknown"
+
     logger.info("=" * 70)
     logger.info("NIJA TRADING BOT - APEX v7.1")
-    logger.info("Branch: %s", os.getenv("GIT_BRANCH", "unknown"))
-    logger.info("Commit: %s", os.getenv("GIT_COMMIT", "unknown"))
+    logger.info("Branch: %s", git_branch)
+    logger.info("Commit: %s", git_commit)
     logger.info("=" * 70)
     logger.info(f"Python version: {sys.version.split()[0]}")
     logger.info(f"Log file: {LOG_FILE}")
