@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 RUN rm -rf ./cd/vendor
 
 # Build provenance and cache control - MUST come BEFORE COPY
-ARG CACHE_BUST=2025-12-25-v8-rebuild-trigger-1766672019
+ARG CACHE_BUST=1766690500
 ARG GIT_BRANCH=unknown
 ARG GIT_COMMIT=unknown
 ENV GIT_BRANCH=${GIT_BRANCH}

@@ -100,6 +100,18 @@ class PositionCapEnforcer:
                     })
                 except Exception as e:
                     logger.warning(f"Could not fetch price for {symbol}: {e}")
+                    # CRITICAL: Still count position even if price fetch fails (use fallback price)
+                    # This prevents rate limiting from causing undercounting
+                    usd_value = balance * 1.0  # Conservative $1 estimate
+                    if balance > 0.001:  # Only skip true dust
+                        logger.warning(f"⚠️ RATE LIMITED: Counting {symbol} with fallback price (balance={balance})")
+                        positions.append({
+                            'symbol': symbol,
+                            'currency': currency,
+                            'balance': balance,
+                            'price': 1.0,  # Fallback
+                            'usd_value': usd_value
+                        })
             
             return positions
         except Exception as e:
@@ -145,12 +157,13 @@ class PositionCapEnforcer:
         try:
             logger.info(f"🔴 ENFORCER: Selling {currency}... (${position['usd_value']:.2f})")
             
-            # Attempt market sell by quote size (USD value)
+            # Market sell by base_size (crypto quantity) - this is the correct way
+            adjusted = balance * 0.995  # Account for fee slippage
             client_order_id = f"enforcer_{currency}_{int(__import__('time').time())}"
             order = self.broker.client.market_order_sell(
                 client_order_id,
                 product_id=symbol,
-                quote_size=str(int(position['usd_value']))  # Round down to avoid overage
+                base_size=str(adjusted)  # Use base_size for crypto quantity
             )
             
             logger.info(f"✅ SOLD {currency}! Order placed.")
@@ -158,20 +171,7 @@ class PositionCapEnforcer:
         
         except Exception as e:
             logger.error(f"❌ Error selling {symbol}: {e}")
-            # Attempt by base_size as fallback
-            try:
-                adjusted = balance * 0.995  # Account for fee slippage
-                client_order_id = f"enforcer_{currency}_retry_{int(__import__('time').time())}"
-                order = self.broker.client.market_order_sell(
-                    client_order_id,
-                    product_id=symbol,
-                    base_size=str(adjusted)
-                )
-                logger.info(f"✅ SOLD {currency} (retry by quantity)!")
-                return True
-            except Exception as e2:
-                logger.error(f"❌ Fallback also failed: {e2}")
-                return False
+            return False
     
     def enforce_cap(self) -> Tuple[bool, Dict]:
         """
