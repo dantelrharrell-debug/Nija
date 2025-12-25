@@ -294,7 +294,7 @@ TRADING_PAIRS = {
 RISK_LIMITS = {
     'max_daily_loss': 0.025,  # 2.5% max daily loss
     'max_exposure': 0.30,  # 30% max total exposure
-    'max_positions': 3,  # 3 positions for ACTIVE TRADING (quick turnover)
+    'max_positions': 8,  # HARD CAP: 8 positions maximum (enforced at startup and per trade)
     'max_trades_per_day': 30,  # 30 trades per day (more active)
 }
 
