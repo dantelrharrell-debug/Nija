@@ -19,7 +19,7 @@ def call_with_timeout(func, args=(), kwargs={}, timeout_seconds=30):
     """
     Execute function with timeout. Returns (result, error).
     If timeout occurs, returns (None, TimeoutError).
-    Increased default to 30s for production API latency.
+    Default timeout is 30 seconds to accommodate production API latency.
     """
     result_queue = queue.Queue()
     
