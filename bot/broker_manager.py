@@ -625,13 +625,16 @@ class BaseBroker(ABC):
             logging.info("")
             
             # Warn if funds are insufficient
-            MINIMUM_TRADING_BALANCE = 10.00  # Minimum to cover $5 order + fees safely
+            MINIMUM_BALANCE_PROTECTION = 10.50  # Absolute minimum to prevent failed orders
+            MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading
             
-            if trading_balance < MINIMUM_TRADING_BALANCE:
+            if trading_balance < MINIMUM_BALANCE_PROTECTION:
+                funding_needed = MINIMUM_BALANCE_PROTECTION - trading_balance
                 logging.error("=" * 70)
-                logging.error("🚨 INSUFFICIENT TRADING BALANCE!")
-                logging.error(f"   Trading balance: ${trading_balance:.2f}")
-                logging.error(f"   Minimum needed: ${MINIMUM_TRADING_BALANCE:.2f}")
+                logging.error("🚨 CRITICAL: INSUFFICIENT TRADING BALANCE!")
+                logging.error(f"   Current balance: ${trading_balance:.2f}")
+                logging.error(f"   MINIMUM_BALANCE (Protection): ${MINIMUM_BALANCE_PROTECTION:.2f}")
+                logging.error(f"   💵 Funding Needed: ${funding_needed:.2f}")
                 logging.error(f"   Why? $5.00 order + fees (~$0.50) + safety margin")
                 logging.error("")
                 if (consumer_usd > 0 or consumer_usdc > 0):
@@ -653,6 +656,7 @@ class BaseBroker(ABC):
                     logging.error("   Add funds to your Coinbase account")
                 else:
                     logging.error("   Your balance is too low for reliable trading")
+                    logging.error("   💡 Note: Funds will become available as open positions are sold")
                     logging.error("   Each trade needs ~$5.50 ($5.00 + fees)")
                     logging.error(f"   With ${trading_balance:.2f}, you can't place ANY trades safely")
                     logging.error("")
@@ -661,6 +665,18 @@ class BaseBroker(ABC):
                     logging.error("      - Proper position sizing")
                     logging.error("      - Strategy works as designed")
                 logging.error("=" * 70)
+            elif trading_balance < MINIMUM_TRADING_BALANCE:
+                funding_recommended = MINIMUM_TRADING_BALANCE - trading_balance
+                logging.warning("=" * 70)
+                logging.warning("⚠️  WARNING: Trading balance below recommended minimum")
+                logging.warning(f"   Current balance: ${trading_balance:.2f}")
+                logging.warning(f"   MINIMUM_TRADING_BALANCE (Recommended): ${MINIMUM_TRADING_BALANCE:.2f}")
+                logging.warning(f"   💵 Additional Funding Recommended: ${funding_recommended:.2f}")
+                logging.warning("")
+                logging.warning("   Bot can operate but with limited capacity")
+                logging.warning("   💡 Add funds for optimal trading performance")
+                logging.warning("   💡 Or wait for positions to close and reinvest profits")
+                logging.warning("=" * 70)
             else:
                 logging.info(f"   ✅ Sufficient funds in Advanced Trade for trading!")
             

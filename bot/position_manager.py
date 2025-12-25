@@ -92,12 +92,48 @@ class PositionManager:
             
             logger.info(f"💾 Loaded {count} positions from {timestamp}")
             
+            # Track zero-size positions for summary
+            zero_size_count = 0
+            valid_positions = 0
+            
             # Log each restored position
             for symbol, pos in positions.items():
-                logger.info(
-                    f"  ↳ {symbol}: {pos.get('side')} @ ${pos.get('entry_price', 0):.4f} "
-                    f"(Size: ${pos.get('position_size_usd', 0):.2f})"
-                )
+                # Try both 'size_usd' and 'position_size_usd' for backward compatibility
+                size = pos.get('size_usd') or pos.get('position_size_usd', 0)
+                
+                # Warn if position has zero size (data integrity issue)
+                if size == 0:
+                    zero_size_count += 1
+                    logger.warning(
+                        f"  ⚠️ {symbol}: {pos.get('side')} @ ${pos.get('entry_price', 0):.4f} "
+                        f"(Size: $0.00 - INVALID POSITION)"
+                    )
+                else:
+                    valid_positions += 1
+                    logger.info(
+                        f"  ↳ {symbol}: {pos.get('side')} @ ${pos.get('entry_price', 0):.4f} "
+                        f"(Size: ${size:.2f})"
+                    )
+            
+            # Summary of position data integrity
+            if zero_size_count > 0:
+                logger.warning("")
+                logger.warning("=" * 70)
+                logger.warning("⚠️  POSITION DATA INTEGRITY WARNING")
+                logger.warning(f"   Found {zero_size_count} position(s) with $0.00 size")
+                logger.warning(f"   Valid positions: {valid_positions}")
+                logger.warning("")
+                logger.warning("   Possible causes:")
+                logger.warning("   - Positions were synced from Coinbase but size not calculated")
+                logger.warning("   - Data corruption in open_positions.json")
+                logger.warning("   - Positions were closed externally")
+                logger.warning("")
+                logger.warning("   Recommendation:")
+                logger.warning("   - These positions will be validated against Coinbase API")
+                logger.warning("   - If they don't exist in Coinbase, they will be removed")
+                logger.warning("   - If they exist, size will be recalculated from holdings")
+                logger.warning("=" * 70)
+                logger.warning("")
             
             return positions
             
@@ -148,7 +184,8 @@ class PositionManager:
                 
                 # Calculate current P&L
                 entry_price = float(pos.get('entry_price', 0))
-                size_usd = float(pos.get('position_size_usd', 0))
+                # Support both 'size_usd' and 'position_size_usd' keys
+                size_usd = float(pos.get('size_usd') or pos.get('position_size_usd', 0))
                 
                 if pos.get('side') == 'BUY':
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100
