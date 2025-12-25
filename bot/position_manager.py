@@ -38,6 +38,20 @@ class PositionManager:
         self.positions_file = self.data_dir / "open_positions.json"
         logger.info(f"💾 Position manager initialized: {self.positions_file}")
     
+    @staticmethod
+    def _get_position_size(position: Dict) -> float:
+        """
+        Get position size from dict, handling both old and new key formats.
+        
+        Args:
+            position: Position dictionary
+        
+        Returns:
+            float: Position size in USD
+        """
+        # Try new key first, fallback to old key for backward compatibility
+        return float(position.get('size_usd') or position.get('position_size_usd', 0))
+    
     def save_positions(self, positions: Dict) -> bool:
         """
         Save current positions to file.
@@ -98,8 +112,8 @@ class PositionManager:
             
             # Log each restored position
             for symbol, pos in positions.items():
-                # Try both 'size_usd' and 'position_size_usd' for backward compatibility
-                size = pos.get('size_usd') or pos.get('position_size_usd', 0)
+                # Use helper method for consistent key handling
+                size = self._get_position_size(pos)
                 
                 # Warn if position has zero size (data integrity issue)
                 if size == 0:
@@ -184,8 +198,8 @@ class PositionManager:
                 
                 # Calculate current P&L
                 entry_price = float(pos.get('entry_price', 0))
-                # Support both 'size_usd' and 'position_size_usd' keys
-                size_usd = float(pos.get('size_usd') or pos.get('position_size_usd', 0))
+                # Use helper method for consistent key handling
+                size_usd = self._get_position_size(pos)
                 
                 if pos.get('side') == 'BUY':
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100

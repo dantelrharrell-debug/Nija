@@ -12,6 +12,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import signal
 import threading
+import subprocess
 
 # Minimal HTTP health server to satisfy platforms expecting $PORT
 def _start_health_server():
@@ -99,7 +100,6 @@ def main():
     # Fallback to git commands if env vars not set
     if not git_branch:
         try:
-            import subprocess
             git_branch = subprocess.check_output(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=os.path.dirname(__file__),
@@ -111,7 +111,6 @@ def main():
     
     if not git_commit:
         try:
-            import subprocess
             git_commit = subprocess.check_output(
                 ["git", "rev-parse", "--short", "HEAD"],
                 cwd=os.path.dirname(__file__),

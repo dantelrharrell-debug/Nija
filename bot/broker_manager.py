@@ -22,6 +22,10 @@ except ImportError:
 # Configure logger for broker operations
 logger = logging.getLogger('nija.broker')
 
+# Balance threshold constants
+MINIMUM_BALANCE_PROTECTION = 10.50  # Absolute minimum to prevent failed orders
+MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading
+
 
 def _serialize_object_to_dict(obj) -> Dict:
     """
@@ -624,10 +628,7 @@ class BaseBroker(ABC):
             logging.info(f"   ▶ TRADING BALANCE: ${trading_balance:.2f}")
             logging.info("")
             
-            # Warn if funds are insufficient
-            MINIMUM_BALANCE_PROTECTION = 10.50  # Absolute minimum to prevent failed orders
-            MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading
-            
+            # Warn if funds are insufficient (using module-level constants)
             if trading_balance < MINIMUM_BALANCE_PROTECTION:
                 funding_needed = MINIMUM_BALANCE_PROTECTION - trading_balance
                 logging.error("=" * 70)
