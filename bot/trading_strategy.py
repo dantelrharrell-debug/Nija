@@ -483,10 +483,49 @@ To enable trading:
                 
                 symbol = f"{currency}-USD"
                 
-                # Skip if already tracked
+                # Refresh tracked positions that are missing size/quantity before skipping
                 if symbol in self.open_positions:
                     existing = self.open_positions[symbol]
-                    logger.info(f"   ⏭️  {symbol}: Already tracked @ ${existing.get('entry_price', 0):.2f}")
+                    refreshed = []
+
+                    if float(existing.get('crypto_quantity', 0) or 0) <= 0:
+                        existing['crypto_quantity'] = quantity
+                        refreshed.append('crypto_quantity')
+
+                    if float(existing.get('size_usd', 0) or 0) <= 0:
+                        existing['size_usd'] = position_value
+                        refreshed.append('size_usd')
+
+                    if float(existing.get('entry_price', 0) or 0) <= 0:
+                        existing['entry_price'] = entry_price
+                        refreshed.append('entry_price')
+
+                    # Backfill protective levels if missing
+                    if float(existing.get('stop_loss', 0) or 0) <= 0:
+                        existing['stop_loss'] = entry_price * (1 - self.stop_loss_pct)
+                        refreshed.append('stop_loss')
+                    if float(existing.get('take_profit', 0) or 0) <= 0:
+                        existing['take_profit'] = entry_price * (1 + self.base_take_profit_pct)
+                        refreshed.append('take_profit')
+                    if float(existing.get('trailing_stop', 0) or 0) <= 0:
+                        existing['trailing_stop'] = existing.get('stop_loss', entry_price * (1 - self.stop_loss_pct))
+                        refreshed.append('trailing_stop')
+
+                    existing.setdefault('highest_price', existing.get('entry_price', entry_price))
+                    existing.setdefault('tp_stepped', False)
+                    existing.setdefault('synced_from_coinbase', True)
+                    existing.setdefault('timestamp', datetime.now().isoformat())
+                    existing.setdefault('entry_time', datetime.now().isoformat())
+
+                    if refreshed:
+                        logger.info(f"   🔄 {symbol}: refreshed {', '.join(refreshed)} from live holdings")
+                        # Persist updates so exits have real sizes
+                        try:
+                            self.position_manager.save_positions(self.open_positions)
+                        except Exception:
+                            pass
+                    else:
+                        logger.info(f"   ⏭️  {symbol}: Already tracked @ ${existing.get('entry_price', 0):.2f}")
                     continue
                 
                 # Get current market price using broker directly (simpler than analyze_symbol)
@@ -1598,7 +1637,11 @@ To enable trading:
                                 # Execute partial exit
                                 exit_signal = 'SELL'
                                 try:
-                                    exit_quantity = position.get('crypto_quantity', position['size_usd'] / entry_price) * stepped_exit_info['exit_pct']
+                                    base_qty = position.get('crypto_quantity', position['size_usd'] / entry_price)
+                                    exit_quantity = base_qty * stepped_exit_info['exit_pct']
+                                    if exit_quantity <= 0:
+                                        logger.warning(f"   ⚠️ Stepped exit skipped for {symbol}: zero quantity")
+                                        continue
                                     
                                     # CRITICAL: Add 10s timeout to prevent broker API hang from blocking entire loop
                                     logger.info(f"   📤 Attempting stepped exit order with 10s timeout...")
@@ -1618,6 +1661,8 @@ To enable trading:
                                         logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
                                         # Don't remove position, just mark that portion as exited
                                         position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
+                                        if 'crypto_quantity' in position:
+                                            position['crypto_quantity'] *= (1.0 - stepped_exit_info['exit_pct'])
                                     else:
                                         logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
                                 except Exception as e:
@@ -1653,7 +1698,11 @@ To enable trading:
                             # Execute partial exit
                             exit_signal = 'BUY'
                             try:
-                                exit_quantity = position.get('crypto_quantity', position['size_usd'] / entry_price) * stepped_exit_info['exit_pct']
+                                base_qty = position.get('crypto_quantity', position['size_usd'] / entry_price)
+                                exit_quantity = base_qty * stepped_exit_info['exit_pct']
+                                if exit_quantity <= 0:
+                                    logger.warning(f"   ⚠️ Stepped exit skipped for {symbol}: zero quantity")
+                                    continue
                                 
                                 # CRITICAL: Add 10s timeout to prevent broker API hang from blocking entire loop
                                 logger.info(f"   📤 Attempting stepped exit order with 10s timeout...")
@@ -1673,6 +1722,8 @@ To enable trading:
                                     logger.info(f"   ✅ Stepped exit {stepped_exit_info['exit_pct']*100:.0f}% @ {stepped_exit_info['profit_level']} profit filled")
                                     # Don't remove position, just mark that portion as exited
                                     position['size_usd'] *= (1.0 - stepped_exit_info['exit_pct'])
+                                    if 'crypto_quantity' in position:
+                                        position['crypto_quantity'] *= (1.0 - stepped_exit_info['exit_pct'])
                                 else:
                                     logger.warning(f"   ⚠️ Stepped exit order incomplete: {order}")
                             except Exception as e:
@@ -1699,6 +1750,27 @@ To enable trading:
                         # Use the ACTUAL crypto quantity from when we opened the position
                         # This accounts for fees paid during entry
                         quantity = position.get('crypto_quantity', position['size_usd'] / entry_price)
+                        if quantity is None or quantity <= 0:
+                            try:
+                                bal = self.broker.get_account_balance()
+                                holdings = bal.get('crypto', {}) if isinstance(bal, dict) else {}
+                                base_cur = symbol.split('-')[0]
+                                live_qty = float(holdings.get(base_cur, 0.0) or 0.0)
+                                if live_qty > 0:
+                                    quantity = live_qty
+                                    position['crypto_quantity'] = live_qty
+                                    logger.info(f"   ↻ Refilled quantity for {symbol} from live holdings: {live_qty:.8f}")
+                            except Exception as qty_err:
+                                logger.warning(f"   ⚠️ Could not refresh quantity for {symbol}: {qty_err}")
+
+                        if (quantity is None or quantity <= 0) and position.get('size_usd', 0) > 0 and current_price > 0:
+                            quantity = position['size_usd'] / current_price
+                            position['crypto_quantity'] = quantity
+                            logger.info(f"   ↻ Derived quantity for {symbol} from size_usd/current_price: {quantity:.8f}")
+
+                        if quantity is None or quantity <= 0:
+                            logger.error(f"❌ Cannot exit {symbol}: quantity missing (tracked ${position.get('size_usd', 0):.2f})")
+                            continue
                         
                         logger.info(f"   🔄 Executing {exit_signal} order for {symbol}")
                         logger.info(f"   Position size: ${position['size_usd']:.2f}")
@@ -2476,6 +2548,18 @@ To enable trading:
             force_exit_flag = _os.path.join(_os.path.dirname(__file__), '..', 'FORCE_EXIT_ALL.conf')
             override_flag = _os.path.join(_os.path.dirname(__file__), '..', 'FORCE_EXIT_OVERRIDE.conf')
             allow_force_exit = (_os.getenv('ALLOW_FORCE_EXIT_DURING_EMERGENCY', '0') == '1') or _os.path.exists(override_flag)
+
+            # 🔻 Hard cap: keep concurrent positions at/below max_concurrent_positions even in sell-only mode
+            try:
+                if len(self.open_positions) > self.max_concurrent_positions:
+                    logger.warning(
+                        f"⚠️ Position overage: {len(self.open_positions)}/{self.max_concurrent_positions} — pruning weakest to stop bleeding"
+                    )
+                    # Allow a bit more time than startup for orderly liquidation
+                    self.close_excess_positions(max_positions=self.max_concurrent_positions, timeout_seconds=12)
+            except Exception as overcap_err:
+                logger.warning(f"Over-cap liquidation check failed: {overcap_err}")
+
             if _os.path.exists(force_exit_flag):
                 if trading_locked and not allow_force_exit:
                     logger.error("="*80)
