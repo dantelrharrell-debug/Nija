@@ -3,6 +3,7 @@ import sys
 import time
 import queue
 import logging
+import traceback
 from threading import Thread
 from dotenv import load_dotenv
 import pandas as pd
@@ -113,48 +114,82 @@ class TradingStrategy:
                 logger.error("🚨 EMERGENCY LIQUIDATION MODE ACTIVE")
                 logger.error("   SELLING ALL POSITIONS IMMEDIATELY")
                 
-                if self.broker:
-                    positions = self.broker.get_positions()
-                    logger.error(f"   Found {len(positions)} positions to liquidate")
-                    
-                    for i, pos in enumerate(positions, 1):
-                        symbol = pos.get('symbol', 'UNKNOWN')
-                        currency = pos.get('currency', symbol.split('-')[0])
-                        quantity = pos.get('quantity', 0)
-                        
-                        if quantity <= 0:
-                            logger.error(f"   [{i}/{len(positions)}] SKIPPING {currency} (quantity={quantity})")
-                            continue
-                        
-                        logger.error(f"   [{i}/{len(positions)}] FORCE SELLING {quantity:.8f} {currency}...")
-                        
+                sold_count = 0
+                total_positions = 0
+                
+                try:
+                    if self.broker:
                         try:
-                            result = self.broker.place_market_order(
-                                symbol=symbol,
-                                side='sell',
-                                quantity=quantity,
-                                size_type='base'
-                            )
-                            if result and result.get('status') not in ['error', 'unfilled']:
-                                logger.error(f"   ✅ SOLD {currency}")
+                            positions = call_with_timeout(self.broker.get_positions, timeout_seconds=30)
+                            if positions[1]:  # Error occurred
+                                logger.error(f"   Failed to get positions: {positions[1]}")
+                                positions = []
                             else:
-                                error_msg = result.get('error', result.get('message', 'Unknown'))
-                                logger.error(f"   ❌ Failed to sell {currency}: {error_msg}")
+                                positions = positions[0] or []
                         except Exception as e:
-                            logger.error(f"   ❌ Error selling {currency}: {e}")
-
-                        # Throttle to avoid Coinbase 429 rate limits
-                        try:
-                            time.sleep(1.0)
-                        except Exception:
-                            pass
-                    
-                    # Remove the emergency file after execution
+                            logger.error(f"   Exception getting positions: {e}")
+                            positions = []
+                        
+                        total_positions = len(positions)
+                        logger.error(f"   Found {total_positions} positions to liquidate")
+                        
+                        for i, pos in enumerate(positions, 1):
+                            try:
+                                symbol = pos.get('symbol', 'UNKNOWN')
+                                currency = pos.get('currency', symbol.split('-')[0])
+                                quantity = pos.get('quantity', 0)
+                                
+                                if quantity <= 0:
+                                    logger.error(f"   [{i}/{total_positions}] SKIPPING {currency} (quantity={quantity})")
+                                    continue
+                                
+                                logger.error(f"   [{i}/{total_positions}] FORCE SELLING {quantity:.8f} {currency}...")
+                                
+                                try:
+                                    result = call_with_timeout(
+                                        self.broker.place_market_order,
+                                        args=(symbol, 'sell', quantity),
+                                        kwargs={'size_type': 'base'},
+                                        timeout_seconds=30
+                                    )
+                                    if result[1]:  # Error from call_with_timeout
+                                        logger.error(f"   ❌ Timeout/error selling {currency}: {result[1]}")
+                                    else:
+                                        result_dict = result[0] or {}
+                                        if result_dict and result_dict.get('status') not in ['error', 'unfilled']:
+                                            logger.error(f"   ✅ SOLD {currency}")
+                                            sold_count += 1
+                                        else:
+                                            error_msg = result_dict.get('error', result_dict.get('message', 'Unknown'))
+                                            logger.error(f"   ❌ Failed to sell {currency}: {error_msg}")
+                                except Exception as e:
+                                    logger.error(f"   ❌ Exception during sell: {e}")
+                                
+                                # Throttle to avoid Coinbase 429 rate limits
+                                try:
+                                    time.sleep(1.0)
+                                except Exception:
+                                    pass
+                            
+                            except Exception as pos_err:
+                                logger.error(f"   ❌ Position processing error: {pos_err}")
+                                continue
+                        
+                        logger.error(f"   Liquidation round complete: {sold_count}/{total_positions} sold")
+                
+                except Exception as liquidation_error:
+                    logger.error(f"   ❌ Emergency liquidation critical error: {liquidation_error}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                
+                finally:
+                    # GUARANTEED cleanup - always remove the trigger file
                     try:
-                        os.remove(liquidate_all_file)
-                        logger.error("✅ Emergency liquidation complete - removed LIQUIDATE_ALL_NOW.conf")
-                    except:
-                        pass
+                        if os.path.exists(liquidate_all_file):
+                            os.remove(liquidate_all_file)
+                            logger.error("✅ Emergency liquidation cycle complete - removed LIQUIDATE_ALL_NOW.conf")
+                    except Exception as cleanup_err:
+                        logger.error(f"   Warning: Could not delete trigger file: {cleanup_err}")
                 
                 return  # Skip normal trading cycle
             
