@@ -15,6 +15,9 @@ from typing import List, Dict, Tuple, Optional
 # Setup logger
 logger = logging.getLogger("nija.enforcer")
 
+# Constants
+DUST_THRESHOLD_USD = 0.001  # USD value threshold for dust positions (consistent with broker)
+
 # Add bot dir to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
@@ -86,8 +89,9 @@ class PositionCapEnforcer:
                     price = float(product.price)
                     usd_value = balance * price
 
-                    # Skip dust/zero-value positions to avoid repeated sell loops
-                    if balance <= 0 or usd_value < 0.01:
+                    # CRITICAL FIX: Only skip TRUE dust to match broker.get_positions()
+                    # Small positions like $0.04-$0.15 MUST be counted and managed
+                    if balance <= 0 or usd_value < DUST_THRESHOLD_USD:
                         logger.info(f"Skipping dust position {symbol}: balance={balance}, usd_value={usd_value:.4f}")
                         continue
                     
@@ -158,11 +162,12 @@ class PositionCapEnforcer:
         try:
             logger.info(f"🔴 ENFORCER: Selling {currency}... (${position['usd_value']:.2f})")
             
-            # Use broker's correct method: place_market_order
+            # CRITICAL FIX: Use correct parameter names (quantity, not size) and size_type='base'
             result = self.broker.place_market_order(
                 symbol=symbol,
                 side='sell',
-                size=balance
+                quantity=balance,
+                size_type='base'
             )
             
             if result and result.get('status') == 'filled':

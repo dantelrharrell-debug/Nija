@@ -15,6 +15,12 @@ logger = logging.getLogger("nija")
 # Configuration constants
 MARKET_SCAN_LIMIT = 20  # Number of markets to scan per cycle (reduced from 732+ to prevent timeouts)
 
+# Exit strategy constants (no entry price required)
+MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
+RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains)
+RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses)
+DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
+
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
     Execute a function with a timeout. Returns (result, error).
@@ -227,6 +233,13 @@ class TradingStrategy:
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
             
+            # CRITICAL: If over position cap, prioritize selling weakest positions immediately
+            # This ensures we get back under cap quickly to avoid further bleeding
+            positions_over_cap = len(current_positions) - 8
+            if positions_over_cap > 0:
+                logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/8 positions ({positions_over_cap} excess)")
+                logger.warning(f"   Will prioritize selling {positions_over_cap} weakest positions first")
+            
             # CRITICAL FIX: Identify ALL positions that need to exit first
             # Then sell them ALL concurrently, not one at a time
             positions_to_exit = []
@@ -254,33 +267,19 @@ class TradingStrategy:
                     # PROFITABILITY MODE: Aggressive exit on weak markets
                     # Exit positions when market conditions deteriorate to prevent bleeding
                     
-                    # PROFITABILITY FIX: Calculate P&L for profit-taking
-                    entry_price = position.get('entry_price', current_price)
-                    pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+                    # CRITICAL FIX: We don't have entry_price from Coinbase API!
+                    # Instead, use aggressive exit criteria based on:
+                    # 1. Market conditions (if filter fails, exit immediately)
+                    # 2. Small position size (anything under $1 should be exited)
+                    # 3. RSI overbought/oversold (take profits or cut losses)
                     
-                    # PROFITABILITY FIX: Take profits at key levels
-                    if pnl_pct >= 10.0:
-                        logger.info(f"   💰 TAKE PROFIT +10%: Selling {symbol} (actual: {pnl_pct:.2f}%)")
+                    # AUTO-EXIT small positions (under $1) - these are likely losers
+                    if position_value < MIN_POSITION_VALUE:
+                        logger.info(f"   🔴 SMALL POSITION AUTO-EXIT: {symbol} (${position_value:.2f} < ${MIN_POSITION_VALUE})")
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'Take profit +10% ({pnl_pct:.2f}%)'
-                        })
-                        continue
-                    elif pnl_pct >= 5.0:
-                        logger.info(f"   💰 TAKE PROFIT +5%: Selling {symbol} (actual: {pnl_pct:.2f}%)")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'Take profit +5% ({pnl_pct:.2f}%)'
-                        })
-                        continue
-                    elif pnl_pct >= 3.0:
-                        logger.info(f"   💰 TAKE PROFIT +3%: Selling {symbol} (actual: {pnl_pct:.2f}%)")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'Take profit +3% ({pnl_pct:.2f}%)'
+                            'reason': f'Small position cleanup (${position_value:.2f})'
                         })
                         continue
                     
@@ -288,6 +287,13 @@ class TradingStrategy:
                     candles = self.broker.get_candles(symbol, '5m', 100)
                     if not candles or len(candles) < 100:
                         logger.warning(f"   ⚠️ Insufficient data for {symbol} ({len(candles) if candles else 0} candles)")
+                        # CRITICAL: Exit positions we can't analyze to prevent blind holding
+                        logger.info(f"   🔴 NO DATA EXIT: {symbol} (cannot analyze market)")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': 'Insufficient market data for analysis'
+                        })
                         continue
                     
                     # Convert to DataFrame
@@ -302,16 +308,33 @@ class TradingStrategy:
                     logger.info(f"   DEBUG candle types → close={type(df['close'].iloc[-1])}, open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}")
                     indicators = self.apex.calculate_indicators(df)
                     if not indicators:
-                        continue
-                    
-                    # PROFITABILITY FIX: Exit on RSI overbought (if profitable)
-                    rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else 0
-                    if rsi > 70 and pnl_pct > 0:
-                        logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f}, profit={pnl_pct:.2f}%)")
+                        # Can't analyze - exit to prevent blind holding
+                        logger.warning(f"   ⚠️ No indicators for {symbol} - exiting")
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'RSI overbought ({rsi:.1f}) - lock profit'
+                            'reason': 'No indicators available'
+                        })
+                        continue
+                    
+                    # CRITICAL FIX: Exit on RSI extremes without requiring entry price
+                    rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI
+                    
+                    # RSI overbought (>70) or oversold (<30) - exit to lock in gains or cut losses
+                    if rsi > RSI_OVERBOUGHT_THRESHOLD:
+                        logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f})")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'RSI overbought ({rsi:.1f})'
+                        })
+                        continue
+                    elif rsi < RSI_OVERSOLD_THRESHOLD:
+                        logger.info(f"   📉 RSI OVERSOLD EXIT: {symbol} (RSI={rsi:.1f}) - prevent further losses")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'RSI oversold ({rsi:.1f}) - cut losses'
                         })
                         continue
                     
@@ -319,7 +342,7 @@ class TradingStrategy:
                     # This protects capital even without knowing entry price
                     allow_trade, trend, market_reason = self.apex.check_market_filter(df, indicators)
                     
-                    # If market conditions deteriorate, mark for exit
+                    # AGGRESSIVE: If market conditions deteriorate, exit immediately
                     if not allow_trade:
                         logger.info(f"   ⚠️ Market conditions weak: {market_reason}")
                         logger.info(f"   💰 MARKING {symbol} for concurrent exit")
@@ -328,21 +351,47 @@ class TradingStrategy:
                             'quantity': quantity,
                             'reason': market_reason
                         })
-                    else:
-                        # Market is still good - check for tighter stop loss (PROFITABILITY FIX: 3% not 5%)
-                        # This prevents unlimited downside even in trending markets
-                        stop_loss_pct = 0.03  # PROFITABILITY FIX: Tighter 3% stop loss (was 5%)
-                        if pnl_pct <= -stop_loss_pct * 100:
-                            logger.info(f"   🛑 STOP LOSS HIT: Position down {pnl_pct:.2f}%")
-                            logger.info(f"   💰 MARKING {symbol} for concurrent exit")
-                            positions_to_exit.append({
-                                'symbol': symbol,
-                                'quantity': quantity,
-                                'reason': f'Stop loss hit ({pnl_pct:.2f}%)'
-                            })
+                        continue
+                    
+                    # If we get here, position passes all checks - keep it
+                    logger.info(f"   ✅ {symbol} passing all checks (RSI={rsi:.1f}, trend={trend})")
                     
                 except Exception as e:
                     logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
+            
+            # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
+            if len(current_positions) > 8 and len(positions_to_exit) < (len(current_positions) - 8):
+                logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - 8 - len(positions_to_exit)} more positions")
+                
+                # Identify positions not yet marked for exit
+                symbols_to_exit = {p['symbol'] for p in positions_to_exit}
+                remaining_positions = [p for p in current_positions if p.get('symbol') not in symbols_to_exit]
+                
+                # Sort by USD value (smallest first - easiest to exit and lowest capital impact)
+                remaining_sorted = sorted(remaining_positions, key=lambda p: p.get('quantity', 0) * self.broker.get_current_price(p.get('symbol', '')))
+                
+                # Force-sell smallest positions to get under cap
+                positions_needed = (len(current_positions) - 8) - len(positions_to_exit)
+                for pos in remaining_sorted[:positions_needed]:
+                    symbol = pos.get('symbol')
+                    quantity = pos.get('quantity', 0)
+                    try:
+                        price = self.broker.get_current_price(symbol)
+                        value = quantity * price
+                        logger.warning(f"   🔴 FORCE-EXIT to meet cap: {symbol} (${value:.2f})")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'Over position cap (${value:.2f})'
+                        })
+                    except Exception as price_err:
+                        # Still add even if price fetch fails
+                        logger.warning(f"   ⚠️ Could not get price for {symbol}: {price_err}")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': 'Over position cap'
+                        })
             
             # CRITICAL FIX: Now sell ALL positions concurrently (not one at a time)
             if positions_to_exit:
