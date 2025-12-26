@@ -155,7 +155,21 @@ def close_dust_positions(dry_run=False, threshold=DEFAULT_DUST_THRESHOLD):
                 time.sleep(0.5)
                 
             except Exception as e:
+                error_msg = str(e)
                 print(f"   ❌ FAILED to sell: {e}")
+                
+                # Provide specific feedback for common errors
+                if "INSUFFICIENT_FUND" in error_msg or "insufficient" in error_msg.lower():
+                    print(f"      Reason: Insufficient balance (may have been sold already)")
+                elif "INVALID_SIZE_PRECISION" in error_msg:
+                    print(f"      Reason: Invalid size precision for {pos['currency']}")
+                elif "INVALID_PRODUCT_ID" in error_msg or "not found" in error_msg.lower():
+                    print(f"      Reason: Product {pos['symbol']} not available")
+                elif "market" in error_msg.lower() and "closed" in error_msg.lower():
+                    print(f"      Reason: Market for {pos['symbol']} is closed")
+                else:
+                    print(f"      Reason: {error_msg}")
+                
                 failed_count += 1
         
         print(f"\n{'='*70}")

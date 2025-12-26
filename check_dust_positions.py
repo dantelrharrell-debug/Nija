@@ -129,8 +129,14 @@ def check_dust_positions():
             print(f"\n🗑️ {len(dust_positions)} DUST POSITIONS TO CLOSE:")
             for pos in dust_positions:
                 print(f"   - {pos['symbol']}: ${pos['usd_value']:.4f}")
+            
+            # Calculate positions that count toward the limit (>= $1.00)
+            positions_above_threshold = sum(1 for p in positions if p['usd_value'] >= 1.00)
+            available_slots = max(0, 8 - positions_above_threshold)
+            
             print(f"\n💡 Closing these would free up {len(dust_positions)} position slots")
-            print(f"   Allowing {8 - len(winning_positions)} more winning trades")
+            print(f"   Currently using {positions_above_threshold} of 8 slots (positions ≥ $1.00)")
+            print(f"   After cleanup: {available_slots} slots available for new winning trades")
         else:
             print(f"\n✅ No dust positions found!")
         

@@ -27,7 +27,7 @@ except ImportError:
     DUST_THRESHOLD_USD = 1.00
 
 def test_dust_threshold():
-    """Test that dust threshold is consistent at $1.00"""
+    """Test that dust threshold of $1.00 is applied correctly for position filtering"""
     print("\n" + "="*80)
     print("TEST 1: Dust Threshold Consistency")
     print("="*80)
