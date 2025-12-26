@@ -19,7 +19,7 @@ MARKET_SCAN_LIMIT = 20  # Number of markets to scan per cycle (reduced from 732+
 MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
 RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains)
 RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses)
-DUST_THRESHOLD = 0.001  # USD value threshold for dust positions
+DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
@@ -311,7 +311,7 @@ class TradingStrategy:
                         continue
                     
                     # CRITICAL FIX: Exit on RSI extremes without requiring entry price
-                    rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else 50
+                    rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI
                     
                     # RSI overbought (>70) or oversold (<30) - exit to lock in gains or cut losses
                     if rsi > RSI_OVERBOUGHT_THRESHOLD:

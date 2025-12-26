@@ -10,6 +10,22 @@ import os
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
+# Import constants from actual code to keep tests synchronized
+try:
+    from trading_strategy import (
+        MIN_POSITION_VALUE,
+        RSI_OVERBOUGHT_THRESHOLD,
+        RSI_OVERSOLD_THRESHOLD
+    )
+    from broker_manager import DUST_THRESHOLD_USD
+except ImportError:
+    # Fallback if imports fail
+    print("Warning: Could not import constants from code, using hardcoded values")
+    MIN_POSITION_VALUE = 1.0
+    RSI_OVERBOUGHT_THRESHOLD = 70
+    RSI_OVERSOLD_THRESHOLD = 30
+    DUST_THRESHOLD_USD = 0.001
+
 def test_dust_threshold():
     """Test that dust threshold is consistent at $0.001"""
     print("\n" + "="*80)
@@ -20,17 +36,16 @@ def test_dust_threshold():
     test_cases = [
         (0.0001, True, "TRUE dust - should skip"),
         (0.0005, True, "Sub-penny - should skip"),
-        (0.001, False, "Exactly $0.001 - should count"),
+        (DUST_THRESHOLD_USD, False, f"Exactly ${DUST_THRESHOLD_USD} - should count"),
         (0.04, False, "$0.04 position - should count"),
         (0.12, False, "$0.12 position - should count"),
         (1.00, False, "$1.00 position - should count"),
     ]
     
-    dust_threshold = 0.001
     all_passed = True
     
     for usd_value, should_skip, description in test_cases:
-        is_dust = usd_value < dust_threshold
+        is_dust = usd_value < DUST_THRESHOLD_USD
         passed = is_dust == should_skip
         status = "✅ PASS" if passed else "❌ FAIL"
         print(f"  {status}: ${usd_value:.4f} - {description}")
@@ -53,15 +68,14 @@ def test_small_position_exit():
         (0.12, True, "$0.12 position - should exit"),
         (0.50, True, "$0.50 position - should exit"),
         (0.99, True, "$0.99 position - should exit"),
-        (1.00, False, "$1.00 position - should keep"),
+        (MIN_POSITION_VALUE, False, f"${MIN_POSITION_VALUE} position - should keep"),
         (5.00, False, "$5.00 position - should keep"),
     ]
     
-    min_position_value = 1.0
     all_passed = True
     
     for position_value, should_exit, description in test_cases:
-        would_exit = position_value < min_position_value
+        would_exit = position_value < MIN_POSITION_VALUE
         passed = would_exit == should_exit
         status = "✅ PASS" if passed else "❌ FAIL"
         print(f"  {status}: {description}")
@@ -80,18 +94,18 @@ def test_rsi_exit_logic():
     
     # Test various RSI values
     test_cases = [
-        (25, True, "RSI 25 - Oversold, should exit"),
-        (30, False, "RSI 30 - Boundary, should keep"),
+        (25, True, f"RSI 25 - Oversold (< {RSI_OVERSOLD_THRESHOLD}), should exit"),
+        (RSI_OVERSOLD_THRESHOLD, False, f"RSI {RSI_OVERSOLD_THRESHOLD} - Boundary, should keep"),
         (50, False, "RSI 50 - Neutral, should keep"),
-        (70, False, "RSI 70 - Boundary, should keep"),
-        (75, True, "RSI 75 - Overbought, should exit"),
+        (RSI_OVERBOUGHT_THRESHOLD, False, f"RSI {RSI_OVERBOUGHT_THRESHOLD} - Boundary, should keep"),
+        (75, True, f"RSI 75 - Overbought (> {RSI_OVERBOUGHT_THRESHOLD}), should exit"),
     ]
     
     all_passed = True
     
     for rsi, should_exit, description in test_cases:
-        # Exit logic: RSI > 70 OR RSI < 30
-        would_exit = rsi > 70 or rsi < 30
+        # Exit logic: RSI > OVERBOUGHT OR RSI < OVERSOLD
+        would_exit = rsi > RSI_OVERBOUGHT_THRESHOLD or rsi < RSI_OVERSOLD_THRESHOLD
         passed = would_exit == should_exit
         status = "✅ PASS" if passed else "❌ FAIL"
         print(f"  {status}: {description}")
