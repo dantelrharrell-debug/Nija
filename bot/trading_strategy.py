@@ -254,6 +254,36 @@ class TradingStrategy:
                     # PROFITABILITY MODE: Aggressive exit on weak markets
                     # Exit positions when market conditions deteriorate to prevent bleeding
                     
+                    # PROFITABILITY FIX: Calculate P&L for profit-taking
+                    entry_price = position.get('entry_price', current_price)
+                    pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+                    
+                    # PROFITABILITY FIX: Take profits at key levels
+                    if pnl_pct >= 10.0:
+                        logger.info(f"   💰 TAKE PROFIT +10%: Selling {symbol} (actual: {pnl_pct:.2f}%)")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'Take profit +10% ({pnl_pct:.2f}%)'
+                        })
+                        continue
+                    elif pnl_pct >= 5.0:
+                        logger.info(f"   💰 TAKE PROFIT +5%: Selling {symbol} (actual: {pnl_pct:.2f}%)")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'Take profit +5% ({pnl_pct:.2f}%)'
+                        })
+                        continue
+                    elif pnl_pct >= 3.0:
+                        logger.info(f"   💰 TAKE PROFIT +3%: Selling {symbol} (actual: {pnl_pct:.2f}%)")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'Take profit +3% ({pnl_pct:.2f}%)'
+                        })
+                        continue
+                    
                     # Get market data for analysis
                     candles = self.broker.get_candles(symbol, '5m', 100)
                     if not candles or len(candles) < 100:
@@ -274,6 +304,17 @@ class TradingStrategy:
                     if not indicators:
                         continue
                     
+                    # PROFITABILITY FIX: Exit on RSI overbought (if profitable)
+                    rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else 0
+                    if rsi > 70 and pnl_pct > 0:
+                        logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f}, profit={pnl_pct:.2f}%)")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'RSI overbought ({rsi:.1f}) - lock profit'
+                        })
+                        continue
+                    
                     # Check for weak market conditions (exit signal)
                     # This protects capital even without knowing entry price
                     allow_trade, trend, market_reason = self.apex.check_market_filter(df, indicators)
@@ -288,16 +329,16 @@ class TradingStrategy:
                             'reason': market_reason
                         })
                     else:
-                        # Market is still good - check for emergency stop loss (5% below current)
+                        # Market is still good - check for tighter stop loss (PROFITABILITY FIX: 3% not 5%)
                         # This prevents unlimited downside even in trending markets
-                        stop_loss_pct = 0.05  # 5% stop loss
-                        if position_value < current_price * quantity * (1 - stop_loss_pct):
-                            logger.info(f"   🛑 EMERGENCY STOP HIT: Position down >{stop_loss_pct*100:.0f}%")
+                        stop_loss_pct = 0.03  # PROFITABILITY FIX: Tighter 3% stop loss (was 5%)
+                        if pnl_pct <= -stop_loss_pct * 100:
+                            logger.info(f"   🛑 STOP LOSS HIT: Position down {pnl_pct:.2f}%")
                             logger.info(f"   💰 MARKING {symbol} for concurrent exit")
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Emergency stop loss (-{stop_loss_pct*100:.0f}%)'
+                                'reason': f'Stop loss hit ({pnl_pct:.2f}%)'
                             })
                     
                 except Exception as e:

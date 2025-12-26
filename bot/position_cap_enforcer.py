@@ -143,7 +143,7 @@ class PositionCapEnforcer:
     
     def sell_position(self, position: Dict) -> bool:
         """
-        Market-sell a single position using the corrected broker.place_order method.
+        Market-sell a single position using broker.place_market_order.
         
         Args:
             position: Position dict with 'symbol', 'balance', etc.
@@ -158,12 +158,11 @@ class PositionCapEnforcer:
         try:
             logger.info(f"🔴 ENFORCER: Selling {currency}... (${position['usd_value']:.2f})")
             
-            # Use broker.place_order with corrected precision logic
-            result = self.broker.place_order(
+            # Use broker's correct method: place_market_order
+            result = self.broker.place_market_order(
                 symbol=symbol,
                 side='sell',
-                quantity=balance,  # Full balance
-                size_type='base'  # Sell by crypto amount
+                size=balance
             )
             
             if result and result.get('status') == 'filled':

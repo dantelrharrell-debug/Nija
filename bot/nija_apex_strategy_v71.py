@@ -56,10 +56,10 @@ class NIJAApexStrategyV71:
         )
         self.execution_engine = ExecutionEngine(broker_client)
         
-        # Strategy parameters
-        self.min_adx = self.config.get('min_adx', 20)
-        self.volume_threshold = self.config.get('volume_threshold', 0.3)  # 30% of 5-candle avg (lowered from 50%)
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.2)  # 20% for no-trade (lowered from 30%)
+        # Strategy parameters - PROFITABILITY FIX: Tightened for quality entries
+        self.min_adx = self.config.get('min_adx', 25)  # Raised from 20 - require stronger trends
+        self.volume_threshold = self.config.get('volume_threshold', 0.5)  # Raised from 0.3 - require higher volume
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.3)  # Raised from 0.2
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
@@ -132,14 +132,14 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= self.volume_threshold
         }
         
-        # PROFITABILITY MODE: Require strong trend confirmation (3 out of 5 conditions)
+        # PROFITABILITY FIX: Require ALL 5 conditions (quality over quantity)
         # This prevents buying weak/choppy markets that lose money
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
         
-        if uptrend_score >= 3:  # PROFITABILITY: 3/5 filters (strong trend required)
+        if uptrend_score >= 5:  # PROFITABILITY FIX: ALL 5 filters required (was 3)
             return True, 'uptrend', f'Uptrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 3:  # PROFITABILITY: 3/5 filters (strong trend required)
+        elif downtrend_score >= 5:  # PROFITABILITY FIX: ALL 5 filters required (was 3)
             return True, 'downtrend', f'Downtrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
             return False, 'none', f'Mixed signals (Up:{uptrend_score}/5, Down:{downtrend_score}/5)'
@@ -175,13 +175,13 @@ class NIJAApexStrategyV71:
         
         conditions = {}
         
-        # 1. Pullback to EMA21 or VWAP (within 0.5%)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.005
-        near_vwap = abs(current_price - vwap) / vwap < 0.005
+        # 1. Pullback to EMA21 or VWAP (PROFITABILITY FIX: tighter 0.3%)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.003
+        near_vwap = abs(current_price - vwap) / vwap < 0.003
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bullish pullback
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi > rsi_prev
+        # 2. RSI bullish pullback (PROFITABILITY FIX: tighter range 35-65)
+        conditions['rsi_pullback'] = 35 < rsi < 65 and rsi > rsi_prev
         
         # 3. Bullish candlestick patterns
         body = current['close'] - current['open']
@@ -216,7 +216,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 4  # STRICT: Minimum 4/5 conditions for profitable entries
+        signal = score >= 5  # PROFITABILITY FIX: Require ALL 5 conditions (was 4)
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
@@ -258,8 +258,8 @@ class NIJAApexStrategyV71:
         near_vwap = abs(current_price - vwap) / vwap < 0.005
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bearish pullback
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi < rsi_prev
+        # 2. RSI bearish pullback (PROFITABILITY FIX: tighter range 35-65)
+        conditions['rsi_pullback'] = 35 < rsi < 65 and rsi < rsi_prev
         
         # 3. Bearish candlestick patterns
         body = current['close'] - current['open']
@@ -294,7 +294,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # HIGH CONVICTION: Minimum 3/5 conditions (Profitability Mode v7.2)
+        signal = score >= 5  # PROFITABILITY FIX: Require ALL 5 conditions (was 4)
         
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         
