@@ -25,7 +25,7 @@ logger = logging.getLogger('nija.broker')
 # Balance threshold constants
 MINIMUM_BALANCE_PROTECTION = 10.50  # Absolute minimum to prevent failed orders
 MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading
-DUST_THRESHOLD_USD = 0.001  # USD value threshold for dust positions (consistent with enforcer)
+DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 
 def _serialize_object_to_dict(obj) -> Dict:

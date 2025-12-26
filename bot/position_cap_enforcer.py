@@ -16,7 +16,7 @@ from typing import List, Dict, Tuple, Optional
 logger = logging.getLogger("nija.enforcer")
 
 # Constants
-DUST_THRESHOLD_USD = 0.001  # USD value threshold for dust positions (consistent with broker)
+DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with broker)
 
 # Add bot dir to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
