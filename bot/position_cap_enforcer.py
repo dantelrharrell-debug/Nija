@@ -162,11 +162,12 @@ class PositionCapEnforcer:
         try:
             logger.info(f"🔴 ENFORCER: Selling {currency}... (${position['usd_value']:.2f})")
             
-            # Use broker's correct method: place_market_order
+            # CRITICAL FIX: Use correct parameter names (quantity, not size) and size_type='base'
             result = self.broker.place_market_order(
                 symbol=symbol,
                 side='sell',
-                size=balance
+                quantity=balance,
+                size_type='base'
             )
             
             if result and result.get('status') == 'filled':
