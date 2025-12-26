@@ -15,6 +15,12 @@ logger = logging.getLogger("nija")
 # Configuration constants
 MARKET_SCAN_LIMIT = 20  # Number of markets to scan per cycle (reduced from 732+ to prevent timeouts)
 
+# Exit strategy constants (no entry price required)
+MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
+RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains)
+RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses)
+DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
+
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
     Execute a function with a timeout. Returns (result, error).
@@ -254,33 +260,19 @@ class TradingStrategy:
                     # PROFITABILITY MODE: Aggressive exit on weak markets
                     # Exit positions when market conditions deteriorate to prevent bleeding
                     
-                    # PROFITABILITY FIX: Calculate P&L for profit-taking
-                    entry_price = position.get('entry_price', current_price)
-                    pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+                    # CRITICAL FIX: We don't have entry_price from Coinbase API!
+                    # Instead, use aggressive exit criteria based on:
+                    # 1. Market conditions (if filter fails, exit immediately)
+                    # 2. Small position size (anything under $1 should be exited)
+                    # 3. RSI overbought/oversold (take profits or cut losses)
                     
-                    # PROFITABILITY FIX: Take profits at key levels
-                    if pnl_pct >= 10.0:
-                        logger.info(f"   💰 TAKE PROFIT +10%: Selling {symbol} (actual: {pnl_pct:.2f}%)")
+                    # AUTO-EXIT small positions (under $1) - these are likely losers
+                    if position_value < MIN_POSITION_VALUE:
+                        logger.info(f"   🔴 SMALL POSITION AUTO-EXIT: {symbol} (${position_value:.2f} < ${MIN_POSITION_VALUE})")
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'Take profit +10% ({pnl_pct:.2f}%)'
-                        })
-                        continue
-                    elif pnl_pct >= 5.0:
-                        logger.info(f"   💰 TAKE PROFIT +5%: Selling {symbol} (actual: {pnl_pct:.2f}%)")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'Take profit +5% ({pnl_pct:.2f}%)'
-                        })
-                        continue
-                    elif pnl_pct >= 3.0:
-                        logger.info(f"   💰 TAKE PROFIT +3%: Selling {symbol} (actual: {pnl_pct:.2f}%)")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'Take profit +3% ({pnl_pct:.2f}%)'
+                            'reason': f'Small position cleanup (${position_value:.2f})'
                         })
                         continue
                     
@@ -288,6 +280,13 @@ class TradingStrategy:
                     candles = self.broker.get_candles(symbol, '5m', 100)
                     if not candles or len(candles) < 100:
                         logger.warning(f"   ⚠️ Insufficient data for {symbol} ({len(candles) if candles else 0} candles)")
+                        # CRITICAL: Exit positions we can't analyze to prevent blind holding
+                        logger.info(f"   🔴 NO DATA EXIT: {symbol} (cannot analyze market)")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': 'Insufficient market data for analysis'
+                        })
                         continue
                     
                     # Convert to DataFrame
@@ -302,16 +301,33 @@ class TradingStrategy:
                     logger.info(f"   DEBUG candle types → close={type(df['close'].iloc[-1])}, open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}")
                     indicators = self.apex.calculate_indicators(df)
                     if not indicators:
-                        continue
-                    
-                    # PROFITABILITY FIX: Exit on RSI overbought (if profitable)
-                    rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else 0
-                    if rsi > 70 and pnl_pct > 0:
-                        logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f}, profit={pnl_pct:.2f}%)")
+                        # Can't analyze - exit to prevent blind holding
+                        logger.warning(f"   ⚠️ No indicators for {symbol} - exiting")
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'RSI overbought ({rsi:.1f}) - lock profit'
+                            'reason': 'No indicators available'
+                        })
+                        continue
+                    
+                    # CRITICAL FIX: Exit on RSI extremes without requiring entry price
+                    rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI
+                    
+                    # RSI overbought (>70) or oversold (<30) - exit to lock in gains or cut losses
+                    if rsi > RSI_OVERBOUGHT_THRESHOLD:
+                        logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f})")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'RSI overbought ({rsi:.1f})'
+                        })
+                        continue
+                    elif rsi < RSI_OVERSOLD_THRESHOLD:
+                        logger.info(f"   📉 RSI OVERSOLD EXIT: {symbol} (RSI={rsi:.1f}) - prevent further losses")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'RSI oversold ({rsi:.1f}) - cut losses'
                         })
                         continue
                     
@@ -319,7 +335,7 @@ class TradingStrategy:
                     # This protects capital even without knowing entry price
                     allow_trade, trend, market_reason = self.apex.check_market_filter(df, indicators)
                     
-                    # If market conditions deteriorate, mark for exit
+                    # AGGRESSIVE: If market conditions deteriorate, exit immediately
                     if not allow_trade:
                         logger.info(f"   ⚠️ Market conditions weak: {market_reason}")
                         logger.info(f"   💰 MARKING {symbol} for concurrent exit")
@@ -328,18 +344,10 @@ class TradingStrategy:
                             'quantity': quantity,
                             'reason': market_reason
                         })
-                    else:
-                        # Market is still good - check for tighter stop loss (PROFITABILITY FIX: 3% not 5%)
-                        # This prevents unlimited downside even in trending markets
-                        stop_loss_pct = 0.03  # PROFITABILITY FIX: Tighter 3% stop loss (was 5%)
-                        if pnl_pct <= -stop_loss_pct * 100:
-                            logger.info(f"   🛑 STOP LOSS HIT: Position down {pnl_pct:.2f}%")
-                            logger.info(f"   💰 MARKING {symbol} for concurrent exit")
-                            positions_to_exit.append({
-                                'symbol': symbol,
-                                'quantity': quantity,
-                                'reason': f'Stop loss hit ({pnl_pct:.2f}%)'
-                            })
+                        continue
+                    
+                    # If we get here, position passes all checks - keep it
+                    logger.info(f"   ✅ {symbol} passing all checks (RSI={rsi:.1f}, trend={trend})")
                     
                 except Exception as e:
                     logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
