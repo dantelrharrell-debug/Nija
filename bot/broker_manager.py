@@ -1525,9 +1525,23 @@ class BaseBroker(ABC):
                     except Exception:
                         quantity = 0.0
 
+                    # CRITICAL FIX: Skip true dust positions (< $0.001 value) to match enforcer
+                    # Calculate USD value to filter consistently
                     if quantity > 0:
+                        symbol = f"{asset}-USD"
+                        try:
+                            price = self.get_current_price(symbol)
+                            usd_value = quantity * price if price > 0 else 0
+                            # Only skip TRUE dust (< $0.001) - count all other positions
+                            if usd_value < 0.001:
+                                logger.debug(f"Skipping dust position {symbol}: qty={quantity}, value=${usd_value:.4f}")
+                                continue
+                        except Exception:
+                            # If we can't get price, include it anyway to be safe
+                            pass
+                        
                         positions.append({
-                            'symbol': f"{asset}-USD",
+                            'symbol': symbol,
                             'quantity': quantity,
                             'currency': asset
                         })
@@ -1553,9 +1567,23 @@ class BaseBroker(ABC):
                     balance_obj = getattr(account, 'available_balance', {})
                     balance = float(balance_obj.get('value', 0)) if isinstance(balance_obj, dict) else float(getattr(balance_obj, 'value', 0)) if balance_obj else 0
 
+                # CRITICAL FIX: Apply same dust filtering as primary path
                 if currency and currency not in ['USD', 'USDC'] and balance > 0:
+                    # Calculate USD value to filter consistently
+                    symbol = f"{currency}-USD"
+                    try:
+                        price = self.get_current_price(symbol)
+                        usd_value = balance * price if price > 0 else 0
+                        # Only skip TRUE dust (< $0.001) - count all other positions
+                        if usd_value < 0.001:
+                            logger.debug(f"Skipping dust position {symbol}: qty={balance}, value=${usd_value:.4f}")
+                            continue
+                    except Exception:
+                        # If we can't get price, include it anyway to be safe
+                        pass
+                    
                     positions.append({
-                        'symbol': f"{currency}-USD",
+                        'symbol': symbol,
                         'quantity': balance,
                         'currency': currency
                     })

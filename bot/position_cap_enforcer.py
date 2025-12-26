@@ -86,8 +86,9 @@ class PositionCapEnforcer:
                     price = float(product.price)
                     usd_value = balance * price
 
-                    # Skip dust/zero-value positions to avoid repeated sell loops
-                    if balance <= 0 or usd_value < 0.01:
+                    # CRITICAL FIX: Only skip TRUE dust (< $0.001) to match broker.get_positions()
+                    # Small positions like $0.04-$0.15 MUST be counted and managed
+                    if balance <= 0 or usd_value < 0.001:
                         logger.info(f"Skipping dust position {symbol}: balance={balance}, usd_value={usd_value:.4f}")
                         continue
                     
