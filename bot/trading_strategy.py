@@ -15,6 +15,12 @@ logger = logging.getLogger("nija")
 # Configuration constants
 MARKET_SCAN_LIMIT = 20  # Number of markets to scan per cycle (reduced from 732+ to prevent timeouts)
 
+# Exit strategy constants (no entry price required)
+MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
+RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains)
+RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses)
+DUST_THRESHOLD = 0.001  # USD value threshold for dust positions
+
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
     Execute a function with a timeout. Returns (result, error).
@@ -261,8 +267,8 @@ class TradingStrategy:
                     # 3. RSI overbought/oversold (take profits or cut losses)
                     
                     # AUTO-EXIT small positions (under $1) - these are likely losers
-                    if position_value < 1.0:
-                        logger.info(f"   🔴 SMALL POSITION AUTO-EXIT: {symbol} (${position_value:.2f} < $1)")
+                    if position_value < MIN_POSITION_VALUE:
+                        logger.info(f"   🔴 SMALL POSITION AUTO-EXIT: {symbol} (${position_value:.2f} < ${MIN_POSITION_VALUE})")
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
@@ -308,7 +314,7 @@ class TradingStrategy:
                     rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else 50
                     
                     # RSI overbought (>70) or oversold (<30) - exit to lock in gains or cut losses
-                    if rsi > 70:
+                    if rsi > RSI_OVERBOUGHT_THRESHOLD:
                         logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f})")
                         positions_to_exit.append({
                             'symbol': symbol,
@@ -316,7 +322,7 @@ class TradingStrategy:
                             'reason': f'RSI overbought ({rsi:.1f})'
                         })
                         continue
-                    elif rsi < 30:
+                    elif rsi < RSI_OVERSOLD_THRESHOLD:
                         logger.info(f"   📉 RSI OVERSOLD EXIT: {symbol} (RSI={rsi:.1f}) - prevent further losses")
                         positions_to_exit.append({
                             'symbol': symbol,
