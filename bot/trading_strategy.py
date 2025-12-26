@@ -361,8 +361,7 @@ class TradingStrategy:
                         result = self.broker.place_market_order(
                             symbol=symbol,
                             side='sell',
-                            quantity=quantity,
-                            size_type='base'
+                            size=quantity
                         )
                         if result and result.get('status') not in ['error', 'unfilled']:
                             logger.info(f"  ✅ {symbol} SOLD successfully!")
@@ -377,8 +376,12 @@ class TradingStrategy:
                 logger.info(f"")
             
             # STEP 2: Look for new entry opportunities (only if entries allowed)
-            if not entries_blocked and len(current_positions) < 8 and account_balance >= 25.0:
-                logger.info("🔍 Scanning for new opportunities...")
+            # CRITICAL: Prevent positions under $2 and enforce strict 8-position cap
+            min_position_size = 2.0  # Never trade below $2
+            max_positions = 8
+            
+            if not entries_blocked and len(current_positions) < max_positions and account_balance >= 25.0:
+                logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{max_positions}, balance: ${account_balance:.2f})...")
                 
                 # Get top market candidates (limit scan to prevent timeouts)
                 try:
@@ -413,7 +416,19 @@ class TradingStrategy:
                             
                             # Execute buy actions
                             if action in ['enter_long', 'enter_short']:
-                                logger.info(f"   🎯 BUY SIGNAL: {symbol} - {analysis.get('reason', '')}")
+                                position_size = analysis.get('position_size', 0)
+                                
+                                # CRITICAL: Skip positions under $2
+                                if position_size < min_position_size:
+                                    logger.warning(f"   ⚠️  {symbol} position size ${position_size:.2f} < ${min_position_size} minimum - SKIPPING")
+                                    continue
+                                
+                                # CRITICAL: Verify we're still under position cap
+                                if len(current_positions) >= max_positions:
+                                    logger.warning(f"   ⚠️  Position cap ({max_positions}) reached - STOP NEW ENTRIES")
+                                    break
+                                
+                                logger.info(f"   🎯 BUY SIGNAL: {symbol} - size=${position_size:.2f} - {analysis.get('reason', '')}")
                                 success = self.apex.execute_action(analysis, symbol)
                                 if success:
                                     logger.info(f"   ✅ Position opened successfully")
