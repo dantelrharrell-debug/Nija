@@ -1126,8 +1126,10 @@ class BaseBroker(ABC):
                     try:
                         current_price = self.get_current_price(symbol)
                         position_usd_value = requested_qty * current_price
-                    except Exception:
-                        position_usd_value = 100  # Assume large if we can't get price (safer)
+                    except Exception as price_err:
+                        # If we can't get price, assume it's a larger position (safer - uses percentage margin)
+                        logger.warning(f"⚠️ Could not get price for {symbol}: {price_err}")
+                        position_usd_value = 100  # Default to large position logic
                     
                     if position_usd_value < 10.0:
                         # For small positions, use tiny epsilon only (not percentage)
@@ -1172,7 +1174,7 @@ class BaseBroker(ABC):
                     if base_size_rounded <= 0 or base_size_rounded < base_increment:
                         logger.error(f"   ❌ Position too small to sell with current precision rules")
                         logger.error(f"   Symbol: {symbol}, Base: {base_currency}")
-                        logger.error(f"   Available: {available_base if 'available_base' in locals() else 'unknown'}")
+                        logger.error(f"   Available: {available_base:.8f}" if skip_preflight else f"   Available: (preflight skipped)")
                         logger.error(f"   Requested: {requested_qty}")
                         logger.error(f"   Increment: {base_increment}, Precision: {precision}")
                         logger.error(f"   Rounded: {base_size_rounded}")

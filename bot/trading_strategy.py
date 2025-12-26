@@ -384,8 +384,9 @@ class TradingStrategy:
                             'quantity': quantity,
                             'reason': f'Over position cap (${value:.2f})'
                         })
-                    except Exception:
+                    except Exception as price_err:
                         # Still add even if price fetch fails
+                        logger.warning(f"   ⚠️ Could not get price for {symbol}: {price_err}")
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,

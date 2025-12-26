@@ -93,8 +93,11 @@ def main():
     
     # Test sell order for one small position
     if positions_under_1_dollar:
-        logger.info("\n🧪 TESTING SELL ORDER (DRY RUN):")
+        logger.info("\n🧪 TESTING SELL ORDER VALIDATION (NO ACTUAL TRADE):")
         logger.info("=" * 80)
+        logger.info("⚠️  NOTE: This will call the API but NOT execute a real trade")
+        logger.info("⚠️  To actually sell positions, run: python emergency_liquidate_all.py")
+        logger.info("")
         test_symbol, test_qty, test_value = positions_under_1_dollar[0]
         logger.info(f"Test position: {test_symbol}")
         logger.info(f"Quantity: {test_qty}")
@@ -102,7 +105,7 @@ def main():
         logger.info("")
         
         # Check if we can sell
-        logger.info("Attempting to place sell order...")
+        logger.info("Validating sell order parameters...")
         try:
             result = broker.place_market_order(
                 symbol=test_symbol,
