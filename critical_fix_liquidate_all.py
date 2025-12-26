@@ -115,7 +115,8 @@ def apply_critical_fix():
                     result = broker.place_market_order(
                         symbol=symbol,
                         side='sell',
-                        size=balance
+                        quantity=balance,
+                        size_type='base'
                     )
                     
                     if result:

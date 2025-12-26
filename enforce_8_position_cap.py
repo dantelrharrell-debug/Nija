@@ -101,7 +101,8 @@ def enforce_position_cap():
                 result = broker.place_market_order(
                     symbol=symbol,
                     side='sell',
-                    size=balance
+                    quantity=balance,
+                    size_type='base'
                 )
                 
                 if result and result.get('status') == 'filled':

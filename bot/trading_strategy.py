@@ -361,7 +361,8 @@ class TradingStrategy:
                         result = self.broker.place_market_order(
                             symbol=symbol,
                             side='sell',
-                            size=quantity
+                            quantity=quantity,
+                            size_type='base'
                         )
                         if result and result.get('status') not in ['error', 'unfilled']:
                             logger.info(f"  ✅ {symbol} SOLD successfully!")
