@@ -1121,13 +1121,29 @@ class BaseBroker(ABC):
                     # Coinbase typically charges 0.5-1% in trading fees, plus potential precision rounding
                     requested_qty = float(quantity)  # Already adjusted to available if needed
                     
-                    # Use 0.5% margin (more conservative than 2% from pre-flight)
-                    safety_margin = max(requested_qty * 0.005, 0.00000001)  # 0.5% or minimum epsilon
+                    # CRITICAL FIX: For small positions (< $10 value), use minimal safety margin
+                    # The 0.5% margin was causing tiny positions to round to 0 after subtraction
+                    try:
+                        current_price = self.get_current_price(symbol)
+                        position_usd_value = requested_qty * current_price
+                    except Exception as price_err:
+                        # If we can't get price, assume it's a larger position (safer - uses percentage margin)
+                        logger.warning(f"⚠️ Could not get price for {symbol}: {price_err}")
+                        position_usd_value = 100  # Default to large position logic
+                    
+                    if position_usd_value < 10.0:
+                        # For small positions, use tiny epsilon only (not percentage)
+                        # These positions are too small for fees to matter much
+                        safety_margin = 1e-8  # Minimal epsilon
+                        logger.info(f"   Small position (${position_usd_value:.2f}) - using minimal safety margin")
+                    else:
+                        # For larger positions, use 0.5% margin
+                        safety_margin = max(requested_qty * 0.005, 1e-8)
                     
                     # Subtract safety margin to leave room for fees and rounding
                     trade_qty = max(0.0, requested_qty - safety_margin)
                     
-                    logger.info(f"   Safety margin: {safety_margin:.8f} {base_currency} (0.5%)")
+                    logger.info(f"   Safety margin: {safety_margin:.8f} {base_currency}")
                     logger.info(f"   Final trade qty: {trade_qty:.8f} {base_currency}")
 
                     # Quantize size DOWN to allowed increment using floor division
@@ -1141,12 +1157,33 @@ class BaseBroker(ABC):
                     # Round to the correct decimal places to avoid floating point artifacts
                     base_size_rounded = round(base_size_rounded, precision)
                     
-                    logger.info(f"   Derived base_increment={base_increment} precision={precision} → rounded={base_size_rounded}")
+                    # CRITICAL FIX: If rounding resulted in 0 or too small, try selling FULL available balance
+                    # This happens with very small positions where safety margin + rounding = 0
                     if base_size_rounded <= 0 or base_size_rounded < base_increment:
+                        logger.warning(f"   ⚠️ Rounded size too small ({base_size_rounded}), attempting to sell FULL balance")
+                        # Try using the full requested quantity without safety margin
+                        num_increments = math.floor(requested_qty / base_increment)
+                        base_size_rounded = num_increments * base_increment
+                        base_size_rounded = round(base_size_rounded, precision)
+                        logger.info(f"   Retry with full balance: {base_size_rounded} {base_currency}")
+                    
+                    logger.info(f"   Derived base_increment={base_increment} precision={precision} → rounded={base_size_rounded}")
+                    
+                    # FINAL CHECK: If still too small, log detailed error and try anyway
+                    # Coinbase may accept it or provide better error message
+                    if base_size_rounded <= 0 or base_size_rounded < base_increment:
+                        logger.error(f"   ❌ Position too small to sell with current precision rules")
+                        logger.error(f"   Symbol: {symbol}, Base: {base_currency}")
+                        logger.error(f"   Available: {available_base:.8f}" if skip_preflight else f"   Available: (preflight skipped)")
+                        logger.error(f"   Requested: {requested_qty}")
+                        logger.error(f"   Increment: {base_increment}, Precision: {precision}")
+                        logger.error(f"   Rounded: {base_size_rounded}")
+                        logger.error(f"   ⚠️ This position cannot be sold via API and may need manual intervention")
+                        
                         return {
                             "status": "unfilled",
                             "error": "INVALID_SIZE",
-                            "message": f"Rounded base size for {symbol} ({base_size_rounded}) is below minimum increment ({base_increment})",
+                            "message": f"Position too small: {symbol} rounded to {base_size_rounded} (min: {base_increment}). Manual sell may be required.",
                             "partial_fill": False,
                             "filled_pct": 0.0
                         }
