@@ -233,6 +233,13 @@ class TradingStrategy:
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
             
+            # CRITICAL: If over position cap, prioritize selling weakest positions immediately
+            # This ensures we get back under cap quickly to avoid further bleeding
+            positions_over_cap = len(current_positions) - 8
+            if positions_over_cap > 0:
+                logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/8 positions ({positions_over_cap} excess)")
+                logger.warning(f"   Will prioritize selling {positions_over_cap} weakest positions first")
+            
             # CRITICAL FIX: Identify ALL positions that need to exit first
             # Then sell them ALL concurrently, not one at a time
             positions_to_exit = []
@@ -351,6 +358,39 @@ class TradingStrategy:
                     
                 except Exception as e:
                     logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
+            
+            # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
+            if len(current_positions) > 8 and len(positions_to_exit) < (len(current_positions) - 8):
+                logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - 8 - len(positions_to_exit)} more positions")
+                
+                # Identify positions not yet marked for exit
+                symbols_to_exit = {p['symbol'] for p in positions_to_exit}
+                remaining_positions = [p for p in current_positions if p.get('symbol') not in symbols_to_exit]
+                
+                # Sort by USD value (smallest first - easiest to exit and lowest capital impact)
+                remaining_sorted = sorted(remaining_positions, key=lambda p: p.get('quantity', 0) * self.broker.get_current_price(p.get('symbol', '')))
+                
+                # Force-sell smallest positions to get under cap
+                positions_needed = (len(current_positions) - 8) - len(positions_to_exit)
+                for pos in remaining_sorted[:positions_needed]:
+                    symbol = pos.get('symbol')
+                    quantity = pos.get('quantity', 0)
+                    try:
+                        price = self.broker.get_current_price(symbol)
+                        value = quantity * price
+                        logger.warning(f"   🔴 FORCE-EXIT to meet cap: {symbol} (${value:.2f})")
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': f'Over position cap (${value:.2f})'
+                        })
+                    except Exception:
+                        # Still add even if price fetch fails
+                        positions_to_exit.append({
+                            'symbol': symbol,
+                            'quantity': quantity,
+                            'reason': 'Over position cap'
+                        })
             
             # CRITICAL FIX: Now sell ALL positions concurrently (not one at a time)
             if positions_to_exit:
