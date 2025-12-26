@@ -7,6 +7,7 @@ how the enforcer will behave when it runs with real positions.
 """
 import sys
 import os
+# Add bot directory to path - test file is in root, bot code is in bot/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
 # Mock broker for testing without real API calls
@@ -115,7 +116,8 @@ def main():
     # Verify all orders have correct parameters
     all_correct = True
     for order in mock_broker.orders_placed:
-        if 'quantity' not in str(order) or order['size_type'] != 'base':
+        # Check that 'quantity' key exists and size_type is 'base'
+        if 'quantity' not in order.keys() or order['size_type'] != 'base':
             all_correct = False
             break
     
