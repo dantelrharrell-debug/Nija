@@ -216,7 +216,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 4  # STRICT: Minimum 4/5 conditions for profitable entries
+        signal = score >= 5  # CRITICAL FIX #6: STRICT profitability mode - require ALL 5 conditions
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
@@ -294,7 +294,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # HIGH CONVICTION: Minimum 3/5 conditions (Profitability Mode v7.2)
+        signal = score >= 4  # CRITICAL FIX #7: Maintain 4/5 for shorts (harder to detect, so slightly looser)
         
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         
@@ -559,6 +559,14 @@ class NIJAApexStrategyV71:
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
                         }
                     
+                    # CRITICAL FIX #8: Enforce minimum position size before calculating stops
+                    MIN_POSITION_SIZE_USD = 5.0
+                    if position_size < MIN_POSITION_SIZE_USD:
+                        return {
+                            'action': 'hold',
+                            'reason': f'Position size ${position_size:.2f} below minimum ${MIN_POSITION_SIZE_USD:.2f} (fee protection)'
+                        }
+                    
                     # Calculate stop loss and take profit
                     swing_low = self.risk_manager.find_swing_low(df, lookback=10)
                     atr = indicators['atr'].iloc[-1]
@@ -568,6 +576,16 @@ class NIJAApexStrategyV71:
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
                         current_price, stop_loss, 'long'
                     )
+                    
+                    # CRITICAL FIX #9: Validate profit target is worth the trade
+                    # Need at least 2% potential profit to justify Coinbase fees (0.5-0.6% per side = 1.2% round trip)
+                    MIN_PROFIT_TARGET_PCT = 0.02  # 2%
+                    potential_profit_pct = (tp_levels['tp1'] - current_price) / current_price
+                    if potential_profit_pct < MIN_PROFIT_TARGET_PCT:
+                        return {
+                            'action': 'hold',
+                            'reason': f'Profit target too small ({potential_profit_pct*100:.1f}% < {MIN_PROFIT_TARGET_PCT*100:.0f}% minimum)'
+                        }
                     
                     return {
                         'action': 'enter_long',
@@ -594,6 +612,14 @@ class NIJAApexStrategyV71:
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
                         }
                     
+                    # CRITICAL FIX #10: Enforce minimum position size for shorts
+                    MIN_POSITION_SIZE_USD = 5.0
+                    if position_size < MIN_POSITION_SIZE_USD:
+                        return {
+                            'action': 'hold',
+                            'reason': f'Position size ${position_size:.2f} below minimum ${MIN_POSITION_SIZE_USD:.2f} (fee protection)'
+                        }
+                    
                     # Calculate stop loss and take profit
                     swing_high = self.risk_manager.find_swing_high(df, lookback=10)
                     atr = indicators['atr'].iloc[-1]
@@ -603,6 +629,15 @@ class NIJAApexStrategyV71:
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
                         current_price, stop_loss, 'short'
                     )
+                    
+                    # CRITICAL FIX #11: Validate profit target for shorts
+                    MIN_PROFIT_TARGET_PCT = 0.02  # 2%
+                    potential_profit_pct = (current_price - tp_levels['tp1']) / current_price
+                    if potential_profit_pct < MIN_PROFIT_TARGET_PCT:
+                        return {
+                            'action': 'hold',
+                            'reason': f'Profit target too small ({potential_profit_pct*100:.1f}% < {MIN_PROFIT_TARGET_PCT*100:.0f}% minimum)'
+                        }
                     
                     return {
                         'action': 'enter_short',

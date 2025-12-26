@@ -203,6 +203,28 @@ class TradingStrategy:
             
             # CRITICAL: Check if new entries are blocked
             current_positions = self.broker.get_positions() if self.broker else []
+            
+            # CRITICAL FIX #5: Sync position tracker with actual broker positions
+            # This prevents bot from re-buying after manual sells
+            if self.apex and hasattr(self.apex, 'execution_engine'):
+                tracked_positions = self.apex.execution_engine.get_all_positions()
+                tracked_symbols = set(tracked_positions.keys())
+                actual_symbols = set(p.get('symbol') for p in current_positions if p.get('symbol'))
+                
+                # Remove positions from tracker that no longer exist in broker
+                for symbol in tracked_symbols:
+                    if symbol not in actual_symbols:
+                        logger.warning(f"🔄 SYNC: Position {symbol} no longer in broker - removing from tracker")
+                        self.apex.execution_engine.close_position(symbol)
+                
+                # Add positions to tracker that exist in broker but not tracked
+                for pos in current_positions:
+                    symbol = pos.get('symbol')
+                    if symbol and symbol not in tracked_symbols:
+                        logger.info(f"🔄 SYNC: Position {symbol} found in broker but not tracked - importing")
+                        # Note: We don't have entry price/stop loss for manual positions
+                        # These will be managed using current price as reference
+            
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
             
@@ -223,6 +245,17 @@ class TradingStrategy:
             balance_data = self.broker.get_account_balance()
             account_balance = balance_data.get('trading_balance', 0.0)
             logger.info(f"💰 Trading balance: ${account_balance:.2f}")
+            
+            # CRITICAL FIX #1: Enforce base reserve - never trade last $25-50
+            MIN_BASE_RESERVE = float(os.getenv('MIN_BASE_RESERVE', '25.0'))
+            if account_balance < MIN_BASE_RESERVE:
+                logger.error("="*80)
+                logger.error(f"🛑 TRADING HALTED: Balance (${account_balance:.2f}) below minimum reserve (${MIN_BASE_RESERVE:.2f})")
+                logger.error(f"   Positions would be too small to profit after fees")
+                logger.error(f"   Bot will pause entry logic and wait for deposit or position exits")
+                logger.error("="*80)
+                # Still allow exits, just no new entries
+                entries_blocked = True
             
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
@@ -335,6 +368,36 @@ class TradingStrategy:
                 logger.info(f"✅ Concurrent exit complete: {len(positions_to_exit)} positions processed")
                 logger.info(f"")
             
+            # CRITICAL FIX #2: Track consecutive trades to enforce 8-trade limit
+            consecutive_trades_file = os.path.join(os.path.dirname(__file__), '..', 'consecutive_trades.txt')
+            consecutive_count = 0
+            last_trade_date = None
+            
+            try:
+                if os.path.exists(consecutive_trades_file):
+                    with open(consecutive_trades_file, 'r') as f:
+                        data = f.read().strip().split(',')
+                        if len(data) >= 2:
+                            consecutive_count = int(data[0])
+                            last_trade_date = data[1]
+                            
+                            # Reset counter if it's a new day
+                            from datetime import datetime
+                            today = datetime.now().strftime('%Y-%m-%d')
+                            if last_trade_date != today:
+                                logger.info(f"New day detected - resetting consecutive trade counter")
+                                consecutive_count = 0
+                                last_trade_date = today
+            except Exception as e:
+                logger.warning(f"Could not read consecutive trades file: {e}")
+            
+            # Check if we've hit the 8 consecutive trade limit
+            MAX_CONSECUTIVE_TRADES = 8
+            if consecutive_count >= MAX_CONSECUTIVE_TRADES:
+                logger.warning(f"🛑 CONSECUTIVE TRADE LIMIT: {consecutive_count}/{MAX_CONSECUTIVE_TRADES} trades completed")
+                logger.warning(f"   Waiting for cooldown period before new entries")
+                entries_blocked = True
+            
             # STEP 2: Look for new entry opportunities (only if entries allowed)
             if not entries_blocked and len(current_positions) < 8 and account_balance >= 25.0:
                 logger.info("🔍 Scanning for new opportunities...")
@@ -370,12 +433,33 @@ class TradingStrategy:
                             analysis = self.apex.analyze_market(df, symbol, account_balance)
                             action = analysis.get('action', 'hold')
                             
+                            # CRITICAL FIX #3: Enforce minimum position size ($5 to beat fees)
+                            MIN_POSITION_SIZE_USD = 5.0
+                            position_size = analysis.get('position_size', 0)
+                            
+                            if position_size < MIN_POSITION_SIZE_USD:
+                                logger.warning(f"   ⚠️ Position size ${position_size:.2f} below minimum ${MIN_POSITION_SIZE_USD:.2f}")
+                                logger.warning(f"   Skipping trade - too small to profit after Coinbase fees (0.5-0.6%)")
+                                continue
+                            
                             # Execute buy actions
                             if action in ['enter_long', 'enter_short']:
                                 logger.info(f"   🎯 BUY SIGNAL: {symbol} - {analysis.get('reason', '')}")
                                 success = self.apex.execute_action(analysis, symbol)
                                 if success:
                                     logger.info(f"   ✅ Position opened successfully")
+                                    
+                                    # CRITICAL FIX #4: Increment consecutive trade counter
+                                    try:
+                                        consecutive_count += 1
+                                        from datetime import datetime
+                                        today = datetime.now().strftime('%Y-%m-%d')
+                                        with open(consecutive_trades_file, 'w') as f:
+                                            f.write(f"{consecutive_count},{today}")
+                                        logger.info(f"   📊 Consecutive trades: {consecutive_count}/{MAX_CONSECUTIVE_TRADES}")
+                                    except Exception as e:
+                                        logger.warning(f"Could not update consecutive trades: {e}")
+                                    
                                     break  # Only open one position per cycle
                                 else:
                                     logger.error(f"   ❌ Failed to open position")
