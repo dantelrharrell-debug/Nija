@@ -771,6 +771,24 @@ python test_raw_api.py
 python scripts/print_accounts.py
 ```
 
+### Position Management Tools
+
+```bash
+# Check current positions and identify dust
+python check_dust_positions.py
+
+# Close dust positions (dry run first)
+python close_dust_positions.py --dry-run
+
+# Close dust positions (< $1.00 by default)
+python close_dust_positions.py
+
+# Close positions with custom threshold
+python close_dust_positions.py --threshold 5.00
+```
+
+**Dust Position Cleanup**: The bot now uses a $1.00 dust threshold to filter out very small positions from counting against the 8-position limit. Use the cleanup script to sell positions below this threshold and free up slots for winning trades. See [DUST_REMOVAL_SUMMARY.md](DUST_REMOVAL_SUMMARY.md) for details.
+
 ### Strategy Backtests
 
 ```bash
