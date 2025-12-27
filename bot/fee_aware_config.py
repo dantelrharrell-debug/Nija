@@ -93,17 +93,17 @@ MAX_TRADES_PER_DAY = 30           # Maximum 30 trades/day (vs 100+ before)
 # ============================================================================
 # SIGNAL QUALITY FILTERS (Only high-probability trades)
 # ============================================================================
-# With small capital, can't afford mediocre trades
-MIN_SIGNAL_STRENGTH = 4           # Require 4/5 strength (vs 3/5 before)
-MIN_ADX_SMALL_BALANCE = 25        # Require stronger trends for small accounts
-MIN_ADX_NORMAL = 20               # Normal ADX threshold
+# PROFITABILITY FIX: Balanced approach - 3/5 allows good setups while filtering weak ones
+MIN_SIGNAL_STRENGTH = 3           # Require 3/5 strength (balanced for crypto volatility)
+MIN_ADX_SMALL_BALANCE = 20        # Industry standard for crypto trending
+MIN_ADX_NORMAL = 20               # Same ADX threshold for consistency
 
 # RSI tighter ranges for better entries
 RSI_OVERSOLD_BUY = 35             # Buy when RSI > 35 (vs 30 before)
 RSI_OVERBOUGHT_SELL = 65          # Sell when RSI < 65 (vs 70 before)
 
-# Volume must be significant
-MIN_VOLUME_MULTIPLIER = 1.5       # 1.5x average volume (vs 0.3x before)
+# Volume must be significant (balanced - not too strict)
+MIN_VOLUME_MULTIPLIER = 0.5       # 50% of average volume (reasonable liquidity)
 
 # ============================================================================
 # ORDER TYPE PREFERENCES (Minimize fees)
