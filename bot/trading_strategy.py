@@ -428,17 +428,24 @@ class TradingStrategy:
                             self.unsellable_positions.discard(symbol)
                         else:
                             error_msg = result.get('error', result.get('message', 'Unknown')) if result else 'No response'
+                            error_code = result.get('error') if result else None
                             logger.error(f"  ❌ {symbol} sell failed: {error_msg}")
                             logger.error(f"     Full result: {result}")
                             # If it's a dust/too-small position, mark it as unsellable to prevent infinite retries
-                            if 'INVALID_SIZE' in str(error_msg) or 'too small' in str(error_msg).lower():
+                            # Check both error code and message for robustness
+                            is_size_error = (
+                                error_code == 'INVALID_SIZE' or 
+                                'INVALID_SIZE' in str(error_msg) or 
+                                'too small' in str(error_msg).lower() or
+                                'minimum' in str(error_msg).lower()
+                            )
+                            if is_size_error:
                                 logger.warning(f"     💡 Position {symbol} is too small to sell via API - marking as dust")
                                 logger.warning(f"     💡 This position will be skipped in future cycles to prevent infinite loops")
                                 self.unsellable_positions.add(symbol)
                     except Exception as sell_err:
                         logger.error(f"  ❌ {symbol} exception during sell: {sell_err}")
                         logger.error(f"     Error type: {type(sell_err).__name__}")
-                        import traceback
                         logger.error(f"     Traceback: {traceback.format_exc()}")
                 
                 logger.info(f"="*80)
