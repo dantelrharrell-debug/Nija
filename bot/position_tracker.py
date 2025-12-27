@@ -161,7 +161,6 @@ class PositionTracker:
                         logger.info(f"Removed position {symbol} (partial exit cleared position)")
                     else:
                         # Update remaining quantity and proportional size
-                        remaining_qty = position['quantity'] - exit_quantity
                         # Preserve proportional cost basis
                         remaining_size = position['size_usd'] * (remaining_qty / position['quantity'])
                         position['quantity'] = remaining_qty
