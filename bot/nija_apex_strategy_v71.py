@@ -56,10 +56,10 @@ class NIJAApexStrategyV71:
         )
         self.execution_engine = ExecutionEngine(broker_client)
         
-        # Strategy parameters - PROFITABILITY FIX: Tightened for quality entries
-        self.min_adx = self.config.get('min_adx', 30)  # Raised from 25 - require stronger trends for better reliability
-        self.volume_threshold = self.config.get('volume_threshold', 0.8)  # Raised from 0.5 - require higher volume for better liquidity
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.3)  # Raised from 0.2
+        # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
+        self.min_adx = self.config.get('min_adx', 20)  # Industry standard for crypto - strong enough to avoid chop
+        self.volume_threshold = self.config.get('volume_threshold', 0.5)  # 50% of 5-candle avg - reasonable liquidity
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.25)  # 25% minimum - avoid dead markets
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
@@ -132,16 +132,23 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= self.volume_threshold
         }
         
-        # PROFITABILITY FIX: Require 4 of 5 conditions (quality over quantity)
-        # This prevents buying weak/choppy markets that lose money while enabling more opportunities
+        # PROFITABILITY FIX: Require 3 of 5 conditions (balanced approach)
+        # 3/5 allows good opportunities while filtering weak markets
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
         
-        if uptrend_score >= 4:  # PROFITABILITY FIX: 4/5 filters required (stricter than 3, more flexible than 5)
-            return True, 'uptrend', f'Uptrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 4:  # PROFITABILITY FIX: 4/5 filters required (stricter than 3, more flexible than 5)
-            return True, 'downtrend', f'Downtrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
+        # Log details for debugging
+        logger.debug(f"Market filter - Uptrend: {uptrend_score}/5, Downtrend: {downtrend_score}/5")
+        logger.debug(f"  Price vs VWAP: {current_price:.4f} vs {vwap:.4f}")
+        logger.debug(f"  EMA sequence: {ema9:.4f} vs {ema21:.4f} vs {ema50:.4f}")
+        logger.debug(f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, Vol ratio: {volume_ratio:.2f}")
+        
+        if uptrend_score >= 3:  # PROFITABILITY FIX: 3/5 filters for better trade opportunities
+            return True, 'uptrend', f'Uptrend confirmed ({uptrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
+        elif downtrend_score >= 3:  # PROFITABILITY FIX: 3/5 filters for better trade opportunities
+            return True, 'downtrend', f'Downtrend confirmed ({downtrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
+            logger.debug(f"  → Rejected: Mixed signals")
             return False, 'none', f'Mixed signals (Up:{uptrend_score}/5, Down:{downtrend_score}/5)'
     
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
@@ -175,13 +182,13 @@ class NIJAApexStrategyV71:
         
         conditions = {}
         
-        # 1. Pullback to EMA21 or VWAP (PROFITABILITY FIX: tighter 0.3%)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.003
-        near_vwap = abs(current_price - vwap) / vwap < 0.003
+        # 1. Pullback to EMA21 or VWAP (PROFITABILITY FIX: 1.0% tolerance for crypto volatility)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
+        near_vwap = abs(current_price - vwap) / vwap < 0.01
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bullish pullback (PROFITABILITY FIX: tighter range 35-65)
-        conditions['rsi_pullback'] = 35 < rsi < 65 and rsi > rsi_prev
+        # 2. RSI bullish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
+        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi > rsi_prev
         
         # 3. Bullish candlestick patterns
         body = current['close'] - current['open']
@@ -216,9 +223,12 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 4  # PROFITABILITY FIX: Require 4/5 conditions for higher quality trades
+        signal = score >= 3  # PROFITABILITY FIX: 3/5 conditions allows good setups while filtering weak ones
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
+        
+        if score > 0:
+            logger.debug(f"  Long entry check: {reason}")
         
         return signal, score, reason
     
@@ -253,13 +263,13 @@ class NIJAApexStrategyV71:
         
         conditions = {}
         
-        # 1. Pullback to EMA21 or VWAP
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.005
-        near_vwap = abs(current_price - vwap) / vwap < 0.005
+        # 1. Pullback to EMA21 or VWAP (PROFITABILITY FIX: 1.0% tolerance for crypto volatility)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
+        near_vwap = abs(current_price - vwap) / vwap < 0.01
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bearish pullback (PROFITABILITY FIX: tighter range 35-65)
-        conditions['rsi_pullback'] = 35 < rsi < 65 and rsi < rsi_prev
+        # 2. RSI bearish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
+        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi < rsi_prev
         
         # 3. Bearish candlestick patterns
         body = current['close'] - current['open']
@@ -294,9 +304,12 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 4  # PROFITABILITY FIX: Require 4/5 conditions for higher quality trades
+        signal = score >= 3  # PROFITABILITY FIX: 3/5 conditions allows good setups while filtering weak ones
         
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
+        
+        if score > 0:
+            logger.debug(f"  Short entry check: {reason}")
         
         return signal, score, reason
     
@@ -475,6 +488,7 @@ class NIJAApexStrategyV71:
         try:
             # Require minimum data
             if len(df) < 100:
+                logger.debug(f"   {symbol}: Insufficient data ({len(df)} candles)")
                 return {
                     'action': 'hold',
                     'reason': f'Insufficient data ({len(df)} candles, need 100+)'
@@ -487,6 +501,7 @@ class NIJAApexStrategyV71:
             current_time = datetime.now()
             filters_ok, filter_reason = self.check_smart_filters(df, current_time)
             if not filters_ok:
+                logger.debug(f"   {symbol}: Smart filter blocked - {filter_reason}")
                 return {
                     'action': 'hold',
                     'reason': filter_reason
@@ -495,6 +510,7 @@ class NIJAApexStrategyV71:
             # Check market filter
             allow_trade, trend, market_reason = self.check_market_filter(df, indicators)
             if not allow_trade:
+                logger.debug(f"   {symbol}: Market filter blocked - {market_reason}")
                 return {
                     'action': 'hold',
                     'reason': market_reason
