@@ -539,11 +539,25 @@ class TradingStrategy:
                     scan_limit = min(MARKET_SCAN_LIMIT, len(all_products))
                     logger.info(f"   Scanning {scan_limit} markets...")
                     
+                    # Track filtering reasons for debugging
+                    filter_stats = {
+                        'total': 0,
+                        'insufficient_data': 0,
+                        'smart_filter': 0,
+                        'market_filter': 0,
+                        'no_entry_signal': 0,
+                        'position_too_small': 0,
+                        'signals_found': 0
+                    }
+                    
                     for i, symbol in enumerate(all_products[:scan_limit]):
+                        filter_stats['total'] += 1
                         try:
                             # Get candles
                             candles = self.broker.get_candles(symbol, '5m', 100)
                             if not candles or len(candles) < 100:
+                                filter_stats['insufficient_data'] += 1
+                                logger.debug(f"   {symbol}: Insufficient candles ({len(candles) if candles else 0}/100)")
                                 continue
                             
                             # Convert to DataFrame
@@ -557,13 +571,31 @@ class TradingStrategy:
                             # Analyze for entry
                             analysis = self.apex.analyze_market(df, symbol, account_balance)
                             action = analysis.get('action', 'hold')
+                            reason = analysis.get('reason', '')
+                            
+                            # Track why we didn't trade
+                            if action == 'hold':
+                                if 'Insufficient data' in reason or 'candles' in reason:
+                                    filter_stats['insufficient_data'] += 1
+                                elif 'smart filter' in reason.lower() or 'volume too low' in reason.lower() or 'candle' in reason.lower():
+                                    filter_stats['smart_filter'] += 1
+                                    logger.debug(f"   {symbol}: Smart filter - {reason}")
+                                elif 'ADX' in reason or 'Volume' in reason or 'Mixed signals' in reason:
+                                    filter_stats['market_filter'] += 1
+                                    logger.debug(f"   {symbol}: Market filter - {reason}")
+                                else:
+                                    filter_stats['no_entry_signal'] += 1
+                                    logger.debug(f"   {symbol}: No signal - {reason}")
+                                continue
                             
                             # Execute buy actions
                             if action in ['enter_long', 'enter_short']:
+                                filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 
                                 # CRITICAL: Skip positions under $2
                                 if position_size < min_position_size:
+                                    filter_stats['position_too_small'] += 1
                                     logger.warning(f"   ⚠️  {symbol} position size ${position_size:.2f} < ${min_position_size} minimum - SKIPPING")
                                     continue
                                 
@@ -583,6 +615,15 @@ class TradingStrategy:
                         except Exception as e:
                             logger.debug(f"   Error scanning {symbol}: {e}")
                             continue
+                    
+                    # Log filtering summary
+                    logger.info(f"   📊 Scan summary: {filter_stats['total']} markets scanned")
+                    logger.info(f"      💡 Signals found: {filter_stats['signals_found']}")
+                    logger.info(f"      📉 No data: {filter_stats['insufficient_data']}")
+                    logger.info(f"      🔇 Smart filter: {filter_stats['smart_filter']}")
+                    logger.info(f"      📊 Market filter: {filter_stats['market_filter']}")
+                    logger.info(f"      🚫 No entry signal: {filter_stats['no_entry_signal']}")
+                    logger.info(f"      💵 Position too small: {filter_stats['position_too_small']}")
                 
                 except Exception as e:
                     logger.error(f"Error during market scan: {e}", exc_info=True)
