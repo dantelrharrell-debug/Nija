@@ -205,32 +205,56 @@ class BaseBroker(ABC):
                 try:
                     products_resp = self.client.get_products()
                     
+                    # Debug: Log response type and structure
+                    logging.info(f"   Response type: {type(products_resp).__name__}")
+                    
                     # Handle both object and dict responses
                     if hasattr(products_resp, 'products'):
                         products = products_resp.products
+                        logging.info(f"   Extracted {len(products) if products else 0} products from .products attribute")
                     elif isinstance(products_resp, dict):
                         products = products_resp.get('products', [])
+                        logging.info(f"   Extracted {len(products)} products from dict['products']")
                     else:
                         products = []
+                        logging.warning(f"⚠️  Unexpected response type: {type(products_resp).__name__}")
                     
                     if not products:
-                        logging.warning("⚠️  No products returned from API")
+                        logging.warning("⚠️  No products returned from API - response may be empty or malformed")
+                        # Debug: Show what attributes/keys are available
+                        if hasattr(products_resp, '__dict__'):
+                            attrs = [k for k in dir(products_resp) if not k.startswith('_')][:10]
+                            logging.info(f"   Available attributes: {attrs}")
+                        elif isinstance(products_resp, dict):
+                            logging.info(f"   Available keys: {list(products_resp.keys())}")
                         return []
                     
                     # Extract product IDs - handle various response formats
-                    for product in products:
+                    for i, product in enumerate(products):
                         product_id = None
                         
-                        # Try object attribute access
-                        if hasattr(product, 'id'):
+                        # Debug first product to understand structure
+                        if i == 0:
+                            if hasattr(product, '__dict__'):
+                                attrs = [k for k in dir(product) if not k.startswith('_')][:10]
+                                logging.info(f"   First product attributes: {attrs}")
+                            elif isinstance(product, dict):
+                                logging.info(f"   First product keys: {list(product.keys())[:10]}")
+                        
+                        # Try object attribute access (Coinbase uses 'product_id', not 'id')
+                        if hasattr(product, 'product_id'):
+                            product_id = getattr(product, 'product_id', None)
+                        elif hasattr(product, 'id'):
                             product_id = getattr(product, 'id', None)
                         # Try dict access
                         elif isinstance(product, dict):
-                            product_id = product.get('id') or product.get('product_id')
+                            product_id = product.get('product_id') or product.get('id')
                         
                         # Filter: Only include USD trading pairs (exclude stablecoins on themselves)
                         if product_id and '-USD' in product_id:
                             all_products.append(product_id)
+                    
+                    logging.info(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
                     
                     # Remove duplicates and sort
                     all_products = sorted(list(set(all_products)))
