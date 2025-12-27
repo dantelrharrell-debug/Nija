@@ -22,14 +22,16 @@ RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains)
 RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses)
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
-# Profit target thresholds (stepped exits) - FEE-AWARE
+# Profit target thresholds (stepped exits) - FEE-AWARE + AGGRESSIVE
 # Updated Dec 27, 2025 to ensure NET profitability after Coinbase fees (~1.4%)
-# Old targets (0.5%, 1.0%) resulted in NET LOSSES after fees
+# ENHANCED: Added more granular targets to lock in smaller gains faster
+# Strategy: Exit portions at multiple levels to reduce risk and free capital
 PROFIT_TARGETS = [
-    (4.0, "Profit target +4.0% (Net ~2.6% after fees)"),
-    (3.0, "Profit target +3.0% (Net ~1.6% after fees)"),
-    (2.5, "Profit target +2.5% (Net ~1.1% after fees)"),
-    (2.0, "Profit target +2.0% (Net ~0.6% after fees)"),
+    (5.0, "Profit target +5.0% (Net ~3.6% after fees) - EXCELLENT"),
+    (4.0, "Profit target +4.0% (Net ~2.6% after fees) - GREAT"),
+    (3.0, "Profit target +3.0% (Net ~1.6% after fees) - GOOD"),
+    (2.5, "Profit target +2.5% (Net ~1.1% after fees) - SOLID"),
+    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - PROFITABLE"),
 ]
 
 # Stop loss thresholds
@@ -319,10 +321,12 @@ class TradingStrategy:
                     
                     # PROFIT-BASED EXIT LOGIC (NEW!)
                     # Check if we have entry price tracked for this position
+                    entry_price_available = False
                     if self.broker and hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
                         try:
                             pnl_data = self.broker.position_tracker.calculate_pnl(symbol, current_price)
                             if pnl_data:
+                                entry_price_available = True
                                 pnl_percent = pnl_data['pnl_percent']
                                 pnl_dollars = pnl_data['pnl_dollars']
                                 entry_price = pnl_data['entry_price']
@@ -353,6 +357,9 @@ class TradingStrategy:
                                     elif pnl_percent <= STOP_LOSS_WARNING:
                                         logger.warning(f"   ⚠️ Approaching stop loss: {symbol} at {pnl_percent:.2f}%")
                                         # Don't exit yet, but log it
+                                    else:
+                                        # Position has entry price but not at any exit threshold
+                                        logger.info(f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)")
                                     continue  # Continue to next position check
                                 
                                 # If we got here via break, skip remaining checks
@@ -360,6 +367,11 @@ class TradingStrategy:
                                 
                         except Exception as pnl_err:
                             logger.debug(f"   Could not calculate P&L for {symbol}: {pnl_err}")
+                    
+                    # Log if no entry price available - this helps debug why positions aren't taking profit
+                    if not entry_price_available:
+                        logger.warning(f"   ⚠️ No entry price tracked for {symbol} - using fallback exit logic")
+                        logger.warning(f"      💡 Run import_current_positions.py to track this position")
                     
                     # Get market data for analysis
                     candles = self.broker.get_candles(symbol, '5m', 100)
@@ -395,26 +407,62 @@ class TradingStrategy:
                         })
                         continue
                     
-                    # CRITICAL FIX: Exit on RSI extremes without requiring entry price
+                    # MOMENTUM-BASED PROFIT TAKING (for positions without entry price)
+                    # When we don't have entry price, use price momentum and trend reversal signals
+                    # This helps lock in gains on strong moves and cut losses on weak positions
+                    
                     rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI
                     
-                    # RSI overbought (>70) or oversold (<30) - exit to lock in gains or cut losses
+                    # ENHANCED: More aggressive profit-taking without entry price
+                    # Exit on RSI extremes OR momentum reversal signals
+                    
+                    # Strong overbought (RSI > 70) - likely near top, take profits
                     if rsi > RSI_OVERBOUGHT_THRESHOLD:
                         logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f})")
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'RSI overbought ({rsi:.1f})'
+                            'reason': f'RSI overbought ({rsi:.1f}) - locking gains'
                         })
                         continue
-                    elif rsi < RSI_OVERSOLD_THRESHOLD:
-                        logger.info(f"   📉 RSI OVERSOLD EXIT: {symbol} (RSI={rsi:.1f}) - prevent further losses")
+                    
+                    # Moderate overbought (RSI > 60) + weak momentum = exit
+                    # This catches positions that are up but losing steam
+                    if rsi > 60:
+                        # Check if price is below short-term EMA (momentum weakening)
+                        ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
+                        if current_price < ema9:
+                            logger.info(f"   📉 MOMENTUM REVERSAL EXIT: {symbol} (RSI={rsi:.1f}, price below EMA9)")
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': f'Momentum reversal (RSI={rsi:.1f}, price<EMA9) - locking gains'
+                            })
+                            continue
+                    
+                    # Oversold (RSI < 30) - prevent further losses
+                    if rsi < RSI_OVERSOLD_THRESHOLD:
+                        logger.info(f"   📉 RSI OVERSOLD EXIT: {symbol} (RSI={rsi:.1f}) - cutting losses")
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'RSI oversold ({rsi:.1f}) - cut losses'
+                            'reason': f'RSI oversold ({rsi:.1f}) - cutting losses'
                         })
                         continue
+                    
+                    # Moderate oversold (RSI < 40) + downtrend = exit
+                    # This catches positions that are down and still falling
+                    if rsi < 40:
+                        # Check if price is in downtrend (below EMA21)
+                        ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
+                        if current_price < ema21:
+                            logger.info(f"   📉 DOWNTREND EXIT: {symbol} (RSI={rsi:.1f}, price below EMA21)")
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': f'Downtrend exit (RSI={rsi:.1f}, price<EMA21) - cutting losses'
+                            })
+                            continue
                     
                     # Check for weak market conditions (exit signal)
                     # This protects capital even without knowing entry price
