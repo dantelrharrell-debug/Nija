@@ -13,7 +13,7 @@ load_dotenv()
 logger = logging.getLogger("nija")
 
 # Configuration constants
-MARKET_SCAN_LIMIT = 20  # Number of markets to scan per cycle (reduced from 732+ to prevent timeouts)
+MARKET_SCAN_LIMIT = 10  # Reduced from 20 to prevent Coinbase rate limiting (429 errors)
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Exit strategy constants (no entry price required)
@@ -615,6 +615,11 @@ class TradingStrategy:
                         except Exception as e:
                             logger.debug(f"   Error scanning {symbol}: {e}")
                             continue
+                        
+                        # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429 errors)
+                        # Coinbase has strict rate limits; spacing out requests prevents blocking
+                        if i < scan_limit - 1:  # Don't delay after last market
+                            time.sleep(0.5)  # 500ms delay between scans = max 2 requests/second
                     
                     # Log filtering summary
                     logger.info(f"   📊 Scan summary: {filter_stats['total']} markets scanned")
@@ -628,7 +633,17 @@ class TradingStrategy:
                 except Exception as e:
                     logger.error(f"Error during market scan: {e}", exc_info=True)
             else:
-                logger.info("   Skipping new entries (blocked or insufficient balance)")
+                # Enhanced diagnostic logging to understand why entries are blocked
+                reasons = []
+                if entries_blocked:
+                    reasons.append("STOP_ALL_ENTRIES.conf exists")
+                if len(current_positions) >= max_positions:
+                    reasons.append(f"Position cap reached ({len(current_positions)}/{max_positions})")
+                if account_balance < 25.0:
+                    reasons.append(f"Balance ${account_balance:.2f} < $25.00 minimum")
+                
+                reason_str = ", ".join(reasons) if reasons else "Unknown reason"
+                logger.info(f"   Skipping new entries: {reason_str}")
             
         except Exception as e:
             # Never raise to keep bot loop alive
