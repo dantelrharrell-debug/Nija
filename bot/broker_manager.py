@@ -1437,6 +1437,32 @@ class BaseBroker(ABC):
             if filled_size:
                 logger.info(f"   Filled crypto amount: {filled_size:.6f}")
             
+            # CRITICAL: Track position for profit-based exits
+            if self.position_tracker:
+                try:
+                    if side.lower() == 'buy':
+                        # Track entry for profit calculation
+                        current_price = self.get_current_price(symbol)
+                        if current_price > 0:
+                            size_usd = quantity if size_type == 'quote' else (filled_size * current_price if filled_size else 0)
+                            self.position_tracker.track_entry(
+                                symbol=symbol,
+                                entry_price=current_price,
+                                quantity=filled_size if filled_size else 0,
+                                size_usd=size_usd,
+                                strategy="APEX_v7.1"
+                            )
+                            logger.info(f"   📊 Position tracked: entry=${current_price:.2f}, size=${size_usd:.2f}")
+                    else:
+                        # Track exit (partial or full sell)
+                        self.position_tracker.track_exit(
+                            symbol=symbol,
+                            exit_quantity=filled_size if filled_size else None
+                        )
+                        logger.info(f"   📊 Position exit tracked")
+                except Exception as track_err:
+                    logger.warning(f"   ⚠️ Position tracking failed: {track_err}")
+            
             return {
                 "status": "filled", 
                 "order": order_dict,
@@ -1733,6 +1759,15 @@ class CoinbaseBroker(BaseBroker):
         self.client = None
         self.portfolio_uuid = None
         self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
+        
+        # Initialize position tracker for profit-based exits
+        try:
+            from position_tracker import PositionTracker
+            self.position_tracker = PositionTracker(storage_file="positions.json")
+            logger.info("✅ Position tracker initialized for profit-based exits")
+        except Exception as e:
+            logger.warning(f"⚠️ Position tracker initialization failed: {e}")
+            self.position_tracker = None
     
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade API"""

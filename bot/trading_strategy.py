@@ -292,6 +292,69 @@ class TradingStrategy:
                         })
                         continue
                     
+                    # PROFIT-BASED EXIT LOGIC (NEW!)
+                    # Check if we have entry price tracked for this position
+                    if self.broker and hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
+                        try:
+                            pnl_data = self.broker.position_tracker.calculate_pnl(symbol, current_price)
+                            if pnl_data:
+                                pnl_percent = pnl_data['pnl_percent']
+                                pnl_dollars = pnl_data['pnl_dollars']
+                                entry_price = pnl_data['entry_price']
+                                
+                                logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent:+.2f}%) | Entry: ${entry_price:.2f}")
+                                
+                                # STEPPED PROFIT TAKING - Exit portions at profit targets
+                                # This locks in gains and frees capital for new opportunities
+                                if pnl_percent >= 3.0:
+                                    logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +3.0%)")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Profit target +3.0% hit (actual: +{pnl_percent:.2f}%)'
+                                    })
+                                    continue
+                                elif pnl_percent >= 2.0:
+                                    logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +2.0%)")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Profit target +2.0% hit (actual: +{pnl_percent:.2f}%)'
+                                    })
+                                    continue
+                                elif pnl_percent >= 1.0:
+                                    logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +1.0%)")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Profit target +1.0% hit (actual: +{pnl_percent:.2f}%)'
+                                    })
+                                    continue
+                                elif pnl_percent >= 0.5:
+                                    logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +0.5%)")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Profit target +0.5% hit (actual: +{pnl_percent:.2f}%)'
+                                    })
+                                    continue
+                                
+                                # STOP LOSS - Cut losses aggressively
+                                elif pnl_percent <= -2.0:
+                                    logger.warning(f"   🛑 STOP LOSS HIT: {symbol} at {pnl_percent:.2f}% (stop: -2.0%)")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Stop loss -2.0% hit (actual: {pnl_percent:.2f}%)'
+                                    })
+                                    continue
+                                elif pnl_percent <= -1.0:
+                                    logger.warning(f"   ⚠️ Approaching stop loss: {symbol} at {pnl_percent:.2f}%")
+                                    # Don't exit yet, but log it
+                                
+                        except Exception as pnl_err:
+                            logger.debug(f"   Could not calculate P&L for {symbol}: {pnl_err}")
+                    
                     # Get market data for analysis
                     candles = self.broker.get_candles(symbol, '5m', 100)
                     if not candles or len(candles) < MIN_CANDLES_REQUIRED:
