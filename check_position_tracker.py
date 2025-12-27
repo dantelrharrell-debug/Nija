@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
 from position_tracker import PositionTracker
 from broker_manager import CoinbaseBroker
+from trading_strategy import PROFIT_TARGETS, STOP_LOSS_THRESHOLD, STOP_LOSS_WARNING
 
 def main():
     print("="*70)
@@ -72,19 +73,17 @@ def main():
                         
                         total_pnl += pnl_dollars
                         
-                        # Show profit target status
-                        if pnl_percent >= 3.0:
-                            print(f"  🎯 PROFIT TARGET +3.0% HIT - SHOULD SELL!")
-                        elif pnl_percent >= 2.0:
-                            print(f"  🎯 PROFIT TARGET +2.0% HIT - SHOULD SELL!")
-                        elif pnl_percent >= 1.0:
-                            print(f"  🎯 PROFIT TARGET +1.0% HIT - SHOULD SELL!")
-                        elif pnl_percent >= 0.5:
-                            print(f"  🎯 PROFIT TARGET +0.5% HIT - SHOULD SELL!")
-                        elif pnl_percent <= -2.0:
-                            print(f"  🛑 STOP LOSS -2.0% HIT - SHOULD SELL!")
-                        elif pnl_percent <= -1.0:
-                            print(f"  ⚠️ Approaching stop loss (-1.0%)")
+                        # Show profit target status using shared configuration
+                        for target_pct, reason in PROFIT_TARGETS:
+                            if pnl_percent >= target_pct:
+                                print(f"  🎯 {reason.upper()} HIT - SHOULD SELL!")
+                                break
+                        else:
+                            # No profit target hit, check stop loss
+                            if pnl_percent <= STOP_LOSS_THRESHOLD:
+                                print(f"  🛑 STOP LOSS {STOP_LOSS_THRESHOLD}% HIT - SHOULD SELL!")
+                            elif pnl_percent <= STOP_LOSS_WARNING:
+                                print(f"  ⚠️ Approaching stop loss ({STOP_LOSS_WARNING}%)")
                 except Exception as e:
                     print(f"  ⚠️ Could not get current price: {e}")
             

@@ -93,10 +93,12 @@ class PositionTracker:
                     old_price = existing['entry_price']
                     old_size = existing['size_usd']
                     
-                    # Calculate new weighted average entry price
+                    # Calculate new weighted average entry price correctly
+                    # Formula: (old_qty * old_price + new_qty * new_price) / total_qty
                     total_qty = old_qty + quantity
+                    total_cost = (old_qty * old_price) + (quantity * entry_price)
+                    avg_price = total_cost / total_qty if total_qty > 0 else entry_price
                     total_size = old_size + size_usd
-                    avg_price = total_size / total_qty if total_qty > 0 else entry_price
                     
                     self.positions[symbol] = {
                         'entry_price': avg_price,
@@ -158,11 +160,13 @@ class PositionTracker:
                         del self.positions[symbol]
                         logger.info(f"Removed position {symbol} (partial exit cleared position)")
                     else:
-                        # Update remaining quantity
-                        remaining_size = position['entry_price'] * remaining_qty
+                        # Update remaining quantity and proportional size
+                        remaining_qty = position['quantity'] - exit_quantity
+                        # Preserve proportional cost basis
+                        remaining_size = position['size_usd'] * (remaining_qty / position['quantity'])
                         position['quantity'] = remaining_qty
                         position['size_usd'] = remaining_size
-                        logger.info(f"Reduced position {symbol}: remaining_qty={remaining_qty:.8f}")
+                        logger.info(f"Reduced position {symbol}: remaining_qty={remaining_qty:.8f}, remaining_size=${remaining_size:.2f}")
                 
                 self._save_positions()
                 return True

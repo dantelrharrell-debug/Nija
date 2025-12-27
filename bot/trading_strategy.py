@@ -22,6 +22,18 @@ RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains)
 RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses)
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
+# Profit target thresholds (stepped exits)
+PROFIT_TARGETS = [
+    (3.0, "Profit target +3.0%"),
+    (2.0, "Profit target +2.0%"),
+    (1.0, "Profit target +1.0%"),
+    (0.5, "Profit target +0.5%"),
+]
+
+# Stop loss thresholds
+STOP_LOSS_THRESHOLD = -2.0  # Exit at -2% loss
+STOP_LOSS_WARNING = -1.0  # Warn at -1% loss
+
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
     Execute a function with a timeout. Returns (result, error).
@@ -317,51 +329,32 @@ class TradingStrategy:
                                 
                                 # STEPPED PROFIT TAKING - Exit portions at profit targets
                                 # This locks in gains and frees capital for new opportunities
-                                if pnl_percent >= 3.0:
-                                    logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +3.0%)")
-                                    positions_to_exit.append({
-                                        'symbol': symbol,
-                                        'quantity': quantity,
-                                        'reason': f'Profit target +3.0% hit (actual: +{pnl_percent:.2f}%)'
-                                    })
-                                    continue
-                                elif pnl_percent >= 2.0:
-                                    logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +2.0%)")
-                                    positions_to_exit.append({
-                                        'symbol': symbol,
-                                        'quantity': quantity,
-                                        'reason': f'Profit target +2.0% hit (actual: +{pnl_percent:.2f}%)'
-                                    })
-                                    continue
-                                elif pnl_percent >= 1.0:
-                                    logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +1.0%)")
-                                    positions_to_exit.append({
-                                        'symbol': symbol,
-                                        'quantity': quantity,
-                                        'reason': f'Profit target +1.0% hit (actual: +{pnl_percent:.2f}%)'
-                                    })
-                                    continue
-                                elif pnl_percent >= 0.5:
-                                    logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +0.5%)")
-                                    positions_to_exit.append({
-                                        'symbol': symbol,
-                                        'quantity': quantity,
-                                        'reason': f'Profit target +0.5% hit (actual: +{pnl_percent:.2f}%)'
-                                    })
-                                    continue
+                                # Check targets from highest to lowest
+                                for target_pct, reason in PROFIT_TARGETS:
+                                    if pnl_percent >= target_pct:
+                                        logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +{target_pct}%)")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'{reason} hit (actual: +{pnl_percent:.2f}%)'
+                                        })
+                                        break  # Exit the for loop, continue to next position
+                                else:
+                                    # No profit target hit, check stop loss
+                                    if pnl_percent <= STOP_LOSS_THRESHOLD:
+                                        logger.warning(f"   🛑 STOP LOSS HIT: {symbol} at {pnl_percent:.2f}% (stop: {STOP_LOSS_THRESHOLD}%)")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Stop loss {STOP_LOSS_THRESHOLD}% hit (actual: {pnl_percent:.2f}%)'
+                                        })
+                                    elif pnl_percent <= STOP_LOSS_WARNING:
+                                        logger.warning(f"   ⚠️ Approaching stop loss: {symbol} at {pnl_percent:.2f}%")
+                                        # Don't exit yet, but log it
+                                    continue  # Continue to next position check
                                 
-                                # STOP LOSS - Cut losses aggressively
-                                elif pnl_percent <= -2.0:
-                                    logger.warning(f"   🛑 STOP LOSS HIT: {symbol} at {pnl_percent:.2f}% (stop: -2.0%)")
-                                    positions_to_exit.append({
-                                        'symbol': symbol,
-                                        'quantity': quantity,
-                                        'reason': f'Stop loss -2.0% hit (actual: {pnl_percent:.2f}%)'
-                                    })
-                                    continue
-                                elif pnl_percent <= -1.0:
-                                    logger.warning(f"   ⚠️ Approaching stop loss: {symbol} at {pnl_percent:.2f}%")
-                                    # Don't exit yet, but log it
+                                # If we got here via break, skip remaining checks
+                                continue
                                 
                         except Exception as pnl_err:
                             logger.debug(f"   Could not calculate P&L for {symbol}: {pnl_err}")

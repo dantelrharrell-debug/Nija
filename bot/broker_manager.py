@@ -1442,17 +1442,30 @@ class BaseBroker(ABC):
                 try:
                     if side.lower() == 'buy':
                         # Track entry for profit calculation
-                        current_price = self.get_current_price(symbol)
-                        if current_price > 0:
-                            size_usd = quantity if size_type == 'quote' else (filled_size * current_price if filled_size else 0)
+                        # Try to get actual fill price from order response first
+                        fill_price = None
+                        
+                        # Try to extract actual fill price from success_response
+                        if success_response and 'average_filled_price' in success_response:
+                            try:
+                                fill_price = float(success_response['average_filled_price'])
+                            except:
+                                pass
+                        
+                        # Fallback to current market price if fill price not available
+                        if not fill_price or fill_price == 0:
+                            fill_price = self.get_current_price(symbol)
+                        
+                        if fill_price > 0:
+                            size_usd = quantity if size_type == 'quote' else (filled_size * fill_price if filled_size else 0)
                             self.position_tracker.track_entry(
                                 symbol=symbol,
-                                entry_price=current_price,
+                                entry_price=fill_price,
                                 quantity=filled_size if filled_size else 0,
                                 size_usd=size_usd,
                                 strategy="APEX_v7.1"
                             )
-                            logger.info(f"   📊 Position tracked: entry=${current_price:.2f}, size=${size_usd:.2f}")
+                            logger.info(f"   📊 Position tracked: entry=${fill_price:.2f}, size=${size_usd:.2f}")
                     else:
                         # Track exit (partial or full sell)
                         self.position_tracker.track_exit(
