@@ -203,7 +203,8 @@ class BaseBroker(ABC):
             # Get products with pagination
             if hasattr(self.client, 'get_products'):
                 try:
-                    products_resp = self.client.get_products()
+                    # Request all products (Coinbase has 700+ markets)
+                    products_resp = self.client.get_products(get_all_products=True)
                     
                     # Debug: Log response type and structure
                     logging.info(f"   Response type: {type(products_resp).__name__}")
@@ -265,7 +266,10 @@ class BaseBroker(ABC):
                     return all_products
                     
                 except Exception as e:
-                    logging.warning(f"⚠️  get_products() failed: {e}")
+                    logging.error(f"⚠️  get_products() failed: {e}")
+                    import traceback
+                    logging.error(f"   Traceback: {traceback.format_exc()}")
+                    # Don't return here - let it fall through to outer handler
             
             # Fallback: Return empty list (will use curated fallback)
             logging.warning("⚠️  Could not fetch products from API, will use fallback list")
