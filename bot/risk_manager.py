@@ -389,6 +389,7 @@ class AdaptiveRiskManager:
                                      side: str) -> Dict[str, float]:
         """
         Calculate take profit levels based on R-multiples
+        PROFITABILITY FIX: Faster profit targets (0.5R, 1R, 1.5R) for more frequent profit-taking cycles
         
         Args:
             entry_price: Entry price
@@ -396,19 +397,19 @@ class AdaptiveRiskManager:
             side: 'long' or 'short'
         
         Returns:
-            Dictionary with TP1 (1R), TP2 (2R), TP3 (3R) levels
+            Dictionary with TP1 (0.5R), TP2 (1R), TP3 (1.5R) levels
         """
         # Calculate R (risk per share)
         if side == 'long':
             risk = entry_price - stop_loss
-            tp1 = entry_price + (risk * 1.0)  # 1R
-            tp2 = entry_price + (risk * 2.0)  # 2R
-            tp3 = entry_price + (risk * 3.0)  # 3R
+            tp1 = entry_price + (risk * 0.5)  # 0.5R - faster profit-taking
+            tp2 = entry_price + (risk * 1.0)  # 1R
+            tp3 = entry_price + (risk * 1.5)  # 1.5R
         else:  # short
             risk = stop_loss - entry_price
-            tp1 = entry_price - (risk * 1.0)  # 1R
-            tp2 = entry_price - (risk * 2.0)  # 2R
-            tp3 = entry_price - (risk * 3.0)  # 3R
+            tp1 = entry_price - (risk * 0.5)  # 0.5R - faster profit-taking
+            tp2 = entry_price - (risk * 1.0)  # 1R
+            tp3 = entry_price - (risk * 1.5)  # 1.5R
         
         return {
             'tp1': tp1,
