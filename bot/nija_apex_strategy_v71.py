@@ -52,13 +52,13 @@ class NIJAApexStrategyV71:
         # Initialize components
         self.risk_manager = RiskManager(
             min_position_pct=self.config.get('min_position_pct', 0.02),
-            max_position_pct=self.config.get('max_position_pct', 0.10)
+            max_position_pct=self.config.get('max_position_pct', 0.05)  # Reduced from 10% to 5% for tighter position sizing
         )
         self.execution_engine = ExecutionEngine(broker_client)
         
         # Strategy parameters - PROFITABILITY FIX: Tightened for quality entries
-        self.min_adx = self.config.get('min_adx', 25)  # Raised from 20 - require stronger trends
-        self.volume_threshold = self.config.get('volume_threshold', 0.5)  # Raised from 0.3 - require higher volume
+        self.min_adx = self.config.get('min_adx', 30)  # Raised from 25 - require stronger trends for better reliability
+        self.volume_threshold = self.config.get('volume_threshold', 0.8)  # Raised from 0.5 - require higher volume for better liquidity
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.3)  # Raised from 0.2
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
@@ -132,14 +132,14 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= self.volume_threshold
         }
         
-        # PROFITABILITY FIX: Require ALL 5 conditions (quality over quantity)
-        # This prevents buying weak/choppy markets that lose money
+        # PROFITABILITY FIX: Require 4 of 5 conditions (quality over quantity)
+        # This prevents buying weak/choppy markets that lose money while enabling more opportunities
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
         
-        if uptrend_score >= 5:  # PROFITABILITY FIX: ALL 5 filters required (was 3)
+        if uptrend_score >= 4:  # PROFITABILITY FIX: 4/5 filters required (stricter than 3, more flexible than 5)
             return True, 'uptrend', f'Uptrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 5:  # PROFITABILITY FIX: ALL 5 filters required (was 3)
+        elif downtrend_score >= 4:  # PROFITABILITY FIX: 4/5 filters required (stricter than 3, more flexible than 5)
             return True, 'downtrend', f'Downtrend confirmed (ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
             return False, 'none', f'Mixed signals (Up:{uptrend_score}/5, Down:{downtrend_score}/5)'
@@ -216,7 +216,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 5  # PROFITABILITY FIX: Require ALL 5 conditions (was 4)
+        signal = score >= 4  # PROFITABILITY FIX: Require 4/5 conditions for higher quality trades
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
@@ -294,7 +294,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 5  # PROFITABILITY FIX: Require ALL 5 conditions (was 4)
+        signal = score >= 4  # PROFITABILITY FIX: Require 4/5 conditions for higher quality trades
         
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         
