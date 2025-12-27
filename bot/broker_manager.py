@@ -271,9 +271,22 @@ class BaseBroker(ABC):
                     logging.error(f"   Traceback: {traceback.format_exc()}")
                     # Don't return here - let it fall through to outer handler
             
-            # Fallback: Return empty list (will use curated fallback)
-            logging.warning("⚠️  Could not fetch products from API, will use fallback list")
-            return []
+            # Fallback: Use curated list of popular crypto markets
+            logging.warning("⚠️  Could not fetch products from API, using fallback list of popular markets")
+            fallback_markets = [
+                'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 
+                'DOGE-USD', 'MATIC-USD', 'DOT-USD', 'LINK-USD', 'UNI-USD',
+                'AVAX-USD', 'ATOM-USD', 'LTC-USD', 'NEAR-USD', 'ALGO-USD',
+                'XLM-USD', 'HBAR-USD', 'APT-USD', 'ARB-USD', 'OP-USD',
+                'INJ-USD', 'SUI-USD', 'TIA-USD', 'SEI-USD', 'RUNE-USD',
+                'FET-USD', 'IMX-USD', 'RENDER-USD', 'GRT-USD', 'AAVE-USD',
+                'MKR-USD', 'SNX-USD', 'CRV-USD', 'LDO-USD', 'COMP-USD',
+                'SAND-USD', 'MANA-USD', 'AXS-USD', 'FIL-USD', 'VET-USD',
+                'ICP-USD', 'FLOW-USD', 'EOS-USD', 'XTZ-USD', 'THETA-USD',
+                'ZEC-USD', 'ETC-USD', 'BAT-USD', 'ENJ-USD', 'CHZ-USD'
+            ]
+            logging.info(f"   Using {len(fallback_markets)} fallback markets")
+            return fallback_markets
             
         except Exception as e:
             logging.error(f"🔥 Error fetching all products: {e}")
