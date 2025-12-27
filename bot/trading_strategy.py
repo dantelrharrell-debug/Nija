@@ -14,6 +14,7 @@ logger = logging.getLogger("nija")
 
 # Configuration constants
 MARKET_SCAN_LIMIT = 20  # Number of markets to scan per cycle (reduced from 732+ to prevent timeouts)
+MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Exit strategy constants (no entry price required)
 MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
@@ -76,6 +77,9 @@ class TradingStrategy:
     def __init__(self):
         """Initialize production strategy with Coinbase broker and enforcer."""
         logger.info("Initializing TradingStrategy (APEX v7.1 - Production Mode)...")
+        
+        # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
+        self.unsellable_positions = set()  # Set of symbols that failed to sell due to size issues
         
         try:
             # Lazy imports to avoid circular deps and allow fallback
@@ -250,6 +254,11 @@ class TradingStrategy:
                     if not symbol:
                         continue
                     
+                    # Skip positions we know can't be sold (too small/dust)
+                    if symbol in self.unsellable_positions:
+                        logger.debug(f"   ⏭️ Skipping {symbol} (marked as unsellable/dust)")
+                        continue
+                    
                     logger.info(f"   Analyzing {symbol}...")
                     
                     # Get current price
@@ -285,8 +294,8 @@ class TradingStrategy:
                     
                     # Get market data for analysis
                     candles = self.broker.get_candles(symbol, '5m', 100)
-                    if not candles or len(candles) < 100:
-                        logger.warning(f"   ⚠️ Insufficient data for {symbol} ({len(candles) if candles else 0} candles)")
+                    if not candles or len(candles) < MIN_CANDLES_REQUIRED:
+                        logger.warning(f"   ⚠️ Insufficient data for {symbol} ({len(candles) if candles else 0} candles, need {MIN_CANDLES_REQUIRED})")
                         # CRITICAL: Exit positions we can't analyze to prevent blind holding
                         logger.info(f"   🔴 NO DATA EXIT: {symbol} (cannot analyze market)")
                         positions_to_exit.append({
@@ -415,11 +424,22 @@ class TradingStrategy:
                         )
                         if result and result.get('status') not in ['error', 'unfilled']:
                             logger.info(f"  ✅ {symbol} SOLD successfully!")
+                            # Remove from unsellable set if it was there (position grew and became sellable)
+                            self.unsellable_positions.discard(symbol)
                         else:
                             error_msg = result.get('error', result.get('message', 'Unknown')) if result else 'No response'
-                            logger.error(f"  ❌ {symbol} failed: {error_msg}")
+                            logger.error(f"  ❌ {symbol} sell failed: {error_msg}")
+                            logger.error(f"     Full result: {result}")
+                            # If it's a dust/too-small position, mark it as unsellable to prevent infinite retries
+                            if 'INVALID_SIZE' in str(error_msg) or 'too small' in str(error_msg).lower():
+                                logger.warning(f"     💡 Position {symbol} is too small to sell via API - marking as dust")
+                                logger.warning(f"     💡 This position will be skipped in future cycles to prevent infinite loops")
+                                self.unsellable_positions.add(symbol)
                     except Exception as sell_err:
-                        logger.error(f"  ❌ {symbol} error: {sell_err}")
+                        logger.error(f"  ❌ {symbol} exception during sell: {sell_err}")
+                        logger.error(f"     Error type: {type(sell_err).__name__}")
+                        import traceback
+                        logger.error(f"     Traceback: {traceback.format_exc()}")
                 
                 logger.info(f"="*80)
                 logger.info(f"✅ Concurrent exit complete: {len(positions_to_exit)} positions processed")
