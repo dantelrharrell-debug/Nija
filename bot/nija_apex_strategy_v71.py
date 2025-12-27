@@ -182,13 +182,13 @@ class NIJAApexStrategyV71:
         
         conditions = {}
         
-        # 1. Pullback to EMA21 or VWAP (PROFITABILITY FIX: tighter 0.3%)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.003
-        near_vwap = abs(current_price - vwap) / vwap < 0.003
+        # 1. Pullback to EMA21 or VWAP (PROFITABILITY FIX: 1.0% tolerance for crypto volatility)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
+        near_vwap = abs(current_price - vwap) / vwap < 0.01
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bullish pullback (PROFITABILITY FIX: tighter range 35-65)
-        conditions['rsi_pullback'] = 35 < rsi < 65 and rsi > rsi_prev
+        # 2. RSI bullish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
+        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi > rsi_prev
         
         # 3. Bullish candlestick patterns
         body = current['close'] - current['open']
@@ -263,13 +263,13 @@ class NIJAApexStrategyV71:
         
         conditions = {}
         
-        # 1. Pullback to EMA21 or VWAP
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.005
-        near_vwap = abs(current_price - vwap) / vwap < 0.005
+        # 1. Pullback to EMA21 or VWAP (PROFITABILITY FIX: 1.0% tolerance for crypto volatility)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
+        near_vwap = abs(current_price - vwap) / vwap < 0.01
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bearish pullback (PROFITABILITY FIX: tighter range 35-65)
-        conditions['rsi_pullback'] = 35 < rsi < 65 and rsi < rsi_prev
+        # 2. RSI bearish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
+        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi < rsi_prev
         
         # 3. Bearish candlestick patterns
         body = current['close'] - current['open']
