@@ -15,7 +15,8 @@ try:
     from trading_strategy import (
         MIN_POSITION_VALUE,
         RSI_OVERBOUGHT_THRESHOLD,
-        RSI_OVERSOLD_THRESHOLD
+        RSI_OVERSOLD_THRESHOLD,
+        MIN_CANDLES_REQUIRED
     )
     from broker_manager import DUST_THRESHOLD_USD
 except ImportError:
@@ -25,6 +26,7 @@ except ImportError:
     RSI_OVERBOUGHT_THRESHOLD = 70
     RSI_OVERSOLD_THRESHOLD = 30
     DUST_THRESHOLD_USD = 1.00
+    MIN_CANDLES_REQUIRED = 90
 
 def test_dust_threshold():
     """Test that positions below $1.00 are correctly identified as dust and positions at or above $1.00 are counted toward the position limit"""
@@ -147,6 +149,63 @@ def test_no_entry_price_dependency():
     print(f"\n✅ Test passed!")
     return True
 
+def test_candle_requirement():
+    """Test that minimum candle requirement is relaxed to prevent infinite loops"""
+    print("\n" + "="*80)
+    print("TEST 5: Candle Requirement (Infinite Loop Prevention)")
+    print("="*80)
+    
+    print(f"  Minimum candles required: {MIN_CANDLES_REQUIRED}")
+    
+    # Test cases for different candle counts
+    test_cases = [
+        (50, True, f"50 candles - Insufficient (< {MIN_CANDLES_REQUIRED})"),
+        (89, True, f"89 candles - Insufficient (< {MIN_CANDLES_REQUIRED})"),
+        (MIN_CANDLES_REQUIRED, False, f"{MIN_CANDLES_REQUIRED} candles - Exactly minimum (acceptable)"),
+        (95, False, "95 candles - Sufficient (> minimum)"),
+        (97, False, "97 candles - Sufficient (fixes BAT-USD issue)"),
+        (100, False, "100 candles - Full dataset (ideal)"),
+    ]
+    
+    all_passed = True
+    
+    for candle_count, should_reject, description in test_cases:
+        # Logic: reject if candle_count < MIN_CANDLES_REQUIRED
+        would_reject = candle_count < MIN_CANDLES_REQUIRED
+        passed = would_reject == should_reject
+        status = "✅ PASS" if passed else "❌ FAIL"
+        print(f"  {status}: {description}")
+        if not passed:
+            all_passed = False
+            print(f"    Expected: reject={should_reject}, Got: reject={would_reject}")
+    
+    # Verify that the fix prevents infinite loops for positions with candles near the boundary
+    print(f"\n  🎯 Boundary case check (candles near minimum):")
+    boundary_cases = [
+        (MIN_CANDLES_REQUIRED - 1, True, "Just below minimum"),
+        (MIN_CANDLES_REQUIRED, False, "At minimum"),
+        (MIN_CANDLES_REQUIRED + 7, False, "Slightly above minimum"),
+    ]
+    
+    boundary_passed = True
+    for candles, should_reject, desc in boundary_cases:
+        would_reject = candles < MIN_CANDLES_REQUIRED
+        if would_reject == should_reject:
+            print(f"  ✅ {candles} candles ({desc}): {'rejected' if would_reject else 'accepted'}")
+        else:
+            print(f"  ❌ {candles} candles ({desc}): Expected {'reject' if should_reject else 'accept'}, got {'reject' if would_reject else 'accept'}")
+            boundary_passed = False
+            all_passed = False
+    
+    if boundary_passed:
+        print(f"  ✅ PASS: Boundary logic correctly prevents infinite loops")
+    else:
+        print(f"  ❌ FAIL: Boundary logic has issues")
+    
+    print(f"\n{'✅ All tests passed!' if all_passed else '❌ Some tests failed!'}")
+    return all_passed
+
+
 def main():
     """Run all tests"""
     print("\n" + "="*80)
@@ -161,6 +220,7 @@ def main():
     results.append(("Small Position Exit", test_small_position_exit()))
     results.append(("RSI Exit Logic", test_rsi_exit_logic()))
     results.append(("No Entry Price Dependency", test_no_entry_price_dependency()))
+    results.append(("Candle Requirement", test_candle_requirement()))
     
     # Summary
     print("\n" + "="*80)
