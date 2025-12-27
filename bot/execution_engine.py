@@ -12,11 +12,7 @@ logger = logging.getLogger("nija")
 
 # Import fee-aware configuration for profit calculations
 try:
-    from fee_aware_config import (
-        COINBASE_MARKET_ORDER_FEE,
-        MARKET_ORDER_ROUND_TRIP,
-        LIMIT_ORDER_ROUND_TRIP
-    )
+    from fee_aware_config import MARKET_ORDER_ROUND_TRIP
     FEE_AWARE_MODE = True
     # Use market order fees as conservative estimate (worst case)
     DEFAULT_ROUND_TRIP_FEE = MARKET_ORDER_ROUND_TRIP  # 1.4%
