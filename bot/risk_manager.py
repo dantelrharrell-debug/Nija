@@ -389,7 +389,21 @@ class AdaptiveRiskManager:
                                      side: str) -> Dict[str, float]:
         """
         Calculate take profit levels based on R-multiples
-        PROFITABILITY FIX: Faster profit targets (0.5R, 1R, 1.5R) for more frequent profit-taking cycles
+        
+        FEE-AWARE PROFITABILITY FIX (Dec 27, 2025):
+        Adjusted to ensure NET profitability after Coinbase fees (~1.4% round-trip)
+        
+        Previous targets (0.5R, 1R, 1.5R) were too low and resulted in NET LOSSES
+        after fees. Updated targets ensure minimum ~0.6% NET profit:
+        
+        - TP1: 1.0R (ensures >1.4% gross to beat fees)
+        - TP2: 1.5R (provides cushion for volatility)
+        - TP3: 2.0R (meaningful profit target)
+        
+        For a typical 2% stop loss:
+        - TP1 @ 2% gross → ~0.6% NET after fees (PROFITABLE)
+        - TP2 @ 3% gross → ~1.6% NET after fees (PROFITABLE)
+        - TP3 @ 4% gross → ~2.6% NET after fees (PROFITABLE)
         
         Args:
             entry_price: Entry price
@@ -397,19 +411,21 @@ class AdaptiveRiskManager:
             side: 'long' or 'short'
         
         Returns:
-            Dictionary with TP1 (0.5R), TP2 (1R), TP3 (1.5R) levels
+            Dictionary with TP1 (1.0R), TP2 (1.5R), TP3 (2.0R) levels
         """
         # Calculate R (risk per share)
         if side == 'long':
             risk = entry_price - stop_loss
-            tp1 = entry_price + (risk * 0.5)  # 0.5R - faster profit-taking
-            tp2 = entry_price + (risk * 1.0)  # 1R
-            tp3 = entry_price + (risk * 1.5)  # 1.5R
+            # Fee-aware targets: 1R, 1.5R, 2R (ensures profitability after fees)
+            tp1 = entry_price + (risk * 1.0)  # 1R - minimum for fee coverage
+            tp2 = entry_price + (risk * 1.5)  # 1.5R - solid profit
+            tp3 = entry_price + (risk * 2.0)  # 2R - excellent trade
         else:  # short
             risk = stop_loss - entry_price
-            tp1 = entry_price - (risk * 0.5)  # 0.5R - faster profit-taking
-            tp2 = entry_price - (risk * 1.0)  # 1R
-            tp3 = entry_price - (risk * 1.5)  # 1.5R
+            # Fee-aware targets: 1R, 1.5R, 2R (ensures profitability after fees)
+            tp1 = entry_price - (risk * 1.0)  # 1R - minimum for fee coverage
+            tp2 = entry_price - (risk * 1.5)  # 1.5R - solid profit
+            tp3 = entry_price - (risk * 2.0)  # 2R - excellent trade
         
         return {
             'tp1': tp1,

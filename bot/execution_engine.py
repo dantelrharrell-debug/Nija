@@ -10,6 +10,22 @@ import logging
 
 logger = logging.getLogger("nija")
 
+# Import fee-aware configuration for profit calculations
+try:
+    from fee_aware_config import (
+        COINBASE_MARKET_ORDER_FEE,
+        MARKET_ORDER_ROUND_TRIP,
+        LIMIT_ORDER_ROUND_TRIP
+    )
+    FEE_AWARE_MODE = True
+    # Use market order fees as conservative estimate (worst case)
+    DEFAULT_ROUND_TRIP_FEE = MARKET_ORDER_ROUND_TRIP  # 1.4%
+    logger.info(f"✅ Fee-aware profit calculations enabled (round-trip fee: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%)")
+except ImportError:
+    FEE_AWARE_MODE = False
+    DEFAULT_ROUND_TRIP_FEE = 0.014  # 1.4% default
+    logger.warning(f"⚠️ Fee-aware config not found - using default {DEFAULT_ROUND_TRIP_FEE*100:.1f}% round-trip fee")
+
 
 class ExecutionEngine:
     """
@@ -235,16 +251,23 @@ class ExecutionEngine:
         """
         Check if position should execute stepped profit-taking exits
         
-        PROFITABILITY_UPGRADE_V7.2: Stepped exits to reduce hold time and cycle capital
+        PROFITABILITY_UPGRADE_V7.2 + FEE-AWARE: Stepped exits adjusted for Coinbase fees
         
-        Exit Schedule (Profitability Mode):
-        - Exit 10% at 0.5% profit (lock quick gains, reduce hold time)
-        - Exit 15% at 1.0% profit (secure profit tier)
-        - Exit 25% at 2.0% profit (scale out at higher confidence)
-        - Exit 50% at 3.0% profit (let remaining 25% ride trailing stop)
+        Exit Schedule (Fee-Aware Profitability Mode):
+        Coinbase round-trip fees: ~1.4% (0.6% entry + 0.6% exit + 0.2% spread)
         
-        This dramatically reduces average hold time (8+ hours → 15-30 minutes)
-        and enables capital recycling for more trades per day.
+        CRITICAL FEE-AWARE ADJUSTMENT:
+        - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees (PROFITABLE)
+        - Exit 15% at 2.5% gross profit → ~1.1% NET profit after fees (PROFITABLE)
+        - Exit 25% at 3.0% gross profit → ~1.6% NET profit after fees (PROFITABLE)
+        - Exit 50% at 4.0% gross profit → ~2.6% NET profit after fees (PROFITABLE)
+        
+        OLD BROKEN THRESHOLDS (resulted in losses):
+        - 0.5% profit → -0.9% NET (LOSS)
+        - 1.0% profit → -0.4% NET (LOSS)
+        - 2.0% profit → +0.6% NET (barely profitable)
+        
+        This dramatically reduces average hold time while ensuring ALL exits are NET PROFITABLE.
         
         Args:
             symbol: Trading symbol
@@ -260,35 +283,44 @@ class ExecutionEngine:
         side = position['side']
         entry_price = position['entry_price']
         
-        # Calculate profit percentage
+        # Calculate GROSS profit percentage (before fees)
         if side == 'long':
-            profit_pct = (current_price - entry_price) / entry_price
+            gross_profit_pct = (current_price - entry_price) / entry_price
         else:  # short
-            profit_pct = (entry_price - current_price) / entry_price
+            gross_profit_pct = (entry_price - current_price) / entry_price
         
-        # Check profit thresholds in order
+        # Calculate NET profit after fees
+        net_profit_pct = gross_profit_pct - DEFAULT_ROUND_TRIP_FEE
+        
+        # FEE-AWARE profit thresholds (GROSS profit needed for NET profitability)
+        # Each threshold ensures NET profit after 1.4% round-trip fees
         exit_levels = [
-            (0.005, 0.10, 'tp_exit_0.5pct'),   # Exit 10% at 0.5% profit
-            (0.010, 0.15, 'tp_exit_1.0pct'),   # Exit 15% at 1.0% profit
-            (0.020, 0.25, 'tp_exit_2.0pct'),   # Exit 25% at 2.0% profit
-            (0.030, 0.50, 'tp_exit_3.0pct'),   # Exit 50% at 3.0% profit
+            (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~0.6% NET
+            (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~1.1% NET
+            (0.030, 0.25, 'tp_exit_3.0pct'),   # Exit 25% at 3.0% gross → ~1.6% NET
+            (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~2.6% NET
         ]
         
-        for profit_threshold, exit_pct, exit_flag in exit_levels:
+        for gross_threshold, exit_pct, exit_flag in exit_levels:
             # Skip if already executed
             if position.get(exit_flag, False):
                 continue
             
-            # Check if profit target hit
-            if profit_pct >= profit_threshold:
+            # Check if GROSS profit target hit (net will be profitable)
+            if gross_profit_pct >= gross_threshold:
                 # Mark as executed
                 position[exit_flag] = True
                 
                 # Calculate exit size
                 exit_size = position['position_size'] * position['remaining_size'] * exit_pct
                 
-                logger.info(f"Stepped profit exit triggered: {symbol} {side}")
-                logger.info(f"  Profit: {profit_pct*100:.2f}% ≥ {profit_threshold*100:.1f}% threshold")
+                # Calculate expected NET profit for this exit
+                expected_net_pct = gross_threshold - DEFAULT_ROUND_TRIP_FEE
+                
+                logger.info(f"✅ FEE-AWARE profit exit triggered: {symbol} {side}")
+                logger.info(f"  Gross profit: {gross_profit_pct*100:.2f}% ≥ {gross_threshold*100:.1f}% threshold")
+                logger.info(f"  Est. fees: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%")
+                logger.info(f"  NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
                 logger.info(f"  Exiting: {exit_pct*100:.0f}% of position (${exit_size:.2f})")
                 logger.info(f"  Remaining: {(position['remaining_size'] * (1.0 - exit_pct))*100:.0f}% for trailing stop")
                 
@@ -297,8 +329,10 @@ class ExecutionEngine:
                 
                 return {
                     'exit_size': exit_size,
-                    'profit_level': f"{profit_threshold*100:.1f}%",
-                    'exit_pct': exit_pct
+                    'profit_level': f"{gross_threshold*100:.1f}%",
+                    'exit_pct': exit_pct,
+                    'gross_profit_pct': gross_profit_pct,
+                    'net_profit_pct': expected_net_pct
                 }
         
         return None
