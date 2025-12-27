@@ -24,10 +24,10 @@ except ImportError:
     MIN_POSITION_VALUE = 1.0
     RSI_OVERBOUGHT_THRESHOLD = 70
     RSI_OVERSOLD_THRESHOLD = 30
-    DUST_THRESHOLD_USD = 0.001
+    DUST_THRESHOLD_USD = 1.00
 
 def test_dust_threshold():
-    """Test that dust threshold is consistent at $0.001"""
+    """Test that positions below $1.00 are correctly identified as dust and positions at or above $1.00 are counted toward the position limit"""
     print("\n" + "="*80)
     print("TEST 1: Dust Threshold Consistency")
     print("="*80)
@@ -35,11 +35,13 @@ def test_dust_threshold():
     # Test positions with various USD values
     test_cases = [
         (0.0001, True, "TRUE dust - should skip"),
-        (0.0005, True, "Sub-penny - should skip"),
+        (0.04, True, "$0.04 position - should skip (dust)"),
+        (0.12, True, "$0.12 position - should skip (dust)"),
+        (0.50, True, "$0.50 position - should skip (dust)"),
+        (0.99, True, "$0.99 position - should skip (dust)"),
         (DUST_THRESHOLD_USD, False, f"Exactly ${DUST_THRESHOLD_USD} - should count"),
-        (0.04, False, "$0.04 position - should count"),
-        (0.12, False, "$0.12 position - should count"),
-        (1.00, False, "$1.00 position - should count"),
+        (1.01, False, "$1.01 position - should count"),
+        (5.00, False, "$5.00 position - should count"),
     ]
     
     all_passed = True
