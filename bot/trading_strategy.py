@@ -98,7 +98,18 @@ class TradingStrategy:
             # Initialize APEX strategy
             self.apex = NIJAApexStrategyV71(broker_client=self.broker)
             
-            logger.info("✅ TradingStrategy initialized (APEX v7.1 + Position Cap Enforcer)")
+            # CRITICAL: Sync position tracker with actual broker positions at startup
+            # This handles cases where positions were sold manually or bot was restarted
+            if self.broker and hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
+                try:
+                    broker_positions = self.broker.get_positions()
+                    removed = self.broker.position_tracker.sync_with_broker(broker_positions)
+                    if removed > 0:
+                        logger.info(f"🔄 Synced position tracker: removed {removed} orphaned positions")
+                except Exception as sync_err:
+                    logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
+            
+            logger.info("✅ TradingStrategy initialized (APEX v7.1 + Position Cap Enforcer + Profit Tracking)")
         
         except ImportError as e:
             logger.error(f"Failed to import strategy modules: {e}")
