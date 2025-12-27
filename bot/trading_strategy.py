@@ -22,12 +22,14 @@ RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains)
 RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses)
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
-# Profit target thresholds (stepped exits)
+# Profit target thresholds (stepped exits) - FEE-AWARE
+# Updated Dec 27, 2025 to ensure NET profitability after Coinbase fees (~1.4%)
+# Old targets (0.5%, 1.0%) resulted in NET LOSSES after fees
 PROFIT_TARGETS = [
-    (3.0, "Profit target +3.0%"),
-    (2.0, "Profit target +2.0%"),
-    (1.0, "Profit target +1.0%"),
-    (0.5, "Profit target +0.5%"),
+    (4.0, "Profit target +4.0% (Net ~2.6% after fees)"),
+    (3.0, "Profit target +3.0% (Net ~1.6% after fees)"),
+    (2.5, "Profit target +2.5% (Net ~1.1% after fees)"),
+    (2.0, "Profit target +2.0% (Net ~0.6% after fees)"),
 ]
 
 # Stop loss thresholds
