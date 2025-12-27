@@ -11,6 +11,7 @@ import logging
 import os
 import uuid
 import json
+import traceback
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -26,6 +27,20 @@ logger = logging.getLogger('nija.broker')
 MINIMUM_BALANCE_PROTECTION = 10.50  # Absolute minimum to prevent failed orders
 MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
+
+# Fallback market list - popular crypto trading pairs used when API fails
+FALLBACK_MARKETS = [
+    'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 
+    'DOGE-USD', 'MATIC-USD', 'DOT-USD', 'LINK-USD', 'UNI-USD',
+    'AVAX-USD', 'ATOM-USD', 'LTC-USD', 'NEAR-USD', 'ALGO-USD',
+    'XLM-USD', 'HBAR-USD', 'APT-USD', 'ARB-USD', 'OP-USD',
+    'INJ-USD', 'SUI-USD', 'TIA-USD', 'SEI-USD', 'RUNE-USD',
+    'FET-USD', 'IMX-USD', 'RENDER-USD', 'GRT-USD', 'AAVE-USD',
+    'MKR-USD', 'SNX-USD', 'CRV-USD', 'LDO-USD', 'COMP-USD',
+    'SAND-USD', 'MANA-USD', 'AXS-USD', 'FIL-USD', 'VET-USD',
+    'ICP-USD', 'FLOW-USD', 'EOS-USD', 'XTZ-USD', 'THETA-USD',
+    'ZEC-USD', 'ETC-USD', 'BAT-USD', 'ENJ-USD', 'CHZ-USD'
+]
 
 
 def _serialize_object_to_dict(obj) -> Dict:
@@ -203,34 +218,59 @@ class BaseBroker(ABC):
             # Get products with pagination
             if hasattr(self.client, 'get_products'):
                 try:
-                    products_resp = self.client.get_products()
+                    # Request all products (Coinbase has 700+ markets)
+                    products_resp = self.client.get_products(get_all_products=True)
+                    
+                    # Debug: Log response type and structure
+                    logging.info(f"   Response type: {type(products_resp).__name__}")
                     
                     # Handle both object and dict responses
                     if hasattr(products_resp, 'products'):
                         products = products_resp.products
+                        logging.info(f"   Extracted {len(products) if products else 0} products from .products attribute")
                     elif isinstance(products_resp, dict):
                         products = products_resp.get('products', [])
+                        logging.info(f"   Extracted {len(products)} products from dict['products']")
                     else:
                         products = []
+                        logging.warning(f"⚠️  Unexpected response type: {type(products_resp).__name__}")
                     
                     if not products:
-                        logging.warning("⚠️  No products returned from API")
+                        logging.warning("⚠️  No products returned from API - response may be empty or malformed")
+                        # Debug: Show what attributes/keys are available
+                        if hasattr(products_resp, '__dict__'):
+                            attrs = [k for k in dir(products_resp) if not k.startswith('_')][:10]
+                            logging.info(f"   Available attributes: {attrs}")
+                        elif isinstance(products_resp, dict):
+                            logging.info(f"   Available keys: {list(products_resp.keys())}")
                         return []
                     
                     # Extract product IDs - handle various response formats
-                    for product in products:
+                    for i, product in enumerate(products):
                         product_id = None
                         
-                        # Try object attribute access
-                        if hasattr(product, 'id'):
+                        # Debug first product to understand structure
+                        if i == 0:
+                            if hasattr(product, '__dict__'):
+                                attrs = [k for k in dir(product) if not k.startswith('_')][:10]
+                                logging.info(f"   First product attributes: {attrs}")
+                            elif isinstance(product, dict):
+                                logging.info(f"   First product keys: {list(product.keys())[:10]}")
+                        
+                        # Try object attribute access (Coinbase uses 'product_id', not 'id')
+                        if hasattr(product, 'product_id'):
+                            product_id = getattr(product, 'product_id', None)
+                        elif hasattr(product, 'id'):
                             product_id = getattr(product, 'id', None)
                         # Try dict access
                         elif isinstance(product, dict):
-                            product_id = product.get('id') or product.get('product_id')
+                            product_id = product.get('product_id') or product.get('id')
                         
                         # Filter: Only include USD trading pairs (exclude stablecoins on themselves)
                         if product_id and '-USD' in product_id:
                             all_products.append(product_id)
+                    
+                    logging.info(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
                     
                     # Remove duplicates and sort
                     all_products = sorted(list(set(all_products)))
@@ -241,11 +281,14 @@ class BaseBroker(ABC):
                     return all_products
                     
                 except Exception as e:
-                    logging.warning(f"⚠️  get_products() failed: {e}")
+                    logging.error(f"⚠️  get_products() failed: {e}")
+                    logging.error(f"   Traceback: {traceback.format_exc()}")
+                    # Don't return here - let it fall through to outer handler
             
-            # Fallback: Return empty list (will use curated fallback)
-            logging.warning("⚠️  Could not fetch products from API, will use fallback list")
-            return []
+            # Fallback: Use curated list of popular crypto markets
+            logging.warning("⚠️  Could not fetch products from API, using fallback list of popular markets")
+            logging.info(f"   Using {len(FALLBACK_MARKETS)} fallback markets")
+            return FALLBACK_MARKETS
             
         except Exception as e:
             logging.error(f"🔥 Error fetching all products: {e}")
