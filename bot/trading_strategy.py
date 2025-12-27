@@ -22,6 +22,18 @@ RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains)
 RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses)
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
+# Profit target thresholds (stepped exits)
+PROFIT_TARGETS = [
+    (3.0, "Profit target +3.0%"),
+    (2.0, "Profit target +2.0%"),
+    (1.0, "Profit target +1.0%"),
+    (0.5, "Profit target +0.5%"),
+]
+
+# Stop loss thresholds
+STOP_LOSS_THRESHOLD = -2.0  # Exit at -2% loss
+STOP_LOSS_WARNING = -1.0  # Warn at -1% loss
+
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
     Execute a function with a timeout. Returns (result, error).
@@ -98,7 +110,18 @@ class TradingStrategy:
             # Initialize APEX strategy
             self.apex = NIJAApexStrategyV71(broker_client=self.broker)
             
-            logger.info("✅ TradingStrategy initialized (APEX v7.1 + Position Cap Enforcer)")
+            # CRITICAL: Sync position tracker with actual broker positions at startup
+            # This handles cases where positions were sold manually or bot was restarted
+            if self.broker and hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
+                try:
+                    broker_positions = self.broker.get_positions()
+                    removed = self.broker.position_tracker.sync_with_broker(broker_positions)
+                    if removed > 0:
+                        logger.info(f"🔄 Synced position tracker: removed {removed} orphaned positions")
+                except Exception as sync_err:
+                    logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
+            
+            logger.info("✅ TradingStrategy initialized (APEX v7.1 + Position Cap Enforcer + Profit Tracking)")
         
         except ImportError as e:
             logger.error(f"Failed to import strategy modules: {e}")
@@ -291,6 +314,50 @@ class TradingStrategy:
                             'reason': f'Small position cleanup (${position_value:.2f})'
                         })
                         continue
+                    
+                    # PROFIT-BASED EXIT LOGIC (NEW!)
+                    # Check if we have entry price tracked for this position
+                    if self.broker and hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
+                        try:
+                            pnl_data = self.broker.position_tracker.calculate_pnl(symbol, current_price)
+                            if pnl_data:
+                                pnl_percent = pnl_data['pnl_percent']
+                                pnl_dollars = pnl_data['pnl_dollars']
+                                entry_price = pnl_data['entry_price']
+                                
+                                logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent:+.2f}%) | Entry: ${entry_price:.2f}")
+                                
+                                # STEPPED PROFIT TAKING - Exit portions at profit targets
+                                # This locks in gains and frees capital for new opportunities
+                                # Check targets from highest to lowest
+                                for target_pct, reason in PROFIT_TARGETS:
+                                    if pnl_percent >= target_pct:
+                                        logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +{target_pct}%)")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'{reason} hit (actual: +{pnl_percent:.2f}%)'
+                                        })
+                                        break  # Exit the for loop, continue to next position
+                                else:
+                                    # No profit target hit, check stop loss
+                                    if pnl_percent <= STOP_LOSS_THRESHOLD:
+                                        logger.warning(f"   🛑 STOP LOSS HIT: {symbol} at {pnl_percent:.2f}% (stop: {STOP_LOSS_THRESHOLD}%)")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Stop loss {STOP_LOSS_THRESHOLD}% hit (actual: {pnl_percent:.2f}%)'
+                                        })
+                                    elif pnl_percent <= STOP_LOSS_WARNING:
+                                        logger.warning(f"   ⚠️ Approaching stop loss: {symbol} at {pnl_percent:.2f}%")
+                                        # Don't exit yet, but log it
+                                    continue  # Continue to next position check
+                                
+                                # If we got here via break, skip remaining checks
+                                continue
+                                
+                        except Exception as pnl_err:
+                            logger.debug(f"   Could not calculate P&L for {symbol}: {pnl_err}")
                     
                     # Get market data for analysis
                     candles = self.broker.get_candles(symbol, '5m', 100)
