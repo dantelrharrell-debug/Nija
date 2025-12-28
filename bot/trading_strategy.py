@@ -5,6 +5,7 @@ import queue
 import logging
 import traceback
 from threading import Thread
+from datetime import datetime
 from dotenv import load_dotenv
 import pandas as pd
 
@@ -340,7 +341,6 @@ class TradingStrategy:
                                 entry_time = tracked_position.get('first_entry_time')
                                 if entry_time:
                                     try:
-                                        from datetime import datetime
                                         entry_dt = datetime.fromisoformat(entry_time)
                                         now = datetime.now()
                                         position_age_hours = (now - entry_dt).total_seconds() / 3600
