@@ -52,7 +52,7 @@ STOP_LOSS_WARNING = -1.0  # Warn at -1% loss
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Stricter limits to ensure fee-efficient trading
-MAX_POSITIONS_ALLOWED = 5  # Maximum concurrent positions (reduced from 8)
+MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/micro positions)
 MIN_POSITION_SIZE_USD = 5.0  # Minimum position size in USD (raised from $2)
 MIN_BALANCE_TO_TRADE_USD = 30.0  # Minimum account balance to allow trading (raised from $25)
 
@@ -126,8 +126,8 @@ class TradingStrategy:
             if not self.broker.connect():
                 logger.warning("Broker connection failed; strategy will run in monitor mode")
             
-            # Initialize position cap enforcer (PROFITABILITY FIX: Reduced to 5 positions)
-            self.enforcer = PositionCapEnforcer(max_positions=5, broker=self.broker)
+            # Initialize position cap enforcer (Maximum 8 positions total)
+            self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
             
             # Initialize APEX strategy
             self.apex = NIJAApexStrategyV71(broker_client=self.broker)
@@ -143,7 +143,7 @@ class TradingStrategy:
                 except Exception as sync_err:
                     logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
             
-            logger.info("✅ TradingStrategy initialized (APEX v7.1 + 5-Position Cap + Tighter Stops + Higher Minimums)")
+            logger.info("✅ TradingStrategy initialized (APEX v7.1 + 8-Position Cap + Tighter Stops + Higher Minimums)")
         
         except ImportError as e:
             logger.error(f"Failed to import strategy modules: {e}")
@@ -284,7 +284,7 @@ class TradingStrategy:
             
             # CRITICAL: If over position cap, prioritize selling weakest positions immediately
             # This ensures we get back under cap quickly to avoid further bleeding
-            # PROFITABILITY FIX: Use new 5 position cap
+            # Position cap set to 8 maximum concurrent positions
             positions_over_cap = len(current_positions) - MAX_POSITIONS_ALLOWED
             if positions_over_cap > 0:
                 logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} positions ({positions_over_cap} excess)")
@@ -550,7 +550,7 @@ class TradingStrategy:
                     logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
             
             # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
-            # PROFITABILITY FIX: Use new 5 position cap
+            # Position cap set to 8 maximum concurrent positions
             if len(current_positions) > MAX_POSITIONS_ALLOWED and len(positions_to_exit) < (len(current_positions) - MAX_POSITIONS_ALLOWED):
                 logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - MAX_POSITIONS_ALLOWED - len(positions_to_exit)} more positions")
                 

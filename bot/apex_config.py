@@ -493,7 +493,7 @@ EXECUTION_CONFIG = {
     'min_time_between_trades': 30,  # 30 seconds between trades (was 2 min)
     
     # Position Limits
-    'max_positions': 3,  # 3 positions for ACTIVE TRADING (quick turnover)
+    'max_positions': 8,  # 8 positions maximum (consistent with MAX_POSITIONS_ALLOWED)
     'max_positions_per_symbol': 1,  # One position per symbol
 }
 
