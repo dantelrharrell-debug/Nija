@@ -38,17 +38,17 @@ class PositionCapEnforcer:
     - Sells positions in order until count <= max_allowed
     """
     
-    def __init__(self, max_positions: int = 8, broker: Optional[CoinbaseBroker] = None):
+    def __init__(self, max_positions: int = 5, broker: Optional[CoinbaseBroker] = None):
         """
         Initialize position cap enforcer.
         
         Args:
-            max_positions: Maximum allowed open positions (default: 8)
+            max_positions: Maximum allowed open positions (default: 5 - reduced for profitability)
             broker: CoinbaseBroker instance (created if None)
         """
         self.max_positions = max_positions
         self.broker = broker or CoinbaseBroker()
-        logger.info(f"PositionCapEnforcer initialized: max={max_positions} positions")
+        logger.info(f"PositionCapEnforcer initialized: max={max_positions} positions (PROFITABILITY MODE)")
     
     def get_current_positions(self) -> List[Dict]:
         """

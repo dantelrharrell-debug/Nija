@@ -34,10 +34,15 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # At different balance levels, what's the minimum trade size?
 # UPDATED: Added capital preservation buffer to prevent fund depletion
 
-# For $10.50-50 balance: Trade with 60% positions (leave 40% reserve)
-MIN_BALANCE_TO_TRADE = 10.50  # $10.50 minimum to leave room for Coinbase fees
+# PROFITABILITY FIX: December 28, 2025
+# CRITICAL: Raised minimum to $30 to ensure viable position sizes
+# With $5 minimum per position and 5 position cap, need $25-30 minimum
+# Added buffer for fees = $30 minimum
+
+# For $30-50 balance: Trade with 50% positions (leave 50% reserve)
+MIN_BALANCE_TO_TRADE = 30.0  # $30 minimum (RAISED from $10.50 for profitability)
 MICRO_BALANCE_THRESHOLD = 50.0
-MICRO_BALANCE_POSITION_PCT = 0.60  # 60% max per position (leave 40% buffer)
+MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position (reduced from 60%)
 
 # For $50-100: Trade with 50% positions (leave 50% reserve for safety)
 SMALL_BALANCE_THRESHOLD = 100.0
@@ -74,13 +79,14 @@ TP3_TARGET = 0.080  # 8.0% - excellent trade
 # ============================================================================
 # STOP LOSS (Tighter to preserve capital)
 # ============================================================================
-# With small capital, can't afford big losses
-MAX_LOSS_SMALL_BALANCE = 0.015   # 1.5% max loss for balances < $100
-MAX_LOSS_NORMAL_BALANCE = 0.020  # 2.0% max loss for balances > $100
+# PROFITABILITY FIX: December 28, 2025 - Tightened stops to -1%
+# With small capital, can't afford even 1.5% losses
+MAX_LOSS_SMALL_BALANCE = 0.010   # 1.0% max loss for balances < $100 (TIGHTENED from 1.5%)
+MAX_LOSS_NORMAL_BALANCE = 0.010  # 1.0% max loss for all balances (TIGHTENED from 2%)
 
 # Stop loss placement (as % below entry for longs, above for shorts)
-STOP_LOSS_SMALL_BALANCE = 0.02   # 2% stop for small accounts
-STOP_LOSS_NORMAL = 0.025         # 2.5% stop for normal accounts
+STOP_LOSS_SMALL_BALANCE = 0.01   # 1% stop for small accounts (TIGHTENED from 2%)
+STOP_LOSS_NORMAL = 0.01          # 1% stop for all accounts (TIGHTENED from 2.5%)
 
 # ============================================================================
 # TRADE FREQUENCY (Reduce to minimize fees)
@@ -90,12 +96,11 @@ MIN_SECONDS_BETWEEN_TRADES = 300  # 5 minutes minimum between trades
 MAX_TRADES_PER_HOUR = 6           # Maximum 6 trades/hour (vs unlimited before)
 MAX_TRADES_PER_DAY = 30           # Maximum 30 trades/day (vs 100+ before)
 
-# ============================================================================
 # SIGNAL QUALITY FILTERS (Only high-probability trades)
 # ============================================================================
-# QUALITY FIX: Stricter approach - 4/5 required to reduce losing trades
-# Raised from 3/5 to 4/5 to filter out marginal setups with low win rates
-MIN_SIGNAL_STRENGTH = 4           # Require 4/5 strength (stricter to reduce losses)
+# PROFITABILITY FIX: December 28, 2025 - Raised to 5/5 for maximum quality
+# Only perfect setups with ALL conditions met to maximize win rate
+MIN_SIGNAL_STRENGTH = 5           # Require 5/5 strength (RAISED from 4/5 for profitability)
 MIN_ADX_SMALL_BALANCE = 20        # Industry standard for crypto trending
 MIN_ADX_NORMAL = 20               # Same ADX threshold for consistency
 
