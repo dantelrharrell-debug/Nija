@@ -27,16 +27,20 @@ def test_micro_trade_prevention():
             content = f.read()
             
         # Find the MIN_POSITION_SIZE_USD line
-        for line in content.split('\n'):
-            if 'MIN_POSITION_SIZE_USD' in line and '=' in line and not line.strip().startswith('#'):
-                print(f"Found: {line.strip()}")
-                
-                # Extract the value
-                if '10.0' in line or '10' in line.split('=')[1].split('#')[0]:
-                    print("✅ PASS: MIN_POSITION_SIZE_USD is set to $10")
-                else:
-                    print("❌ FAIL: MIN_POSITION_SIZE_USD is not $10")
-                break
+        import re
+        pattern = r'MIN_POSITION_SIZE_USD\s*=\s*([\d.]+)'
+        match = re.search(pattern, content)
+        
+        if match:
+            value = float(match.group(1))
+            print(f"Found: MIN_POSITION_SIZE_USD = {value}")
+            
+            if value >= 10.0:
+                print("✅ PASS: MIN_POSITION_SIZE_USD is set to $10 or higher")
+            else:
+                print(f"❌ FAIL: MIN_POSITION_SIZE_USD is ${value}, expected $10+")
+        else:
+            print("❌ FAIL: Could not find MIN_POSITION_SIZE_USD")
     except Exception as e:
         print(f"❌ FAIL: Could not read trading_strategy.py: {e}")
     
@@ -107,9 +111,10 @@ def test_micro_trade_prevention():
     print("💡 Impact: Only positions $10+ will be entered")
     print("💡 Reason: Coinbase fees (~1.4%) destroy profit on small positions")
     print("\n📊 Example Impact:")
-    print("   $2 position: Need 6.4% gain for $0.10 profit (UNREALISTIC)")
-    print("   $5 position: Need 3.4% gain for $0.10 profit (DIFFICULT)")
-    print("  $10 position: Need 2.4% gain for $0.10 profit (ACHIEVABLE)")
+    print("   $2 position: Need 1.4% gain to break even, $0.028 in fees")
+    print("   $5 position: Need 1.4% gain to break even, $0.070 in fees")
+    print("  $10 position: Need 1.4% gain to break even, $0.140 in fees")
+    print("  For $0.10 profit: $2 needs 6.4% gain, $5 needs 3.4%, $10 needs 2.4%")
     print("=" * 70 + "\n")
 
 

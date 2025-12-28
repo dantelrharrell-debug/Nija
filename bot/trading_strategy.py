@@ -713,7 +713,9 @@ class TradingStrategy:
                                     filter_stats['position_too_small'] += 1
                                     logger.warning(f"   🚫 MICRO TRADE BLOCKED: {symbol} position size ${position_size:.2f} < ${MIN_POSITION_SIZE_USD} minimum")
                                     logger.warning(f"      💡 Reason: Micro trades hurt profitability - fees (~1.4%) consume profits on small positions")
-                                    logger.warning(f"      📊 With ${position_size:.2f} position, need {(1.4/(position_size/10)):.1f}% gain just to break even on fees")
+                                    # Calculate break-even % needed: (fee_dollars / position_size) * 100
+                                    breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
+                                    logger.warning(f"      📊 Need {breakeven_pct:.1f}% gain just to break even on fees")
                                     continue
                                 
                                 # CRITICAL: Verify we're still under position cap
