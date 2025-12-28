@@ -44,7 +44,7 @@ STOP_LOSS_WARNING = -0.5  # Warn at -0.5% loss
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Stricter limits to ensure fee-efficient trading
-MAX_POSITIONS_ALLOWED = 5  # Maximum concurrent positions (reduced from 8)
+MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/micro positions)
 MIN_POSITION_SIZE_USD = 5.0  # Minimum position size in USD (raised from $2)
 MIN_BALANCE_TO_TRADE_USD = 30.0  # Minimum account balance to allow trading (raised from $25)
 
@@ -118,8 +118,8 @@ class TradingStrategy:
             if not self.broker.connect():
                 logger.warning("Broker connection failed; strategy will run in monitor mode")
             
-            # Initialize position cap enforcer (PROFITABILITY FIX: Reduced to 5 positions)
-            self.enforcer = PositionCapEnforcer(max_positions=5, broker=self.broker)
+            # Initialize position cap enforcer (Maximum 8 positions total)
+            self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
             
             # Initialize APEX strategy
             self.apex = NIJAApexStrategyV71(broker_client=self.broker)
