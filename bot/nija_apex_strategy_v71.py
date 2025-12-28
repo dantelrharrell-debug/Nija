@@ -144,13 +144,13 @@ class NIJAApexStrategyV71:
         logger.debug(f"  EMA sequence: {ema9:.4f} vs {ema21:.4f} vs {ema50:.4f}")
         logger.debug(f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, Vol ratio: {volume_ratio:.2f}")
         
-        if uptrend_score >= 4:  # QUALITY FIX: 4/5 required to reduce losing trades (was 3/5)
+        if uptrend_score >= 3:  # PROFITABILITY V7.2: 3/5 required - balanced quality filter (changed from 4/5)
             return True, 'uptrend', f'Uptrend confirmed ({uptrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 4:  # QUALITY FIX: 4/5 required to reduce losing trades (was 3/5)
+        elif downtrend_score >= 3:  # PROFITABILITY V7.2: 3/5 required - balanced quality filter (changed from 4/5)
             return True, 'downtrend', f'Downtrend confirmed ({downtrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
             logger.debug(f"  → Rejected: Insufficient confirmation")
-            return False, 'none', f'Insufficient trend confirmation (Up:{uptrend_score}/5, Down:{downtrend_score}/5 - need 4/5)'
+            return False, 'none', f'Insufficient trend confirmation (Up:{uptrend_score}/5, Down:{downtrend_score}/5 - need 3/5)'
     
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
@@ -224,7 +224,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 5  # PROFITABILITY FIX: 5/5 required - only perfect setups (raised from 4/5)
+        signal = score >= 3  # PROFITABILITY V7.2: 3/5 required - high conviction without missing opportunities (changed from 5/5)
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
@@ -305,7 +305,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 5  # PROFITABILITY FIX: 5/5 required - only perfect setups (raised from 4/5)
+        signal = score >= 3  # PROFITABILITY V7.2: 3/5 required - high conviction without missing opportunities (changed from 5/5)
         
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         

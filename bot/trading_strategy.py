@@ -27,20 +27,23 @@ DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 MAX_POSITION_HOLD_HOURS = 48  # Auto-exit positions held longer than this (2 days)
 STALE_POSITION_WARNING_HOURS = 24  # Warn about positions held this long (1 day)
 
-# Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE
+# Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE V7.2
 # Updated Dec 28, 2025 - PROFITABILITY FIX for small accounts
 # CRITICAL: With small positions (<$5), we need FASTER exits to lock gains
 # Coinbase fees are ~1.4%, so minimum 1.5% needed for net profit
-# Strategy: Take profits quickly, cut losses faster
+# Strategy: Take profits quickly in STEPS, letting winners run with trailing stops
 PROFIT_TARGETS = [
-    (2.5, "Profit target +2.5% (Net ~1.1% after fees) - EXCELLENT"),
+    (3.0, "Profit target +3.0% (Net ~1.6% after fees) - EXCELLENT"),
     (2.0, "Profit target +2.0% (Net ~0.6% after fees) - GOOD"),
-    (1.5, "Profit target +1.5% (Net ~0.1% after fees) - BREAKEVEN+"),
+    (1.0, "Profit target +1.0% (Net -0.4% after fees) - QUICK EXIT"),
+    (0.5, "Profit target +0.5% (Net -0.9% after fees) - ULTRA FAST EXIT"),
 ]
 
-# Stop loss thresholds - TIGHTENED to prevent excessive drawdown
-STOP_LOSS_THRESHOLD = -1.0  # Exit at -1% loss (REDUCED from -2%)
-STOP_LOSS_WARNING = -0.5  # Warn at -0.5% loss
+# Stop loss thresholds - WIDENED to prevent premature exits (V7.2 IMPROVEMENT)
+# Key insight: Crypto is volatile, -1% stops get hit on normal price action
+# Better to use wider stops and exit on technical breakdown instead
+STOP_LOSS_THRESHOLD = -2.0  # Exit at -2% loss (WIDENED from -1% to reduce stop hunts)
+STOP_LOSS_WARNING = -1.0  # Warn at -1% loss
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Stricter limits to ensure fee-efficient trading
