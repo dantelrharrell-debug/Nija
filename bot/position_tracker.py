@@ -54,18 +54,17 @@ class PositionTracker:
             self.positions = {}
     
     def _save_positions(self):
-        """Save positions to JSON file"""
+        """Save positions to JSON file (assumes lock is already held)"""
         try:
-            with self.lock:
-                data = {
-                    'positions': self.positions,
-                    'last_updated': datetime.now().isoformat()
-                }
-                # Write to temp file first, then rename for atomicity
-                temp_file = self.storage_file + '.tmp'
-                with open(temp_file, 'w') as f:
-                    json.dump(data, f, indent=2)
-                os.replace(temp_file, self.storage_file)
+            data = {
+                'positions': self.positions,
+                'last_updated': datetime.now().isoformat()
+            }
+            # Write to temp file first, then rename for atomicity
+            temp_file = self.storage_file + '.tmp'
+            with open(temp_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            os.replace(temp_file, self.storage_file)
         except Exception as e:
             logger.error(f"Error saving positions: {e}")
     

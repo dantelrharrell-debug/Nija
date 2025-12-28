@@ -66,3 +66,8 @@
 {"timestamp": "2025-12-22T21:23:32.839821", "symbol": "XRP-USD", "side": "SELL", "price": 1.8944, "size_usd": 13.484581416}
 {"timestamp": "2025-12-22T21:23:33.038843", "symbol": "APT-USD", "side": "SELL", "price": 1.6078, "size_usd": 14.615897282}
 {"timestamp": "2025-12-23T05:44:11.418808", "symbol": "BAT-USD", "side": "SELL", "price": 0.21196, "size_usd": 1.2391766981999999}
+{"timestamp": "2025-12-28T02:15:39.145263", "symbol": "BTC-USD", "side": "BUY", "price": 96500.0, "size_usd": 100.0, "quantity": 0.001036}
+{"timestamp": "2025-12-28T02:17:21.561971", "symbol": "TEST-USD", "side": "BUY", "price": 96500.0, "size_usd": 100.0, "quantity": 0.001036}
+{"timestamp": "2025-12-28T02:17:21.562428", "symbol": "TEST-USD", "side": "SELL", "price": 98500.0, "size_usd": 102.07, "quantity": 0.001036, "entry_price": 96500.0, "pnl_dollars": 2.0460000000000065, "pnl_percent": 2.0460000000000065, "entry_value": 100.0}
+{"timestamp": "2025-12-28T02:17:37.332438", "symbol": "TEST-USD", "side": "BUY", "price": 96500.0, "size_usd": 100.0, "quantity": 0.001036}
+{"timestamp": "2025-12-28T02:17:37.332802", "symbol": "TEST-USD", "side": "SELL", "price": 98500.0, "size_usd": 102.07, "quantity": 0.001036, "entry_price": 96500.0, "pnl_dollars": 4.092000000000013, "pnl_percent": 2.0460000000000065, "entry_value": 200.0}
