@@ -53,7 +53,7 @@ STOP_LOSS_WARNING = -1.0  # Warn at -1% loss
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Stricter limits to ensure fee-efficient trading
 MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/micro positions)
-MIN_POSITION_SIZE_USD = 5.0  # Minimum position size in USD (raised from $2)
+MIN_POSITION_SIZE_USD = 10.0  # Minimum position size in USD (raised from $5 to prevent micro trades)
 MIN_BALANCE_TO_TRADE_USD = 30.0  # Minimum account balance to allow trading (raised from $25)
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
@@ -708,10 +708,12 @@ class TradingStrategy:
                                 
                                 # CRITICAL PROFITABILITY FIX: Much stricter minimum position size
                                 # Fees are ~1.4% round-trip, so tiny positions are guaranteed losers
+                                # MICRO TRADE PREVENTION: Block all positions under $10
                                 if position_size < MIN_POSITION_SIZE_USD:
                                     filter_stats['position_too_small'] += 1
-                                    logger.warning(f"   ⚠️  {symbol} position size ${position_size:.2f} < ${MIN_POSITION_SIZE_USD} minimum - SKIPPING")
-                                    logger.warning(f"      💡 Reason: Fees (~1.4%) make positions under ${MIN_POSITION_SIZE_USD} unprofitable")
+                                    logger.warning(f"   🚫 MICRO TRADE BLOCKED: {symbol} position size ${position_size:.2f} < ${MIN_POSITION_SIZE_USD} minimum")
+                                    logger.warning(f"      💡 Reason: Micro trades hurt profitability - fees (~1.4%) consume profits on small positions")
+                                    logger.warning(f"      📊 With ${position_size:.2f} position, need {(1.4/(position_size/10)):.1f}% gain just to break even on fees")
                                     continue
                                 
                                 # CRITICAL: Verify we're still under position cap

@@ -36,7 +36,8 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 
 # PROFITABILITY FIX: December 28, 2025
 # CRITICAL: Raised minimum to $30 to ensure viable position sizes
-# With $5 minimum per position and 5 position cap, need $25-30 minimum
+# With $10 minimum per position and conservative sizing, need $30+ minimum
+# MICRO TRADE PREVENTION: $10 minimum position blocks unprofitable trades
 # Added buffer for fees = $30 minimum
 
 # For $30-50 balance: Trade with 50% positions (leave 50% reserve)
@@ -188,10 +189,15 @@ def calculate_min_position_size(account_balance: float) -> float:
         account_balance: Current account balance
     
     Returns:
-        Minimum position size in USD
+        Minimum position size in USD (never less than $10)
     """
     position_pct = get_position_size_pct(account_balance)
-    return account_balance * position_pct
+    calculated_size = account_balance * position_pct
+    
+    # MICRO TRADE PREVENTION: Always enforce $10 minimum
+    # This prevents fee-destroying micro trades
+    MIN_ABSOLUTE_POSITION = 10.0
+    return max(calculated_size, MIN_ABSOLUTE_POSITION)
 
 
 def should_trade(account_balance: float, trades_today: int, 
@@ -272,6 +278,7 @@ def print_config_summary():
     print("="*70)
     print(f"\n💰 POSITION SIZING:")
     print(f"   Minimum balance to trade: ${MIN_BALANCE_TO_TRADE}")
+    print(f"   Minimum position size: $10.00 (MICRO TRADE PREVENTION)")
     print(f"   Small balance (<$100): {SMALL_BALANCE_POSITION_PCT*100}% per trade")
     print(f"   Medium balance ($100-500): {MEDIUM_BALANCE_POSITION_PCT*100}% per trade")
     print(f"   Normal balance (>$500): {NORMAL_MIN_POSITION_PCT*100}-{NORMAL_MAX_POSITION_PCT*100}%")
@@ -296,6 +303,12 @@ def print_config_summary():
     print(f"   Minimum signal strength: {MIN_SIGNAL_STRENGTH}/5")
     print(f"   Minimum ADX: {MIN_ADX_SMALL_BALANCE} (small), {MIN_ADX_NORMAL} (normal)")
     print(f"   Volume multiplier: {MIN_VOLUME_MULTIPLIER}x")
+    
+    print(f"\n🚫 MICRO TRADE PREVENTION:")
+    print(f"   NO positions under $10.00 allowed")
+    print(f"   Reason: Fees (~1.4%) destroy profitability on small trades")
+    print(f"   Example: $5 position needs 3.4% gain just to profit $0.10")
+    print(f"   With $10+ positions, fees are manageable")
     
     print("="*70 + "\n")
 
