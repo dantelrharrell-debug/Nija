@@ -31,13 +31,18 @@ STALE_POSITION_WARNING_HOURS = 24  # Warn about positions held this long (1 day)
 # Updated Dec 28, 2025 - PROFITABILITY FIX for small accounts
 # CRITICAL: With small positions (<$5), we need FASTER exits to lock gains
 # Coinbase fees are ~1.4%, so minimum 1.5% needed for net profit
-# Strategy: Take profits quickly in STEPS, letting winners run with trailing stops
+# Strategy: Exit FULL position at FIRST target hit, checking from HIGHEST to LOWEST
+# This prioritizes larger gains while providing safety nets for quick reversals
 PROFIT_TARGETS = [
-    (3.0, "Profit target +3.0% (Net ~1.6% after fees) - EXCELLENT"),
-    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - GOOD"),
-    (1.0, "Profit target +1.0% (Net -0.4% after fees) - QUICK EXIT"),
-    (0.5, "Profit target +0.5% (Net -0.9% after fees) - ULTRA FAST EXIT"),
+    (3.0, "Profit target +3.0% (Net ~1.6% after fees) - EXCELLENT"),  # Check first
+    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - GOOD"),       # Check second
+    (1.0, "Profit target +1.0% (Net -0.4% after fees) - QUICK EXIT to protect gains from reversal"),  # Safety net
+    (0.5, "Profit target +0.5% (Net -0.9% after fees) - ULTRA FAST EXIT to prevent loss"),            # Emergency exit
 ]
+# NOTE: 1.0% and 0.5% targets are PROTECTIVE measures, not profit targets
+# They prevent positions from turning profitable gains into losses during sudden reversals
+# The bot checks targets from TOP to BOTTOM, so it exits at 3% if available, 2% if not, etc.
+# This ensures we prioritize profit but have safety mechanisms for volatile markets
 
 # Stop loss thresholds - WIDENED to prevent premature exits (V7.2 IMPROVEMENT)
 # Key insight: Crypto is volatile, -1% stops get hit on normal price action

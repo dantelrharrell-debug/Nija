@@ -144,6 +144,9 @@ class NIJAApexStrategyV71:
         logger.debug(f"  EMA sequence: {ema9:.4f} vs {ema21:.4f} vs {ema50:.4f}")
         logger.debug(f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, Vol ratio: {volume_ratio:.2f}")
         
+        # PROFITABILITY V7.2: Require 3/5 conditions for balanced quality
+        # This filters out weak setups (1-2/5) while allowing quality opportunities (3/5+)
+        # Too strict (4-5/5) misses profitable trades; too loose (1-2/5) takes junk
         if uptrend_score >= 3:  # PROFITABILITY V7.2: 3/5 required - balanced quality filter (changed from 4/5)
             return True, 'uptrend', f'Uptrend confirmed ({uptrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         elif downtrend_score >= 3:  # PROFITABILITY V7.2: 3/5 required - balanced quality filter (changed from 4/5)
