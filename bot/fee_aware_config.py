@@ -93,8 +93,9 @@ MAX_TRADES_PER_DAY = 30           # Maximum 30 trades/day (vs 100+ before)
 # ============================================================================
 # SIGNAL QUALITY FILTERS (Only high-probability trades)
 # ============================================================================
-# PROFITABILITY FIX: Balanced approach - 3/5 allows good setups while filtering weak ones
-MIN_SIGNAL_STRENGTH = 3           # Require 3/5 strength (balanced for crypto volatility)
+# QUALITY FIX: Stricter approach - 4/5 required to reduce losing trades
+# Raised from 3/5 to 4/5 to filter out marginal setups with low win rates
+MIN_SIGNAL_STRENGTH = 4           # Require 4/5 strength (stricter to reduce losses)
 MIN_ADX_SMALL_BALANCE = 20        # Industry standard for crypto trending
 MIN_ADX_NORMAL = 20               # Same ADX threshold for consistency
 

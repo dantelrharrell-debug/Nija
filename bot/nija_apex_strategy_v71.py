@@ -132,8 +132,9 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= self.volume_threshold
         }
         
-        # PROFITABILITY FIX: Require 3 of 5 conditions (balanced approach)
-        # 3/5 allows good opportunities while filtering weak markets
+        # QUALITY FIX: Require 4 of 5 conditions (stricter approach to reduce losing trades)
+        # Raised from 3/5 to 4/5 to filter out marginal setups that lose money
+        # This improves win rate by only trading high-probability setups
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
         
@@ -143,13 +144,13 @@ class NIJAApexStrategyV71:
         logger.debug(f"  EMA sequence: {ema9:.4f} vs {ema21:.4f} vs {ema50:.4f}")
         logger.debug(f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, Vol ratio: {volume_ratio:.2f}")
         
-        if uptrend_score >= 3:  # PROFITABILITY FIX: 3/5 filters for better trade opportunities
+        if uptrend_score >= 4:  # QUALITY FIX: 4/5 required to reduce losing trades (was 3/5)
             return True, 'uptrend', f'Uptrend confirmed ({uptrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 3:  # PROFITABILITY FIX: 3/5 filters for better trade opportunities
+        elif downtrend_score >= 4:  # QUALITY FIX: 4/5 required to reduce losing trades (was 3/5)
             return True, 'downtrend', f'Downtrend confirmed ({downtrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
-            logger.debug(f"  → Rejected: Mixed signals")
-            return False, 'none', f'Mixed signals (Up:{uptrend_score}/5, Down:{downtrend_score}/5)'
+            logger.debug(f"  → Rejected: Insufficient confirmation")
+            return False, 'none', f'Insufficient trend confirmation (Up:{uptrend_score}/5, Down:{downtrend_score}/5 - need 4/5)'
     
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
@@ -223,7 +224,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # PROFITABILITY FIX: 3/5 conditions allows good setups while filtering weak ones
+        signal = score >= 4  # QUALITY FIX: 4/5 required to reduce losing trades (was 3/5)
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
@@ -304,7 +305,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # PROFITABILITY FIX: 3/5 conditions allows good setups while filtering weak ones
+        signal = score >= 4  # QUALITY FIX: 4/5 required to reduce losing trades (was 3/5)
         
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         
