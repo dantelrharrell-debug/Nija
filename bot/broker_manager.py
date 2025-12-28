@@ -1509,13 +1509,49 @@ class BaseBroker(ABC):
                                 strategy="APEX_v7.1"
                             )
                             logger.info(f"   📊 Position tracked: entry=${fill_price:.2f}, size=${size_usd:.2f}")
+                            
+                            # Log BUY trade to journal
+                            self._log_trade_to_journal(
+                                symbol=symbol,
+                                side='BUY',
+                                price=fill_price,
+                                size_usd=size_usd,
+                                quantity=filled_size if filled_size else 0
+                            )
                     else:
+                        # Get P&L before tracking exit
+                        fill_price = None
+                        if success_response and 'average_filled_price' in success_response:
+                            try:
+                                fill_price = float(success_response['average_filled_price'])
+                            except:
+                                pass
+                        if not fill_price or fill_price == 0:
+                            fill_price = self.get_current_price(symbol)
+                        
+                        # Calculate P&L for this exit
+                        pnl_data = None
+                        if fill_price and fill_price > 0:
+                            pnl_data = self.position_tracker.calculate_pnl(symbol, fill_price)
+                            if pnl_data:
+                                logger.info(f"   💰 Exit P&L: ${pnl_data['pnl_dollars']:+.2f} ({pnl_data['pnl_percent']:+.2f}%)")
+                        
                         # Track exit (partial or full sell)
                         self.position_tracker.track_exit(
                             symbol=symbol,
                             exit_quantity=filled_size if filled_size else None
                         )
                         logger.info(f"   📊 Position exit tracked")
+                        
+                        # Log SELL trade to journal with P&L
+                        self._log_trade_to_journal(
+                            symbol=symbol,
+                            side='SELL',
+                            price=fill_price if fill_price else 0,
+                            size_usd=quantity if size_type == 'quote' else (filled_size * fill_price if filled_size and fill_price else 0),
+                            quantity=filled_size if filled_size else 0,
+                            pnl_data=pnl_data
+                        )
                 except Exception as track_err:
                     logger.warning(f"   ⚠️ Position tracking failed: {track_err}")
             
@@ -1824,6 +1860,47 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logger.warning(f"⚠️ Position tracker initialization failed: {e}")
             self.position_tracker = None
+    
+    def _log_trade_to_journal(self, symbol: str, side: str, price: float, 
+                               size_usd: float, quantity: float, pnl_data: dict = None):
+        """
+        Log trade to trade_journal.jsonl with P&L tracking.
+        
+        Args:
+            symbol: Trading symbol
+            side: 'BUY' or 'SELL'
+            price: Execution price
+            size_usd: Trade size in USD
+            quantity: Crypto quantity
+            pnl_data: Optional P&L data for SELL orders (from position_tracker.calculate_pnl)
+        """
+        try:
+            from datetime import datetime
+            
+            trade_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "symbol": symbol,
+                "side": side,
+                "price": price,
+                "size_usd": size_usd,
+                "quantity": quantity
+            }
+            
+            # Add P&L data for SELL orders
+            if pnl_data and side == 'SELL':
+                trade_entry["entry_price"] = pnl_data.get('entry_price', 0)
+                trade_entry["pnl_dollars"] = pnl_data.get('pnl_dollars', 0)
+                trade_entry["pnl_percent"] = pnl_data.get('pnl_percent', 0)
+                trade_entry["entry_value"] = pnl_data.get('entry_value', 0)
+            
+            # Append to trade journal file
+            journal_file = "trade_journal.jsonl"
+            with open(journal_file, 'a') as f:
+                f.write(json.dumps(trade_entry) + '\n')
+            
+            logger.debug(f"Trade logged to journal: {symbol} {side} @ ${price:.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to log trade to journal: {e}")
     
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade API"""
