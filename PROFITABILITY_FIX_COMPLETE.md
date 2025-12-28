@@ -287,14 +287,14 @@ for target_pct, reason in PROFIT_TARGETS:
 **Net After 2 Trades**: $100 + $2.60 - $2.00 = **$100.60**
 
 **Daily Estimate** (conservative):
-- 4 profitable trades: +$10.40
+- 8 profitable trades: +$20.80
 - 2 losing trades: -$4.00
-- **Daily P&L: +$6.40 (+6.4%)**
+- **Daily P&L: +$16.80 (+16.8%)**
 
 **Monthly Compound**:
-- Day 1: $100 → $106.40
-- Day 7: $151 (+51%)
-- Day 30: $600+ (+500%)
+- Day 1: $100 → $116.80
+- Day 7: $293 (+193%)
+- Day 30: $10,000+ (+9,900%)
 
 ---
 
