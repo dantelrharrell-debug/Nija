@@ -42,6 +42,12 @@ PROFIT_TARGETS = [
 STOP_LOSS_THRESHOLD = -1.0  # Exit at -1% loss (REDUCED from -2%)
 STOP_LOSS_WARNING = -0.5  # Warn at -0.5% loss
 
+# Position management constants - PROFITABILITY FIX (Dec 28, 2025)
+# Stricter limits to ensure fee-efficient trading
+MAX_POSITIONS_ALLOWED = 5  # Maximum concurrent positions (reduced from 8)
+MIN_POSITION_SIZE_USD = 5.0  # Minimum position size in USD (raised from $2)
+MIN_BALANCE_TO_TRADE_USD = 30.0  # Minimum account balance to allow trading (raised from $25)
+
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
     Execute a function with a timeout. Returns (result, error).
@@ -246,9 +252,6 @@ class TradingStrategy:
             current_positions = self.broker.get_positions() if self.broker else []
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
-            
-            # PROFITABILITY FIX: Lower position cap for better capital management
-            MAX_POSITIONS_ALLOWED = 5  # Reduced from 8 for profitability
             
             if entries_blocked:
                 logger.error("🛑 ALL NEW ENTRIES BLOCKED: STOP_ALL_ENTRIES.conf is active")
@@ -624,14 +627,10 @@ class TradingStrategy:
                 logger.info(f"")
             
             # STEP 2: Look for new entry opportunities (only if entries allowed)
-            # CRITICAL PROFITABILITY FIX: Much higher minimums to ensure fee-profitable trades
-            # With fees at 1.4%, positions under $5 have no realistic profit potential
-            min_position_size = 5.0  # RAISED from $2 - essential for profitability
-            max_positions = 5  # REDUCED from 8 - smaller account needs fewer, larger positions
-            min_balance_to_trade = 30.0  # RAISED from $25 - need buffer for fees
+            # CRITICAL PROFITABILITY FIX: Use module-level constants for consistency
             
-            if not entries_blocked and len(current_positions) < max_positions and account_balance >= min_balance_to_trade:
-                logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{max_positions}, balance: ${account_balance:.2f}, min: ${min_balance_to_trade})...")
+            if not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD:
+                logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
                 
                 # Get top market candidates (limit scan to prevent timeouts)
                 try:
@@ -701,15 +700,15 @@ class TradingStrategy:
                                 
                                 # CRITICAL PROFITABILITY FIX: Much stricter minimum position size
                                 # Fees are ~1.4% round-trip, so tiny positions are guaranteed losers
-                                if position_size < min_position_size:
+                                if position_size < MIN_POSITION_SIZE_USD:
                                     filter_stats['position_too_small'] += 1
-                                    logger.warning(f"   ⚠️  {symbol} position size ${position_size:.2f} < ${min_position_size} minimum - SKIPPING")
-                                    logger.warning(f"      💡 Reason: Fees (~1.4%) make positions under ${min_position_size} unprofitable")
+                                    logger.warning(f"   ⚠️  {symbol} position size ${position_size:.2f} < ${MIN_POSITION_SIZE_USD} minimum - SKIPPING")
+                                    logger.warning(f"      💡 Reason: Fees (~1.4%) make positions under ${MIN_POSITION_SIZE_USD} unprofitable")
                                     continue
                                 
                                 # CRITICAL: Verify we're still under position cap
-                                if len(current_positions) >= max_positions:
-                                    logger.warning(f"   ⚠️  Position cap ({max_positions}) reached - STOP NEW ENTRIES")
+                                if len(current_positions) >= MAX_POSITIONS_ALLOWED:
+                                    logger.warning(f"   ⚠️  Position cap ({MAX_POSITIONS_ALLOWED}) reached - STOP NEW ENTRIES")
                                     break
                                 
                                 logger.info(f"   🎯 BUY SIGNAL: {symbol} - size=${position_size:.2f} - {analysis.get('reason', '')}")
@@ -745,10 +744,10 @@ class TradingStrategy:
                 reasons = []
                 if entries_blocked:
                     reasons.append("STOP_ALL_ENTRIES.conf exists")
-                if len(current_positions) >= max_positions:
-                    reasons.append(f"Position cap reached ({len(current_positions)}/{max_positions})")
-                if account_balance < min_balance_to_trade:
-                    reasons.append(f"Balance ${account_balance:.2f} < ${min_balance_to_trade} minimum (need buffer for fees)")
+                if len(current_positions) >= MAX_POSITIONS_ALLOWED:
+                    reasons.append(f"Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
+                if account_balance < MIN_BALANCE_TO_TRADE_USD:
+                    reasons.append(f"Balance ${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD} minimum (need buffer for fees)")
                 
                 reason_str = ", ".join(reasons) if reasons else "Unknown reason"
                 logger.info(f"   Skipping new entries: {reason_str}")
