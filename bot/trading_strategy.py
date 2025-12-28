@@ -5,6 +5,7 @@ import queue
 import logging
 import traceback
 from threading import Thread
+from datetime import datetime
 from dotenv import load_dotenv
 import pandas as pd
 
@@ -18,20 +19,25 @@ MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 1
 
 # Exit strategy constants (no entry price required)
 MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
-RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains)
-RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses)
+RSI_OVERBOUGHT_THRESHOLD = 65  # Exit when RSI exceeds this (lock gains) - LOWERED from 70
+RSI_OVERSOLD_THRESHOLD = 35  # Exit when RSI below this (cut losses) - RAISED from 30
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
-# Profit target thresholds (stepped exits) - FEE-AWARE + AGGRESSIVE
-# Updated Dec 27, 2025 to ensure NET profitability after Coinbase fees (~1.4%)
-# ENHANCED: Added more granular targets to lock in smaller gains faster
-# Strategy: Exit portions at multiple levels to reduce risk and free capital
+# Time-based exit thresholds (prevent indefinite holding)
+MAX_POSITION_HOLD_HOURS = 48  # Auto-exit positions held longer than this (2 days)
+STALE_POSITION_WARNING_HOURS = 24  # Warn about positions held this long (1 day)
+
+# Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE
+# Updated Dec 28, 2025 to sell faster and lock in gains before reversals
+# CRITICAL FIX: Lower targets to take profits more aggressively
+# Coinbase fees are ~1.4%, so we need at least 1.5% to be profitable
+# Strategy: Exit at first profitable opportunity to free capital and reduce risk
 PROFIT_TARGETS = [
-    (5.0, "Profit target +5.0% (Net ~3.6% after fees) - EXCELLENT"),
-    (4.0, "Profit target +4.0% (Net ~2.6% after fees) - GREAT"),
-    (3.0, "Profit target +3.0% (Net ~1.6% after fees) - GOOD"),
-    (2.5, "Profit target +2.5% (Net ~1.1% after fees) - SOLID"),
-    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - PROFITABLE"),
+    (3.0, "Profit target +3.0% (Net ~1.6% after fees) - GREAT"),
+    (2.5, "Profit target +2.5% (Net ~1.1% after fees) - GOOD"),
+    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - SOLID"),
+    (1.75, "Profit target +1.75% (Net ~0.35% after fees) - PROFITABLE"),
+    (1.5, "Profit target +1.5% (Net ~0.1% after fees) - BREAKEVEN+"),
 ]
 
 # Stop loss thresholds
@@ -322,8 +328,38 @@ class TradingStrategy:
                     # PROFIT-BASED EXIT LOGIC (NEW!)
                     # Check if we have entry price tracked for this position
                     entry_price_available = False
+                    entry_time_available = False
+                    position_age_hours = 0
+                    
                     if self.broker and hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
                         try:
+                            tracked_position = self.broker.position_tracker.get_position(symbol)
+                            if tracked_position:
+                                entry_price_available = True
+                                
+                                # Check position age for time-based exits
+                                entry_time = tracked_position.get('first_entry_time')
+                                if entry_time:
+                                    try:
+                                        entry_dt = datetime.fromisoformat(entry_time)
+                                        now = datetime.now()
+                                        position_age_hours = (now - entry_dt).total_seconds() / 3600
+                                        entry_time_available = True
+                                        
+                                        # TIME-BASED EXIT: Auto-exit stale positions
+                                        if position_age_hours >= MAX_POSITION_HOLD_HOURS:
+                                            logger.warning(f"   ⏰ STALE POSITION EXIT: {symbol} held for {position_age_hours:.1f} hours (max: {MAX_POSITION_HOLD_HOURS})")
+                                            positions_to_exit.append({
+                                                'symbol': symbol,
+                                                'quantity': quantity,
+                                                'reason': f'Time-based exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_HOURS}h)'
+                                            })
+                                            continue
+                                        elif position_age_hours >= STALE_POSITION_WARNING_HOURS:
+                                            logger.info(f"   ⚠️ Position aging: {symbol} held for {position_age_hours:.1f} hours")
+                                    except Exception as time_err:
+                                        logger.debug(f"   Could not parse entry time for {symbol}: {time_err}")
+                            
                             pnl_data = self.broker.position_tracker.calculate_pnl(symbol, current_price)
                             if pnl_data:
                                 entry_price_available = True
@@ -413,10 +449,10 @@ class TradingStrategy:
                     
                     rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI
                     
-                    # ENHANCED: More aggressive profit-taking without entry price
-                    # Exit on RSI extremes OR momentum reversal signals
+                    # ULTRA AGGRESSIVE: Exit on multiple signals to lock gains faster
+                    # Dec 28, 2025: Lowered thresholds to sell positions before reversals eat profits
                     
-                    # Strong overbought (RSI > 70) - likely near top, take profits
+                    # Strong overbought (RSI > 65) - likely near top, take profits (LOWERED from 70)
                     if rsi > RSI_OVERBOUGHT_THRESHOLD:
                         logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f})")
                         positions_to_exit.append({
@@ -426,9 +462,9 @@ class TradingStrategy:
                         })
                         continue
                     
-                    # Moderate overbought (RSI > 60) + weak momentum = exit
+                    # Moderate overbought (RSI > 55) + weak momentum = exit (LOWERED from 60)
                     # This catches positions that are up but losing steam
-                    if rsi > 60:
+                    if rsi > 55:
                         # Check if price is below short-term EMA (momentum weakening)
                         ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
                         if current_price < ema9:
@@ -440,7 +476,22 @@ class TradingStrategy:
                             })
                             continue
                     
-                    # Oversold (RSI < 30) - prevent further losses
+                    # NEW: Profit protection - exit if in profit zone (RSI 50-65) but price crosses below EMA9
+                    # This prevents giving back profits when momentum shifts
+                    if 50 < rsi < 65:
+                        ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
+                        ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
+                        # If price crosses below both EMAs, momentum is shifting - protect gains
+                        if current_price < ema9 and current_price < ema21:
+                            logger.info(f"   🔻 PROFIT PROTECTION EXIT: {symbol} (RSI={rsi:.1f}, price below both EMAs)")
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': f'Profit protection (RSI={rsi:.1f}, bearish cross) - locking gains'
+                            })
+                            continue
+                    
+                    # Oversold (RSI < 35) - prevent further losses (RAISED from 30)
                     if rsi < RSI_OVERSOLD_THRESHOLD:
                         logger.info(f"   📉 RSI OVERSOLD EXIT: {symbol} (RSI={rsi:.1f}) - cutting losses")
                         positions_to_exit.append({
@@ -450,9 +501,9 @@ class TradingStrategy:
                         })
                         continue
                     
-                    # Moderate oversold (RSI < 40) + downtrend = exit
+                    # Moderate oversold (RSI < 45) + downtrend = exit (RAISED from 40)
                     # This catches positions that are down and still falling
-                    if rsi < 40:
+                    if rsi < 45:
                         # Check if price is in downtrend (below EMA21)
                         ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
                         if current_price < ema21:
