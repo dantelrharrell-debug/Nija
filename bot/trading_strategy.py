@@ -28,21 +28,19 @@ MAX_POSITION_HOLD_HOURS = 48  # Auto-exit positions held longer than this (2 day
 STALE_POSITION_WARNING_HOURS = 24  # Warn about positions held this long (1 day)
 
 # Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE
-# Updated Dec 28, 2025 to sell faster and lock in gains before reversals
-# CRITICAL FIX: Lower targets to take profits more aggressively
-# Coinbase fees are ~1.4%, so we need at least 1.5% to be profitable
-# Strategy: Exit at first profitable opportunity to free capital and reduce risk
+# Updated Dec 28, 2025 - PROFITABILITY FIX for small accounts
+# CRITICAL: With small positions (<$5), we need FASTER exits to lock gains
+# Coinbase fees are ~1.4%, so minimum 1.5% needed for net profit
+# Strategy: Take profits quickly, cut losses faster
 PROFIT_TARGETS = [
-    (3.0, "Profit target +3.0% (Net ~1.6% after fees) - GREAT"),
-    (2.5, "Profit target +2.5% (Net ~1.1% after fees) - GOOD"),
-    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - SOLID"),
-    (1.75, "Profit target +1.75% (Net ~0.35% after fees) - PROFITABLE"),
+    (2.5, "Profit target +2.5% (Net ~1.1% after fees) - EXCELLENT"),
+    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - GOOD"),
     (1.5, "Profit target +1.5% (Net ~0.1% after fees) - BREAKEVEN+"),
 ]
 
-# Stop loss thresholds
-STOP_LOSS_THRESHOLD = -2.0  # Exit at -2% loss
-STOP_LOSS_WARNING = -1.0  # Warn at -1% loss
+# Stop loss thresholds - TIGHTENED to prevent excessive drawdown
+STOP_LOSS_THRESHOLD = -1.0  # Exit at -1% loss (REDUCED from -2%)
+STOP_LOSS_WARNING = -0.5  # Warn at -0.5% loss
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
@@ -114,8 +112,8 @@ class TradingStrategy:
             if not self.broker.connect():
                 logger.warning("Broker connection failed; strategy will run in monitor mode")
             
-            # Initialize position cap enforcer (hard limit: 8 positions)
-            self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
+            # Initialize position cap enforcer (PROFITABILITY FIX: Reduced to 5 positions)
+            self.enforcer = PositionCapEnforcer(max_positions=5, broker=self.broker)
             
             # Initialize APEX strategy
             self.apex = NIJAApexStrategyV71(broker_client=self.broker)
@@ -131,7 +129,7 @@ class TradingStrategy:
                 except Exception as sync_err:
                     logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
             
-            logger.info("✅ TradingStrategy initialized (APEX v7.1 + Position Cap Enforcer + Profit Tracking)")
+            logger.info("✅ TradingStrategy initialized (APEX v7.1 + 5-Position Cap + Tighter Stops + Higher Minimums)")
         
         except ImportError as e:
             logger.error(f"Failed to import strategy modules: {e}")
@@ -238,7 +236,7 @@ class TradingStrategy:
             
             # CRITICAL: Enforce position cap first
             if self.enforcer:
-                logger.info("🔍 Enforcing position cap (max 8)...")
+                logger.info("🔍 Enforcing position cap (max 5 - PROFITABILITY MODE)...")
                 success, result = self.enforcer.enforce_cap()
                 if result['excess'] > 0:
                     logger.warning(f"⚠️ Excess positions detected: {result['excess']} over cap")
@@ -249,14 +247,17 @@ class TradingStrategy:
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
             
+            # PROFITABILITY FIX: Lower position cap for better capital management
+            MAX_POSITIONS_ALLOWED = 5  # Reduced from 8 for profitability
+            
             if entries_blocked:
                 logger.error("🛑 ALL NEW ENTRIES BLOCKED: STOP_ALL_ENTRIES.conf is active")
                 logger.info("   Exiting positions only (no new buys)")
-            elif len(current_positions) >= 8:
-                logger.warning(f"🛑 ENTRY BLOCKED: Position cap reached ({len(current_positions)}/8)")
+            elif len(current_positions) >= MAX_POSITIONS_ALLOWED:
+                logger.warning(f"🛑 ENTRY BLOCKED: Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
                 logger.info("   Closing positions only until below cap")
             else:
-                logger.info(f"✅ Position cap OK ({len(current_positions)}/8) - entries enabled")
+                logger.info(f"✅ Position cap OK ({len(current_positions)}/{MAX_POSITIONS_ALLOWED}) - entries enabled")
             
             # Get account balance for position sizing
             if not self.broker or not self.apex:
@@ -272,9 +273,10 @@ class TradingStrategy:
             
             # CRITICAL: If over position cap, prioritize selling weakest positions immediately
             # This ensures we get back under cap quickly to avoid further bleeding
-            positions_over_cap = len(current_positions) - 8
+            # PROFITABILITY FIX: Use new 5 position cap
+            positions_over_cap = len(current_positions) - MAX_POSITIONS_ALLOWED
             if positions_over_cap > 0:
-                logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/8 positions ({positions_over_cap} excess)")
+                logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} positions ({positions_over_cap} excess)")
                 logger.warning(f"   Will prioritize selling {positions_over_cap} weakest positions first")
             
             # CRITICAL FIX: Identify ALL positions that need to exit first
@@ -537,8 +539,9 @@ class TradingStrategy:
                     logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
             
             # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
-            if len(current_positions) > 8 and len(positions_to_exit) < (len(current_positions) - 8):
-                logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - 8 - len(positions_to_exit)} more positions")
+            # PROFITABILITY FIX: Use new 5 position cap
+            if len(current_positions) > MAX_POSITIONS_ALLOWED and len(positions_to_exit) < (len(current_positions) - MAX_POSITIONS_ALLOWED):
+                logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - MAX_POSITIONS_ALLOWED - len(positions_to_exit)} more positions")
                 
                 # Identify positions not yet marked for exit
                 symbols_to_exit = {p['symbol'] for p in positions_to_exit}
@@ -548,7 +551,7 @@ class TradingStrategy:
                 remaining_sorted = sorted(remaining_positions, key=lambda p: p.get('quantity', 0) * self.broker.get_current_price(p.get('symbol', '')))
                 
                 # Force-sell smallest positions to get under cap
-                positions_needed = (len(current_positions) - 8) - len(positions_to_exit)
+                positions_needed = (len(current_positions) - MAX_POSITIONS_ALLOWED) - len(positions_to_exit)
                 for pos in remaining_sorted[:positions_needed]:
                     symbol = pos.get('symbol')
                     quantity = pos.get('quantity', 0)
@@ -621,12 +624,14 @@ class TradingStrategy:
                 logger.info(f"")
             
             # STEP 2: Look for new entry opportunities (only if entries allowed)
-            # CRITICAL: Prevent positions under $2 and enforce strict 8-position cap
-            min_position_size = 2.0  # Never trade below $2
-            max_positions = 8
+            # CRITICAL PROFITABILITY FIX: Much higher minimums to ensure fee-profitable trades
+            # With fees at 1.4%, positions under $5 have no realistic profit potential
+            min_position_size = 5.0  # RAISED from $2 - essential for profitability
+            max_positions = 5  # REDUCED from 8 - smaller account needs fewer, larger positions
+            min_balance_to_trade = 30.0  # RAISED from $25 - need buffer for fees
             
-            if not entries_blocked and len(current_positions) < max_positions and account_balance >= 25.0:
-                logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{max_positions}, balance: ${account_balance:.2f})...")
+            if not entries_blocked and len(current_positions) < max_positions and account_balance >= min_balance_to_trade:
+                logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{max_positions}, balance: ${account_balance:.2f}, min: ${min_balance_to_trade})...")
                 
                 # Get top market candidates (limit scan to prevent timeouts)
                 try:
@@ -694,10 +699,12 @@ class TradingStrategy:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 
-                                # CRITICAL: Skip positions under $2
+                                # CRITICAL PROFITABILITY FIX: Much stricter minimum position size
+                                # Fees are ~1.4% round-trip, so tiny positions are guaranteed losers
                                 if position_size < min_position_size:
                                     filter_stats['position_too_small'] += 1
                                     logger.warning(f"   ⚠️  {symbol} position size ${position_size:.2f} < ${min_position_size} minimum - SKIPPING")
+                                    logger.warning(f"      💡 Reason: Fees (~1.4%) make positions under ${min_position_size} unprofitable")
                                     continue
                                 
                                 # CRITICAL: Verify we're still under position cap
@@ -740,8 +747,8 @@ class TradingStrategy:
                     reasons.append("STOP_ALL_ENTRIES.conf exists")
                 if len(current_positions) >= max_positions:
                     reasons.append(f"Position cap reached ({len(current_positions)}/{max_positions})")
-                if account_balance < 25.0:
-                    reasons.append(f"Balance ${account_balance:.2f} < $25.00 minimum")
+                if account_balance < min_balance_to_trade:
+                    reasons.append(f"Balance ${account_balance:.2f} < ${min_balance_to_trade} minimum (need buffer for fees)")
                 
                 reason_str = ", ".join(reasons) if reasons else "Unknown reason"
                 logger.info(f"   Skipping new entries: {reason_str}")

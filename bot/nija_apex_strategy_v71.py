@@ -224,7 +224,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 4  # QUALITY FIX: 4/5 required to reduce losing trades (was 3/5)
+        signal = score >= 5  # PROFITABILITY FIX: 5/5 required - only perfect setups (raised from 4/5)
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
@@ -305,7 +305,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 4  # QUALITY FIX: 4/5 required to reduce losing trades (was 3/5)
+        signal = score >= 5  # PROFITABILITY FIX: 5/5 required - only perfect setups (raised from 4/5)
         
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         
