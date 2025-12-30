@@ -262,7 +262,7 @@ EXECUTION = {
 # ═══════════════════════════════════════════════════════════════════
 
 BROKERS = {
-    'supported': ['coinbase', 'binance', 'alpaca'],
+    'supported': ['coinbase', 'binance', 'alpaca', 'okx'],
     'default': 'coinbase',
     'coinbase': {
         'enabled': True,
@@ -270,6 +270,10 @@ BROKERS = {
     },
     'binance': {
         'enabled': False,  # Placeholder
+        'asset_classes': ['crypto', 'futures'],
+    },
+    'okx': {
+        'enabled': False,  # Enable when configured
         'asset_classes': ['crypto', 'futures'],
     },
     'alpaca': {
@@ -429,7 +433,7 @@ AI_CONFIG = {
 
 BROKER_CONFIG = {
     # Default Broker
-    'default_broker': 'coinbase',  # 'coinbase', 'binance', or 'alpaca'
+    'default_broker': 'coinbase',  # 'coinbase', 'binance', 'alpaca', or 'okx'
     
     # Broker-Specific Settings
     'coinbase': {
@@ -437,6 +441,10 @@ BROKER_CONFIG = {
         'default_product_type': 'SPOT',
     },
     'binance': {
+        'use_testnet': False,
+        'default_product_type': 'SPOT',  # or 'FUTURES'
+    },
+    'okx': {
         'use_testnet': False,
         'default_product_type': 'SPOT',  # or 'FUTURES'
     },

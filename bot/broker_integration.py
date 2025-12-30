@@ -378,6 +378,329 @@ class AlpacaBrokerAdapter(BrokerInterface):
         return None
 
 
+class OKXBrokerAdapter(BrokerInterface):
+    """
+    OKX Exchange API adapter for cryptocurrency spot and futures trading.
+    
+    Supports:
+    - Spot trading (USDT pairs)
+    - Futures/Perpetual contracts
+    - Testnet for paper trading
+    - Advanced order types
+    
+    Documentation: https://www.okx.com/docs-v5/en/
+    """
+    
+    def __init__(self, api_key: str = None, api_secret: str = None,
+                 passphrase: str = None, testnet: bool = False):
+        """
+        Initialize OKX broker adapter.
+        
+        Args:
+            api_key: OKX API key
+            api_secret: OKX API secret
+            passphrase: OKX API passphrase
+            testnet: Use OKX testnet (default: False)
+        """
+        import os
+        self.api_key = api_key or os.getenv("OKX_API_KEY")
+        self.api_secret = api_secret or os.getenv("OKX_API_SECRET")
+        self.passphrase = passphrase or os.getenv("OKX_PASSPHRASE")
+        self.testnet = testnet or os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
+        self.account_api = None
+        self.market_api = None
+        self.trade_api = None
+        logger.info(f"OKX broker adapter initialized (testnet={self.testnet})")
+    
+    def connect(self) -> bool:
+        """Connect to OKX API."""
+        try:
+            import okx.Account as Account
+            import okx.MarketData as MarketData
+            import okx.Trade as Trade
+            
+            if not self.api_key or not self.api_secret or not self.passphrase:
+                logger.error("OKX credentials not found")
+                return False
+            
+            # API flag: "1" for testnet, "0" for live
+            flag = "1" if self.testnet else "0"
+            
+            # Initialize OKX API clients
+            self.account_api = Account.AccountAPI(self.api_key, self.api_secret, 
+                                                   self.passphrase, False, flag)
+            self.market_api = MarketData.MarketAPI(self.api_key, self.api_secret,
+                                                    self.passphrase, False, flag)
+            self.trade_api = Trade.TradeAPI(self.api_key, self.api_secret,
+                                            self.passphrase, False, flag)
+            
+            # Test connection
+            result = self.account_api.get_account_balance()
+            
+            if result and result.get('code') == '0':
+                env_type = "testnet" if self.testnet else "live"
+                logger.info(f"✅ OKX connected ({env_type})")
+                return True
+            else:
+                error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+                logger.error(f"OKX connection test failed: {error_msg}")
+                return False
+                
+        except ImportError:
+            logger.error("OKX SDK not installed. Install with: pip install okx")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to connect to OKX: {e}")
+            return False
+    
+    def get_account_balance(self) -> Dict[str, float]:
+        """Get OKX account balance."""
+        try:
+            if not self.account_api:
+                return {
+                    'total_balance': 0.0,
+                    'available_balance': 0.0,
+                    'currency': 'USDT'
+                }
+            
+            result = self.account_api.get_account_balance()
+            
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    # Get total equity
+                    total_eq = float(data[0].get('totalEq', 0))
+                    
+                    # Find USDT available balance
+                    details = data[0].get('details', [])
+                    usdt_available = 0.0
+                    
+                    for detail in details:
+                        if detail.get('ccy') == 'USDT':
+                            usdt_available = float(detail.get('availBal', 0))
+                            break
+                    
+                    logger.info(f"OKX balance: Total ${total_eq:.2f}, Available USDT: ${usdt_available:.2f}")
+                    
+                    return {
+                        'total_balance': total_eq,
+                        'available_balance': usdt_available,
+                        'currency': 'USDT'
+                    }
+            
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USDT'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching OKX balance: {e}")
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USDT'
+            }
+    
+    def get_market_data(self, symbol: str, timeframe: str = '5m',
+                       limit: int = 100) -> Optional[Dict]:
+        """Get market data from OKX."""
+        try:
+            if not self.market_api:
+                return None
+            
+            # Convert symbol format (BTC-USD -> BTC-USDT)
+            okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
+            
+            # Map timeframe to OKX format
+            timeframe_map = {
+                "1m": "1m", "5m": "5m", "15m": "15m",
+                "1h": "1H", "4h": "4H", "1d": "1D"
+            }
+            okx_timeframe = timeframe_map.get(timeframe.lower(), "5m")
+            
+            # Fetch candles
+            result = self.market_api.get_candlesticks(
+                instId=okx_symbol,
+                bar=okx_timeframe,
+                limit=str(min(limit, 100))
+            )
+            
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                candles = []
+                
+                for candle in data:
+                    candles.append({
+                        'timestamp': int(candle[0]),
+                        'open': float(candle[1]),
+                        'high': float(candle[2]),
+                        'low': float(candle[3]),
+                        'close': float(candle[4]),
+                        'volume': float(candle[5])
+                    })
+                
+                logger.info(f"Fetched {len(candles)} candles for {okx_symbol} from OKX")
+                
+                return {
+                    'symbol': okx_symbol,
+                    'timeframe': timeframe,
+                    'candles': candles
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching OKX market data: {e}")
+            return None
+    
+    def place_market_order(self, symbol: str, side: str, size: float,
+                          size_type: str = 'quote') -> Optional[Dict]:
+        """Place market order on OKX."""
+        try:
+            if not self.trade_api:
+                return None
+            
+            # Convert symbol format
+            okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
+            
+            # Place order
+            result = self.trade_api.place_order(
+                instId=okx_symbol,
+                tdMode='cash',  # Spot trading
+                side=side.lower(),
+                ordType='market',
+                sz=str(size)
+            )
+            
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    order_id = data[0].get('ordId')
+                    logger.info(f"OKX market {side} order placed: {okx_symbol} (ID: {order_id})")
+                    
+                    return {
+                        'order_id': order_id,
+                        'symbol': okx_symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': 0.0,  # Would need to fetch order details
+                        'status': 'filled',
+                        'timestamp': datetime.now()
+                    }
+            
+            error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+            logger.error(f"OKX order failed: {error_msg}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"OKX order error: {e}")
+            return None
+    
+    def place_limit_order(self, symbol: str, side: str, size: float,
+                         price: float, size_type: str = 'quote') -> Optional[Dict]:
+        """Place limit order on OKX."""
+        try:
+            if not self.trade_api:
+                return None
+            
+            # Convert symbol format
+            okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
+            
+            # Place limit order
+            result = self.trade_api.place_order(
+                instId=okx_symbol,
+                tdMode='cash',
+                side=side.lower(),
+                ordType='limit',
+                px=str(price),
+                sz=str(size)
+            )
+            
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    order_id = data[0].get('ordId')
+                    logger.info(f"OKX limit {side} order placed: {okx_symbol} @ ${price} (ID: {order_id})")
+                    
+                    return {
+                        'order_id': order_id,
+                        'symbol': okx_symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': price,
+                        'status': 'open',
+                        'timestamp': datetime.now()
+                    }
+            
+            error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+            logger.error(f"OKX limit order failed: {error_msg}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"OKX limit order error: {e}")
+            return None
+    
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel order on OKX."""
+        try:
+            if not self.trade_api:
+                return False
+            
+            # Note: OKX needs both ordId and instId to cancel
+            # This is a simplified version - you'd need to track instId
+            logger.warning("OKX order cancellation requires instrument ID - not implemented")
+            return False
+            
+        except Exception as e:
+            logger.error(f"OKX cancel order error: {e}")
+            return False
+    
+    def get_open_positions(self) -> List[Dict]:
+        """Get open positions from OKX."""
+        try:
+            if not self.account_api:
+                return []
+            
+            result = self.account_api.get_account_balance()
+            
+            if result and result.get('code') == '0':
+                positions = []
+                data = result.get('data', [])
+                
+                if data and len(data) > 0:
+                    details = data[0].get('details', [])
+                    
+                    for detail in details:
+                        ccy = detail.get('ccy')
+                        available = float(detail.get('availBal', 0))
+                        
+                        # Only non-zero, non-USDT balances
+                        if ccy != 'USDT' and available > 0:
+                            positions.append({
+                                'symbol': f'{ccy}-USDT',
+                                'size': available,
+                                'entry_price': 0.0,  # Would need trade history
+                                'current_price': 0.0,  # Would need ticker
+                                'pnl': 0.0,
+                                'pnl_pct': 0.0
+                            })
+                
+                return positions
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error fetching OKX positions: {e}")
+            return []
+    
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get order status from OKX."""
+        logger.info(f"Checking OKX order status: {order_id}")
+        # TODO: Implement using trade_api.get_order()
+        return None
+
+
 class BrokerFactory:
     """
     Factory class for creating broker adapters.
@@ -389,7 +712,7 @@ class BrokerFactory:
         Create a broker adapter instance.
         
         Args:
-            broker_name: Name of broker ('coinbase', 'binance', 'alpaca')
+            broker_name: Name of broker ('coinbase', 'binance', 'alpaca', 'okx')
             **kwargs: Broker-specific configuration
         
         Returns:
@@ -406,5 +729,7 @@ class BrokerFactory:
             return BinanceBrokerAdapter(**kwargs)
         elif broker_name == 'alpaca':
             return AlpacaBrokerAdapter(**kwargs)
+        elif broker_name == 'okx':
+            return OKXBrokerAdapter(**kwargs)
         else:
             raise ValueError(f"Unsupported broker: {broker_name}")

@@ -97,6 +97,7 @@ def _serialize_object_to_dict(obj) -> Dict:
 class BrokerType(Enum):
     COINBASE = "coinbase"
     BINANCE = "binance"
+    OKX = "okx"
     INTERACTIVE_BROKERS = "interactive_brokers"
     TD_AMERITRADE = "td_ameritrade"
     ALPACA = "alpaca"
@@ -2296,6 +2297,308 @@ class BinanceBroker(BaseBroker):
     def supports_asset_class(self, asset_class: str) -> bool:
         """Binance supports crypto"""
         return asset_class.lower() == "crypto"
+
+
+class OKXBroker(BaseBroker):
+    """
+    OKX Exchange integration for crypto spot and futures trading.
+    
+    Features:
+    - Spot trading (USDT pairs)
+    - Futures/perpetual contracts  
+    - Testnet support for paper trading
+    - Advanced order types
+    
+    Documentation: https://www.okx.com/docs-v5/en/
+    Python SDK: https://github.com/okx/okx-python-sdk
+    """
+    
+    def __init__(self):
+        super().__init__(BrokerType.OKX)
+        self.client = None
+        self.account_api = None
+        self.market_api = None
+        self.trade_api = None
+        self.use_testnet = False
+    
+    def connect(self) -> bool:
+        """
+        Connect to OKX Exchange API.
+        
+        Requires environment variables:
+        - OKX_API_KEY: Your OKX API key
+        - OKX_API_SECRET: Your OKX API secret
+        - OKX_PASSPHRASE: Your OKX API passphrase
+        - OKX_USE_TESTNET: 'true' for testnet, 'false' for live (optional, default: false)
+        
+        Returns:
+            bool: True if connected successfully
+        """
+        try:
+            import okx.Account as Account
+            import okx.MarketData as MarketData
+            import okx.Trade as Trade
+            
+            api_key = os.getenv("OKX_API_KEY")
+            api_secret = os.getenv("OKX_API_SECRET")
+            passphrase = os.getenv("OKX_PASSPHRASE")
+            self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
+            
+            if not api_key or not api_secret or not passphrase:
+                logging.error("=" * 70)
+                logging.error("❌ OKX CREDENTIALS NOT FOUND")
+                logging.error("=" * 70)
+                logging.error("Set these environment variables:")
+                logging.error("  1. OKX_API_KEY - Your OKX API key")
+                logging.error("  2. OKX_API_SECRET - Your OKX API secret")  
+                logging.error("  3. OKX_PASSPHRASE - Your OKX API passphrase")
+                logging.error("")
+                logging.error("Get credentials from: https://www.okx.com/account/my-api")
+                logging.error("=" * 70)
+                return False
+            
+            # Determine API flag (0 = live, 1 = testnet)
+            flag = "1" if self.use_testnet else "0"
+            
+            # Initialize OKX API clients
+            self.account_api = Account.AccountAPI(api_key, api_secret, passphrase, False, flag)
+            self.market_api = MarketData.MarketAPI(api_key, api_secret, passphrase, False, flag)
+            self.trade_api = Trade.TradeAPI(api_key, api_secret, passphrase, False, flag)
+            
+            # Test connection by fetching account balance
+            result = self.account_api.get_account_balance()
+            
+            if result and result.get('code') == '0':
+                self.connected = True
+                env_type = "🧪 TESTNET" if self.use_testnet else "🔴 LIVE"
+                logging.info("=" * 70)
+                logging.info(f"✅ OKX CONNECTED ({env_type})")
+                logging.info("=" * 70)
+                
+                # Log account info
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    total_eq = data[0].get('totalEq', '0')
+                    logging.info(f"   Total Account Value: ${float(total_eq):.2f}")
+                
+                logging.info("=" * 70)
+                return True
+            else:
+                error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+                logging.error(f"❌ OKX connection test failed: {error_msg}")
+                return False
+                
+        except ImportError:
+            logging.error("=" * 70)
+            logging.error("❌ OKX SDK NOT INSTALLED")
+            logging.error("=" * 70)
+            logging.error("Install with: pip install okx")
+            logging.error("=" * 70)
+            return False
+        except Exception as e:
+            logging.error(f"❌ OKX connection failed: {e}")
+            logging.error(f"   Traceback: {traceback.format_exc()}")
+            return False
+    
+    def get_account_balance(self) -> float:
+        """
+        Get USDT balance available for trading.
+        
+        Returns:
+            float: Available USDT balance
+        """
+        try:
+            if not self.account_api:
+                return 0.0
+            
+            # Get account balance
+            result = self.account_api.get_account_balance()
+            
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    details = data[0].get('details', [])
+                    
+                    # Find USDT balance
+                    for detail in details:
+                        if detail.get('ccy') == 'USDT':
+                            available = float(detail.get('availBal', 0))
+                            logging.info(f"💰 OKX USDT Balance: ${available:.2f}")
+                            return available
+                
+                # No USDT found
+                logging.warning("⚠️  No USDT balance found in OKX account")
+                return 0.0
+            else:
+                error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+                logging.error(f"Error fetching OKX balance: {error_msg}")
+                return 0.0
+                
+        except Exception as e:
+            logging.error(f"Error fetching OKX balance: {e}")
+            return 0.0
+    
+    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+        """
+        Place market order on OKX.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USDT')
+            side: 'buy' or 'sell'
+            quantity: Order size in USDT (for buys) or base currency (for sells)
+        
+        Returns:
+            dict: Order result with status, order_id, etc.
+        """
+        try:
+            if not self.trade_api:
+                return {"status": "error", "error": "Not connected to OKX"}
+            
+            # Convert symbol format if needed (BTC-USD -> BTC-USDT)
+            okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
+            
+            # Determine order side (buy/sell)
+            okx_side = side.lower()
+            
+            # Place market order
+            # For spot trading: tdMode = 'cash'
+            # For margin/futures: tdMode = 'cross' or 'isolated'
+            result = self.trade_api.place_order(
+                instId=okx_symbol,
+                tdMode='cash',  # Spot trading mode
+                side=okx_side,
+                ordType='market',
+                sz=str(quantity)
+            )
+            
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    order_id = data[0].get('ordId')
+                    logging.info(f"✅ OKX order placed: {okx_side.upper()} {okx_symbol} (Order ID: {order_id})")
+                    return {
+                        "status": "filled",
+                        "order_id": order_id,
+                        "symbol": okx_symbol,
+                        "side": okx_side,
+                        "quantity": quantity
+                    }
+            
+            error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+            logging.error(f"❌ OKX order failed: {error_msg}")
+            return {"status": "error", "error": error_msg}
+            
+        except Exception as e:
+            logging.error(f"OKX order error: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    def get_positions(self) -> List[Dict]:
+        """
+        Get open positions (non-zero balances).
+        
+        Returns:
+            list: List of position dicts with symbol, quantity, currency
+        """
+        try:
+            if not self.account_api:
+                return []
+            
+            # Get account balance to see all assets
+            result = self.account_api.get_account_balance()
+            
+            if result and result.get('code') == '0':
+                positions = []
+                data = result.get('data', [])
+                
+                if data and len(data) > 0:
+                    details = data[0].get('details', [])
+                    
+                    for detail in details:
+                        ccy = detail.get('ccy')
+                        available = float(detail.get('availBal', 0))
+                        
+                        # Only include non-zero, non-USDT balances
+                        if ccy != 'USDT' and available > 0:
+                            positions.append({
+                                'symbol': f'{ccy}-USDT',
+                                'quantity': available,
+                                'currency': ccy
+                            })
+                
+                return positions
+            
+            return []
+            
+        except Exception as e:
+            logging.error(f"Error fetching OKX positions: {e}")
+            return []
+    
+    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
+        """
+        Get historical candle data from OKX.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USDT')
+            timeframe: Candle interval ('1m', '5m', '15m', '1H', '1D', etc.)
+            count: Number of candles to fetch (max 100)
+        
+        Returns:
+            list: List of candle dicts with OHLCV data
+        """
+        try:
+            if not self.market_api:
+                return []
+            
+            # Convert symbol format if needed
+            okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
+            
+            # Map timeframe to OKX format
+            # OKX uses: 1m, 3m, 5m, 15m, 30m, 1H, 2H, 4H, 6H, 12H, 1D, 1W, 1M
+            timeframe_map = {
+                "1m": "1m",
+                "5m": "5m", 
+                "15m": "15m",
+                "1h": "1H",
+                "4h": "4H",
+                "1d": "1D"
+            }
+            
+            okx_timeframe = timeframe_map.get(timeframe.lower(), "5m")
+            
+            # Fetch candles
+            result = self.market_api.get_candlesticks(
+                instId=okx_symbol,
+                bar=okx_timeframe,
+                limit=str(min(count, 100))  # OKX max is 100
+            )
+            
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                candles = []
+                
+                for candle in data:
+                    # OKX candle format: [timestamp, open, high, low, close, volume, volumeCcy, volumeCcyQuote, confirm]
+                    candles.append({
+                        'time': int(candle[0]),
+                        'open': float(candle[1]),
+                        'high': float(candle[2]),
+                        'low': float(candle[3]),
+                        'close': float(candle[4]),
+                        'volume': float(candle[5])
+                    })
+                
+                return candles
+            
+            return []
+            
+        except Exception as e:
+            logging.error(f"Error fetching OKX candles: {e}")
+            return []
+    
+    def supports_asset_class(self, asset_class: str) -> bool:
+        """OKX supports crypto spot and futures"""
+        return asset_class.lower() in ["crypto", "futures"]
+
 
 class BrokerManager:
     """Manages multiple broker connections"""
