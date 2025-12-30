@@ -304,8 +304,8 @@ class BaseBroker(ABC):
             logging.error(f"🔥 Error fetching all products: {e}")
             return []
 
-    def get_account_balance(self):
-        """Return ONLY tradable Advanced Trade USD/USDC balances.
+    def _get_account_balance_detailed(self):
+        """Return ONLY tradable Advanced Trade USD/USDC balances (detailed version).
 
         Coinbase frequently shows Consumer wallet balances that **cannot** be used
         for Advanced Trade orders. To avoid false positives (and endless
@@ -541,6 +541,26 @@ class BaseBroker(ABC):
                 "consumer_usd": consumer_usd,
                 "consumer_usdc": consumer_usdc,
             }
+    
+    def get_account_balance(self) -> float:
+        """Get USD trading balance (conforms to BaseBroker interface).
+        
+        Returns:
+            float: Total trading balance (USD + USDC)
+        """
+        balance_data = self._get_account_balance_detailed()
+        return float(balance_data.get('trading_balance', 0.0))
+    
+    def get_account_balance_detailed(self) -> dict:
+        """Get detailed account balance information including crypto holdings.
+        
+        This is a public wrapper around _get_account_balance_detailed() for
+        callers that need the full balance breakdown (crypto holdings, consumer wallets, etc).
+        
+        Returns:
+            dict: Detailed balance info with keys: usdc, usd, trading_balance, crypto, consumer_usd, consumer_usdc
+        """
+        return self._get_account_balance_detailed()
     
     def get_account_balance_OLD_BROKEN_METHOD(self):
         """
@@ -945,7 +965,7 @@ class BaseBroker(ABC):
 
             # PRE-FLIGHT CHECK: Verify sufficient balance before placing order
             if side.lower() == 'buy':
-                balance_data = self.get_account_balance()
+                balance_data = self._get_account_balance_detailed()
                 trading_balance = float(balance_data.get('trading_balance', 0.0))
                 
                 logger.info(f"💰 Pre-flight balance check for {symbol}:")
@@ -1072,7 +1092,7 @@ class BaseBroker(ABC):
 
                     if not skip_preflight:
                         try:
-                            balance_snapshot = self.get_account_balance()
+                            balance_snapshot = self._get_account_balance_detailed()
                             holdings = (balance_snapshot or {}).get('crypto', {}) or {}
                             available_base = float(holdings.get(base_currency, 0.0))
 
