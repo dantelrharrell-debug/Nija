@@ -1,0 +1,21 @@
+{
+  "current_target": {
+    "target_amount": 50.0,
+    "start_date": "2025-12-30",
+    "achieved_date": null,
+    "best_daily_profit": 0.0,
+    "total_days_at_level": 0,
+    "achievement_count": 0
+  },
+  "history": [
+    {
+      "target_amount": 25.0,
+      "start_date": "2025-12-30",
+      "achieved_date": "2025-12-30",
+      "best_daily_profit": 30.0,
+      "total_days_at_level": 1,
+      "achievement_count": 1
+    }
+  ],
+  "last_updated": "2025-12-30T16:07:54.303563"
+}
