@@ -97,6 +97,7 @@ def _serialize_object_to_dict(obj) -> Dict:
 class BrokerType(Enum):
     COINBASE = "coinbase"
     BINANCE = "binance"
+    KRAKEN = "kraken"
     OKX = "okx"
     INTERACTIVE_BROKERS = "interactive_brokers"
     TD_AMERITRADE = "td_ameritrade"
@@ -2074,229 +2075,608 @@ class AlpacaBroker(BaseBroker):
         return asset_class.lower() in ["stocks", "stock"]
 
 class BinanceBroker(BaseBroker):
-    """Binance integration for crypto and futures (PLACEHOLDER)"""
     """
-    Binance integration for crypto trading (SKELETON - PLACEHOLDER)
+    Binance Exchange integration for cryptocurrency spot trading.
     
-    To implement:
-    1. Install binance-connector: pip install binance-connector
-    2. Set environment variables: BINANCE_API_KEY, BINANCE_API_SECRET
-    3. Uncomment and implement methods below
+    Features:
+    - Spot trading (USDT pairs)
+    - Market and limit orders
+    - Real-time account balance
+    - Historical candle data (OHLCV)
     
-    Documentation: https://github.com/binance/binance-connector-python
+    Documentation: https://python-binance.readthedocs.io/
     """
     
     def __init__(self):
         super().__init__(BrokerType.BINANCE)
         self.client = None
+        self.use_testnet = False
     
     def connect(self) -> bool:
         """
-        Connect to Binance
+        Connect to Binance API.
         
-        This is a placeholder implementation. To use Binance:
-        1. Install python-binance: pip install python-binance
-        2. Set BINANCE_API_KEY and BINANCE_API_SECRET environment variables
-        3. Uncomment and implement the connection logic below
+        Requires environment variables:
+        - BINANCE_API_KEY: Your Binance API key
+        - BINANCE_API_SECRET: Your Binance API secret
+        - BINANCE_USE_TESTNET: 'true' for testnet, 'false' for live (optional, default: false)
+        
+        Returns:
+            bool: True if connected successfully
         """
-        print("⚠️ Binance broker is a placeholder - not yet implemented")
-        print("To enable Binance:")
-        print("  1. pip install python-binance")
-        print("  2. Set BINANCE_API_KEY and BINANCE_API_SECRET")
-        print("  3. Implement connection logic in broker_manager.py")
-        
-        # Placeholder - would implement actual connection here
-        # try:
-        #     from binance.client import Client
-        #     
-        #     api_key = os.getenv("BINANCE_API_KEY")
-        #     api_secret = os.getenv("BINANCE_API_SECRET")
-        #     
-        #     if not api_key or not api_secret:
-        #         print("❌ Binance credentials not found")
-        #         return False
-        #     
-        #     self.client = Client(api_key, api_secret)
-        #     
-        #     # Test connection
-        #     self.client.get_account()
-        #     self.connected = True
-        #     print("✅ Binance connected")
-        #     return True
-        #     
-        # except Exception as e:
-        #     print(f"❌ Binance connection failed: {e}")
-        #     return False
-        
-        return False
-    
-    def get_account_balance(self) -> float:
-        """Get USD balance (placeholder)"""
-        if not self.connected:
-            return 0.0
-        
-        # Placeholder - would fetch actual balance
-        print("⚠️ Binance get_account_balance not implemented")
-        return 0.0
-    
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
-        """Place market order (placeholder)"""
-        print("⚠️ Binance place_market_order not implemented")
-        return {"status": "error", "error": "Binance broker not implemented"}
-    
-    def get_positions(self) -> List[Dict]:
-        """Get open positions (placeholder)"""
-        if not self.connected:
-            return []
-        
-        print("⚠️ Binance get_positions not implemented")
-        return []
-    
-    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get candle data (placeholder)"""
-        print("⚠️ Binance get_candles not implemented")
-        return []
-    
-    def supports_asset_class(self, asset_class: str) -> bool:
-        """Binance supports crypto and futures"""
-        return asset_class.lower() in ["crypto", "futures"]
-        """Connect to Binance (SKELETON)"""
         try:
-            # TODO: Uncomment when binance-connector is installed
-            # from binance.spot import Spot
+            from binance.client import Client
             
             api_key = os.getenv("BINANCE_API_KEY")
             api_secret = os.getenv("BINANCE_API_SECRET")
+            self.use_testnet = os.getenv("BINANCE_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
             
             if not api_key or not api_secret:
-                print("❌ Binance credentials not found (set BINANCE_API_KEY and BINANCE_API_SECRET)")
+                logging.error("=" * 70)
+                logging.error("❌ BINANCE CREDENTIALS NOT FOUND")
+                logging.error("=" * 70)
+                logging.error("Set these environment variables:")
+                logging.error("  1. BINANCE_API_KEY - Your Binance API key")
+                logging.error("  2. BINANCE_API_SECRET - Your Binance API secret")
+                logging.error("")
+                logging.error("Get credentials from: https://www.binance.com/en/my/settings/api-management")
+                logging.error("=" * 70)
                 return False
             
-            # TODO: Initialize Binance client
-            # self.client = Spot(api_key=api_key, api_secret=api_secret)
+            # Initialize Binance client
+            if self.use_testnet:
+                # Testnet base URL
+                self.client = Client(api_key, api_secret, testnet=True)
+            else:
+                self.client = Client(api_key, api_secret)
             
-            # TODO: Test connection
-            # account = self.client.account()
-            # self.connected = True
-            # print("✅ Binance connected")
+            # Test connection by fetching account status
+            account = self.client.get_account()
             
-            print("⚠️  Binance integration is a skeleton - implement connection logic")
+            if account:
+                self.connected = True
+                env_type = "🧪 TESTNET" if self.use_testnet else "🔴 LIVE"
+                logging.info("=" * 70)
+                logging.info(f"✅ BINANCE CONNECTED ({env_type})")
+                logging.info("=" * 70)
+                
+                # Log account trading status
+                can_trade = account.get('canTrade', False)
+                logging.info(f"   Trading Enabled: {'✅' if can_trade else '❌'}")
+                
+                # Log USDT balance
+                for balance in account.get('balances', []):
+                    if balance['asset'] == 'USDT':
+                        usdt_balance = float(balance['free'])
+                        logging.info(f"   USDT Balance: ${usdt_balance:.2f}")
+                        break
+                
+                logging.info("=" * 70)
+                return True
+            else:
+                logging.error("❌ Binance connection test failed: No account data returned")
+                return False
+                
+        except ImportError:
+            logging.error("=" * 70)
+            logging.error("❌ BINANCE SDK NOT INSTALLED")
+            logging.error("=" * 70)
+            logging.error("Install with: pip install python-binance")
+            logging.error("=" * 70)
             return False
-            
         except Exception as e:
-            print(f"❌ Binance connection failed: {e}")
+            logging.error(f"❌ Binance connection failed: {e}")
+            logging.error(f"   Traceback: {traceback.format_exc()}")
             return False
     
     def get_account_balance(self) -> float:
-        """Get USD balance (SKELETON)"""
+        """
+        Get USDT balance available for trading.
+        
+        Returns:
+            float: Available USDT balance
+        """
         try:
             if not self.client:
                 return 0.0
             
-            # TODO: Implement balance fetching
-            # account = self.client.account()
-            # for balance in account['balances']:
-            #     if balance['asset'] == 'USDT':
-            #         return float(balance['free'])
+            # Get account balances
+            account = self.client.get_account()
             
+            # Find USDT balance
+            for balance in account.get('balances', []):
+                if balance['asset'] == 'USDT':
+                    available = float(balance.get('free', 0))
+                    logging.info(f"💰 Binance USDT Balance: ${available:.2f}")
+                    return available
+            
+            # No USDT found
+            logging.warning("⚠️  No USDT balance found in Binance account")
             return 0.0
+            
         except Exception as e:
-            print(f"Error fetching Binance balance: {e}")
+            logging.error(f"Error fetching Binance balance: {e}")
             return 0.0
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
-        """Place market order (SKELETON)"""
+        """
+        Place market order on Binance.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USD' or 'BTCUSDT')
+            side: 'buy' or 'sell'
+            quantity: Order size in USDT (for buys) or base currency (for sells)
+        
+        Returns:
+            dict: Order result with status, order_id, etc.
+        """
         try:
             if not self.client:
-                return {"status": "error", "error": "Not connected"}
+                return {"status": "error", "error": "Not connected to Binance"}
             
-            # TODO: Implement order placement
-            # Convert symbol format (e.g., BTC-USD -> BTCUSDT)
-            # binance_symbol = symbol.replace('-', '')
+            # Convert symbol format (BTC-USD -> BTCUSDT)
+            binance_symbol = symbol.replace('-USD', 'USDT').replace('-', '')
             
-            # order = self.client.new_order(
-            #     symbol=binance_symbol,
-            #     side=side.upper(),
-            #     type='MARKET',
-            #     quantity=quantity
-            # )
+            # Binance uses uppercase for side
+            binance_side = side.upper()
             
-            # return {"status": "filled", "order": order}
+            # Place market order
+            # Note: Binance requires 'quantity' parameter for market orders
+            # For buy orders, you may want to use quoteOrderQty instead
+            if binance_side == 'BUY':
+                # Use quoteOrderQty for buy orders (spend X USDT)
+                order = self.client.order_market_buy(
+                    symbol=binance_symbol,
+                    quoteOrderQty=quantity
+                )
+            else:
+                # Use quantity for sell orders (sell X crypto)
+                order = self.client.order_market_sell(
+                    symbol=binance_symbol,
+                    quantity=quantity
+                )
             
-            return {"status": "error", "error": "Skeleton implementation"}
+            if order:
+                order_id = order.get('orderId')
+                status = order.get('status', 'UNKNOWN')
+                filled_qty = float(order.get('executedQty', 0))
+                
+                logging.info(f"✅ Binance order placed: {binance_side} {binance_symbol}")
+                logging.info(f"   Order ID: {order_id}")
+                logging.info(f"   Status: {status}")
+                logging.info(f"   Filled: {filled_qty}")
+                
+                return {
+                    "status": "filled" if status == "FILLED" else "unfilled",
+                    "order_id": str(order_id),
+                    "symbol": binance_symbol,
+                    "side": binance_side.lower(),
+                    "quantity": quantity,
+                    "filled_quantity": filled_qty
+                }
+            
+            logging.error("❌ Binance order failed: No order data returned")
+            return {"status": "error", "error": "No order data"}
             
         except Exception as e:
-            print(f"Binance order error: {e}")
+            logging.error(f"Binance order error: {e}")
             return {"status": "error", "error": str(e)}
     
     def get_positions(self) -> List[Dict]:
-        """Get open positions (SKELETON)"""
+        """
+        Get open positions (non-zero balances).
+        
+        Returns:
+            list: List of position dicts with symbol, quantity, currency
+        """
         try:
             if not self.client:
                 return []
             
-            # TODO: Implement position fetching
-            # account = self.client.account()
-            # positions = []
-            # for balance in account['balances']:
-            #     if float(balance['free']) > 0 and balance['asset'] != 'USDT':
-            #         positions.append({
-            #             'symbol': f"{balance['asset']}USDT",
-            #             'quantity': float(balance['free']),
-            #             'currency': balance['asset']
-            #         })
-            # return positions
+            # Get account balances
+            account = self.client.get_account()
+            positions = []
             
-            return []
+            for balance in account.get('balances', []):
+                asset = balance['asset']
+                available = float(balance.get('free', 0))
+                
+                # Only include non-zero, non-USDT balances
+                if asset != 'USDT' and available > 0:
+                    # Convert to standard symbol format
+                    symbol = f'{asset}USDT'
+                    
+                    positions.append({
+                        'symbol': symbol,
+                        'quantity': available,
+                        'currency': asset
+                    })
+            
+            return positions
+            
         except Exception as e:
-            print(f"Error fetching positions: {e}")
+            logging.error(f"Error fetching Binance positions: {e}")
             return []
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get candle data (SKELETON)"""
+        """
+        Get historical candle data from Binance.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USD' or 'BTCUSDT')
+            timeframe: Candle interval ('1m', '5m', '15m', '1h', '1d', etc.)
+            count: Number of candles to fetch (max 1000)
+        
+        Returns:
+            list: List of candle dicts with OHLCV data
+        """
         try:
             if not self.client:
                 return []
             
-            # TODO: Implement candle fetching
-            # Convert symbol and timeframe
-            # binance_symbol = symbol.replace('-', '')
-            # interval_map = {
-            #     "1m": "1m",
-            #     "5m": "5m",
-            #     "15m": "15m",
-            #     "1h": "1h",
-            #     "1d": "1d"
-            # }
+            # Convert symbol format
+            binance_symbol = symbol.replace('-USD', 'USDT').replace('-', '')
             
-            # klines = self.client.klines(
-            #     symbol=binance_symbol,
-            #     interval=interval_map.get(timeframe, "5m"),
-            #     limit=count
-            # )
+            # Map timeframe to Binance interval
+            # Binance uses: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w, 1M
+            interval_map = {
+                "1m": "1m",
+                "5m": "5m",
+                "15m": "15m",
+                "1h": "1h",
+                "4h": "4h",
+                "1d": "1d"
+            }
             
-            # candles = []
-            # for k in klines:
-            #     candles.append({
-            #         'time': k[0],
-            #         'open': float(k[1]),
-            #         'high': float(k[2]),
-            #         'low': float(k[3]),
-            #         'close': float(k[4]),
-            #         'volume': float(k[5])
-            #     })
+            binance_interval = interval_map.get(timeframe.lower(), "5m")
             
-            # return candles
+            # Fetch klines (candles)
+            klines = self.client.get_klines(
+                symbol=binance_symbol,
+                interval=binance_interval,
+                limit=min(count, 1000)  # Binance max is 1000
+            )
+            
+            candles = []
+            for kline in klines:
+                # Binance kline format: [timestamp, open, high, low, close, volume, ...]
+                candles.append({
+                    'time': int(kline[0]),
+                    'open': float(kline[1]),
+                    'high': float(kline[2]),
+                    'low': float(kline[3]),
+                    'close': float(kline[4]),
+                    'volume': float(kline[5])
+                })
+            
+            return candles
+            
+        except Exception as e:
+            logging.error(f"Error fetching Binance candles: {e}")
+            return []
+    
+    def supports_asset_class(self, asset_class: str) -> bool:
+        """Binance supports crypto spot trading"""
+        return asset_class.lower() in ["crypto", "cryptocurrency"]
+
+
+class KrakenBroker(BaseBroker):
+    """
+    Kraken Pro Exchange integration for cryptocurrency spot trading.
+    
+    Features:
+    - Spot trading (USD/USDT pairs)
+    - Market and limit orders
+    - Real-time account balance
+    - Historical candle data (OHLCV)
+    
+    Documentation: https://docs.kraken.com/rest/
+    Python wrapper: https://github.com/veox/python3-krakenex
+    """
+    
+    def __init__(self):
+        super().__init__(BrokerType.KRAKEN)
+        self.api = None
+        self.kraken_api = None
+    
+    def connect(self) -> bool:
+        """
+        Connect to Kraken Pro API.
+        
+        Requires environment variables:
+        - KRAKEN_API_KEY: Your Kraken API key
+        - KRAKEN_API_SECRET: Your Kraken API private key
+        
+        Returns:
+            bool: True if connected successfully
+        """
+        try:
+            import krakenex
+            from pykrakenapi import KrakenAPI
+            
+            api_key = os.getenv("KRAKEN_API_KEY")
+            api_secret = os.getenv("KRAKEN_API_SECRET")
+            
+            if not api_key or not api_secret:
+                logging.error("=" * 70)
+                logging.error("❌ KRAKEN CREDENTIALS NOT FOUND")
+                logging.error("=" * 70)
+                logging.error("Set these environment variables:")
+                logging.error("  1. KRAKEN_API_KEY - Your Kraken API key")
+                logging.error("  2. KRAKEN_API_SECRET - Your Kraken API private key")
+                logging.error("")
+                logging.error("Get credentials from: https://www.kraken.com/u/security/api")
+                logging.error("=" * 70)
+                return False
+            
+            # Initialize Kraken API
+            self.api = krakenex.API(key=api_key, secret=api_secret)
+            self.kraken_api = KrakenAPI(self.api)
+            
+            # Test connection by fetching account balance
+            balance = self.api.query_private('Balance')
+            
+            if balance and 'error' in balance:
+                if balance['error']:
+                    error_msgs = ', '.join(balance['error'])
+                    logging.error(f"❌ Kraken connection test failed: {error_msgs}")
+                    return False
+            
+            if balance and 'result' in balance:
+                self.connected = True
+                logging.info("=" * 70)
+                logging.info("✅ KRAKEN PRO CONNECTED")
+                logging.info("=" * 70)
+                
+                # Log USD/USDT balance
+                result = balance.get('result', {})
+                usd_balance = float(result.get('ZUSD', 0))  # Kraken uses ZUSD for USD
+                usdt_balance = float(result.get('USDT', 0))
+                
+                total = usd_balance + usdt_balance
+                logging.info(f"   USD Balance: ${usd_balance:.2f}")
+                logging.info(f"   USDT Balance: ${usdt_balance:.2f}")
+                logging.info(f"   Total: ${total:.2f}")
+                logging.info("=" * 70)
+                
+                return True
+            else:
+                logging.error("❌ Kraken connection test failed: No balance data returned")
+                return False
+                
+        except ImportError:
+            logging.error("=" * 70)
+            logging.error("❌ KRAKEN SDK NOT INSTALLED")
+            logging.error("=" * 70)
+            logging.error("Install with: pip install krakenex pykrakenapi")
+            logging.error("=" * 70)
+            return False
+        except Exception as e:
+            logging.error(f"❌ Kraken connection failed: {e}")
+            logging.error(f"   Traceback: {traceback.format_exc()}")
+            return False
+    
+    def get_account_balance(self) -> float:
+        """
+        Get USD/USDT balance available for trading.
+        
+        Returns:
+            float: Available USD + USDT balance
+        """
+        try:
+            if not self.api:
+                return 0.0
+            
+            # Get account balance
+            balance = self.api.query_private('Balance')
+            
+            if balance and 'error' in balance and balance['error']:
+                error_msgs = ', '.join(balance['error'])
+                logging.error(f"Error fetching Kraken balance: {error_msgs}")
+                return 0.0
+            
+            if balance and 'result' in balance:
+                result = balance['result']
+                
+                # Kraken uses ZUSD for USD and USDT for Tether
+                usd_balance = float(result.get('ZUSD', 0))
+                usdt_balance = float(result.get('USDT', 0))
+                
+                total = usd_balance + usdt_balance
+                logging.info(f"💰 Kraken Balance: USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
+                return total
+            
+            return 0.0
+            
+        except Exception as e:
+            logging.error(f"Error fetching Kraken balance: {e}")
+            return 0.0
+    
+    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+        """
+        Place market order on Kraken.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USD' or 'XBTUSDT')
+            side: 'buy' or 'sell'
+            quantity: Order size in USD (for buys) or base currency (for sells)
+        
+        Returns:
+            dict: Order result with status, order_id, etc.
+        """
+        try:
+            if not self.api:
+                return {"status": "error", "error": "Not connected to Kraken"}
+            
+            # Convert symbol format to Kraken format
+            # Kraken uses XBTUSD, ETHUSD, etc. (no dash)
+            # BTC-USD -> XBTUSD, ETH-USD -> ETHUSD
+            kraken_symbol = symbol.replace('-', '').upper()
+            
+            # Kraken uses X prefix for BTC
+            if kraken_symbol.startswith('BTC'):
+                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            
+            # Determine order type
+            order_type = side.lower()  # 'buy' or 'sell'
+            
+            # Place market order
+            # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
+            order_params = {
+                'pair': kraken_symbol,
+                'type': order_type,
+                'ordertype': 'market',
+                'volume': str(quantity)
+            }
+            
+            result = self.api.query_private('AddOrder', order_params)
+            
+            if result and 'error' in result and result['error']:
+                error_msgs = ', '.join(result['error'])
+                logging.error(f"❌ Kraken order failed: {error_msgs}")
+                return {"status": "error", "error": error_msgs}
+            
+            if result and 'result' in result:
+                order_result = result['result']
+                txid = order_result.get('txid', [])
+                order_id = txid[0] if txid else None
+                
+                logging.info(f"✅ Kraken order placed: {order_type.upper()} {kraken_symbol}")
+                logging.info(f"   Order ID: {order_id}")
+                
+                return {
+                    "status": "filled",
+                    "order_id": order_id,
+                    "symbol": kraken_symbol,
+                    "side": order_type,
+                    "quantity": quantity
+                }
+            
+            logging.error("❌ Kraken order failed: No result data")
+            return {"status": "error", "error": "No result data"}
+            
+        except Exception as e:
+            logging.error(f"Kraken order error: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    def get_positions(self) -> List[Dict]:
+        """
+        Get open positions (non-zero balances).
+        
+        Returns:
+            list: List of position dicts with symbol, quantity, currency
+        """
+        try:
+            if not self.api:
+                return []
+            
+            # Get account balance
+            balance = self.api.query_private('Balance')
+            
+            if balance and 'error' in balance and balance['error']:
+                error_msgs = ', '.join(balance['error'])
+                logging.error(f"Error fetching Kraken positions: {error_msgs}")
+                return []
+            
+            if balance and 'result' in balance:
+                result = balance['result']
+                positions = []
+                
+                for asset, amount in result.items():
+                    balance_val = float(amount)
+                    
+                    # Skip USD/USDT and zero balances
+                    if asset in ['ZUSD', 'USDT'] or balance_val <= 0:
+                        continue
+                    
+                    # Convert Kraken asset codes to standard format
+                    # XXBT -> BTC, XETH -> ETH, etc.
+                    currency = asset
+                    if currency.startswith('X') and len(currency) == 4:
+                        currency = currency[1:]
+                    if currency == 'XBT':
+                        currency = 'BTC'
+                    
+                    # Create symbol (e.g., BTCUSD)
+                    symbol = f'{currency}USD'
+                    
+                    positions.append({
+                        'symbol': symbol,
+                        'quantity': balance_val,
+                        'currency': currency
+                    })
+                
+                return positions
             
             return []
             
         except Exception as e:
-            print(f"Error fetching candles: {e}")
+            logging.error(f"Error fetching Kraken positions: {e}")
+            return []
+    
+    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
+        """
+        Get historical candle data from Kraken.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USD' or 'XBTUSD')
+            timeframe: Candle interval ('1m', '5m', '15m', '1h', '1d', etc.)
+            count: Number of candles to fetch (max 720)
+        
+        Returns:
+            list: List of candle dicts with OHLCV data
+        """
+        try:
+            if not self.kraken_api:
+                return []
+            
+            # Convert symbol format to Kraken format
+            kraken_symbol = symbol.replace('-', '').upper()
+            if kraken_symbol.startswith('BTC'):
+                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            
+            # Map timeframe to Kraken interval (in minutes)
+            # Kraken supports: 1, 5, 15, 30, 60, 240, 1440, 10080, 21600
+            interval_map = {
+                "1m": 1,
+                "5m": 5,
+                "15m": 15,
+                "30m": 30,
+                "1h": 60,
+                "4h": 240,
+                "1d": 1440
+            }
+            
+            kraken_interval = interval_map.get(timeframe.lower(), 5)
+            
+            # Fetch OHLC data using pykrakenapi
+            ohlc, last = self.kraken_api.get_ohlc_data(
+                kraken_symbol,
+                interval=kraken_interval,
+                ascending=True
+            )
+            
+            # Convert to standard format
+            candles = []
+            for idx, row in ohlc.tail(count).iterrows():
+                candles.append({
+                    'time': int(idx.timestamp()),
+                    'open': float(row['open']),
+                    'high': float(row['high']),
+                    'low': float(row['low']),
+                    'close': float(row['close']),
+                    'volume': float(row['volume'])
+                })
+            
+            return candles
+            
+        except Exception as e:
+            logging.error(f"Error fetching Kraken candles: {e}")
             return []
     
     def supports_asset_class(self, asset_class: str) -> bool:
-        """Binance supports crypto"""
-        return asset_class.lower() == "crypto"
+        """Kraken supports crypto spot trading"""
+        return asset_class.lower() in ["crypto", "cryptocurrency"]
 
 
 class OKXBroker(BaseBroker):
