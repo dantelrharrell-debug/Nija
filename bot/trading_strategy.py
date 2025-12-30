@@ -115,46 +115,145 @@ class TradingStrategy:
     """
 
     def __init__(self):
-        """Initialize production strategy with Coinbase broker and enforcer."""
-        logger.info("Initializing TradingStrategy (APEX v7.1 - Production Mode)...")
+        """Initialize production strategy with multi-broker support."""
+        logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
         
         # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
         self.unsellable_positions = set()  # Set of symbols that failed to sell due to size issues
         
         try:
             # Lazy imports to avoid circular deps and allow fallback
-            from broker_manager import CoinbaseBroker
+            from broker_manager import (
+                BrokerManager, CoinbaseBroker, KrakenBroker, 
+                OKXBroker, BinanceBroker, AlpacaBroker
+            )
             from position_cap_enforcer import PositionCapEnforcer
             from nija_apex_strategy_v71 import NIJAApexStrategyV71
             
-            # Initialize broker
-            self.broker = CoinbaseBroker()
-            if not self.broker.connect():
-                logger.warning("Broker connection failed; strategy will run in monitor mode")
+            # Initialize multi-broker manager
+            logger.info("=" * 70)
+            logger.info("🌐 MULTI-BROKER MODE ACTIVATED")
+            logger.info("=" * 70)
             
-            # Initialize position cap enforcer (Maximum 8 positions total)
-            self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
+            self.broker_manager = BrokerManager()
+            connected_brokers = []
             
-            # Initialize APEX strategy
-            self.apex = NIJAApexStrategyV71(broker_client=self.broker)
+            # Try to connect Coinbase (primary broker)
+            logger.info("📊 Attempting to connect Coinbase Advanced Trade...")
+            try:
+                coinbase = CoinbaseBroker()
+                if coinbase.connect():
+                    self.broker_manager.add_broker(coinbase)
+                    connected_brokers.append("Coinbase")
+                    logger.info("   ✅ Coinbase connected")
+                else:
+                    logger.warning("   ⚠️  Coinbase connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Coinbase error: {e}")
             
-            # CRITICAL: Sync position tracker with actual broker positions at startup
-            # This handles cases where positions were sold manually or bot was restarted
-            if self.broker and hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
-                try:
-                    broker_positions = self.broker.get_positions()
-                    removed = self.broker.position_tracker.sync_with_broker(broker_positions)
-                    if removed > 0:
-                        logger.info(f"🔄 Synced position tracker: removed {removed} orphaned positions")
-                except Exception as sync_err:
-                    logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
+            # Try to connect Kraken Pro
+            logger.info("📊 Attempting to connect Kraken Pro...")
+            try:
+                kraken = KrakenBroker()
+                if kraken.connect():
+                    self.broker_manager.add_broker(kraken)
+                    connected_brokers.append("Kraken")
+                    logger.info("   ✅ Kraken connected")
+                else:
+                    logger.warning("   ⚠️  Kraken connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Kraken error: {e}")
             
-            logger.info("✅ TradingStrategy initialized (APEX v7.1 + 8-Position Cap + Tighter Stops + Higher Minimums)")
+            # Try to connect OKX
+            logger.info("📊 Attempting to connect OKX...")
+            try:
+                okx = OKXBroker()
+                if okx.connect():
+                    self.broker_manager.add_broker(okx)
+                    connected_brokers.append("OKX")
+                    logger.info("   ✅ OKX connected")
+                else:
+                    logger.warning("   ⚠️  OKX connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  OKX error: {e}")
+            
+            # Try to connect Binance
+            logger.info("📊 Attempting to connect Binance...")
+            try:
+                binance = BinanceBroker()
+                if binance.connect():
+                    self.broker_manager.add_broker(binance)
+                    connected_brokers.append("Binance")
+                    logger.info("   ✅ Binance connected")
+                else:
+                    logger.warning("   ⚠️  Binance connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Binance error: {e}")
+            
+            # Try to connect Alpaca (for stocks)
+            logger.info("📊 Attempting to connect Alpaca...")
+            try:
+                alpaca = AlpacaBroker()
+                if alpaca.connect():
+                    self.broker_manager.add_broker(alpaca)
+                    connected_brokers.append("Alpaca")
+                    logger.info("   ✅ Alpaca connected")
+                else:
+                    logger.warning("   ⚠️  Alpaca connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Alpaca error: {e}")
+            
+            logger.info("=" * 70)
+            if connected_brokers:
+                logger.info(f"✅ CONNECTED BROKERS: {', '.join(connected_brokers)}")
+                total_balance = self.broker_manager.get_total_balance()
+                logger.info(f"💰 TOTAL BALANCE ACROSS ALL BROKERS: ${total_balance:,.2f}")
+            else:
+                logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
+            logger.info("=" * 70)
+            
+            # For backward compatibility, set primary broker as self.broker
+            # Use first connected broker as primary (preferring Coinbase if available)
+            if self.broker_manager.brokers:
+                from broker_manager import BrokerType
+                # Try to use Coinbase as primary, fallback to any connected broker
+                if BrokerType.COINBASE in self.broker_manager.brokers:
+                    self.broker = self.broker_manager.brokers[BrokerType.COINBASE]
+                else:
+                    self.broker = list(self.broker_manager.brokers.values())[0]
+                logger.info(f"📌 Primary broker set to: {self.broker.broker_type.value}")
+            else:
+                self.broker = None
+                logger.warning("No primary broker available")
+            
+            # Initialize position cap enforcer (Maximum 8 positions total across all brokers)
+            if self.broker:
+                self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
+                
+                # Initialize APEX strategy with primary broker
+                self.apex = NIJAApexStrategyV71(broker_client=self.broker)
+                
+                # CRITICAL: Sync position tracker with actual broker positions at startup
+                if hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
+                    try:
+                        broker_positions = self.broker.get_positions()
+                        removed = self.broker.position_tracker.sync_with_broker(broker_positions)
+                        if removed > 0:
+                            logger.info(f"🔄 Synced position tracker: removed {removed} orphaned positions")
+                    except Exception as sync_err:
+                        logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
+                
+                logger.info("✅ TradingStrategy initialized (APEX v7.1 + Multi-Broker + 8-Position Cap)")
+            else:
+                logger.warning("Strategy initialized in monitor mode (no active brokers)")
+                self.enforcer = None
+                self.apex = None
         
         except ImportError as e:
             logger.error(f"Failed to import strategy modules: {e}")
             logger.error("Falling back to safe monitor mode (no trades)")
             self.broker = None
+            self.broker_manager = None
             self.enforcer = None
             self.apex = None
 
