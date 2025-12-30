@@ -35,15 +35,16 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # UPDATED: Added capital preservation buffer to prevent fund depletion
 
 # PROFITABILITY FIX: December 28, 2025
-# CRITICAL: Raised minimum to $30 to ensure viable position sizes
-# With $10 minimum per position and conservative sizing, need $30+ minimum
-# MICRO TRADE PREVENTION: $10 minimum position blocks unprofitable trades
-# Added buffer for fees = $30 minimum
+# UPDATED: December 30, 2025 - Lowered to allow very small account trading
+# ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to fees (~1.4% round-trip)
+# With $2-5 positions, expect fees to consume most/all profits
+# This setting allows trading for learning/testing but profitability will be limited
+# STRONG RECOMMENDATION: Fund account to $30+ for viable trading
 
-# For $30-50 balance: Trade with 50% positions (leave 50% reserve)
-MIN_BALANCE_TO_TRADE = 30.0  # $30 minimum (RAISED from $10.50 for profitability)
+# For $2-50 balance: Trade with 50% positions (leave 50% reserve)
+MIN_BALANCE_TO_TRADE = 2.0  # $2 minimum (LOWERED from $5 to allow very small accounts)
 MICRO_BALANCE_THRESHOLD = 50.0
-MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position (reduced from 60%)
+MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position
 
 # For $50-100: Trade with 50% positions (leave 50% reserve for safety)
 SMALL_BALANCE_THRESHOLD = 100.0
@@ -189,14 +190,16 @@ def calculate_min_position_size(account_balance: float) -> float:
         account_balance: Current account balance
     
     Returns:
-        Minimum position size in USD (never less than $10)
+        Minimum position size in USD (lowered to $2 to allow very small account trading)
+        WARNING: Positions under $10 face significant fee pressure (~1.4% round-trip)
     """
     position_pct = get_position_size_pct(account_balance)
     calculated_size = account_balance * position_pct
     
-    # MICRO TRADE PREVENTION: Always enforce $10 minimum
-    # This prevents fee-destroying micro trades
-    MIN_ABSOLUTE_POSITION = 10.0
+    # MICRO TRADE PREVENTION: Enforce $2 minimum (lowered from $5)
+    # ⚠️ WARNING: Very small positions are likely unprofitable due to fees
+    # Recommended minimum is $10+ for better results
+    MIN_ABSOLUTE_POSITION = 2.0
     return max(calculated_size, MIN_ABSOLUTE_POSITION)
 
 
