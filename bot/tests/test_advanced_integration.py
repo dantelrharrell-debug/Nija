@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-# Add parent directory to path
+# Add parent directory to path (consistent with other test files in this project)
+# This allows imports to work when tests are run directly or via test runner
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from advanced_trading_integration import (

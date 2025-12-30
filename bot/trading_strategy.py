@@ -279,7 +279,17 @@ class TradingStrategy:
             from advanced_trading_integration import AdvancedTradingManager, ExchangeType
             
             # Get initial capital estimate (will be updated after broker connection)
-            initial_capital = float(os.getenv('INITIAL_CAPITAL', '100'))
+            # Validate the environment variable before conversion
+            initial_capital_str = os.getenv('INITIAL_CAPITAL', '100')
+            try:
+                initial_capital = float(initial_capital_str)
+                if initial_capital <= 0:
+                    logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, using default $100")
+                    initial_capital = 100.0
+            except (ValueError, TypeError):
+                logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, using default $100")
+                initial_capital = 100.0
+            
             allocation_strategy = os.getenv('ALLOCATION_STRATEGY', 'conservative')
             
             # Initialize advanced manager
