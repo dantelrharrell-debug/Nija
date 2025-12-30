@@ -273,7 +273,7 @@ BROKERS = {
         'asset_classes': ['crypto', 'futures'],
     },
     'okx': {
-        'enabled': False,  # Enable when configured
+        'enabled': True,  # ✅ Ready to trade - just add credentials to .env
         'asset_classes': ['crypto', 'futures'],
     },
     'alpaca': {
