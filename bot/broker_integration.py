@@ -445,7 +445,7 @@ class OKXBrokerAdapter(BrokerInterface):
                 return False
                 
         except ImportError:
-            logger.error("OKX SDK not installed. Install with: pip install okx")
+            logger.error("OKX SDK not installed or incompatible version. Install with: pip install okx==2.1.2")
             return False
         except Exception as e:
             logger.error(f"Failed to connect to OKX: {e}")

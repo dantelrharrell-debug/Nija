@@ -2388,9 +2388,10 @@ class OKXBroker(BaseBroker):
                 
         except ImportError:
             logging.error("=" * 70)
-            logging.error("❌ OKX SDK NOT INSTALLED")
+            logging.error("❌ OKX SDK NOT INSTALLED OR INCOMPATIBLE VERSION")
             logging.error("=" * 70)
-            logging.error("Install with: pip install okx")
+            logging.error("Install with: pip install okx==2.1.2")
+            logging.error("Required version: 2.1.2 (for API compatibility)")
             logging.error("=" * 70)
             return False
         except Exception as e:
