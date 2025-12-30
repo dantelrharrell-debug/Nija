@@ -229,6 +229,50 @@ if total_account_value < MINIMUM_TRADING_BALANCE:
 ```
 **Result**: Bot recognizes total portfolio value, not just available cash
 
+## 🚀 MULTI-EXCHANGE SUPPORT
+
+NIJA now supports multiple cryptocurrency exchanges:
+
+### ✅ Supported Exchanges
+
+1. **Coinbase Advanced Trade** (Primary)
+   - Status: ✅ Fully implemented and tested
+   - Setup: [COINBASE_SETUP.md](COINBASE_SETUP.md)
+   
+2. **OKX Exchange** (New! ✨)
+   - Status: ✅ Fully implemented and tested
+   - Setup: [OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)
+   - Features: Spot trading, testnet support, 400+ pairs
+   - Quick start: `python test_okx_connection.py`
+   
+3. **Binance** (Skeleton)
+   - Status: ⚠️ Placeholder implementation
+   - See "Binance Fork Starter" section below
+   
+4. **Alpaca** (Skeleton)
+   - Status: ⚠️ Placeholder implementation
+   - Use for stocks/crypto hybrid strategies
+
+### 🔌 Quick Setup for OKX
+
+```bash
+# 1. Install OKX SDK
+pip install okx
+
+# 2. Get API credentials from https://www.okx.com/account/my-api
+
+# 3. Add to .env file
+export OKX_API_KEY="your_api_key"
+export OKX_API_SECRET="your_secret"
+export OKX_PASSPHRASE="your_passphrase"
+export OKX_USE_TESTNET="true"  # false for live trading
+
+# 4. Test connection
+python test_okx_connection.py
+```
+
+See complete guide: [OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)
+
 ## 📦 BINANCE FORK STARTER (REUSE THIS SETUP)
 
 If you want to spin a Binance-based project reusing this structure:
