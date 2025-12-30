@@ -121,6 +121,10 @@ class TradingStrategy:
         # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
         self.unsellable_positions = set()  # Set of symbols that failed to sell due to size issues
         
+        # Initialize advanced trading features (progressive targets, exchange profiles, capital allocation)
+        self.advanced_manager = None
+        self._init_advanced_features()
+        
         try:
             # Lazy imports to avoid circular deps and allow fallback
             from broker_manager import (
@@ -208,6 +212,14 @@ class TradingStrategy:
                 logger.info(f"✅ CONNECTED BROKERS: {', '.join(connected_brokers)}")
                 total_balance = self.broker_manager.get_total_balance()
                 logger.info(f"💰 TOTAL BALANCE ACROSS ALL BROKERS: ${total_balance:,.2f}")
+                
+                # Update advanced manager with actual balance
+                if self.advanced_manager and total_balance > 0:
+                    try:
+                        self.advanced_manager.capital_allocator.update_total_capital(total_balance)
+                        logger.info(f"   Updated capital allocation with ${total_balance:,.2f}")
+                    except Exception as e:
+                        logger.warning(f"   Failed to update capital allocation: {e}")
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
             logger.info("=" * 70)
@@ -256,6 +268,40 @@ class TradingStrategy:
             self.broker_manager = None
             self.enforcer = None
             self.apex = None
+    
+    def _init_advanced_features(self):
+        """Initialize progressive targets, exchange risk profiles, and capital allocation.
+        
+        This is optional and will gracefully degrade if modules are not available.
+        """
+        try:
+            # Import advanced trading modules
+            from advanced_trading_integration import AdvancedTradingManager, ExchangeType
+            
+            # Get initial capital estimate (will be updated after broker connection)
+            initial_capital = float(os.getenv('INITIAL_CAPITAL', '100'))
+            allocation_strategy = os.getenv('ALLOCATION_STRATEGY', 'conservative')
+            
+            # Initialize advanced manager
+            self.advanced_manager = AdvancedTradingManager(
+                total_capital=initial_capital,
+                allocation_strategy=allocation_strategy
+            )
+            
+            logger.info("=" * 70)
+            logger.info("✅ Advanced Trading Features Enabled:")
+            logger.info(f"   📈 Progressive Targets: ${self.advanced_manager.target_manager.get_current_target():.2f}/day")
+            logger.info(f"   🏦 Exchange Profiles: Loaded")
+            logger.info(f"   💰 Capital Allocation: {allocation_strategy}")
+            logger.info("=" * 70)
+            
+        except ImportError as e:
+            logger.info(f"ℹ️ Advanced trading features not available: {e}")
+            logger.info("   Continuing with standard trading mode")
+            self.advanced_manager = None
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize advanced features: {e}")
+            self.advanced_manager = None
 
     def run_cycle(self):
         """Execute a complete trading cycle with position cap enforcement.
@@ -883,3 +929,77 @@ class TradingStrategy:
         except Exception as e:
             # Never raise to keep bot loop alive
             logger.error(f"Error in trading cycle: {e}", exc_info=True)
+    
+    def record_trade_with_advanced_manager(self, symbol: str, profit_usd: float, is_win: bool):
+        """
+        Record a completed trade with the advanced trading manager.
+        
+        Args:
+            symbol: Trading symbol
+            profit_usd: Profit/loss in USD
+            is_win: True if trade was profitable
+        """
+        if not self.advanced_manager:
+            return
+        
+        try:
+            # Determine which exchange was used
+            from advanced_trading_integration import ExchangeType
+            
+            # Default to Coinbase as it's the primary broker
+            exchange = ExchangeType.COINBASE
+            
+            # Try to detect actual exchange if broker type is available
+            if hasattr(self, 'broker') and self.broker:
+                broker_type = getattr(self.broker, 'broker_type', None)
+                if broker_type:
+                    exchange_mapping = {
+                        'coinbase': ExchangeType.COINBASE,
+                        'okx': ExchangeType.OKX,
+                        'kraken': ExchangeType.KRAKEN,
+                        'binance': ExchangeType.BINANCE,
+                        'alpaca': ExchangeType.ALPACA,
+                    }
+                    broker_name = str(broker_type.value).lower() if hasattr(broker_type, 'value') else str(broker_type).lower()
+                    exchange = exchange_mapping.get(broker_name, ExchangeType.COINBASE)
+            
+            # Record the trade
+            self.advanced_manager.record_completed_trade(
+                exchange=exchange,
+                profit_usd=profit_usd,
+                is_win=is_win
+            )
+            
+            logger.debug(f"Recorded trade in advanced manager: {symbol} profit=${profit_usd:.2f} win={is_win}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to record trade in advanced manager: {e}")
+    
+    def process_end_of_day(self):
+        """
+        Process end-of-day tasks for advanced trading features.
+        
+        Should be called once per day to:
+        - Check if daily profit target was achieved
+        - Trigger rebalancing if needed
+        - Generate performance reports
+        """
+        if not self.advanced_manager:
+            return
+        
+        try:
+            # Process end-of-day in advanced manager
+            self.advanced_manager.process_end_of_day()
+            
+            # Log current status
+            current_target = self.advanced_manager.target_manager.get_current_target()
+            progress = self.advanced_manager.target_manager.get_progress_summary()
+            
+            logger.info("=" * 70)
+            logger.info("📊 END OF DAY SUMMARY")
+            logger.info(f"   Current Target: ${current_target:.2f}/day")
+            logger.info(f"   Progress: {progress}")
+            logger.info("=" * 70)
+            
+        except Exception as e:
+            logger.warning(f"Failed to process end-of-day tasks: {e}")

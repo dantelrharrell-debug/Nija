@@ -22,6 +22,32 @@ from multi_exchange_capital_allocator import MultiExchangeCapitalAllocator, get_
 logger = logging.getLogger("nija.advanced_integration")
 
 
+def validate_configuration(total_capital: float, allocation_strategy: str) -> Tuple[bool, str]:
+    """
+    Validate configuration for advanced trading features.
+    
+    Args:
+        total_capital: Total capital to validate
+        allocation_strategy: Allocation strategy to validate
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Validate capital
+    if total_capital <= 0:
+        return False, f"Invalid total capital: ${total_capital:.2f} (must be > 0)"
+    
+    if total_capital < 10:
+        logger.warning(f"⚠️ Very low capital: ${total_capital:.2f} - trading may be unprofitable due to fees")
+    
+    # Validate allocation strategy
+    valid_strategies = ['conservative', 'risk_adjusted', 'equal_weight']
+    if allocation_strategy not in valid_strategies:
+        return False, f"Invalid allocation strategy: {allocation_strategy} (must be one of {valid_strategies})"
+    
+    return True, ""
+
+
 class AdvancedTradingManager:
     """
     Unified manager for advanced trading features
@@ -39,7 +65,15 @@ class AdvancedTradingManager:
         Args:
             total_capital: Total capital across all exchanges
             allocation_strategy: Capital allocation strategy
+            
+        Raises:
+            ValueError: If configuration is invalid
         """
+        # Validate configuration
+        is_valid, error_msg = validate_configuration(total_capital, allocation_strategy)
+        if not is_valid:
+            raise ValueError(f"Invalid configuration: {error_msg}")
+        
         # Initialize sub-managers
         self.target_manager = get_progressive_target_manager()
         self.risk_manager = get_exchange_risk_manager()
