@@ -1948,6 +1948,123 @@ python3 diagnose_profitability_now.py
 
 ---
 
+## 📚 Comprehensive Documentation Index
+
+**NEW - December 30, 2025**: Complete playbooks and guides added
+
+### Core Playbooks & Guides
+
+1. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **START HERE**
+   - Complete guide to growing from any balance to $1000+/day
+   - Capital tiers ($10, $50, $200, $1K, $5K, $20K+)
+   - Position sizing rules per tier
+   - Expected returns and timelines
+   - Compound growth strategies
+   - Common pitfalls and solutions
+
+2. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
+   - Comprehensive issue diagnosis
+   - Balance & API problems
+   - Trading issues (no trades, too many trades, etc.)
+   - Position management fixes
+   - Performance optimization
+   - Recovery procedures
+
+3. **[EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)** 🚨 **CRITICAL ISSUES**
+   - Immediate stop procedures
+   - Emergency liquidation
+   - Trading lock/unlock
+   - Circuit breaker info
+
+### Broker & Integration Guides
+
+4. **[BROKER_INTEGRATION_GUIDE.md](BROKER_INTEGRATION_GUIDE.md)**
+   - Coinbase Advanced Trade setup
+   - Multi-broker configuration
+   - API troubleshooting
+
+5. **[OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)** / **[OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)**
+   - OKX exchange integration
+   - Lower fees (0.08% vs 1.4%)
+
+6. **[MULTI_BROKER_ACTIVATION_GUIDE.md](MULTI_BROKER_ACTIVATION_GUIDE.md)**
+   - Using multiple exchanges
+   - Fee optimization strategies
+
+### Profitability & Performance
+
+7. **[PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md)**
+   - Complete profitability analysis
+   - How NIJA makes money
+   - Verification methods
+
+8. **[PROFITABILITY_UPGRADE_GUIDE.md](PROFITABILITY_UPGRADE_GUIDE.md)**
+   - v7.2 upgrade details
+   - Performance improvements
+   - Configuration changes
+
+9. **[V7.2_UPGRADE_COMPLETE.md](V7.2_UPGRADE_COMPLETE.md)**
+   - v7.2 technical summary
+   - Code changes
+   - Deployment checklist
+
+### Deployment & Operations
+
+10. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** / **[DEPLOYMENT_GUIDE_PROFIT_FIX.md](DEPLOYMENT_GUIDE_PROFIT_FIX.md)**
+    - Railway deployment
+    - Docker setup
+    - Environment configuration
+
+11. **[RENDER_GUIDE.md](RENDER_GUIDE.md)**
+    - Alternative hosting on Render
+    - Configuration steps
+
+12. **[BOT_RESTART_GUIDE.md](BOT_RESTART_GUIDE.md)**
+    - Safe restart procedures
+    - Verification steps
+
+### Quick Reference
+
+```bash
+# Balance issues
+python3 test_v2_balance.py              # Test balance detection
+python3 check_balance_now.py             # Quick balance check
+
+# Trading status
+python3 check_if_selling_now.py          # Check if bot is active
+python3 check_nija_profitability_status.py  # Verify profitability (5/5 checks)
+
+# Position management
+python3 check_current_positions.py       # See open positions
+python3 close_dust_positions.py          # Clean up small positions
+
+# Full diagnostics
+python3 diagnose_profitability_now.py    # Complete system check
+python3 full_status_check.py             # Overall bot status
+```
+
+### Recovery Quick Reference
+
+**If bot stops working**:
+1. See [TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)
+2. Check specific issue category
+3. Follow step-by-step fix
+4. Verify with diagnostic commands
+
+**If emergency shutdown needed**:
+1. See [EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)
+2. Create trading lock: `echo "TRADING_DISABLED=true" > TRADING_LOCKED.conf`
+3. Close positions if needed: `python3 emergency_sell_all.py`
+4. Review and fix issues before resuming
+
+**To restore from backup**:
+1. See README Recovery Guide sections above
+2. Find appropriate commit: `git log --oneline | grep "working\|v7.2\|fix"`
+3. Restore: `git reset --hard <commit-hash>`
+4. Verify: `python3 check_nija_profitability_status.py` (should show 5/5)
+
+---
+
 **NIJA v7.2 - December 23, 2025**  
 *Profitability Locked. No More Flat Positions. Recovery Plan in Place.*
 
