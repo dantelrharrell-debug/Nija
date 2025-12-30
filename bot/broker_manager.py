@@ -2106,8 +2106,8 @@ class BinanceBroker(BaseBroker):
         try:
             from binance.client import Client
             
-            api_key = os.getenv("BINANCE_API_KEY")
-            api_secret = os.getenv("BINANCE_API_SECRET")
+            api_key = os.getenv("BINANCE_API_KEY", "").strip()
+            api_secret = os.getenv("BINANCE_API_SECRET", "").strip()
             use_testnet = os.getenv("BINANCE_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
             
             if not api_key or not api_secret:
@@ -2153,7 +2153,7 @@ class BinanceBroker(BaseBroker):
                 logging.info("=" * 70)
                 return True
             else:
-                logging.error("❌ Binance connection test failed: No account data returned")
+                logging.warning("⚠️  Binance connection test failed: No account data returned")
                 return False
                 
         except ImportError:
@@ -2164,8 +2164,13 @@ class BinanceBroker(BaseBroker):
             logging.error("=" * 70)
             return False
         except Exception as e:
-            logging.error(f"❌ Binance connection failed: {e}")
-            logging.error(f"   Traceback: {traceback.format_exc()}")
+            # Handle authentication errors gracefully
+            error_str = str(e).lower()
+            if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
+                logging.warning("⚠️  Binance authentication failed - invalid or expired API credentials")
+                logging.warning("   Please check your BINANCE_API_KEY and BINANCE_API_SECRET")
+            else:
+                logging.error(f"❌ Binance connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
@@ -2716,10 +2721,13 @@ class OKXBroker(BaseBroker):
         try:
             from okx.api import Account, Market, Trade
             
-            api_key = os.getenv("OKX_API_KEY")
-            api_secret = os.getenv("OKX_API_SECRET")
-            passphrase = os.getenv("OKX_PASSPHRASE")
+            api_key = os.getenv("OKX_API_KEY", "").strip()
+            api_secret = os.getenv("OKX_API_SECRET", "").strip()
+            passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
             self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
+            
+            # Check for missing or placeholder credentials
+            placeholder_values = ['your_passphrase', 'YOUR_PASSPHRASE', 'passphrase', 'PASSPHRASE']
             
             if not api_key or not api_secret or not passphrase:
                 logging.error("=" * 70)
@@ -2732,6 +2740,12 @@ class OKXBroker(BaseBroker):
                 logging.error("")
                 logging.error("Get credentials from: https://www.okx.com/account/my-api")
                 logging.error("=" * 70)
+                return False
+            
+            # Check for placeholder passphrase
+            if passphrase in placeholder_values:
+                logging.warning("⚠️  OKX passphrase appears to be a placeholder value")
+                logging.warning("   Please set a valid OKX_PASSPHRASE in your environment")
                 return False
             
             # Determine API flag (0 = live, 1 = testnet)
@@ -2762,7 +2776,7 @@ class OKXBroker(BaseBroker):
                 return True
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-                logging.error(f"❌ OKX connection test failed: {error_msg}")
+                logging.warning(f"⚠️  OKX connection test failed: {error_msg}")
                 return False
                 
         except ImportError:
@@ -2774,8 +2788,13 @@ class OKXBroker(BaseBroker):
             logging.error("=" * 70)
             return False
         except Exception as e:
-            logging.error(f"❌ OKX connection failed: {e}")
-            logging.error(f"   Traceback: {traceback.format_exc()}")
+            # Handle authentication errors gracefully
+            error_str = str(e).lower()
+            if 'api key' in error_str or '401' in error_str or 'authentication' in error_str or '50119' in error_str:
+                logging.warning("⚠️  OKX authentication failed - invalid or expired API credentials")
+                logging.warning("   Please check your OKX_API_KEY, OKX_API_SECRET, and OKX_PASSPHRASE")
+            else:
+                logging.error(f"❌ OKX connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
