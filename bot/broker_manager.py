@@ -2169,8 +2169,10 @@ class BinanceBroker(BaseBroker):
             if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
                 logging.warning("⚠️  Binance authentication failed - invalid or expired API credentials")
                 logging.warning("   Please check your BINANCE_API_KEY and BINANCE_API_SECRET")
+            elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
+                logging.warning("⚠️  Binance connection failed - network issue or API unavailable")
             else:
-                logging.error(f"❌ Binance connection failed: {e}")
+                logging.warning(f"⚠️  Binance connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
@@ -2793,8 +2795,10 @@ class OKXBroker(BaseBroker):
             if 'api key' in error_str or '401' in error_str or 'authentication' in error_str or '50119' in error_str:
                 logging.warning("⚠️  OKX authentication failed - invalid or expired API credentials")
                 logging.warning("   Please check your OKX_API_KEY, OKX_API_SECRET, and OKX_PASSPHRASE")
+            elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
+                logging.warning("⚠️  OKX connection failed - network issue or API unavailable")
             else:
-                logging.error(f"❌ OKX connection failed: {e}")
+                logging.warning(f"⚠️  OKX connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
