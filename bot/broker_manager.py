@@ -2717,6 +2717,8 @@ class OKXBroker(BaseBroker):
             self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
             
             # Check for missing or placeholder credentials
+            # Note: Only checking passphrase for placeholders because API keys are UUIDs/hex
+            # which don't have obvious placeholder patterns like "your_passphrase"
             placeholder_values = ['your_passphrase', 'YOUR_PASSPHRASE', 'passphrase', 'PASSPHRASE']
             
             if not api_key or not api_secret or not passphrase:
@@ -2724,7 +2726,7 @@ class OKXBroker(BaseBroker):
                 logging.info("⚠️  OKX credentials not configured (skipping)")
                 return False
             
-            # Check for placeholder passphrase
+            # Check for placeholder passphrase (most common user error)
             if passphrase in placeholder_values:
                 logging.warning("⚠️  OKX passphrase appears to be a placeholder value")
                 logging.warning("   Please set a valid OKX_PASSPHRASE in your environment")
@@ -2766,6 +2768,7 @@ class OKXBroker(BaseBroker):
             return False
         except Exception as e:
             # Handle authentication errors gracefully
+            # Note: OKX error code 50119 = "API key doesn't exist"
             error_str = str(e).lower()
             if 'api key' in error_str or '401' in error_str or 'authentication' in error_str or '50119' in error_str:
                 logging.warning("⚠️  OKX authentication failed - invalid or expired API credentials")
