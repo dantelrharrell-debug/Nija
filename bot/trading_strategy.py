@@ -242,6 +242,26 @@ class TradingStrategy:
             if self.broker:
                 self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
                 
+                # Initialize broker failsafes (hard limits and circuit breakers)
+                try:
+                    from broker_failsafes import create_failsafe_for_broker
+                    broker_name = self.broker.broker_type.value if hasattr(self.broker, 'broker_type') else 'coinbase'
+                    account_balance = total_balance if 'total_balance' in locals() else 100.0
+                    self.failsafes = create_failsafe_for_broker(broker_name, account_balance)
+                    logger.info(f"🛡️  Broker failsafes initialized for {broker_name}")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to initialize broker failsafes: {e}")
+                    self.failsafes = None
+                
+                # Initialize market adaptation engine
+                try:
+                    from market_adaptation import create_market_adapter
+                    self.market_adapter = create_market_adapter(learning_enabled=True)
+                    logger.info(f"🧠 Market adaptation engine initialized with learning enabled")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to initialize market adaptation: {e}")
+                    self.market_adapter = None
+                
                 # Initialize APEX strategy with primary broker
                 self.apex = NIJAApexStrategyV71(broker_client=self.broker)
                 
@@ -949,6 +969,31 @@ class TradingStrategy:
             profit_usd: Profit/loss in USD
             is_win: True if trade was profitable
         """
+        # Record with broker failsafes for circuit breaker protection
+        if hasattr(self, 'failsafes') and self.failsafes:
+            try:
+                pnl_pct = (profit_usd / 100.0) if profit_usd != 0 else 0.0  # Approximate percentage
+                self.failsafes.record_trade_result(profit_usd, pnl_pct)
+            except Exception as e:
+                logger.warning(f"Failed to record trade in failsafes: {e}")
+        
+        # Record with market adaptation for learning
+        if hasattr(self, 'market_adapter') and self.market_adapter:
+            try:
+                # Estimate hold time (default 30 minutes if not tracked)
+                hold_time_minutes = 30
+                current_regime = getattr(self.market_adapter, 'current_regime', None)
+                if current_regime:
+                    self.market_adapter.record_trade_performance(
+                        regime=current_regime,
+                        pnl_dollars=profit_usd,
+                        hold_time_minutes=hold_time_minutes,
+                        parameters_used={'symbol': symbol}
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to record trade in market adapter: {e}")
+        
+        # Record with advanced manager (original functionality)
         if not self.advanced_manager:
             return
         
