@@ -50,10 +50,11 @@ class AdaptiveRiskManager:
     - Market volatility
     - Total portfolio exposure
     - FEE AWARENESS (NEW - prevents unprofitable small trades)
+    - EXCHANGE-SPECIFIC PROFILES (OPTIONAL - uses exchange risk profiles if available)
     """
     
     def __init__(self, min_position_pct=0.02, max_position_pct=0.05,
-                 max_total_exposure=0.80):
+                 max_total_exposure=0.80, use_exchange_profiles=False):
         """
         Initialize Adaptive Risk Manager - PROFITABILITY MODE v7.2
         
@@ -61,6 +62,7 @@ class AdaptiveRiskManager:
             min_position_pct: Minimum position size as % of account (default 2% - upgraded from 5%)
             max_position_pct: Maximum position size as % of account (default 5% - upgraded from 25%)
             max_total_exposure: Maximum total exposure across all positions (default 80% - upgraded from 50%)
+            use_exchange_profiles: If True, uses exchange-specific risk profiles (default False)
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct
@@ -80,6 +82,19 @@ class AdaptiveRiskManager:
         
         # Fee-aware mode status
         self.fee_aware_mode = FEE_AWARE_MODE
+        
+        # Exchange-specific profiles (optional)
+        self.use_exchange_profiles = use_exchange_profiles
+        self.exchange_risk_manager = None
+        
+        if self.use_exchange_profiles:
+            try:
+                from exchange_risk_profiles import get_exchange_risk_manager
+                self.exchange_risk_manager = get_exchange_risk_manager()
+                logger.info("✅ Exchange-specific risk profiles enabled")
+            except ImportError:
+                logger.warning("⚠️ Exchange risk profiles not available, using standard mode")
+                self.use_exchange_profiles = False
         
         if self.fee_aware_mode:
             logger.info(f"✅ Adaptive Risk Manager initialized - FEE-AWARE PROFITABILITY MODE")

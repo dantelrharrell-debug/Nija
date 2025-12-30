@@ -1,7 +1,7 @@
 {
   "total_capital_usd": 1000.0,
   "strategy_name": "conservative",
-  "last_updated": "2025-12-30T16:08:11.335802",
+  "last_updated": "2025-12-30T16:34:04.921477",
   "allocations": {
     "coinbase": {
       "exchange": "coinbase",
@@ -10,10 +10,10 @@
       "allocated_capital_usd": 700.0,
       "available_balance_usd": 680.0,
       "in_positions_usd": 20.0,
-      "total_pnl_usd": 5.0,
-      "total_trades": 1,
+      "total_pnl_usd": 35.0,
+      "total_trades": 4,
       "win_rate": 1.0,
-      "avg_profit_per_trade": 5.0,
+      "avg_profit_per_trade": 8.75,
       "sharpe_ratio": null,
       "max_drawdown_pct": 0.0,
       "last_rebalance": "2025-12-30T16:08:11.335215"

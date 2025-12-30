@@ -429,6 +429,12 @@ if __name__ == "__main__":
     for balance in [25, 100, 500]:
         best = get_best_exchange_for_balance(balance, test_exchanges)
         print(f"  ${balance}: {best.upper()}")
+
+
+# ============================================================================
+# SECOND MODULE: Exchange Risk Manager with Dataclass Profiles
+# ============================================================================
+"""
 Different risk parameters for each exchange based on:
 - Fee structures
 - Liquidity characteristics
