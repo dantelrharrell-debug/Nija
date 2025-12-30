@@ -51,10 +51,14 @@ STOP_LOSS_THRESHOLD = -2.0  # Exit at -2% loss (WIDENED from -1% to reduce stop 
 STOP_LOSS_WARNING = -1.0  # Warn at -1% loss
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
-# Stricter limits to ensure fee-efficient trading
+# Updated Dec 30, 2025: Lowered minimums to allow very small account trading
+# ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to fees (~1.4% round-trip)
+# With $1-2 positions, expect fees to consume most/all profits
+# This allows trading for learning/testing but profitability is severely limited
+# STRONG RECOMMENDATION: Fund account to $30+ for better trading outcomes
 MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/micro positions)
-MIN_POSITION_SIZE_USD = 10.0  # Minimum position size in USD (raised from $5 to prevent micro trades)
-MIN_BALANCE_TO_TRADE_USD = 30.0  # Minimum account balance to allow trading (raised from $25)
+MIN_POSITION_SIZE_USD = 1.0  # Minimum position size in USD (lowered from $10 to allow very small accounts)
+MIN_BALANCE_TO_TRADE_USD = 2.0  # Minimum account balance to allow trading (lowered from $30 to allow very small accounts)
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
@@ -706,17 +710,27 @@ class TradingStrategy:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 
-                                # CRITICAL PROFITABILITY FIX: Much stricter minimum position size
-                                # Fees are ~1.4% round-trip, so tiny positions are guaranteed losers
-                                # MICRO TRADE PREVENTION: Block all positions under $10
+                                # PROFITABILITY WARNING: Small positions have lower profitability
+                                # Fees are ~1.4% round-trip, so very small positions face significant fee pressure
+                                # MICRO TRADE PREVENTION: Block positions under $1 minimum
                                 if position_size < MIN_POSITION_SIZE_USD:
                                     filter_stats['position_too_small'] += 1
                                     logger.warning(f"   🚫 MICRO TRADE BLOCKED: {symbol} position size ${position_size:.2f} < ${MIN_POSITION_SIZE_USD} minimum")
-                                    logger.warning(f"      💡 Reason: Micro trades hurt profitability - fees (~1.4%) consume profits on small positions")
+                                    logger.warning(f"      💡 Reason: Extremely small positions face severe fee impact (~1.4% round-trip)")
                                     # Calculate break-even % needed: (fee_dollars / position_size) * 100
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
                                     logger.warning(f"      📊 Need {breakeven_pct:.1f}% gain just to break even on fees")
                                     continue
+                                
+                                # Warn if position is very small but allowed
+                                elif position_size < 2.0:
+                                    logger.warning(f"   ⚠️  EXTREMELY SMALL POSITION: ${position_size:.2f} - profitability nearly impossible due to fees")
+                                    logger.warning(f"      💡 URGENT: Fund account to $30+ for viable trading")
+                                elif position_size < 5.0:
+                                    logger.warning(f"   ⚠️  VERY SMALL POSITION: ${position_size:.2f} - profitability severely limited by fees")
+                                    logger.warning(f"      💡 Recommended: Fund account to $30+ for better trading results")
+                                elif position_size < 10.0:
+                                    logger.warning(f"   ⚠️  Small position: ${position_size:.2f} - profitability may be limited by fees")
                                 
                                 # CRITICAL: Verify we're still under position cap
                                 if len(current_positions) >= MAX_POSITIONS_ALLOWED:

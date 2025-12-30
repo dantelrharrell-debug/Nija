@@ -29,12 +29,12 @@ class TestFeeAwareConfig(unittest.TestCase):
     
     def test_minimum_balance(self):
         """Test minimum balance requirement"""
-        self.assertEqual(MIN_BALANCE_TO_TRADE, 50.0, "Minimum balance should be $50")
+        self.assertEqual(MIN_BALANCE_TO_TRADE, 2.0, "Minimum balance should be $2 (lowered to allow very small accounts)")
     
     def test_position_sizing(self):
         """Test position sizing percentages"""
-        self.assertEqual(SMALL_BALANCE_POSITION_PCT, 0.80, "Small balance position should be 80%")
-        self.assertEqual(MEDIUM_BALANCE_POSITION_PCT, 0.50, "Medium balance position should be 50%")
+        self.assertEqual(SMALL_BALANCE_POSITION_PCT, 0.50, "Small balance position should be 50%")
+        self.assertEqual(MEDIUM_BALANCE_POSITION_PCT, 0.40, "Medium balance position should be 40%")
     
     def test_profit_targets_exceed_fees(self):
         """Test that profit targets exceed fee costs"""
@@ -70,16 +70,16 @@ class TestPositionSizing(unittest.TestCase):
         balance = 57.70
         position = balance * SMALL_BALANCE_POSITION_PCT
         
-        self.assertAlmostEqual(position, 46.16, places=2,
-                              msg="$57.70 * 80% should equal $46.16")
+        self.assertAlmostEqual(position, 28.85, places=2,
+                              msg="$57.70 * 50% should equal $28.85")
     
     def test_medium_balance_sizing(self):
         """Test position sizing for medium balances"""
         balance = 150.00
         position = balance * MEDIUM_BALANCE_POSITION_PCT
         
-        self.assertEqual(position, 75.00,
-                        msg="$150 * 50% should equal $75")
+        self.assertEqual(position, 60.00,
+                        msg="$150 * 40% should equal $60")
     
     def test_minimum_position_after_fees(self):
         """Test that minimum positions are profitable after fees"""
