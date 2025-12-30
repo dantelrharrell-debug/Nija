@@ -28,6 +28,14 @@ MINIMUM_BALANCE_PROTECTION = 10.50  # Absolute minimum to prevent failed orders
 MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
+# Credential validation constants
+PLACEHOLDER_PASSPHRASE_VALUES = [
+    'your_passphrase', 'YOUR_PASSPHRASE', 
+    'passphrase', 'PASSPHRASE',
+    'your_password', 'YOUR_PASSWORD',
+    'password', 'PASSWORD'
+]
+
 # Fallback market list - popular crypto trading pairs used when API fails
 FALLBACK_MARKETS = [
     'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 
@@ -2716,18 +2724,15 @@ class OKXBroker(BaseBroker):
             passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
             self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
             
-            # Check for missing or placeholder credentials
-            # Note: Only checking passphrase for placeholders because API keys are UUIDs/hex
-            # which don't have obvious placeholder patterns like "your_passphrase"
-            placeholder_values = ['your_passphrase', 'YOUR_PASSPHRASE', 'passphrase', 'PASSPHRASE']
-            
             if not api_key or not api_secret or not passphrase:
                 # Silently skip - OKX is optional, no need for scary error messages
                 logging.info("⚠️  OKX credentials not configured (skipping)")
                 return False
             
+            
             # Check for placeholder passphrase (most common user error)
-            if passphrase in placeholder_values:
+            # Note: Only checking passphrase because API keys are UUIDs/hex without obvious placeholder patterns
+            if passphrase in PLACEHOLDER_PASSPHRASE_VALUES:
                 logging.warning("⚠️  OKX passphrase appears to be a placeholder value")
                 logging.warning("   Please set a valid OKX_PASSPHRASE in your environment")
                 return False
