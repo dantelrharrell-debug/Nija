@@ -180,6 +180,177 @@ adapter = CoinbaseApexAdapter(existing_broker)
 
 ---
 
+## 🟠 OKX Exchange Integration
+
+### Setup
+
+1. **Get API Credentials:**
+   - Log in to [OKX](https://www.okx.com)
+   - Go to Account → API
+   - Create new API key with trading permissions
+   - Save: API Key, Secret Key, and Passphrase
+   - ⚠️ **Important**: Enable "Trade" permission, disable "Withdrawal"
+
+2. **Configure Environment Variables:**
+```bash
+export OKX_API_KEY="your_api_key"
+export OKX_API_SECRET="your_secret_key"
+export OKX_PASSPHRASE="your_passphrase"
+
+# Optional: Use testnet for paper trading (recommended for testing)
+export OKX_USE_TESTNET="true"
+```
+
+3. **Install Required Packages:**
+```bash
+pip install okx
+```
+
+### Symbol Format
+
+OKX uses different symbol formats than Coinbase:
+- **Coinbase**: `BTC-USD`, `ETH-USD`
+- **OKX**: `BTC-USDT`, `ETH-USDT`
+
+The adapter automatically converts `BTC-USD` to `BTC-USDT` for you.
+
+### Example Usage
+
+```python
+from broker_integration import BrokerFactory
+
+# Create OKX adapter (testnet)
+broker = BrokerFactory.create_broker('okx', testnet=True)
+
+# Or for live trading
+broker = BrokerFactory.create_broker('okx', testnet=False)
+
+# Connect
+if broker.connect():
+    print("Connected to OKX!")
+    
+    # Get balance
+    balance = broker.get_account_balance()
+    print(f"Available USDT: ${balance['available_balance']:.2f}")
+    
+    # Get market data (automatically converts BTC-USD to BTC-USDT)
+    market_data = broker.get_market_data('BTC-USD', '5m', 100)
+    
+    # Place order (spot trading)
+    order = broker.place_market_order('BTC-USDT', 'buy', 100.0)
+    print(f"Order placed: {order['order_id']}")
+```
+
+### Using with broker_manager.py
+
+```python
+from broker_manager import OKXBroker
+
+# Initialize OKX broker
+okx = OKXBroker()
+
+# Connect
+if okx.connect():
+    print("✅ OKX Connected")
+    
+    # Get balance
+    balance = okx.get_account_balance()
+    print(f"USDT Balance: ${balance:.2f}")
+    
+    # Get candles
+    candles = okx.get_candles('BTC-USDT', '5m', 100)
+    
+    # Get positions
+    positions = okx.get_positions()
+    for pos in positions:
+        print(f"{pos['symbol']}: {pos['quantity']}")
+```
+
+### Testing Connection
+
+Use the included test script:
+
+```bash
+python test_okx_connection.py
+```
+
+This will:
+- Verify your credentials are set
+- Test connection to OKX API
+- Fetch account balance
+- Get market data
+- Display open positions
+
+### OKX-Specific Features
+
+**Trading Modes:**
+- `cash` - Spot trading (default)
+- `cross` - Cross margin
+- `isolated` - Isolated margin
+
+**Supported Timeframes:**
+- `1m`, `3m`, `5m`, `15m`, `30m`
+- `1H`, `2H`, `4H`, `6H`, `12H`
+- `1D`, `1W`, `1M`
+
+**Product Types:**
+- SPOT - Spot trading
+- SWAP - Perpetual futures
+- FUTURES - Delivery futures
+- OPTION - Options
+
+### Security Best Practices
+
+1. **API Permissions**: Only enable "Trade" permission, never "Withdrawal"
+2. **IP Whitelist**: Add your server's IP to API whitelist
+3. **Testnet First**: Always test on testnet before live trading
+4. **API Key Storage**: Store credentials in `.env` file, never in code
+5. **Regular Rotation**: Rotate API keys every 3-6 months
+
+### Testnet vs Live
+
+**Testnet** (Recommended for testing):
+- URL: https://www.okx.com/testnet
+- Free testnet tokens
+- Zero risk testing environment
+- Set `OKX_USE_TESTNET=true`
+
+**Live Trading**:
+- URL: https://www.okx.com
+- Real funds at risk
+- Start with small amounts
+- Set `OKX_USE_TESTNET=false`
+
+### Common Issues
+
+**Issue**: "Invalid signature"
+- **Fix**: Check that API key, secret, and passphrase are correct
+- Make sure there are no extra spaces in environment variables
+
+**Issue**: "Insufficient balance"
+- **Fix**: Ensure you have USDT in your trading account
+- Transfer funds from funding account to trading account
+
+**Issue**: "Order size too small"
+- **Fix**: Check minimum order size for the trading pair
+- OKX has minimum notional requirements (usually $5-10 USD)
+
+**Issue**: "Rate limit exceeded"
+- **Fix**: Reduce API call frequency
+- Implement exponential backoff
+
+### Implementation Checklist
+
+- [x] Implement `OKXBroker` class in `broker_manager.py`
+- [x] Implement `OKXBrokerAdapter` class in `broker_integration.py`
+- [x] Add OKX to `BrokerFactory`
+- [x] Add OKX to supported brokers in `apex_config.py`
+- [x] Add OKX credentials to `.env.example`
+- [x] Create test script `test_okx_connection.py`
+- [x] Update documentation
+
+---
+
 ## 🟡 Binance Integration (Future)
 
 ### Setup
