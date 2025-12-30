@@ -456,7 +456,11 @@ class TradingStrategy:
                 logger.info("📡 Monitor mode (strategy not loaded; no trades)")
                 return
             
-            balance_data = self.broker.get_account_balance()
+            # Get detailed balance including crypto holdings
+            if hasattr(self.broker, 'get_account_balance_detailed'):
+                balance_data = self.broker.get_account_balance_detailed()
+            else:
+                balance_data = {'trading_balance': self.broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
             logger.info(f"💰 Trading balance: ${account_balance:.2f}")
             
