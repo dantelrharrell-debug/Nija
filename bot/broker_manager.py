@@ -549,6 +549,8 @@ class BaseBroker(ABC):
             float: Total trading balance (USD + USDC)
         """
         balance_data = self._get_account_balance_detailed()
+        if balance_data is None:
+            return 0.0
         return float(balance_data.get('trading_balance', 0.0))
     
     def get_account_balance_detailed(self) -> dict:

@@ -41,7 +41,10 @@ class EmergencyStopLoss:
         """
         try:
             # Get current positions
-            balance_data = self.broker.get_account_balance_detailed() if hasattr(self.broker, 'get_account_balance_detailed') else {'crypto': {}}
+            if hasattr(self.broker, 'get_account_balance_detailed'):
+                balance_data = self.broker.get_account_balance_detailed()
+            else:
+                balance_data = {'crypto': {}}
             crypto_positions = balance_data.get('crypto', {})
             
             stops_added = 0

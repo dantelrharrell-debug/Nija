@@ -457,7 +457,10 @@ class TradingStrategy:
                 return
             
             # Get detailed balance including crypto holdings
-            balance_data = self.broker.get_account_balance_detailed() if hasattr(self.broker, 'get_account_balance_detailed') else {'trading_balance': self.broker.get_account_balance()}
+            if hasattr(self.broker, 'get_account_balance_detailed'):
+                balance_data = self.broker.get_account_balance_detailed()
+            else:
+                balance_data = {'trading_balance': self.broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
             logger.info(f"💰 Trading balance: ${account_balance:.2f}")
             
