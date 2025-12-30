@@ -2090,7 +2090,6 @@ class BinanceBroker(BaseBroker):
     def __init__(self):
         super().__init__(BrokerType.BINANCE)
         self.client = None
-        self.use_testnet = False
     
     def connect(self) -> bool:
         """
@@ -2109,7 +2108,7 @@ class BinanceBroker(BaseBroker):
             
             api_key = os.getenv("BINANCE_API_KEY")
             api_secret = os.getenv("BINANCE_API_SECRET")
-            self.use_testnet = os.getenv("BINANCE_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
+            use_testnet = os.getenv("BINANCE_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
             
             if not api_key or not api_secret:
                 logging.error("=" * 70)
@@ -2124,7 +2123,7 @@ class BinanceBroker(BaseBroker):
                 return False
             
             # Initialize Binance client
-            if self.use_testnet:
+            if use_testnet:
                 # Testnet base URL
                 self.client = Client(api_key, api_secret, testnet=True)
             else:
@@ -2135,7 +2134,7 @@ class BinanceBroker(BaseBroker):
             
             if account:
                 self.connected = True
-                env_type = "🧪 TESTNET" if self.use_testnet else "🔴 LIVE"
+                env_type = "🧪 TESTNET" if use_testnet else "🔴 LIVE"
                 logging.info("=" * 70)
                 logging.info(f"✅ BINANCE CONNECTED ({env_type})")
                 logging.info("=" * 70)

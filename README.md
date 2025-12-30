@@ -247,7 +247,7 @@ NIJA now supports multiple cryptocurrency exchanges:
    - Quick test: `python test_okx_connection.py`
 
 3. **Binance Exchange** (✅ NEW - FULLY IMPLEMENTED!)
-   - Status: ✅ **Full implementation complete** (December 30, 2025)
+   - Status: ✅ **Full implementation complete** (December 30, 2024)
    - Features: Spot trading, testnet support, 600+ pairs, 0.1% fees
    - Setup: Set `BINANCE_API_KEY` and `BINANCE_API_SECRET` in `.env`
    - Get credentials: https://www.binance.com/en/my/settings/api-management
@@ -255,7 +255,7 @@ NIJA now supports multiple cryptocurrency exchanges:
    - Note: Requires `python-binance==1.0.21` (auto-installed via requirements.txt)
    
 4. **Kraken Pro Exchange** (✅ NEW - FULLY IMPLEMENTED!)
-   - Status: ✅ **Full implementation complete** (December 30, 2025)
+   - Status: ✅ **Full implementation complete** (December 30, 2024)
    - Features: Spot trading, 200+ pairs, 0.16% maker / 0.26% taker fees
    - Setup: Set `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` in `.env`
    - Get credentials: https://www.kraken.com/u/security/api
@@ -376,7 +376,7 @@ The bot will automatically route orders to the appropriate exchange based on the
 
 ## 📦 BINANCE FORK STARTER (DEPRECATED - NOW BUILT-IN!)
 
-**Note**: This section is now deprecated. Binance is fully integrated into NIJA as of December 30, 2025.
+**Note**: This section is now deprecated. Binance is fully integrated into NIJA as of December 30, 2024.
 Simply set your Binance API credentials in `.env` and the bot will support it automatically.
 
 ~~If you want to spin a Binance-based project reusing this structure:~~
