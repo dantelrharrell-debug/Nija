@@ -339,12 +339,14 @@ class AdaptiveRiskManager:
         
         position_size = account_balance * final_pct
         
-        # MICRO TRADE PREVENTION: Enforce absolute $10 minimum
-        # This prevents fee-destroying micro trades regardless of percentage calculations
-        MIN_ABSOLUTE_POSITION_SIZE = 10.0
+        # MICRO TRADE PREVENTION: Enforce absolute $1 minimum (lowered from $10 to allow very small accounts)
+        # ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to ~1.4% round-trip fees
+        # With $1-2 positions, expect fees to consume most/all profits
+        # This minimum allows trading for learning/testing but profitability is severely limited
+        MIN_ABSOLUTE_POSITION_SIZE = 1.0
         if position_size < MIN_ABSOLUTE_POSITION_SIZE:
             logger.warning(f"🚫 MICRO TRADE BLOCKED: Calculated ${position_size:.2f} < ${MIN_ABSOLUTE_POSITION_SIZE} minimum")
-            logger.warning(f"   💡 Reason: Micro trades hurt profitability - fees consume gains on small positions")
+            logger.warning(f"   💡 Reason: Extremely small positions face severe fee impact")
             return 0.0, {'reason': 'Position too small (micro trade prevention)', 'calculated_size': position_size, 'minimum': MIN_ABSOLUTE_POSITION_SIZE}
         
         logger.info(f"Position size: ${position_size:.2f} ({final_pct*100:.2f}%) - "

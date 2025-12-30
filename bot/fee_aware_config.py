@@ -152,13 +152,13 @@ def get_position_size_pct(account_balance: float) -> float:
     if account_balance < MIN_BALANCE_TO_TRADE:
         return 0.0  # Don't trade
     elif account_balance < MICRO_BALANCE_THRESHOLD:
-        return MICRO_BALANCE_POSITION_PCT  # 90% for $10-50
+        return MICRO_BALANCE_POSITION_PCT  # 50% for $2-50
     elif account_balance < SMALL_BALANCE_THRESHOLD:
-        return SMALL_BALANCE_POSITION_PCT  # 80% for $50-100
+        return SMALL_BALANCE_POSITION_PCT  # 50% for $50-100
     elif account_balance < MEDIUM_BALANCE_THRESHOLD:
-        return MEDIUM_BALANCE_POSITION_PCT  # 50% for $100-500
+        return MEDIUM_BALANCE_POSITION_PCT  # 40% for $100-500
     else:
-        return NORMAL_MAX_POSITION_PCT  # 25% for $500+
+        return NORMAL_MAX_POSITION_PCT  # 20% for $500+
 
 
 def get_min_profit_target(use_limit_order: bool = True, account_balance: float = 100.0) -> float:
@@ -190,16 +190,17 @@ def calculate_min_position_size(account_balance: float) -> float:
         account_balance: Current account balance
     
     Returns:
-        Minimum position size in USD (lowered to $2 to allow very small account trading)
-        WARNING: Positions under $10 face significant fee pressure (~1.4% round-trip)
+        Minimum position size in USD (lowered to $1 to allow very small account trading)
+        ⚠️ CRITICAL WARNING: Positions under $10 face severe fee pressure (~1.4% round-trip)
+        With $1-2 positions, profitability is nearly impossible
     """
     position_pct = get_position_size_pct(account_balance)
     calculated_size = account_balance * position_pct
     
-    # MICRO TRADE PREVENTION: Enforce $2 minimum (lowered from $10)
-    # ⚠️ WARNING: Very small positions are likely unprofitable due to fees
+    # MICRO TRADE PREVENTION: Enforce $1 minimum (lowered from $10)
+    # ⚠️ CRITICAL WARNING: Very small positions are likely unprofitable due to fees
     # Recommended minimum is $10+ for better results
-    MIN_ABSOLUTE_POSITION = 2.0
+    MIN_ABSOLUTE_POSITION = 1.0
     return max(calculated_size, MIN_ABSOLUTE_POSITION)
 
 
