@@ -42,7 +42,7 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # STRONG RECOMMENDATION: Fund account to $30+ for viable trading
 
 # For $2-50 balance: Trade with 50% positions (leave 50% reserve)
-MIN_BALANCE_TO_TRADE = 2.0  # $2 minimum (LOWERED from $5 to allow very small accounts)
+MIN_BALANCE_TO_TRADE = 2.0  # $2 minimum (LOWERED from $30 to allow very small accounts)
 MICRO_BALANCE_THRESHOLD = 50.0
 MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position
 
@@ -196,7 +196,7 @@ def calculate_min_position_size(account_balance: float) -> float:
     position_pct = get_position_size_pct(account_balance)
     calculated_size = account_balance * position_pct
     
-    # MICRO TRADE PREVENTION: Enforce $2 minimum (lowered from $5)
+    # MICRO TRADE PREVENTION: Enforce $2 minimum (lowered from $10)
     # ⚠️ WARNING: Very small positions are likely unprofitable due to fees
     # Recommended minimum is $10+ for better results
     MIN_ABSOLUTE_POSITION = 2.0
