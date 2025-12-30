@@ -28,6 +28,14 @@ MINIMUM_BALANCE_PROTECTION = 10.50  # Absolute minimum to prevent failed orders
 MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
+# Credential validation constants
+PLACEHOLDER_PASSPHRASE_VALUES = [
+    'your_passphrase', 'YOUR_PASSPHRASE', 
+    'passphrase', 'PASSPHRASE',
+    'your_password', 'YOUR_PASSWORD',
+    'password', 'PASSWORD'
+]
+
 # Fallback market list - popular crypto trading pairs used when API fails
 FALLBACK_MARKETS = [
     'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 
@@ -1956,12 +1964,13 @@ class AlpacaBroker(BaseBroker):
         try:
             from alpaca.trading.client import TradingClient
             
-            api_key = os.getenv("ALPACA_API_KEY")
-            api_secret = os.getenv("ALPACA_API_SECRET")
+            api_key = os.getenv("ALPACA_API_KEY", "").strip()
+            api_secret = os.getenv("ALPACA_API_SECRET", "").strip()
             paper = os.getenv("ALPACA_PAPER", "true").lower() == "true"
             
             if not api_key or not api_secret:
-                print("❌ Alpaca credentials not found")
+                # Silently skip - Alpaca is optional
+                logging.info("⚠️  Alpaca credentials not configured (skipping)")
                 return False
             
             self.api = TradingClient(api_key, api_secret, paper=paper)
@@ -1969,11 +1978,14 @@ class AlpacaBroker(BaseBroker):
             # Test connection
             account = self.api.get_account()
             self.connected = True
-            print(f"✅ Alpaca connected ({'PAPER' if paper else 'LIVE'})")
+            logging.info(f"✅ Alpaca connected ({'PAPER' if paper else 'LIVE'})")
             return True
             
+        except ImportError:
+            # SDK not installed - skip silently
+            return False
         except Exception as e:
-            print(f"❌ Alpaca connection failed: {e}")
+            logging.warning(f"⚠️  Alpaca connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
@@ -2106,20 +2118,13 @@ class BinanceBroker(BaseBroker):
         try:
             from binance.client import Client
             
-            api_key = os.getenv("BINANCE_API_KEY")
-            api_secret = os.getenv("BINANCE_API_SECRET")
+            api_key = os.getenv("BINANCE_API_KEY", "").strip()
+            api_secret = os.getenv("BINANCE_API_SECRET", "").strip()
             use_testnet = os.getenv("BINANCE_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
             
             if not api_key or not api_secret:
-                logging.error("=" * 70)
-                logging.error("❌ BINANCE CREDENTIALS NOT FOUND")
-                logging.error("=" * 70)
-                logging.error("Set these environment variables:")
-                logging.error("  1. BINANCE_API_KEY - Your Binance API key")
-                logging.error("  2. BINANCE_API_SECRET - Your Binance API secret")
-                logging.error("")
-                logging.error("Get credentials from: https://www.binance.com/en/my/settings/api-management")
-                logging.error("=" * 70)
+                # Silently skip - Binance is optional, no need for scary error messages
+                logging.info("⚠️  Binance credentials not configured (skipping)")
                 return False
             
             # Initialize Binance client
@@ -2153,19 +2158,22 @@ class BinanceBroker(BaseBroker):
                 logging.info("=" * 70)
                 return True
             else:
-                logging.error("❌ Binance connection test failed: No account data returned")
+                logging.warning("⚠️  Binance connection test failed: No account data returned")
                 return False
                 
         except ImportError:
-            logging.error("=" * 70)
-            logging.error("❌ BINANCE SDK NOT INSTALLED")
-            logging.error("=" * 70)
-            logging.error("Install with: pip install python-binance")
-            logging.error("=" * 70)
+            # SDK not installed - skip silently (it's optional)
             return False
         except Exception as e:
-            logging.error(f"❌ Binance connection failed: {e}")
-            logging.error(f"   Traceback: {traceback.format_exc()}")
+            # Handle authentication errors gracefully
+            error_str = str(e).lower()
+            if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
+                logging.warning("⚠️  Binance authentication failed - invalid or expired API credentials")
+                logging.warning("   Please check your BINANCE_API_KEY and BINANCE_API_SECRET")
+            elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
+                logging.warning("⚠️  Binance connection failed - network issue or API unavailable")
+            else:
+                logging.warning(f"⚠️  Binance connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
@@ -2393,19 +2401,12 @@ class KrakenBroker(BaseBroker):
             import krakenex
             from pykrakenapi import KrakenAPI
             
-            api_key = os.getenv("KRAKEN_API_KEY")
-            api_secret = os.getenv("KRAKEN_API_SECRET")
+            api_key = os.getenv("KRAKEN_API_KEY", "").strip()
+            api_secret = os.getenv("KRAKEN_API_SECRET", "").strip()
             
             if not api_key or not api_secret:
-                logging.error("=" * 70)
-                logging.error("❌ KRAKEN CREDENTIALS NOT FOUND")
-                logging.error("=" * 70)
-                logging.error("Set these environment variables:")
-                logging.error("  1. KRAKEN_API_KEY - Your Kraken API key")
-                logging.error("  2. KRAKEN_API_SECRET - Your Kraken API private key")
-                logging.error("")
-                logging.error("Get credentials from: https://www.kraken.com/u/security/api")
-                logging.error("=" * 70)
+                # Silently skip - Kraken is optional, no need for scary error messages
+                logging.info("⚠️  Kraken credentials not configured (skipping)")
                 return False
             
             # Initialize Kraken API
@@ -2444,15 +2445,17 @@ class KrakenBroker(BaseBroker):
                 return False
                 
         except ImportError:
-            logging.error("=" * 70)
-            logging.error("❌ KRAKEN SDK NOT INSTALLED")
-            logging.error("=" * 70)
-            logging.error("Install with: pip install krakenex pykrakenapi")
-            logging.error("=" * 70)
+            # SDK not installed - skip silently (it's optional)
             return False
         except Exception as e:
-            logging.error(f"❌ Kraken connection failed: {e}")
-            logging.error(f"   Traceback: {traceback.format_exc()}")
+            # Handle errors gracefully
+            error_str = str(e).lower()
+            if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
+                logging.warning("⚠️  Kraken authentication failed - invalid or expired API credentials")
+            elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
+                logging.warning("⚠️  Kraken connection failed - network issue or API unavailable")
+            else:
+                logging.warning(f"⚠️  Kraken connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
@@ -2716,22 +2719,22 @@ class OKXBroker(BaseBroker):
         try:
             from okx.api import Account, Market, Trade
             
-            api_key = os.getenv("OKX_API_KEY")
-            api_secret = os.getenv("OKX_API_SECRET")
-            passphrase = os.getenv("OKX_PASSPHRASE")
+            api_key = os.getenv("OKX_API_KEY", "").strip()
+            api_secret = os.getenv("OKX_API_SECRET", "").strip()
+            passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
             self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
             
             if not api_key or not api_secret or not passphrase:
-                logging.error("=" * 70)
-                logging.error("❌ OKX CREDENTIALS NOT FOUND")
-                logging.error("=" * 70)
-                logging.error("Set these environment variables:")
-                logging.error("  1. OKX_API_KEY - Your OKX API key")
-                logging.error("  2. OKX_API_SECRET - Your OKX API secret")  
-                logging.error("  3. OKX_PASSPHRASE - Your OKX API passphrase")
-                logging.error("")
-                logging.error("Get credentials from: https://www.okx.com/account/my-api")
-                logging.error("=" * 70)
+                # Silently skip - OKX is optional, no need for scary error messages
+                logging.info("⚠️  OKX credentials not configured (skipping)")
+                return False
+            
+            
+            # Check for placeholder passphrase (most common user error)
+            # Note: Only checking passphrase because API keys are UUIDs/hex without obvious placeholder patterns
+            if passphrase in PLACEHOLDER_PASSPHRASE_VALUES:
+                logging.warning("⚠️  OKX passphrase appears to be a placeholder value")
+                logging.warning("   Please set a valid OKX_PASSPHRASE in your environment")
                 return False
             
             # Determine API flag (0 = live, 1 = testnet)
@@ -2762,20 +2765,23 @@ class OKXBroker(BaseBroker):
                 return True
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-                logging.error(f"❌ OKX connection test failed: {error_msg}")
+                logging.warning(f"⚠️  OKX connection test failed: {error_msg}")
                 return False
                 
         except ImportError:
-            logging.error("=" * 70)
-            logging.error("❌ OKX SDK NOT INSTALLED OR INCOMPATIBLE VERSION")
-            logging.error("=" * 70)
-            logging.error("Install with: pip install okx==2.1.2")
-            logging.error("Required version: 2.1.2 (for API compatibility)")
-            logging.error("=" * 70)
+            # SDK not installed - skip silently (it's optional)
             return False
         except Exception as e:
-            logging.error(f"❌ OKX connection failed: {e}")
-            logging.error(f"   Traceback: {traceback.format_exc()}")
+            # Handle authentication errors gracefully
+            # Note: OKX error code 50119 = "API key doesn't exist"
+            error_str = str(e).lower()
+            if 'api key' in error_str or '401' in error_str or 'authentication' in error_str or '50119' in error_str:
+                logging.warning("⚠️  OKX authentication failed - invalid or expired API credentials")
+                logging.warning("   Please check your OKX_API_KEY, OKX_API_SECRET, and OKX_PASSPHRASE")
+            elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
+                logging.warning("⚠️  OKX connection failed - network issue or API unavailable")
+            else:
+                logging.warning(f"⚠️  OKX connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
