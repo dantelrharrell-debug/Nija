@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from apex_strategy_v7 import ApexStrategyV7
 from apex_config import EXECUTION
-from broker_manager import BrokerManager, CoinbaseBroker, AlpacaBroker, BinanceBroker
+from broker_manager import BrokerManager, CoinbaseBroker, AlpacaBroker, BinanceBroker, KrakenBroker, OKXBroker
 import pandas as pd
 
 # Setup logging
@@ -313,6 +313,21 @@ def main():
     coinbase = CoinbaseBroker()
     if coinbase.connect():
         broker_manager.add_broker(coinbase)
+    
+    # Optional: Add Binance for crypto
+    # binance = BinanceBroker()
+    # if binance.connect():
+    #     broker_manager.add_broker(binance)
+    
+    # Optional: Add Kraken Pro for crypto
+    # kraken = KrakenBroker()
+    # if kraken.connect():
+    #     broker_manager.add_broker(kraken)
+    
+    # Optional: Add OKX for crypto
+    # okx = OKXBroker()
+    # if okx.connect():
+    #     broker_manager.add_broker(okx)
     
     # Optional: Add Alpaca for stocks
     # alpaca = AlpacaBroker()

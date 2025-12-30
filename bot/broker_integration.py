@@ -378,6 +378,333 @@ class AlpacaBrokerAdapter(BrokerInterface):
         return None
 
 
+class KrakenBrokerAdapter(BrokerInterface):
+    """
+    Kraken Pro API adapter for cryptocurrency spot trading.
+    
+    Supports spot trading with USD/USDT pairs.
+    Documentation: https://docs.kraken.com/rest/
+    """
+    
+    def __init__(self, api_key: str = None, api_secret: str = None):
+        """
+        Initialize Kraken broker adapter.
+        
+        Args:
+            api_key: Kraken API key
+            api_secret: Kraken API private key
+        """
+        import os
+        self.api_key = api_key or os.getenv("KRAKEN_API_KEY")
+        self.api_secret = api_secret or os.getenv("KRAKEN_API_SECRET")
+        self.api = None
+        self.kraken_api = None
+        logger.info("Kraken broker adapter initialized")
+    
+    def connect(self) -> bool:
+        """Connect to Kraken API."""
+        try:
+            import krakenex
+            from pykrakenapi import KrakenAPI
+            
+            if not self.api_key or not self.api_secret:
+                logger.error("Kraken credentials not found")
+                return False
+            
+            self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
+            self.kraken_api = KrakenAPI(self.api)
+            
+            # Test connection
+            balance = self.api.query_private('Balance')
+            
+            if balance and 'error' in balance and balance['error']:
+                logger.error(f"Kraken connection test failed: {', '.join(balance['error'])}")
+                return False
+            
+            if balance and 'result' in balance:
+                logger.info("✅ Kraken connected")
+                return True
+            
+            return False
+                
+        except ImportError:
+            logger.error("Kraken SDK not installed. Install with: pip install krakenex pykrakenapi")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to connect to Kraken: {e}")
+            return False
+    
+    def get_account_balance(self) -> Dict[str, float]:
+        """Get Kraken account balance."""
+        try:
+            if not self.api:
+                return {
+                    'total_balance': 0.0,
+                    'available_balance': 0.0,
+                    'currency': 'USD'
+                }
+            
+            balance = self.api.query_private('Balance')
+            
+            if balance and 'result' in balance:
+                result = balance['result']
+                usd_balance = float(result.get('ZUSD', 0))
+                usdt_balance = float(result.get('USDT', 0))
+                total = usd_balance + usdt_balance
+                
+                logger.info(f"Kraken balance: USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
+                
+                return {
+                    'total_balance': total,
+                    'available_balance': total,
+                    'currency': 'USD'
+                }
+            
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USD'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching Kraken balance: {e}")
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USD'
+            }
+    
+    def get_market_data(self, symbol: str, timeframe: str = '5m',
+                       limit: int = 100) -> Optional[Dict]:
+        """Get market data from Kraken."""
+        try:
+            if not self.kraken_api:
+                return None
+            
+            # Convert symbol format to Kraken format
+            kraken_symbol = symbol.replace('-', '').upper()
+            if kraken_symbol.startswith('BTC'):
+                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            
+            # Map timeframe to Kraken interval (in minutes)
+            interval_map = {
+                "1m": 1, "5m": 5, "15m": 15, "30m": 30,
+                "1h": 60, "4h": 240, "1d": 1440
+            }
+            
+            kraken_interval = interval_map.get(timeframe.lower(), 5)
+            
+            # Fetch OHLC data
+            ohlc, last = self.kraken_api.get_ohlc_data(
+                kraken_symbol,
+                interval=kraken_interval,
+                ascending=True
+            )
+            
+            # Convert to standard format
+            candles = []
+            for idx, row in ohlc.tail(limit).iterrows():
+                candles.append({
+                    'timestamp': int(idx.timestamp()),
+                    'open': float(row['open']),
+                    'high': float(row['high']),
+                    'low': float(row['low']),
+                    'close': float(row['close']),
+                    'volume': float(row['volume'])
+                })
+            
+            logger.info(f"Fetched {len(candles)} candles for {kraken_symbol} from Kraken")
+            
+            return {
+                'symbol': kraken_symbol,
+                'timeframe': timeframe,
+                'candles': candles
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching Kraken market data: {e}")
+            return None
+    
+    def place_market_order(self, symbol: str, side: str, size: float,
+                          size_type: str = 'quote') -> Optional[Dict]:
+        """Place market order on Kraken."""
+        try:
+            if not self.api:
+                return None
+            
+            # Convert symbol format
+            kraken_symbol = symbol.replace('-', '').upper()
+            if kraken_symbol.startswith('BTC'):
+                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            
+            # Place market order
+            order_params = {
+                'pair': kraken_symbol,
+                'type': side.lower(),
+                'ordertype': 'market',
+                'volume': str(size)
+            }
+            
+            result = self.api.query_private('AddOrder', order_params)
+            
+            if result and 'result' in result:
+                order_result = result['result']
+                txid = order_result.get('txid', [])
+                order_id = txid[0] if txid else None
+                
+                logger.info(f"Kraken market {side} order placed: {kraken_symbol} (ID: {order_id})")
+                
+                return {
+                    'order_id': order_id,
+                    'symbol': kraken_symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': 0.0,
+                    'status': 'filled',
+                    'timestamp': datetime.now()
+                }
+            
+            error_msg = result.get('error', ['Unknown error'])[0] if result else 'No response'
+            logger.error(f"Kraken order failed: {error_msg}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Kraken order error: {e}")
+            return None
+    
+    def place_limit_order(self, symbol: str, side: str, size: float,
+                         price: float, size_type: str = 'quote') -> Optional[Dict]:
+        """Place limit order on Kraken."""
+        try:
+            if not self.api:
+                return None
+            
+            # Convert symbol format
+            kraken_symbol = symbol.replace('-', '').upper()
+            if kraken_symbol.startswith('BTC'):
+                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            
+            # Place limit order
+            order_params = {
+                'pair': kraken_symbol,
+                'type': side.lower(),
+                'ordertype': 'limit',
+                'price': str(price),
+                'volume': str(size)
+            }
+            
+            result = self.api.query_private('AddOrder', order_params)
+            
+            if result and 'result' in result:
+                order_result = result['result']
+                txid = order_result.get('txid', [])
+                order_id = txid[0] if txid else None
+                
+                logger.info(f"Kraken limit {side} order placed: {kraken_symbol} @ ${price} (ID: {order_id})")
+                
+                return {
+                    'order_id': order_id,
+                    'symbol': kraken_symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': price,
+                    'status': 'open',
+                    'timestamp': datetime.now()
+                }
+            
+            error_msg = result.get('error', ['Unknown error'])[0] if result else 'No response'
+            logger.error(f"Kraken limit order failed: {error_msg}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Kraken limit order error: {e}")
+            return None
+    
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel order on Kraken."""
+        try:
+            if not self.api:
+                return False
+            
+            result = self.api.query_private('CancelOrder', {'txid': order_id})
+            
+            if result and 'result' in result and 'count' in result['result']:
+                count = result['result']['count']
+                logger.info(f"Cancelled {count} Kraken order(s): {order_id}")
+                return count > 0
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Kraken cancel order error: {e}")
+            return False
+    
+    def get_open_positions(self) -> List[Dict]:
+        """Get open positions from Kraken."""
+        try:
+            if not self.api:
+                return []
+            
+            balance = self.api.query_private('Balance')
+            
+            if balance and 'result' in balance:
+                result = balance['result']
+                positions = []
+                
+                for asset, amount in result.items():
+                    balance_val = float(amount)
+                    
+                    # Skip USD/USDT and zero balances
+                    if asset in ['ZUSD', 'USDT'] or balance_val <= 0:
+                        continue
+                    
+                    # Convert Kraken asset codes
+                    currency = asset
+                    if currency.startswith('X') and len(currency) == 4:
+                        currency = currency[1:]
+                    if currency == 'XBT':
+                        currency = 'BTC'
+                    
+                    positions.append({
+                        'symbol': f'{currency}USD',
+                        'size': balance_val,
+                        'entry_price': 0.0,
+                        'current_price': 0.0,
+                        'pnl': 0.0,
+                        'pnl_pct': 0.0
+                    })
+                
+                return positions
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error fetching Kraken positions: {e}")
+            return []
+    
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get order status from Kraken."""
+        try:
+            if not self.api:
+                return None
+            
+            result = self.api.query_private('QueryOrders', {'txid': order_id})
+            
+            if result and 'result' in result:
+                orders = result['result']
+                if order_id in orders:
+                    order = orders[order_id]
+                    logger.info(f"Kraken order status: {order_id} - {order.get('status', 'unknown')}")
+                    return order
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Kraken get order status error: {e}")
+            return None
+
+
+
 class OKXBrokerAdapter(BrokerInterface):
     """
     OKX Exchange API adapter for cryptocurrency spot and futures trading.
@@ -710,7 +1037,7 @@ class BrokerFactory:
         Create a broker adapter instance.
         
         Args:
-            broker_name: Name of broker ('coinbase', 'binance', 'alpaca', 'okx')
+            broker_name: Name of broker ('coinbase', 'binance', 'kraken', 'alpaca', 'okx')
             **kwargs: Broker-specific configuration
         
         Returns:
@@ -725,6 +1052,8 @@ class BrokerFactory:
             return CoinbaseBrokerAdapter(**kwargs)
         elif broker_name == 'binance':
             return BinanceBrokerAdapter(**kwargs)
+        elif broker_name == 'kraken':
+            return KrakenBrokerAdapter(**kwargs)
         elif broker_name == 'alpaca':
             return AlpacaBrokerAdapter(**kwargs)
         elif broker_name == 'okx':

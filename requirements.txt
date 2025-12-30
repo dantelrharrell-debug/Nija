@@ -120,3 +120,8 @@ websocket-client==1.9.0
 websockets==13.1
 Werkzeug==3.1.4
 okx==2.1.2
+# Kraken Pro API
+krakenex==2.2.2
+pykrakenapi==0.3.2
+# Binance API
+python-binance==1.0.21
