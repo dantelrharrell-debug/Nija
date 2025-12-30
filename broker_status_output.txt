@@ -1,0 +1,79 @@
+ERROR:root:❌ Failed to verify Coinbase connection: HTTPSConnectionPool(host='api.coinbase.com', port=443): Max retries exceeded with url: /api/v3/brokerage/accounts (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7fa7806ba300>: Failed to establish a new connection: [Errno -5] No address associated with hostname'))
+
+================================================================================
+  NIJA Multi-Broker Connection Status Report
+================================================================================
+  Generated: 2025-12-30 18:35:03
+
+--------------------------------------------------------------------------------
+  Checking Broker Connections
+--------------------------------------------------------------------------------
+
+🟦 Coinbase Advanced Trade (Crypto) [PRIMARY]
+   ✅ Credentials configured
+   🔄 Testing connection...
+   ❌ Connection failed
+   Error: Connection returned False
+
+🟪 Kraken Pro (Crypto)
+   ⚠️  Credentials not configured
+   Missing: KRAKEN_API_KEY, KRAKEN_API_SECRET
+
+⬛ OKX (Crypto)
+   ⚠️  Credentials not configured
+   Missing: OKX_API_KEY, OKX_API_SECRET, OKX_PASSPHRASE
+
+🟨 Binance (Crypto)
+   ⚠️  Credentials not configured
+   Missing: BINANCE_API_KEY, BINANCE_API_SECRET
+
+🟩 Alpaca (Stocks)
+   ⚠️  Credentials not configured
+   Missing: ALPACA_API_KEY, ALPACA_API_SECRET
+
+================================================================================
+  SUMMARY
+================================================================================
+
+❌ NO BROKERS CONNECTED
+
+⚠️  1 BROKER(S) WITH FAILED CONNECTIONS:
+   🟦 Coinbase Advanced Trade
+      Error: Connection returned False
+
+📝 4 BROKER(S) NOT CONFIGURED:
+   🟪 Kraken Pro (Crypto)
+      Set: KRAKEN_API_KEY, KRAKEN_API_SECRET
+   ⬛ OKX (Crypto)
+      Set: OKX_API_KEY, OKX_API_SECRET, OKX_PASSPHRASE
+   🟨 Binance (Crypto)
+      Set: BINANCE_API_KEY, BINANCE_API_SECRET
+   🟩 Alpaca (Stocks)
+      Set: ALPACA_API_KEY, ALPACA_API_SECRET
+
+--------------------------------------------------------------------------------
+  Trading Readiness Status
+--------------------------------------------------------------------------------
+
+❌ NIJA IS NOT READY TO TRADE
+
+   No brokers are currently connected.
+   Please configure at least one broker's credentials in the .env file.
+
+--------------------------------------------------------------------------------
+  Next Steps
+--------------------------------------------------------------------------------
+
+📝 To configure additional brokers:
+   1. Copy .env.example to .env (if not done already)
+   2. Add API credentials for the brokers you want to use
+   3. See BROKER_INTEGRATION_GUIDE.md for detailed setup instructions
+
+🔧 To fix connection issues:
+   1. Verify your API credentials are correct
+   2. Check that API keys have required permissions
+   3. For testnet accounts, ensure *_USE_TESTNET is set correctly
+   4. Review error messages above for specific issues
+
+================================================================================
+
