@@ -538,6 +538,80 @@ ENV_VARS_REQUIRED = [
 ]
 
 # ═══════════════════════════════════════════════════════════════════
+# DAILY PROFIT TARGET OPTIMIZATION (NEW - Dec 30, 2025)
+# ═══════════════════════════════════════════════════════════════════
+
+DAILY_TARGET = {
+    'enabled': True,  # Enable daily target optimization
+    'target_usd': 25.00,  # Target $25/day profit
+    'min_balance_for_target': 100.00,  # Scale target for smaller accounts
+    'expected_win_rate': 0.60,  # 60% expected win rate
+    'avg_win_pct': 0.020,  # 2.0% average profit per win
+    'avg_loss_pct': 0.010,  # 1.0% average loss per trade
+    'max_trades_per_day': 20,  # Maximum trades per day
+    'min_trades_per_day': 5,  # Minimum trades to hit target
+    'auto_adjust': True,  # Auto-adjust based on account balance
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# MULTI-EXCHANGE CAPITAL ALLOCATION (NEW - Dec 30, 2025)
+# ═══════════════════════════════════════════════════════════════════
+
+MULTI_EXCHANGE = {
+    'enabled': True,  # Enable multi-exchange trading
+    'allocation_strategy': 'hybrid',  # 'equal_weight', 'fee_optimized', 'risk_balanced', 'hybrid'
+    'min_exchange_allocation': 0.15,  # Minimum 15% per exchange
+    'max_exchange_allocation': 0.50,  # Maximum 50% per exchange
+    'rebalance_threshold': 0.10,  # Rebalance when drift > 10%
+    'auto_rebalance': True,  # Automatically rebalance when needed
+    
+    # Default allocations (used if no connected exchanges)
+    'default_allocations': {
+        'coinbase': 0.40,  # 40% - Most reliable
+        'okx': 0.30,       # 30% - Lowest fees
+        'kraken': 0.30,    # 30% - Balanced
+        'binance': 0.0,    # 0% - Not integrated yet
+    },
+    
+    # Exchange priorities (higher = preferred)
+    'exchange_priority': {
+        'coinbase': 3,  # High priority (reliable, US-based)
+        'kraken': 2,    # Medium priority
+        'okx': 1,       # Lower priority (new integration)
+        'binance': 0,   # Not active
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# EXCHANGE-SPECIFIC RISK PROFILES (NEW - Dec 30, 2025)
+# ═══════════════════════════════════════════════════════════════════
+
+EXCHANGE_PROFILES = {
+    'use_exchange_profiles': True,  # Use exchange-specific settings
+    'auto_select_best': True,  # Auto-select best exchange for balance
+    
+    # Override settings per exchange (applied on top of base config)
+    'coinbase': {
+        'min_position_pct': 0.15,  # 15% minimum
+        'max_position_pct': 0.30,  # 30% maximum
+        'min_profit_target': 0.025,  # 2.5% minimum (high fees)
+        'max_trades_per_day': 15,  # Quality over quantity
+    },
+    'okx': {
+        'min_position_pct': 0.05,  # 5% minimum
+        'max_position_pct': 0.20,  # 20% maximum
+        'min_profit_target': 0.015,  # 1.5% minimum (low fees)
+        'max_trades_per_day': 30,  # Higher frequency
+    },
+    'kraken': {
+        'min_position_pct': 0.10,  # 10% minimum
+        'max_position_pct': 0.25,  # 25% maximum
+        'min_profit_target': 0.020,  # 2.0% minimum (medium fees)
+        'max_trades_per_day': 20,  # Balanced frequency
+    },
+}
+
+# ═══════════════════════════════════════════════════════════════════
 # STRATEGY METADATA
 # ═══════════════════════════════════════════════════════════════════
 
@@ -547,5 +621,5 @@ STRATEGY_INFO = {
     'description': 'Production-ready trading system with strict filtering and dynamic risk management',
     'author': 'NIJA Trading Systems',
     'created': '2025-12-12',
-    'last_updated': '2025-12-12',
+    'last_updated': '2025-12-30',
 }
