@@ -415,9 +415,7 @@ class OKXBrokerAdapter(BrokerInterface):
     def connect(self) -> bool:
         """Connect to OKX API."""
         try:
-            import okx.Account as Account
-            import okx.MarketData as MarketData
-            import okx.Trade as Trade
+            from okx.api import Account, Market, Trade
             
             if not self.api_key or not self.api_secret or not self.passphrase:
                 logger.error("OKX credentials not found")
@@ -427,15 +425,15 @@ class OKXBrokerAdapter(BrokerInterface):
             flag = "1" if self.testnet else "0"
             
             # Initialize OKX API clients
-            self.account_api = Account.AccountAPI(self.api_key, self.api_secret, 
-                                                   self.passphrase, False, flag)
-            self.market_api = MarketData.MarketAPI(self.api_key, self.api_secret,
-                                                    self.passphrase, False, flag)
-            self.trade_api = Trade.TradeAPI(self.api_key, self.api_secret,
-                                            self.passphrase, False, flag)
+            self.account_api = Account(self.api_key, self.api_secret, 
+                                       self.passphrase, flag)
+            self.market_api = Market(self.api_key, self.api_secret,
+                                     self.passphrase, flag)
+            self.trade_api = Trade(self.api_key, self.api_secret,
+                                   self.passphrase, flag)
             
             # Test connection
-            result = self.account_api.get_account_balance()
+            result = self.account_api.get_balance()
             
             if result and result.get('code') == '0':
                 env_type = "testnet" if self.testnet else "live"
@@ -463,7 +461,7 @@ class OKXBrokerAdapter(BrokerInterface):
                     'currency': 'USDT'
                 }
             
-            result = self.account_api.get_account_balance()
+            result = self.account_api.get_balance()
             
             if result and result.get('code') == '0':
                 data = result.get('data', [])
@@ -520,7 +518,7 @@ class OKXBrokerAdapter(BrokerInterface):
             okx_timeframe = timeframe_map.get(timeframe.lower(), "5m")
             
             # Fetch candles
-            result = self.market_api.get_candlesticks(
+            result = self.market_api.get_candles(
                 instId=okx_symbol,
                 bar=okx_timeframe,
                 limit=str(min(limit, 100))
@@ -662,7 +660,7 @@ class OKXBrokerAdapter(BrokerInterface):
             if not self.account_api:
                 return []
             
-            result = self.account_api.get_account_balance()
+            result = self.account_api.get_balance()
             
             if result and result.get('code') == '0':
                 positions = []

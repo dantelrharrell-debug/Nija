@@ -2335,9 +2335,7 @@ class OKXBroker(BaseBroker):
             bool: True if connected successfully
         """
         try:
-            import okx.Account as Account
-            import okx.MarketData as MarketData
-            import okx.Trade as Trade
+            from okx.api import Account, Market, Trade
             
             api_key = os.getenv("OKX_API_KEY")
             api_secret = os.getenv("OKX_API_SECRET")
@@ -2361,12 +2359,12 @@ class OKXBroker(BaseBroker):
             flag = "1" if self.use_testnet else "0"
             
             # Initialize OKX API clients
-            self.account_api = Account.AccountAPI(api_key, api_secret, passphrase, False, flag)
-            self.market_api = MarketData.MarketAPI(api_key, api_secret, passphrase, False, flag)
-            self.trade_api = Trade.TradeAPI(api_key, api_secret, passphrase, False, flag)
+            self.account_api = Account(api_key, api_secret, passphrase, flag)
+            self.market_api = Market(api_key, api_secret, passphrase, flag)
+            self.trade_api = Trade(api_key, api_secret, passphrase, flag)
             
             # Test connection by fetching account balance
-            result = self.account_api.get_account_balance()
+            result = self.account_api.get_balance()
             
             if result and result.get('code') == '0':
                 self.connected = True
@@ -2412,7 +2410,7 @@ class OKXBroker(BaseBroker):
                 return 0.0
             
             # Get account balance
-            result = self.account_api.get_account_balance()
+            result = self.account_api.get_balance()
             
             if result and result.get('code') == '0':
                 data = result.get('data', [])
@@ -2504,7 +2502,7 @@ class OKXBroker(BaseBroker):
                 return []
             
             # Get account balance to see all assets
-            result = self.account_api.get_account_balance()
+            result = self.account_api.get_balance()
             
             if result and result.get('code') == '0':
                 positions = []
@@ -2566,7 +2564,7 @@ class OKXBroker(BaseBroker):
             okx_timeframe = timeframe_map.get(timeframe.lower(), "5m")
             
             # Fetch candles
-            result = self.market_api.get_candlesticks(
+            result = self.market_api.get_candles(
                 instId=okx_symbol,
                 bar=okx_timeframe,
                 limit=str(min(count, 100))  # OKX max is 100
