@@ -282,7 +282,7 @@ def print_config_summary():
     print("="*70)
     print(f"\n💰 POSITION SIZING:")
     print(f"   Minimum balance to trade: ${MIN_BALANCE_TO_TRADE}")
-    print(f"   Minimum position size: $10.00 (MICRO TRADE PREVENTION)")
+    print(f"   Minimum position size: $1.00 (LOWERED for very small account support)")
     print(f"   Small balance (<$100): {SMALL_BALANCE_POSITION_PCT*100}% per trade")
     print(f"   Medium balance ($100-500): {MEDIUM_BALANCE_POSITION_PCT*100}% per trade")
     print(f"   Normal balance (>$500): {NORMAL_MIN_POSITION_PCT*100}-{NORMAL_MAX_POSITION_PCT*100}%")
@@ -308,11 +308,12 @@ def print_config_summary():
     print(f"   Minimum ADX: {MIN_ADX_SMALL_BALANCE} (small), {MIN_ADX_NORMAL} (normal)")
     print(f"   Volume multiplier: {MIN_VOLUME_MULTIPLIER}x")
     
-    print(f"\n🚫 MICRO TRADE PREVENTION:")
-    print(f"   NO positions under $10.00 allowed")
-    print(f"   Reason: Fees (~1.4%) destroy profitability on small trades")
-    print(f"   Example: $5 position needs 3.4% gain just to profit $0.10")
-    print(f"   With $10+ positions, fees are manageable")
+    print(f"\n⚠️  VERY SMALL POSITION WARNING:")
+    print(f"   Positions as low as $1.00 are now allowed (lowered from $10)")
+    print(f"   ⚠️  CRITICAL: Positions under $10 face severe fee pressure (~1.4% round-trip)")
+    print(f"   Example: $2 position needs 1.4% gain just to break even on fees")
+    print(f"   Example: $5 position needs 2.8% gain to profit $0.10 after fees")
+    print(f"   💡 RECOMMENDATION: Fund account to $30+ for viable trading")
     
     print("="*70 + "\n")
 
