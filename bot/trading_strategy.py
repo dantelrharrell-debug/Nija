@@ -15,6 +15,8 @@ logger = logging.getLogger("nija")
 
 # Configuration constants
 MARKET_SCAN_LIMIT = 730  # Scan all available markets with rate limiting protection
+                         # Note: Actual scan count is min(MARKET_SCAN_LIMIT, len(all_products))
+                         # so this automatically adjusts if fewer markets are available
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Exit strategy constants (no entry price required)
@@ -750,8 +752,8 @@ class TradingStrategy:
                             continue
                         
                         # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429 errors)
-                        # With 0.1s delay, can scan 730 markets in ~73 seconds (well within 150s cycle)
-                        # This provides 10 requests/second which is safe and leaves 77s buffer for API overhead
+                        # With 0.1s delay, scanning 730 markets takes ~73 seconds (729 delays × 0.1s = 72.9s)
+                        # This provides ~10 requests/second and leaves ~77s buffer within the 150s scan cycle
                         if i < scan_limit - 1:  # Don't delay after last market
                             time.sleep(0.1)  # 100ms delay = max 10 requests/second
                     
