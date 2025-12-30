@@ -669,6 +669,24 @@ NIJA requires v2 API access to detect balances in retail/consumer Coinbase accou
 
 ### Verification Tools
 
+**Check broker connection status** (shows which exchanges are connected):
+```bash
+python3 check_broker_status.py
+# or use the shortcut:
+./check_brokers.sh
+```
+
+Expected output:
+```
+✅ 1 BROKER(S) CONNECTED AND READY TO TRADE:
+   🟦 Coinbase Advanced Trade [PRIMARY] - $34.54
+
+✅ NIJA IS READY TO TRADE
+   Primary Trading Broker: Coinbase Advanced Trade
+```
+
+For detailed broker setup and troubleshooting, see [BROKER_CONNECTION_STATUS.md](BROKER_CONNECTION_STATUS.md).
+
 **Check rebalance results** (after deployment):
 ```bash
 python verify_rebalance.py
