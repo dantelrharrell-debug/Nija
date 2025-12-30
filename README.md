@@ -240,9 +240,10 @@ NIJA now supports multiple cryptocurrency exchanges:
    - Setup: [COINBASE_SETUP.md](COINBASE_SETUP.md)
    
 2. **OKX Exchange** (New! ✨)
-   - Status: ✅ Fully implemented and tested
+   - Status: ✅ **Fully operational** (SDK v2.1.2 compatibility fixed Dec 30, 2024)
    - Setup: [OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)
-   - Features: Spot trading, testnet support, 400+ pairs
+   - Status Doc: [OKX_CONNECTION_STATUS.md](OKX_CONNECTION_STATUS.md)
+   - Features: Spot trading, testnet support, 400+ pairs, 0.08% fees
    - Quick start: `python test_okx_connection.py`
    
 3. **Binance** (Skeleton)
