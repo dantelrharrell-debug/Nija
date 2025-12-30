@@ -245,18 +245,24 @@ NIJA now supports multiple cryptocurrency exchanges:
    - Readiness: [OKX_TRADING_READINESS_STATUS.md](OKX_TRADING_READINESS_STATUS.md) ⭐ **START HERE**
    - Features: Spot trading, testnet support, 400+ pairs, lower fees (0.08% vs 0.4%)
    - Quick test: `python test_okx_connection.py`
-2. **OKX Exchange** (New! ✨)
-   - Status: ✅ **Fully operational** (SDK v2.1.2 compatibility fixed Dec 30, 2024)
-   - Setup: [OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)
-   - Status Doc: [OKX_CONNECTION_STATUS.md](OKX_CONNECTION_STATUS.md)
-   - Features: Spot trading, testnet support, 400+ pairs, 0.08% fees
-   - Quick start: `python test_okx_connection.py`
+
+3. **Binance Exchange** (✅ NEW - FULLY IMPLEMENTED!)
+   - Status: ✅ **Full implementation complete** (December 30, 2025)
+   - Features: Spot trading, testnet support, 600+ pairs, 0.1% fees
+   - Setup: Set `BINANCE_API_KEY` and `BINANCE_API_SECRET` in `.env`
+   - Get credentials: https://www.binance.com/en/my/settings/api-management
+   - Quick test: `python test_broker_integrations.py`
+   - Note: Requires `python-binance==1.0.21` (auto-installed via requirements.txt)
    
-3. **Binance** (Skeleton)
-   - Status: ⚠️ Placeholder implementation
-   - See "Binance Fork Starter" section below
+4. **Kraken Pro Exchange** (✅ NEW - FULLY IMPLEMENTED!)
+   - Status: ✅ **Full implementation complete** (December 30, 2025)
+   - Features: Spot trading, 200+ pairs, 0.16% maker / 0.26% taker fees
+   - Setup: Set `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` in `.env`
+   - Get credentials: https://www.kraken.com/u/security/api
+   - Quick test: `python test_broker_integrations.py`
+   - Note: Requires `krakenex==2.2.2` and `pykrakenapi==0.3.2` (auto-installed via requirements.txt)
    
-4. **Alpaca** (Skeleton)
+5. **Alpaca** (Skeleton)
    - Status: ⚠️ Placeholder implementation
    - Use for stocks/crypto hybrid strategies
 
@@ -280,9 +286,100 @@ python test_okx_connection.py
 
 See complete guide: [OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)
 
-## 📦 BINANCE FORK STARTER (REUSE THIS SETUP)
+### 🔌 Quick Setup for Binance
 
-If you want to spin a Binance-based project reusing this structure:
+```bash
+# 1. Install Binance SDK (already in requirements.txt)
+pip install python-binance
+
+# 2. Get API credentials from https://www.binance.com/en/my/settings/api-management
+# Important: Enable "Spot & Margin Trading" permission
+
+# 3. Add to .env file
+export BINANCE_API_KEY="your_api_key"
+export BINANCE_API_SECRET="your_secret"
+export BINANCE_USE_TESTNET="false"  # true for testnet
+
+# 4. Test connection
+python test_broker_integrations.py
+```
+
+**Binance Features:**
+- ✅ Spot trading with 600+ cryptocurrency pairs
+- ✅ Low fees: 0.1% (even lower with BNB)
+- ✅ High liquidity and 24/7 trading
+- ✅ Testnet available for paper trading
+- 📖 See API docs: https://python-binance.readthedocs.io/
+
+### 🔌 Quick Setup for Kraken Pro
+
+```bash
+# 1. Install Kraken SDKs (already in requirements.txt)
+pip install krakenex pykrakenapi
+
+# 2. Get API credentials from https://www.kraken.com/u/security/api
+# Important: Enable "Query Funds", "Create & Modify Orders", and "Query Ledger Entries"
+
+# 3. Add to .env file
+export KRAKEN_API_KEY="your_api_key"
+export KRAKEN_API_SECRET="your_private_key"
+
+# 4. Test connection
+python test_broker_integrations.py
+```
+
+**Kraken Features:**
+- ✅ Spot trading with 200+ cryptocurrency pairs
+- ✅ Security-focused exchange with strong reputation
+- ✅ 0.16% maker / 0.26% taker fees
+- ✅ Advanced order types and margin trading
+- 📖 See API docs: https://docs.kraken.com/rest/
+
+### 🎯 Multi-Exchange Trading Strategy
+
+**Why Trade on Multiple Exchanges?**
+1. **Fee Optimization**: Use Binance (0.1%) or OKX (0.08%) instead of Coinbase (1.4%)
+2. **Arbitrage Opportunities**: Price differences between exchanges
+3. **Liquidity**: Access more trading pairs and deeper order books
+4. **Risk Diversification**: Don't keep all funds on one exchange
+
+**How to Enable Multiple Exchanges:**
+
+Uncomment broker initialization in `bot/apex_live_trading.py`:
+
+```python
+# Initialize broker manager
+broker_manager = BrokerManager()
+
+# Add Coinbase (optional)
+coinbase = CoinbaseBroker()
+if coinbase.connect():
+    broker_manager.add_broker(coinbase)
+
+# Add Binance (recommended for lower fees)
+binance = BinanceBroker()
+if binance.connect():
+    broker_manager.add_broker(binance)
+
+# Add Kraken Pro
+kraken = KrakenBroker()
+if kraken.connect():
+    broker_manager.add_broker(kraken)
+
+# Add OKX
+okx = OKXBroker()
+if okx.connect():
+    broker_manager.add_broker(okx)
+```
+
+The bot will automatically route orders to the appropriate exchange based on the symbol.
+
+## 📦 BINANCE FORK STARTER (DEPRECATED - NOW BUILT-IN!)
+
+**Note**: This section is now deprecated. Binance is fully integrated into NIJA as of December 30, 2025.
+Simply set your Binance API credentials in `.env` and the bot will support it automatically.
+
+~~If you want to spin a Binance-based project reusing this structure:~~
 
 1. **Clone as new repo**: copy this workspace to a fresh repo (strip `.git`, keep folder layout and docs).
 2. **Swap broker layer**: replace Coinbase-specific code in `bot/broker_manager.py` and `bot/broker_integration.py` with Binance client calls; keep the risk manager and strategy unchanged.
