@@ -687,6 +687,29 @@ Expected output:
 
 For detailed broker setup and troubleshooting, see [BROKER_CONNECTION_STATUS.md](BROKER_CONNECTION_STATUS.md).
 
+**Check active trading status per broker** (shows which exchanges are actively trading):
+```bash
+python3 check_active_trading_per_broker.py
+# or use the shortcut:
+./check_active_trading.sh
+```
+
+Expected output:
+```
+✅ BROKERS ACTIVELY TRADING (1):
+   🟦 Coinbase Advanced Trade [PRIMARY]
+      💰 Balance: $34.54
+      📊 Open Positions: 3
+
+✅ NIJA IS ACTIVELY TRADING
+   Primary Broker: Coinbase Advanced Trade
+   Active Exchanges: 1
+   Combined Open Positions: 3
+   Recent Activity (24h): 12 trades
+```
+
+This shows whether each broker is currently holding positions (actively trading) vs. just connected but idle. For full documentation, see [ACTIVE_TRADING_STATUS_PER_BROKER.md](ACTIVE_TRADING_STATUS_PER_BROKER.md).
+
 **Check rebalance results** (after deployment):
 ```bash
 python verify_rebalance.py
