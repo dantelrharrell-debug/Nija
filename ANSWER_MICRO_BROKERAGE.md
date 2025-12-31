@@ -8,10 +8,12 @@
 ## 🏆 ANSWER: OKX Exchange
 
 **Why OKX:**
-- ✅ **Lowest crypto fees**: 0.08% maker / 0.10% taker (vs Coinbase's 0.40-1.40%)
+- ✅ **Lowest crypto fees**: 0.08% maker / 0.10% taker (avg ~0.09% vs Coinbase 1.40%)
 - ✅ **Crypto micro perpetuals supported**: Trade BTC perpetuals with margin instead of full capital
 - ✅ **Already integrated**: Ready to use in NIJA
-- ✅ **Saves ~$60/month** in fees with current trading volume (based on 8 trades/day)
+- ✅ **Saves ~$60/month** in fees with current trading volume (assumes market orders at taker fee)
+
+*Note: Fee calculations use taker fees (0.10% OKX, 1.40% Coinbase) assuming market orders. Maker fees lower but not guaranteed.*
 
 ---
 
@@ -42,7 +44,7 @@
 - 8 trades/day = **-$0.32 in fees**
 - **Fee burden:** Fees alone = -0.9% of balance daily
 
-**Fee Reduction: 86% lower fees on OKX**  
+**Fee Reduction: 85.7% lower fees on OKX**  
 **Daily Savings: $2.00/day = $60/month**
 
 *Note: Actual profitability depends on trading strategy performance, not just fees. Lower fees increase the likelihood of net positive returns.*
@@ -104,7 +106,7 @@ python test_okx_connection.py
 
 ### After Moving to OKX:
 - ✅ **Fee savings**: $2/day = $60/month on same trading volume
-- ✅ **Lower fee burden**: 86% fee reduction improves profitability potential
+- ✅ **Lower fee burden**: 85.7% fee reduction improves profitability potential
 - ✅ **Smaller positions viable**: Can trade $5-10 positions with lower fee impact
 - ✅ **Perpetual access**: Optional leverage and shorting capabilities
 - ✅ **Better profit margins**: More of each winning trade kept (less lost to fees)

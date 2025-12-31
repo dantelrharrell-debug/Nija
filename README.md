@@ -345,7 +345,7 @@ python test_broker_integrations.py
 
 **Why Trade on Multiple Exchanges?**
 1. **Fee Optimization**: Use OKX (0.08%) or Binance (0.1%) instead of Coinbase (1.4%)
-   - **OKX saves 86% on fees** compared to Coinbase
+   - **OKX saves 85.7% on fees** compared to Coinbase
    - With $34.54 balance: Save $2/day = $60/month
    - See [MICRO_FUTURES_BROKERAGE_GUIDE.md](MICRO_FUTURES_BROKERAGE_GUIDE.md) for detailed analysis
 2. **Micro Futures Access**: OKX and Binance support micro perpetual contracts

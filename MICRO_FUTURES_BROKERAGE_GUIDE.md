@@ -565,7 +565,7 @@ Assuming 8 trades/day with 60% win rate and ±2% average move:
 ### Expected Impact
 
 **Moving from Coinbase to OKX:**
-- Fee reduction: 1.4% → 0.2% per round-trip (86% reduction)
+- Fee reduction: 1.4% → 0.2% per round-trip (85.7% reduction)
 - Daily fee savings: $2.00 ($60/month) on same trading volume
 - Fee burden reduction: From 6.7% to 0.9% of balance daily
 - **Better profit potential:** More of each win kept, less overhead to overcome
