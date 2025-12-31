@@ -5,7 +5,7 @@ Tests Alpaca integration with paper trading account
 NOTE: This test supports both alpaca-trade-api (older) and alpaca-py (newer).
 The alpaca-trade-api library is NOT in requirements.txt due to websockets version conflicts.
 To run Method 1 test, manually install:
-    pip install alpaca-trade-api==3.2.0 websockets<11
+    pip install alpaca-trade-api==3.2.0 websockets<11.0
 
 For production use, use alpaca-py (Method 2) which is in requirements.txt
 """

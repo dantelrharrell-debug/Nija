@@ -4,7 +4,7 @@ Uses the exact code provided for testing Alpaca paper trading
 
 NOTE: This test uses alpaca-trade-api (older library) which is NOT in requirements.txt
 due to websockets version conflicts. To run this test, manually install:
-    pip install alpaca-trade-api==3.2.0 websockets<11
+    pip install alpaca-trade-api==3.2.0 websockets<11.0
 
 For production use, use alpaca-py instead (see bot/broker_manager.py for examples)
 """
