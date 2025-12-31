@@ -722,6 +722,45 @@ Expected output:
 
 This shows whether each broker is currently holding positions (actively trading) vs. just connected but idle. For full documentation, see [ACTIVE_TRADING_STATUS_PER_BROKER.md](ACTIVE_TRADING_STATUS_PER_BROKER.md).
 
+**Comprehensive System Health Check** (recommended - checks everything):
+```bash
+# Run comprehensive check
+./check_nija_comprehensive.sh
+# or
+python3 comprehensive_nija_check.py
+```
+
+This comprehensive check verifies:
+- ✅ All broker connections (Coinbase, Binance, Kraken, OKX, Alpaca)
+- ✅ Profitability configuration (profit targets, stop loss, P&L tracking)
+- ✅ 24/7 operational readiness (deployment configs, monitoring)
+- ✅ Current trading status
+
+Expected output:
+```
+Overall Health Score: 85.7% (6/7 checks passed)
+
+1. BROKER CONNECTIONS:
+   🟦 Coinbase Advanced Trade [PRIMARY] - $34.54
+
+2. PROFITABILITY CONFIGURATION: ✅ 7/7 COMPLETE
+   • Profit targets: 0.5%, 1%, 2%, 3%
+   • Stop loss: -2%
+   • Position tracking active
+
+3. 24/7 READINESS: ✅ 12/12 COMPLETE
+   • Railway, Render, Docker configs ready
+   • Monitoring systems active
+
+FINAL VERDICT: ✅ NIJA is ready to make profit 24/7
+```
+
+For detailed results and troubleshooting:
+- Quick summary: [NIJA_CHECK_SUMMARY.md](NIJA_CHECK_SUMMARY.md)
+- Full report: [NIJA_COMPREHENSIVE_CHECK_REPORT.md](NIJA_COMPREHENSIVE_CHECK_REPORT.md)
+- Checklist: [NIJA_BROKER_PROFITABILITY_CHECKLIST.md](NIJA_BROKER_PROFITABILITY_CHECKLIST.md)
+- Results JSON: `nija_health_check_results.json` (auto-generated)
+
 **Check rebalance results** (after deployment):
 ```bash
 python verify_rebalance.py
@@ -1010,6 +1049,31 @@ Or visit: https://railway.app → Your Project → Deployments → Logs
 
 ## 🧪 Testing
 
+### Comprehensive System Health Check
+
+**Recommended**: Run the comprehensive check to verify all systems:
+
+```bash
+# Complete health check
+./check_nija_comprehensive.sh
+
+# Or use Python directly
+python3 comprehensive_nija_check.py
+```
+
+This verifies:
+- All broker connections (5 exchanges)
+- Profitability configuration (7 components)
+- 24/7 operational readiness (12 requirements)
+- Current trading status
+
+Results saved to: `nija_health_check_results.json`
+
+See documentation:
+- [NIJA_CHECK_SUMMARY.md](NIJA_CHECK_SUMMARY.md) - Quick reference
+- [NIJA_COMPREHENSIVE_CHECK_REPORT.md](NIJA_COMPREHENSIVE_CHECK_REPORT.md) - Full analysis
+- [NIJA_BROKER_PROFITABILITY_CHECKLIST.md](NIJA_BROKER_PROFITABILITY_CHECKLIST.md) - Checklist
+
 ### Balance Detection Test
 
 ```bash
@@ -1027,6 +1091,12 @@ python test_raw_api.py
 
 # Print all accounts
 python scripts/print_accounts.py
+
+# Check broker connections only
+python3 check_broker_status.py
+
+# Check profitability configuration only
+python3 check_nija_profitability_status.py
 ```
 
 ### Position Management Tools
@@ -1371,8 +1441,17 @@ This project is proprietary software. All rights reserved.
 # Start bot
 python main.py
 
+# Comprehensive system check (recommended)
+./check_nija_comprehensive.sh
+
 # Test balance
 python test_v2_balance.py
+
+# Check broker connections
+python3 check_broker_status.py
+
+# Check profitability status
+python3 check_nija_profitability_status.py
 
 # View logs
 tail -f nija.log
@@ -2003,11 +2082,35 @@ python3 diagnose_profitability_now.py
 
 ## 📚 Comprehensive Documentation Index
 
-**NEW - December 30, 2025**: Complete playbooks and guides added
+**NEW - December 30, 2025**: Complete playbooks and guides added  
+**UPDATED - December 31, 2025**: Added comprehensive system health check tools
+
+### System Health & Verification
+
+**NEW** 1. **[NIJA_CHECK_SUMMARY.md](NIJA_CHECK_SUMMARY.md)** 🔍 **QUICK STATUS CHECK**
+   - One-page comprehensive health check summary
+   - Broker connection status
+   - Profitability configuration verification
+   - 24/7 readiness status
+   - Quick commands reference
+   - **Script**: `./check_nija_comprehensive.sh` or `python3 comprehensive_nija_check.py`
+
+**NEW** 2. **[NIJA_COMPREHENSIVE_CHECK_REPORT.md](NIJA_COMPREHENSIVE_CHECK_REPORT.md)** 📊 **DETAILED ANALYSIS**
+   - Complete technical health report
+   - System architecture overview
+   - Troubleshooting guide
+   - Expected performance metrics
+   - Support resources
+
+**NEW** 3. **[NIJA_BROKER_PROFITABILITY_CHECKLIST.md](NIJA_BROKER_PROFITABILITY_CHECKLIST.md)** ✅ **INTERACTIVE CHECKLIST**
+   - Step-by-step verification checklist
+   - Component-by-component status
+   - Expected behavior guide
+   - Recommendations and next steps
 
 ### Core Playbooks & Guides
 
-1. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **START HERE**
+4. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **START HERE**
    - Complete guide to growing from any balance to $1000+/day
    - Capital tiers ($10, $50, $200, $1K, $5K, $20K+)
    - Position sizing rules per tier
@@ -2015,7 +2118,7 @@ python3 diagnose_profitability_now.py
    - Compound growth strategies
    - Common pitfalls and solutions
 
-2. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
+5. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
    - Comprehensive issue diagnosis
    - Balance & API problems
    - Trading issues (no trades, too many trades, etc.)
@@ -2023,7 +2126,7 @@ python3 diagnose_profitability_now.py
    - Performance optimization
    - Recovery procedures
 
-3. **[EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)** 🚨 **CRITICAL ISSUES**
+6. **[EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)** 🚨 **CRITICAL ISSUES**
    - Immediate stop procedures
    - Emergency liquidation
    - Trading lock/unlock
@@ -2031,48 +2134,48 @@ python3 diagnose_profitability_now.py
 
 ### Broker & Integration Guides
 
-4. **[BROKER_INTEGRATION_GUIDE.md](BROKER_INTEGRATION_GUIDE.md)**
+7. **[BROKER_INTEGRATION_GUIDE.md](BROKER_INTEGRATION_GUIDE.md)**
    - Coinbase Advanced Trade setup
    - Multi-broker configuration
    - API troubleshooting
 
-5. **[OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)** / **[OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)**
+8. **[OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)** / **[OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)**
    - OKX exchange integration
    - Lower fees (0.08% vs 1.4%)
 
-6. **[MULTI_BROKER_ACTIVATION_GUIDE.md](MULTI_BROKER_ACTIVATION_GUIDE.md)**
+9. **[MULTI_BROKER_ACTIVATION_GUIDE.md](MULTI_BROKER_ACTIVATION_GUIDE.md)**
    - Using multiple exchanges
    - Fee optimization strategies
 
 ### Profitability & Performance
 
-7. **[PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md)**
+10. **[PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md)**
    - Complete profitability analysis
    - How NIJA makes money
    - Verification methods
 
-8. **[PROFITABILITY_UPGRADE_GUIDE.md](PROFITABILITY_UPGRADE_GUIDE.md)**
+11. **[PROFITABILITY_UPGRADE_GUIDE.md](PROFITABILITY_UPGRADE_GUIDE.md)**
    - v7.2 upgrade details
    - Performance improvements
    - Configuration changes
 
-9. **[V7.2_UPGRADE_COMPLETE.md](V7.2_UPGRADE_COMPLETE.md)**
+12. **[V7.2_UPGRADE_COMPLETE.md](V7.2_UPGRADE_COMPLETE.md)**
    - v7.2 technical summary
    - Code changes
    - Deployment checklist
 
 ### Deployment & Operations
 
-10. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** / **[DEPLOYMENT_GUIDE_PROFIT_FIX.md](DEPLOYMENT_GUIDE_PROFIT_FIX.md)**
+13. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** / **[DEPLOYMENT_GUIDE_PROFIT_FIX.md](DEPLOYMENT_GUIDE_PROFIT_FIX.md)**
     - Railway deployment
     - Docker setup
     - Environment configuration
 
-11. **[RENDER_GUIDE.md](RENDER_GUIDE.md)**
+14. **[RENDER_GUIDE.md](RENDER_GUIDE.md)**
     - Alternative hosting on Render
     - Configuration steps
 
-12. **[BOT_RESTART_GUIDE.md](BOT_RESTART_GUIDE.md)**
+15. **[BOT_RESTART_GUIDE.md](BOT_RESTART_GUIDE.md)**
     - Safe restart procedures
     - Verification steps
 
