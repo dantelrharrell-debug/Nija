@@ -28,10 +28,11 @@
 
 ### 1. Crypto Micro Perpetuals
 Smaller perpetual contract sizes that allow trading with less capital:
-- **Standard BTC Perpetual:** 1 BTC contract (~$100,000+ value)
-- **Micro BTC Perpetual:** 0.01 BTC contract (~$1,000 value)
-- **Benefit:** Trade Bitcoin perpetual exposure with $100-500 instead of $10,000+
+- **Standard BTC Perpetual:** 1 BTC contract (~$100,000+ notional value)
+- **Micro BTC Perpetual:** 0.01 BTC contract (~$1,000 notional value)
+- **Benefit:** With 5x leverage, control $1,000 BTC exposure using only $200 margin (vs $20,000 for standard contract)
 - **Note:** These are crypto perpetuals (no expiration), not traditional futures
+- **Risk:** Leverage amplifies both gains and losses; use appropriate risk management
 
 ### 2. Micro Position Sizes (Crypto Spot Trading)
 Small position trading in crypto spot markets:
@@ -486,22 +487,27 @@ If moving from Coinbase to OKX/Binance:
 
 **A:** Realistic projections with $34.54:
 
-**On OKX (0.2% fees):**
+**Example Scenario (Hypothetical):**
+
+Assuming 8 trades/day with 60% win rate and ±2% average move:
+
+**On OKX (0.2% total fees):**
 - Position size: $20.72
-- 8 trades/day, 60% win rate
-- Average win: +2% = $0.41
-- Average loss: -2% = -$0.41
-- Daily fees: $0.32
-- **Expected daily profit: +$0.65 (+1.9%)**
-- **Monthly: +$19.50 (57%)**
+- Daily fees: $0.32 (0.9% of balance)
+- Winning trades (4.8): +$0.41 each = +$1.97
+- Losing trades (3.2): -$0.41 each = -$1.31
+- **Net before fees: +$0.66**
+- **Net after fees: +$0.34 (+1.0% daily)**
 
-**On Coinbase (1.4% fees):**
-- Same setup, higher fees
-- Daily fees: $2.32
-- **Expected daily profit: -$1.35 (-3.9%)**
-- **Monthly: -$40.50 (117% loss)**
+**On Coinbase (1.4% total fees):**
+- Same trades, higher fees
+- Daily fees: $2.32 (6.7% of balance)
+- **Net before fees: +$0.66**
+- **Net after fees: -$1.66 (-4.8% daily)**
 
-**Conclusion: OKX is 400% more profitable than Coinbase for micro trading**
+**Conclusion: Lower fees dramatically improve viability of small account trading**
+
+*Note: Actual results vary based on strategy performance, market conditions, and risk management.*
 
 ### Q: Is leverage safe for small accounts?
 
@@ -559,13 +565,13 @@ If moving from Coinbase to OKX/Binance:
 ### Expected Impact
 
 **Moving from Coinbase to OKX:**
-- Fee reduction: 1.4% → 0.2% (86% reduction)
-- Daily fee savings: $2.00 ($60/month)
-- Profitability: -3.9%/day → +1.9%/day (580% improvement)
-- Timeline to $1000/day: Reduced from 1000+ days to ~69 days
+- Fee reduction: 1.4% → 0.2% per round-trip (86% reduction)
+- Daily fee savings: $2.00 ($60/month) on same trading volume
+- Fee burden reduction: From 6.7% to 0.9% of balance daily
+- **Better profit potential:** More of each win kept, less overhead to overcome
 
 **Bottom Line:**
-🏆 **OKX is the best brokerage for NIJA to benefit from micro trading.**
+🏆 **OKX is the best brokerage for NIJA to benefit from crypto micro trading.**
 
 Moving to OKX would improve NIJA's profitability by **~6x** compared to staying on Coinbase.
 

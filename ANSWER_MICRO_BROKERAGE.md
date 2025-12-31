@@ -8,10 +8,10 @@
 ## 🏆 ANSWER: OKX Exchange
 
 **Why OKX:**
-- ✅ **Lowest crypto fees**: 0.08% (7x cheaper than Coinbase's 1.4%)
-- ✅ **Crypto micro perpetuals supported**: Trade BTC with $100-200 instead of $10,000+
+- ✅ **Lowest crypto fees**: 0.08% maker / 0.10% taker (vs Coinbase's 0.40-1.40%)
+- ✅ **Crypto micro perpetuals supported**: Trade BTC perpetuals with margin instead of full capital
 - ✅ **Already integrated**: Ready to use in NIJA
-- ✅ **Saves $60/month** in fees with current trading volume
+- ✅ **Saves ~$60/month** in fees with current trading volume (based on 8 trades/day)
 
 ---
 
@@ -34,15 +34,18 @@
 - Position: $20.72
 - Fees per trade: $0.29 (1.4%)
 - 8 trades/day = **-$2.32 in fees**
-- Expected: **-3.9% daily** (losing money to fees)
+- **Fee burden:** Fees alone = -6.7% of balance daily
 
 ### On OKX (Recommended):
 - Position: $20.72
 - Fees per trade: $0.04 (0.2%)
 - 8 trades/day = **-$0.32 in fees**
-- Expected: **+1.9% daily** (profitable)
+- **Fee burden:** Fees alone = -0.9% of balance daily
 
-**Improvement: 580% better profitability on OKX**
+**Fee Reduction: 86% lower fees on OKX**  
+**Daily Savings: $2.00/day = $60/month**
+
+*Note: Actual profitability depends on trading strategy performance, not just fees. Lower fees increase the likelihood of net positive returns.*
 
 ---
 
@@ -100,11 +103,11 @@ python test_okx_connection.py
 ## Expected Results
 
 ### After Moving to OKX:
-- ✅ **Fee savings**: $2/day = $60/month
-- ✅ **Profitability**: -3.9% → +1.9% daily
-- ✅ **Smaller positions viable**: Can trade $5-10 positions profitably
-- ✅ **Perpetual access**: Optional leverage and shorting
-- ✅ **Faster growth**: 69 days to $1000/day (vs 1000+ days on Coinbase)
+- ✅ **Fee savings**: $2/day = $60/month on same trading volume
+- ✅ **Lower fee burden**: 86% fee reduction improves profitability potential
+- ✅ **Smaller positions viable**: Can trade $5-10 positions with lower fee impact
+- ✅ **Perpetual access**: Optional leverage and shorting capabilities
+- ✅ **Better profit margins**: More of each winning trade kept (less lost to fees)
 
 ---
 
