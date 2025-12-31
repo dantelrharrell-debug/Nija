@@ -233,17 +233,23 @@ if total_account_value < MINIMUM_TRADING_BALANCE:
 
 NIJA now supports multiple cryptocurrency exchanges:
 
+> **💡 NEW: Micro Trading Guide** - [Which brokerage is best for micro futures?](ANSWER_MICRO_BROKERAGE.md)  
+> **TL;DR: OKX is 7x cheaper than Coinbase for small positions.** See [MICRO_FUTURES_BROKERAGE_GUIDE.md](MICRO_FUTURES_BROKERAGE_GUIDE.md) for full analysis.
+
 ### ✅ Supported Exchanges
 
 1. **Coinbase Advanced Trade** (Primary)
    - Status: ✅ Fully implemented and tested
    - Setup: [COINBASE_SETUP.md](COINBASE_SETUP.md)
+   - ⚠️ **High fees (1.4%)** - Not recommended for micro trading
    
-2. **OKX Exchange** (✅ READY TO TRADE!)
+2. **OKX Exchange** (✅ BEST FOR MICRO TRADING! 🏆)
    - Status: ✅ Fully implemented, tested, and **ENABLED**
    - Setup: [OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md) or [OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)
    - Readiness: [OKX_TRADING_READINESS_STATUS.md](OKX_TRADING_READINESS_STATUS.md) ⭐ **START HERE**
-   - Features: Spot trading, testnet support, 400+ pairs, lower fees (0.08% vs 0.4%)
+   - Features: Spot trading, **micro perpetuals**, testnet support, 400+ pairs
+   - **Fees: 0.08%** (7x cheaper than Coinbase)
+   - **Micro contracts**: Trade BTC with $100-200 instead of $10,000+
    - Quick test: `python test_okx_connection.py`
 
 3. **Binance Exchange** (✅ NEW - FULLY IMPLEMENTED!)
@@ -338,10 +344,16 @@ python test_broker_integrations.py
 ### 🎯 Multi-Exchange Trading Strategy
 
 **Why Trade on Multiple Exchanges?**
-1. **Fee Optimization**: Use Binance (0.1%) or OKX (0.08%) instead of Coinbase (1.4%)
-2. **Arbitrage Opportunities**: Price differences between exchanges
-3. **Liquidity**: Access more trading pairs and deeper order books
-4. **Risk Diversification**: Don't keep all funds on one exchange
+1. **Fee Optimization**: Use OKX (0.08%) or Binance (0.1%) instead of Coinbase (1.4%)
+   - **OKX saves 85.7% on fees** compared to Coinbase
+   - With $34.54 balance: Save $2/day = $60/month
+   - See [MICRO_FUTURES_BROKERAGE_GUIDE.md](MICRO_FUTURES_BROKERAGE_GUIDE.md) for detailed analysis
+2. **Micro Futures Access**: OKX and Binance support micro perpetual contracts
+   - Trade BTC with $100-200 instead of $10,000+
+   - Enables leverage and short-selling for small accounts
+3. **Arbitrage Opportunities**: Price differences between exchanges
+4. **Liquidity**: Access more trading pairs and deeper order books
+5. **Risk Diversification**: Don't keep all funds on one exchange
 
 **How to Enable Multiple Exchanges:**
 
