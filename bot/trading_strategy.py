@@ -837,6 +837,10 @@ class TradingStrategy:
                     scan_limit = min(MARKET_SCAN_LIMIT, len(all_products))
                     logger.info(f"   Scanning {scan_limit} markets...")
                     
+                    # Adaptive rate limiting: track consecutive 429 errors
+                    rate_limit_counter = 0
+                    max_consecutive_rate_limits = 5  # If we hit this many in a row, slow down significantly
+                    
                     # Track filtering reasons for debugging
                     filter_stats = {
                         'total': 0,
@@ -845,7 +849,8 @@ class TradingStrategy:
                         'market_filter': 0,
                         'no_entry_signal': 0,
                         'position_too_small': 0,
-                        'signals_found': 0
+                        'signals_found': 0,
+                        'rate_limited': 0
                     }
                     
                     for i, symbol in enumerate(all_products[:scan_limit]):
@@ -853,10 +858,31 @@ class TradingStrategy:
                         try:
                             # Get candles
                             candles = self.broker.get_candles(symbol, '5m', 100)
-                            if not candles or len(candles) < 100:
+                            
+                            # Check if we got candles or if rate limited
+                            if not candles:
+                                # Could be rate limited or genuinely no data
+                                # We can't distinguish easily here, so increment counter conservatively
+                                rate_limit_counter += 1
                                 filter_stats['insufficient_data'] += 1
-                                logger.debug(f"   {symbol}: Insufficient candles ({len(candles) if candles else 0}/100)")
+                                logger.debug(f"   {symbol}: No candles returned (may be rate limited or no data)")
+                                
+                                # If we're getting many consecutive failures, assume rate limiting
+                                if rate_limit_counter >= max_consecutive_rate_limits:
+                                    filter_stats['rate_limited'] += 1
+                                    logger.warning(f"   ⚠️ Possible rate limiting detected ({rate_limit_counter} consecutive failures)")
+                                    logger.warning(f"   Increasing delay to allow API to recover...")
+                                    time.sleep(2.0)  # Extra 2s delay to let API recover
+                                    rate_limit_counter = 0  # Reset counter after delay
                                 continue
+                            elif len(candles) < 100:
+                                rate_limit_counter = 0  # Reset on partial success
+                                filter_stats['insufficient_data'] += 1
+                                logger.debug(f"   {symbol}: Insufficient candles ({len(candles)}/100)")
+                                continue
+                            else:
+                                # Success! Reset rate limit counter
+                                rate_limit_counter = 0
                             
                             # Convert to DataFrame
                             df = pd.DataFrame(candles)
@@ -931,15 +957,22 @@ class TradingStrategy:
                             continue
                         
                         # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429 errors)
-                        # With 0.1s delay, scanning 730 markets takes ~73 seconds (729 delays × 0.1s = 72.9s)
-                        # This provides ~10 requests/second and leaves ~77s buffer within the 150s scan cycle
+                        # Coinbase rate limits: ~10 requests/second burst, lower sustained rate
+                        # With 0.25s delay, scanning 730 markets takes ~183 seconds (729 delays × 0.25s = 182.25s)
+                        # This provides ~4 requests/second sustained rate, well below burst limit
+                        # Adding jitter prevents thundering herd when multiple processes/retries happen
                         if i < scan_limit - 1:  # Don't delay after last market
-                            time.sleep(0.1)  # 100ms delay = max 10 requests/second
+                            import random
+                            base_delay = 0.25  # 250ms base delay = max 4 requests/second
+                            jitter = random.uniform(0, 0.05)  # Add 0-50ms jitter
+                            time.sleep(base_delay + jitter)
                     
                     # Log filtering summary
                     logger.info(f"   📊 Scan summary: {filter_stats['total']} markets scanned")
                     logger.info(f"      💡 Signals found: {filter_stats['signals_found']}")
                     logger.info(f"      📉 No data: {filter_stats['insufficient_data']}")
+                    if filter_stats['rate_limited'] > 0:
+                        logger.warning(f"      ⚠️ Rate limited: {filter_stats['rate_limited']} times")
                     logger.info(f"      🔇 Smart filter: {filter_stats['smart_filter']}")
                     logger.info(f"      📊 Market filter: {filter_stats['market_filter']}")
                     logger.info(f"      🚫 No entry signal: {filter_stats['no_entry_signal']}")
