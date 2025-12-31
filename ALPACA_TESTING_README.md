@@ -9,8 +9,8 @@ Simple test using the exact code provided with paper trading credentials.
 
 **Usage:**
 ```bash
-# Install required library
-pip install alpaca-trade-api
+# Install required library (NOT in requirements.txt due to dependency conflicts)
+pip install alpaca-trade-api==3.2.0 websockets<11
 
 # Run test
 python test_alpaca_simple.py
@@ -27,14 +27,16 @@ Comprehensive test that checks all three integration methods:
 **Usage:**
 ```bash
 # Install required libraries
-pip install alpaca-trade-api alpaca-py
+# Note: alpaca-trade-api NOT in requirements.txt, manual install needed for Method 1
+pip install alpaca-trade-api==3.2.0 websockets<11
+pip install alpaca-py  # Already in requirements.txt
 
 # Run test
 python test_alpaca_integration.py
 ```
 
 **What it tests:**
-1. **Method 1:** Old `alpaca_trade_api` library (as provided)
+1. **Method 1:** Old `alpaca_trade_api` library (manual install required)
 2. **Method 2:** New `alpaca-py` library (NIJA's current integration)
 3. **Method 3:** NIJA's `AlpacaBroker` class
 
@@ -86,17 +88,20 @@ python check_broker_status.py
 
 ## Libraries Required
 
-### For alpaca_trade_api (older library):
-```bash
-pip install alpaca-trade-api
-```
+**IMPORTANT:** Due to dependency conflicts with websockets versions, `alpaca-trade-api` has been removed from `requirements.txt`.
 
-### For alpaca-py (newer library, NIJA uses this):
+### For alpaca-py (newer library, NIJA uses this - IN requirements.txt):
 ```bash
 pip install alpaca-py
 ```
 
-Both are included in `requirements.txt`.
+### For alpaca_trade_api (older library - NOT in requirements.txt):
+```bash
+# Manual installation required for testing only
+pip install alpaca-trade-api==3.2.0 websockets<11
+```
+
+**Note:** The older `alpaca-trade-api` library requires `websockets<11`, which conflicts with other dependencies that require `websockets>=12`. NIJA uses the newer `alpaca-py` library for production, which is compatible with modern websockets versions.
 
 ## About Alpaca
 
@@ -120,11 +125,14 @@ For micro trading:
 
 ### ImportError: No module named 'alpaca_trade_api'
 ```bash
-pip install alpaca-trade-api
+# This library is NOT in requirements.txt due to dependency conflicts
+# Manual installation required:
+pip install alpaca-trade-api==3.2.0 websockets<11
 ```
 
 ### ImportError: No module named 'alpaca'
 ```bash
+# This library IS in requirements.txt
 pip install alpaca-py
 ```
 
