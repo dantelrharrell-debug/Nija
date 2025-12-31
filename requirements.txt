@@ -125,3 +125,6 @@ krakenex==2.2.2
 pykrakenapi==0.3.2
 # Binance API
 python-binance==1.0.21
+# Alpaca Trading API (for stock trading and paper trading)
+alpaca-py==0.36.0
+alpaca-trade-api==3.2.0
