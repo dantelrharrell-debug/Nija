@@ -1,41 +1,43 @@
-# Micro Futures & Small Position Trading - Brokerage Comparison Guide
+# Crypto Micro Perpetuals & Small Position Trading - Brokerage Guide
 
 **Date:** December 31, 2025  
-**Question:** "Which brokerage will NIJA benefit from trading micro?"
+**Question:** "Which brokerage will NIJA benefit from trading micro?"  
+**Context:** NIJA is a crypto trading bot - all analysis is specific to cryptocurrency markets
 
 ---
 
 ## Executive Summary
 
-**Best Brokerage for Micro Trading: OKX** 🏆
+**Best Brokerage for Crypto Micro Trading: OKX** 🏆
 
 **Reasoning:**
 - Lowest fees (0.08% maker, 0.10% taker)
-- Supports micro perpetual contracts (0.01 BTC minimum)
-- Better leverage options for small accounts
+- Supports crypto micro perpetual contracts (0.01 BTC minimum)
+- Better leverage options for small crypto accounts
 - Already integrated into NIJA
 
 **Second Best: Binance**
 - Low fees (0.10%)
-- Excellent liquidity
-- Supports micro futures
+- Excellent crypto liquidity
+- Supports crypto micro perpetuals
 - Already integrated into NIJA
 
 ---
 
-## What is "Micro" Trading?
+## What is "Micro" Trading? (Crypto Context)
 
-### 1. Micro Futures/Perpetuals
-Smaller contract sizes that allow trading with less capital:
+### 1. Crypto Micro Perpetuals
+Smaller perpetual contract sizes that allow trading with less capital:
 - **Standard BTC Perpetual:** 1 BTC contract (~$100,000+ value)
 - **Micro BTC Perpetual:** 0.01 BTC contract (~$1,000 value)
-- **Benefit:** Trade Bitcoin exposure with $100-500 instead of $10,000+
+- **Benefit:** Trade Bitcoin perpetual exposure with $100-500 instead of $10,000+
+- **Note:** These are crypto perpetuals (no expiration), not traditional futures
 
-### 2. Micro Position Sizes (Spot Trading)
-Small position trading in spot markets:
+### 2. Micro Position Sizes (Crypto Spot Trading)
+Small position trading in crypto spot markets:
 - NIJA currently blocks positions under $10 (see MICRO_TRADE_PREVENTION_FIX.md)
 - Reason: Coinbase fees (1.4%) make sub-$10 positions unprofitable
-- **Solution:** Use lower-fee exchanges (OKX 0.08%, Binance 0.10%)
+- **Solution:** Use lower-fee crypto exchanges (OKX 0.08%, Binance 0.10%)
 
 ---
 
@@ -234,20 +236,26 @@ Same capital on OKX:
 
 ---
 
-## Micro Futures Explained
+## Micro Futures Explained (Crypto-Specific)
 
-### What Are Perpetual Contracts?
+### What Are Crypto Perpetual Contracts?
 
-**Traditional Futures:**
-- Fixed expiration date
-- Settle monthly/quarterly
-- Used by institutions
+> **Note:** NIJA is a crypto trading bot. This section focuses on **crypto perpetuals**, which are different from traditional commodity/index futures.
 
-**Perpetual Contracts (Crypto):**
+**Crypto Perpetuals** (What OKX/Binance Offer):
 - No expiration (hold indefinitely)
 - Similar to CFDs (Contract for Difference)
-- Popular in crypto markets
+- 24/7 trading (no market hours)
+- Funding rates instead of rollover costs
 - Allow leverage (2x-125x)
+- **This is what NIJA would use**
+
+**vs. Traditional Crypto Futures** (e.g., CME Bitcoin Futures):
+- Fixed expiration dates (monthly/quarterly)
+- Settlement on expiration
+- Require rollover to maintain positions
+- Higher capital requirements
+- **Not relevant for NIJA's automated trading**
 
 ### Micro vs. Standard Contracts
 
@@ -424,21 +432,23 @@ If moving from Coinbase to OKX/Binance:
 
 ## Frequently Asked Questions
 
-### Q: Should NIJA trade perpetuals or spot?
+### Q: Should NIJA trade crypto perpetuals or crypto spot?
 
-**A:** **Spot trading is recommended initially.**
+**A:** **Crypto spot trading is recommended initially.**
 
 **Reasons:**
-1. Lower risk (no liquidation)
-2. No funding rates to pay
+1. Lower risk (no liquidation from leverage)
+2. No funding rates to pay (perpetuals charge/pay funding every 8 hours)
 3. Simpler position management
-4. NIJA is optimized for spot
+4. NIJA is currently optimized for spot trading
 
-**When to consider perpetuals:**
+**When to consider crypto perpetuals:**
 - After account grows to $500+
-- If you understand leverage risks
-- If you want to short markets
-- If strategy benefits from leverage
+- If you understand leverage and liquidation risks
+- If you want to short crypto markets (bet on price drops)
+- If strategy benefits from leverage (amplified returns)
+
+**Important:** This guide discusses crypto perpetuals (no expiration, 24/7 trading), not traditional futures contracts with expiration dates.
 
 ### Q: Can I use multiple brokers simultaneously?
 

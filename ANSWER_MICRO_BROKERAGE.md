@@ -1,14 +1,15 @@
-# Quick Answer: Which Brokerage for Micro Trading?
+# Quick Answer: Which Brokerage for Crypto Micro Trading?
 
-**Question:** "Which brokerage will NIJA benefit from trading micro?"
+**Question:** "Which brokerage will NIJA benefit from trading micro?"  
+**Context:** NIJA trades cryptocurrencies - this guide is crypto-specific
 
 ---
 
 ## 🏆 ANSWER: OKX Exchange
 
 **Why OKX:**
-- ✅ **Lowest fees**: 0.08% (7x cheaper than Coinbase's 1.4%)
-- ✅ **Micro perpetuals supported**: Trade BTC with $100-200 instead of $10,000+
+- ✅ **Lowest crypto fees**: 0.08% (7x cheaper than Coinbase's 1.4%)
+- ✅ **Crypto micro perpetuals supported**: Trade BTC with $100-200 instead of $10,000+
 - ✅ **Already integrated**: Ready to use in NIJA
 - ✅ **Saves $60/month** in fees with current trading volume
 
@@ -45,19 +46,20 @@
 
 ---
 
-## What Are "Micro" Contracts?
+## What Are "Micro" Contracts? (Crypto)
 
-### Micro Perpetuals (Futures)
-Smaller contract sizes for trading with less capital:
-- **Standard BTC contract**: 1 BTC (~$100,000)
-- **Micro BTC contract**: 0.01 BTC (~$1,000)
-- **Your benefit**: Trade with $100-200 instead of $10,000+
+### Crypto Micro Perpetuals
+Smaller perpetual contract sizes for trading with less capital:
+- **Standard BTC Perpetual**: 1 BTC (~$100,000 notional value)
+- **Micro BTC Perpetual**: 0.01 BTC (~$1,000 notional value)
+- **Your benefit**: Trade BTC perpetuals with $100-200 instead of $10,000+
+- **Note**: These are crypto perpetuals (no expiration), not traditional futures
 
-### Why This Matters for NIJA
+### Why This Matters for NIJA (Crypto Bot)
 - Current balance: $34.54
-- Can't trade standard futures (need $10K+)
-- **CAN trade micro perpetuals** on OKX/Binance
-- Unlocks leverage and short-selling capabilities
+- Can't trade standard perpetual contracts (need $10K+)
+- **CAN trade crypto micro perpetuals** on OKX/Binance
+- Unlocks leverage and short-selling capabilities for crypto
 
 ---
 
