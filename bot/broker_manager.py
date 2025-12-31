@@ -1814,11 +1814,12 @@ class BaseBroker(ABC):
             return 0.0
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get candle data with retry logic for rate limiting"""
+        """Get candle data with improved retry logic for rate limiting"""
         import time
+        import random
         
         max_retries = 3
-        retry_delay = 1  # Start with 1 second
+        base_delay = 1.0  # Start with 1 second
         
         for attempt in range(max_retries):
             try:
@@ -1855,13 +1856,17 @@ class BaseBroker(ABC):
                 is_rate_limited = '429' in error_str or 'rate limit' in error_str.lower() or 'too many' in error_str.lower()
                 
                 if is_rate_limited and attempt < max_retries - 1:
-                    logging.warning(f"Rate limited on {symbol}, retrying in {retry_delay}s (attempt {attempt+1}/{max_retries})")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
+                    # Exponential backoff with jitter to prevent thundering herd
+                    retry_delay = base_delay * (2 ** attempt)
+                    jitter = random.uniform(0, retry_delay * 0.3)  # Add up to 30% jitter
+                    total_delay = retry_delay + jitter
+                    
+                    logging.warning(f"Rate limited on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")
+                    time.sleep(total_delay)
                     continue
                 else:
                     if attempt == max_retries - 1:
-                        logging.error(f"Failed to fetch candles for {symbol} after {max_retries} attempts: {e}")
+                        logging.debug(f"Failed to fetch candles for {symbol} after {max_retries} attempts (rate limited)")
                     else:
                         logging.error(f"Error fetching candles for {symbol}: {e}")
                     return []
