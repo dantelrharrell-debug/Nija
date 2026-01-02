@@ -1,4 +1,19 @@
-# NIJA - Autonomous Cryptocurrency Trading Bot
+# NIJA - Autonomous Algorithmic Trading Platform
+
+**What is NIJA?** NIJA is a sophisticated, AI-powered autonomous trading platform that goes far beyond simple cryptocurrency trading. It's a comprehensive algorithmic trading system featuring:
+
+- 🤖 **Multi-Asset Trading**: Cryptocurrencies (732+ pairs) AND traditional stocks via Alpaca
+- 🌍 **Multi-Exchange Support**: Coinbase, OKX, Binance, Kraken, and Alpaca integrations
+- 🧠 **Advanced AI Strategy Engine**: APEX v7.1/v7.2 with dual RSI, machine learning filters, and adaptive growth management
+- 🎯 **Intelligent Risk Management**: Dynamic position sizing, circuit breakers, stop-loss automation, and profit-taking systems
+- 📊 **Real-Time Analytics**: P&L tracking, position monitoring, performance metrics, and trade journaling
+- 🔔 **TradingView Integration**: Instant execution via custom webhooks for manual strategy overlay
+- 🧪 **Development Tools**: Backtesting engine, paper trading mode, and comprehensive diagnostics
+- ⚡ **24/7 Autonomous Operation**: Self-healing, auto-scaling, and continuous market scanning
+
+NIJA isn't just a bot—it's a complete algorithmic trading framework designed for professional-grade systematic trading with institutional-quality risk management.
+
+---
 
 ⚠️ **CRITICAL REFERENCE POINT**: This README documents the **v7.2 Profitability Upgrade** deployed December 23, 2025 with **Filter Optimization Fix** deployed December 27, 2025 and **P&L Tracking Fix** deployed December 28, 2025. See [RECOVERY_GUIDE.md](#recovery-guide-v72-profitability-locked) below to restore to this exact state if needed.
 
@@ -12,6 +27,65 @@ See Emergency Procedures: [EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)
 **Current Balance**: $34.54 (position sizing: ~$20.72 per trade at 60%)
 **Goal**: Consistent daily profitability with 8+ profitable trades/day achieving +16.8% daily growth
 **Git Commit**: All changes committed to branch — ready for deployment
+
+---
+
+## 🎯 What Makes NIJA Unique?
+
+NIJA is not just another crypto trading bot—it's a **comprehensive algorithmic trading platform** that combines institutional-grade risk management with cutting-edge AI technology. Here's what sets NIJA apart:
+
+### 🌐 Multi-Asset, Multi-Exchange Trading
+- **Cryptocurrency Trading**: 732+ trading pairs across Coinbase, OKX, Binance, and Kraken
+- **Stock Trading**: Traditional equities via Alpaca integration
+- **Multi-Exchange Arbitrage**: Simultaneous operation across multiple exchanges
+- **Fee Optimization**: Automatic routing to lowest-fee exchanges (OKX: 0.08% vs Coinbase: 1.4%)
+
+### 🧠 Advanced AI & Machine Learning
+- **APEX v7.2 Strategy Engine**: Dual RSI system with 14+ technical indicators
+- **AI Momentum Filters**: Machine learning-based signal quality scoring
+- **Adaptive Growth Manager**: Auto-adjusts strategy based on account size and market conditions
+- **Smart Market Filters**: ADX trending, volume confirmation, pullback detection
+
+### 🎯 Professional Risk Management
+- **Dynamic Position Sizing**: Scales with trend strength (ADX-based: 2%-10% per trade)
+- **Multi-Layer Protection**: Stop losses, take profits, trailing stops, circuit breakers
+- **Capital Preservation**: Tiered reserve system (40%-80% safety buffer)
+- **Position Cap Enforcement**: Automatic rebalancing to maintain diversification
+- **Fee-Aware Sizing**: Ensures every trade overcomes exchange fees
+
+### 📊 Real-Time Intelligence
+- **P&L Tracking**: Live profit/loss monitoring with entry price persistence
+- **Trade Journal**: Complete audit trail with performance analytics
+- **Position Monitoring**: 2.5-minute scan cycles for instant reaction
+- **Performance Metrics**: Win rate, average hold time, daily/monthly returns
+
+### 🔔 TradingView Integration
+- **Custom Webhook Server**: Execute trades instantly from TradingView alerts
+- **Strategy Overlay**: Combine NIJA automation with manual TradingView signals
+- **Dual-Mode Operation**: Autonomous scanning + webhook-triggered execution
+
+### 🧪 Development & Testing Tools
+- **Backtesting Engine**: Historical performance validation with multi-timeframe analysis
+- **Paper Trading Mode**: Risk-free strategy testing with simulated capital
+- **Comprehensive Diagnostics**: 5/5 profitability checks, broker status, system health
+- **Emergency Procedures**: Instant shutdown, position liquidation, recovery modes
+
+### ⚡ Enterprise-Grade Reliability
+- **24/7 Operation**: Autonomous market scanning every 2.5 minutes, never sleeps
+- **Auto-Recovery**: Self-healing mechanisms for API failures and network issues
+- **Multi-Platform Deployment**: Docker, Railway, Render support
+- **Version Control**: Git-based recovery points with verified working states
+- **Security**: API key encryption, webhook signature validation, secret management
+
+### 📈 Scalable Architecture
+- **Micro to Institutional**: Optimized for accounts from $10 to $1M+
+- **Growth Stages**: ULTRA AGGRESSIVE → AGGRESSIVE → BALANCED → CONSERVATIVE
+- **Compound Optimization**: Automatic profit reinvestment with capital scaling
+- **From Crypto to Stocks**: Expand to traditional markets without code changes
+
+**Bottom Line**: NIJA is a production-ready, institutional-quality trading platform that brings hedge fund-level technology to individual traders. It's designed for serious algorithmic traders who want complete control, transparency, and scalability.
+
+---
 
 > **⚡ FILTER OPTIMIZATION - December 27, 2025 - ✅ DEPLOYED**:
 > - 🚨 **Issue Fixed**: Bot was scanning 734 markets but placing ZERO trades due to overly strict filters
