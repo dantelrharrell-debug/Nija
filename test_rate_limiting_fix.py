@@ -7,7 +7,9 @@ Verifies that API calls have proper delays to prevent 429 errors
 import time
 import random
 
-# Constants from trading_strategy.py (must match exactly)
+# Constants from trading_strategy.py (duplicated here to avoid module import issues)
+# NOTE: These MUST be kept in sync with bot/trading_strategy.py constants
+# If you change these values, update both files!
 POSITION_CHECK_DELAY = 0.2  # 200ms delay between position checks (max 5 req/s)
 SELL_ORDER_DELAY = 0.3      # 300ms delay between sell orders (max ~3 req/s)
 MARKET_SCAN_DELAY = 0.25    # 250ms delay between market scans (max 4 req/s)
