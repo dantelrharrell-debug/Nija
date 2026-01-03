@@ -313,6 +313,28 @@ class MultiExchangeCapitalAllocator:
         
         self._save_state()
     
+    def update_total_capital(self, new_total_capital: float):
+        """
+        Update total capital and rebalance allocations proportionally
+        
+        Args:
+            new_total_capital: New total capital amount in USD
+        """
+        if new_total_capital <= 0:
+            logger.warning(f"Invalid total capital: ${new_total_capital:.2f}")
+            return
+        
+        old_total = self.total_capital_usd
+        self.total_capital_usd = new_total_capital
+        
+        # Recalculate current allocation percentages based on new total
+        for alloc in self.allocations.values():
+            if old_total > 0:
+                alloc.current_allocation_pct = (alloc.allocated_capital_usd / new_total_capital) * 100
+        
+        logger.info(f"💰 Updated total capital: ${old_total:.2f} → ${new_total_capital:.2f}")
+        self._save_state()
+    
     def record_trade(self, exchange: ExchangeType, pnl: float, is_win: bool):
         """
         Record a completed trade for performance tracking
