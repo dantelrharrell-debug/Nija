@@ -96,18 +96,32 @@ class BrokerFailsafes:
         
         # Try to load from exchange_risk_profiles.py if available
         try:
-            from exchange_risk_profiles import get_exchange_risk_manager
+            from exchange_risk_profiles import get_exchange_risk_manager, ExchangeType
             manager = get_exchange_risk_manager()
-            profile = manager.get_risk_profile(self.broker_name)
+            
+            # Map broker name to ExchangeType
+            broker_map = {
+                'coinbase': ExchangeType.COINBASE,
+                'alpaca': ExchangeType.ALPACA,
+                'binance': ExchangeType.BINANCE,
+                'okx': ExchangeType.OKX,
+                'kraken': ExchangeType.KRAKEN,
+            }
+            
+            exchange_type = broker_map.get(self.broker_name.lower())
+            if not exchange_type:
+                raise ValueError(f"Unknown broker: {self.broker_name}")
+            
+            profile = manager.get_profile(exchange_type)
             
             # Convert to our format
             return {
-                'daily_stop_loss_pct': profile.get('max_daily_loss', 0.10),
-                'max_loss_per_trade_pct': profile.get('max_loss_per_trade', 0.02),
-                'max_drawdown_pct': profile.get('max_drawdown', 0.15),
-                'max_position_size_pct': profile.get('max_position_pct', 0.25),
-                'max_trades_per_day': profile.get('max_trades_per_day', 50),
-                'min_profit_target_pct': profile.get('min_profit_target', 0.015),
+                'daily_stop_loss_pct': 0.10,  # Conservative default
+                'max_loss_per_trade_pct': profile.max_stop_loss_pct,
+                'max_drawdown_pct': 0.15,  # Conservative default
+                'max_position_size_pct': profile.max_position_size_pct,
+                'max_trades_per_day': profile.max_trades_per_day,
+                'min_profit_target_pct': profile.min_take_profit_pct,
                 'circuit_breaker_threshold': 3,  # Consecutive losses trigger review
             }
         except (ImportError, Exception) as e:

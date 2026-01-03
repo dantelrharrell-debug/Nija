@@ -52,7 +52,7 @@ class PositionCapEnforcer:
     
     def get_current_positions(self) -> List[Dict]:
         """
-        Fetch current crypto holdings from Coinbase.
+        Fetch current crypto holdings from broker.
         
         Returns:
             List of position dicts: {'symbol', 'currency', 'balance', 'price', 'usd_value'}
@@ -62,31 +62,23 @@ class PositionCapEnforcer:
                 logger.error("Failed to connect to broker")
                 return []
             
-            accounts = self.broker.client.get_accounts()
-            positions = []
+            # Use broker's get_positions() method which works for all brokers
+            positions = self.broker.get_positions()
             
-            # Handle both dict and object responses from Coinbase SDK
-            accounts_list = accounts.get('accounts') if isinstance(accounts, dict) else getattr(accounts, 'accounts', [])
-            
-            for account in accounts_list:
-                # Handle both dict and object account formats
-                if isinstance(account, dict):
-                    currency = account.get('currency')
-                    balance_obj = account.get('available_balance', {})
-                    balance = float(balance_obj.get('value', 0)) if balance_obj else 0
-                else:
-                    # Account object from Coinbase SDK
-                    currency = getattr(account, 'currency', None)
-                    balance_obj = getattr(account, 'available_balance', {})
-                    balance = float(balance_obj.get('value', 0)) if isinstance(balance_obj, dict) else float(getattr(balance_obj, 'value', 0)) if balance_obj else 0
+            result = []
+            for pos in positions:
+                symbol = pos.get('symbol', '')
+                currency = pos.get('currency', symbol.split('-')[0] if '-' in symbol else symbol)
+                balance = float(pos.get('quantity', 0))
                 
-                if not currency or balance <= 0 or currency in ['USD', 'USDC']:
+                if balance <= 0:
                     continue
                 
-                symbol = f"{currency}-USD"
+                # Try to get current price
                 try:
-                    product = self.broker.client.get_product(symbol)
-                    price = float(product.price)
+                    price = self.broker.get_current_price(symbol)
+                    if price <= 0:
+                        price = 1.0  # Fallback if price unavailable
                     usd_value = balance * price
 
                     # CRITICAL FIX: Only skip TRUE dust to match broker.get_positions()
@@ -95,7 +87,7 @@ class PositionCapEnforcer:
                         logger.info(f"Skipping dust position {symbol}: balance={balance}, usd_value={usd_value:.4f}")
                         continue
                     
-                    positions.append({
+                    result.append({
                         'symbol': symbol,
                         'currency': currency,
                         'balance': balance,
@@ -109,7 +101,7 @@ class PositionCapEnforcer:
                     usd_value = balance * 1.0  # Conservative $1 estimate
                     if balance > 0.001:  # Only skip true dust
                         logger.warning(f"⚠️ RATE LIMITED: Counting {symbol} with fallback price (balance={balance})")
-                        positions.append({
+                        result.append({
                             'symbol': symbol,
                             'currency': currency,
                             'balance': balance,
@@ -117,7 +109,7 @@ class PositionCapEnforcer:
                             'usd_value': usd_value
                         })
             
-            return positions
+            return result
         except Exception as e:
             logger.error(f"Error fetching positions: {e}")
             return []
