@@ -2023,6 +2023,11 @@ class AlpacaBroker(BaseBroker):
         super().__init__(BrokerType.ALPACA)
         self.api = None
     
+    @property
+    def client(self):
+        """Alias for self.api to maintain consistency with other brokers"""
+        return self.api
+    
     def connect(self) -> bool:
         """Connect to Alpaca"""
         try:
@@ -2149,6 +2154,53 @@ class AlpacaBroker(BaseBroker):
     def supports_asset_class(self, asset_class: str) -> bool:
         """Alpaca supports stocks"""
         return asset_class.lower() in ["stocks", "stock"]
+    
+    def get_all_products(self) -> list:
+        """
+        Get list of tradeable stock symbols from Alpaca.
+        Note: Alpaca is for stocks, not crypto. Returns popular stock symbols.
+        
+        Returns:
+            List of stock symbols (e.g., ['AAPL', 'MSFT', 'GOOGL', ...])
+        """
+        try:
+            if not self.api:
+                logging.warning("⚠️  Alpaca not connected, cannot fetch products")
+                return []
+            
+            # Get all active assets from Alpaca
+            from alpaca.trading.requests import GetAssetsRequest
+            from alpaca.trading.enums import AssetClass, AssetStatus
+            
+            request = GetAssetsRequest(
+                status=AssetStatus.ACTIVE,
+                asset_class=AssetClass.US_EQUITY
+            )
+            
+            assets = self.api.get_all_assets(request)
+            
+            # Extract tradeable symbols
+            symbols = []
+            for asset in assets:
+                if asset.tradable and asset.status == AssetStatus.ACTIVE:
+                    symbols.append(asset.symbol)
+            
+            logging.info(f"📊 Alpaca: Found {len(symbols)} tradeable stock symbols")
+            return symbols
+            
+        except ImportError:
+            logging.warning("⚠️  Alpaca SDK not available")
+            return []
+        except Exception as e:
+            logging.warning(f"⚠️  Error fetching Alpaca products: {e}")
+            # Return a fallback list of popular stocks
+            fallback_stocks = [
+                'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM',
+                'V', 'WMT', 'MA', 'DIS', 'NFLX', 'ADBE', 'PYPL', 'INTC',
+                'CSCO', 'PFE', 'KO', 'NKE', 'BAC', 'XOM', 'T', 'VZ'
+            ]
+            logging.info(f"📊 Alpaca: Using fallback list of {len(fallback_stocks)} stock symbols")
+            return fallback_stocks
 
 class BinanceBroker(BaseBroker):
     """
@@ -2429,6 +2481,44 @@ class BinanceBroker(BaseBroker):
     def supports_asset_class(self, asset_class: str) -> bool:
         """Binance supports crypto spot trading"""
         return asset_class.lower() in ["crypto", "cryptocurrency"]
+    
+    def get_all_products(self) -> list:
+        """
+        Get list of all tradeable cryptocurrency pairs from Binance.
+        
+        Returns:
+            List of trading pairs (e.g., ['BTCUSDT', 'ETHUSDT', ...])
+        """
+        try:
+            if not self.client:
+                logging.warning("⚠️  Binance not connected, cannot fetch products")
+                return []
+            
+            # Get all exchange info (includes all trading pairs)
+            exchange_info = self.client.get_exchange_info()
+            
+            # Extract symbols that are trading (status = 'TRADING')
+            symbols = []
+            for symbol_info in exchange_info.get('symbols', []):
+                if symbol_info.get('status') == 'TRADING':
+                    # Filter for USDT pairs (most common for crypto trading)
+                    symbol = symbol_info.get('symbol', '')
+                    if symbol.endswith('USDT'):
+                        symbols.append(symbol)
+            
+            logging.info(f"📊 Binance: Found {len(symbols)} tradeable USDT pairs")
+            return symbols
+            
+        except Exception as e:
+            logging.warning(f"⚠️  Error fetching Binance products: {e}")
+            # Return a fallback list of popular crypto pairs
+            fallback_pairs = [
+                'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT',
+                'DOGEUSDT', 'MATICUSDT', 'DOTUSDT', 'LINKUSDT', 'UNIUSDT', 'AVAXUSDT',
+                'ATOMUSDT', 'LTCUSDT', 'NEARUSDT', 'ALGOUSDT', 'XLMUSDT', 'HBARUSDT'
+            ]
+            logging.info(f"📊 Binance: Using fallback list of {len(fallback_pairs)} crypto pairs")
+            return fallback_pairs
 
 
 class KrakenBroker(BaseBroker):
@@ -2743,6 +2833,47 @@ class KrakenBroker(BaseBroker):
     def supports_asset_class(self, asset_class: str) -> bool:
         """Kraken supports crypto spot trading"""
         return asset_class.lower() in ["crypto", "cryptocurrency"]
+    
+    def get_all_products(self) -> list:
+        """
+        Get list of all tradeable cryptocurrency pairs from Kraken.
+        
+        Returns:
+            List of trading pairs in standard format (e.g., ['BTC-USD', 'ETH-USD', ...])
+        """
+        try:
+            if not self.kraken_api:
+                logging.warning("⚠️  Kraken not connected, cannot fetch products")
+                return []
+            
+            # Get all tradeable asset pairs
+            asset_pairs = self.kraken_api.get_tradable_asset_pairs()
+            
+            # Extract pairs that trade against USD or USDT
+            symbols = []
+            for pair_name, pair_info in asset_pairs.items():
+                # Kraken uses format like 'XXBTZUSD' for BTC/USD
+                # Convert to our standard format BTC-USD
+                wsname = pair_info.get('wsname', '')
+                if wsname and ('USD' in wsname or 'USDT' in wsname):
+                    # Convert from Kraken format to standard format
+                    # e.g., BTC/USD -> BTC-USD
+                    symbol = wsname.replace('/', '-')
+                    symbols.append(symbol)
+            
+            logging.info(f"📊 Kraken: Found {len(symbols)} tradeable USD/USDT pairs")
+            return symbols
+            
+        except Exception as e:
+            logging.warning(f"⚠️  Error fetching Kraken products: {e}")
+            # Return a fallback list of popular crypto pairs
+            fallback_pairs = [
+                'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'DOGE-USD',
+                'MATIC-USD', 'DOT-USD', 'LINK-USD', 'UNI-USD', 'AVAX-USD', 'ATOM-USD',
+                'LTC-USD', 'ALGO-USD', 'XLM-USD'
+            ]
+            logging.info(f"📊 Kraken: Using fallback list of {len(fallback_pairs)} crypto pairs")
+            return fallback_pairs
 
 
 class OKXBroker(BaseBroker):
@@ -3046,6 +3177,52 @@ class OKXBroker(BaseBroker):
     def supports_asset_class(self, asset_class: str) -> bool:
         """OKX supports crypto spot and futures"""
         return asset_class.lower() in ["crypto", "futures"]
+    
+    def get_all_products(self) -> list:
+        """
+        Get list of all tradeable cryptocurrency pairs from OKX.
+        
+        Returns:
+            List of trading pairs (e.g., ['BTC-USDT', 'ETH-USDT', ...])
+        """
+        try:
+            if not self.market_api:
+                logging.warning("⚠️  OKX not connected, cannot fetch products")
+                return []
+            
+            # Get all trading instruments (spot trading)
+            result = self.market_api.get_instruments(instType='SPOT')
+            
+            if result and result.get('code') == '0':
+                instruments = result.get('data', [])
+                
+                # Extract symbols that trade against USDT
+                symbols = []
+                for inst in instruments:
+                    inst_id = inst.get('instId', '')
+                    # Filter for USDT pairs
+                    if inst_id.endswith('-USDT') and inst.get('state') == 'live':
+                        symbols.append(inst_id)
+                
+                logging.info(f"📊 OKX: Found {len(symbols)} tradeable USDT pairs")
+                return symbols
+            else:
+                logging.warning(f"⚠️  OKX API returned error: {result.get('msg', 'Unknown error')}")
+                return self._get_okx_fallback_pairs()
+            
+        except Exception as e:
+            logging.warning(f"⚠️  Error fetching OKX products: {e}")
+            return self._get_okx_fallback_pairs()
+    
+    def _get_okx_fallback_pairs(self) -> list:
+        """Get fallback list of popular OKX trading pairs"""
+        fallback_pairs = [
+            'BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'XRP-USDT', 'ADA-USDT', 'DOGE-USDT',
+            'MATIC-USDT', 'DOT-USDT', 'LINK-USDT', 'UNI-USDT', 'AVAX-USDT', 'ATOM-USDT',
+            'LTC-USDT', 'NEAR-USDT', 'ALGO-USDT', 'XLM-USDT', 'HBAR-USDT', 'APT-USDT'
+        ]
+        logging.info(f"📊 OKX: Using fallback list of {len(fallback_pairs)} crypto pairs")
+        return fallback_pairs
 
 
 class BrokerManager:
