@@ -7,16 +7,21 @@ Verifies that API calls have proper delays to prevent 429 errors
 import time
 import random
 
+# Constants from trading_strategy.py (must match exactly)
+POSITION_CHECK_DELAY = 0.2  # 200ms delay between position checks (max 5 req/s)
+SELL_ORDER_DELAY = 0.3      # 300ms delay between sell orders (max ~3 req/s)
+MARKET_SCAN_DELAY = 0.25    # 250ms delay between market scans (max 4 req/s)
+
+
 def test_position_check_rate_limiting():
     """Test that position checks have proper delays"""
     print("\n" + "="*80)
     print("Testing Position Check Rate Limiting")
     print("="*80)
     
-    position_check_delay = 0.2  # 200ms between position checks
     num_positions = 5
     
-    print(f"\nSimulating {num_positions} position checks with {position_check_delay}s delay...")
+    print(f"\nSimulating {num_positions} position checks with {POSITION_CHECK_DELAY}s delay...")
     start_time = time.time()
     
     for position_idx in range(num_positions):
@@ -25,12 +30,12 @@ def test_position_check_rate_limiting():
         # Skip delay after last position
         if position_idx < num_positions - 1:
             jitter = random.uniform(0, 0.05)  # 0-50ms jitter
-            delay = position_check_delay + jitter
+            delay = POSITION_CHECK_DELAY + jitter
             print(f"    Delay: {delay:.3f}s")
             time.sleep(delay)
     
     elapsed = time.time() - start_time
-    expected_min = (num_positions - 1) * position_check_delay
+    expected_min = (num_positions - 1) * POSITION_CHECK_DELAY
     expected_max = expected_min + (num_positions - 1) * 0.05
     
     print(f"\n✅ Test complete!")
@@ -50,10 +55,9 @@ def test_sell_order_rate_limiting():
     print("Testing Sell Order Rate Limiting")
     print("="*80)
     
-    sell_order_delay = 0.3  # 300ms between sell orders
     num_orders = 3
     
-    print(f"\nSimulating {num_orders} sell orders with {sell_order_delay}s delay...")
+    print(f"\nSimulating {num_orders} sell orders with {SELL_ORDER_DELAY}s delay...")
     start_time = time.time()
     
     for i in range(1, num_orders + 1):
@@ -62,12 +66,12 @@ def test_sell_order_rate_limiting():
         # Skip delay after last order
         if i < num_orders:
             jitter = random.uniform(0, 0.1)  # 0-100ms jitter
-            delay = sell_order_delay + jitter
+            delay = SELL_ORDER_DELAY + jitter
             print(f"    Delay: {delay:.3f}s")
             time.sleep(delay)
     
     elapsed = time.time() - start_time
-    expected_min = (num_orders - 1) * sell_order_delay
+    expected_min = (num_orders - 1) * SELL_ORDER_DELAY
     expected_max = expected_min + (num_orders - 1) * 0.1
     
     print(f"\n✅ Test complete!")
@@ -92,14 +96,10 @@ def test_combined_rate_limiting():
     num_sells = 2      # 2 positions to sell
     num_scans = 10     # Scan 10 markets
     
-    position_check_delay = 0.2
-    sell_order_delay = 0.3
-    market_scan_delay = 0.25
-    
     print(f"\nScenario:")
-    print(f"  - {num_positions} positions to check (0.2s delay each)")
-    print(f"  - {num_sells} positions to sell (0.3s delay each)")
-    print(f"  - {num_scans} markets to scan (0.25s delay each)")
+    print(f"  - {num_positions} positions to check ({POSITION_CHECK_DELAY}s delay each)")
+    print(f"  - {num_sells} positions to sell ({SELL_ORDER_DELAY}s delay each)")
+    print(f"  - {num_scans} markets to scan ({MARKET_SCAN_DELAY}s delay each)")
     
     start_time = time.time()
     total_requests = 0
@@ -109,21 +109,21 @@ def test_combined_rate_limiting():
     for i in range(num_positions):
         total_requests += 1
         if i < num_positions - 1:
-            time.sleep(position_check_delay + random.uniform(0, 0.05))
+            time.sleep(POSITION_CHECK_DELAY + random.uniform(0, 0.05))
     
     # Step 2: Sell positions
     print(f"Step 2: Selling {num_sells} positions...")
     for i in range(num_sells):
         total_requests += 1
         if i < num_sells - 1:
-            time.sleep(sell_order_delay + random.uniform(0, 0.1))
+            time.sleep(SELL_ORDER_DELAY + random.uniform(0, 0.1))
     
     # Step 3: Scan markets
     print(f"Step 3: Scanning {num_scans} markets...")
     for i in range(num_scans):
         total_requests += 1
         if i < num_scans - 1:
-            time.sleep(market_scan_delay + random.uniform(0, 0.05))
+            time.sleep(MARKET_SCAN_DELAY + random.uniform(0, 0.05))
     
     elapsed = time.time() - start_time
     avg_rate = total_requests / elapsed
@@ -154,9 +154,9 @@ if __name__ == "__main__":
         print("="*80)
         print("\nRate limiting is properly implemented to prevent 429 errors.")
         print("Expected outcomes:")
-        print("  - Position checks: ~4-5 req/s")
-        print("  - Sell orders: ~2-3 req/s")
-        print("  - Market scans: ~4 req/s")
+        print(f"  - Position checks: ~{1/POSITION_CHECK_DELAY:.1f} req/s max")
+        print(f"  - Sell orders: ~{1/SELL_ORDER_DELAY:.1f} req/s max")
+        print(f"  - Market scans: ~{1/MARKET_SCAN_DELAY:.1f} req/s max")
         print("  - Combined: <6 req/s (well below Coinbase's ~10 req/s limit)")
         print("="*80)
         
