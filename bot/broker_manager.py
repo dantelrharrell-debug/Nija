@@ -126,7 +126,145 @@ class BaseBroker(ABC):
     
     @abstractmethod
     def get_account_balance(self) -> float:
+        """Get USD trading balance. Must be implemented by each broker."""
         pass
+    
+    @abstractmethod
+    def get_positions(self) -> List[Dict]:
+        """Get open positions. Must be implemented by each broker."""
+        pass
+    
+    @abstractmethod
+    def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
+        """Place market order. Must be implemented by each broker."""
+        pass
+    
+    def close_position(self, symbol: str, base_size: Optional[float] = None, **kwargs) -> Dict:
+        """Default implementation calls place_market_order. Brokers can override."""
+        quantity = kwargs.get('quantity', base_size)
+        side = kwargs.get('side', 'sell')
+        size_type = kwargs.get('size_type', 'base')
+        if quantity is None:
+            raise ValueError("close_position requires a quantity or base_size")
+        return self.place_market_order(symbol, side, quantity, size_type)
+    
+    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
+        """Get candle data. Optional method, brokers can override."""
+        return []
+    
+    def get_current_price(self, symbol: str) -> float:
+        """Get current price. Optional method, brokers can override."""
+        return 0.0
+    
+    def get_market_data(self, symbol: str, timeframe: str = '5m', limit: int = 100) -> Dict:
+        """Get market data. Optional method, brokers can override."""
+        candles = self.get_candles(symbol, timeframe, limit)
+        return {'candles': candles}
+    
+    def supports_asset_class(self, asset_class: str) -> bool:
+        """Check if broker supports asset class. Optional method, brokers can override."""
+        return False
+
+
+# Coinbase-specific broker implementation
+class CoinbaseBroker(BaseBroker):
+    """Coinbase Advanced Trade broker implementation"""
+    
+    def __init__(self):
+        """Initialize Coinbase broker"""
+        super().__init__(BrokerType.COINBASE)
+        self.client = None
+        self.portfolio_uuid = None
+        self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
+        
+        # Initialize position tracker for profit-based exits
+        try:
+            from position_tracker import PositionTracker
+            self.position_tracker = PositionTracker(storage_file="positions.json")
+            logger.info("✅ Position tracker initialized for profit-based exits")
+        except Exception as e:
+            logger.warning(f"⚠️ Position tracker initialization failed: {e}")
+            self.position_tracker = None
+    
+    def _log_trade_to_journal(self, symbol: str, side: str, price: float, 
+                               size_usd: float, quantity: float, pnl_data: dict = None):
+        """
+        Log trade to trade_journal.jsonl with P&L tracking.
+        
+        Args:
+            symbol: Trading symbol
+            side: 'BUY' or 'SELL'
+            price: Execution price
+            size_usd: Trade size in USD
+            quantity: Crypto quantity
+            pnl_data: Optional P&L data for SELL orders (from position_tracker.calculate_pnl)
+        """
+        try:
+            from datetime import datetime
+            
+            trade_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "symbol": symbol,
+                "side": side,
+                "price": price,
+                "size_usd": size_usd,
+                "quantity": quantity
+            }
+            
+            # Add P&L data for SELL orders
+            if pnl_data and side == 'SELL':
+                trade_entry["entry_price"] = pnl_data.get('entry_price', 0)
+                trade_entry["pnl_dollars"] = pnl_data.get('pnl_dollars', 0)
+                trade_entry["pnl_percent"] = pnl_data.get('pnl_percent', 0)
+                trade_entry["entry_value"] = pnl_data.get('entry_value', 0)
+            
+            # Append to trade journal file
+            journal_file = "trade_journal.jsonl"
+            with open(journal_file, 'a') as f:
+                f.write(json.dumps(trade_entry) + '\n')
+            
+            logger.debug(f"Trade logged to journal: {symbol} {side} @ ${price:.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to log trade to journal: {e}")
+    
+    def connect(self) -> bool:
+        """Connect to Coinbase Advanced Trade API"""
+        try:
+            from coinbase.rest import RESTClient
+            import os
+            
+            # Get credentials from environment
+            api_key = os.getenv("COINBASE_API_KEY")
+            api_secret = os.getenv("COINBASE_API_SECRET")
+            
+            if not api_key or not api_secret:
+                logging.error("❌ Coinbase API credentials not found")
+                return False
+            
+            # Initialize REST client
+            self.client = RESTClient(api_key=api_key, api_secret=api_secret)
+            
+            # Test connection by fetching accounts
+            try:
+                accounts_resp = self.client.get_accounts()
+                self.connected = True
+                logging.info("✅ Connected to Coinbase Advanced Trade API")
+                
+                # Portfolio detection
+                self._detect_portfolio()
+                
+                return True
+                
+            except Exception as e:
+                logging.error(f"❌ Failed to verify Coinbase connection: {e}")
+                return False
+                
+        except ImportError:
+            logging.error("❌ Coinbase SDK not installed. Run: pip install coinbase-advanced-py")
+            return False
+        except Exception as e:
+            logging.error(f"❌ Coinbase connection error: {e}")
+            return False
     
     def _detect_portfolio(self):
         """DISABLED: Always use default Advanced Trade portfolio"""
@@ -1876,107 +2014,6 @@ class BaseBroker(ABC):
     def supports_asset_class(self, asset_class: str) -> bool:
         """Coinbase supports crypto only"""
         return asset_class.lower() == "crypto"
-
-
-# Coinbase Broker - extends BaseBroker which has all Coinbase implementation
-class CoinbaseBroker(BaseBroker):
-    """Coinbase Advanced Trade broker implementation"""
-    
-    def __init__(self):
-        """Initialize Coinbase broker"""
-        super().__init__(BrokerType.COINBASE)
-        self.client = None
-        self.portfolio_uuid = None
-        self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
-        
-        # Initialize position tracker for profit-based exits
-        try:
-            from position_tracker import PositionTracker
-            self.position_tracker = PositionTracker(storage_file="positions.json")
-            logger.info("✅ Position tracker initialized for profit-based exits")
-        except Exception as e:
-            logger.warning(f"⚠️ Position tracker initialization failed: {e}")
-            self.position_tracker = None
-    
-    def _log_trade_to_journal(self, symbol: str, side: str, price: float, 
-                               size_usd: float, quantity: float, pnl_data: dict = None):
-        """
-        Log trade to trade_journal.jsonl with P&L tracking.
-        
-        Args:
-            symbol: Trading symbol
-            side: 'BUY' or 'SELL'
-            price: Execution price
-            size_usd: Trade size in USD
-            quantity: Crypto quantity
-            pnl_data: Optional P&L data for SELL orders (from position_tracker.calculate_pnl)
-        """
-        try:
-            from datetime import datetime
-            
-            trade_entry = {
-                "timestamp": datetime.now().isoformat(),
-                "symbol": symbol,
-                "side": side,
-                "price": price,
-                "size_usd": size_usd,
-                "quantity": quantity
-            }
-            
-            # Add P&L data for SELL orders
-            if pnl_data and side == 'SELL':
-                trade_entry["entry_price"] = pnl_data.get('entry_price', 0)
-                trade_entry["pnl_dollars"] = pnl_data.get('pnl_dollars', 0)
-                trade_entry["pnl_percent"] = pnl_data.get('pnl_percent', 0)
-                trade_entry["entry_value"] = pnl_data.get('entry_value', 0)
-            
-            # Append to trade journal file
-            journal_file = "trade_journal.jsonl"
-            with open(journal_file, 'a') as f:
-                f.write(json.dumps(trade_entry) + '\n')
-            
-            logger.debug(f"Trade logged to journal: {symbol} {side} @ ${price:.2f}")
-        except Exception as e:
-            logger.warning(f"Failed to log trade to journal: {e}")
-    
-    def connect(self) -> bool:
-        """Connect to Coinbase Advanced Trade API"""
-        try:
-            from coinbase.rest import RESTClient
-            import os
-            
-            # Get credentials from environment
-            api_key = os.getenv("COINBASE_API_KEY")
-            api_secret = os.getenv("COINBASE_API_SECRET")
-            
-            if not api_key or not api_secret:
-                logging.error("❌ Coinbase API credentials not found")
-                return False
-            
-            # Initialize REST client
-            self.client = RESTClient(api_key=api_key, api_secret=api_secret)
-            
-            # Test connection by fetching accounts
-            try:
-                accounts_resp = self.client.get_accounts()
-                self.connected = True
-                logging.info("✅ Connected to Coinbase Advanced Trade API")
-                
-                # Portfolio detection (uses inherited method from BaseBroker)
-                self._detect_portfolio()
-                
-                return True
-                
-            except Exception as e:
-                logging.error(f"❌ Failed to verify Coinbase connection: {e}")
-                return False
-                
-        except ImportError:
-            logging.error("❌ Coinbase SDK not installed. Run: pip install coinbase-advanced-py")
-            return False
-        except Exception as e:
-            logging.error(f"❌ Coinbase connection error: {e}")
-            return False
 
 
 class AlpacaBroker(BaseBroker):
