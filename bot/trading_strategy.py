@@ -479,7 +479,11 @@ class TradingStrategy:
             # Then sell them ALL concurrently, not one at a time
             positions_to_exit = []
             
-            for position in current_positions:
+            # Rate limiting: Add delay between position management API calls to prevent 429 errors
+            import random
+            position_check_delay = 0.2  # 200ms between position checks (5 req/s max)
+            
+            for position_idx, position in enumerate(current_positions):
                 try:
                     symbol = position.get('symbol')
                     if not symbol:
@@ -733,6 +737,12 @@ class TradingStrategy:
                     
                 except Exception as e:
                     logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
+                
+                # Rate limiting: Add delay after each position check to prevent 429 errors
+                # Skip delay after the last position
+                if position_idx < len(current_positions) - 1:
+                    jitter = random.uniform(0, 0.05)  # 0-50ms jitter
+                    time.sleep(position_check_delay + jitter)
             
             # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
             # Position cap set to 8 maximum concurrent positions
@@ -748,7 +758,7 @@ class TradingStrategy:
                 
                 # Force-sell smallest positions to get under cap
                 positions_needed = (len(current_positions) - MAX_POSITIONS_ALLOWED) - len(positions_to_exit)
-                for pos in remaining_sorted[:positions_needed]:
+                for pos_idx, pos in enumerate(remaining_sorted[:positions_needed]):
                     symbol = pos.get('symbol')
                     quantity = pos.get('quantity', 0)
                     try:
@@ -768,12 +778,20 @@ class TradingStrategy:
                             'quantity': quantity,
                             'reason': 'Over position cap'
                         })
+                    
+                    # Rate limiting: Add delay after each price check (except last one)
+                    if pos_idx < positions_needed - 1:
+                        jitter = random.uniform(0, 0.05)  # 0-50ms jitter
+                        time.sleep(position_check_delay + jitter)
             
             # CRITICAL FIX: Now sell ALL positions concurrently (not one at a time)
             if positions_to_exit:
                 logger.info(f"")
                 logger.info(f"🔴 CONCURRENT EXIT: Selling {len(positions_to_exit)} positions NOW")
                 logger.info(f"="*80)
+                
+                # Rate limiting: Add delay between sell orders to prevent 429 errors
+                sell_order_delay = 0.3  # 300ms between sell orders (~3 req/s)
                 
                 for i, pos_data in enumerate(positions_to_exit, 1):
                     symbol = pos_data['symbol']
@@ -814,6 +832,11 @@ class TradingStrategy:
                         logger.error(f"  ❌ {symbol} exception during sell: {sell_err}")
                         logger.error(f"     Error type: {type(sell_err).__name__}")
                         logger.error(f"     Traceback: {traceback.format_exc()}")
+                    
+                    # Rate limiting: Add delay after each sell order (except the last one)
+                    if i < len(positions_to_exit):
+                        jitter = random.uniform(0, 0.1)  # 0-100ms jitter
+                        time.sleep(sell_order_delay + jitter)
                 
                 logger.info(f"="*80)
                 logger.info(f"✅ Concurrent exit complete: {len(positions_to_exit)} positions processed")
