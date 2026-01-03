@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import random
 import queue
 import logging
 import traceback
@@ -18,6 +19,12 @@ MARKET_SCAN_LIMIT = 730  # Scan all available markets with rate limiting protect
                          # Note: Actual scan count is min(MARKET_SCAN_LIMIT, len(all_products))
                          # so this automatically adjusts if fewer markets are available
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
+
+# Rate limiting constants (prevent 429 errors from Coinbase API)
+# These delays keep request rate well below Coinbase's ~10 req/s limit
+POSITION_CHECK_DELAY = 0.2  # 200ms delay between position checks (max 5 req/s)
+SELL_ORDER_DELAY = 0.3      # 300ms delay between sell orders (max ~3 req/s)
+MARKET_SCAN_DELAY = 0.25    # 250ms delay between market scans (max 4 req/s)
 
 # Exit strategy constants (no entry price required)
 MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
@@ -479,7 +486,7 @@ class TradingStrategy:
             # Then sell them ALL concurrently, not one at a time
             positions_to_exit = []
             
-            for position in current_positions:
+            for position_idx, position in enumerate(current_positions):
                 try:
                     symbol = position.get('symbol')
                     if not symbol:
@@ -733,6 +740,12 @@ class TradingStrategy:
                     
                 except Exception as e:
                     logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
+                
+                # Rate limiting: Add delay after each position check to prevent 429 errors
+                # Skip delay after the last position
+                if position_idx < len(current_positions) - 1:
+                    jitter = random.uniform(0, 0.05)  # 0-50ms jitter
+                    time.sleep(POSITION_CHECK_DELAY + jitter)
             
             # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
             # Position cap set to 8 maximum concurrent positions
@@ -748,7 +761,7 @@ class TradingStrategy:
                 
                 # Force-sell smallest positions to get under cap
                 positions_needed = (len(current_positions) - MAX_POSITIONS_ALLOWED) - len(positions_to_exit)
-                for pos in remaining_sorted[:positions_needed]:
+                for pos_idx, pos in enumerate(remaining_sorted[:positions_needed]):
                     symbol = pos.get('symbol')
                     quantity = pos.get('quantity', 0)
                     try:
@@ -768,6 +781,11 @@ class TradingStrategy:
                             'quantity': quantity,
                             'reason': 'Over position cap'
                         })
+                    
+                    # Rate limiting: Add delay after each price check (except last one)
+                    if pos_idx < positions_needed - 1:
+                        jitter = random.uniform(0, 0.05)  # 0-50ms jitter
+                        time.sleep(POSITION_CHECK_DELAY + jitter)
             
             # CRITICAL FIX: Now sell ALL positions concurrently (not one at a time)
             if positions_to_exit:
@@ -814,6 +832,11 @@ class TradingStrategy:
                         logger.error(f"  ❌ {symbol} exception during sell: {sell_err}")
                         logger.error(f"     Error type: {type(sell_err).__name__}")
                         logger.error(f"     Traceback: {traceback.format_exc()}")
+                    
+                    # Rate limiting: Add delay after each sell order (except the last one)
+                    if i < len(positions_to_exit):
+                        jitter = random.uniform(0, 0.1)  # 0-100ms jitter
+                        time.sleep(SELL_ORDER_DELAY + jitter)
                 
                 logger.info(f"="*80)
                 logger.info(f"✅ Concurrent exit complete: {len(positions_to_exit)} positions processed")
@@ -958,14 +981,12 @@ class TradingStrategy:
                         
                         # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429 errors)
                         # Coinbase rate limits: ~10 requests/second burst, lower sustained rate
-                        # With 0.25s delay, scanning 730 markets takes ~183 seconds (729 delays × 0.25s = 182.25s)
+                        # With MARKET_SCAN_DELAY, scanning 730 markets takes ~183 seconds (729 delays × 0.25s = 182.25s)
                         # This provides ~4 requests/second sustained rate, well below burst limit
                         # Adding jitter prevents thundering herd when multiple processes/retries happen
                         if i < scan_limit - 1:  # Don't delay after last market
-                            import random
-                            base_delay = 0.25  # 250ms base delay = max 4 requests/second
                             jitter = random.uniform(0, 0.05)  # Add 0-50ms jitter
-                            time.sleep(base_delay + jitter)
+                            time.sleep(MARKET_SCAN_DELAY + jitter)
                     
                     # Log filtering summary
                     logger.info(f"   📊 Scan summary: {filter_stats['total']} markets scanned")
