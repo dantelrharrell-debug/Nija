@@ -250,7 +250,7 @@ class CoinbaseBroker(BaseBroker):
                 self.connected = True
                 logging.info("✅ Connected to Coinbase Advanced Trade API")
                 
-                # Portfolio detection (uses inherited method from BaseBroker)
+                # Portfolio detection
                 self._detect_portfolio()
                 
                 return True
