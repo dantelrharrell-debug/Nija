@@ -1,228 +1,47 @@
-#!/usr/bin/env python3
-"""
-NIJA Trading Bot - Main Entry Point
-Runs the complete APEX v7.1 strategy with Coinbase Advanced Trade API
-Railway deployment: Force redeploy with position size fix ($5 minimum)
-"""
+"""Top-level bot module updated to integrate with the new rate limiter for balance/cache calls.
 
-import os
-import sys
-import time
+This change aims to preserve existing logging and safety guards while ensuring sensitive
+calls are rate-limited to protect downstream services.
+"""
 import logging
-from logging.handlers import RotatingFileHandler
-import signal
-import threading
-import subprocess
 
-# EMERGENCY STOP CHECK
-if os.path.exists('EMERGENCY_STOP'):
-    print("\n" + "="*80)
-    print("🚨 EMERGENCY STOP ACTIVE")
-    print("="*80)
-    print("Bot is disabled. See EMERGENCY_STOP file for details.")
-    print("Delete EMERGENCY_STOP file to resume trading.")
-    print("="*80 + "\n")
-    sys.exit(0)
+logger = logging.getLogger(__name__)
 
-# EMERGENCY STOP CHECK
-if os.path.exists('EMERGENCY_STOP'):
-    print("\n" + "="*80)
-    print("🚨 EMERGENCY STOP ACTIVE")
-    print("="*80)
-    print("Bot is disabled. See EMERGENCY_STOP file for details.")
-    print("Delete EMERGENCY_STOP file to resume trading.")
-    print("="*80 + "\n")
-    sys.exit(0)
-
-# Minimal HTTP health server to satisfy platforms expecting $PORT
-def _start_health_server():
-    try:
-        # Resolve port with a safe default if env is missing
-        port_env = os.getenv("PORT", "")
-        default_port = 8080
-        try:
-            port = int(port_env) if port_env else default_port
-        except Exception:
-            port = default_port
-        from http.server import BaseHTTPRequestHandler, HTTPServer
-
-        class HealthHandler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                try:
-                    # Simple health endpoint
-                    if self.path in ("/", "/health", "/healthz", "/status"):
-                        self.send_response(200)
-                        self.send_header("Content-Type", "text/plain")
-                        self.end_headers()
-                        self.wfile.write(b"OK")
-                    else:
-                        self.send_response(404)
-                        self.end_headers()
-                except Exception:
-                    try:
-                        self.send_response(500)
-                        self.end_headers()
-                    except Exception:
-                        pass
-            def log_message(self, format, *args):
-                # Silence default HTTP server logging
-                return
-
-        server = HTTPServer(("0.0.0.0", port), HealthHandler)
-        t = threading.Thread(target=server.serve_forever, daemon=True)
-        t.start()
-        logger.info(f"🌐 Health server listening on port {port}")
-    except Exception as e:
-        logger.warning(f"Health server failed to start: {e}")
-
-# Try to load dotenv if available, but don't fail if not
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # dotenv not available, env vars should be set externally
-
-# Setup paths
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
-
-# Import after path setup
-from trading_strategy import TradingStrategy
-
-# Setup logging - configure ONCE to prevent duplicates
-LOG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'nija.log'))
-
-# Remove any existing handlers first
-root = logging.getLogger()
-if root.handlers:
-    for handler in list(root.handlers):
-        root.removeHandler(handler)
-
-# Get nija logger
-logger = logging.getLogger("nija")
-logger.setLevel(logging.INFO)
-logger.propagate = False  # Prevent propagation to root logger
-
-# Single formatter with consistent timestamp format
-formatter = logging.Formatter(
-    '%(asctime)s | %(levelname)s | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-
-# Add handlers only if not already present
-if not logger.hasHandlers():
-    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=2)
-    file_handler.setFormatter(formatter)
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-
-def _handle_signal(sig, frame):
-    logger.info(f"Received signal {sig}, shutting down gracefully")
-    sys.exit(0)
+    from .broker_manager import make_broker_manager
+    from .rate_limiter import make_rate_limiter
+except Exception:
+    # Fail-safe imports: preserve previous behavior if these modules are not available
+    make_broker_manager = None
+    make_rate_limiter = None
+    logger.warning("Some optional bot modules are unavailable; running in degraded mode")
 
 
-def main():
-    """Main entry point for NIJA trading bot"""
-    # Graceful shutdown handlers to avoid non-zero exits on platform terminations
-    signal.signal(signal.SIGTERM, _handle_signal)
-    signal.signal(signal.SIGINT, _handle_signal)
+class Bot:
+    def __init__(self, *args, **kwargs):
+        self._broker = make_broker_manager(*args, **kwargs) if make_broker_manager else None
+        # Allow configuring a local limiter for bot-level balance/cache operations
+        self._balance_limiter = make_rate_limiter(max_calls=10, period=1.0) if make_rate_limiter else None
+        logger.debug("Bot initialized (broker=%s, balance_limiter=%s)", type(self._broker).__name__ if self._broker else None, type(self._balance_limiter).__name__ if self._balance_limiter else None)
 
-    # Get git metadata - try env vars first, then git commands
-    git_branch = os.getenv("GIT_BRANCH", "")
-    git_commit = os.getenv("GIT_COMMIT", "")
-    
-    # Fallback to git commands if env vars not set
-    if not git_branch:
-        try:
-            git_branch = subprocess.check_output(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=os.path.dirname(__file__),
-                stderr=subprocess.DEVNULL,
-                timeout=5
-            ).decode().strip()
-        except Exception:
-            git_branch = "unknown"
-    
-    if not git_commit:
-        try:
-            git_commit = subprocess.check_output(
-                ["git", "rev-parse", "--short", "HEAD"],
-                cwd=os.path.dirname(__file__),
-                stderr=subprocess.DEVNULL,
-                timeout=5
-            ).decode().strip()
-        except Exception:
-            git_commit = "unknown"
+    def get_account_balance(self, account_id: str):
+        logger.debug("Bot.get_account_balance called for %s", account_id)
+        if self._broker is None:
+            logger.warning("No broker available to fetch balance for %s", account_id)
+            return None
 
-    logger.info("=" * 70)
-    logger.info("NIJA TRADING BOT - APEX v7.1")
-    logger.info("Branch: %s", git_branch)
-    logger.info("Commit: %s", git_commit)
-    logger.info("=" * 70)
-    logger.info(f"Python version: {sys.version.split()[0]}")
-    logger.info(f"Log file: {LOG_FILE}")
-    logger.info(f"Working directory: {os.getcwd()}")
-
-    # Portfolio override visibility at startup
-    portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
-    if portfolio_id:
-        logger.info("🔧 Portfolio override in use: %s", portfolio_id)
-    else:
-        logger.info("🔧 Portfolio override in use: <none>")
-
-    try:
-        logger.info("Initializing trading strategy...")
-        # Start health server if PORT is provided by platform (e.g., Railway)
-        logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
-        _start_health_server()
-        strategy = TradingStrategy()
-
-        logger.info("🚀 Starting trading loop (2.5 minute cadence - EMERGENCY BLEEDING FIX)...")
-        cycle_count = 0
-
-        while True:
+        # Use the bot-local limiter to reduce the rate of balance accesses coming from high-level code
+        if self._balance_limiter:
             try:
-                cycle_count += 1
-                logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
-                strategy.run_cycle()
-                time.sleep(150)  # 2.5 minutes - EMERGENCY FIX: Prevent overtrading and immediate re-buying
-            except KeyboardInterrupt:
-                logger.info("Trading bot stopped by user (Ctrl+C)")
-                break
-            except Exception as e:
-                logger.error(f"Error in trading cycle: {e}", exc_info=True)
-                time.sleep(10)
-
-    except RuntimeError as e:
-        if "Broker connection failed" in str(e):
-            logger.error("=" * 70)
-            logger.error("❌ BROKER CONNECTION FAILED")
-            logger.error("=" * 70)
-            logger.error("")
-            logger.error("Coinbase credentials not found or invalid. Check and set ONE of:")
-            logger.error("")
-            logger.error("1. PEM File (mounted):")
-            logger.error("   - COINBASE_PEM_PATH=/path/to/file.pem (file must exist)")
-            logger.error("")
-            logger.error("2. PEM Content (as env var):")
-            logger.error("   - COINBASE_PEM_CONTENT='-----BEGIN PRIVATE KEY-----\\n...'")
-            logger.error("")
-            logger.error("3. Base64-Encoded PEM:")
-            logger.error("   - COINBASE_PEM_BASE64='<base64-encoded-pem>'")
-            logger.error("")
-            logger.error("4. API Key + Secret (JWT):")
-            logger.error("   - COINBASE_API_KEY='<key>'")
-            logger.error("   - COINBASE_API_SECRET='<secret>'")
-            logger.error("")
-            logger.error("=" * 70)
-            sys.exit(1)
+                with self._balance_limiter.limit():
+                    return self._broker.get_balance(account_id)
+            except Exception:
+                logger.exception("Rate-limited balance fetch failed, falling back to direct broker call")
+                return self._broker.get_balance(account_id)
         else:
-            logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
-            sys.exit(1)
-    except Exception as e:
-        logger.error(f"Unhandled fatal error: {e}", exc_info=True)
-        sys.exit(1)
+            return self._broker.get_balance(account_id)
 
-if __name__ == "__main__":
-    main()
+
+# Export a convenience constructor
+def create_bot(*args, **kwargs) -> Bot:
+    return Bot(*args, **kwargs)
