@@ -12,6 +12,7 @@ import os
 import uuid
 import json
 import traceback
+import time
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -178,6 +179,9 @@ class CoinbaseBroker(BaseBroker):
         self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
         
         # Cache for account data to prevent redundant API calls during initialization
+        # NOTE: These caches are only accessed during bot startup in the main thread,
+        # before any trading threads are spawned. Thread safety is not a concern as
+        # the cache TTL (30s) expires before multi-threaded trading begins.
         self._accounts_cache = None
         self._accounts_cache_time = 0
         self._balance_cache = None
@@ -331,7 +335,6 @@ class CoinbaseBroker(BaseBroker):
             
             # Use cached accounts if available to avoid redundant API calls
             try:
-                import time
                 if self._accounts_cache and (time.time() - self._accounts_cache_time) < self._cache_ttl:
                     # Use cached response
                     accounts_resp = self._accounts_cache
@@ -512,8 +515,6 @@ class CoinbaseBroker(BaseBroker):
 
         Returns dict with: {"usdc", "usd", "trading_balance", "crypto", "consumer_*"}
         """
-        import time
-        
         # Check if we have a cached balance (during initialization only)
         if self._balance_cache and (time.time() - self._balance_cache_time) < self._cache_ttl:
             logging.debug("Using cached balance data")
