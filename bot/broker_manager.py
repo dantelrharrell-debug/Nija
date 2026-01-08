@@ -183,9 +183,9 @@ class CoinbaseBroker(BaseBroker):
         # before any trading threads are spawned. Thread safety is not a concern as
         # the cache TTL (30s) expires before multi-threaded trading begins.
         self._accounts_cache = None
-        self._accounts_cache_time = 0
+        self._accounts_cache_time = None
         self._balance_cache = None
-        self._balance_cache_time = 0
+        self._balance_cache_time = None
         self._cache_ttl = 30  # Cache TTL in seconds (30s is safe for initialization)
         
         # Initialize position tracker for profit-based exits
@@ -197,17 +197,17 @@ class CoinbaseBroker(BaseBroker):
             logger.warning(f"⚠️ Position tracker initialization failed: {e}")
             self.position_tracker = None
     
-    def _is_cache_valid(self, cache_time: float) -> bool:
+    def _is_cache_valid(self, cache_time) -> bool:
         """
         Check if a cache entry is still valid based on its timestamp.
         
         Args:
-            cache_time: Timestamp when cache was last updated
+            cache_time: Timestamp when cache was last updated (or None if never cached)
             
         Returns:
             True if cache is still valid, False otherwise
         """
-        return cache_time > 0 and (time.time() - cache_time) < self._cache_ttl
+        return cache_time is not None and (time.time() - cache_time) < self._cache_ttl
     
     def _log_trade_to_journal(self, symbol: str, side: str, price: float, 
                                size_usd: float, quantity: float, pnl_data: dict = None):
