@@ -149,6 +149,11 @@ class TradingStrategy:
             self.broker_manager = BrokerManager()
             connected_brokers = []
             
+            # Add startup delay to avoid immediate rate limiting on restart
+            startup_delay = 3
+            logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
+            time.sleep(startup_delay)
+            
             # Try to connect Coinbase (primary broker)
             logger.info("📊 Attempting to connect Coinbase Advanced Trade...")
             try:
