@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 def setup_daivon_frazier():
     """
-    Set up user account for Daivon Frazier with Coinbase credentials.
+    Set up user account for Daivon Frazier with Kraken credentials.
     """
     from auth import get_api_key_manager, get_user_manager
     from execution import UserPermissions, get_permission_validator
@@ -40,9 +40,9 @@ def setup_daivon_frazier():
     email = "Frazierdaivon@gmail.com"
     name = "Daivon Frazier"
     
-    # API credentials provided by user
-    coinbase_api_key = "HSo/f1zjeQALCM/rri9bjTB5JisQ/SPgurCRTx8W7kLD7psjcv2PXEf+"
-    coinbase_api_secret = "6WOxnBLq+r4ln2Zz7nT0Nvv8CMkaolHtjYdOgTm7NWIq/mJqV8KbDA2XaThP65bHK9QvpEabRr1u38FrBJntaQ=="
+    # API credentials provided by user (Kraken)
+    kraken_api_key = "8zdYy7PMRjnyDraiJUtrAb3wmu8MFxKBON3nrTkjkwnJ9iIUQyKNGKP7"
+    kraken_api_secret = "e2xaakHliGa5RwH7uXwuq6RLGospWaQhScaVJfsS6wIa9huHxmx+HgeQCax8A+gvqV3P9jXD9YbR3wtsipdpRA=="
     
     print("\n" + "="*80)
     print(f"Setting up user: {name}")
@@ -79,17 +79,17 @@ def setup_daivon_frazier():
     
     api_mgr.store_user_api_key(
         user_id=user_id,
-        broker="coinbase",
-        api_key=coinbase_api_key,
-        api_secret=coinbase_api_secret,
+        broker="kraken",
+        api_key=kraken_api_key,
+        api_secret=kraken_api_secret,
         additional_params={
             'name': name,
             'email': email
         }
     )
-    print(f"✅ API credentials encrypted and stored for Coinbase")
+    print(f"✅ API credentials encrypted and stored for Kraken")
     print(f"    Credentials are encrypted and secure")
-    print(f"    User can now trade on Coinbase")
+    print(f"    User can now trade on Kraken")
     
     # Step 3: Configure user permissions
     print("\n[3/4] Configuring user permissions...")
@@ -149,9 +149,9 @@ def setup_daivon_frazier():
     print(f"  • Disable trading: user_mgr.disable_user('{user_id}')")
     print(f"  • Check status: user_mgr.get_user('{user_id}')")
     print(f"\nAPI KEYS:")
-    print(f"  • Broker: Coinbase")
+    print(f"  • Broker: Kraken")
     print(f"  • Status: Encrypted and stored")
-    print(f"  • Retrieve: api_mgr.get_user_api_key('{user_id}', 'coinbase')")
+    print(f"  • Retrieve: api_mgr.get_user_api_key('{user_id}', 'kraken')")
     print("\n" + "="*80)
     
     return user, permissions
