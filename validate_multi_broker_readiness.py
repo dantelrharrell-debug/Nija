@@ -28,8 +28,12 @@ load_dotenv()
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
-# Minimum balance required for trading
-MINIMUM_TRADING_BALANCE = 2.0
+# Import minimum balance threshold from broker_manager for consistency
+try:
+    from broker_manager import MINIMUM_BALANCE_PROTECTION as MINIMUM_TRADING_BALANCE
+except ImportError:
+    # Fallback if import fails (shouldn't happen)
+    MINIMUM_TRADING_BALANCE = 2.0
 
 
 def print_header(title):
