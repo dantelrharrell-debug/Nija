@@ -24,7 +24,7 @@ from datetime import datetime
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
-MINIMUM_FUNDED_BALANCE = 10.0
+MINIMUM_FUNDED_BALANCE = 2.0  # Lowered from 10.0 to allow trading with small balances
 
 
 class IndependentBrokerTrader:

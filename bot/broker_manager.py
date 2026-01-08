@@ -25,8 +25,12 @@ except ImportError:
 logger = logging.getLogger('nija.broker')
 
 # Balance threshold constants
-MINIMUM_BALANCE_PROTECTION = 10.50  # Absolute minimum to prevent failed orders
-MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading
+# Note: Large gap between PROTECTION and TRADING thresholds is intentional:
+#   - PROTECTION ($2.00): Absolute minimum to allow bot to start (hard requirement)
+#   - TRADING ($25.00): Recommended for optimal performance (warning only)
+#   This allows users to start with small balances while encouraging adequate funding
+MINIMUM_BALANCE_PROTECTION = 2.00  # Lowered from 10.50 to allow trading with small balances
+MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading (warning only, not enforced)
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 # Credential validation constants
@@ -945,7 +949,7 @@ class CoinbaseBroker(BaseBroker):
                 logging.error(f"   Current balance: ${trading_balance:.2f}")
                 logging.error(f"   MINIMUM_BALANCE (Protection): ${MINIMUM_BALANCE_PROTECTION:.2f}")
                 logging.error(f"   💵 Funding Needed: ${funding_needed:.2f}")
-                logging.error(f"   Why? $5.00 order + fees (~$0.50) + safety margin")
+                logging.error(f"   Why? Minimum for small trades to cover fees and safety margin")
                 logging.error("")
                 if (consumer_usd > 0 or consumer_usdc > 0):
                     logging.error("   🔍 ROOT CAUSE: Your funds are in Consumer wallet!")
@@ -965,15 +969,15 @@ class CoinbaseBroker(BaseBroker):
                     logging.error("   No funds detected in any account")
                     logging.error("   Add funds to your Coinbase account")
                 else:
-                    logging.error("   Your balance is too low for reliable trading")
+                    logging.error("   Your balance is very low for reliable trading")
                     logging.error("   💡 Note: Funds will become available as open positions are sold")
-                    logging.error("   Each trade needs ~$5.50 ($5.00 + fees)")
-                    logging.error(f"   With ${trading_balance:.2f}, you can't place ANY trades safely")
+                    logging.error("   💡 Bot will attempt to trade but with very limited capacity")
+                    logging.error(f"   With ${trading_balance:.2f}, position sizing will be extremely small")
                     logging.error("")
-                    logging.error("   🎯 RECOMMENDED: Deposit at least $50-$100")
-                    logging.error("      - Allows 10-20 trades")
-                    logging.error("      - Proper position sizing")
-                    logging.error("      - Strategy works as designed")
+                    logging.error("   🎯 RECOMMENDED: Deposit at least $25-$50")
+                    logging.error("      - Allows multiple trades")
+                    logging.error("      - Better position sizing")
+                    logging.error("      - Strategy works more effectively")
                 logging.error("=" * 70)
             elif trading_balance < MINIMUM_TRADING_BALANCE:
                 funding_recommended = MINIMUM_TRADING_BALANCE - trading_balance
