@@ -26,6 +26,7 @@ logger = logging.getLogger("nija.risk_manager")
 try:
     from fee_aware_config import (
         MIN_BALANCE_TO_TRADE,
+        MICRO_ACCOUNT_THRESHOLD,
         get_position_size_pct,
         get_min_profit_target,
         should_trade,
@@ -37,6 +38,7 @@ try:
 except ImportError:
     FEE_AWARE_MODE = False
     MIN_BALANCE_TO_TRADE = 10.0
+    MICRO_ACCOUNT_THRESHOLD = 5.0
     logger.warning("⚠️ Fee-aware config not found - using legacy mode")
 
 
@@ -327,7 +329,7 @@ class AdaptiveRiskManager:
             # to ensure at least one trade can execute. With < $5, quality multipliers can reduce
             # position size below $1 minimum, preventing any trading.
             # This is an "all-in" strategy appropriate for learning/testing with minimal capital.
-            MICRO_ACCOUNT_THRESHOLD = 5.0
+            # MICRO_ACCOUNT_THRESHOLD is defined in fee_aware_config.py
             if account_balance < MICRO_ACCOUNT_THRESHOLD:
                 # Use base fee-aware % without quality multipliers
                 final_pct = fee_aware_pct
