@@ -7,12 +7,12 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
+import json
 import logging
 import os
-import uuid
-import json
-import traceback
 import time
+import traceback
+import uuid
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -197,6 +197,18 @@ class CoinbaseBroker(BaseBroker):
             logger.warning(f"⚠️ Position tracker initialization failed: {e}")
             self.position_tracker = None
     
+    def _is_cache_valid(self, cache_time: float) -> bool:
+        """
+        Check if a cache entry is still valid based on its timestamp.
+        
+        Args:
+            cache_time: Timestamp when cache was last updated
+            
+        Returns:
+            True if cache is still valid, False otherwise
+        """
+        return cache_time > 0 and (time.time() - cache_time) < self._cache_ttl
+    
     def _log_trade_to_journal(self, symbol: str, side: str, price: float, 
                                size_usd: float, quantity: float, pnl_data: dict = None):
         """
@@ -335,7 +347,7 @@ class CoinbaseBroker(BaseBroker):
             
             # Use cached accounts if available to avoid redundant API calls
             try:
-                if self._accounts_cache and (time.time() - self._accounts_cache_time) < self._cache_ttl:
+                if self._accounts_cache and self._is_cache_valid(self._accounts_cache_time):
                     # Use cached response
                     accounts_resp = self._accounts_cache
                     logging.debug("Using cached accounts data from connect()")
@@ -516,7 +528,7 @@ class CoinbaseBroker(BaseBroker):
         Returns dict with: {"usdc", "usd", "trading_balance", "crypto", "consumer_*"}
         """
         # Check if we have a cached balance (during initialization only)
-        if self._balance_cache and (time.time() - self._balance_cache_time) < self._cache_ttl:
+        if self._balance_cache and self._is_cache_valid(self._balance_cache_time):
             logging.debug("Using cached balance data")
             return self._balance_cache
         
@@ -607,7 +619,7 @@ class CoinbaseBroker(BaseBroker):
             logging.info("💰 Fetching account balance (Advanced Trade only)...")
 
             # Use cached accounts if available to avoid redundant API calls
-            if self._accounts_cache and (time.time() - self._accounts_cache_time) < self._cache_ttl:
+            if self._accounts_cache and self._is_cache_valid(self._accounts_cache_time):
                 logging.debug("Using cached accounts data")
                 resp = self._accounts_cache
             else:
