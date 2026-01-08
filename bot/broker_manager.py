@@ -7,11 +7,12 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
+import json
 import logging
 import os
-import uuid
-import json
+import time
 import traceback
+import uuid
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -177,6 +178,16 @@ class CoinbaseBroker(BaseBroker):
         self.portfolio_uuid = None
         self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
         
+        # Cache for account data to prevent redundant API calls during initialization
+        # NOTE: These caches are only accessed during bot startup in the main thread,
+        # before any trading threads are spawned. Thread safety is not a concern as
+        # the cache TTL (30s) expires before multi-threaded trading begins.
+        self._accounts_cache = None
+        self._accounts_cache_time = None
+        self._balance_cache = None
+        self._balance_cache_time = None
+        self._cache_ttl = 30  # Cache TTL in seconds (30s is safe for initialization)
+        
         # Initialize position tracker for profit-based exits
         try:
             from position_tracker import PositionTracker
@@ -185,6 +196,18 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logger.warning(f"⚠️ Position tracker initialization failed: {e}")
             self.position_tracker = None
+    
+    def _is_cache_valid(self, cache_time) -> bool:
+        """
+        Check if a cache entry is still valid based on its timestamp.
+        
+        Args:
+            cache_time: Timestamp when cache was last updated (or None if never cached)
+            
+        Returns:
+            True if cache is still valid, False otherwise
+        """
+        return cache_time is not None and (time.time() - cache_time) < self._cache_ttl
     
     def _log_trade_to_journal(self, symbol: str, side: str, price: float, 
                                size_usd: float, quantity: float, pnl_data: dict = None):
@@ -258,6 +281,11 @@ class CoinbaseBroker(BaseBroker):
                         time.sleep(delay)
                     
                     accounts_resp = self.client.get_accounts()
+                    
+                    # Cache accounts response to avoid redundant API calls during initialization
+                    self._accounts_cache = accounts_resp
+                    self._accounts_cache_time = time.time()
+                    
                     self.connected = True
                     
                     if attempt > 1:
@@ -265,7 +293,7 @@ class CoinbaseBroker(BaseBroker):
                     else:
                         logging.info("✅ Connected to Coinbase Advanced Trade API")
                     
-                    # Portfolio detection
+                    # Portfolio detection (will use cached accounts)
                     self._detect_portfolio()
                     
                     return True
@@ -317,9 +345,18 @@ class CoinbaseBroker(BaseBroker):
             # Do NOT set portfolio_uuid - let SDK use default
             self.portfolio_uuid = None
             
-            # Still fetch accounts for balance reporting
+            # Use cached accounts if available to avoid redundant API calls
             try:
-                accounts_resp = self.client.get_accounts() if hasattr(self.client, 'get_accounts') else self.client.list_accounts()
+                if self._accounts_cache and self._is_cache_valid(self._accounts_cache_time):
+                    # Use cached response
+                    accounts_resp = self._accounts_cache
+                    logging.debug("Using cached accounts data from connect()")
+                else:
+                    # Cache expired or not available, fetch fresh
+                    accounts_resp = self.client.get_accounts() if hasattr(self.client, 'get_accounts') else self.client.list_accounts()
+                    self._accounts_cache = accounts_resp
+                    self._accounts_cache_time = time.time()
+                
                 accounts = getattr(accounts_resp, 'accounts', [])
                 
                 logging.info("📊 ACCOUNT BALANCES (for information only):")
@@ -486,9 +523,15 @@ class CoinbaseBroker(BaseBroker):
         1. Better consumer wallet diagnostics - tells user to transfer funds
         2. API permission validation - checks if we can see accounts
         3. Expanded account type matching - handles more Coinbase account types
+        4. Caching - reuses accounts data from connect() to avoid redundant API calls
 
         Returns dict with: {"usdc", "usd", "trading_balance", "crypto", "consumer_*"}
         """
+        # Check if we have a cached balance (during initialization only)
+        if self._balance_cache and self._is_cache_valid(self._balance_cache_time):
+            logging.debug("Using cached balance data")
+            return self._balance_cache
+        
         usd_balance = 0.0
         usdc_balance = 0.0
         consumer_usd = 0.0
@@ -553,7 +596,7 @@ class CoinbaseBroker(BaseBroker):
                 logging.info("   (Source: get_portfolio_breakdown)")
                 logging.info("-" * 70)
 
-                return {
+                result = {
                     "usdc": usdc_balance,
                     "usd": usd_balance,
                     "trading_balance": trading_balance,
@@ -561,6 +604,12 @@ class CoinbaseBroker(BaseBroker):
                     "consumer_usd": consumer_usd,
                     "consumer_usdc": consumer_usdc,
                 }
+                
+                # Cache the result
+                self._balance_cache = result
+                self._balance_cache_time = time.time()
+                
+                return result
             else:
                 logging.warning("⚠️  No default portfolio found; falling back to get_accounts()")
         except Exception as e:
@@ -569,7 +618,15 @@ class CoinbaseBroker(BaseBroker):
         try:
             logging.info("💰 Fetching account balance (Advanced Trade only)...")
 
-            resp = self.client.get_accounts()
+            # Use cached accounts if available to avoid redundant API calls
+            if self._accounts_cache and self._is_cache_valid(self._accounts_cache_time):
+                logging.debug("Using cached accounts data")
+                resp = self._accounts_cache
+            else:
+                resp = self.client.get_accounts()
+                self._accounts_cache = resp
+                self._accounts_cache_time = time.time()
+            
             accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
 
             # IMPROVEMENT #2: Validate API permissions
@@ -684,7 +741,7 @@ class CoinbaseBroker(BaseBroker):
             logging.info(f"   💎 Tradeable crypto holdings: {len(crypto_holdings)} assets")
             logging.info("=" * 70)
 
-            return {
+            result = {
                 "usdc": usdc_balance,
                 "usd": usd_balance,
                 "trading_balance": trading_balance,
@@ -692,6 +749,12 @@ class CoinbaseBroker(BaseBroker):
                 "consumer_usd": consumer_usd,
                 "consumer_usdc": consumer_usdc,
             }
+            
+            # Cache the result
+            self._balance_cache = result
+            self._balance_cache_time = time.time()
+            
+            return result
         except Exception as e:
             logging.error(f"🔥 ERROR get_account_balance: {e}")
             logging.error("This usually indicates:")

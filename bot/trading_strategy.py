@@ -168,6 +168,9 @@ class TradingStrategy:
             except Exception as e:
                 logger.warning(f"   ⚠️  Coinbase error: {e}")
             
+            # Add delay between broker connections to avoid rate limiting
+            time.sleep(0.5)
+            
             # Try to connect Kraken Pro
             logger.info("📊 Attempting to connect Kraken Pro...")
             try:
@@ -180,6 +183,9 @@ class TradingStrategy:
                     logger.warning("   ⚠️  Kraken connection failed")
             except Exception as e:
                 logger.warning(f"   ⚠️  Kraken error: {e}")
+            
+            # Add delay between broker connections
+            time.sleep(0.5)
             
             # Try to connect OKX
             logger.info("📊 Attempting to connect OKX...")
@@ -194,6 +200,9 @@ class TradingStrategy:
             except Exception as e:
                 logger.warning(f"   ⚠️  OKX error: {e}")
             
+            # Add delay between broker connections
+            time.sleep(0.5)
+            
             # Try to connect Binance
             logger.info("📊 Attempting to connect Binance...")
             try:
@@ -206,6 +215,9 @@ class TradingStrategy:
                     logger.warning("   ⚠️  Binance connection failed")
             except Exception as e:
                 logger.warning(f"   ⚠️  Binance error: {e}")
+            
+            # Add delay between broker connections
+            time.sleep(0.5)
             
             # Try to connect Alpaca (for stocks)
             logger.info("📊 Attempting to connect Alpaca...")
@@ -289,6 +301,9 @@ class TradingStrategy:
                 
                 # Initialize APEX strategy with primary broker
                 self.apex = NIJAApexStrategyV71(broker_client=self.broker)
+                
+                # Add delay before syncing positions to avoid rate limiting
+                time.sleep(0.5)
                 
                 # CRITICAL: Sync position tracker with actual broker positions at startup
                 if hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
