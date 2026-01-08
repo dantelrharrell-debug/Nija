@@ -39,3 +39,6 @@ nija.log.*
 test_broker_get_all_products.py
 test_alpaca_client_property.py
 users_db.json
+
+# Test log files (examples for documentation)
+test_logs_*.txt
