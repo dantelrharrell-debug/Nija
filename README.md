@@ -10,8 +10,42 @@
 - 🔔 **TradingView Integration**: Instant execution via custom webhooks for manual strategy overlay
 - 🧪 **Development Tools**: Backtesting engine, paper trading mode, and comprehensive diagnostics
 - ⚡ **24/7 Autonomous Operation**: Self-healing, auto-scaling, and continuous market scanning
+- 👥 **Multi-User Platform**: Secure layered architecture with user-specific permissions and encrypted API keys
 
 NIJA isn't just a bot—it's a complete algorithmic trading framework designed for professional-grade systematic trading with institutional-quality risk management.
+
+## 🆕 Layered Architecture (v2.0)
+
+NIJA now features a secure, multi-user architecture with three distinct layers:
+
+### Layer 1: Core Brain (PRIVATE) 🚫
+- **What**: Proprietary strategy logic, risk engine, AI tuning
+- **Access**: Internal only, never exposed to users
+- **Protection**: Strategy logic remains private and locked
+
+### Layer 2: Execution Engine (LIMITED) ⚡
+- **What**: Broker adapters, order execution, rate limiting
+- **Access**: User-specific permissions and API keys
+- **Features**: Per-user position caps, daily limits, encrypted credentials
+
+### Layer 3: User Interface (PUBLIC) 📊
+- **What**: Dashboard, stats, settings management
+- **Access**: Public with authentication
+- **Capabilities**: View performance, configure preferences (within limits)
+
+**Key Features**:
+- ✅ Encrypted API key storage per user
+- ✅ Scoped permissions (trade-only, limited pairs)
+- ✅ Hard controls (2-10% position sizing, daily limits)
+- ✅ Kill switches (global + per-user)
+- ✅ Auto-disable on errors/abuse
+- ✅ Strategy locking (users cannot modify core logic)
+
+**Documentation**:
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Complete architecture overview
+- **[SECURITY.md](SECURITY.md)** - Security model and best practices
+- **[USER_MANAGEMENT.md](USER_MANAGEMENT.md)** - User administration guide
+- **[example_usage.py](example_usage.py)** - Implementation examples
 
 ---
 
