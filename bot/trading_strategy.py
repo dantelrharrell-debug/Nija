@@ -151,7 +151,8 @@ class TradingStrategy:
             connected_brokers = []
             
             # Add startup delay to avoid immediate rate limiting on restart
-            startup_delay = 3
+            # Increased to 10s to allow any previous rate limits to fully reset
+            startup_delay = 10
             logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
             time.sleep(startup_delay)
             
