@@ -38,3 +38,4 @@ nija.log.*
 # Temporary test files
 test_broker_get_all_products.py
 test_alpaca_client_property.py
+users_db.json
