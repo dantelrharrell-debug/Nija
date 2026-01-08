@@ -6,6 +6,7 @@ import queue
 import logging
 import traceback
 from threading import Thread
+from typing import Dict
 from datetime import datetime
 from dotenv import load_dotenv
 import pandas as pd
@@ -248,6 +249,18 @@ class TradingStrategy:
                 logger.info(f"📌 Primary broker set to: {self.broker.broker_type.value}")
             else:
                 self.broker = None
+            
+            # Initialize independent broker trader for multi-broker support
+            try:
+                from independent_broker_trader import IndependentBrokerTrader
+                self.independent_trader = IndependentBrokerTrader(
+                    self.broker_manager, 
+                    self
+                )
+                logger.info("✅ Independent broker trader initialized")
+            except Exception as indie_err:
+                logger.warning(f"⚠️  Independent trader initialization failed: {indie_err}")
+                self.independent_trader = None
                 logger.warning("No primary broker available")
             
             # Initialize position cap enforcer (Maximum 8 positions total across all brokers)
@@ -300,6 +313,7 @@ class TradingStrategy:
             self.broker_manager = None
             self.enforcer = None
             self.apex = None
+            self.independent_trader = None
     
     def _init_advanced_features(self):
         """Initialize progressive targets, exchange risk profiles, and capital allocation.
@@ -344,6 +358,63 @@ class TradingStrategy:
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize advanced features: {e}")
             self.advanced_manager = None
+    
+    def start_independent_multi_broker_trading(self):
+        """
+        Start independent trading threads for all connected and funded brokers.
+        Each broker operates in complete isolation to prevent cascade failures.
+        
+        Returns:
+            bool: True if independent trading started successfully
+        """
+        if not self.independent_trader:
+            logger.warning("⚠️  Independent trader not initialized")
+            return False
+        
+        if not self.broker_manager or not self.broker_manager.brokers:
+            logger.warning("⚠️  No brokers available for independent trading")
+            return False
+        
+        try:
+            # Start independent trading threads
+            self.independent_trader.start_independent_trading()
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to start independent trading: {e}")
+            return False
+    
+    def stop_independent_trading(self):
+        """
+        Stop all independent trading threads gracefully.
+        """
+        if self.independent_trader:
+            self.independent_trader.stop_all_trading()
+        else:
+            logger.warning("⚠️  Independent trader not initialized, nothing to stop")
+    
+    def get_multi_broker_status(self) -> Dict:
+        """
+        Get status of all brokers and independent trading.
+        
+        Returns:
+            dict: Status summary including broker health and trading activity
+        """
+        if not self.independent_trader:
+            return {
+                'error': 'Independent trader not initialized',
+                'mode': 'single_broker'
+            }
+        
+        return self.independent_trader.get_status_summary()
+    
+    def log_multi_broker_status(self):
+        """
+        Log current status of all brokers.
+        """
+        if self.independent_trader:
+            self.independent_trader.log_status_summary()
+        else:
+            logger.info("📊 Single broker mode (independent trading not enabled)")
 
     def run_cycle(self):
         """Execute a complete trading cycle with position cap enforcement.
