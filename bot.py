@@ -178,21 +178,64 @@ def main():
         _start_health_server()
         strategy = TradingStrategy()
 
-        logger.info("🚀 Starting trading loop (2.5 minute cadence - EMERGENCY BLEEDING FIX)...")
-        cycle_count = 0
+        # Check if we should use independent multi-broker trading mode
+        use_independent_trading = os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
+        
+        if use_independent_trading and strategy.independent_trader:
+            logger.info("=" * 70)
+            logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING MODE")
+            logger.info("=" * 70)
+            logger.info("Each broker will trade independently in isolated threads.")
+            logger.info("Failures in one broker will NOT affect other brokers.")
+            logger.info("=" * 70)
+            
+            # Start independent trading for all funded brokers
+            if strategy.start_independent_multi_broker_trading():
+                logger.info("✅ Independent multi-broker trading started successfully")
+                
+                # Main loop just monitors status and keeps process alive
+                cycle_count = 0
+                while True:
+                    try:
+                        cycle_count += 1
+                        
+                        # Log status every 10 cycles (25 minutes)
+                        if cycle_count % 10 == 0:
+                            logger.info(f"🔄 Status check #{cycle_count // 10}")
+                            strategy.log_multi_broker_status()
+                        
+                        # Sleep for 2.5 minutes
+                        time.sleep(150)
+                        
+                    except KeyboardInterrupt:
+                        logger.info("Received shutdown signal, stopping all trading...")
+                        strategy.stop_independent_trading()
+                        break
+                    except Exception as e:
+                        logger.error(f"Error in monitoring loop: {e}", exc_info=True)
+                        time.sleep(10)
+            else:
+                logger.error("❌ Failed to start independent multi-broker trading")
+                logger.info("Falling back to single-broker mode...")
+                use_independent_trading = False
+        
+        if not use_independent_trading:
+            # Single broker mode (original behavior)
+            logger.info("🚀 Starting single-broker trading loop (2.5 minute cadence)...")
+            cycle_count = 0
 
-        while True:
-            try:
-                cycle_count += 1
-                logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
-                strategy.run_cycle()
-                time.sleep(150)  # 2.5 minutes - EMERGENCY FIX: Prevent overtrading and immediate re-buying
-            except KeyboardInterrupt:
-                logger.info("Trading bot stopped by user (Ctrl+C)")
-                break
-            except Exception as e:
-                logger.error(f"Error in trading cycle: {e}", exc_info=True)
-                time.sleep(10)
+            while True:
+                try:
+                    cycle_count += 1
+                    logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
+                    strategy.run_cycle()
+                    time.sleep(150)  # 2.5 minutes
+                except KeyboardInterrupt:
+                    logger.info("Trading bot stopped by user (Ctrl+C)")
+                    break
+                except Exception as e:
+                    logger.error(f"Error in trading cycle: {e}", exc_info=True)
+                    time.sleep(10)
 
     except RuntimeError as e:
         if "Broker connection failed" in str(e):
