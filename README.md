@@ -48,10 +48,17 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **[MULTI_USER_SETUP_GUIDE.md](MULTI_USER_SETUP_GUIDE.md)** - Multi-user setup and management
 - **[example_usage.py](example_usage.py)** - Implementation examples
 
+**User & Investor Tracking**:
+- **[USER_INVESTOR_DOCUMENTATION_INDEX.md](USER_INVESTOR_DOCUMENTATION_INDEX.md)** - 📚 Complete documentation index
+- **[USER_INVESTOR_REGISTRY.md](USER_INVESTOR_REGISTRY.md)** - 📋 Registry of all users
+- **[USER_INVESTOR_TRACKING.md](USER_INVESTOR_TRACKING.md)** - 📊 Tracking system guide
+- **[USER_COMMUNICATION_LOG.md](USER_COMMUNICATION_LOG.md)** - 💬 Communication history
+
 **Current Users**: 1 user configured
 - **User #1**: Daivon Frazier (daivon_frazier) - Pro tier, Coinbase integration ✅
 
 **User Management**:
+- Check all users: `python check_all_users.py`
 - Initialize system: `python init_user_system.py`
 - Manage Daivon: `python manage_user_daivon.py [status|enable|disable|info]`
 
