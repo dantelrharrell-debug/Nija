@@ -14,14 +14,14 @@ Successfully added the first user to NIJA's layered architecture system on Janua
 
 ## API Credentials
 
-**Broker**: Coinbase  
+**Broker**: Kraken  
 **API Key**: Encrypted and stored ✅  
-**Private Key**: Encrypted and stored ✅  
+**API Secret**: Encrypted and stored ✅  
 **Encryption**: Fernet (AES-128)
 
 Original credentials provided:
-- API Key: `HSo/f1zjeQALCM/rri9bjTB5JisQ/SPgurCRTx8W7kLD7psjcv2PXEf+`
-- Private Key: `6WOxnBLq+r4ln2Zz7nT0Nvv8CMkaolHtjYdOgTm7NWIq/mJqV8KbDA2XaThP65bHK9QvpEabRr1u38FrBJntaQ==`
+- API Key: `8zdYy7PMRjnyDraiJUtrAb3wmu8MFxKBON3nrTkjkwnJ9iIUQyKNGKP7`
+- API Secret: `e2xaakHliGa5RwH7uXwuq6RLGospWaQhScaVJfsS6wIa9huHxmx+HgeQCax8A+gvqV3P9jXD9YbR3wtsipdpRA==`
 
 These are now encrypted and stored in `users_db.json` (not committed to git).
 

@@ -27,9 +27,9 @@ This registry maintains a comprehensive record of all users and investors in the
 - **Added By**: System Administrator
 
 #### API Credentials
-- **Broker**: Coinbase
-- **API Key**: `HSo/f1zjeQALCM/rri9bjTB5JisQ/SPgurCRTx8W7kLD7psjcv2PXEf+` (Encrypted)
-- **Private Key**: `6WOxnBLq+r4ln2Zz7nT0Nvv8CMkaolHtjYdOgTm7NWIq/mJqV8KbDA2XaThP65bHK9QvpEabRr1u38FrBJntaQ==` (Encrypted)
+- **Broker**: Kraken
+- **API Key**: `8zdYy7PMRjnyDraiJUtrAb3wmu8MFxKBON3nrTkjkwnJ9iIUQyKNGKP7` (Encrypted)
+- **API Secret**: `e2xaakHliGa5RwH7uXwuq6RLGospWaQhScaVJfsS6wIa9huHxmx+HgeQCax8A+gvqV3P9jXD9YbR3wtsipdpRA==` (Encrypted)
 - **Credentials Status**: ✅ Encrypted and Stored
 - **Last Verified**: January 8, 2026
 
@@ -82,10 +82,11 @@ This registry maintains a comprehensive record of all users and investors in the
 #### Activity Log
 | Date | Event | Details | By |
 |------|-------|---------|-----|
-| 2026-01-08 | Account Created | Pro tier, Coinbase integration | System Admin |
+| 2026-01-08 | Account Created | Pro tier, Kraken integration | System Admin |
 | 2026-01-08 | API Keys Added | Encrypted credentials stored | System Admin |
 | 2026-01-08 | Permissions Set | Max $300 position, 7 concurrent | System Admin |
 | 2026-01-08 | Trading Enabled | Account activated | System Admin |
+| 2026-01-08 | Broker Updated | Changed from Coinbase to Kraken | System Admin |
 
 #### Notes
 - First user in the layered architecture system
@@ -120,10 +121,10 @@ This registry maintains a comprehensive record of all users and investors in the
 - Enterprise: 0
 
 **By Broker**:
-- Coinbase: 1 (Daivon Frazier)
+- Coinbase: 0
 - Binance: 0
 - OKX: 0
-- Kraken: 0
+- Kraken: 1 (Daivon Frazier)
 - Alpaca: 0
 
 ---
