@@ -273,15 +273,16 @@ class CoinbaseBroker(BaseBroker):
             self.client = RESTClient(api_key=api_key, api_secret=api_secret)
             
             # Test connection by fetching accounts with retry logic
-            # Increased max attempts for 403 rate limit errors which need longer cooldown
+            # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
+            # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
             max_attempts = 5
-            base_delay = 5.0  # Increased from 2.0 to allow rate limits to reset
+            base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
             
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
-                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s, 80s
+                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
                         delay = base_delay * (2 ** (attempt - 2))
                         logging.info(f"🔄 Retrying connection in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
