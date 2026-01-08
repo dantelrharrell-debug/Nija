@@ -323,16 +323,30 @@ class AdaptiveRiskManager:
             # Use fee-aware position sizing
             fee_aware_pct = get_position_size_pct(account_balance)
             
-            # Apply our quality multipliers to the fee-aware base
-            quality_multiplier = (strength_multiplier * confidence_multiplier * 
-                                streak_multiplier * volatility_multiplier)
-            
-            final_pct = fee_aware_pct * quality_multiplier
-            
-            breakdown['fee_aware_base_pct'] = fee_aware_pct
-            breakdown['quality_multiplier'] = quality_multiplier
-            
-            logger.info(f"💰 Fee-aware sizing: {fee_aware_pct*100:.1f}% base → {final_pct*100:.1f}% final")
+            # MICRO ACCOUNT PROTECTION: For very small accounts (< $5), bypass quality multipliers
+            # to ensure at least one trade can execute. With < $5, quality multipliers can reduce
+            # position size below $1 minimum, preventing any trading.
+            # This is an "all-in" strategy appropriate for learning/testing with minimal capital.
+            MICRO_ACCOUNT_THRESHOLD = 5.0
+            if account_balance < MICRO_ACCOUNT_THRESHOLD:
+                # Use base fee-aware % without quality multipliers
+                final_pct = fee_aware_pct
+                breakdown['fee_aware_base_pct'] = fee_aware_pct
+                breakdown['quality_multiplier'] = 1.0
+                breakdown['micro_account_mode'] = True
+                logger.info(f"💰 MICRO ACCOUNT MODE: Using {fee_aware_pct*100:.1f}% (quality multipliers bypassed)")
+                logger.info(f"   ⚠️  Account < ${MICRO_ACCOUNT_THRESHOLD:.2f} - trading with minimal capital")
+            else:
+                # Apply our quality multipliers to the fee-aware base
+                quality_multiplier = (strength_multiplier * confidence_multiplier * 
+                                    streak_multiplier * volatility_multiplier)
+                
+                final_pct = fee_aware_pct * quality_multiplier
+                
+                breakdown['fee_aware_base_pct'] = fee_aware_pct
+                breakdown['quality_multiplier'] = quality_multiplier
+                
+                logger.info(f"💰 Fee-aware sizing: {fee_aware_pct*100:.1f}% base → {final_pct*100:.1f}% final")
         
         else:
             # Legacy sizing
