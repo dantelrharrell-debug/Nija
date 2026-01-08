@@ -28,6 +28,9 @@ load_dotenv()
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
+# Minimum balance required for trading
+MINIMUM_TRADING_BALANCE = 2.0
+
 
 def print_header(title):
     """Print formatted header"""
@@ -271,24 +274,26 @@ def main():
     # ===== FUNDING STATUS =====
     print_header("FUNDING STATUS")
     
-    minimum_balance = 2.0
+    # Check funding status and store in variables for later use
+    kraken_funded = False
+    okx_funded = False
     
     if kraken_balance is not None:
-        kraken_funded = kraken_balance >= minimum_balance
+        kraken_funded = kraken_balance >= MINIMUM_TRADING_BALANCE
         print_status(
             "Kraken Funded",
             kraken_funded,
-            f"${kraken_balance:.2f} (minimum: ${minimum_balance:.2f})"
+            f"${kraken_balance:.2f} (minimum: ${MINIMUM_TRADING_BALANCE:.2f})"
         )
     else:
         print_status("Kraken Funded", False, "Cannot verify - connection failed")
     
     if okx_balance is not None:
-        okx_funded = okx_balance >= minimum_balance
+        okx_funded = okx_balance >= MINIMUM_TRADING_BALANCE
         print_status(
             "OKX Funded",
             okx_funded,
-            f"${okx_balance:.2f} (minimum: ${minimum_balance:.2f})"
+            f"${okx_balance:.2f} (minimum: ${MINIMUM_TRADING_BALANCE:.2f})"
         )
     else:
         print_status("OKX Funded", False, "Cannot verify - connection failed")
@@ -318,16 +323,16 @@ def main():
         print("\n✅ Kraken Status: READY")
         if kraken_balance is not None:
             print(f"   💰 Balance: ${kraken_balance:.2f}")
-            if kraken_balance >= minimum_balance:
-                print(f"   ✅ Funded (minimum: ${minimum_balance:.2f})")
+            if kraken_funded:
+                print(f"   ✅ Funded (minimum: ${MINIMUM_TRADING_BALANCE:.2f})")
             else:
-                print(f"   ⚠️  Underfunded (minimum: ${minimum_balance:.2f})")
+                print(f"   ⚠️  Underfunded (minimum: ${MINIMUM_TRADING_BALANCE:.2f})")
         
         print("\n✅ OKX Status: READY")
         if okx_balance is not None:
             print(f"   💰 Balance: ${okx_balance:.2f}")
-            if okx_balance >= minimum_balance:
-                print(f"   ✅ Funded (minimum: ${minimum_balance:.2f})")
+            if okx_funded:
+                print(f"   ✅ Funded (minimum: ${MINIMUM_TRADING_BALANCE:.2f})")
             else:
                 print(f"   ⚠️  Unfunded - Transfer funds to start trading")
         
