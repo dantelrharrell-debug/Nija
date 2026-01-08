@@ -10,7 +10,7 @@
 
 Your logs show perfect initialization at 23:26:19 UTC. The bot entered a 15-second wait period and should have started trading at **23:26:34 UTC**. 
 
-**To confirm 100%:** Check Railway logs or Coinbase for activity after 23:26:34 UTC.
+**To confirm 100%:** Check Railway logs or User #1's Kraken account for activity after 23:26:34 UTC.
 
 ---
 
@@ -49,13 +49,24 @@ railway logs --follow
 - ✅ "Scanning 732 markets" → **BOT IS WORKING**
 - ✅ "BUY order placed" → **EXECUTING TRADES**
 
-### 3. Check Coinbase (Most Reliable)
+### 3. Check User #1's Kraken Account (Most Reliable)
 
-1. Go to: **https://www.coinbase.com/advanced-portfolio**
-2. Click **"Orders"** tab
-3. Look for orders after **23:26:34 UTC**
+**Important:** User #1 (Daivon Frazier) uses **Kraken**, not Coinbase.
 
-If you see recent buy/sell orders → **Bot IS trading** ✅
+Run:
+```bash
+python check_user1_kraken_balance.py
+```
+
+Or manually:
+1. Go to: **https://www.kraken.com**
+2. Log in with User #1's account (Frazierdaivon@gmail.com)
+3. Click **"Orders"** tab
+4. Look for orders after **23:26:34 UTC**
+
+If you see recent buy/sell orders → **Bot IS trading with User #1's account** ✅
+
+**Note:** If multi-user system is not active yet, check the default account being used by the bot.
 
 ---
 
@@ -66,7 +77,7 @@ If you see recent buy/sell orders → **Bot IS trading** ✅
 **✅ INITIALIZATION: SUCCESSFUL**
 - Container started
 - APEX v7.1 strategy loaded
-- Coinbase API connected
+- Broker API connected
 - $100 capital allocated
 - $50/day profit target set
 - Health server running on port 8080
@@ -89,9 +100,10 @@ If you see recent buy/sell orders → **Bot IS trading** ✅
 **Important:** The multi-user system is **not yet activated** in production.
 
 **Current Setup:**
-- Bot is trading with **single Coinbase account**
+- Bot is trading with **default account** (multi-user system not active)
 - Uses API credentials from environment variables
-- All trades go to the same Coinbase Advanced Trade account
+- User #1 has **Kraken** credentials configured, but multi-user system needs activation
+- All trades currently go to the default account, not User #1's Kraken account
 - "User #1" (Daivon Frazier) system exists but not active
 
 **To Enable Multi-User Trading:**
@@ -101,7 +113,7 @@ python setup_user_daivon.py
 python manage_user_daivon.py enable
 ```
 
-For now, when you ask "Is NIJA trading for user #1?", the answer relates to whether the bot is trading at all with your Coinbase account.
+For now, when you ask "Is NIJA trading for user #1?", the answer relates to whether the bot is trading at all. Note that User #1's Kraken account is NOT being used yet - the multi-user system needs to be activated first.
 
 ---
 
@@ -145,9 +157,9 @@ python check_current_positions.py
 | **Did bot initialize?** | ✅ YES - Perfect initialization |
 | **Is bot running?** | ✅ YES - Container active, health server up |
 | **Is bot trading?** | ⏱️ **SHOULD BE** - Started at 23:26:34 UTC |
-| **How to confirm?** | Check Railway logs or Coinbase orders |
+| **How to confirm?** | Check Railway logs or User #1's Kraken orders |
 | **User #1 active?** | ❌ NO - Multi-user system not initialized |
-| **Which account?** | Main Coinbase account (API credentials) |
+| **Which account?** | Default account (User #1's Kraken not active yet) |
 
 ---
 
@@ -158,8 +170,9 @@ python check_current_positions.py
    railway logs --tail 100 | grep "trading loop"
    ```
 
-2. **Check Coinbase for orders:**
-   - https://www.coinbase.com/advanced-portfolio
+2. **Check User #1's Kraken account for orders:**
+   - Run: `python check_user1_kraken_balance.py`
+   - Or visit: https://www.kraken.com (Frazierdaivon@gmail.com)
 
 3. **Run automated analysis:**
    ```bash

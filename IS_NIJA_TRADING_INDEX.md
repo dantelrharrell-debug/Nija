@@ -26,7 +26,19 @@ python analyze_trading_status_from_logs.py my_logs.txt
 - 🎯 Confidence level
 - 📝 What to do next
 
-### Option 2: Check Coinbase Directly
+### Option 2: Check Broker Account Directly
+
+**Important:** User #1 (Daivon Frazier) uses **Kraken**, not Coinbase.
+
+For User #1's Kraken account:
+```bash
+python check_user1_kraken_balance.py
+```
+
+Or manually:
+- Visit: https://www.kraken.com
+- Log in with User #1's account (Frazierdaivon@gmail.com)
+- Check Orders tab for recent activity
 
 **Most reliable method:**
 1. Go to https://www.coinbase.com/advanced-portfolio
@@ -240,8 +252,8 @@ Use this checklist to determine if NIJA is trading:
 - [ ] **Container running?** (Check Railway deployment status)
 - [ ] **Logs show initialization complete?** (Health server started)
 - [ ] **Logs show trading iterations?** (Main trading loop iteration #2+)
-- [ ] **Recent orders on Coinbase?** (Check Advanced Trade orders)
-- [ ] **Open positions on Coinbase?** (Check portfolio)
+- [ ] **Recent orders on broker?** (Check User #1's Kraken or default broker)
+- [ ] **Open positions on broker?** (Check portfolio)
 - [ ] **No errors in logs?** (No ERROR messages)
 
 **If 4+ checked:** ✅ Bot IS trading  
@@ -255,10 +267,11 @@ Use this checklist to determine if NIJA is trading:
 **Important Note:** The multi-user system is **not yet activated** in production deployments.
 
 **Current Reality:**
-- Bot trades with **single Coinbase account** (API credentials in .env)
-- "User #1" refers to Daivon Frazier in the codebase
+- Bot uses **default broker account** (API credentials from .env)
+- "User #1" refers to Daivon Frazier in documentation
+- **User #1 has Kraken credentials configured** (not Coinbase)
 - But user-specific trading is **not active** yet
-- All trades go to the main Coinbase account
+- All trades go to the default account, not User #1's Kraken account
 
 **To activate multi-user trading:**
 ```bash
@@ -267,7 +280,7 @@ python setup_user_daivon.py
 python manage_user_daivon.py enable
 ```
 
-**For now:** When asking "Is NIJA trading for user #1?", the question is really "Is NIJA trading at all with my Coinbase account?"
+**For now:** When asking "Is NIJA trading for user #1?", the question is really "Is NIJA trading at all?" Note that User #1's Kraken account is configured but not being used yet - the multi-user system needs activation.
 
 ---
 

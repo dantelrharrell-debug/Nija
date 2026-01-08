@@ -17,7 +17,7 @@
 **WHAT WE KNOW FOR CERTAIN:**
 - ✅ Container started successfully on Railway
 - ✅ APEX v7.1 strategy loaded
-- ✅ Coinbase API credentials verified 
+- ✅ Broker API credentials verified 
 - ✅ Capital allocated: $100 active from $1,000 total
 - ✅ Progressive target set: $50/day
 - ✅ All systems initialized without errors
@@ -155,16 +155,28 @@ railway logs --tail 100
 - ❌ "Error in trading cycle" → **Something went wrong**
 - ❌ No logs after 23:26:19 → **Container may have stopped**
 
-### Option 2: Check Coinbase (1 minute) - MOST DEFINITIVE
+### Option 2: Check Broker Account (1 minute) - MOST DEFINITIVE
 
-1. Go to **https://www.coinbase.com/advanced-portfolio**
-2. Click **"Orders"** tab
-3. Look for orders placed after **23:26:34 UTC** today
+**Important:** User #1 (Daivon Frazier) uses **Kraken**, not Coinbase.
+
+**To check User #1's Kraken account:**
+
+```bash
+python check_user1_kraken_balance.py
+```
+
+This will show you User #1's Kraken account balance and recent trading activity.
+
+**Or check manually:**
+1. Go to: **https://www.kraken.com**
+2. Log in with User #1's account (Frazierdaivon@gmail.com)
+3. Click **"Orders"** tab
+4. Look for orders placed after **23:26:34 UTC** today
 
 **What to look for:**
-- ✅ Any buy orders after 23:26:34 → **BOT IS TRADING**
-- ✅ Open positions in portfolio → **BOT HAS ACTIVE TRADES**
-- ❌ No activity → **BOT NOT TRADING YET** (may be waiting for signals)
+- ✅ Any buy orders after 23:26:34 → **Bot IS using User #1's account**
+- ✅ Open positions in Kraken portfolio → **Bot HAS ACTIVE TRADES**
+- ❌ No activity → **Multi-user system may not be active yet** (bot using default account)
 
 ### Option 3: Health Check (10 seconds)
 
@@ -286,8 +298,13 @@ python manage_user_daivon.py enable
 ### Possible Issues (Unlikely, but check):
 
 1. **Insufficient Balance**
-   - Check: Coinbase Advanced Trade has ≥ $25
+   - Check: Broker account has ≥ $25
    - Solution: Deposit or transfer funds
+
+**For User #1 specifically:** Check Kraken account balance
+```bash
+python check_user1_kraken_balance.py
+```
 
 2. **Container Crashed**
    - Check: Railway deployment shows "Running"
@@ -316,7 +333,7 @@ Look for "Main trading loop iteration #2" or higher
 
 ### Step 2: Check for Actual Trades (1 minute)
 
-1. Go to Coinbase Advanced Trade
+1. Go to broker account (User #1 uses Kraken: https://www.kraken.com)
 2. Check "Orders" tab for activity after 23:26:34 UTC
 3. Check "Portfolio" for open positions
 
@@ -355,10 +372,10 @@ python check_first_user_trading_status.py
 python check_current_positions.py
 ```
 
-### Check Coinbase:
-- Orders: https://www.coinbase.com/advanced-portfolio → Orders tab
-- Positions: https://www.coinbase.com/advanced-portfolio → Portfolio
-- Balance: Check USD + USDC in Advanced Trade
+### Check Broker Account:
+- **For User #1 (Kraken):** Run `python check_user1_kraken_balance.py`
+- Or visit: https://www.kraken.com → Orders tab
+- Look for: Recent buy/sell orders after 23:26:34 UTC
 
 ---
 
@@ -396,7 +413,7 @@ python check_current_positions.py
 ---
 
 **Note on "User #1":**  
-The multi-user system is not yet activated in production. Bot is currently trading with the main Coinbase account (API credentials in environment). To enable user-specific trading, run the user initialization scripts.
+The multi-user system is not yet activated in production. User #1 (Daivon Frazier) has **Kraken** credentials configured, but the bot is currently using the default account from environment variables. To enable user-specific trading with User #1's Kraken account, run the user initialization scripts.
 
 ---
 

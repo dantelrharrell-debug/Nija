@@ -48,8 +48,9 @@ User can verify with any of these methods:
    railway logs --tail 100 | grep "trading loop"
    ```
 
-3. **Coinbase check (1 minute):**
-   - Visit: https://www.coinbase.com/advanced-portfolio
+3. **Broker account check (1 minute):**
+   - For User #1: Run `python check_user1_kraken_balance.py`
+   - Or visit: https://www.kraken.com (Frazierdaivon@gmail.com)
    - Check Orders tab for activity after 23:26:34 UTC
 
 ---
@@ -169,8 +170,7 @@ The multi-user system exists in the codebase but is **not yet activated** in pro
 - All trades go to main Coinbase Advanced Trade account
 
 **For Now:**
-When asking "Is NIJA trading for user #1?", the question means:
-"Is NIJA trading at all with my Coinbase account?"
+When asking "Is NIJA trading for user #1?", the question currently means "Is NIJA trading at all?" since User #1's Kraken account is configured but not being used yet (multi-user system needs activation).
 
 **To Activate Multi-User:**
 ```bash
@@ -270,10 +270,16 @@ railway logs --tail 100
 railway logs | grep "trading loop"
 ```
 
-### Verify on Coinbase
-1. Visit: https://www.coinbase.com/advanced-portfolio
-2. Check Orders tab
-3. Look for activity after 23:26:34 UTC
+### Verify on Broker
+For User #1's Kraken account:
+```bash
+python check_user1_kraken_balance.py
+```
+
+Or manually:
+1. Visit: https://www.kraken.com
+2. Log in with User #1's account (Frazierdaivon@gmail.com)
+3. Check Orders tab for activity after 23:26:34 UTC
 
 ---
 
@@ -282,7 +288,7 @@ railway logs | grep "trading loop"
 If still uncertain after using tools and documentation:
 
 1. Run automated analysis on fresh logs
-2. Check Coinbase directly for orders
+2. Check broker account directly for orders (User #1 uses Kraken)
 3. Review comprehensive documentation
 4. Contact support with analysis results
 
