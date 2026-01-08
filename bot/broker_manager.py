@@ -228,10 +228,11 @@ class CoinbaseBroker(BaseBroker):
             logger.warning(f"Failed to log trade to journal: {e}")
     
     def connect(self) -> bool:
-        """Connect to Coinbase Advanced Trade API"""
+        """Connect to Coinbase Advanced Trade API with retry logic"""
         try:
             from coinbase.rest import RESTClient
             import os
+            import time
             
             # Get credentials from environment
             api_key = os.getenv("COINBASE_API_KEY")
@@ -244,20 +245,51 @@ class CoinbaseBroker(BaseBroker):
             # Initialize REST client
             self.client = RESTClient(api_key=api_key, api_secret=api_secret)
             
-            # Test connection by fetching accounts
-            try:
-                accounts_resp = self.client.get_accounts()
-                self.connected = True
-                logging.info("✅ Connected to Coinbase Advanced Trade API")
-                
-                # Portfolio detection
-                self._detect_portfolio()
-                
-                return True
-                
-            except Exception as e:
-                logging.error(f"❌ Failed to verify Coinbase connection: {e}")
-                return False
+            # Test connection by fetching accounts with retry logic
+            max_attempts = 3
+            base_delay = 2.0
+            
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if attempt > 1:
+                        # Add delay before retry with exponential backoff
+                        delay = base_delay * (2 ** (attempt - 2))  # 2s, 4s, 8s
+                        logging.info(f"🔄 Retrying connection in {delay}s (attempt {attempt}/{max_attempts})...")
+                        time.sleep(delay)
+                    
+                    accounts_resp = self.client.get_accounts()
+                    self.connected = True
+                    
+                    if attempt > 1:
+                        logging.info(f"✅ Connected to Coinbase Advanced Trade API (succeeded on attempt {attempt})")
+                    else:
+                        logging.info("✅ Connected to Coinbase Advanced Trade API")
+                    
+                    # Portfolio detection
+                    self._detect_portfolio()
+                    
+                    return True
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    
+                    # Check if error is retryable (rate limiting, network issues, etc.)
+                    is_retryable = any(keyword in error_msg.lower() for keyword in [
+                        'timeout', 'connection', 'network', 'rate limit',
+                        'too many requests', 'service unavailable',
+                        '503', '504', '429', 'temporary', 'try again'
+                    ])
+                    
+                    if is_retryable and attempt < max_attempts:
+                        logging.warning(f"⚠️  Connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                        continue
+                    else:
+                        logging.error(f"❌ Failed to verify Coinbase connection: {e}")
+                        return False
+            
+            # Should never reach here, but just in case
+            logging.error("❌ Failed to connect after maximum retry attempts")
+            return False
                 
         except ImportError:
             logging.error("❌ Coinbase SDK not installed. Run: pip install coinbase-advanced-py")
