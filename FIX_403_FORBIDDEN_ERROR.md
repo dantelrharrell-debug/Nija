@@ -1,8 +1,8 @@
-# Fix for Coinbase 403 "Too many errors" Issue
+# Fix for 403 "Too many errors" Issue (All Brokers)
 
 ## Problem Statement
 
-The NIJA trading bot was failing to start with a **403 Forbidden "Too many errors"** response from Coinbase:
+The NIJA trading bot was failing to start with a **403 Forbidden "Too many errors"** response from exchange APIs (Coinbase, Kraken, OKX, Binance, Alpaca):
 
 ```
 2026-01-08 21:03:33 - coinbase.RESTClient - ERROR - HTTP Error: 403 Client Error: Forbidden Too many errors
@@ -17,11 +17,11 @@ This caused the bot to run in "monitor mode" with no active trading.
 The **403 "Too many errors"** response is different from a **429 "Too many requests"** rate limit error:
 
 - **429**: Too many API requests in a short time period
-- **403 "Too many errors"**: API key has been temporarily flagged/blocked by Coinbase due to too many failed or error-generating requests
+- **403 "Too many errors"**: API key has been temporarily flagged/blocked by the exchange due to too many failed or error-generating requests
 
 ### Why the Bot Was Failing
 
-The connection retry logic in `bot/broker_manager.py` was NOT treating 403 errors as retryable. When a 403 error occurred:
+The connection retry logic in `bot/broker_manager.py` was NOT treating 403 errors as retryable for any broker. When a 403 error occurred:
 
 1. The bot attempted to connect once
 2. Received a 403 "Too many errors" response
@@ -44,6 +44,8 @@ is_retryable = any(keyword in error_msg.lower() for keyword in [
 ### Changes Made
 
 #### 1. Added 403 Errors to Retryable List (`bot/broker_manager.py`)
+
+Applied to **all broker classes**: CoinbaseBroker, KrakenBroker, OKXBroker, BinanceBroker, AlpacaBroker
 
 ```python
 # BEFORE

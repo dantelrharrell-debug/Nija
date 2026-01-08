@@ -2134,9 +2134,10 @@ class AlpacaBroker(BaseBroker):
         return self.api
     
     def connect(self) -> bool:
-        """Connect to Alpaca"""
+        """Connect to Alpaca with retry logic"""
         try:
             from alpaca.trading.client import TradingClient
+            import time
             
             api_key = os.getenv("ALPACA_API_KEY", "").strip()
             api_secret = os.getenv("ALPACA_API_SECRET", "").strip()
@@ -2149,17 +2150,57 @@ class AlpacaBroker(BaseBroker):
             
             self.api = TradingClient(api_key, api_secret, paper=paper)
             
-            # Test connection
-            account = self.api.get_account()
-            self.connected = True
-            logging.info(f"✅ Alpaca connected ({'PAPER' if paper else 'LIVE'})")
-            return True
+            # Test connection with retry logic
+            # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
+            # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
+            max_attempts = 5
+            base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
+            
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if attempt > 1:
+                        # Add delay before retry with exponential backoff
+                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
+                        delay = base_delay * (2 ** (attempt - 2))
+                        logging.info(f"🔄 Retrying Alpaca connection in {delay}s (attempt {attempt}/{max_attempts})...")
+                        time.sleep(delay)
+                    
+                    account = self.api.get_account()
+                    self.connected = True
+                    
+                    if attempt > 1:
+                        logging.info(f"✅ Connected to Alpaca API (succeeded on attempt {attempt})")
+                    else:
+                        logging.info(f"✅ Alpaca connected ({'PAPER' if paper else 'LIVE'})")
+                    
+                    return True
+                
+                except Exception as e:
+                    error_msg = str(e)
+                    
+                    # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
+                    # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
+                    # These indicate API key blocking and need longer cooldown periods
+                    is_retryable = any(keyword in error_msg.lower() for keyword in [
+                        'timeout', 'connection', 'network', 'rate limit',
+                        'too many requests', 'service unavailable',
+                        '503', '504', '429', '403', 'forbidden', 
+                        'too many errors', 'temporary', 'try again'
+                    ])
+                    
+                    if is_retryable and attempt < max_attempts:
+                        logging.warning(f"⚠️  Alpaca connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                        continue
+                    else:
+                        logging.warning(f"⚠️  Alpaca connection failed: {e}")
+                        return False
+            
+            # Should never reach here, but just in case
+            logging.error("❌ Failed to connect to Alpaca after maximum retry attempts")
+            return False
             
         except ImportError:
             # SDK not installed - skip silently
-            return False
-        except Exception as e:
-            logging.warning(f"⚠️  Alpaca connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
@@ -2326,7 +2367,7 @@ class BinanceBroker(BaseBroker):
     
     def connect(self) -> bool:
         """
-        Connect to Binance API.
+        Connect to Binance API with retry logic.
         
         Requires environment variables:
         - BINANCE_API_KEY: Your Binance API key
@@ -2338,6 +2379,7 @@ class BinanceBroker(BaseBroker):
         """
         try:
             from binance.client import Client
+            import time
             
             api_key = os.getenv("BINANCE_API_KEY", "").strip()
             api_secret = os.getenv("BINANCE_API_SECRET", "").strip()
@@ -2355,46 +2397,89 @@ class BinanceBroker(BaseBroker):
             else:
                 self.client = Client(api_key, api_secret)
             
-            # Test connection by fetching account status
-            account = self.client.get_account()
+            # Test connection by fetching account status with retry logic
+            # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
+            # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
+            max_attempts = 5
+            base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
             
-            if account:
-                self.connected = True
-                env_type = "🧪 TESTNET" if use_testnet else "🔴 LIVE"
-                logging.info("=" * 70)
-                logging.info(f"✅ BINANCE CONNECTED ({env_type})")
-                logging.info("=" * 70)
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if attempt > 1:
+                        # Add delay before retry with exponential backoff
+                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
+                        delay = base_delay * (2 ** (attempt - 2))
+                        logging.info(f"🔄 Retrying Binance connection in {delay}s (attempt {attempt}/{max_attempts})...")
+                        time.sleep(delay)
+                    
+                    account = self.client.get_account()
+                    
+                    if account:
+                        self.connected = True
+                        
+                        if attempt > 1:
+                            logging.info(f"✅ Connected to Binance API (succeeded on attempt {attempt})")
+                        
+                        env_type = "🧪 TESTNET" if use_testnet else "🔴 LIVE"
+                        logging.info("=" * 70)
+                        logging.info(f"✅ BINANCE CONNECTED ({env_type})")
+                        logging.info("=" * 70)
+                        
+                        # Log account trading status
+                        can_trade = account.get('canTrade', False)
+                        logging.info(f"   Trading Enabled: {'✅' if can_trade else '❌'}")
+                        
+                        # Log USDT balance
+                        for balance in account.get('balances', []):
+                            if balance['asset'] == 'USDT':
+                                usdt_balance = float(balance['free'])
+                                logging.info(f"   USDT Balance: ${usdt_balance:.2f}")
+                                break
+                        
+                        logging.info("=" * 70)
+                        return True
+                    else:
+                        if attempt < max_attempts:
+                            logging.warning(f"⚠️  Binance connection attempt {attempt}/{max_attempts} failed (retryable): No account data returned")
+                            continue
+                        else:
+                            logging.warning("⚠️  Binance connection test failed: No account data returned")
+                            return False
                 
-                # Log account trading status
-                can_trade = account.get('canTrade', False)
-                logging.info(f"   Trading Enabled: {'✅' if can_trade else '❌'}")
-                
-                # Log USDT balance
-                for balance in account.get('balances', []):
-                    if balance['asset'] == 'USDT':
-                        usdt_balance = float(balance['free'])
-                        logging.info(f"   USDT Balance: ${usdt_balance:.2f}")
-                        break
-                
-                logging.info("=" * 70)
-                return True
-            else:
-                logging.warning("⚠️  Binance connection test failed: No account data returned")
-                return False
+                except Exception as e:
+                    error_msg = str(e)
+                    
+                    # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
+                    # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
+                    # These indicate API key blocking and need longer cooldown periods
+                    is_retryable = any(keyword in error_msg.lower() for keyword in [
+                        'timeout', 'connection', 'network', 'rate limit',
+                        'too many requests', 'service unavailable',
+                        '503', '504', '429', '403', 'forbidden', 
+                        'too many errors', 'temporary', 'try again'
+                    ])
+                    
+                    if is_retryable and attempt < max_attempts:
+                        logging.warning(f"⚠️  Binance connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                        continue
+                    else:
+                        # Handle authentication errors gracefully
+                        error_str = error_msg.lower()
+                        if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
+                            logging.warning("⚠️  Binance authentication failed - invalid or expired API credentials")
+                            logging.warning("   Please check your BINANCE_API_KEY and BINANCE_API_SECRET")
+                        elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
+                            logging.warning("⚠️  Binance connection failed - network issue or API unavailable")
+                        else:
+                            logging.warning(f"⚠️  Binance connection failed: {e}")
+                        return False
+            
+            # Should never reach here, but just in case
+            logging.error("❌ Failed to connect to Binance after maximum retry attempts")
+            return False
                 
         except ImportError:
             # SDK not installed - skip silently (it's optional)
-            return False
-        except Exception as e:
-            # Handle authentication errors gracefully
-            error_str = str(e).lower()
-            if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
-                logging.warning("⚠️  Binance authentication failed - invalid or expired API credentials")
-                logging.warning("   Please check your BINANCE_API_KEY and BINANCE_API_SECRET")
-            elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
-                logging.warning("⚠️  Binance connection failed - network issue or API unavailable")
-            else:
-                logging.warning(f"⚠️  Binance connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
@@ -2647,7 +2732,7 @@ class KrakenBroker(BaseBroker):
     
     def connect(self) -> bool:
         """
-        Connect to Kraken Pro API.
+        Connect to Kraken Pro API with retry logic.
         
         Requires environment variables:
         - KRAKEN_API_KEY: Your Kraken API key
@@ -2659,6 +2744,7 @@ class KrakenBroker(BaseBroker):
         try:
             import krakenex
             from pykrakenapi import KrakenAPI
+            import time
             
             api_key = os.getenv("KRAKEN_API_KEY", "").strip()
             api_secret = os.getenv("KRAKEN_API_SECRET", "").strip()
@@ -2672,49 +2758,109 @@ class KrakenBroker(BaseBroker):
             self.api = krakenex.API(key=api_key, secret=api_secret)
             self.kraken_api = KrakenAPI(self.api)
             
-            # Test connection by fetching account balance
-            balance = self.api.query_private('Balance')
+            # Test connection by fetching account balance with retry logic
+            # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
+            # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
+            max_attempts = 5
+            base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
             
-            if balance and 'error' in balance:
-                if balance['error']:
-                    error_msgs = ', '.join(balance['error'])
-                    logging.error(f"❌ Kraken connection test failed: {error_msgs}")
-                    return False
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if attempt > 1:
+                        # Add delay before retry with exponential backoff
+                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
+                        delay = base_delay * (2 ** (attempt - 2))
+                        logging.info(f"🔄 Retrying Kraken connection in {delay}s (attempt {attempt}/{max_attempts})...")
+                        time.sleep(delay)
+                    
+                    balance = self.api.query_private('Balance')
+                    
+                    if balance and 'error' in balance:
+                        if balance['error']:
+                            error_msgs = ', '.join(balance['error'])
+                            
+                            # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
+                            # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
+                            # These indicate API key blocking and need longer cooldown periods
+                            is_retryable = any(keyword in error_msgs.lower() for keyword in [
+                                'timeout', 'connection', 'network', 'rate limit',
+                                'too many requests', 'service unavailable',
+                                '503', '504', '429', '403', 'forbidden', 
+                                'too many errors', 'temporary', 'try again'
+                            ])
+                            
+                            if is_retryable and attempt < max_attempts:
+                                logging.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable): {error_msgs}")
+                                continue
+                            else:
+                                logging.error(f"❌ Kraken connection test failed: {error_msgs}")
+                                return False
+                    
+                    if balance and 'result' in balance:
+                        self.connected = True
+                        
+                        if attempt > 1:
+                            logging.info(f"✅ Connected to Kraken Pro API (succeeded on attempt {attempt})")
+                        
+                        logging.info("=" * 70)
+                        logging.info("✅ KRAKEN PRO CONNECTED")
+                        logging.info("=" * 70)
+                        
+                        # Log USD/USDT balance
+                        result = balance.get('result', {})
+                        usd_balance = float(result.get('ZUSD', 0))  # Kraken uses ZUSD for USD
+                        usdt_balance = float(result.get('USDT', 0))
+                        
+                        total = usd_balance + usdt_balance
+                        logging.info(f"   USD Balance: ${usd_balance:.2f}")
+                        logging.info(f"   USDT Balance: ${usdt_balance:.2f}")
+                        logging.info(f"   Total: ${total:.2f}")
+                        logging.info("=" * 70)
+                        
+                        return True
+                    else:
+                        # No result, but could be retryable
+                        error_msg = "No balance data returned"
+                        if attempt < max_attempts:
+                            logging.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                            continue
+                        else:
+                            logging.error(f"❌ Kraken connection test failed: {error_msg}")
+                            return False
+                
+                except Exception as e:
+                    error_msg = str(e)
+                    
+                    # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
+                    # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
+                    # These indicate API key blocking and need longer cooldown periods
+                    is_retryable = any(keyword in error_msg.lower() for keyword in [
+                        'timeout', 'connection', 'network', 'rate limit',
+                        'too many requests', 'service unavailable',
+                        '503', '504', '429', '403', 'forbidden', 
+                        'too many errors', 'temporary', 'try again'
+                    ])
+                    
+                    if is_retryable and attempt < max_attempts:
+                        logging.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                        continue
+                    else:
+                        # Handle errors gracefully for non-retryable or final attempt
+                        error_str = error_msg.lower()
+                        if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
+                            logging.warning("⚠️  Kraken authentication failed - invalid or expired API credentials")
+                        elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
+                            logging.warning("⚠️  Kraken connection failed - network issue or API unavailable")
+                        else:
+                            logging.warning(f"⚠️  Kraken connection failed: {e}")
+                        return False
             
-            if balance and 'result' in balance:
-                self.connected = True
-                logging.info("=" * 70)
-                logging.info("✅ KRAKEN PRO CONNECTED")
-                logging.info("=" * 70)
-                
-                # Log USD/USDT balance
-                result = balance.get('result', {})
-                usd_balance = float(result.get('ZUSD', 0))  # Kraken uses ZUSD for USD
-                usdt_balance = float(result.get('USDT', 0))
-                
-                total = usd_balance + usdt_balance
-                logging.info(f"   USD Balance: ${usd_balance:.2f}")
-                logging.info(f"   USDT Balance: ${usdt_balance:.2f}")
-                logging.info(f"   Total: ${total:.2f}")
-                logging.info("=" * 70)
-                
-                return True
-            else:
-                logging.error("❌ Kraken connection test failed: No balance data returned")
-                return False
+            # Should never reach here, but just in case
+            logging.error("❌ Failed to connect to Kraken after maximum retry attempts")
+            return False
                 
         except ImportError:
             # SDK not installed - skip silently (it's optional)
-            return False
-        except Exception as e:
-            # Handle errors gracefully
-            error_str = str(e).lower()
-            if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
-                logging.warning("⚠️  Kraken authentication failed - invalid or expired API credentials")
-            elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
-                logging.warning("⚠️  Kraken connection failed - network issue or API unavailable")
-            else:
-                logging.warning(f"⚠️  Kraken connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
@@ -3005,7 +3151,7 @@ class OKXBroker(BaseBroker):
     
     def connect(self) -> bool:
         """
-        Connect to OKX Exchange API.
+        Connect to OKX Exchange API with retry logic.
         
         Requires environment variables:
         - OKX_API_KEY: Your OKX API key
@@ -3018,6 +3164,7 @@ class OKXBroker(BaseBroker):
         """
         try:
             from okx.api import Account, Market, Trade
+            import time
             
             api_key = os.getenv("OKX_API_KEY", "").strip()
             api_secret = os.getenv("OKX_API_SECRET", "").strip()
@@ -3045,43 +3192,95 @@ class OKXBroker(BaseBroker):
             self.market_api = Market(api_key, api_secret, passphrase, flag)
             self.trade_api = Trade(api_key, api_secret, passphrase, flag)
             
-            # Test connection by fetching account balance
-            result = self.account_api.get_balance()
+            # Test connection by fetching account balance with retry logic
+            # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
+            # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
+            max_attempts = 5
+            base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
             
-            if result and result.get('code') == '0':
-                self.connected = True
-                env_type = "🧪 TESTNET" if self.use_testnet else "🔴 LIVE"
-                logging.info("=" * 70)
-                logging.info(f"✅ OKX CONNECTED ({env_type})")
-                logging.info("=" * 70)
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if attempt > 1:
+                        # Add delay before retry with exponential backoff
+                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
+                        delay = base_delay * (2 ** (attempt - 2))
+                        logging.info(f"🔄 Retrying OKX connection in {delay}s (attempt {attempt}/{max_attempts})...")
+                        time.sleep(delay)
+                    
+                    result = self.account_api.get_balance()
+                    
+                    if result and result.get('code') == '0':
+                        self.connected = True
+                        
+                        if attempt > 1:
+                            logging.info(f"✅ Connected to OKX API (succeeded on attempt {attempt})")
+                        
+                        env_type = "🧪 TESTNET" if self.use_testnet else "🔴 LIVE"
+                        logging.info("=" * 70)
+                        logging.info(f"✅ OKX CONNECTED ({env_type})")
+                        logging.info("=" * 70)
+                        
+                        # Log account info
+                        data = result.get('data', [])
+                        if data and len(data) > 0:
+                            total_eq = data[0].get('totalEq', '0')
+                            logging.info(f"   Total Account Value: ${float(total_eq):.2f}")
+                        
+                        logging.info("=" * 70)
+                        return True
+                    else:
+                        error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+                        
+                        # Check if error is retryable
+                        is_retryable = any(keyword in error_msg.lower() for keyword in [
+                            'timeout', 'connection', 'network', 'rate limit',
+                            'too many requests', 'service unavailable',
+                            '503', '504', '429', '403', 'forbidden', 
+                            'too many errors', 'temporary', 'try again'
+                        ])
+                        
+                        if is_retryable and attempt < max_attempts:
+                            logging.warning(f"⚠️  OKX connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                            continue
+                        else:
+                            logging.warning(f"⚠️  OKX connection test failed: {error_msg}")
+                            return False
                 
-                # Log account info
-                data = result.get('data', [])
-                if data and len(data) > 0:
-                    total_eq = data[0].get('totalEq', '0')
-                    logging.info(f"   Total Account Value: ${float(total_eq):.2f}")
-                
-                logging.info("=" * 70)
-                return True
-            else:
-                error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-                logging.warning(f"⚠️  OKX connection test failed: {error_msg}")
-                return False
+                except Exception as e:
+                    error_msg = str(e)
+                    
+                    # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
+                    # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
+                    # These indicate API key blocking and need longer cooldown periods
+                    is_retryable = any(keyword in error_msg.lower() for keyword in [
+                        'timeout', 'connection', 'network', 'rate limit',
+                        'too many requests', 'service unavailable',
+                        '503', '504', '429', '403', 'forbidden', 
+                        'too many errors', 'temporary', 'try again'
+                    ])
+                    
+                    if is_retryable and attempt < max_attempts:
+                        logging.warning(f"⚠️  OKX connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                        continue
+                    else:
+                        # Handle authentication errors gracefully
+                        # Note: OKX error code 50119 = "API key doesn't exist"
+                        error_str = error_msg.lower()
+                        if 'api key' in error_str or '401' in error_str or 'authentication' in error_str or '50119' in error_str:
+                            logging.warning("⚠️  OKX authentication failed - invalid or expired API credentials")
+                            logging.warning("   Please check your OKX_API_KEY, OKX_API_SECRET, and OKX_PASSPHRASE")
+                        elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
+                            logging.warning("⚠️  OKX connection failed - network issue or API unavailable")
+                        else:
+                            logging.warning(f"⚠️  OKX connection failed: {e}")
+                        return False
+            
+            # Should never reach here, but just in case
+            logging.error("❌ Failed to connect to OKX after maximum retry attempts")
+            return False
                 
         except ImportError:
             # SDK not installed - skip silently (it's optional)
-            return False
-        except Exception as e:
-            # Handle authentication errors gracefully
-            # Note: OKX error code 50119 = "API key doesn't exist"
-            error_str = str(e).lower()
-            if 'api key' in error_str or '401' in error_str or 'authentication' in error_str or '50119' in error_str:
-                logging.warning("⚠️  OKX authentication failed - invalid or expired API credentials")
-                logging.warning("   Please check your OKX_API_KEY, OKX_API_SECRET, and OKX_PASSPHRASE")
-            elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
-                logging.warning("⚠️  OKX connection failed - network issue or API unavailable")
-            else:
-                logging.warning(f"⚠️  OKX connection failed: {e}")
             return False
     
     def get_account_balance(self) -> float:
