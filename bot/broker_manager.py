@@ -273,14 +273,16 @@ class CoinbaseBroker(BaseBroker):
             self.client = RESTClient(api_key=api_key, api_secret=api_secret)
             
             # Test connection by fetching accounts with retry logic
-            max_attempts = 3
-            base_delay = 2.0
+            # Increased max attempts for 403 rate limit errors which need longer cooldown
+            max_attempts = 5
+            base_delay = 5.0  # Increased from 2.0 to allow rate limits to reset
             
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
-                        delay = base_delay * (2 ** (attempt - 2))  # 2s, 4s, 8s
+                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s, 80s
+                        delay = base_delay * (2 ** (attempt - 2))
                         logging.info(f"🔄 Retrying connection in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
                     
@@ -305,11 +307,14 @@ class CoinbaseBroker(BaseBroker):
                 except Exception as e:
                     error_msg = str(e)
                     
-                    # Check if error is retryable (rate limiting, network issues, etc.)
+                    # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
+                    # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
+                    # These indicate rate limiting from Coinbase and need longer cooldown periods
                     is_retryable = any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
-                        '503', '504', '429', 'temporary', 'try again'
+                        '503', '504', '429', '403', 'forbidden', 
+                        'too many errors', 'temporary', 'try again'
                     ])
                     
                     if is_retryable and attempt < max_attempts:
