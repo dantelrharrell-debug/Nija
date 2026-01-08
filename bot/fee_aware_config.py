@@ -46,6 +46,11 @@ MIN_BALANCE_TO_TRADE = 2.0  # $2 minimum (LOWERED from $30 to allow very small a
 MICRO_BALANCE_THRESHOLD = 50.0
 MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position
 
+# For very small accounts (< $5), bypass quality multipliers to ensure tradeable positions
+# Without this, quality multipliers can reduce positions below $1 minimum
+# This enables "all-in" strategy for learning/testing with minimal capital
+MICRO_ACCOUNT_THRESHOLD = 5.0  # Accounts below this bypass quality multipliers
+
 # For $50-100: Trade with 50% positions (leave 50% reserve for safety)
 SMALL_BALANCE_THRESHOLD = 100.0
 SMALL_BALANCE_POSITION_PCT = 0.50  # 50% max per position (leave 50% buffer)

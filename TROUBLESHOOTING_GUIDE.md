@@ -254,16 +254,38 @@ kill <process-id>
 python3 check_balance_now.py
 
 # Minimum thresholds:
-# - $2 absolute minimum (very small positions, low profitability)
+# - $2 absolute minimum (micro account mode - see below)
+# - $5+ normal operation with quality multipliers
 # - $10 recommended minimum for fee-adjusted profitability
 # - $30+ optimal for consistent profits
 ```
 
+**Understanding Micro Account Mode ($2-5 balance)**:
+
+When your balance is between $2-$5, the bot operates in "Micro Account Mode":
+- ✅ **Enabled**: Trading is allowed (bypasses quality multipliers)
+- ⚠️ **Simplified**: Uses 50% position sizing without risk adjustments
+- 📊 **Trade Size**: Positions will be $1-2.50 (minimum $1 enforced)
+- 💸 **Profitability**: Limited due to ~1.4% fees on small positions
+- 🎓 **Purpose**: Learning/testing, not recommended for profit
+
+**What you'll see in logs**:
+```
+💰 MICRO ACCOUNT MODE: Using 50.0% (quality multipliers bypassed)
+   ⚠️  Account < $5.00 - trading with minimal capital
+```
+
+**Recommendation**: 
+- For learning: $2-5 works but expect minimal/no profits
+- For active trading: Deposit to $25+ for better results
+
 **Fix if too low**:
 ```bash
-# Deposit more funds OR
-# Adjust minimum in bot/trading_strategy.py:
-MIN_BALANCE_TO_TRADE_USD = 2.0  # Lower if needed for testing
+# Option 1: Deposit more funds (RECOMMENDED)
+# Transfer $25+ to Advanced Trade portfolio
+
+# Option 2: Accept micro account mode limitations
+# Bot will work but profitability is very limited
 ```
 
 #### Step 2: Check Filter Settings
