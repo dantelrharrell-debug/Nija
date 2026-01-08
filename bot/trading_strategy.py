@@ -727,7 +727,7 @@ class TradingStrategy:
                             df[col] = pd.to_numeric(df[col], errors='coerce')
                     
                     # Calculate indicators for exit signal detection
-                    logger.info(f"   DEBUG candle types → close={type(df['close'].iloc[-1])}, open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}")
+                    logger.debug(f"   DEBUG candle types → close={type(df['close'].iloc[-1])}, open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}")
                     indicators = self.apex.calculate_indicators(df)
                     if not indicators:
                         # Can't analyze - exit to prevent blind holding

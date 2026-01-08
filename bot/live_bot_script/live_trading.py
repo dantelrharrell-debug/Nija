@@ -41,11 +41,11 @@ def run_live_trading(client):
         strategy = TradingStrategy()
         logger.info("Starting main live trading loop...")
         while True:
-            logger.info(f"[DEBUG] Main loop iteration started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.debug(f"[DEBUG] Main loop iteration started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             print(f"[DEBUG] Main loop iteration started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             try:
                 strategy.run_trading_cycle()
-                logger.info(f"[DEBUG] Main loop iteration finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                logger.debug(f"[DEBUG] Main loop iteration finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
                 print(f"[DEBUG] Main loop iteration finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             except Exception as e:
                 logger.error(f"[ERROR] Exception in trading strategy: {e}")

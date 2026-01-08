@@ -448,7 +448,7 @@ class NIJAApexStrategyV71:
                 return {}
             df[required_cols] = df[required_cols].astype(float)
             # Debug: confirm types are floats
-            logger.info(
+            logger.debug(
                 f"DEBUG candle types → close={type(df['close'].iloc[-1])}, "
                 f"open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}"
             )
