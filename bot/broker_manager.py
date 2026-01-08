@@ -25,8 +25,8 @@ except ImportError:
 logger = logging.getLogger('nija.broker')
 
 # Balance threshold constants
-MINIMUM_BALANCE_PROTECTION = 10.50  # Absolute minimum to prevent failed orders
-MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading
+MINIMUM_BALANCE_PROTECTION = 2.00  # Lowered from 10.50 to allow trading with small balances
+MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading (warning only, not enforced)
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 # Credential validation constants
