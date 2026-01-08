@@ -753,6 +753,37 @@ NIJA requires v2 API access to detect balances in retail/consumer Coinbase accou
 - API credentials from Coinbase
 - Docker (for deployment)
 
+### Funding Requirements
+
+**Minimum Balance**: $2.00 (allows bot to start)
+
+**Balance Tiers & Trading Modes**:
+
+| Balance | Mode | Position Sizing | Profitability | Use Case |
+|---------|------|-----------------|---------------|----------|
+| $2-$5 | 🟡 **Micro Account** | 50% (no multipliers) | ⚠️ Very Limited | Learning/Testing |
+| $5-$25 | 🟠 **Small Account** | 50% (with multipliers) | ⚠️ Limited | Light Trading |
+| $25-$100 | 🟢 **Active Trading** | 40-50% | ✅ Good | Recommended Minimum |
+| $100+ | 🔵 **Optimal** | 20-40% | ✅ Excellent | Best Performance |
+
+**Micro Account Mode ($2-5)**:
+- ✅ Trading enabled with simplified risk management
+- ⚠️ Quality multipliers bypassed to ensure $1+ positions
+- ⚠️ ~1.4% fees consume most profits on small positions
+- 💡 **Purpose**: Learning the bot, not for profit
+- 📈 **Recommendation**: Deposit $25+ for actual trading
+
+**What You'll See**:
+```
+💰 MICRO ACCOUNT MODE: Using 50.0% (quality multipliers bypassed)
+   ⚠️  Account < $5.00 - trading with minimal capital
+```
+
+**To Check Your Mode**:
+```bash
+python3 check_balance_now.py
+```
+
 ### Verification Tools
 
 **Check broker connection status** (shows which exchanges are connected):
