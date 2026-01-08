@@ -2057,12 +2057,15 @@ class CoinbaseBroker(BaseBroker):
             return 0.0
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get candle data with improved retry logic for rate limiting"""
+        """Get candle data with improved retry logic for rate limiting
+        
+        UPDATED (Jan 2026): Enhanced exponential backoff to prevent 429 errors
+        """
         import time
         import random
         
         max_retries = 3
-        base_delay = 1.0  # Start with 1 second
+        base_delay = 1.5  # Increased from 1.0s to 1.5s for better rate limit handling
         
         for attempt in range(max_retries):
             try:
@@ -2100,8 +2103,9 @@ class CoinbaseBroker(BaseBroker):
                 
                 if is_rate_limited and attempt < max_retries - 1:
                     # Exponential backoff with jitter to prevent thundering herd
+                    # UPDATED (Jan 2026): Increased backoff timing
                     retry_delay = base_delay * (2 ** attempt)
-                    jitter = random.uniform(0, retry_delay * 0.3)  # Add up to 30% jitter
+                    jitter = random.uniform(0, retry_delay * 0.5)  # Increased jitter from 30% to 50%
                     total_delay = retry_delay + jitter
                     
                     logging.warning(f"Rate limited on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")

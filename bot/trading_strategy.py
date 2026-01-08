@@ -16,16 +16,25 @@ load_dotenv()
 logger = logging.getLogger("nija")
 
 # Configuration constants
-MARKET_SCAN_LIMIT = 730  # Scan all available markets with rate limiting protection
-                         # Note: Actual scan count is min(MARKET_SCAN_LIMIT, len(all_products))
-                         # so this automatically adjusts if fewer markets are available
+# CRITICAL FIX (Jan 2026): Reduced market scanning to prevent 429 rate limit errors
+# Coinbase has strict rate limits (~10 req/s burst, lower sustained)
+# Instead of scanning all 730 markets every cycle, we batch scan smaller subsets
+MARKET_SCAN_LIMIT = 100  # Scan only 100 markets per cycle (down from 730)
+                         # This rotates through different markets each cycle
+                         # Complete scan of 730 markets takes ~8 cycles (20 minutes)
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Rate limiting constants (prevent 429 errors from Coinbase API)
-# These delays keep request rate well below Coinbase's ~10 req/s limit
-POSITION_CHECK_DELAY = 0.2  # 200ms delay between position checks (max 5 req/s)
-SELL_ORDER_DELAY = 0.3      # 300ms delay between sell orders (max ~3 req/s)
-MARKET_SCAN_DELAY = 0.25    # 250ms delay between market scans (max 4 req/s)
+# UPDATED (Jan 2026): Increased delays to prevent rate limiting
+# Coinbase rate limits: ~10 requests/second burst, ~3-5 req/s sustained safe rate
+POSITION_CHECK_DELAY = 0.3  # 300ms delay between position checks (was 0.2s)
+SELL_ORDER_DELAY = 0.5      # 500ms delay between sell orders (was 0.3s)
+MARKET_SCAN_DELAY = 0.5     # 500ms delay between market scans (was 0.25s) - CRITICAL for preventing 429s
+                            # At 0.5s delay, we scan at 2 req/s which is well under limits
+                            
+# Market scanning rotation (prevents scanning same markets every cycle)
+MARKET_BATCH_SIZE = 100     # Number of markets to scan per cycle
+MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # Exit strategy constants (no entry price required)
 MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
@@ -129,6 +138,16 @@ class TradingStrategy:
         # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
         self.unsellable_positions = set()  # Set of symbols that failed to sell due to size issues
         
+        # Market rotation state (prevents scanning same markets every cycle)
+        self.market_rotation_offset = 0  # Tracks which batch of markets to scan next
+        self.all_markets_cache = []      # Cache of all available markets
+        self.markets_cache_time = 0      # Timestamp of last market list refresh
+        self.MARKETS_CACHE_TTL = 3600    # Refresh market list every hour
+        
+        # Candle data cache (prevents duplicate API calls for same market/timeframe)
+        self.candle_cache = {}           # {symbol: (timestamp, candles_data)}
+        self.CANDLE_CACHE_TTL = 150      # Cache candles for 2.5 minutes (one cycle)
+        
         # Initialize advanced trading features (progressive targets, exchange profiles, capital allocation)
         self.advanced_manager = None
         self._init_advanced_features()
@@ -151,8 +170,9 @@ class TradingStrategy:
             connected_brokers = []
             
             # Add startup delay to avoid immediate rate limiting on restart
-            # Increased to 10s to allow any previous rate limits to fully reset
-            startup_delay = 10
+            # CRITICAL (Jan 2026): Increased to 15s to ensure API rate limits fully reset
+            # Previous 10s delay was insufficient when bot restarted after rate limiting
+            startup_delay = 15
             logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
             time.sleep(startup_delay)
             
@@ -431,6 +451,75 @@ class TradingStrategy:
             self.independent_trader.log_status_summary()
         else:
             logger.info("📊 Single broker mode (independent trading not enabled)")
+    
+    def _get_cached_candles(self, symbol: str, timeframe: str = '5m', count: int = 100):
+        """
+        Get candles with caching to reduce API calls.
+        
+        Args:
+            symbol: Trading pair symbol
+            timeframe: Candle timeframe
+            count: Number of candles
+            
+        Returns:
+            List of candle dicts or empty list
+        """
+        cache_key = f"{symbol}_{timeframe}_{count}"
+        current_time = time.time()
+        
+        # Check cache first
+        if cache_key in self.candle_cache:
+            cached_time, cached_data = self.candle_cache[cache_key]
+            if current_time - cached_time < self.CANDLE_CACHE_TTL:
+                logger.debug(f"   {symbol}: Using cached candles (age: {int(current_time - cached_time)}s)")
+                return cached_data
+        
+        # Cache miss or expired - fetch fresh data
+        candles = self.broker.get_candles(symbol, timeframe, count)
+        
+        # Cache the result (even if empty, to avoid repeated failed requests)
+        self.candle_cache[cache_key] = (current_time, candles)
+        
+        return candles
+    
+    def _get_rotated_markets(self, all_markets: list) -> list:
+        """
+        Get next batch of markets to scan using rotation strategy.
+        
+        This prevents scanning the same markets every cycle and distributes
+        API load across time. With 730 markets and batch size of 100,
+        we complete a full rotation in ~8 cycles (20 minutes).
+        
+        Args:
+            all_markets: Full list of available markets
+            
+        Returns:
+            Subset of markets for this cycle
+        """
+        if not MARKET_ROTATION_ENABLED or len(all_markets) <= MARKET_BATCH_SIZE:
+            # If rotation disabled or fewer markets than batch size, use all markets
+            return all_markets[:MARKET_BATCH_SIZE]
+        
+        # Calculate batch boundaries
+        total_markets = len(all_markets)
+        start_idx = self.market_rotation_offset
+        end_idx = start_idx + MARKET_BATCH_SIZE
+        
+        # Handle wrap-around
+        if end_idx <= total_markets:
+            batch = all_markets[start_idx:end_idx]
+        else:
+            # Wrap around to beginning
+            batch = all_markets[start_idx:] + all_markets[:end_idx - total_markets]
+        
+        # Update offset for next cycle
+        self.market_rotation_offset = end_idx % total_markets
+        
+        # Log rotation progress
+        rotation_pct = (self.market_rotation_offset / total_markets) * 100
+        logger.info(f"   📊 Market rotation: scanning batch {start_idx}-{min(end_idx, total_markets)} of {total_markets} ({rotation_pct:.0f}% through cycle)")
+        
+        return batch
 
     def run_cycle(self):
         """Execute a complete trading cycle with position cap enforcement.
@@ -942,15 +1031,32 @@ class TradingStrategy:
                 
                 # Get top market candidates (limit scan to prevent timeouts)
                 try:
-                    # Get list of all products
-                    all_products = self.broker.get_all_products()
+                    # Get list of all products (with caching to reduce API calls)
+                    current_time = time.time()
+                    if (not self.all_markets_cache or 
+                        current_time - self.markets_cache_time > self.MARKETS_CACHE_TTL):
+                        logger.info("   🔄 Refreshing market list from API...")
+                        all_products = self.broker.get_all_products()
+                        if all_products:
+                            self.all_markets_cache = all_products
+                            self.markets_cache_time = current_time
+                            logger.info(f"   ✅ Cached {len(all_products)} markets")
+                        else:
+                            logger.warning("   ⚠️  No products available from API")
+                            return
+                    else:
+                        all_products = self.all_markets_cache
+                        cache_age = int(current_time - self.markets_cache_time)
+                        logger.info(f"   ✅ Using cached market list ({len(all_products)} markets, age: {cache_age}s)")
+                    
                     if not all_products:
                         logger.warning("   No products available for scanning")
                         return
                     
-                    # Scan top markets (limit to prevent timeouts)
-                    scan_limit = min(MARKET_SCAN_LIMIT, len(all_products))
-                    logger.info(f"   Scanning {scan_limit} markets...")
+                    # Use rotation to scan different markets each cycle
+                    markets_to_scan = self._get_rotated_markets(all_products)
+                    scan_limit = len(markets_to_scan)
+                    logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
                     
                     # Adaptive rate limiting: track consecutive 429 errors
                     rate_limit_counter = 0
@@ -965,14 +1071,15 @@ class TradingStrategy:
                         'no_entry_signal': 0,
                         'position_too_small': 0,
                         'signals_found': 0,
-                        'rate_limited': 0
+                        'rate_limited': 0,
+                        'cache_hits': 0
                     }
                     
-                    for i, symbol in enumerate(all_products[:scan_limit]):
+                    for i, symbol in enumerate(markets_to_scan):
                         filter_stats['total'] += 1
                         try:
-                            # Get candles
-                            candles = self.broker.get_candles(symbol, '5m', 100)
+                            # Get candles with caching to reduce duplicate API calls
+                            candles = self._get_cached_candles(symbol, '5m', 100)
                             
                             # Check if we got candles or if rate limited
                             if not candles:
@@ -1069,15 +1176,26 @@ class TradingStrategy:
                         
                         except Exception as e:
                             logger.debug(f"   Error scanning {symbol}: {e}")
+                            # Check if it's a rate limit error
+                            if '429' in str(e) or 'rate limit' in str(e).lower() or 'too many' in str(e).lower():
+                                filter_stats['rate_limited'] += 1
+                                rate_limit_counter += 1
+                                logger.warning(f"   ⚠️ Rate limit error on {symbol}: {e}")
+                                # Add extra delay to recover
+                                if rate_limit_counter >= 3:
+                                    logger.warning(f"   ⏸️  Pausing for 3s to allow API rate limits to reset...")
+                                    time.sleep(3.0)
+                                    rate_limit_counter = 0
                             continue
                         
                         # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429 errors)
-                        # Coinbase rate limits: ~10 requests/second burst, lower sustained rate
-                        # With MARKET_SCAN_DELAY, scanning 730 markets takes ~183 seconds (729 delays × 0.25s = 182.25s)
-                        # This provides ~4 requests/second sustained rate, well below burst limit
-                        # Adding jitter prevents thundering herd when multiple processes/retries happen
+                        # UPDATED (Jan 2026): Increased from 0.25s to 0.5s for better rate limit compliance
+                        # Coinbase rate limits: ~10 requests/second burst, ~3-5 req/s sustained safe rate
+                        # With MARKET_SCAN_DELAY=0.5s, we scan at 2 req/s which is well under limits
+                        # At 100 markets per cycle with 0.5s delay, scanning takes ~50 seconds
+                        # This prevents the 429 errors that occurred when scanning 730 markets at 0.25s (3 min scan)
                         if i < scan_limit - 1:  # Don't delay after last market
-                            jitter = random.uniform(0, 0.05)  # Add 0-50ms jitter
+                            jitter = random.uniform(0, 0.1)  # Add 0-100ms jitter
                             time.sleep(MARKET_SCAN_DELAY + jitter)
                     
                     # Log filtering summary
