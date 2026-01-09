@@ -2124,7 +2124,7 @@ class CoinbaseBroker(BaseBroker):
                     if is_403_forbidden:
                         # 403 "too many errors" means API key was temporarily blocked
                         # Need MUCH LONGER delays: 10s, 20s, 40s, 80s, 160s, 320s
-                        retry_delay = base_delay * 2 * (2 ** attempt)  # More aggressive backoff for 403
+                        retry_delay = base_delay * (2 ** (attempt + 1))  # More aggressive backoff for 403
                         jitter = random.uniform(0, retry_delay * 0.3)  # 30% jitter
                         total_delay = retry_delay + jitter
                         logging.warning(f"⚠️  API key temporarily blocked (403) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")

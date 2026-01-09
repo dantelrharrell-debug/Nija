@@ -21,7 +21,7 @@ logger = logging.getLogger("nija")
 # Instead of scanning all 730 markets every cycle, we batch scan smaller subsets
 MARKET_SCAN_LIMIT = 25   # Scan only 25 markets per cycle (reduced from 50 to prevent rate limits)
                          # This rotates through different markets each cycle
-                         # Complete scan of 730 markets takes ~30 cycles (~25 minutes)
+                         # Complete scan of 730 markets takes ~29 cycles (~25 minutes)
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Rate limiting constants (prevent 429 errors from Coinbase API)
@@ -35,7 +35,7 @@ MARKET_SCAN_DELAY = 2.0     # 2000ms delay between market scans (increased from 
                             # At 25 markets per cycle with 2.0s delay, scanning takes ~50 seconds
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
-MARKET_BATCH_SIZE = 25      # Number of markets to scan per cycle (reduced from 50)
+MARKET_BATCH_SIZE = 25      # Number of markets to scan per cycle (same as MARKET_SCAN_LIMIT)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # Exit strategy constants (no entry price required)
