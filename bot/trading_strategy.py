@@ -258,6 +258,7 @@ class TradingStrategy:
                 logger.warning(f"   ⚠️  Alpaca error: {e}")
             
             logger.info("=" * 70)
+            logger.info("✅ Broker connection phase complete")
             if connected_brokers:
                 logger.info(f"✅ CONNECTED BROKERS: {', '.join(connected_brokers)}")
                 total_balance = self.broker_manager.get_total_balance()
