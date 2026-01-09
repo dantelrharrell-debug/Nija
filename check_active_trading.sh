@@ -17,6 +17,12 @@ echo ""
 if command -v curl &> /dev/null; then
     echo "📡 Trying HTTP endpoint..."
     if curl -s --connect-timeout 2 http://localhost:5001/health &>/dev/null; then
+        curl_health_success=$?
+    else
+        curl_health_success=1
+    fi
+    
+    if [ $curl_health_success -eq 0 ]; then
         echo "✅ Dashboard server is running"
         echo ""
         echo "🌐 View in browser: http://localhost:5001/status"
@@ -26,7 +32,8 @@ if command -v curl &> /dev/null; then
         # Show quick status from API
         echo "Quick Status:"
         status=$(curl -s http://localhost:5001/api/trading_status)
-        if [ $? -eq 0 ]; then
+        curl_status_success=$?
+        if [ $curl_status_success -eq 0 ]; then
             # Parse JSON response (basic parsing without jq)
             trading_status=$(echo "$status" | grep -o '"trading_status":"[^"]*"' | cut -d'"' -f4)
             total_positions=$(echo "$status" | grep -o '"total_positions":[0-9]*' | cut -d':' -f2)

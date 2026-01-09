@@ -302,10 +302,11 @@ def get_trading_status():
 def human_readable_status():
     """Human-readable trading status page"""
     try:
-        # Get trading status data
-        import requests
-        response = requests.get('http://localhost:5001/api/trading_status')
-        data = response.json()
+        # Get trading status data by calling the function directly
+        # to avoid circular HTTP requests
+        with app.test_request_context():
+            status_response = get_trading_status()
+            data = status_response.get_json()
         
         # Build HTML
         html = """<!DOCTYPE html>
