@@ -24,6 +24,10 @@ load_dotenv()
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
+# Constants
+USER_ID = 'daivon_frazier'  # User #1 identifier
+MAX_ERROR_MSG_LENGTH = 100  # Maximum length for error message display
+
 def print_header(title):
     """Print a formatted header"""
     print("\n" + "=" * 80)
@@ -208,7 +212,7 @@ def test_broker_manager():
     
     try:
         from multi_account_broker_manager import MultiAccountBrokerManager
-        from broker_manager import BrokerType
+        from broker_manager import BrokerType, AccountType
         
         print("  🔄 Initializing MultiAccountBrokerManager...")
         print("  ℹ️  Note: This test attempts live API connections to Kraken")
@@ -229,22 +233,22 @@ def test_broker_manager():
                 print("    ❌ Failed to add master Kraken broker")
                 print("       (Network issue or invalid credentials)")
         except Exception as e:
-            print(f"    ⚠️  Connection error (may be expected in test/sandbox environments): {str(e)[:100]}")
+            print(f"    ⚠️  Connection error (may be expected in test/sandbox environments): {str(e)[:MAX_ERROR_MSG_LENGTH]}")
             master_broker = None
         
         # Try to add user broker (with timeout handling)
         print("\n  Testing User #1 Broker Addition:")
         try:
-            user_broker = manager.add_user_broker('daivon_frazier', BrokerType.KRAKEN)
+            user_broker = manager.add_user_broker(USER_ID, BrokerType.KRAKEN)
             if user_broker:
-                print("    ✅ User #1 (Daivon) Kraken broker added successfully")
-                user_balance = manager.get_user_balance('daivon_frazier', BrokerType.KRAKEN)
+                print(f"    ✅ User #1 ({USER_ID}) Kraken broker added successfully")
+                user_balance = manager.get_user_balance(USER_ID, BrokerType.KRAKEN)
                 print(f"    💰 User #1 balance: ${user_balance:.2f}")
             else:
-                print("    ❌ Failed to add user #1 Kraken broker")
+                print(f"    ❌ Failed to add user #1 Kraken broker")
                 print("       (Network issue or invalid credentials)")
         except Exception as e:
-            print(f"    ⚠️  Connection error (may be expected in test/sandbox environments): {str(e)[:100]}")
+            print(f"    ⚠️  Connection error (may be expected in test/sandbox environments): {str(e)[:MAX_ERROR_MSG_LENGTH]}")
             user_broker = None
         
         return master_broker is not None, user_broker is not None
