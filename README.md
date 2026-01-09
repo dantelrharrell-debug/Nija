@@ -72,7 +72,7 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 
 **Broker Status** 🌐:
 - **Currently Active**: Coinbase Advanced Trade ✅
-- **Is NIJA trading on Kraken?**: ❌ NO - [See Answer](ANSWER_IS_NIJA_TRADING_ON_KRAKEN_NOW.md)
+- **Kraken Trading**: ✅ ENABLED - [Setup Complete](KRAKEN_TRADING_ENABLED.md)
 - **Check all brokers**: `python check_broker_status.py`
 - **Multi-Broker Guide**: [MULTI_BROKER_STATUS.md](MULTI_BROKER_STATUS.md)
 
