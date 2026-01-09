@@ -120,17 +120,19 @@ class RetryHandler:
             if keyword in error_msg_lower:
                 return True
         
-        # CRITICAL: Check for 403 with "too many errors" or "forbidden" which indicates
-        # temporary API key blocking (Coinbase rate limiting), not authentication failure
-        # This is different from 403 Unauthorized which is a permanent auth failure
+        # CRITICAL: Check for 403 errors which can indicate either:
+        # 1. Temporary API key blocking from rate limiting (RETRYABLE)
+        # 2. Permanent authentication failure (NON-RETRYABLE)
+        # We need to distinguish between these cases based on the error message
         if '403' in error_msg_lower:
-            # 403 with rate limiting indicators is retryable
-            if any(indicator in error_msg_lower for indicator in ['too many', 'rate limit', 'forbidden too many']):
+            # 403 with rate limiting indicators is retryable (Coinbase temporary block)
+            # Example messages: "403 Forbidden Too many errors", "403 too many requests"
+            if any(indicator in error_msg_lower for indicator in ['too many', 'rate limit']):
                 return True
             # 403 with auth failure indicators is not retryable
             elif any(indicator in error_msg_lower for indicator in ['invalid', 'authentication', 'unauthorized']):
                 return False
-            # Default: treat 403 as non-retryable to avoid infinite loops on auth issues
+            # Default: treat bare 403 as non-retryable to avoid infinite loops on auth issues
             return False
         
         # Non-retryable errors
