@@ -175,6 +175,8 @@ class TradingStrategy:
             # CRITICAL (Jan 2026): Increased to 30s to ensure API rate limits fully reset
             # Previous 15s delay was insufficient when bot restarted after rate limiting
             # Coinbase appears to have a ~30 second cooldown period after 403 errors
+            # Combined with improved retry logic (10 attempts, 15s base delay with 120s cap),
+            # this gives the bot multiple chances to recover from temporary API blocks
             startup_delay = 30
             logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
             time.sleep(startup_delay)
