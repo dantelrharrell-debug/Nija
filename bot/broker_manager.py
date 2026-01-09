@@ -3603,11 +3603,49 @@ class BrokerManager:
     def __init__(self):
         self.brokers: Dict[BrokerType, BaseBroker] = {}
         self.active_broker: Optional[BaseBroker] = None
+        self.primary_broker_type: Optional[BrokerType] = None
     
     def add_broker(self, broker: BaseBroker):
         """Add a broker to the manager"""
         self.brokers[broker.broker_type] = broker
+        
+        # Auto-set as active broker if none is set yet
+        # Priority: Coinbase > Kraken > OKX > Binance > Alpaca
+        if self.active_broker is None:
+            self.set_primary_broker(broker.broker_type)
+        elif broker.broker_type == BrokerType.COINBASE and self.active_broker.broker_type != BrokerType.COINBASE:
+            # Always prefer Coinbase as primary if available
+            self.set_primary_broker(BrokerType.COINBASE)
+        
         print(f"📊 Added {broker.broker_type.value} broker")
+    
+    def set_primary_broker(self, broker_type: BrokerType) -> bool:
+        """
+        Set a specific broker as the primary/active broker.
+        
+        Args:
+            broker_type: Type of broker to set as primary
+            
+        Returns:
+            bool: True if successfully set as primary
+        """
+        if broker_type in self.brokers:
+            self.active_broker = self.brokers[broker_type]
+            self.primary_broker_type = broker_type
+            logging.info(f"📌 PRIMARY BROKER SET: {broker_type.value}")
+            return True
+        else:
+            logging.warning(f"⚠️  Cannot set {broker_type.value} as primary - not connected")
+            return False
+    
+    def get_primary_broker(self) -> Optional[BaseBroker]:
+        """
+        Get the current primary/active broker.
+        
+        Returns:
+            BaseBroker instance or None if no broker is active
+        """
+        return self.active_broker
     
     def connect_all(self):
         """Connect to all configured brokers"""

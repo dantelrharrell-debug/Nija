@@ -269,22 +269,17 @@ class TradingStrategy:
                         logger.info(f"   Updated capital allocation with ${total_balance:,.2f}")
                     except Exception as e:
                         logger.warning(f"   Failed to update capital allocation: {e}")
+                
+                # Get the primary broker from broker_manager (auto-set when brokers were added)
+                self.broker = self.broker_manager.get_primary_broker()
+                if self.broker:
+                    logger.info(f"📌 Primary broker: {self.broker.broker_type.value}")
+                else:
+                    logger.error("❌ No primary broker available")
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
-            logger.info("=" * 70)
-            
-            # For backward compatibility, set primary broker as self.broker
-            # Use first connected broker as primary (preferring Coinbase if available)
-            if self.broker_manager.brokers:
-                from broker_manager import BrokerType
-                # Try to use Coinbase as primary, fallback to any connected broker
-                if BrokerType.COINBASE in self.broker_manager.brokers:
-                    self.broker = self.broker_manager.brokers[BrokerType.COINBASE]
-                else:
-                    self.broker = list(self.broker_manager.brokers.values())[0]
-                logger.info(f"📌 Primary broker set to: {self.broker.broker_type.value}")
-            else:
                 self.broker = None
+            logger.info("=" * 70)
             
             # Initialize independent broker trader for multi-broker support
             try:
