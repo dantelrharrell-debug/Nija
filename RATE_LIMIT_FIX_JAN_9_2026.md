@@ -32,7 +32,7 @@ The bot's previous configuration was too aggressive:
 
 **After:**
 - **25 markets per batch** (50% reduction)
-- **2.0s delay between requests** (0.48 req/s)
+- **2.0s delay between requests** (0.5 req/s)
 - ~52 second scan time
 - Complete market scan: 29 cycles vs 15 cycles (slower but safer)
 
@@ -91,7 +91,7 @@ When the bot detects multiple consecutive rate limit errors, it now pauses for 5
 ### Market Scanning
 1. Scans **25 markets** per cycle (reduced from 50)
 2. **2.0 seconds** between each market request
-3. Effective rate: **~0.48 requests/second** (well below Coinbase limits)
+3. Effective rate: **~0.5 requests/second** (well below Coinbase limits)
 4. If rate limited:
    - Circuit breaker activates after 3-5 consecutive failures
    - Pauses for 5 seconds to allow API recovery
@@ -163,4 +163,4 @@ This fix implements a **much more conservative** approach to API rate limiting:
 - **2x longer startup delay** (30s vs 15s)
 - **Up to 320s backoff** for 403 errors
 
-The effective request rate is now **~0.48 req/s**, which is well below Coinbase's sustained rate limit and should eliminate both 403 and 429 errors completely.
+The effective request rate is now **~0.5 req/s**, which is well below Coinbase's sustained rate limit and should eliminate both 403 and 429 errors completely.
