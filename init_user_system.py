@@ -115,9 +115,9 @@ def initialize_daivon_frazier():
     email = "Frazierdaivon@gmail.com"
     name = "Daivon Frazier"
     
-    # API credentials
-    coinbase_api_key = "HSo/f1zjeQALCM/rri9bjTB5JisQ/SPgurCRTx8W7kLD7psjcv2PXEf+"
-    coinbase_api_secret = "6WOxnBLq+r4ln2Zz7nT0Nvv8CMkaolHtjYdOgTm7NWIq/mJqV8KbDA2XaThP65bHK9QvpEabRr1u38FrBJntaQ=="
+    # API credentials (Kraken)
+    kraken_api_key = "8zdYy7PMRjnyDraiJUtrAb3wmu8MFxKBON3nrTkjkwnJ9iIUQyKNGKP7"
+    kraken_api_secret = "e2xaakHliGa5RwH7uXwuq6RLGospWaQhScaVJfsS6wIa9huHxmx+HgeQCax8A+gvqV3P9jXD9YbR3wtsipdpRA=="
     
     # Create user account
     print("\n[1/4] Creating user account...")
@@ -134,15 +134,15 @@ def initialize_daivon_frazier():
     api_mgr = get_api_key_manager()
     api_mgr.store_user_api_key(
         user_id=user_id,
-        broker="coinbase",
-        api_key=coinbase_api_key,
-        api_secret=coinbase_api_secret,
+        broker="kraken",
+        api_key=kraken_api_key,
+        api_secret=kraken_api_secret,
         additional_params={
             'name': name,
             'email': email
         }
     )
-    print(f"✅ API credentials encrypted and stored")
+    print(f"✅ API credentials encrypted and stored for Kraken")
     
     # Configure permissions
     print("\n[3/4] Configuring permissions...")
