@@ -178,6 +178,7 @@ class TradingStrategy:
             startup_delay = 30
             logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
             time.sleep(startup_delay)
+            logger.info("✅ Startup delay complete, beginning broker connections...")
             
             # Try to connect Coinbase (primary broker)
             logger.info("📊 Attempting to connect Coinbase Advanced Trade...")
@@ -257,6 +258,7 @@ class TradingStrategy:
                 logger.warning(f"   ⚠️  Alpaca error: {e}")
             
             logger.info("=" * 70)
+            logger.info("✅ Broker connection phase complete")
             if connected_brokers:
                 logger.info(f"✅ CONNECTED BROKERS: {', '.join(connected_brokers)}")
                 total_balance = self.broker_manager.get_total_balance()
