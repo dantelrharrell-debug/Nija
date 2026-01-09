@@ -58,9 +58,11 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **User #1**: Daivon Frazier (daivon_frazier) - Pro tier, Coinbase integration ✅
 
 **User Management**:
+- **Quick check if User #1 is trading**: `python is_user1_trading.py` or `./check_user1_trading.sh`
 - Check all users: `python check_all_users.py`
 - Initialize system: `python init_user_system.py`
 - Manage Daivon: `python manage_user_daivon.py [status|enable|disable|info]`
+- **Detailed guide**: [IS_USER1_TRADING.md](IS_USER1_TRADING.md)
 
 ---
 
