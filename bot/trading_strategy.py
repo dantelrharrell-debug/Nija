@@ -335,6 +335,24 @@ class TradingStrategy:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
                 self.broker = None
                 self.user1_broker = None
+            
+            # Log clear trading status summary
+            logger.info("=" * 70)
+            logger.info("📊 ACCOUNT TRADING STATUS SUMMARY")
+            logger.info("=" * 70)
+            
+            # Master account status
+            if self.broker:
+                logger.info(f"✅ MASTER ACCOUNT: TRADING (Broker: {self.broker.broker_type.value})")
+            else:
+                logger.info("❌ MASTER ACCOUNT: NOT TRADING (No broker connected)")
+            
+            # User #1 status - always show explicit status
+            if self.user1_broker:
+                logger.info("✅ USER #1 (Daivon Frazier): TRADING (Broker: Kraken)")
+            else:
+                logger.info("❌ USER #1 (Daivon Frazier): NOT TRADING (Connection failed or not configured)")
+            
             logger.info("=" * 70)
             
             # Initialize independent broker trader for multi-broker support
