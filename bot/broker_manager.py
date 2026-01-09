@@ -249,9 +249,15 @@ class CoinbaseBroker(BaseBroker):
                 error_msg = str(e).lower()
                 
                 # Check if this is a rate limiting error (403, 429, or "too many" errors)
-                is_rate_limit = any(keyword in error_msg for keyword in [
-                    '403', 'forbidden', 'too many', '429', 'rate limit', 'too many requests'
-                ])
+                # Use more precise pattern matching to avoid false positives
+                is_rate_limit = (
+                    '403 ' in error_msg or ' 403' in error_msg or  # HTTP 403 status
+                    '429 ' in error_msg or ' 429' in error_msg or  # HTTP 429 status
+                    'forbidden' in error_msg or
+                    'too many' in error_msg or
+                    'rate limit' in error_msg or
+                    'too many requests' in error_msg
+                )
                 
                 # If this is the last attempt or not a rate limit error, raise
                 if attempt >= max_retries - 1 or not is_rate_limit:
@@ -259,7 +265,7 @@ class CoinbaseBroker(BaseBroker):
                 
                 # Calculate exponential backoff delay
                 # For 403 errors, use longer delays (more aggressive backoff)
-                if '403' in error_msg or 'too many errors' in error_msg:
+                if ('403 ' in error_msg or ' 403' in error_msg or 'too many errors' in error_msg):
                     delay = base_delay * (3 ** attempt)  # 5s, 15s, 45s, 135s, 405s
                 else:
                     delay = base_delay * (2 ** attempt)  # 5s, 10s, 20s, 40s, 80s
@@ -267,9 +273,6 @@ class CoinbaseBroker(BaseBroker):
                 logging.warning(f"⚠️  API rate limit hit (attempt {attempt + 1}/{max_retries}): {e}")
                 logging.warning(f"   Waiting {delay:.1f}s before retry...")
                 time.sleep(delay)
-        
-        # Should never reach here, but just in case
-        raise Exception(f"Failed after {max_retries} retries")
     
     def _log_trade_to_journal(self, symbol: str, side: str, price: float, 
                                size_usd: float, quantity: float, pnl_data: dict = None):
