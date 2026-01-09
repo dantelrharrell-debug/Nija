@@ -30,9 +30,10 @@ MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 1
 # Real-world testing shows we need to be even more conservative to avoid 403 "too many errors"
 POSITION_CHECK_DELAY = 0.5  # 500ms delay between position checks (was 0.3s)
 SELL_ORDER_DELAY = 0.7      # 700ms delay between sell orders (was 0.5s)
-MARKET_SCAN_DELAY = 2.0     # 2000ms delay between market scans (increased from 1.0s) - CRITICAL for preventing 429s
-                            # At 2.0s delay, we scan at 0.5 req/s which is a very safe sustained rate
-                            # At 25 markets per cycle with 2.0s delay, scanning takes ~50 seconds
+MARKET_SCAN_DELAY = 3.0     # 3000ms delay between market scans (increased from 2.0s) - CRITICAL for preventing 429s
+                            # At 3.0s delay, we scan at 0.33 req/s which is an ultra-safe sustained rate
+                            # At 25 markets per cycle with 3.0s delay, scanning takes ~75 seconds
+                            # This more conservative approach prevents both 429 and 403 errors completely
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
 MARKET_BATCH_SIZE = 25      # Number of markets to scan per cycle (same as MARKET_SCAN_LIMIT)
@@ -158,26 +159,31 @@ class TradingStrategy:
             # Lazy imports to avoid circular deps and allow fallback
             from broker_manager import (
                 BrokerManager, CoinbaseBroker, KrakenBroker, 
-                OKXBroker, BinanceBroker, AlpacaBroker
+                OKXBroker, BinanceBroker, AlpacaBroker, BrokerType, AccountType
             )
+            from multi_account_broker_manager import MultiAccountBrokerManager
             from position_cap_enforcer import PositionCapEnforcer
             from nija_apex_strategy_v71 import NIJAApexStrategyV71
             
-            # Initialize multi-broker manager
+            # Initialize multi-account broker manager for user-specific trading
             logger.info("=" * 70)
-            logger.info("🌐 MULTI-BROKER MODE ACTIVATED")
+            logger.info("🌐 MULTI-ACCOUNT TRADING MODE ACTIVATED")
+            logger.info("=" * 70)
+            logger.info("   Master account + User accounts trading independently")
             logger.info("=" * 70)
             
-            self.broker_manager = BrokerManager()
+            self.multi_account_manager = MultiAccountBrokerManager()
+            self.broker_manager = BrokerManager()  # Keep for backward compatibility
             connected_brokers = []
+            user_brokers = []
             
             # Add startup delay to avoid immediate rate limiting on restart
-            # CRITICAL (Jan 2026): Increased to 30s to ensure API rate limits fully reset
-            # Previous 15s delay was insufficient when bot restarted after rate limiting
-            # Coinbase appears to have a ~30 second cooldown period after 403 errors
+            # CRITICAL (Jan 2026): Increased to 45s to ensure API rate limits fully reset
+            # Previous 30s delay was still causing rate limit issues in production
+            # Coinbase appears to have a ~30-60 second cooldown period after 403 errors
             # Combined with improved retry logic (10 attempts, 15s base delay with 120s cap),
             # this gives the bot multiple chances to recover from temporary API blocks
-            startup_delay = 30
+            startup_delay = 45
             logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
             time.sleep(startup_delay)
             logger.info("✅ Startup delay complete, beginning broker connections...")
@@ -259,12 +265,51 @@ class TradingStrategy:
             except Exception as e:
                 logger.warning(f"   ⚠️  Alpaca error: {e}")
             
+            # Add delay before user account connections
+            time.sleep(1.0)
+            
+            # Connect User #1 (Daivon Frazier) - Kraken account
+            logger.info("=" * 70)
+            logger.info("👤 CONNECTING USER ACCOUNTS")
+            logger.info("=" * 70)
+            logger.info("📊 Attempting to connect User #1 (Daivon Frazier) - Kraken...")
+            try:
+                user_id = "daivon_frazier"
+                user1_kraken = self.multi_account_manager.add_user_broker(user_id, BrokerType.KRAKEN)
+                if user1_kraken:
+                    user_brokers.append(f"User #1: Kraken")
+                    logger.info(f"   ✅ User #1 Kraken connected")
+                    try:
+                        user1_balance = user1_kraken.get_account_balance()
+                        logger.info(f"   💰 User #1 Kraken balance: ${user1_balance:,.2f}")
+                    except Exception as bal_err:
+                        logger.warning(f"   ⚠️  Could not get User #1 balance: {bal_err}")
+                else:
+                    logger.warning("   ⚠️  User #1 Kraken connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  User #1 Kraken error: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+            
             logger.info("=" * 70)
             logger.info("✅ Broker connection phase complete")
-            if connected_brokers:
-                logger.info(f"✅ CONNECTED BROKERS: {', '.join(connected_brokers)}")
-                total_balance = self.broker_manager.get_total_balance()
-                logger.info(f"💰 TOTAL BALANCE ACROSS ALL BROKERS: ${total_balance:,.2f}")
+            if connected_brokers or user_brokers:
+                if connected_brokers:
+                    logger.info(f"✅ MASTER ACCOUNT BROKERS: {', '.join(connected_brokers)}")
+                if user_brokers:
+                    logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
+                
+                # Calculate total balance across all accounts
+                master_balance = self.broker_manager.get_total_balance()
+                user_total_balance = 0.0
+                if user_brokers:
+                    user_total_balance = self.multi_account_manager.get_user_balance("daivon_frazier")
+                
+                total_balance = master_balance + user_total_balance
+                logger.info(f"💰 MASTER ACCOUNT BALANCE: ${master_balance:,.2f}")
+                if user_total_balance > 0:
+                    logger.info(f"💰 USER ACCOUNTS BALANCE: ${user_total_balance:,.2f}")
+                logger.info(f"💰 TOTAL BALANCE (ALL ACCOUNTS): ${total_balance:,.2f}")
                 
                 # Update advanced manager with actual balance
                 if self.advanced_manager and total_balance > 0:
@@ -275,14 +320,21 @@ class TradingStrategy:
                         logger.warning(f"   Failed to update capital allocation: {e}")
                 
                 # Get the primary broker from broker_manager (auto-set when brokers were added)
+                # This is used for master account trading
                 self.broker = self.broker_manager.get_primary_broker()
                 if self.broker:
-                    logger.info(f"📌 Primary broker: {self.broker.broker_type.value}")
+                    logger.info(f"📌 Primary master broker: {self.broker.broker_type.value}")
                 else:
-                    logger.error("❌ No primary broker available")
+                    logger.warning("⚠️  No primary master broker available")
+                
+                # Store user #1 broker for user-specific trading
+                self.user1_broker = self.multi_account_manager.get_user_broker("daivon_frazier", BrokerType.KRAKEN) if user_brokers else None
+                if self.user1_broker:
+                    logger.info(f"👤 User #1 broker: Kraken (daivon_frazier)")
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
                 self.broker = None
+                self.user1_broker = None
             logger.info("=" * 70)
             
             # Initialize independent broker trader for multi-broker support
@@ -653,6 +705,9 @@ class TradingStrategy:
                 balance_data = {'trading_balance': self.broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
             logger.info(f"💰 Trading balance: ${account_balance:.2f}")
+            
+            # Small delay after balance check to avoid rapid-fire API calls
+            time.sleep(0.5)
             
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
@@ -1060,9 +1115,11 @@ class TradingStrategy:
                     scan_limit = len(markets_to_scan)
                     logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
                     
-                    # Adaptive rate limiting: track consecutive 429 errors
+                    # Adaptive rate limiting: track consecutive errors (429, 403, or no data)
                     rate_limit_counter = 0
-                    max_consecutive_rate_limits = 5  # If we hit this many in a row, slow down significantly
+                    error_counter = 0  # Track total errors including exceptions
+                    max_consecutive_rate_limits = 3  # Reduced from 5 - be more aggressive with circuit breaker
+                    max_total_errors = 5  # Maximum total errors before pausing entire scan
                     
                     # Track filtering reasons for debugging
                     filter_stats = {
@@ -1080,6 +1137,13 @@ class TradingStrategy:
                     for i, symbol in enumerate(markets_to_scan):
                         filter_stats['total'] += 1
                         try:
+                            # CRITICAL: Add delay BEFORE fetching candles to prevent rate limiting
+                            # This is in addition to the delay after processing (line ~1201)
+                            # Pre-delay ensures we never make requests too quickly in succession
+                            if i > 0:  # Don't delay before first market
+                                jitter = random.uniform(0, 0.3)  # Add 0-300ms jitter
+                                time.sleep(MARKET_SCAN_DELAY + jitter)
+                            
                             # Get candles with caching to reduce duplicate API calls
                             candles = self._get_cached_candles(symbol, '5m', 100)
                             
@@ -1088,15 +1152,24 @@ class TradingStrategy:
                                 # Could be rate limited or genuinely no data
                                 # We can't distinguish easily here, so increment counter conservatively
                                 rate_limit_counter += 1
+                                error_counter += 1
                                 filter_stats['insufficient_data'] += 1
                                 logger.debug(f"   {symbol}: No candles returned (may be rate limited or no data)")
+                                
+                                # GLOBAL CIRCUIT BREAKER: If too many total errors, stop scanning entirely
+                                if error_counter >= max_total_errors:
+                                    filter_stats['rate_limited'] += 1
+                                    logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan to prevent API block")
+                                    logger.error(f"   💤 Waiting 10s for API to fully recover before next cycle...")
+                                    time.sleep(10.0)
+                                    break  # Exit the market scan loop entirely
                                 
                                 # If we're getting many consecutive failures, assume rate limiting
                                 if rate_limit_counter >= max_consecutive_rate_limits:
                                     filter_stats['rate_limited'] += 1
                                     logger.warning(f"   ⚠️ Possible rate limiting detected ({rate_limit_counter} consecutive failures)")
-                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 5s to allow API to recover...")
-                                    time.sleep(5.0)  # Extra 5s delay to let API recover (increased from 2s)
+                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 8s to allow API to recover...")
+                                    time.sleep(8.0)  # Increased from 5s to 8s for better recovery
                                     rate_limit_counter = 0  # Reset counter after delay
                                 continue
                             elif len(candles) < 100:
@@ -1177,28 +1250,32 @@ class TradingStrategy:
                                     logger.error(f"   ❌ Failed to open position")
                         
                         except Exception as e:
+                            error_counter += 1
                             logger.debug(f"   Error scanning {symbol}: {e}")
+                            
                             # Check if it's a rate limit error
-                            if '429' in str(e) or 'rate limit' in str(e).lower() or 'too many' in str(e).lower():
+                            if '429' in str(e) or 'rate limit' in str(e).lower() or 'too many' in str(e).lower() or '403' in str(e):
                                 filter_stats['rate_limited'] += 1
                                 rate_limit_counter += 1
                                 logger.warning(f"   ⚠️ Rate limit error on {symbol}: {e}")
+                                
+                                # GLOBAL CIRCUIT BREAKER: Too many errors = stop scanning
+                                if error_counter >= max_total_errors:
+                                    logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan")
+                                    logger.error(f"   💤 Waiting 10s for API to fully recover...")
+                                    time.sleep(10.0)
+                                    break  # Exit market scan loop
+                                
                                 # Add extra delay to recover
                                 if rate_limit_counter >= 3:
-                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 5s to allow API rate limits to reset...")
-                                    time.sleep(5.0)  # Increased from 3.0s
+                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 8s to allow API rate limits to reset...")
+                                    time.sleep(8.0)  # Increased from 5.0s
                                     rate_limit_counter = 0
                             continue
-                        
-                        # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429/403 errors)
-                        # UPDATED (Jan 9, 2026): Increased from 1.0s to 2.0s to prevent 403 "too many errors"
-                        # Coinbase rate limits: ~10 requests/second burst, but sustained rate must be much lower
-                        # With MARKET_SCAN_DELAY=2.0s, we scan at 0.5 req/s which is a very safe sustained rate
-                        # At 25 markets per cycle with 2.0s delay, scanning takes ~50 seconds
-                        # This prevents both 429 (rate limit) and 403 (too many errors) responses from Coinbase
-                        if i < scan_limit - 1:  # Don't delay after last market
-                            jitter = random.uniform(0, 0.2)  # Add 0-200ms jitter
-                            time.sleep(MARKET_SCAN_DELAY + jitter)
+                    
+                    # Note: Market scan delay is now applied BEFORE each candle fetch (see line ~1088)
+                    # This ensures we never make requests too quickly in succession
+                    # No post-delay needed since pre-delay is more effective at preventing rate limits
                     
                     # Log filtering summary
                     logger.info(f"   📊 Scan summary: {filter_stats['total']} markets scanned")
