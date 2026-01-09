@@ -89,14 +89,14 @@ NIJA Trading Bot
 
 **Master Account:**
 ```bash
-KRAKEN_MASTER_API_KEY=8zdYy7PMRjnyDraiJUtrAb3wmu8MFxKBON3nrTkjkwnJ9iIUQyKNGKP7
-KRAKEN_MASTER_API_SECRET=e2xaakHliGa5RwH7uXwuq6RLGospWaQhScaVJfsS6wIa9huHxmx+HgeQCax8A+gvqV3P9jXD9YbR3wtsipdpRA==
+KRAKEN_MASTER_API_KEY=your_master_api_key_here
+KRAKEN_MASTER_API_SECRET=your_master_api_secret_here
 ```
 
 **User #1 Account:**
 ```bash
-KRAKEN_USER_DAIVON_API_KEY=HSo/f1zjeQALCM/rri9bjTB5JisQ/SPgurCRTx8W7kLD7psjcv2PXEf+
-KRAKEN_USER_DAIVON_API_SECRET=6WOxnBLq+r4ln2Zz7nT0Nvv8CMkaolHtjYdOgTm7NWIq/mJqV8KbDA2XaThP65bHK9QvpEabRr1u38FrBJntaQ==
+KRAKEN_USER_DAIVON_API_KEY=your_user_api_key_here
+KRAKEN_USER_DAIVON_API_SECRET=your_user_api_secret_here
 ```
 
 ### 2. Broker Initialization

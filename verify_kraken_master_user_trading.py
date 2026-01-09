@@ -83,7 +83,7 @@ def test_master_connection():
         api_secret = os.getenv("KRAKEN_MASTER_API_SECRET", "").strip()
         
         if not api_key or not api_secret:
-            print("  ❌ Cannot test connection: Credentials not found")
+            print(f"  ❌ Cannot test connection: Credentials not found for master account")
             return False, None
         
         # Initialize Kraken API
@@ -148,7 +148,7 @@ def test_user_connection():
         api_secret = os.getenv("KRAKEN_USER_DAIVON_API_SECRET", "").strip()
         
         if not api_key or not api_secret:
-            print("  ❌ Cannot test connection: Credentials not found")
+            print(f"  ❌ Cannot test connection: Credentials not found for user #1 (Daivon)")
             return False, None
         
         # Initialize Kraken API
@@ -211,8 +211,9 @@ def test_broker_manager():
         from broker_manager import BrokerType
         
         print("  🔄 Initializing MultiAccountBrokerManager...")
-        print("  ℹ️  Note: This test attempts live API connections")
-        print("     Timeouts or network errors are expected in some environments")
+        print("  ℹ️  Note: This test attempts live API connections to Kraken")
+        print("     Network timeouts may occur in restricted environments or with slow connections")
+        print("     This is normal and doesn't affect production deployment")
         
         manager = MultiAccountBrokerManager()
         
@@ -228,7 +229,7 @@ def test_broker_manager():
                 print("    ❌ Failed to add master Kraken broker")
                 print("       (Network issue or invalid credentials)")
         except Exception as e:
-            print(f"    ⚠️  Connection error (expected in sandbox): {str(e)[:100]}")
+            print(f"    ⚠️  Connection error (may be expected in test/sandbox environments): {str(e)[:100]}")
             master_broker = None
         
         # Try to add user broker (with timeout handling)
@@ -243,7 +244,7 @@ def test_broker_manager():
                 print("    ❌ Failed to add user #1 Kraken broker")
                 print("       (Network issue or invalid credentials)")
         except Exception as e:
-            print(f"    ⚠️  Connection error (expected in sandbox): {str(e)[:100]}")
+            print(f"    ⚠️  Connection error (may be expected in test/sandbox environments): {str(e)[:100]}")
             user_broker = None
         
         return master_broker is not None, user_broker is not None
