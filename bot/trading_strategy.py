@@ -19,23 +19,23 @@ logger = logging.getLogger("nija")
 # CRITICAL FIX (Jan 2026): Reduced market scanning to prevent 429 rate limit errors
 # Coinbase has strict rate limits (~10 req/s burst, lower sustained)
 # Instead of scanning all 730 markets every cycle, we batch scan smaller subsets
-MARKET_SCAN_LIMIT = 50   # Scan only 50 markets per cycle (reduced from 100 to prevent rate limits)
+MARKET_SCAN_LIMIT = 25   # Scan only 25 markets per cycle (reduced from 50 to prevent rate limits)
                          # This rotates through different markets each cycle
-                         # Complete scan of 730 markets takes ~15 cycles (37.5 minutes)
+                         # Complete scan of 730 markets takes ~29 cycles (~25 minutes)
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Rate limiting constants (prevent 429 errors from Coinbase API)
 # UPDATED (Jan 9, 2026): Further increased delays to prevent 403/429 rate limit errors
 # Coinbase rate limits: ~10 requests/second burst, but sustained rate must be much lower
-# Real-world testing shows 1 req/s is the safe sustained rate to avoid 403 "too many errors"
-POSITION_CHECK_DELAY = 0.3  # 300ms delay between position checks (was 0.2s)
-SELL_ORDER_DELAY = 0.5      # 500ms delay between sell orders (was 0.3s)
-MARKET_SCAN_DELAY = 1.0     # 1000ms delay between market scans (increased from 0.5s) - CRITICAL for preventing 429s
-                            # At 1.0s delay, we scan at 1 req/s which is the safe sustained rate
-                            # At 50 markets per cycle with 1.0s delay, scanning takes ~50 seconds
+# Real-world testing shows we need to be even more conservative to avoid 403 "too many errors"
+POSITION_CHECK_DELAY = 0.5  # 500ms delay between position checks (was 0.3s)
+SELL_ORDER_DELAY = 0.7      # 700ms delay between sell orders (was 0.5s)
+MARKET_SCAN_DELAY = 2.0     # 2000ms delay between market scans (increased from 1.0s) - CRITICAL for preventing 429s
+                            # At 2.0s delay, we scan at 0.5 req/s which is a very safe sustained rate
+                            # At 25 markets per cycle with 2.0s delay, scanning takes ~50 seconds
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
-MARKET_BATCH_SIZE = 50      # Number of markets to scan per cycle (reduced from 100)
+MARKET_BATCH_SIZE = 25      # Number of markets to scan per cycle (same as MARKET_SCAN_LIMIT)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # Exit strategy constants (no entry price required)
@@ -172,9 +172,10 @@ class TradingStrategy:
             connected_brokers = []
             
             # Add startup delay to avoid immediate rate limiting on restart
-            # CRITICAL (Jan 2026): Increased to 15s to ensure API rate limits fully reset
-            # Previous 10s delay was insufficient when bot restarted after rate limiting
-            startup_delay = 15
+            # CRITICAL (Jan 2026): Increased to 30s to ensure API rate limits fully reset
+            # Previous 15s delay was insufficient when bot restarted after rate limiting
+            # Coinbase appears to have a ~30 second cooldown period after 403 errors
+            startup_delay = 30
             logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
             time.sleep(startup_delay)
             
@@ -192,7 +193,7 @@ class TradingStrategy:
                 logger.warning(f"   ⚠️  Coinbase error: {e}")
             
             # Add delay between broker connections to avoid rate limiting
-            time.sleep(0.5)
+            time.sleep(2.0)  # Increased from 0.5s to 2.0s
             
             # Try to connect Kraken Pro
             logger.info("📊 Attempting to connect Kraken Pro...")
@@ -1095,8 +1096,8 @@ class TradingStrategy:
                                 if rate_limit_counter >= max_consecutive_rate_limits:
                                     filter_stats['rate_limited'] += 1
                                     logger.warning(f"   ⚠️ Possible rate limiting detected ({rate_limit_counter} consecutive failures)")
-                                    logger.warning(f"   Increasing delay to allow API to recover...")
-                                    time.sleep(2.0)  # Extra 2s delay to let API recover
+                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 5s to allow API to recover...")
+                                    time.sleep(5.0)  # Extra 5s delay to let API recover (increased from 2s)
                                     rate_limit_counter = 0  # Reset counter after delay
                                 continue
                             elif len(candles) < 100:
@@ -1185,19 +1186,19 @@ class TradingStrategy:
                                 logger.warning(f"   ⚠️ Rate limit error on {symbol}: {e}")
                                 # Add extra delay to recover
                                 if rate_limit_counter >= 3:
-                                    logger.warning(f"   ⏸️  Pausing for 3s to allow API rate limits to reset...")
-                                    time.sleep(3.0)
+                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 5s to allow API rate limits to reset...")
+                                    time.sleep(5.0)  # Increased from 3.0s
                                     rate_limit_counter = 0
                             continue
                         
                         # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429/403 errors)
-                        # UPDATED (Jan 9, 2026): Increased from 0.5s to 1.0s to prevent 403 "too many errors"
-                        # Coinbase rate limits: ~10 requests/second burst, but sustained rate must be ~1 req/s
-                        # With MARKET_SCAN_DELAY=1.0s, we scan at 1 req/s which is the safe sustained rate
-                        # At 50 markets per cycle with 1.0s delay, scanning takes ~50 seconds
+                        # UPDATED (Jan 9, 2026): Increased from 1.0s to 2.0s to prevent 403 "too many errors"
+                        # Coinbase rate limits: ~10 requests/second burst, but sustained rate must be much lower
+                        # With MARKET_SCAN_DELAY=2.0s, we scan at 0.5 req/s which is a very safe sustained rate
+                        # At 25 markets per cycle with 2.0s delay, scanning takes ~50 seconds
                         # This prevents both 429 (rate limit) and 403 (too many errors) responses from Coinbase
                         if i < scan_limit - 1:  # Don't delay after last market
-                            jitter = random.uniform(0, 0.1)  # Add 0-100ms jitter
+                            jitter = random.uniform(0, 0.2)  # Add 0-200ms jitter
                             time.sleep(MARKET_SCAN_DELAY + jitter)
                     
                     # Log filtering summary

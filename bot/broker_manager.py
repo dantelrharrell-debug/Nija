@@ -287,14 +287,14 @@ class CoinbaseBroker(BaseBroker):
             # Test connection by fetching accounts with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
-            max_attempts = 5
-            base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
+            max_attempts = 6  # Increased from 5 to give more chances for API to recover
+            base_delay = 10.0  # Increased from 5.0s to allow API key blocks to reset longer
             
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
-                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
+                        # For 403 errors, we need LONGER delays: 10s, 20s, 40s, 80s, 160s (attempts 2-6)
                         delay = base_delay * (2 ** (attempt - 2))
                         logging.info(f"🔄 Retrying connection in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
@@ -2072,16 +2072,16 @@ class CoinbaseBroker(BaseBroker):
         """Get candle data with improved retry logic for rate limiting
         
         UPDATED (Jan 9, 2026): Enhanced exponential backoff to prevent 429/403 errors
-        - Increased base delay from 1.5s to 3.0s for safer recovery
-        - Increased max retries from 3 to 5 for better resilience
+        - Increased base delay from 3.0s to 5.0s for safer recovery
+        - Increased max retries from 5 to 6 for better resilience
         - Added explicit handling for 403 "too many errors" (API key temporary ban)
-        - 403 errors get longer delays than 429 (rate limit) errors
+        - 403 errors get much longer delays than 429 (rate limit) errors
         """
         import time
         import random
         
-        max_retries = 5  # Increased from 3 to handle both 429 and 403 errors
-        base_delay = 3.0  # Increased from 1.5s to 3.0s for safer recovery from rate limits
+        max_retries = 6  # Increased from 5 to handle both 429 and 403 errors
+        base_delay = 5.0  # Increased from 3.0s to 5.0s for safer recovery from rate limits
         
         for attempt in range(max_retries):
             try:
@@ -2123,13 +2123,13 @@ class CoinbaseBroker(BaseBroker):
                     # Different handling for 403 vs 429
                     if is_403_forbidden:
                         # 403 "too many errors" means API key was temporarily blocked
-                        # Need LONGER delays: 5s, 10s, 20s, 40s, 80s
+                        # Need MUCH LONGER delays: 10s, 20s, 40s, 80s, 160s, 320s
                         retry_delay = base_delay * (2 ** (attempt + 1))  # More aggressive backoff for 403
                         jitter = random.uniform(0, retry_delay * 0.3)  # 30% jitter
                         total_delay = retry_delay + jitter
                         logging.warning(f"⚠️  API key temporarily blocked (403) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")
                     else:
-                        # 429 rate limit - standard exponential backoff: 3s, 6s, 12s, 24s, 48s
+                        # 429 rate limit - standard exponential backoff: 5s, 10s, 20s, 40s, 80s, 160s
                         retry_delay = base_delay * (2 ** attempt)
                         jitter = random.uniform(0, retry_delay * 0.5)  # 50% jitter to prevent thundering herd
                         total_delay = retry_delay + jitter
