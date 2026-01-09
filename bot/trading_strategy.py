@@ -159,18 +159,23 @@ class TradingStrategy:
             # Lazy imports to avoid circular deps and allow fallback
             from broker_manager import (
                 BrokerManager, CoinbaseBroker, KrakenBroker, 
-                OKXBroker, BinanceBroker, AlpacaBroker
+                OKXBroker, BinanceBroker, AlpacaBroker, BrokerType, AccountType
             )
+            from multi_account_broker_manager import MultiAccountBrokerManager
             from position_cap_enforcer import PositionCapEnforcer
             from nija_apex_strategy_v71 import NIJAApexStrategyV71
             
-            # Initialize multi-broker manager
+            # Initialize multi-account broker manager for user-specific trading
             logger.info("=" * 70)
-            logger.info("🌐 MULTI-BROKER MODE ACTIVATED")
+            logger.info("🌐 MULTI-ACCOUNT TRADING MODE ACTIVATED")
+            logger.info("=" * 70)
+            logger.info("   Master account + User accounts trading independently")
             logger.info("=" * 70)
             
-            self.broker_manager = BrokerManager()
+            self.multi_account_manager = MultiAccountBrokerManager()
+            self.broker_manager = BrokerManager()  # Keep for backward compatibility
             connected_brokers = []
+            user_brokers = []
             
             # Add startup delay to avoid immediate rate limiting on restart
             # CRITICAL (Jan 2026): Increased to 45s to ensure API rate limits fully reset
@@ -260,12 +265,51 @@ class TradingStrategy:
             except Exception as e:
                 logger.warning(f"   ⚠️  Alpaca error: {e}")
             
+            # Add delay before user account connections
+            time.sleep(1.0)
+            
+            # Connect User #1 (Daivon Frazier) - Kraken account
+            logger.info("=" * 70)
+            logger.info("👤 CONNECTING USER ACCOUNTS")
+            logger.info("=" * 70)
+            logger.info("📊 Attempting to connect User #1 (Daivon Frazier) - Kraken...")
+            try:
+                user_id = "daivon_frazier"
+                user1_kraken = self.multi_account_manager.add_user_broker(user_id, BrokerType.KRAKEN)
+                if user1_kraken:
+                    user_brokers.append(f"User #1: Kraken")
+                    logger.info(f"   ✅ User #1 Kraken connected")
+                    try:
+                        user1_balance = user1_kraken.get_account_balance()
+                        logger.info(f"   💰 User #1 Kraken balance: ${user1_balance:,.2f}")
+                    except Exception as bal_err:
+                        logger.warning(f"   ⚠️  Could not get User #1 balance: {bal_err}")
+                else:
+                    logger.warning("   ⚠️  User #1 Kraken connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  User #1 Kraken error: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+            
             logger.info("=" * 70)
             logger.info("✅ Broker connection phase complete")
-            if connected_brokers:
-                logger.info(f"✅ CONNECTED BROKERS: {', '.join(connected_brokers)}")
-                total_balance = self.broker_manager.get_total_balance()
-                logger.info(f"💰 TOTAL BALANCE ACROSS ALL BROKERS: ${total_balance:,.2f}")
+            if connected_brokers or user_brokers:
+                if connected_brokers:
+                    logger.info(f"✅ MASTER ACCOUNT BROKERS: {', '.join(connected_brokers)}")
+                if user_brokers:
+                    logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
+                
+                # Calculate total balance across all accounts
+                master_balance = self.broker_manager.get_total_balance()
+                user_total_balance = 0.0
+                if user_brokers:
+                    user_total_balance = self.multi_account_manager.get_user_balance("daivon_frazier")
+                
+                total_balance = master_balance + user_total_balance
+                logger.info(f"💰 MASTER ACCOUNT BALANCE: ${master_balance:,.2f}")
+                if user_total_balance > 0:
+                    logger.info(f"💰 USER ACCOUNTS BALANCE: ${user_total_balance:,.2f}")
+                logger.info(f"💰 TOTAL BALANCE (ALL ACCOUNTS): ${total_balance:,.2f}")
                 
                 # Update advanced manager with actual balance
                 if self.advanced_manager and total_balance > 0:
@@ -276,14 +320,21 @@ class TradingStrategy:
                         logger.warning(f"   Failed to update capital allocation: {e}")
                 
                 # Get the primary broker from broker_manager (auto-set when brokers were added)
+                # This is used for master account trading
                 self.broker = self.broker_manager.get_primary_broker()
                 if self.broker:
-                    logger.info(f"📌 Primary broker: {self.broker.broker_type.value}")
+                    logger.info(f"📌 Primary master broker: {self.broker.broker_type.value}")
                 else:
-                    logger.error("❌ No primary broker available")
+                    logger.warning("⚠️  No primary master broker available")
+                
+                # Store user #1 broker for user-specific trading
+                self.user1_broker = self.multi_account_manager.get_user_broker("daivon_frazier", BrokerType.KRAKEN) if user_brokers else None
+                if self.user1_broker:
+                    logger.info(f"👤 User #1 broker: Kraken (daivon_frazier)")
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
                 self.broker = None
+                self.user1_broker = None
             logger.info("=" * 70)
             
             # Initialize independent broker trader for multi-broker support
