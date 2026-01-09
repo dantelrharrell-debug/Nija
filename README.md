@@ -64,6 +64,12 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - Manage Daivon: `python manage_user_daivon.py [status|enable|disable|info]`
 - **Detailed guide**: [IS_USER1_TRADING.md](IS_USER1_TRADING.md)
 
+**Active Trading Status** ⭐ NEW:
+- **Check if NIJA is trading right now**: `python check_trading_status.py`
+- **Web interface**: http://localhost:5001/status (when bot is running)
+- **API endpoint**: http://localhost:5001/api/trading_status
+- **Complete guide**: [ACTIVE_TRADING_STATUS.md](ACTIVE_TRADING_STATUS.md)
+
 ---
 
 ⚠️ **CRITICAL REFERENCE POINT**: This README documents the **v7.2 Profitability Upgrade** deployed December 23, 2025 with **Filter Optimization Fix** deployed December 27, 2025 and **P&L Tracking Fix** deployed December 28, 2025. See [RECOVERY_GUIDE.md](#recovery-guide-v72-profitability-locked) below to restore to this exact state if needed.
