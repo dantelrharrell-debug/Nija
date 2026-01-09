@@ -70,6 +70,12 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **API endpoint**: http://localhost:5001/api/trading_status
 - **Complete guide**: [ACTIVE_TRADING_STATUS.md](ACTIVE_TRADING_STATUS.md)
 
+**Broker Status** 🌐:
+- **Currently Active**: Coinbase Advanced Trade ✅
+- **Kraken Trading**: ✅ ENABLED - [Setup Complete](KRAKEN_TRADING_ENABLED.md)
+- **Check all brokers**: `python check_broker_status.py`
+- **Multi-Broker Guide**: [MULTI_BROKER_STATUS.md](MULTI_BROKER_STATUS.md)
+
 ---
 
 ⚠️ **CRITICAL REFERENCE POINT**: This README documents the **v7.2 Profitability Upgrade** deployed December 23, 2025 with **Filter Optimization Fix** deployed December 27, 2025 and **P&L Tracking Fix** deployed December 28, 2025. See [RECOVERY_GUIDE.md](#recovery-guide-v72-profitability-locked) below to restore to this exact state if needed.
