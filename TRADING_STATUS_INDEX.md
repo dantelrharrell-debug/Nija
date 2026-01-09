@@ -1,80 +1,193 @@
 # 🚀 NIJA Trading Status - Quick Navigation
 
-**Last Updated:** January 8, 2026
+**Last Updated:** January 9, 2026 ⭐ NEW ENDPOINTS ADDED
 
 ---
 
-## Your Question: "Is NIJA trading for user #1 now?"
+## Your Question: "Is NIJA trading for me and NIJA users now?"
 
-👉 **START HERE:** [ANSWER_IS_NIJA_TRADING_NOW.md](./ANSWER_IS_NIJA_TRADING_NOW.md)
+### 🎯 FASTEST ANSWER (Choose One):
 
-This document provides:
-- ✅ Direct answer to your question
-- 📊 Analysis of your startup logs
-- 🔍 How to verify with 100% certainty
-- 📋 Next steps
+#### 1. **Web Browser** (Easiest) 🌐
+Visit: http://localhost:5001/status or https://your-app.railway.app/status
+- 🟢 ACTIVE = Trading now
+- 🟡 READY = Running, waiting for signals
+- 🔴 STOPPED = Not running
+
+#### 2. **Shell Command** 💻
+```bash
+./check_active_trading.sh
+```
+
+#### 3. **Python Script** 🐍
+```bash
+python check_trading_status.py
+```
+
+#### 4. **API Call** 🔧
+```bash
+curl http://localhost:5001/api/trading_status
+```
+
+---
+
+## 📚 Complete Documentation
+
+### ⭐ **[TRADING_STATUS_START_HERE.md](./TRADING_STATUS_START_HERE.md)** - START HERE
+One-page guide with all methods and quick reference.
+
+### 📖 **[ACTIVE_TRADING_STATUS.md](./ACTIVE_TRADING_STATUS.md)** - COMPLETE GUIDE ⭐ NEW
+Comprehensive documentation including:
+- All status check methods
+- Status level explanations
+- HTTP endpoints reference
+- Integration examples
+- Troubleshooting guide
+
+### 📋 **[README_TRADING_STATUS.md](./README_TRADING_STATUS.md)** - QUICK REFERENCE
+1-page summary for quick lookups.
+
+### 📊 **[ANSWER_IS_NIJA_TRADING_NOW.md](./ANSWER_IS_NIJA_TRADING_NOW.md)**
+Detailed analysis of trading status with log interpretation.
+
+### 🔍 **[IS_NIJA_TRADING_NOW.md](./IS_NIJA_TRADING_NOW.md)**
+Original comprehensive guide with verification methods.
+
+---
+
+## 🆕 New Features (January 9, 2026)
+
+### HTTP Endpoints ⭐ NEW
+- **Status Page:** http://localhost:5001/status (auto-refreshing HTML)
+- **API Endpoint:** http://localhost:5001/api/trading_status (JSON)
+- **Health Check:** http://localhost:5001/health (simple OK response)
+
+### Enhanced Scripts ⭐ NEW
+- **check_trading_status.py** - Comprehensive status checker
+- **check_active_trading.sh** - Smart shell script (tries HTTP first, falls back to Python)
+
+### Status Levels
+- 🟢 **ACTIVE** - Trading with open positions
+- 🟡 **READY** - Running, waiting for entry signals (normal)
+- 🔴 **STOPPED** - Not running (needs attention)
+
+---
+
+## 🛠️ All Status Check Tools
+
+| Tool | Type | Best For | Status |
+|------|------|----------|--------|
+| `/status` webpage | Web | Visual monitoring | ⭐ NEW |
+| `/api/trading_status` | API | Automation | ⭐ NEW |
+| `check_trading_status.py` | Python | Comprehensive check | ⭐ NEW |
+| `check_active_trading.sh` | Shell | Quick CLI check | Updated |
+| `check_if_trading_now.py` | Python | Alternative check | Existing |
+| `check_active_trading_per_broker.py` | Python | Per-broker details | Existing |
+| `check_first_user_trading_status.py` | Python | User-specific | Existing |
 
 ---
 
 ## Quick Access Guide
 
-### For Quick Answer (1-2 minutes)
-📄 **[README_IS_TRADING_NOW.md](./README_IS_TRADING_NOW.md)**
-- TL;DR summary
-- Fast verification steps
+### For Quick Answer (30 seconds)
+📄 **[TRADING_STATUS_START_HERE.md](./TRADING_STATUS_START_HERE.md)**
+- One-page reference
+- All methods listed
 - Quick commands
 
-### For Detailed Analysis (5 minutes)
-📄 **[IS_NIJA_TRADING_NOW.md](./IS_NIJA_TRADING_NOW.md)**
-- Complete log analysis
-- All verification methods
-- Troubleshooting guide
+### For Comprehensive Guide (5 minutes)
+📄 **[ACTIVE_TRADING_STATUS.md](./ACTIVE_TRADING_STATUS.md)**
+- Complete documentation
+- Troubleshooting
+- Integration examples
+- API reference
 
 ### For Automated Check
-🐍 **[check_if_trading_now.py](./check_if_trading_now.py)**
+🐍 **Scripts:**
 ```bash
-python check_if_trading_now.py
+./check_active_trading.sh          # Tries HTTP, then Python
+python check_trading_status.py     # Comprehensive check
 ```
-- Runs 5 automated checks
-- Provides confidence rating
-- No Railway access needed
+
+🌐 **HTTP:**
+```bash
+curl http://localhost:5001/api/trading_status  # JSON API
+```
+
+---
+
+## HTTP Endpoints Reference
+
+### GET /status
+Human-readable HTML status page
+- Auto-refreshes every 10 seconds
+- Color-coded status indicator
+- Shows positions, balance, recent activity
+- Shows per-user status (if multi-user system active)
+
+### GET /api/trading_status
+JSON API endpoint with complete status
+```json
+{
+  "timestamp": "2026-01-09T05:00:00.000Z",
+  "is_trading": true,
+  "trading_status": "ACTIVE",
+  "message": "NIJA is actively trading with 5 open positions...",
+  "bot_running": true,
+  "total_positions": 5,
+  "trading_balance": 157.42,
+  "active_brokers": [...],
+  "recent_activity": {...},
+  "users": [...]
+}
+```
+
+### GET /health
+Simple health check
+- Returns: "OK" (200) if server is running
+- Use for uptime monitoring
 
 ---
 
 ## What You Need to Do
 
-### Option 1: Check Railway Logs (Fastest)
-```bash
-railway logs --tail 100
-```
-Look for: `"Main trading loop iteration #2"`
+### Option 1: Check via Web Browser (Easiest)
+1. Open: http://localhost:5001/status
+2. Look at status indicator:
+   - 🟢 ACTIVE = Trading now
+   - 🟡 READY = Waiting for signals (normal)
+   - 🔴 STOPPED = Not running
 
-### Option 2: Check Coinbase (Most Reliable)
+### Option 2: Run Shell Script
+```bash
+./check_active_trading.sh
+```
+
+### Option 3: Check Coinbase Directly (Most Reliable)
 1. Go to: https://www.coinbase.com/advanced-portfolio
-2. Check "Orders" tab
-3. Look for buy orders after 22:35 UTC today
-
-### Option 3: Run Diagnostic Script
-```bash
-python check_if_trading_now.py
-```
+2. Check "Orders" tab for recent activity
+3. Check "Portfolio" for open positions
 
 ---
 
-## Quick Summary
+## Understanding Status Levels
 
-**Your Logs Show:**
-- ✅ Perfect initialization at 22:35 UTC
-- ✅ All systems configured correctly
-- ❓ Logs cut off before showing trading activity
+### 🟢 ACTIVE - Actively Trading
+- Bot is running (log active)
+- Has open positions
+- Recent trades detected
+- **Action:** None - working normally
 
-**Most Likely Status:**
-- 70% confidence: Bot IS trading
-- Time elapsed: 18+ minutes
-- Expected: 7-8 trading cycles completed
+### 🟡 READY - Running but Not Trading  
+- Bot is running (log active)
+- No open positions currently
+- Waiting for entry signals
+- **Action:** None - this is normal!
 
-**To Confirm:**
-View Railway logs after 22:35 UTC OR check Coinbase for recent orders
+### 🔴 STOPPED - Not Running
+- Bot not running (log stale)
+- No positions or activity
+- **Action:** Check deployment, logs, balance, credentials
 
 ---
 
