@@ -21,6 +21,16 @@ try:
 except ImportError:
     pass  # dotenv not available, env vars should be set externally
 
+# Import rate limiter for API call throttling
+try:
+    from bot.rate_limiter import RateLimiter
+except ImportError:
+    try:
+        from rate_limiter import RateLimiter
+    except ImportError:
+        # Fallback if rate_limiter not available
+        RateLimiter = None
+
 # Configure logger for broker operations
 logger = logging.getLogger('nija.broker')
 
@@ -203,6 +213,22 @@ class CoinbaseBroker(BaseBroker):
         self._balance_cache = None
         self._balance_cache_time = None
         self._cache_ttl = 120  # Cache TTL in seconds (increased from 30s to 120s to reduce API calls and avoid rate limits)
+        
+        # Initialize rate limiter for API calls to prevent 403/429 errors
+        # Coinbase has strict rate limits: ~10 req/s burst but much lower sustained rate
+        # Using 12 requests per minute (1 every 5 seconds) for safe sustained operation
+        if RateLimiter:
+            self._rate_limiter = RateLimiter(
+                default_per_min=12,  # 12 requests per minute = 1 request every 5 seconds
+                per_key_overrides={
+                    'get_candles': 10,  # Even more conservative for candle fetching (6s between calls)
+                    'get_product': 15,  # Slightly faster for product queries (4s between calls)
+                }
+            )
+            logger.info("✅ Rate limiter initialized (12 req/min default, 10 req/min for candles)")
+        else:
+            self._rate_limiter = None
+            logger.warning("⚠️ RateLimiter not available - using manual delays only")
         
         # Initialize position tracker for profit-based exits
         try:
@@ -2135,47 +2161,58 @@ class CoinbaseBroker(BaseBroker):
             return 0.0
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get candle data with improved retry logic for rate limiting
+        """Get candle data with rate limiting and retry logic
         
-        UPDATED (Jan 9, 2026): Enhanced exponential backoff to prevent 429/403 errors
-        - Increased base delay from 3.0s to 5.0s for safer recovery
-        - Increased max retries from 5 to 6 for better resilience
-        - Added explicit handling for 403 "too many errors" (API key temporary ban)
-        - 403 errors get much longer delays than 429 (rate limit) errors
+        UPDATED (Jan 9, 2026): Added RateLimiter integration to prevent 403/429 errors
+        - Uses centralized rate limiter (12 req/min for candles = 1 every 6 seconds)
+        - Reduced max retries from 6 to 3 for 403 errors (API key ban, not transient)
+        - 429 errors get standard retry with exponential backoff
+        - Rate limiter prevents cascading retries that trigger API key bans
         """
         import time
         import random
         
-        max_retries = 6  # Increased from 5 to handle both 429 and 403 errors
-        base_delay = 5.0  # Increased from 3.0s to 5.0s for safer recovery from rate limits
+        # Reduced retries: 403 means API key is temporarily banned, retrying won't help much
+        max_retries = 3  # Reduced from 6 to avoid cascading retries
+        base_delay = 5.0  # 5 second base delay for rate limit recovery
         
+        # Wrapper function for rate-limited API call
+        def _fetch_candles():
+            granularity_map = {
+                "1m": "ONE_MINUTE",
+                "5m": "FIVE_MINUTE",
+                "15m": "FIFTEEN_MINUTE",
+                "1h": "ONE_HOUR",
+                "1d": "ONE_DAY"
+            }
+            
+            granularity = granularity_map.get(timeframe, "FIVE_MINUTE")
+            
+            end = int(time.time())
+            start = end - (300 * count)  # 5 min candles
+            
+            candles = self.client.get_candles(
+                product_id=symbol,
+                start=start,
+                end=end,
+                granularity=granularity
+            )
+            
+            if hasattr(candles, 'candles'):
+                return [vars(c) for c in candles.candles]
+            elif isinstance(candles, dict) and 'candles' in candles:
+                return candles['candles']
+            return []
+        
+        # Use rate limiter if available
         for attempt in range(max_retries):
             try:
-                granularity_map = {
-                    "1m": "ONE_MINUTE",
-                    "5m": "FIVE_MINUTE",
-                    "15m": "FIFTEEN_MINUTE",
-                    "1h": "ONE_HOUR",
-                    "1d": "ONE_DAY"
-                }
-                
-                granularity = granularity_map.get(timeframe, "FIVE_MINUTE")
-                
-                end = int(time.time())
-                start = end - (300 * count)  # 5 min candles
-                
-                candles = self.client.get_candles(
-                    product_id=symbol,
-                    start=start,
-                    end=end,
-                    granularity=granularity
-                )
-                
-                if hasattr(candles, 'candles'):
-                    return [vars(c) for c in candles.candles]
-                elif isinstance(candles, dict) and 'candles' in candles:
-                    return candles['candles']
-                return []
+                if self._rate_limiter:
+                    # Rate-limited call - automatically enforces minimum interval between requests
+                    return self._rate_limiter.call('get_candles', _fetch_candles)
+                else:
+                    # Fallback to direct call without rate limiting
+                    return _fetch_candles()
                 
             except Exception as e:
                 error_str = str(e).lower()
@@ -2189,23 +2226,23 @@ class CoinbaseBroker(BaseBroker):
                     # Different handling for 403 vs 429
                     if is_403_forbidden:
                         # 403 "too many errors" means API key was temporarily blocked
-                        # Need MUCH LONGER delays: 10s, 20s, 40s, 80s, 160s, 320s
-                        retry_delay = base_delay * (2 ** (attempt + 1))  # More aggressive backoff for 403
+                        # Don't retry aggressively - the key needs time to unblock
+                        # Use fixed 15s delay instead of exponential backoff
+                        total_delay = 15.0 + random.uniform(0, 5.0)  # 15-20 seconds
+                        logging.warning(f"⚠️  API key temporarily blocked (403) on {symbol}, waiting {total_delay:.1f}s before retry {attempt+1}/{max_retries}")
+                    else:
+                        # 429 rate limit - exponential backoff: 5s, 10s, 20s
+                        retry_delay = base_delay * (2 ** attempt)
                         jitter = random.uniform(0, retry_delay * 0.3)  # 30% jitter
                         total_delay = retry_delay + jitter
-                        logging.warning(f"⚠️  API key temporarily blocked (403) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")
-                    else:
-                        # 429 rate limit - standard exponential backoff: 5s, 10s, 20s, 40s, 80s, 160s
-                        retry_delay = base_delay * (2 ** attempt)
-                        jitter = random.uniform(0, retry_delay * 0.5)  # 50% jitter to prevent thundering herd
-                        total_delay = retry_delay + jitter
-                        logging.warning(f"Rate limited (429) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")
+                        logging.warning(f"⚠️  Rate limited (429) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")
                     
                     time.sleep(total_delay)
                     continue
                 else:
                     if attempt == max_retries - 1:
-                        logging.debug(f"Failed to fetch candles for {symbol} after {max_retries} attempts (rate limited)")
+                        # Only log as debug - this is expected during rate limiting
+                        logging.debug(f"Failed to fetch candles for {symbol} after {max_retries} attempts")
                     else:
                         # Only log non-rate-limit errors as errors
                         if not is_rate_limited:
