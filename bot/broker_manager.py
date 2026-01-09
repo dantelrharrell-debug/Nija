@@ -202,7 +202,7 @@ class CoinbaseBroker(BaseBroker):
         self._accounts_cache_time = None
         self._balance_cache = None
         self._balance_cache_time = None
-        self._cache_ttl = 30  # Cache TTL in seconds (30s is safe for initialization)
+        self._cache_ttl = 120  # Cache TTL in seconds (increased from 30s to 120s to reduce API calls and avoid rate limits)
         
         # Initialize position tracker for profit-based exits
         try:
@@ -224,6 +224,52 @@ class CoinbaseBroker(BaseBroker):
             True if cache is still valid, False otherwise
         """
         return cache_time is not None and (time.time() - cache_time) < self._cache_ttl
+    
+    def _api_call_with_retry(self, api_func, *args, max_retries=5, base_delay=5.0, **kwargs):
+        """
+        Execute an API call with exponential backoff retry logic for rate limiting errors.
+        
+        Args:
+            api_func: The API function to call
+            *args: Positional arguments for the API function
+            max_retries: Maximum number of retry attempts (default: 5)
+            base_delay: Base delay in seconds for exponential backoff (default: 5.0)
+            **kwargs: Keyword arguments for the API function
+            
+        Returns:
+            The API response if successful
+            
+        Raises:
+            Exception: If all retries are exhausted
+        """
+        for attempt in range(max_retries):
+            try:
+                return api_func(*args, **kwargs)
+            except Exception as e:
+                error_msg = str(e).lower()
+                
+                # Check if this is a rate limiting error (403, 429, or "too many" errors)
+                is_rate_limit = any(keyword in error_msg for keyword in [
+                    '403', 'forbidden', 'too many', '429', 'rate limit', 'too many requests'
+                ])
+                
+                # If this is the last attempt or not a rate limit error, raise
+                if attempt >= max_retries - 1 or not is_rate_limit:
+                    raise
+                
+                # Calculate exponential backoff delay
+                # For 403 errors, use longer delays (more aggressive backoff)
+                if '403' in error_msg or 'too many errors' in error_msg:
+                    delay = base_delay * (3 ** attempt)  # 5s, 15s, 45s, 135s, 405s
+                else:
+                    delay = base_delay * (2 ** attempt)  # 5s, 10s, 20s, 40s, 80s
+                
+                logging.warning(f"⚠️  API rate limit hit (attempt {attempt + 1}/{max_retries}): {e}")
+                logging.warning(f"   Waiting {delay:.1f}s before retry...")
+                time.sleep(delay)
+        
+        # Should never reach here, but just in case
+        raise Exception(f"Failed after {max_retries} retries")
     
     def _log_trade_to_journal(self, symbol: str, side: str, price: float, 
                                size_usd: float, quantity: float, pnl_data: dict = None):
@@ -566,7 +612,12 @@ class CoinbaseBroker(BaseBroker):
         # Preferred path: portfolio breakdown (more reliable than get_accounts)
         try:
             logging.info("💰 Fetching account balance via portfolio breakdown (preferred)...")
-            portfolios_resp = self.client.get_portfolios() if hasattr(self.client, 'get_portfolios') else None
+            
+            # Use retry logic for portfolio API calls to handle rate limiting
+            portfolios_resp = None
+            if hasattr(self.client, 'get_portfolios'):
+                portfolios_resp = self._api_call_with_retry(self.client.get_portfolios)
+            
             portfolios = getattr(portfolios_resp, 'portfolios', [])
             if isinstance(portfolios_resp, dict):
                 portfolios = portfolios_resp.get('portfolios', [])
@@ -587,7 +638,11 @@ class CoinbaseBroker(BaseBroker):
                     portfolio_uuid = default_portfolio.get('uuid', portfolio_uuid)
 
             if default_portfolio and portfolio_uuid:
-                breakdown_resp = self.client.get_portfolio_breakdown(portfolio_uuid=portfolio_uuid)
+                # Use retry logic for portfolio breakdown API call
+                breakdown_resp = self._api_call_with_retry(
+                    self.client.get_portfolio_breakdown,
+                    portfolio_uuid=portfolio_uuid
+                )
                 breakdown = getattr(breakdown_resp, 'breakdown', None)
                 if isinstance(breakdown_resp, dict):
                     breakdown = breakdown_resp.get('breakdown', breakdown)
@@ -646,7 +701,8 @@ class CoinbaseBroker(BaseBroker):
                 logging.debug("Using cached accounts data")
                 resp = self._accounts_cache
             else:
-                resp = self.client.get_accounts()
+                # Use retry logic for get_accounts API call to handle rate limiting
+                resp = self._api_call_with_retry(self.client.get_accounts)
                 self._accounts_cache = resp
                 self._accounts_cache_time = time.time()
             
