@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 import json
 import logging
 import os
+import random
 import time
 import traceback
 import uuid
@@ -50,6 +51,13 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
     'your_password', 'YOUR_PASSWORD',
     'password', 'PASSWORD'
 ]
+
+# Rate limiting retry constants
+# UPDATED (Jan 9, 2026): Added constants for 403/429 error retry delays
+RATE_LIMIT_MAX_RETRIES = 3  # Maximum retries for rate limit errors (reduced from 6)
+RATE_LIMIT_BASE_DELAY = 5.0  # Base delay in seconds for exponential backoff on 429 errors
+FORBIDDEN_BASE_DELAY = 15.0  # Fixed delay for 403 "forbidden" errors (API key ban)
+FORBIDDEN_JITTER_MAX = 5.0   # Maximum additional random delay for 403 errors (15-20s total)
 
 # Fallback market list - popular crypto trading pairs used when API fails
 FALLBACK_MARKETS = [
@@ -2164,17 +2172,11 @@ class CoinbaseBroker(BaseBroker):
         """Get candle data with rate limiting and retry logic
         
         UPDATED (Jan 9, 2026): Added RateLimiter integration to prevent 403/429 errors
-        - Uses centralized rate limiter (12 req/min for candles = 1 every 6 seconds)
+        - Uses centralized rate limiter (10 req/min for candles = 1 every 6 seconds)
         - Reduced max retries from 6 to 3 for 403 errors (API key ban, not transient)
         - 429 errors get standard retry with exponential backoff
         - Rate limiter prevents cascading retries that trigger API key bans
         """
-        import time
-        import random
-        
-        # Reduced retries: 403 means API key is temporarily banned, retrying won't help much
-        max_retries = 3  # Reduced from 6 to avoid cascading retries
-        base_delay = 5.0  # 5 second base delay for rate limit recovery
         
         # Wrapper function for rate-limited API call
         def _fetch_candles():
@@ -2205,7 +2207,7 @@ class CoinbaseBroker(BaseBroker):
             return []
         
         # Use rate limiter if available
-        for attempt in range(max_retries):
+        for attempt in range(RATE_LIMIT_MAX_RETRIES):
             try:
                 if self._rate_limiter:
                     # Rate-limited call - automatically enforces minimum interval between requests
@@ -2222,27 +2224,27 @@ class CoinbaseBroker(BaseBroker):
                 is_429_rate_limit = '429' in error_str or 'rate limit' in error_str or 'too many requests' in error_str
                 is_rate_limited = is_403_forbidden or is_429_rate_limit
                 
-                if is_rate_limited and attempt < max_retries - 1:
+                if is_rate_limited and attempt < RATE_LIMIT_MAX_RETRIES - 1:
                     # Different handling for 403 vs 429
                     if is_403_forbidden:
                         # 403 "too many errors" means API key was temporarily blocked
                         # Don't retry aggressively - the key needs time to unblock
-                        # Use fixed 15s delay instead of exponential backoff
-                        total_delay = 15.0 + random.uniform(0, 5.0)  # 15-20 seconds
-                        logging.warning(f"⚠️  API key temporarily blocked (403) on {symbol}, waiting {total_delay:.1f}s before retry {attempt+1}/{max_retries}")
+                        # Use fixed delay with jitter
+                        total_delay = FORBIDDEN_BASE_DELAY + random.uniform(0, FORBIDDEN_JITTER_MAX)
+                        logging.warning(f"⚠️  API key temporarily blocked (403) on {symbol}, waiting {total_delay:.1f}s before retry {attempt+1}/{RATE_LIMIT_MAX_RETRIES}")
                     else:
-                        # 429 rate limit - exponential backoff: 5s, 10s, 20s
-                        retry_delay = base_delay * (2 ** attempt)
+                        # 429 rate limit - exponential backoff
+                        retry_delay = RATE_LIMIT_BASE_DELAY * (2 ** attempt)
                         jitter = random.uniform(0, retry_delay * 0.3)  # 30% jitter
                         total_delay = retry_delay + jitter
-                        logging.warning(f"⚠️  Rate limited (429) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")
+                        logging.warning(f"⚠️  Rate limited (429) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{RATE_LIMIT_MAX_RETRIES})")
                     
                     time.sleep(total_delay)
                     continue
                 else:
-                    if attempt == max_retries - 1:
+                    if attempt == RATE_LIMIT_MAX_RETRIES - 1:
                         # Only log as debug - this is expected during rate limiting
-                        logging.debug(f"Failed to fetch candles for {symbol} after {max_retries} attempts")
+                        logging.debug(f"Failed to fetch candles for {symbol} after {RATE_LIMIT_MAX_RETRIES} attempts")
                     else:
                         # Only log non-rate-limit errors as errors
                         if not is_rate_limited:
