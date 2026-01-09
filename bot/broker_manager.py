@@ -287,15 +287,16 @@ class CoinbaseBroker(BaseBroker):
             # Test connection by fetching accounts with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
-            max_attempts = 6  # Increased from 5 to give more chances for API to recover
-            base_delay = 10.0  # Increased from 5.0s to allow API key blocks to reset longer
+            max_attempts = 10  # Increased from 6 to give more chances for API to recover from rate limits
+            base_delay = 15.0  # Increased from 10.0s to allow API key blocks to reset longer
             
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
-                        # For 403 errors, we need LONGER delays: 10s, 20s, 40s, 80s, 160s (attempts 2-6)
-                        delay = base_delay * (2 ** (attempt - 2))
+                        # For 403 errors, we need LONGER delays: 15s, 30s, 60s, 120s, 240s... (attempts 2-10)
+                        # Cap maximum delay at 120 seconds to prevent excessive wait times
+                        delay = min(base_delay * (2 ** (attempt - 2)), 120.0)
                         logging.info(f"🔄 Retrying connection in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
                     
@@ -2180,6 +2181,10 @@ class AlpacaBroker(BaseBroker):
                 logging.info("⚠️  Alpaca credentials not configured (skipping)")
                 return False
             
+            # Log connection mode
+            mode_str = "PAPER" if paper else "LIVE"
+            logging.info(f"📊 Attempting to connect Alpaca ({mode_str} mode)...")
+            
             self.api = TradingClient(api_key, api_secret, paper=paper)
             
             # Test connection with retry logic
@@ -2209,6 +2214,12 @@ class AlpacaBroker(BaseBroker):
                 
                 except Exception as e:
                     error_msg = str(e)
+                    
+                    # Special handling for paper trading being disabled
+                    if "paper" in error_msg.lower() and "not" in error_msg.lower():
+                        logging.warning("⚠️  Alpaca paper trading may be disabled or account not configured for paper trading")
+                        logging.warning("   Try setting ALPACA_PAPER=false for live trading or verify account supports paper trading")
+                        return False
                     
                     # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
                     # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
@@ -2819,6 +2830,10 @@ class KrakenBroker(BaseBroker):
             if not api_key or not api_secret:
                 # Silently skip - Kraken is optional, no need for scary error messages
                 logging.info(f"⚠️  Kraken credentials not configured for {cred_label} (skipping)")
+                if self.account_type == AccountType.MASTER:
+                    logging.info("   To enable Kraken MASTER trading, set:")
+                    logging.info("      KRAKEN_MASTER_API_KEY=<your-api-key>")
+                    logging.info("      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
                 return False
             
             # Initialize Kraken API
