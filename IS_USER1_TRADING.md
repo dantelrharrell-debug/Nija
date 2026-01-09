@@ -17,7 +17,7 @@ User #1 (Daivon Frazier) is **initialized and actively trading** in the system.
 
 - ✅ User #1 account created and enabled
 - ✅ User database initialized (`users_db.json` exists)
-- ✅ API credentials encrypted and stored (Coinbase)
+- ✅ API credentials encrypted and stored (Kraken)
 - ✅ Trading permissions configured
 - ✅ User can trade with configured limits
 

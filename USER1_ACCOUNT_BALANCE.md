@@ -26,7 +26,7 @@ The balance check requires:
 
 The user database contains **encrypted** credentials but the balance check needs to:
 - Decrypt the credentials
-- Connect to Coinbase API
+- Connect to Kraken API
 - Retrieve current account balance
 - Display available funds
 
@@ -58,7 +58,7 @@ python3 check_actual_coinbase_balance.py
 ### Option 3: Manual Check
 
 1. Go to: https://www.coinbase.com/advanced-portfolio
-2. Log in with User #1's Coinbase account
+2. Log in with User #1's Kraken account
 3. View "Available for Trading" balance
 
 ---
@@ -66,7 +66,7 @@ python3 check_actual_coinbase_balance.py
 ## User #1 Account Information
 
 ### Broker Details
-- **Broker**: Coinbase Advanced Trade
+- **Broker**: Kraken
 - **API Credentials**: ✅ Encrypted and stored in database
 - **Status**: Active and enabled
 
@@ -99,12 +99,12 @@ When you run the check script, you'll see output like:
 
 ### User Account
 - ✅ User #1 created and enabled
-- ✅ Coinbase API credentials stored (encrypted)
+- ✅ Kraken API credentials stored (encrypted)
 - ✅ Trading permissions configured
 - ✅ Account active and ready
 
 ### What We DON'T Know Yet
-- ❓ Current balance in Coinbase account
+- ❓ Current balance in Kraken account
 - ❓ Available USD/USDC for trading
 - ❓ Existing crypto holdings
 - ❓ Whether funds need to be transferred from Consumer wallet
@@ -117,7 +117,7 @@ When you run the check script, you'll see output like:
 
 If the balance check shows insufficient funds, here's how to add money:
 
-### Step 1: Deposit to Coinbase
+### Step 1: Deposit to Kraken
 
 1. Go to: https://www.coinbase.com
 2. Log in with User #1's account
@@ -130,7 +130,7 @@ If the balance check shows insufficient funds, here's how to add money:
 If funds are in Consumer wallet:
 
 1. Go to: https://www.coinbase.com/advanced-portfolio
-2. Click "Deposit" → "From Coinbase"
+2. Click "Deposit" → "From Kraken"
 3. Transfer USD/USDC to Advanced Trade
 4. Funds are instantly available (no fees)
 
@@ -177,7 +177,7 @@ To check the balance, the script needs to run where:
    - `COINBASE_PEM_CONTENT` (if using JWT)
 
 2. **Internet Access Available**:
-   - Can connect to api.coinbase.com
+   - Can connect to api.kraken.com
    - No firewall blocking API requests
 
 3. **User Database Exists**:
@@ -189,7 +189,7 @@ To check the balance, the script needs to run where:
 
 ### If Balance Check Fails
 
-**Error: "Could not connect to Coinbase"**
+**Error: "Could not connect to Kraken"**
 - Check internet connection
 - Verify API credentials in environment variables
 - Ensure running in production environment
@@ -201,7 +201,7 @@ To check the balance, the script needs to run where:
 **Shows $0.00 Balance**
 - Account may need funding
 - Funds may be in Consumer wallet (need transfer)
-- Check Coinbase web interface manually
+- Check Kraken web interface manually
 
 ---
 
@@ -229,7 +229,7 @@ python3 check_first_user_trading_status.py
 
 This will:
 1. Load User #1's encrypted credentials
-2. Connect to Coinbase API
+2. Connect to Kraken API
 3. Retrieve current balance
 4. Display available funds for trading
 5. Show whether balance is sufficient

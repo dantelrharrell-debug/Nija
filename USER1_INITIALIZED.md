@@ -49,7 +49,7 @@ Status: ENABLED and ACTIVE
 
 ### 3. API Credentials Stored
 
-- **Broker**: Coinbase
+- **Broker**: Kraken
 - **Encryption**: Credentials encrypted using Fernet encryption
 - **Security**: Encryption key generated and stored securely
 
