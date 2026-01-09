@@ -795,8 +795,8 @@ class TradingStrategy:
                         logger.warning(f"   ⚠️ No entry price tracked for {symbol} - using fallback exit logic")
                         logger.warning(f"      💡 Run import_current_positions.py to track this position")
                     
-                    # Get market data for analysis
-                    candles = self.broker.get_candles(symbol, '5m', 100)
+                    # Get market data for analysis (use cached method to prevent rate limiting)
+                    candles = self._get_cached_candles(symbol, '5m', 100)
                     if not candles or len(candles) < MIN_CANDLES_REQUIRED:
                         logger.warning(f"   ⚠️ Insufficient data for {symbol} ({len(candles) if candles else 0} candles, need {MIN_CANDLES_REQUIRED})")
                         # CRITICAL: Exit positions we can't analyze to prevent blind holding

@@ -107,6 +107,7 @@ class RetryHandler:
             'network',
             'rate limit',
             'too many requests',
+            'too many errors',  # Coinbase-specific rate limiting message
             'service unavailable',
             '503',
             '504',
@@ -119,17 +120,28 @@ class RetryHandler:
             if keyword in error_msg_lower:
                 return True
         
+        # CRITICAL: Check for 403 with "too many errors" or "forbidden" which indicates
+        # temporary API key blocking (Coinbase rate limiting), not authentication failure
+        # This is different from 403 Unauthorized which is a permanent auth failure
+        if '403' in error_msg_lower:
+            # 403 with rate limiting indicators is retryable
+            if any(indicator in error_msg_lower for indicator in ['too many', 'rate limit', 'forbidden too many']):
+                return True
+            # 403 with auth failure indicators is not retryable
+            elif any(indicator in error_msg_lower for indicator in ['invalid', 'authentication', 'unauthorized']):
+                return False
+            # Default: treat 403 as non-retryable to avoid infinite loops on auth issues
+            return False
+        
         # Non-retryable errors
         non_retryable_keywords = [
             'invalid',
             'unauthorized',
-            'forbidden',
             'not found',
             'insufficient',
             'authentication',
             '400',
             '401',
-            '403',
             '404'
         ]
         
