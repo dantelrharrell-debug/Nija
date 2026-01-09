@@ -28,12 +28,14 @@ MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 1
 # UPDATED (Jan 9, 2026): Further increased delays to prevent 403/429 rate limit errors
 # Coinbase rate limits: ~10 requests/second burst, but sustained rate must be much lower
 # Real-world testing shows we need to be even more conservative to avoid 403 "too many errors"
+# Additional fix: Integrated RateLimiter class in broker_manager.py for centralized rate limiting
 POSITION_CHECK_DELAY = 0.5  # 500ms delay between position checks (was 0.3s)
 SELL_ORDER_DELAY = 0.7      # 700ms delay between sell orders (was 0.5s)
-MARKET_SCAN_DELAY = 3.0     # 3000ms delay between market scans (increased from 2.0s) - CRITICAL for preventing 429s
-                            # At 3.0s delay, we scan at 0.33 req/s which is an ultra-safe sustained rate
-                            # At 25 markets per cycle with 3.0s delay, scanning takes ~75 seconds
-                            # This more conservative approach prevents both 429 and 403 errors completely
+MARKET_SCAN_DELAY = 4.0     # 4000ms delay between market scans (increased from 3.0s to 4.0s)
+                            # This works with RateLimiter (6s minimum) for extra safety
+                            # At 4.0s delay, we scan at 0.25 req/s which is ultra-conservative
+                            # At 25 markets per cycle with 4.0s delay, scanning takes ~100 seconds
+                            # Combined with RateLimiter enforcement, this prevents both 429 and 403 errors
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
 MARKET_BATCH_SIZE = 25      # Number of markets to scan per cycle (same as MARKET_SCAN_LIMIT)
