@@ -197,7 +197,7 @@ class CoinbaseBroker(BaseBroker):
         # Cache for account data to prevent redundant API calls during initialization
         # NOTE: These caches are only accessed during bot startup in the main thread,
         # before any trading threads are spawned. Thread safety is not a concern as
-        # the cache TTL (30s) expires before multi-threaded trading begins.
+        # the cache TTL (120s) expires before multi-threaded trading begins.
         self._accounts_cache = None
         self._accounts_cache_time = None
         self._balance_cache = None
@@ -249,15 +249,18 @@ class CoinbaseBroker(BaseBroker):
                 error_msg = str(e).lower()
                 
                 # Check if this is a rate limiting error (403, 429, or "too many" errors)
-                # Use more precise pattern matching to avoid false positives
-                is_rate_limit = (
-                    '403 ' in error_msg or ' 403' in error_msg or  # HTTP 403 status
-                    '429 ' in error_msg or ' 429' in error_msg or  # HTTP 429 status
+                # Use precise pattern matching to avoid false positives
+                is_403_error = (
+                    '403 ' in error_msg or ' 403' in error_msg or
                     'forbidden' in error_msg or
-                    'too many' in error_msg or
+                    'too many errors' in error_msg
+                )
+                is_429_error = (
+                    '429 ' in error_msg or ' 429' in error_msg or
                     'rate limit' in error_msg or
                     'too many requests' in error_msg
                 )
+                is_rate_limit = is_403_error or is_429_error or 'too many' in error_msg
                 
                 # If this is the last attempt or not a rate limit error, raise
                 if attempt >= max_retries - 1 or not is_rate_limit:
@@ -265,7 +268,7 @@ class CoinbaseBroker(BaseBroker):
                 
                 # Calculate exponential backoff delay
                 # For 403 errors, use longer delays (more aggressive backoff)
-                if ('403 ' in error_msg or ' 403' in error_msg or 'too many errors' in error_msg):
+                if is_403_error:
                     delay = base_delay * (3 ** attempt)  # 5s, 15s, 45s, 135s, 405s
                 else:
                     delay = base_delay * (2 ** attempt)  # 5s, 10s, 20s, 40s, 80s
