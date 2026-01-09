@@ -19,21 +19,23 @@ logger = logging.getLogger("nija")
 # CRITICAL FIX (Jan 2026): Reduced market scanning to prevent 429 rate limit errors
 # Coinbase has strict rate limits (~10 req/s burst, lower sustained)
 # Instead of scanning all 730 markets every cycle, we batch scan smaller subsets
-MARKET_SCAN_LIMIT = 100  # Scan only 100 markets per cycle (down from 730)
+MARKET_SCAN_LIMIT = 50   # Scan only 50 markets per cycle (reduced from 100 to prevent rate limits)
                          # This rotates through different markets each cycle
-                         # Complete scan of 730 markets takes ~8 cycles (20 minutes)
+                         # Complete scan of 730 markets takes ~15 cycles (37.5 minutes)
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Rate limiting constants (prevent 429 errors from Coinbase API)
-# UPDATED (Jan 2026): Increased delays to prevent rate limiting
-# Coinbase rate limits: ~10 requests/second burst, ~3-5 req/s sustained safe rate
+# UPDATED (Jan 9, 2026): Further increased delays to prevent 403/429 rate limit errors
+# Coinbase rate limits: ~10 requests/second burst, but sustained rate must be much lower
+# Real-world testing shows 1 req/s is the safe sustained rate to avoid 403 "too many errors"
 POSITION_CHECK_DELAY = 0.3  # 300ms delay between position checks (was 0.2s)
 SELL_ORDER_DELAY = 0.5      # 500ms delay between sell orders (was 0.3s)
-MARKET_SCAN_DELAY = 0.5     # 500ms delay between market scans (was 0.25s) - CRITICAL for preventing 429s
-                            # At 0.5s delay, we scan at 2 req/s which is well under limits
+MARKET_SCAN_DELAY = 1.0     # 1000ms delay between market scans (increased from 0.5s) - CRITICAL for preventing 429s
+                            # At 1.0s delay, we scan at 1 req/s which is the safe sustained rate
+                            # At 50 markets per cycle with 1.0s delay, scanning takes ~50 seconds
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
-MARKET_BATCH_SIZE = 100     # Number of markets to scan per cycle
+MARKET_BATCH_SIZE = 50      # Number of markets to scan per cycle (reduced from 100)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # Exit strategy constants (no entry price required)
@@ -1188,12 +1190,12 @@ class TradingStrategy:
                                     rate_limit_counter = 0
                             continue
                         
-                        # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429 errors)
-                        # UPDATED (Jan 2026): Increased from 0.25s to 0.5s for better rate limit compliance
-                        # Coinbase rate limits: ~10 requests/second burst, ~3-5 req/s sustained safe rate
-                        # With MARKET_SCAN_DELAY=0.5s, we scan at 2 req/s which is well under limits
-                        # At 100 markets per cycle with 0.5s delay, scanning takes ~50 seconds
-                        # This prevents the 429 errors that occurred when scanning 730 markets at 0.25s (3 min scan)
+                        # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429/403 errors)
+                        # UPDATED (Jan 9, 2026): Increased from 0.5s to 1.0s to prevent 403 "too many errors"
+                        # Coinbase rate limits: ~10 requests/second burst, but sustained rate must be ~1 req/s
+                        # With MARKET_SCAN_DELAY=1.0s, we scan at 1 req/s which is the safe sustained rate
+                        # At 50 markets per cycle with 1.0s delay, scanning takes ~50 seconds
+                        # This prevents both 429 (rate limit) and 403 (too many errors) responses from Coinbase
                         if i < scan_limit - 1:  # Don't delay after last market
                             jitter = random.uniform(0, 0.1)  # Add 0-100ms jitter
                             time.sleep(MARKET_SCAN_DELAY + jitter)

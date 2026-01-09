@@ -2059,13 +2059,17 @@ class CoinbaseBroker(BaseBroker):
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """Get candle data with improved retry logic for rate limiting
         
-        UPDATED (Jan 2026): Enhanced exponential backoff to prevent 429 errors
+        UPDATED (Jan 9, 2026): Enhanced exponential backoff to prevent 429/403 errors
+        - Increased base delay from 1.5s to 3.0s for safer recovery
+        - Increased max retries from 3 to 5 for better resilience
+        - Added explicit handling for 403 "too many errors" (API key temporary ban)
+        - 403 errors get longer delays than 429 (rate limit) errors
         """
         import time
         import random
         
-        max_retries = 3
-        base_delay = 1.5  # Increased from 1.0s to 1.5s for better rate limit handling
+        max_retries = 5  # Increased from 3 to handle both 429 and 403 errors
+        base_delay = 3.0  # Increased from 1.5s to 3.0s for safer recovery from rate limits
         
         for attempt in range(max_retries):
             try:
@@ -2096,26 +2100,38 @@ class CoinbaseBroker(BaseBroker):
                 return []
                 
             except Exception as e:
-                error_str = str(e)
+                error_str = str(e).lower()
                 
-                # Check if rate limited (429 status or rate limit message)
-                is_rate_limited = '429' in error_str or 'rate limit' in error_str.lower() or 'too many' in error_str.lower()
+                # Distinguish between 429 (rate limit) and 403 (too many errors / temporary ban)
+                is_403_forbidden = '403' in error_str or 'forbidden' in error_str or 'too many errors' in error_str
+                is_429_rate_limit = '429' in error_str or 'rate limit' in error_str or 'too many requests' in error_str
+                is_rate_limited = is_403_forbidden or is_429_rate_limit
                 
                 if is_rate_limited and attempt < max_retries - 1:
-                    # Exponential backoff with jitter to prevent thundering herd
-                    # UPDATED (Jan 2026): Increased backoff timing
-                    retry_delay = base_delay * (2 ** attempt)
-                    jitter = random.uniform(0, retry_delay * 0.5)  # Increased jitter from 30% to 50%
-                    total_delay = retry_delay + jitter
+                    # Different handling for 403 vs 429
+                    if is_403_forbidden:
+                        # 403 "too many errors" means API key was temporarily blocked
+                        # Need LONGER delays: 5s, 10s, 20s, 40s, 80s
+                        retry_delay = base_delay * (2 ** (attempt + 1))  # More aggressive backoff for 403
+                        jitter = random.uniform(0, retry_delay * 0.3)  # 30% jitter
+                        total_delay = retry_delay + jitter
+                        logging.warning(f"⚠️  API key temporarily blocked (403) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")
+                    else:
+                        # 429 rate limit - standard exponential backoff: 3s, 6s, 12s, 24s, 48s
+                        retry_delay = base_delay * (2 ** attempt)
+                        jitter = random.uniform(0, retry_delay * 0.5)  # 50% jitter to prevent thundering herd
+                        total_delay = retry_delay + jitter
+                        logging.warning(f"Rate limited (429) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")
                     
-                    logging.warning(f"Rate limited on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{max_retries})")
                     time.sleep(total_delay)
                     continue
                 else:
                     if attempt == max_retries - 1:
                         logging.debug(f"Failed to fetch candles for {symbol} after {max_retries} attempts (rate limited)")
                     else:
-                        logging.error(f"Error fetching candles for {symbol}: {e}")
+                        # Only log non-rate-limit errors as errors
+                        if not is_rate_limited:
+                            logging.error(f"Error fetching candles for {symbol}: {e}")
                     return []
         
         return []
