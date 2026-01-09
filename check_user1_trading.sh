@@ -6,7 +6,7 @@ echo ""
 echo "Checking if NIJA is trading for user #1..."
 echo ""
 
-python is_user1_trading.py
+python3 is_user1_trading.py
 
 exit_code=$?
 

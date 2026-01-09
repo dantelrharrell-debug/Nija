@@ -10,7 +10,7 @@ Usage:
 
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,7 +23,7 @@ def check_user1_trading():
     
     print("\n" + "=" * 70)
     print("IS NIJA TRADING FOR USER #1?")
-    print(f"Checked: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print(f"Checked: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print("=" * 70 + "\n")
     
     # Check if user database exists
