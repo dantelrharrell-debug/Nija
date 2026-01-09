@@ -30,9 +30,10 @@ MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 1
 # Real-world testing shows we need to be even more conservative to avoid 403 "too many errors"
 POSITION_CHECK_DELAY = 0.5  # 500ms delay between position checks (was 0.3s)
 SELL_ORDER_DELAY = 0.7      # 700ms delay between sell orders (was 0.5s)
-MARKET_SCAN_DELAY = 2.0     # 2000ms delay between market scans (increased from 1.0s) - CRITICAL for preventing 429s
-                            # At 2.0s delay, we scan at 0.5 req/s which is a very safe sustained rate
-                            # At 25 markets per cycle with 2.0s delay, scanning takes ~50 seconds
+MARKET_SCAN_DELAY = 3.0     # 3000ms delay between market scans (increased from 2.0s) - CRITICAL for preventing 429s
+                            # At 3.0s delay, we scan at 0.33 req/s which is an ultra-safe sustained rate
+                            # At 25 markets per cycle with 3.0s delay, scanning takes ~75 seconds
+                            # This more conservative approach prevents both 429 and 403 errors completely
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
 MARKET_BATCH_SIZE = 25      # Number of markets to scan per cycle (same as MARKET_SCAN_LIMIT)
@@ -172,12 +173,12 @@ class TradingStrategy:
             connected_brokers = []
             
             # Add startup delay to avoid immediate rate limiting on restart
-            # CRITICAL (Jan 2026): Increased to 30s to ensure API rate limits fully reset
-            # Previous 15s delay was insufficient when bot restarted after rate limiting
-            # Coinbase appears to have a ~30 second cooldown period after 403 errors
+            # CRITICAL (Jan 2026): Increased to 45s to ensure API rate limits fully reset
+            # Previous 30s delay was still causing rate limit issues in production
+            # Coinbase appears to have a ~30-60 second cooldown period after 403 errors
             # Combined with improved retry logic (10 attempts, 15s base delay with 120s cap),
             # this gives the bot multiple chances to recover from temporary API blocks
-            startup_delay = 30
+            startup_delay = 45
             logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
             time.sleep(startup_delay)
             logger.info("✅ Startup delay complete, beginning broker connections...")
@@ -654,6 +655,9 @@ class TradingStrategy:
             account_balance = balance_data.get('trading_balance', 0.0)
             logger.info(f"💰 Trading balance: ${account_balance:.2f}")
             
+            # Small delay after balance check to avoid rapid-fire API calls
+            time.sleep(0.5)
+            
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
             
@@ -1060,9 +1064,11 @@ class TradingStrategy:
                     scan_limit = len(markets_to_scan)
                     logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
                     
-                    # Adaptive rate limiting: track consecutive 429 errors
+                    # Adaptive rate limiting: track consecutive errors (429, 403, or no data)
                     rate_limit_counter = 0
-                    max_consecutive_rate_limits = 5  # If we hit this many in a row, slow down significantly
+                    error_counter = 0  # Track total errors including exceptions
+                    max_consecutive_rate_limits = 3  # Reduced from 5 - be more aggressive with circuit breaker
+                    max_total_errors = 5  # Maximum total errors before pausing entire scan
                     
                     # Track filtering reasons for debugging
                     filter_stats = {
@@ -1080,6 +1086,13 @@ class TradingStrategy:
                     for i, symbol in enumerate(markets_to_scan):
                         filter_stats['total'] += 1
                         try:
+                            # CRITICAL: Add delay BEFORE fetching candles to prevent rate limiting
+                            # This is in addition to the delay after processing (line ~1201)
+                            # Pre-delay ensures we never make requests too quickly in succession
+                            if i > 0:  # Don't delay before first market
+                                jitter = random.uniform(0, 0.3)  # Add 0-300ms jitter
+                                time.sleep(MARKET_SCAN_DELAY + jitter)
+                            
                             # Get candles with caching to reduce duplicate API calls
                             candles = self._get_cached_candles(symbol, '5m', 100)
                             
@@ -1088,15 +1101,24 @@ class TradingStrategy:
                                 # Could be rate limited or genuinely no data
                                 # We can't distinguish easily here, so increment counter conservatively
                                 rate_limit_counter += 1
+                                error_counter += 1
                                 filter_stats['insufficient_data'] += 1
                                 logger.debug(f"   {symbol}: No candles returned (may be rate limited or no data)")
+                                
+                                # GLOBAL CIRCUIT BREAKER: If too many total errors, stop scanning entirely
+                                if error_counter >= max_total_errors:
+                                    filter_stats['rate_limited'] += 1
+                                    logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan to prevent API block")
+                                    logger.error(f"   💤 Waiting 10s for API to fully recover before next cycle...")
+                                    time.sleep(10.0)
+                                    break  # Exit the market scan loop entirely
                                 
                                 # If we're getting many consecutive failures, assume rate limiting
                                 if rate_limit_counter >= max_consecutive_rate_limits:
                                     filter_stats['rate_limited'] += 1
                                     logger.warning(f"   ⚠️ Possible rate limiting detected ({rate_limit_counter} consecutive failures)")
-                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 5s to allow API to recover...")
-                                    time.sleep(5.0)  # Extra 5s delay to let API recover (increased from 2s)
+                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 8s to allow API to recover...")
+                                    time.sleep(8.0)  # Increased from 5s to 8s for better recovery
                                     rate_limit_counter = 0  # Reset counter after delay
                                 continue
                             elif len(candles) < 100:
@@ -1177,28 +1199,32 @@ class TradingStrategy:
                                     logger.error(f"   ❌ Failed to open position")
                         
                         except Exception as e:
+                            error_counter += 1
                             logger.debug(f"   Error scanning {symbol}: {e}")
+                            
                             # Check if it's a rate limit error
-                            if '429' in str(e) or 'rate limit' in str(e).lower() or 'too many' in str(e).lower():
+                            if '429' in str(e) or 'rate limit' in str(e).lower() or 'too many' in str(e).lower() or '403' in str(e):
                                 filter_stats['rate_limited'] += 1
                                 rate_limit_counter += 1
                                 logger.warning(f"   ⚠️ Rate limit error on {symbol}: {e}")
+                                
+                                # GLOBAL CIRCUIT BREAKER: Too many errors = stop scanning
+                                if error_counter >= max_total_errors:
+                                    logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan")
+                                    logger.error(f"   💤 Waiting 10s for API to fully recover...")
+                                    time.sleep(10.0)
+                                    break  # Exit market scan loop
+                                
                                 # Add extra delay to recover
                                 if rate_limit_counter >= 3:
-                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 5s to allow API rate limits to reset...")
-                                    time.sleep(5.0)  # Increased from 3.0s
+                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 8s to allow API rate limits to reset...")
+                                    time.sleep(8.0)  # Increased from 5.0s
                                     rate_limit_counter = 0
                             continue
-                        
-                        # CRITICAL: Add delay between market scans to prevent Coinbase rate limiting (429/403 errors)
-                        # UPDATED (Jan 9, 2026): Increased from 1.0s to 2.0s to prevent 403 "too many errors"
-                        # Coinbase rate limits: ~10 requests/second burst, but sustained rate must be much lower
-                        # With MARKET_SCAN_DELAY=2.0s, we scan at 0.5 req/s which is a very safe sustained rate
-                        # At 25 markets per cycle with 2.0s delay, scanning takes ~50 seconds
-                        # This prevents both 429 (rate limit) and 403 (too many errors) responses from Coinbase
-                        if i < scan_limit - 1:  # Don't delay after last market
-                            jitter = random.uniform(0, 0.2)  # Add 0-200ms jitter
-                            time.sleep(MARKET_SCAN_DELAY + jitter)
+                    
+                    # Note: Market scan delay is now applied BEFORE each candle fetch (see line ~1088)
+                    # This ensures we never make requests too quickly in succession
+                    # No post-delay needed since pre-delay is more effective at preventing rate limits
                     
                     # Log filtering summary
                     logger.info(f"   📊 Scan summary: {filter_stats['total']} markets scanned")
