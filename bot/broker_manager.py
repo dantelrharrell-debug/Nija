@@ -294,7 +294,7 @@ class CoinbaseBroker(BaseBroker):
                 try:
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
-                        # For 403 errors, we need LONGER delays: 15s, 30s, 60s, 120s, 240s... (attempts 2-10)
+                        # For 403 errors, we need LONGER delays with cap: 15s, 30s, 60s, 120s, 120s... (attempts 2-10)
                         # Cap maximum delay at 120 seconds to prevent excessive wait times
                         delay = min(base_delay * (2 ** (attempt - 2)), 120.0)
                         logging.info(f"🔄 Retrying connection in {delay}s (attempt {attempt}/{max_attempts})...")

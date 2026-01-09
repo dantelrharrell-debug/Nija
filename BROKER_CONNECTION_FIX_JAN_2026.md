@@ -292,7 +292,7 @@ These minimal, surgical changes improve the bot's resilience to temporary API is
 
 ---
 
-**Author**: GitHub Copilot Agent  
+**Author**: GitHub Copilot  
 **Date**: January 9, 2026  
 **Branch**: `copilot/fix-connection-issues`  
-**Commit**: `e8f6b1e`
+**Commit**: `a6c189e`
