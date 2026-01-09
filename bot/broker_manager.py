@@ -246,6 +246,8 @@ class CoinbaseBroker(BaseBroker):
             try:
                 return api_func(*args, **kwargs)
             except Exception as e:
+                # Catch all exceptions to handle various API error types (HTTP errors, network errors, etc.)
+                # This is intentionally broad to ensure all rate limiting errors are caught
                 error_msg = str(e).lower()
                 
                 # Check if this is a rate limiting error (403, 429, or "too many" errors)
@@ -253,31 +255,32 @@ class CoinbaseBroker(BaseBroker):
                 is_403_error = (
                     '403 ' in error_msg or ' 403' in error_msg or
                     'forbidden' in error_msg or
-                    'too many errors' in error_msg
+                    'too many errors' in error_msg or
+                    'too many' in error_msg  # Coinbase sometimes returns "too many" without "errors"
                 )
                 is_429_error = (
                     '429 ' in error_msg or ' 429' in error_msg or
                     'rate limit' in error_msg or
                     'too many requests' in error_msg
                 )
-                is_rate_limit = is_403_error or is_429_error or 'too many' in error_msg
+                is_rate_limit = is_403_error or is_429_error
                 
                 # If this is the last attempt or not a rate limit error, raise
                 if attempt >= max_retries - 1 or not is_rate_limit:
                     raise
                 
-                # Calculate exponential backoff delay
+                # Calculate exponential backoff delay with maximum cap
                 # For 403 errors, use longer delays (more aggressive backoff)
                 if is_403_error:
-                    delay = base_delay * (3 ** attempt)  # 5s, 15s, 45s, 135s, 405s
+                    delay = min(base_delay * (3 ** attempt), 120.0)  # 5s, 15s, 45s, 120s (capped), 120s (capped)
                 else:
-                    delay = base_delay * (2 ** attempt)  # 5s, 10s, 20s, 40s, 80s
+                    delay = min(base_delay * (2 ** attempt), 60.0)  # 5s, 10s, 20s, 40s, 60s (capped)
                 
                 logging.warning(f"⚠️  API rate limit hit (attempt {attempt + 1}/{max_retries}): {e}")
                 logging.warning(f"   Waiting {delay:.1f}s before retry...")
                 time.sleep(delay)
     
-    def _log_trade_to_journal(self, symbol: str, side: str, price: float, 
+    def _log_trade_to_journal(self, symbol: str, side: str, price: float,
                                size_usd: float, quantity: float, pnl_data: dict = None):
         """
         Log trade to trade_journal.jsonl with P&L tracking.
