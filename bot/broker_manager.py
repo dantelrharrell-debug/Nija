@@ -2764,8 +2764,16 @@ class KrakenBroker(BaseBroker):
         Args:
             account_type: MASTER for Nija system account, USER for individual user accounts
             user_id: User ID for USER account_type (e.g., 'daivon_frazier')
+            
+        Raises:
+            ValueError: If account_type is USER but user_id is not provided
         """
         super().__init__(BrokerType.KRAKEN)
+        
+        # Validate that USER account_type has user_id
+        if account_type == AccountType.USER and not user_id:
+            raise ValueError("USER account_type requires user_id parameter")
+        
         self.api = None
         self.kraken_api = None
         self.account_type = account_type
@@ -2800,14 +2808,12 @@ class KrakenBroker(BaseBroker):
                 cred_label = "MASTER"
             else:
                 # User account - construct env var name from user_id
-                if not self.user_id:
-                    logging.error("❌ Kraken USER account requires user_id")
-                    return False
-                
-                # Convert user_id to uppercase for env var (e.g., daivon_frazier -> DAIVON)
-                user_env_prefix = self.user_id.split('_')[0].upper()
-                api_key = os.getenv(f"KRAKEN_USER_{user_env_prefix}_API_KEY", "").strip()
-                api_secret = os.getenv(f"KRAKEN_USER_{user_env_prefix}_API_SECRET", "").strip()
+                # Convert user_id to uppercase for env var
+                # For user_id like 'daivon_frazier', extracts 'DAIVON' for KRAKEN_USER_DAIVON_API_KEY
+                # For user_id like 'john', uses 'JOHN' for KRAKEN_USER_JOHN_API_KEY
+                user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
+                api_key = os.getenv(f"KRAKEN_USER_{user_env_name}_API_KEY", "").strip()
+                api_secret = os.getenv(f"KRAKEN_USER_{user_env_name}_API_SECRET", "").strip()
                 cred_label = f"USER:{self.user_id}"
             
             if not api_key or not api_secret:
