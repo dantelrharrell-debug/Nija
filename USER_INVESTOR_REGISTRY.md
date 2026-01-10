@@ -95,6 +95,86 @@ This registry maintains a comprehensive record of all users and investors in the
 
 ---
 
+### User #2: Tania Gilbert
+
+**Status**: 🟢 ACTIVE  
+**Type**: Investor/User  
+**Tier**: Pro
+
+#### Contact Information
+- **Full Name**: Tania Gilbert
+- **Email**: Tanialgilbert@gmail.com
+- **User ID**: `tania_gilbert`
+- **Added**: January 10, 2026
+- **Added By**: System Administrator
+
+#### API Credentials
+- **Broker**: Kraken
+- **API Key**: `XEB37FsbsQ2Wj/bknOy6HPZTFqs25nyU10M2oxF/ja//Yh/r2kSRCAp/` (Encrypted)
+- **API Secret**: `iINPAKFyVe9rTfYCKnauFCpOfqdsm9+lBFxzx2KLFkArjStbjAQ9Rr+FuA5lZgnzpZ85wMwnzKpkO07iHmMLmw==` (Encrypted)
+- **Credentials Status**: ✅ Encrypted and Stored
+- **Last Verified**: January 10, 2026
+
+#### Trading Permissions
+- **Max Position Size**: $300 USD per trade
+- **Max Daily Loss**: $150 USD
+- **Max Concurrent Positions**: 7
+- **Trade-Only Mode**: Yes (Cannot modify strategy)
+- **Allowed Trading Pairs**:
+  1. BTC-USD (Bitcoin)
+  2. ETH-USD (Ethereum)
+  3. SOL-USD (Solana)
+  4. AVAX-USD (Avalanche)
+  5. MATIC-USD (Polygon)
+  6. DOT-USD (Polkadot)
+  7. LINK-USD (Chainlink)
+  8. ADA-USD (Cardano)
+
+#### Account Settings
+- **Risk Level**: Moderate
+- **Trailing Stops**: Enabled
+- **Auto-Compound**: Enabled
+- **Notifications**: Enabled to Tanialgilbert@gmail.com
+
+#### Control & Management
+- **Trading Enabled**: ✅ Yes
+- **Last Status Check**: January 10, 2026
+- **Management Script**: `manage_user_tania.py`
+- **Setup Script**: `init_user_tania.py`
+- **Control Commands**:
+  ```bash
+  python manage_user_tania.py status    # Check status
+  python manage_user_tania.py enable    # Enable trading
+  python manage_user_tania.py disable   # Disable trading
+  python manage_user_tania.py info      # View details
+  ```
+
+#### Performance Metrics
+- **Account Balance**: TBD
+- **Total Trades**: 0 (Just initialized)
+- **Winning Trades**: 0
+- **Losing Trades**: 0
+- **Win Rate**: N/A
+- **Total P&L**: $0.00
+- **ROI**: 0%
+- **Best Trade**: N/A
+- **Worst Trade**: N/A
+- **Average Trade**: N/A
+
+#### Activity Log
+| Date | Event | Details | By |
+|------|-------|---------|-----|
+| 2026-01-10 | Account Created | Pro tier, Kraken integration | System Admin |
+| 2026-01-10 | API Keys Added | Encrypted credentials stored | System Admin |
+| 2026-01-10 | Permissions Set | Max $300 position, 7 concurrent | System Admin |
+| 2026-01-10 | Trading Enabled | Account activated | System Admin |
+
+#### Notes
+- Second user in the multi-user Kraken system
+- Full documentation in `USER_SETUP_COMPLETE_TANIA.md`
+
+---
+
 ## Pending Users
 
 *No pending users at this time.*
@@ -109,22 +189,22 @@ This registry maintains a comprehensive record of all users and investors in the
 
 ## User Statistics
 
-**Total Users**: 1  
-**Active Users**: 1  
+**Total Users**: 2  
+**Active Users**: 2  
 **Pending Users**: 0  
 **Suspended Users**: 0  
 **Deleted Users**: 0
 
 **By Tier**:
 - Basic: 0
-- Pro: 1 (Daivon Frazier)
+- Pro: 2 (Daivon Frazier, Tania Gilbert)
 - Enterprise: 0
 
 **By Broker**:
 - Coinbase: 0
 - Binance: 0
 - OKX: 0
-- Kraken: 1 (Daivon Frazier)
+- Kraken: 2 (Daivon Frazier, Tania Gilbert)
 - Alpaca: 0
 
 ---
@@ -179,7 +259,7 @@ If there are any discrepancies or issues with this registry:
 
 ---
 
-**Document Version**: 1.0  
+**Document Version**: 1.1  
 **Created**: January 8, 2026  
-**Last Modified**: January 8, 2026  
+**Last Modified**: January 10, 2026  
 **Next Review**: January 15, 2026
