@@ -2993,8 +2993,7 @@ class KrakenBroker(BaseBroker):
                     logger.info("      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
                 else:
                     # USER account - provide specific instructions
-                    # Re-extract user_env_name for error message (guaranteed to be in USER branch)
-                    user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
+                    # Note: user_env_name is guaranteed to be defined from the else block above
                     logger.info(f"   To enable Kraken USER trading for {self.user_id}, set:")
                     logger.info(f"      KRAKEN_USER_{user_env_name}_API_KEY=<your-api-key>")
                     logger.info(f"      KRAKEN_USER_{user_env_name}_API_SECRET=<your-api-secret>")
