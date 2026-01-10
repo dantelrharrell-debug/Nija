@@ -302,6 +302,25 @@ If you see the failure message, the environment variables are not set in your de
 - For user "john", use `KRAKEN_USER_JOHN_API_KEY`
 - Check the code extracts first name: `user_id.split('_')[0].upper()`
 
+### Issue: "EGeneral:Permission denied" or "Kraken connection test failed: Permission denied"
+
+**Cause**: Your Kraken API key exists but doesn't have sufficient permissions
+
+**Solution**:
+1. Go to https://www.kraken.com/u/security/api
+2. Find your API key and click "Edit" or "Manage"
+3. Enable these permissions:
+   - ✅ **Query Funds** (required to check balance)
+   - ✅ **Query Open Orders & Trades** (required for position tracking)
+   - ✅ **Query Closed Orders & Trades** (required for trade history)
+   - ✅ **Create & Modify Orders** (required to place trades)
+   - ✅ **Cancel/Close Orders** (required for stop losses)
+   - ❌ **Withdraw Funds** (DO NOT enable for security)
+4. Save changes
+5. Restart the bot (redeploy if in production)
+
+**Note**: The bot needs at minimum "Query Funds" permission to connect. Without it, you'll get "Permission denied" errors even though your API key is valid.
+
 ### Issue: Coinbase PEM key not working in Railway
 
 **Cause**: Newlines in PEM key

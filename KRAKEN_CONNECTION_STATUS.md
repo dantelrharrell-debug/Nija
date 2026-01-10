@@ -270,9 +270,18 @@ This script will:
 - Check that API key hasn't expired
 - Regenerate keys on Kraken if needed
 
-### "Kraken connection failed: Permission denied"
-- Check API key permissions on Kraken
-- Enable required trading permissions (see Step 1 above)
+### "Kraken connection failed: Permission denied" or "EGeneral:Permission denied"
+- **This means your API key exists but doesn't have the required permissions**
+- Go to https://www.kraken.com/u/security/api
+- Edit your API key and enable these permissions:
+  - ✅ Query Funds (required to check balance)
+  - ✅ Query Open Orders & Trades (required for position tracking)
+  - ✅ Query Closed Orders & Trades (required for trade history)
+  - ✅ Create & Modify Orders (required to place trades)
+  - ✅ Cancel/Close Orders (required for stop losses)
+  - ❌ Withdraw Funds (Do NOT enable for security)
+- Save changes and restart the bot
+- **Common cause**: API key was created with "View only" or limited permissions
 
 ### "No module named 'krakenex'"
 - Install dependencies: `pip install krakenex pykrakenapi`
