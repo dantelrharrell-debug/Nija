@@ -18,10 +18,16 @@ from typing import Dict, List, Optional
 from enum import Enum
 
 # Import broker classes
-from broker_manager import (
-    BrokerType, AccountType, BaseBroker,
-    CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker
-)
+try:
+    from bot.broker_manager import (
+        BrokerType, AccountType, BaseBroker,
+        CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker
+    )
+except ImportError:
+    from broker_manager import (
+        BrokerType, AccountType, BaseBroker,
+        CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker
+    )
 
 logger = logging.getLogger('nija.multi_account')
 
