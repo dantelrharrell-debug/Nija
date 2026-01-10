@@ -621,7 +621,7 @@ class IndependentBrokerTrader:
             total_user_threads = sum(len(threads) for threads in self.user_broker_threads.values())
             # Collect all user broker names
             user_broker_names = []
-            for user_id, threads in self.user_broker_threads.items():
+            for _, threads in self.user_broker_threads.items():
                 user_broker_names.extend(sorted(threads.keys()))
             user_broker_list = ", ".join(user_broker_names)
             logger.info(f"   👤 User brokers ({total_user_threads}): {user_broker_list}")
