@@ -548,7 +548,7 @@ class CoinbaseBroker(BaseBroker):
             
             # Get products with pagination
             if hasattr(self.client, 'get_products'):
-                # CRITICAL FIX (Jan 2026): Add retry logic for 403/429 rate limit errors
+                # CRITICAL FIX: Add retry logic for 403/429 rate limit errors
                 # The Coinbase SDK's get_all_products=True can trigger rate limits
                 # We need to retry with exponential backoff to handle temporary blocks
                 max_retries = RATE_LIMIT_MAX_RETRIES
@@ -557,7 +557,7 @@ class CoinbaseBroker(BaseBroker):
                 
                 while retry_count <= max_retries:
                     try:
-                        # CRITICAL FIX (Jan 2026): Wrap get_products() call with rate limiting
+                        # CRITICAL FIX: Wrap get_products() call with rate limiting
                         # The Coinbase SDK's get_all_products=True internally makes multiple paginated
                         # requests rapidly, which can exhaust rate limits before market scanning begins
                         # Using rate limiter with retry logic to prevent 403 "Forbidden" errors
@@ -591,11 +591,11 @@ class CoinbaseBroker(BaseBroker):
                             if is_forbidden:
                                 # 403 errors: Use fixed delay with jitter (API key temporarily blocked)
                                 delay = FORBIDDEN_BASE_DELAY + random.uniform(0, FORBIDDEN_JITTER_MAX)
-                                logging.warning(f"⚠️  API key temporarily blocked (403) on get_all_products, waiting {delay:.1f}s before retry {retry_count}/{max_retries}")
+                                logging.warning(f"⚠️  Rate limit (403 Forbidden): API key temporarily blocked on get_all_products, waiting {delay:.1f}s before retry {retry_count}/{max_retries}")
                             else:
                                 # 429 errors: Use exponential backoff
                                 delay = RATE_LIMIT_BASE_DELAY * (2 ** (retry_count - 1))
-                                logging.warning(f"⚠️  Rate limit hit (429) on get_all_products, waiting {delay:.1f}s before retry {retry_count}/{max_retries}")
+                                logging.warning(f"⚠️  Rate limit (429 Too Many Requests): Quota exceeded on get_all_products, waiting {delay:.1f}s before retry {retry_count}/{max_retries}")
                             
                             time.sleep(delay)
                             continue
@@ -608,7 +608,7 @@ class CoinbaseBroker(BaseBroker):
                     logging.error("⚠️  Failed to fetch products after retries")
                     return FALLBACK_MARKETS
                     
-                # Debug: Log response type and structure
+                # Log response type and structure
                 logging.info(f"   Response type: {type(products_resp).__name__}")
                 
                 # Handle both object and dict responses
