@@ -1434,6 +1434,43 @@ class CoinbaseBroker(BaseBroker):
             Order response dictionary
         """
         try:
+            # CRITICAL FIX (Jan 10, 2026): Validate symbol parameter before any API calls
+            # Prevents "ProductID is invalid" errors from Coinbase API
+            if not symbol:
+                logger.error("❌ INVALID SYMBOL: Symbol parameter is None or empty")
+                logger.error(f"   Side: {side}, Quantity: {quantity}, Size Type: {size_type}")
+                return {
+                    "status": "error",
+                    "error": "INVALID_SYMBOL",
+                    "message": "Symbol parameter is None or empty",
+                    "partial_fill": False,
+                    "filled_pct": 0.0
+                }
+            
+            if not isinstance(symbol, str):
+                logger.error(f"❌ INVALID SYMBOL: Symbol must be string, got {type(symbol)}")
+                logger.error(f"   Symbol value: {symbol}")
+                return {
+                    "status": "error",
+                    "error": "INVALID_SYMBOL",
+                    "message": f"Symbol must be string, got {type(symbol)}",
+                    "partial_fill": False,
+                    "filled_pct": 0.0
+                }
+            
+            # Validate symbol format (should be like "BTC-USD", "ETH-USD", etc.)
+            if '-' not in symbol or len(symbol) < 5:
+                logger.error(f"❌ INVALID SYMBOL: Invalid format '{symbol}'")
+                logger.error(f"   Expected format: BASE-QUOTE (e.g., 'BTC-USD')")
+                logger.error(f"   Side: {side}, Quantity: {quantity}")
+                return {
+                    "status": "error",
+                    "error": "INVALID_SYMBOL",
+                    "message": f"Invalid symbol format '{symbol}' - expected 'BASE-QUOTE'",
+                    "partial_fill": False,
+                    "filled_pct": 0.0
+                }
+            
             # Global BUY guard: block all buys when emergency stop is active or HARD_BUY_OFF=1
             try:
                 import os as _os
