@@ -231,9 +231,10 @@ class CoinbaseBroker(BaseBroker):
                 per_key_overrides={
                     'get_candles': 10,  # Even more conservative for candle fetching (6s between calls)
                     'get_product': 15,  # Slightly faster for product queries (4s between calls)
+                    'get_all_products': 6,  # Ultra conservative for bulk product fetching (10s between calls)
                 }
             )
-            logger.info("✅ Rate limiter initialized (12 req/min default, 10 req/min for candles)")
+            logger.info("✅ Rate limiter initialized (12 req/min default, 6 req/min for get_all_products)")
         else:
             self._rate_limiter = None
             logger.warning("⚠️ RateLimiter not available - using manual delays only")
@@ -536,6 +537,7 @@ class CoinbaseBroker(BaseBroker):
         """
         Fetch ALL available products (cryptocurrency pairs) from Coinbase.
         Handles pagination to retrieve 700+ markets without timeouts.
+        Uses rate limiting and retry logic to prevent 403/429 errors.
         
         Returns:
             List of product IDs (e.g., ['BTC-USD', 'ETH-USD', ...])
@@ -546,73 +548,124 @@ class CoinbaseBroker(BaseBroker):
             
             # Get products with pagination
             if hasattr(self.client, 'get_products'):
-                try:
-                    # Request all products (Coinbase has 700+ markets)
-                    products_resp = self.client.get_products(get_all_products=True)
+                # CRITICAL FIX (Jan 2026): Add retry logic for 403/429 rate limit errors
+                # The Coinbase SDK's get_all_products=True can trigger rate limits
+                # We need to retry with exponential backoff to handle temporary blocks
+                max_retries = RATE_LIMIT_MAX_RETRIES
+                retry_count = 0
+                products_resp = None
+                
+                while retry_count <= max_retries:
+                    try:
+                        # CRITICAL FIX (Jan 2026): Wrap get_products() call with rate limiting
+                        # The Coinbase SDK's get_all_products=True internally makes multiple paginated
+                        # requests rapidly, which can exhaust rate limits before market scanning begins
+                        # Using rate limiter with retry logic to prevent 403 "Forbidden" errors
+                        
+                        def _fetch_products():
+                            """Inner function for rate-limited product fetching"""
+                            return self.client.get_products(get_all_products=True)
+                        
+                        # Apply rate limiting if available
+                        if self._rate_limiter:
+                            # Rate-limited call - enforces minimum interval between requests
+                            products_resp = self._rate_limiter.call('get_all_products', _fetch_products)
+                        else:
+                            # Fallback to direct call without rate limiting
+                            products_resp = _fetch_products()
+                        
+                        # Success! Break out of retry loop
+                        break
+                        
+                    except Exception as fetch_err:
+                        error_str = str(fetch_err)
+                        
+                        # Check if it's a rate limit error (403 or 429)
+                        is_rate_limit = '429' in error_str or 'rate limit' in error_str.lower()
+                        is_forbidden = '403' in error_str or 'forbidden' in error_str.lower() or 'too many' in error_str.lower()
+                        
+                        if (is_rate_limit or is_forbidden) and retry_count < max_retries:
+                            retry_count += 1
+                            
+                            # Calculate backoff delay
+                            if is_forbidden:
+                                # 403 errors: Use fixed delay with jitter (API key temporarily blocked)
+                                delay = FORBIDDEN_BASE_DELAY + random.uniform(0, FORBIDDEN_JITTER_MAX)
+                                logging.warning(f"⚠️  API key temporarily blocked (403) on get_all_products, waiting {delay:.1f}s before retry {retry_count}/{max_retries}")
+                            else:
+                                # 429 errors: Use exponential backoff
+                                delay = RATE_LIMIT_BASE_DELAY * (2 ** (retry_count - 1))
+                                logging.warning(f"⚠️  Rate limit hit (429) on get_all_products, waiting {delay:.1f}s before retry {retry_count}/{max_retries}")
+                            
+                            time.sleep(delay)
+                            continue
+                        else:
+                            # Not a rate limit error or max retries reached
+                            raise fetch_err
+                
+                # Check if we successfully fetched products
+                if not products_resp:
+                    logging.error("⚠️  Failed to fetch products after retries")
+                    return FALLBACK_MARKETS
                     
-                    # Debug: Log response type and structure
-                    logging.info(f"   Response type: {type(products_resp).__name__}")
-                    
-                    # Handle both object and dict responses
-                    if hasattr(products_resp, 'products'):
-                        products = products_resp.products
-                        logging.info(f"   Extracted {len(products) if products else 0} products from .products attribute")
+                # Debug: Log response type and structure
+                logging.info(f"   Response type: {type(products_resp).__name__}")
+                
+                # Handle both object and dict responses
+                if hasattr(products_resp, 'products'):
+                    products = products_resp.products
+                    logging.info(f"   Extracted {len(products) if products else 0} products from .products attribute")
+                elif isinstance(products_resp, dict):
+                    products = products_resp.get('products', [])
+                    logging.info(f"   Extracted {len(products)} products from dict['products']")
+                else:
+                    products = []
+                    logging.warning(f"⚠️  Unexpected response type: {type(products_resp).__name__}")
+                
+                if not products:
+                    logging.warning("⚠️  No products returned from API - response may be empty or malformed")
+                    # Debug: Show what attributes/keys are available
+                    if hasattr(products_resp, '__dict__'):
+                        attrs = [k for k in dir(products_resp) if not k.startswith('_')][:10]
+                        logging.info(f"   Available attributes: {attrs}")
                     elif isinstance(products_resp, dict):
-                        products = products_resp.get('products', [])
-                        logging.info(f"   Extracted {len(products)} products from dict['products']")
-                    else:
-                        products = []
-                        logging.warning(f"⚠️  Unexpected response type: {type(products_resp).__name__}")
+                        logging.info(f"   Available keys: {list(products_resp.keys())}")
+                    return []
+                
+                # Extract product IDs - handle various response formats
+                for i, product in enumerate(products):
+                    product_id = None
                     
-                    if not products:
-                        logging.warning("⚠️  No products returned from API - response may be empty or malformed")
-                        # Debug: Show what attributes/keys are available
-                        if hasattr(products_resp, '__dict__'):
-                            attrs = [k for k in dir(products_resp) if not k.startswith('_')][:10]
-                            logging.info(f"   Available attributes: {attrs}")
-                        elif isinstance(products_resp, dict):
-                            logging.info(f"   Available keys: {list(products_resp.keys())}")
-                        return []
-                    
-                    # Extract product IDs - handle various response formats
-                    for i, product in enumerate(products):
-                        product_id = None
-                        
-                        # Debug first product to understand structure
-                        if i == 0:
-                            if hasattr(product, '__dict__'):
-                                attrs = [k for k in dir(product) if not k.startswith('_')][:10]
-                                logging.info(f"   First product attributes: {attrs}")
-                            elif isinstance(product, dict):
-                                logging.info(f"   First product keys: {list(product.keys())[:10]}")
-                        
-                        # Try object attribute access (Coinbase uses 'product_id', not 'id')
-                        if hasattr(product, 'product_id'):
-                            product_id = getattr(product, 'product_id', None)
-                        elif hasattr(product, 'id'):
-                            product_id = getattr(product, 'id', None)
-                        # Try dict access
+                    # Debug first product to understand structure
+                    if i == 0:
+                        if hasattr(product, '__dict__'):
+                            attrs = [k for k in dir(product) if not k.startswith('_')][:10]
+                            logging.info(f"   First product attributes: {attrs}")
                         elif isinstance(product, dict):
-                            product_id = product.get('product_id') or product.get('id')
-                        
-                        # Filter: Only include USD trading pairs (exclude stablecoins on themselves)
-                        if product_id and '-USD' in product_id:
-                            all_products.append(product_id)
+                            logging.info(f"   First product keys: {list(product.keys())[:10]}")
                     
-                    logging.info(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
+                    # Try object attribute access (Coinbase uses 'product_id', not 'id')
+                    if hasattr(product, 'product_id'):
+                        product_id = getattr(product, 'product_id', None)
+                    elif hasattr(product, 'id'):
+                        product_id = getattr(product, 'id', None)
+                    # Try dict access
+                    elif isinstance(product, dict):
+                        product_id = product.get('product_id') or product.get('id')
                     
-                    # Remove duplicates and sort
-                    all_products = sorted(list(set(all_products)))
-                    
-                    logging.info(f"✅ Successfully fetched {len(all_products)} USD/USDC trading pairs from Coinbase API")
-                    if all_products:
-                        logging.info(f"   Sample markets: {', '.join(all_products[:10])}")
-                    return all_products
-                    
-                except Exception as e:
-                    logging.error(f"⚠️  get_products() failed: {e}")
-                    logging.error(f"   Traceback: {traceback.format_exc()}")
-                    # Don't return here - let it fall through to outer handler
+                    # Filter: Only include USD trading pairs (exclude stablecoins on themselves)
+                    if product_id and '-USD' in product_id:
+                        all_products.append(product_id)
+                
+                logging.info(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
+                
+                # Remove duplicates and sort
+                all_products = sorted(list(set(all_products)))
+                
+                logging.info(f"✅ Successfully fetched {len(all_products)} USD/USDC trading pairs from Coinbase API")
+                if all_products:
+                    logging.info(f"   Sample markets: {', '.join(all_products[:10])}")
+                return all_products
             
             # Fallback: Use curated list of popular crypto markets
             logging.warning("⚠️  Could not fetch products from API, using fallback list of popular markets")
