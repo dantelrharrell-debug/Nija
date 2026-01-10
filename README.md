@@ -1394,6 +1394,23 @@ See: `API_KEY_ISSUE.md`
 2. Verify `close_full_position()` method indentation
 3. Run `python -m py_compile bot/trading_strategy.py`
 
+### Problem: Kraken "Permission denied" error
+
+**Solution**: API key lacks required permissions
+
+If you see `EGeneral:Permission denied` in logs:
+
+1. Go to https://www.kraken.com/u/security/api
+2. Edit your API key and enable these permissions:
+   - ✅ Query Funds
+   - ✅ Query Open Orders & Trades
+   - ✅ Query Closed Orders & Trades
+   - ✅ Create & Modify Orders
+   - ✅ Cancel/Close Orders
+3. Save and restart the bot
+
+See: `KRAKEN_PERMISSION_ERROR_FIX.md` for detailed instructions
+
 ### Problem: No trades executing
 
 **Possible causes**:
