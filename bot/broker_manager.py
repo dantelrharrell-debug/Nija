@@ -3935,7 +3935,7 @@ class BrokerManager:
         # This maintains backward compatibility while removing Coinbase preference
         if self.active_broker is None:
             self.set_primary_broker(broker.broker_type)
-            logging.info(f"   First broker {broker.broker_type.value} set as primary (for legacy compatibility)")
+            logger.info(f"   First broker {broker.broker_type.value} set as primary (for legacy compatibility)")
         
         # NOTE: Removed automatic Coinbase priority logic
         # Old logic: "Always prefer Coinbase as primary if available"
