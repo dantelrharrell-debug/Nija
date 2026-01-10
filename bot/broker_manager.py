@@ -673,7 +673,7 @@ class CoinbaseBroker(BaseBroker):
                         continue
                     
                     # 2. Must be USD or USDC pair
-                    if not ('-USD' in product_id or '-USDC' in product_id):
+                    if not (product_id.endswith('-USD') or product_id.endswith('-USDC')):
                         continue
                     
                     # 3. Status must be 'online' (exclude offline, delisted, etc.)

@@ -16,10 +16,10 @@ def test_symbol_format_validation():
         ("MATIC-USDC", True),
         ("LINK-USD", True),
         
-        # Invalid symbols that should be filtered
-        ("2Z-USD", True),       # Note: If it has status='online', it's technically valid format
-                                 # The actual filtering happens via status check in get_all_products()
-        ("A-USD", False),        # Too short base currency
+        # Borderline cases - these pass format validation but may fail status check
+        ("2Z-USD", True),       # 2 chars is minimum length - passes format validation
+                                 # Note: Will be filtered by status check if status != 'online'
+        ("A-USD", False),        # Too short (1 char < 2 minimum)
         ("VERYLONGSYMBOL-USD", False),  # Too long base currency
         ("BTC", False),          # Missing quote currency
         ("BTC-", False),         # Missing quote currency
@@ -46,7 +46,7 @@ def test_symbol_format_validation():
             is_valid = False
         
         # 2. Must be USD or USDC pair
-        if is_valid and not ('-USD' in product_id or '-USDC' in product_id):
+        if is_valid and not (product_id.endswith('-USD') or product_id.endswith('-USDC')):
             is_valid = False
         
         # 3. Validate symbol format
@@ -166,9 +166,9 @@ def test_invalid_symbol_error_detection():
     for error_msg, expected_is_invalid in test_cases:
         error_str = error_msg.lower()
         
-        # Apply the same detection logic from broker_manager.py
+        # Apply the same detection logic from broker_manager.py (with explicit parentheses)
         is_invalid_symbol = (
-            ('invalid' in error_str and ('product' in error_str or 'symbol' in error_str)) or
+            (('invalid' in error_str) and ('product' in error_str or 'symbol' in error_str)) or
             'productid is invalid' in error_str or
             ('400' in error_str and 'invalid_argument' in error_str)
         )
