@@ -4,6 +4,8 @@
 
 NIJA now supports **independent multi-broker trading**, where each connected and funded brokerage operates in complete isolation. This architecture ensures that failures in one broker don't affect trading on other brokers.
 
+**🔧 RECENT FIX (Jan 10, 2026)**: Removed automatic Coinbase priority logic that was causing Coinbase to control trading decisions for all other brokers. Each broker now operates 100% independently without any broker taking priority over others.
+
 ## Key Features
 
 ### ✅ Error Isolation
