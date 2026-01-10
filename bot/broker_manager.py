@@ -633,8 +633,16 @@ class CoinbaseBroker(BaseBroker):
                     return []
                 
                 # Extract product IDs - handle various response formats
+                # CRITICAL FIX (Jan 10, 2026): Add status filtering to exclude delisted/disabled products
+                # This prevents invalid symbols (e.g., 2Z-USD, AGLD-USD, HIO, BOE) from causing API errors
+                filtered_count = 0
+                filtered_products_count = 0  # Tracks all filtered products (status, disabled, format)
+                DEBUG_LOG_LIMIT = 5  # Maximum number of filtered products to log at debug level
+                
                 for i, product in enumerate(products):
                     product_id = None
+                    status = None
+                    trading_disabled = False
                     
                     # Debug first product to understand structure
                     if i == 0:
@@ -647,15 +655,56 @@ class CoinbaseBroker(BaseBroker):
                     # Try object attribute access (Coinbase uses 'product_id', not 'id')
                     if hasattr(product, 'product_id'):
                         product_id = getattr(product, 'product_id', None)
+                        status = getattr(product, 'status', None)
+                        trading_disabled = getattr(product, 'trading_disabled', False)
                     elif hasattr(product, 'id'):
                         product_id = getattr(product, 'id', None)
+                        status = getattr(product, 'status', None)
+                        trading_disabled = getattr(product, 'trading_disabled', False)
                     # Try dict access
                     elif isinstance(product, dict):
                         product_id = product.get('product_id') or product.get('id')
+                        status = product.get('status')
+                        trading_disabled = product.get('trading_disabled', False)
                     
-                    # Filter: Only include USD trading pairs (exclude stablecoins on themselves)
-                    if product_id and '-USD' in product_id:
-                        all_products.append(product_id)
+                    # CRITICAL FILTERS to prevent invalid symbol errors:
+                    # 1. Must have product_id
+                    if not product_id:
+                        continue
+                    
+                    # 2. Must be USD or USDC pair
+                    if not (product_id.endswith('-USD') or product_id.endswith('-USDC')):
+                        continue
+                    
+                    # 3. Status must be 'online' (exclude offline, delisted, etc.)
+                    # This is the KEY fix - prevents delisted coins from being scanned
+                    if not status or status.lower() != 'online':
+                        filtered_products_count += 1
+                        if filtered_products_count <= DEBUG_LOG_LIMIT:  # Log first 5 for debugging
+                            logging.debug(f"   Filtered out {product_id}: status={status}")
+                        continue
+                    
+                    # 4. Trading must not be disabled
+                    if trading_disabled:
+                        filtered_products_count += 1
+                        if filtered_products_count <= DEBUG_LOG_LIMIT:
+                            logging.debug(f"   Filtered out {product_id}: trading_disabled=True")
+                        continue
+                    
+                    # 5. Validate symbol format (basic sanity check)
+                    # Valid format: 2-8 chars, dash, USD/USDC
+                    parts = product_id.split('-')
+                    if len(parts) != 2 or len(parts[0]) < 2 or len(parts[0]) > 8:
+                        filtered_products_count += 1
+                        if filtered_products_count <= DEBUG_LOG_LIMIT:
+                            logging.debug(f"   Filtered out {product_id}: invalid format (length)")
+                        continue
+                    
+                    # Passed all filters - add to list
+                    all_products.append(product_id)
+                
+                if filtered_products_count > 0:
+                    logging.info(f"   Filtered out {filtered_products_count} products (offline/delisted/disabled/invalid format)")
                 
                 logging.info(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
                 
@@ -2272,6 +2321,21 @@ class CoinbaseBroker(BaseBroker):
             except Exception as e:
                 error_str = str(e).lower()
                 
+                # CRITICAL FIX (Jan 10, 2026): Distinguish invalid symbols from rate limits
+                # Invalid symbols should not trigger retries or count toward rate limit errors
+                # This prevents delisted coins from causing circuit breaker activation
+                
+                # Check for invalid product/symbol errors
+                has_invalid_keyword = 'invalid' in error_str and ('product' in error_str or 'symbol' in error_str)
+                is_productid_invalid = 'productid is invalid' in error_str
+                is_400_invalid_arg = '400' in error_str and 'invalid_argument' in error_str
+                is_invalid_symbol = has_invalid_keyword or is_productid_invalid or is_400_invalid_arg
+                
+                # If invalid symbol, don't retry - just skip it
+                if is_invalid_symbol:
+                    logging.debug(f"⚠️  Invalid/delisted symbol: {symbol} - skipping")
+                    return []  # Return empty to signal "no data" without counting as error
+                
                 # Distinguish between 429 (rate limit) and 403 (too many errors / temporary ban)
                 is_403_forbidden = '403' in error_str or 'forbidden' in error_str or 'too many errors' in error_str
                 is_429_rate_limit = '429' in error_str or 'rate limit' in error_str or 'too many requests' in error_str
@@ -2494,7 +2558,25 @@ class AlpacaBroker(BaseBroker):
             return candles[-count:] if len(candles) > count else candles
             
         except Exception as e:
-            print(f"Error fetching candles: {e}")
+            error_str = str(e).lower()
+            
+            # CRITICAL FIX (Jan 10, 2026): Distinguish invalid symbols from other errors
+            # Alpaca returns "invalid symbol" errors for delisted/invalid stocks
+            # These should not trigger retries or count toward rate limit errors
+            is_invalid_symbol = (
+                'invalid symbol' in error_str or
+                'symbol not found' in error_str or
+                'asset not found' in error_str or
+                'no data' in error_str
+            )
+            
+            # Log invalid symbols at debug level (not error) since it's expected
+            if is_invalid_symbol:
+                logging.debug(f"⚠️  Invalid/delisted stock symbol: {symbol} - skipping")
+            else:
+                # Only log actual errors
+                print(f"Error fetching candles: {e}")
+            
             return []
     
     def supports_asset_class(self, asset_class: str) -> bool:
