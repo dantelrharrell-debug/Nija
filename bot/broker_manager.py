@@ -3133,6 +3133,32 @@ class KrakenBroker(BaseBroker):
                         if balance['error']:
                             error_msgs = ', '.join(balance['error'])
                             
+                            # Check if it's a permission error (EGeneral:Permission denied, EAPI:Invalid permission, etc.)
+                            is_permission_error = any(keyword in error_msgs.lower() for keyword in [
+                                'permission denied', 'permission', 'egeneral:permission', 
+                                'eapi:invalid permission', 'insufficient permission'
+                            ])
+                            
+                            if is_permission_error:
+                                logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
+                                logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                                logger.error("   Your Kraken API key does not have the required permissions.")
+                                logger.error("")
+                                logger.error("   To fix this issue:")
+                                logger.error("   1. Go to https://www.kraken.com/u/security/api")
+                                logger.error("   2. Find your API key and edit its permissions")
+                                logger.error("   3. Enable these permissions:")
+                                logger.error("      ✅ Query Funds (required to check balance)")
+                                logger.error("      ✅ Query Open Orders & Trades (required for position tracking)")
+                                logger.error("      ✅ Query Closed Orders & Trades (required for trade history)")
+                                logger.error("      ✅ Create & Modify Orders (required to place trades)")
+                                logger.error("      ✅ Cancel/Close Orders (required for stop losses)")
+                                logger.error("   4. Save changes and restart the bot")
+                                logger.error("")
+                                logger.error("   For security, do NOT enable 'Withdraw Funds' permission")
+                                logger.error("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                                return False
+                            
                             # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
                             # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
                             # These indicate API key blocking and need longer cooldown periods
