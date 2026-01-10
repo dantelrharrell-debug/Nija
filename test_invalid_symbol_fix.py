@@ -22,13 +22,15 @@ def test_invalid_symbol_detection():
         ('ProductID is invalid', True),
         ('product_id is invalid', True),
         ('400 Client Error: Bad Request {"error":"INVALID_ARGUMENT","error_details":"ProductID is invalid"}', True),
-        ('invalid product', True),
-        ('invalid symbol TRX-USD', True),
+        ('invalid product not found', True),
+        ('invalid symbol does not exist', True),
+        ('symbol TRX-USD unknown', False),  # Not enough context
         ('429 Too Many Requests', False),
         ('403 Forbidden', False),
         ('rate limit exceeded', False),
         ('connection timeout', False),
         ('network error', False),
+        ('invalid request format', False),  # Too generic
     ]
     
     passed = 0
@@ -37,13 +39,16 @@ def test_invalid_symbol_detection():
     for error_str, expected_invalid in test_cases:
         error_lower = error_str.lower()
         
-        # This is the detection logic from trading_strategy.py
-        is_invalid_symbol = (
-            'productid is invalid' in error_lower or
-            'product_id is invalid' in error_lower or
-            ('invalid' in error_lower and ('product' in error_lower or 'symbol' in error_lower)) or
-            ('400' in error_lower and 'invalid_argument' in error_lower)
+        # This is the updated detection logic from trading_strategy.py
+        is_productid_invalid = 'productid is invalid' in error_lower or 'product_id is invalid' in error_lower
+        is_invalid_argument = '400' in error_lower and 'invalid_argument' in error_lower
+        is_invalid_product_symbol = (
+            'invalid' in error_lower and 
+            ('product' in error_lower or 'symbol' in error_lower) and
+            ('not found' in error_lower or 'does not exist' in error_lower or 'unknown' in error_lower)
         )
+        
+        is_invalid_symbol = is_productid_invalid or is_invalid_argument or is_invalid_product_symbol
         
         if is_invalid_symbol == expected_invalid:
             print(f"  ✅ PASS: '{error_str[:50]}...' -> {is_invalid_symbol}")
@@ -71,6 +76,8 @@ def test_error_classification():
         ('too many requests', True, False),
         ('ProductID is invalid', False, True),
         ('400 INVALID_ARGUMENT', False, True),
+        ('invalid product not found', False, True),
+        ('symbol does not exist', False, False),  # Missing 'invalid' keyword
         ('connection timeout', False, False),
         ('network error', False, False),
     ]
@@ -81,13 +88,16 @@ def test_error_classification():
     for error_str, expected_rate_limit, expected_invalid in test_cases:
         error_lower = error_str.lower()
         
-        # Invalid symbol detection
-        is_invalid_symbol = (
-            'productid is invalid' in error_lower or
-            'product_id is invalid' in error_lower or
-            ('invalid' in error_lower and ('product' in error_lower or 'symbol' in error_lower)) or
-            ('400' in error_lower and 'invalid_argument' in error_lower)
+        # Invalid symbol detection (updated logic)
+        is_productid_invalid = 'productid is invalid' in error_lower or 'product_id is invalid' in error_lower
+        is_invalid_argument = '400' in error_lower and 'invalid_argument' in error_lower
+        is_invalid_product_symbol = (
+            'invalid' in error_lower and 
+            ('product' in error_lower or 'symbol' in error_lower) and
+            ('not found' in error_lower or 'does not exist' in error_lower or 'unknown' in error_lower)
         )
+        
+        is_invalid_symbol = is_productid_invalid or is_invalid_argument or is_invalid_product_symbol
         
         # Rate limit detection
         is_rate_limit = (
@@ -119,7 +129,11 @@ def test_position_cap_message():
     print("=" * 60)
     
     # Read the trading_strategy.py file
-    with open('/home/runner/work/Nija/Nija/bot/trading_strategy.py', 'r') as f:
+    import os
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    trading_strategy_path = os.path.join(script_dir, 'bot', 'trading_strategy.py')
+    
+    with open(trading_strategy_path, 'r') as f:
         content = f.read()
     
     # Find MAX_POSITIONS_ALLOWED value

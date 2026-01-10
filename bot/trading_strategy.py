@@ -1242,7 +1242,7 @@ class TradingStrategy:
                                     logger.warning(f"   ⚠️ Possible rate limiting detected ({rate_limit_counter} consecutive failures)")
                                     logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 15s to allow API to recover...")
                                     self.api_health_score = max(0, self.api_health_score - 10)  # Moderate penalty
-                                    time.sleep(15.0)  # CRITICAL FIX (Jan 10): Increased from 20s to 15s for consistency
+                                    time.sleep(15.0)  # CRITICAL FIX (Jan 10): Decreased from 20s to 15s for consistency
                                     rate_limit_counter = 0  # Reset counter after delay
                                 continue
                             elif len(candles) < 100:
@@ -1328,12 +1328,17 @@ class TradingStrategy:
                             # CRITICAL FIX (Jan 10, 2026): Distinguish invalid symbols from rate limits
                             # Invalid symbols should NOT trigger circuit breakers or count as errors
                             error_str = str(e).lower()
-                            is_invalid_symbol = (
-                                'productid is invalid' in error_str or
-                                'product_id is invalid' in error_str or
-                                ('invalid' in error_str and ('product' in error_str or 'symbol' in error_str)) or
-                                ('400' in error_str and 'invalid_argument' in error_str)
+                            
+                            # More specific patterns to avoid false positives
+                            is_productid_invalid = 'productid is invalid' in error_str or 'product_id is invalid' in error_str
+                            is_invalid_argument = '400' in error_str and 'invalid_argument' in error_str
+                            is_invalid_product_symbol = (
+                                'invalid' in error_str and 
+                                ('product' in error_str or 'symbol' in error_str) and
+                                ('not found' in error_str or 'does not exist' in error_str or 'unknown' in error_str)
                             )
+                            
+                            is_invalid_symbol = is_productid_invalid or is_invalid_argument or is_invalid_product_symbol
                             
                             if is_invalid_symbol:
                                 # Invalid/delisted symbol - skip silently without counting as error
