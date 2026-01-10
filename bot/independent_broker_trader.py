@@ -615,10 +615,16 @@ class IndependentBrokerTrader:
         logger.info("=" * 70)
         logger.info(f"✅ {total_threads} INDEPENDENT TRADING THREADS RUNNING")
         if self.broker_threads:
-            logger.info(f"   🔷 Master brokers: {len(self.broker_threads)}")
+            broker_names = ", ".join(sorted(self.broker_threads.keys()))
+            logger.info(f"   🔷 Master brokers ({len(self.broker_threads)}): {broker_names}")
         if any(self.user_broker_threads.values()):
             total_user_threads = sum(len(threads) for threads in self.user_broker_threads.values())
-            logger.info(f"   👤 User brokers: {total_user_threads}")
+            # Collect all user broker names
+            user_broker_names = []
+            for user_id, threads in self.user_broker_threads.items():
+                user_broker_names.extend(sorted(threads.keys()))
+            user_broker_list = ", ".join(user_broker_names)
+            logger.info(f"   👤 User brokers ({total_user_threads}): {user_broker_list}")
         logger.info("=" * 70)
     
     def stop_all_trading(self):
