@@ -1266,7 +1266,8 @@ class CoinbaseBroker(BaseBroker):
     def _dump_portfolio_summary(self):
         """Diagnostic: dump all portfolios and their USD/USDC balances"""
         try:
-            accounts_resp = self.client.get_accounts()
+            # RATE LIMIT FIX: Wrap get_accounts with retry logic to prevent 429 errors
+            accounts_resp = self._api_call_with_retry(self.client.get_accounts)
             accounts = getattr(accounts_resp, 'accounts', [])
             usd_total = 0.0
             usdc_total = 0.0
@@ -1290,7 +1291,8 @@ class CoinbaseBroker(BaseBroker):
         """
         lines: list[str] = []
         try:
-            resp = self.client.get_accounts()
+            # RATE LIMIT FIX: Wrap get_accounts with retry logic to prevent 429 errors
+            resp = self._api_call_with_retry(self.client.get_accounts)
             accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
             usd_total = 0.0
             usdc_total = 0.0
@@ -1343,7 +1345,8 @@ class CoinbaseBroker(BaseBroker):
     def _log_insufficient_fund_context(self, base_currency: str, quote_currency: str) -> None:
         """Log available balances for base/quote/USD/USDC across portfolios for diagnostics."""
         try:
-            resp = self.client.get_accounts()
+            # RATE LIMIT FIX: Wrap get_accounts with retry logic to prevent 429 errors
+            resp = self._api_call_with_retry(self.client.get_accounts)
             accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
 
             def _as_float(val):
@@ -1389,7 +1392,15 @@ class CoinbaseBroker(BaseBroker):
 
         meta: Dict = {}
         try:
-            product = self.client.get_product(product_id=symbol)
+            # RATE LIMIT FIX: Wrap get_product with rate limiter to prevent 429 errors
+            def _fetch_product():
+                return self.client.get_product(product_id=symbol)
+            
+            if self._rate_limiter:
+                product = self._rate_limiter.call('get_product', _fetch_product)
+            else:
+                product = _fetch_product()
+            
             if isinstance(product, dict):
                 meta = product
             else:
@@ -1582,7 +1593,8 @@ class CoinbaseBroker(BaseBroker):
                             available_base = float(holdings.get(base_currency, 0.0))
 
                             try:
-                                accounts = self.client.get_accounts()
+                                # RATE LIMIT FIX: Wrap get_accounts with retry logic to prevent 429 errors
+                                accounts = self._api_call_with_retry(self.client.get_accounts)
                                 hold_amount = 0.0
                                 for a in accounts:
                                     if isinstance(a, dict):
@@ -1980,8 +1992,15 @@ class CoinbaseBroker(BaseBroker):
                     # For buy orders, estimate crypto received = quote_size / price
                     try:
                         quote_size = float(market_config['quote_size'])
-                        # Fetch current price to estimate
-                        price_data = self.client.get_product(symbol)
+                        # RATE LIMIT FIX: Wrap get_product with rate limiter to prevent 429 errors
+                        def _fetch_price_data():
+                            return self.client.get_product(symbol)
+                        
+                        if self._rate_limiter:
+                            price_data = self._rate_limiter.call('get_product', _fetch_price_data)
+                        else:
+                            price_data = _fetch_price_data()
+                        
                         if price_data and 'price' in price_data:
                             current_price = float(price_data['price'])
                             filled_size = quote_size / current_price
@@ -2135,7 +2154,11 @@ class CoinbaseBroker(BaseBroker):
 
         # Preferred: Use portfolio breakdown to derive base quantities
         try:
-            portfolios_resp = self.client.get_portfolios() if hasattr(self.client, 'get_portfolios') else None
+            # RATE LIMIT FIX: Wrap get_portfolios with rate limiter to prevent 429 errors
+            portfolios_resp = None
+            if hasattr(self.client, 'get_portfolios'):
+                portfolios_resp = self._api_call_with_retry(self.client.get_portfolios)
+            
             portfolios = getattr(portfolios_resp, 'portfolios', [])
             if isinstance(portfolios_resp, dict):
                 portfolios = portfolios_resp.get('portfolios', [])
@@ -2156,7 +2179,11 @@ class CoinbaseBroker(BaseBroker):
                     portfolio_uuid = default_portfolio.get('uuid', portfolio_uuid)
 
             if default_portfolio and portfolio_uuid:
-                breakdown_resp = self.client.get_portfolio_breakdown(portfolio_uuid=portfolio_uuid)
+                # RATE LIMIT FIX: Wrap get_portfolio_breakdown with retry logic to prevent 429 errors
+                breakdown_resp = self._api_call_with_retry(
+                    self.client.get_portfolio_breakdown,
+                    portfolio_uuid=portfolio_uuid
+                )
                 breakdown = getattr(breakdown_resp, 'breakdown', None)
                 if isinstance(breakdown_resp, dict):
                     breakdown = breakdown_resp.get('breakdown', breakdown)
@@ -2225,7 +2252,8 @@ class CoinbaseBroker(BaseBroker):
 
         # Fallback: Use get_accounts available balances
         try:
-            accounts = self.client.get_accounts()
+            # RATE LIMIT FIX: Wrap get_accounts with retry logic to prevent 429 errors
+            accounts = self._api_call_with_retry(self.client.get_accounts)
             # Handle both dict and object responses from Coinbase SDK
             accounts_list = accounts.get('accounts') if isinstance(accounts, dict) else getattr(accounts, 'accounts', [])
 
@@ -2276,7 +2304,15 @@ class CoinbaseBroker(BaseBroker):
         try:
             # Fast path: product ticker price
             try:
-                product = self.client.get_product(symbol)
+                # RATE LIMIT FIX: Wrap get_product with rate limiter to prevent 429 errors
+                def _fetch_product_price():
+                    return self.client.get_product(symbol)
+                
+                if self._rate_limiter:
+                    product = self._rate_limiter.call('get_product', _fetch_product_price)
+                else:
+                    product = _fetch_product_price()
+                
                 price_val = product.get('price') if isinstance(product, dict) else getattr(product, 'price', None)
                 if price_val:
                     return float(price_val)
