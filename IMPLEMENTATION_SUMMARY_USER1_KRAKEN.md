@@ -236,8 +236,8 @@ KRAKEN_USER_DAIVON_API_SECRET=<your-api-secret>
 
 ================================================================================
 ✅ X INDEPENDENT TRADING THREADS RUNNING
-   🔷 Master brokers: X
-   👤 User brokers: 1
+   🔷 Master brokers (X): coinbase, alpaca
+   👤 User brokers (1): daivon_frazier_kraken
 ================================================================================
 ```
 
