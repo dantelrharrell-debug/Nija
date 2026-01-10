@@ -2428,7 +2428,8 @@ class CoinbaseBroker(BaseBroker):
                 has_invalid_keyword = 'invalid' in error_str and ('product' in error_str or 'symbol' in error_str)
                 is_productid_invalid = 'productid is invalid' in error_str
                 is_400_invalid_arg = '400' in error_str and 'invalid_argument' in error_str
-                is_invalid_symbol = has_invalid_keyword or is_productid_invalid or is_400_invalid_arg
+                is_no_key_error = 'no key' in error_str and 'was found' in error_str
+                is_invalid_symbol = has_invalid_keyword or is_productid_invalid or is_400_invalid_arg or is_no_key_error
                 
                 # If invalid symbol, don't retry - just skip it
                 if is_invalid_symbol:
