@@ -378,7 +378,8 @@ class TradingStrategy:
                 from independent_broker_trader import IndependentBrokerTrader
                 self.independent_trader = IndependentBrokerTrader(
                     self.broker_manager, 
-                    self
+                    self,
+                    self.multi_account_manager  # Pass multi-account manager for user trading
                 )
                 logger.info("✅ Independent broker trader initialized")
             except Exception as indie_err:
