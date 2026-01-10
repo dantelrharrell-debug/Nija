@@ -2974,6 +2974,7 @@ class KrakenBroker(BaseBroker):
                 api_key = os.getenv("KRAKEN_MASTER_API_KEY", "").strip()
                 api_secret = os.getenv("KRAKEN_MASTER_API_SECRET", "").strip()
                 cred_label = "MASTER"
+                user_env_name = None  # Not used for MASTER
             else:
                 # User account - construct env var name from user_id
                 # Convert user_id to uppercase for env var
