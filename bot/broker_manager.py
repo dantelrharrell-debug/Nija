@@ -3205,11 +3205,11 @@ class KrakenBroker(BaseBroker):
                     "quantity": quantity
                 }
             
-            logging.error("❌ Kraken order failed: No result data")
+            logger.error("❌ Kraken order failed: No result data")
             return {"status": "error", "error": "No result data"}
             
         except Exception as e:
-            logging.error(f"Kraken order error: {e}")
+            logger.error(f"Kraken order error: {e}")
             return {"status": "error", "error": str(e)}
     
     def get_positions(self) -> List[Dict]:
