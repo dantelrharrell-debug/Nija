@@ -781,6 +781,7 @@ pip install -r requirements.txt
 # 4. Configure environment variables
 cp .env.example .env
 # Edit .env with your Coinbase API credentials
+# For deployment (Railway/Render), see ENVIRONMENT_VARIABLES_GUIDE.md
 
 # 5. Test balance detection
 python test_v2_balance.py
@@ -2339,11 +2340,18 @@ python3 diagnose_profitability_now.py
     - Docker setup
     - Environment configuration
 
-14. **[RENDER_GUIDE.md](RENDER_GUIDE.md)**
+14. **[ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md)** ⭐ NEW
+    - Complete environment variables reference
+    - Local development (.env file) setup
+    - Production deployment (Railway/Render/Heroku)
+    - Multi-account Kraken credentials
+    - Troubleshooting missing credentials
+
+15. **[RENDER_GUIDE.md](RENDER_GUIDE.md)**
     - Alternative hosting on Render
     - Configuration steps
 
-15. **[BOT_RESTART_GUIDE.md](BOT_RESTART_GUIDE.md)**
+16. **[BOT_RESTART_GUIDE.md](BOT_RESTART_GUIDE.md)**
     - Safe restart procedures
     - Verification steps
 
