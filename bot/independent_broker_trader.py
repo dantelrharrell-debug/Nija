@@ -59,16 +59,18 @@ class IndependentBrokerTrader:
     Each broker operates in isolation to prevent cascade failures.
     """
     
-    def __init__(self, broker_manager, trading_strategy):
+    def __init__(self, broker_manager, trading_strategy, multi_account_manager=None):
         """
         Initialize independent broker trader.
         
         Args:
             broker_manager: BrokerManager instance with connected brokers
             trading_strategy: TradingStrategy instance for trading logic
+            multi_account_manager: Optional MultiAccountBrokerManager for user accounts
         """
         self.broker_manager = broker_manager
         self.trading_strategy = trading_strategy
+        self.multi_account_manager = multi_account_manager
         
         # Track broker health and status
         self.broker_health: Dict[str, Dict] = {}
@@ -76,11 +78,18 @@ class IndependentBrokerTrader:
         self.stop_flags: Dict[str, threading.Event] = {}
         self.funded_brokers: Set[str] = set()
         
+        # Track user account brokers separately
+        self.user_broker_health: Dict[str, Dict[str, Dict]] = {}  # {user_id: {broker_name: health_dict}}
+        self.user_broker_threads: Dict[str, Dict[str, threading.Thread]] = {}  # {user_id: {broker_name: thread}}
+        self.user_stop_flags: Dict[str, Dict[str, threading.Event]] = {}  # {user_id: {broker_name: event}}
+        
         # Thread safety locks
         self.health_lock = threading.Lock()
         
         logger.info("=" * 70)
         logger.info("🔒 INDEPENDENT BROKER TRADER INITIALIZED")
+        if multi_account_manager:
+            logger.info("   ✅ Multi-account support enabled (user trading)")
         logger.info("=" * 70)
     
     def detect_funded_brokers(self) -> Dict[str, float]:
@@ -125,6 +134,65 @@ class IndependentBrokerTrader:
         logger.info("=" * 70)
         
         return funded
+    
+    def detect_funded_user_brokers(self) -> Dict[str, Dict[str, float]]:
+        """
+        Detect which user brokers are funded and ready to trade.
+        
+        Returns:
+            dict: Nested dict {user_id: {broker_name: balance}} for funded user brokers
+        """
+        if not self.multi_account_manager:
+            return {}
+        
+        funded_users = {}
+        
+        logger.info("🔍 Detecting funded user brokers...")
+        
+        # Check all user accounts
+        for user_id, user_brokers in self.multi_account_manager.user_brokers.items():
+            for broker_type, broker in user_brokers.items():
+                broker_name = f"{user_id}_{broker_type.value}"
+                
+                if not broker.connected:
+                    logger.info(f"   ⚪ User: {user_id} | {broker_type.value}: Not connected")
+                    continue
+                
+                try:
+                    balance = broker.get_account_balance()
+                    logger.info(f"   💰 User: {user_id} | {broker_type.value}: ${balance:,.2f}")
+                    
+                    if balance >= MINIMUM_FUNDED_BALANCE:
+                        if user_id not in funded_users:
+                            funded_users[user_id] = {}
+                        funded_users[user_id][broker_type.value] = balance
+                        logger.info(f"      ✅ FUNDED - Ready to trade")
+                    else:
+                        logger.info(f"      ⚠️  Underfunded (minimum: ${MINIMUM_FUNDED_BALANCE:.2f})")
+                
+                except Exception as e:
+                    logger.warning(f"   ❌ User: {user_id} | {broker_type.value}: Error checking balance: {e}")
+        
+        logger.info("=" * 70)
+        if funded_users:
+            total_user_count = len(funded_users)
+            total_broker_count = sum(len(brokers) for brokers in funded_users.values())
+            total_user_capital = sum(sum(brokers.values()) for brokers in funded_users.values())
+            
+            logger.info(f"✅ FUNDED USER ACCOUNTS: {total_user_count}")
+            logger.info(f"✅ FUNDED USER BROKERS: {total_broker_count}")
+            logger.info(f"💰 TOTAL USER TRADING CAPITAL: ${total_user_capital:,.2f}")
+            
+            for user_id, brokers in funded_users.items():
+                user_total = sum(brokers.values())
+                logger.info(f"   👤 {user_id}: ${user_total:,.2f}")
+                for broker_name, balance in brokers.items():
+                    logger.info(f"      • {broker_name}: ${balance:,.2f}")
+        else:
+            logger.info("⚠️  NO FUNDED USER BROKERS DETECTED")
+        logger.info("=" * 70)
+        
+        return funded_users
     
     def get_broker_health_status(self, broker_name: str) -> Dict:
         """
@@ -291,84 +359,303 @@ class IndependentBrokerTrader:
         
         logger.info(f"🛑 {broker_name} trading loop stopped (total cycles: {cycle_count})")
     
+    def run_user_broker_trading_loop(self, user_id: str, broker_type, broker, stop_flag: threading.Event):
+        """
+        Run trading loop for a USER broker in an isolated thread.
+        Each user broker operates completely independently from master brokers and other users.
+        
+        Args:
+            user_id: User identifier (e.g., 'daivon_frazier')
+            broker_type: Broker type enum
+            broker: Broker instance
+            stop_flag: Threading event to signal shutdown
+        """
+        broker_name = f"{user_id}_{broker_type.value}"
+        logger.info(f"🚀 {broker_name} (USER) trading loop started")
+        
+        # Random startup delay to prevent all user brokers hitting API at once
+        startup_delay = random.uniform(STARTUP_DELAY_MIN, STARTUP_DELAY_MAX)
+        logger.info(f"   ⏳ {broker_name}: Initial startup delay {startup_delay:.1f}s...")
+        stop_flag.wait(startup_delay)
+        
+        cycle_count = 0
+        
+        while not stop_flag.is_set():
+            try:
+                cycle_count += 1
+                logger.info(f"🔄 {broker_name} (USER) - Cycle #{cycle_count}")
+                
+                # Check if broker is still funded
+                try:
+                    balance = broker.get_account_balance()
+                    if balance < MINIMUM_FUNDED_BALANCE:
+                        logger.warning(f"⚠️  {broker_name} (USER) balance too low: ${balance:.2f}")
+                        # Store health in user-specific tracking
+                        if user_id not in self.user_broker_health:
+                            self.user_broker_health[user_id] = {}
+                        self.user_broker_health[user_id][broker_name] = {
+                            'status': 'degraded',
+                            'error': f'Underfunded: ${balance:.2f}',
+                            'last_check': datetime.now()
+                        }
+                        # Wait before rechecking
+                        stop_flag.wait(60)
+                        continue
+                except Exception as balance_err:
+                    logger.error(f"❌ {broker_name} (USER) balance check failed: {balance_err}")
+                    if user_id not in self.user_broker_health:
+                        self.user_broker_health[user_id] = {}
+                    self.user_broker_health[user_id][broker_name] = {
+                        'status': 'degraded',
+                        'error': f'Balance check failed: {str(balance_err)[:50]}',
+                        'last_check': datetime.now()
+                    }
+                    # Wait before retry
+                    stop_flag.wait(30)
+                    continue
+                
+                # Run trading cycle for this user broker
+                try:
+                    # CRITICAL: Set this user broker as active for this cycle ONLY
+                    # Store original state
+                    original_broker = self.trading_strategy.broker
+                    original_user1_broker = getattr(self.trading_strategy, 'user1_broker', None)
+                    
+                    # Temporarily set this user broker as the active broker
+                    # This ensures the trading strategy uses THIS user's account
+                    self.trading_strategy.broker = broker
+                    if user_id == "daivon_frazier":
+                        self.trading_strategy.user1_broker = broker
+                    
+                    # Execute trading cycle for THIS user broker only
+                    logger.info(f"   {broker_name} (USER): Running trading cycle...")
+                    self.trading_strategy.run_cycle()
+                    
+                    # Restore original brokers to prevent affecting other threads
+                    self.trading_strategy.broker = original_broker
+                    if user_id == "daivon_frazier":
+                        self.trading_strategy.user1_broker = original_user1_broker
+                    
+                    # Mark as healthy
+                    if user_id not in self.user_broker_health:
+                        self.user_broker_health[user_id] = {}
+                    self.user_broker_health[user_id][broker_name] = {
+                        'status': 'healthy',
+                        'error': None,
+                        'last_check': datetime.now(),
+                        'is_trading': True,
+                        'total_cycles': self.user_broker_health.get(user_id, {}).get(broker_name, {}).get('total_cycles', 0) + 1
+                    }
+                    logger.info(f"   ✅ {broker_name} (USER) cycle completed successfully")
+                
+                except Exception as trading_err:
+                    logger.error(f"❌ {broker_name} (USER) trading cycle failed: {trading_err}")
+                    logger.error(f"   Error type: {type(trading_err).__name__}")
+                    
+                    # Restore original brokers on error
+                    try:
+                        self.trading_strategy.broker = original_broker
+                        if user_id == "daivon_frazier":
+                            self.trading_strategy.user1_broker = original_user1_broker
+                    except:
+                        pass
+                    
+                    # Update health status
+                    if user_id not in self.user_broker_health:
+                        self.user_broker_health[user_id] = {}
+                    self.user_broker_health[user_id][broker_name] = {
+                        'status': 'degraded',
+                        'error': f'Trading error: {str(trading_err)[:100]}',
+                        'last_check': datetime.now()
+                    }
+                    
+                    # Continue to next cycle - don't let one user broker's failure stop everything
+                    logger.info(f"   ⚠️  {broker_name} (USER) will retry next cycle")
+                
+                # Wait 150 seconds (2.5 minutes) between cycles
+                # Use stop_flag.wait() so we can be interrupted for shutdown
+                logger.info(f"   {broker_name} (USER): Waiting 2.5 minutes until next cycle...")
+                stop_flag.wait(150)
+            
+            except Exception as outer_err:
+                # Catch-all for any unexpected errors
+                logger.error(f"❌ {broker_name} (USER) CRITICAL ERROR in trading loop: {outer_err}")
+                if user_id not in self.user_broker_health:
+                    self.user_broker_health[user_id] = {}
+                self.user_broker_health[user_id][broker_name] = {
+                    'status': 'failed',
+                    'error': f'Critical error: {str(outer_err)[:100]}',
+                    'last_check': datetime.now()
+                }
+                
+                # Wait before retry
+                stop_flag.wait(60)
+        
+        logger.info(f"🛑 {broker_name} (USER) trading loop stopped (total cycles: {cycle_count})")
+    
     def start_independent_trading(self):
         """
         Start independent trading threads for all funded brokers.
         Each broker operates completely independently.
+        Includes both MASTER brokers and USER brokers.
         """
         logger.info("=" * 70)
         logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING")
         logger.info("=" * 70)
         
-        # Detect funded brokers
+        # Detect funded MASTER brokers
         funded = self.detect_funded_brokers()
         
-        if not funded:
-            logger.error("❌ No funded brokers detected. Cannot start trading.")
+        # Detect funded USER brokers
+        funded_users = self.detect_funded_user_brokers()
+        
+        if not funded and not funded_users:
+            logger.error("❌ No funded brokers detected (master or user). Cannot start trading.")
             return
         
-        # Start a trading thread for each funded broker
-        broker_start_count = 0
-        for broker_type, broker in self.broker_manager.brokers.items():
-            broker_name = broker_type.value
+        total_threads = 0
+        
+        # Start threads for MASTER brokers
+        if funded:
+            logger.info("=" * 70)
+            logger.info("🔷 STARTING MASTER BROKER THREADS")
+            logger.info("=" * 70)
             
-            # Only start threads for funded brokers
-            if broker_name not in funded:
-                logger.info(f"⏭️  Skipping {broker_name} (not funded)")
-                continue
+            broker_start_count = 0
+            for broker_type, broker in self.broker_manager.brokers.items():
+                broker_name = broker_type.value
+                
+                # Only start threads for funded brokers
+                if broker_name not in funded:
+                    logger.info(f"⏭️  Skipping {broker_name} (not funded)")
+                    continue
+                
+                if not broker.connected:
+                    logger.warning(f"⏭️  Skipping {broker_name} (not connected)")
+                    continue
+                
+                # CRITICAL FIX (Jan 10, 2026): Stagger broker thread starts to prevent concurrent API bursts
+                # If we start all brokers simultaneously, they all hit the API at once causing rate limits
+                # Add a delay between each broker start (except the first one)
+                if broker_start_count > 0:
+                    logger.info(f"   ⏳ Staggering start: waiting {BROKER_STAGGER_DELAY:.0f}s before starting {broker_name}...")
+                    time.sleep(BROKER_STAGGER_DELAY)
+                
+                # Create stop flag for this broker
+                stop_flag = threading.Event()
+                self.stop_flags[broker_name] = stop_flag
+                
+                # Create and start trading thread
+                thread = threading.Thread(
+                    target=self.run_broker_trading_loop,
+                    args=(broker_type, broker, stop_flag),
+                    name=f"Trader-{broker_name}",
+                    daemon=True
+                )
+                
+                self.broker_threads[broker_name] = thread
+                thread.start()
+                broker_start_count += 1
+                total_threads += 1
+                
+                logger.info(f"✅ Started independent trading thread for {broker_name} (MASTER)")
+        
+        # Start threads for USER brokers
+        if funded_users:
+            logger.info("=" * 70)
+            logger.info("👤 STARTING USER BROKER THREADS")
+            logger.info("=" * 70)
             
-            if not broker.connected:
-                logger.warning(f"⏭️  Skipping {broker_name} (not connected)")
-                continue
-            
-            # CRITICAL FIX (Jan 10, 2026): Stagger broker thread starts to prevent concurrent API bursts
-            # If we start all brokers simultaneously, they all hit the API at once causing rate limits
-            # Add a delay between each broker start (except the first one)
-            if broker_start_count > 0:
-                logger.info(f"   ⏳ Staggering start: waiting {BROKER_STAGGER_DELAY:.0f}s before starting {broker_name}...")
-                time.sleep(BROKER_STAGGER_DELAY)
-            
-            # Create stop flag for this broker
-            stop_flag = threading.Event()
-            self.stop_flags[broker_name] = stop_flag
-            
-            # Create and start trading thread
-            thread = threading.Thread(
-                target=self.run_broker_trading_loop,
-                args=(broker_type, broker, stop_flag),
-                name=f"Trader-{broker_name}",
-                daemon=True
-            )
-            
-            self.broker_threads[broker_name] = thread
-            thread.start()
-            broker_start_count += 1
-            
-            logger.info(f"✅ Started independent trading thread for {broker_name}")
+            user_broker_start_count = 0
+            for user_id, user_brokers in self.multi_account_manager.user_brokers.items():
+                for broker_type, broker in user_brokers.items():
+                    broker_name = f"{user_id}_{broker_type.value}"
+                    
+                    # Only start threads for funded user brokers
+                    if user_id not in funded_users or broker_type.value not in funded_users[user_id]:
+                        logger.info(f"⏭️  Skipping {broker_name} (not funded)")
+                        continue
+                    
+                    if not broker.connected:
+                        logger.warning(f"⏭️  Skipping {broker_name} (not connected)")
+                        continue
+                    
+                    # Stagger user broker thread starts
+                    if user_broker_start_count > 0 or total_threads > 0:
+                        logger.info(f"   ⏳ Staggering start: waiting {BROKER_STAGGER_DELAY:.0f}s before starting {broker_name}...")
+                        time.sleep(BROKER_STAGGER_DELAY)
+                    
+                    # Initialize user broker tracking dictionaries if needed
+                    if user_id not in self.user_stop_flags:
+                        self.user_stop_flags[user_id] = {}
+                    if user_id not in self.user_broker_threads:
+                        self.user_broker_threads[user_id] = {}
+                    if user_id not in self.user_broker_health:
+                        self.user_broker_health[user_id] = {}
+                    
+                    # Create stop flag for this user broker
+                    stop_flag = threading.Event()
+                    self.user_stop_flags[user_id][broker_name] = stop_flag
+                    
+                    # Create and start trading thread
+                    thread = threading.Thread(
+                        target=self.run_user_broker_trading_loop,
+                        args=(user_id, broker_type, broker, stop_flag),
+                        name=f"Trader-{broker_name}",
+                        daemon=True
+                    )
+                    
+                    self.user_broker_threads[user_id][broker_name] = thread
+                    thread.start()
+                    user_broker_start_count += 1
+                    total_threads += 1
+                    
+                    logger.info(f"✅ Started independent trading thread for {broker_name} (USER)")
         
         logger.info("=" * 70)
-        logger.info(f"✅ {len(self.broker_threads)} INDEPENDENT TRADING THREADS RUNNING")
+        logger.info(f"✅ {total_threads} INDEPENDENT TRADING THREADS RUNNING")
+        if self.broker_threads:
+            logger.info(f"   🔷 Master brokers: {len(self.broker_threads)}")
+        if any(self.user_broker_threads.values()):
+            total_user_threads = sum(len(threads) for threads in self.user_broker_threads.values())
+            logger.info(f"   👤 User brokers: {total_user_threads}")
         logger.info("=" * 70)
     
     def stop_all_trading(self):
         """
-        Stop all trading threads gracefully.
+        Stop all trading threads gracefully (both master and user brokers).
         """
         logger.info("🛑 Stopping all independent trading threads...")
         
-        # Signal all threads to stop
+        # Signal all MASTER broker threads to stop
         for broker_name, stop_flag in self.stop_flags.items():
-            logger.info(f"   Signaling {broker_name} to stop...")
+            logger.info(f"   Signaling {broker_name} (MASTER) to stop...")
             stop_flag.set()
         
-        # Wait for all threads to finish (with timeout)
+        # Signal all USER broker threads to stop
+        for user_id, user_stop_flags in self.user_stop_flags.items():
+            for broker_name, stop_flag in user_stop_flags.items():
+                logger.info(f"   Signaling {broker_name} (USER) to stop...")
+                stop_flag.set()
+        
+        # Wait for all MASTER threads to finish (with timeout)
         for broker_name, thread in self.broker_threads.items():
-            logger.info(f"   Waiting for {broker_name} thread to finish...")
+            logger.info(f"   Waiting for {broker_name} (MASTER) thread to finish...")
             thread.join(timeout=10)
             if thread.is_alive():
-                logger.warning(f"   ⚠️  {broker_name} thread did not stop gracefully")
+                logger.warning(f"   ⚠️  {broker_name} (MASTER) thread did not stop gracefully")
             else:
-                logger.info(f"   ✅ {broker_name} thread stopped")
+                logger.info(f"   ✅ {broker_name} (MASTER) thread stopped")
+        
+        # Wait for all USER threads to finish (with timeout)
+        for user_id, user_threads in self.user_broker_threads.items():
+            for broker_name, thread in user_threads.items():
+                logger.info(f"   Waiting for {broker_name} (USER) thread to finish...")
+                thread.join(timeout=10)
+                if thread.is_alive():
+                    logger.warning(f"   ⚠️  {broker_name} (USER) thread did not stop gracefully")
+                else:
+                    logger.info(f"   ✅ {broker_name} (USER) thread stopped")
         
         logger.info("✅ All trading threads stopped")
     
