@@ -16,29 +16,33 @@ load_dotenv()
 logger = logging.getLogger("nija")
 
 # Configuration constants
-# CRITICAL FIX (Jan 2026): Reduced market scanning to prevent 429 rate limit errors
+# CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
 # Coinbase has strict rate limits (~10 req/s burst, lower sustained)
 # Instead of scanning all 730 markets every cycle, we batch scan smaller subsets
-MARKET_SCAN_LIMIT = 25   # Scan only 25 markets per cycle (reduced from 50 to prevent rate limits)
+# RateLimiter enforces 10 req/min (6s between calls), so we must scan fewer markets
+MARKET_SCAN_LIMIT = 15   # Scan only 15 markets per cycle (reduced from 25 to prevent rate limits)
                          # This rotates through different markets each cycle
-                         # Complete scan of 730 markets takes ~29 cycles (~25 minutes)
+                         # Complete scan of 730 markets takes ~49 cycles (~2 hours)
+                         # At 15 markets with 6.5s delay, each scan takes ~97s (well under 2.5 min cycle time)
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Rate limiting constants (prevent 429 errors from Coinbase API)
-# UPDATED (Jan 9, 2026): Further increased delays to prevent 403/429 rate limit errors
+# UPDATED (Jan 10, 2026): CRITICAL FIX - Aligned delays with RateLimiter to prevent rate limits
 # Coinbase rate limits: ~10 requests/second burst, but sustained rate must be much lower
 # Real-world testing shows we need to be even more conservative to avoid 403 "too many errors"
-# Additional fix: Integrated RateLimiter class in broker_manager.py for centralized rate limiting
+# RateLimiter enforces 6s minimum between get_candles calls (10 req/min)
+# Manual delay must be >= 6s to avoid conflicts and ensure proper rate limiting
 POSITION_CHECK_DELAY = 0.5  # 500ms delay between position checks (was 0.3s)
 SELL_ORDER_DELAY = 0.7      # 700ms delay between sell orders (was 0.5s)
-MARKET_SCAN_DELAY = 4.0     # 4000ms delay between market scans (increased from 3.0s to 4.0s)
-                            # This works with RateLimiter (6s minimum) for extra safety
-                            # At 4.0s delay, we scan at 0.25 req/s which is ultra-conservative
-                            # At 25 markets per cycle with 4.0s delay, scanning takes ~100 seconds
-                            # Combined with RateLimiter enforcement, this prevents both 429 and 403 errors
+MARKET_SCAN_DELAY = 6.5     # 6500ms delay between market scans (increased from 4.0s to 6.5s)
+                            # CRITICAL: Must be >= 6.0s to align with RateLimiter (10 req/min for get_candles)
+                            # The 0.5s buffer (6.5s vs 6.0s) accounts for jitter and processing time
+                            # At 6.5s delay, we scan at ~0.15 req/s which prevents both 429 and 403 errors
+                            # At 15 markets per cycle with 6.5s delay, scanning takes ~97 seconds
+                            # This conservative rate ensures API key never gets temporarily blocked
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
-MARKET_BATCH_SIZE = 25      # Number of markets to scan per cycle (same as MARKET_SCAN_LIMIT)
+MARKET_BATCH_SIZE = 15      # Number of markets to scan per cycle (same as MARKET_SCAN_LIMIT)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # Exit strategy constants (no entry price required)
@@ -1143,8 +1147,8 @@ class TradingStrategy:
                     # Adaptive rate limiting: track consecutive errors (429, 403, or no data)
                     rate_limit_counter = 0
                     error_counter = 0  # Track total errors including exceptions
-                    max_consecutive_rate_limits = 3  # Reduced from 5 - be more aggressive with circuit breaker
-                    max_total_errors = 5  # Maximum total errors before pausing entire scan
+                    max_consecutive_rate_limits = 2  # CRITICAL FIX (Jan 10): Reduced from 3 - activate circuit breaker faster
+                    max_total_errors = 4  # CRITICAL FIX (Jan 10): Reduced from 5 - stop scan earlier to prevent API ban
                     
                     # Track filtering reasons for debugging
                     filter_stats = {
@@ -1185,16 +1189,16 @@ class TradingStrategy:
                                 if error_counter >= max_total_errors:
                                     filter_stats['rate_limited'] += 1
                                     logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan to prevent API block")
-                                    logger.error(f"   💤 Waiting 10s for API to fully recover before next cycle...")
-                                    time.sleep(10.0)
+                                    logger.error(f"   💤 Waiting 20s for API to fully recover before next cycle...")
+                                    time.sleep(20.0)  # CRITICAL FIX (Jan 10): Increased from 10s to 20s for better recovery
                                     break  # Exit the market scan loop entirely
                                 
                                 # If we're getting many consecutive failures, assume rate limiting
                                 if rate_limit_counter >= max_consecutive_rate_limits:
                                     filter_stats['rate_limited'] += 1
                                     logger.warning(f"   ⚠️ Possible rate limiting detected ({rate_limit_counter} consecutive failures)")
-                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 8s to allow API to recover...")
-                                    time.sleep(8.0)  # Increased from 5s to 8s for better recovery
+                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 15s to allow API to recover...")
+                                    time.sleep(15.0)  # CRITICAL FIX (Jan 10): Increased from 8s to 15s for better recovery
                                     rate_limit_counter = 0  # Reset counter after delay
                                 continue
                             elif len(candles) < 100:

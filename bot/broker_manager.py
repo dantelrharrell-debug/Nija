@@ -53,11 +53,11 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
 ]
 
 # Rate limiting retry constants
-# UPDATED (Jan 9, 2026): Added constants for 403/429 error retry delays
+# UPDATED (Jan 10, 2026): Increased 403 error delays to prevent persistent API blocks
 RATE_LIMIT_MAX_RETRIES = 3  # Maximum retries for rate limit errors (reduced from 6)
 RATE_LIMIT_BASE_DELAY = 5.0  # Base delay in seconds for exponential backoff on 429 errors
-FORBIDDEN_BASE_DELAY = 15.0  # Fixed delay for 403 "forbidden" errors (API key ban)
-FORBIDDEN_JITTER_MAX = 5.0   # Maximum additional random delay for 403 errors (15-20s total)
+FORBIDDEN_BASE_DELAY = 20.0  # Fixed delay for 403 "forbidden" errors (increased from 15s to 20s for API key ban)
+FORBIDDEN_JITTER_MAX = 10.0   # Maximum additional random delay for 403 errors (20-30s total, increased from 15-20s)
 
 # Fallback market list - popular crypto trading pairs used when API fails
 FALLBACK_MARKETS = [
