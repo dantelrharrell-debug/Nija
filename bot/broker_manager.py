@@ -636,7 +636,7 @@ class CoinbaseBroker(BaseBroker):
                 # CRITICAL FIX (Jan 10, 2026): Add status filtering to exclude delisted/disabled products
                 # This prevents invalid symbols (e.g., 2Z-USD, AGLD-USD, HIO, BOE) from causing API errors
                 filtered_count = 0
-                invalid_status_count = 0
+                filtered_products_count = 0  # Tracks all filtered products (status, disabled, format)
                 DEBUG_LOG_LIMIT = 5  # Maximum number of filtered products to log at debug level
                 
                 for i, product in enumerate(products):
@@ -678,16 +678,16 @@ class CoinbaseBroker(BaseBroker):
                     
                     # 3. Status must be 'online' (exclude offline, delisted, etc.)
                     # This is the KEY fix - prevents delisted coins from being scanned
-                    if status and status.lower() != 'online':
-                        invalid_status_count += 1
-                        if invalid_status_count <= DEBUG_LOG_LIMIT:  # Log first 5 for debugging
+                    if not status or status.lower() != 'online':
+                        filtered_products_count += 1
+                        if filtered_products_count <= DEBUG_LOG_LIMIT:  # Log first 5 for debugging
                             logging.debug(f"   Filtered out {product_id}: status={status}")
                         continue
                     
                     # 4. Trading must not be disabled
                     if trading_disabled:
-                        invalid_status_count += 1
-                        if invalid_status_count <= DEBUG_LOG_LIMIT:
+                        filtered_products_count += 1
+                        if filtered_products_count <= DEBUG_LOG_LIMIT:
                             logging.debug(f"   Filtered out {product_id}: trading_disabled=True")
                         continue
                     
@@ -695,16 +695,16 @@ class CoinbaseBroker(BaseBroker):
                     # Valid format: 2-8 chars, dash, USD/USDC
                     parts = product_id.split('-')
                     if len(parts) != 2 or len(parts[0]) < 2 or len(parts[0]) > 8:
-                        invalid_status_count += 1
-                        if invalid_status_count <= DEBUG_LOG_LIMIT:
+                        filtered_products_count += 1
+                        if filtered_products_count <= DEBUG_LOG_LIMIT:
                             logging.debug(f"   Filtered out {product_id}: invalid format (length)")
                         continue
                     
                     # Passed all filters - add to list
                     all_products.append(product_id)
                 
-                if invalid_status_count > 0:
-                    logging.info(f"   Filtered out {invalid_status_count} products (offline/delisted/disabled/invalid format)")
+                if filtered_products_count > 0:
+                    logging.info(f"   Filtered out {filtered_products_count} products (offline/delisted/disabled/invalid format)")
                 
                 logging.info(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
                 
@@ -2324,11 +2324,12 @@ class CoinbaseBroker(BaseBroker):
                 # CRITICAL FIX (Jan 10, 2026): Distinguish invalid symbols from rate limits
                 # Invalid symbols should not trigger retries or count toward rate limit errors
                 # This prevents delisted coins from causing circuit breaker activation
-                is_invalid_symbol = (
-                    ('invalid' in error_str and ('product' in error_str or 'symbol' in error_str)) or
-                    'productid is invalid' in error_str or
-                    ('400' in error_str and 'invalid_argument' in error_str)
-                )
+                
+                # Check for invalid product/symbol errors
+                has_invalid_keyword = 'invalid' in error_str and ('product' in error_str or 'symbol' in error_str)
+                is_productid_invalid = 'productid is invalid' in error_str
+                is_400_invalid_arg = '400' in error_str and 'invalid_argument' in error_str
+                is_invalid_symbol = has_invalid_keyword or is_productid_invalid or is_400_invalid_arg
                 
                 # If invalid symbol, don't retry - just skip it
                 if is_invalid_symbol:

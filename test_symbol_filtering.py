@@ -16,9 +16,8 @@ def test_symbol_format_validation():
         ("MATIC-USDC", True),
         ("LINK-USD", True),
         
-        # Borderline cases - these pass format validation but may fail status check
-        ("2Z-USD", True),       # 2 chars is minimum length - passes format validation
-                                 # Note: Will be filtered by status check if status != 'online'
+        # Borderline: 2Z passes format (2 chars=min) but fails status check if not 'online'
+        ("2Z-USD", True),
         ("A-USD", False),        # Too short (1 char < 2 minimum)
         ("VERYLONGSYMBOL-USD", False),  # Too long base currency
         ("BTC", False),          # Missing quote currency
@@ -166,12 +165,11 @@ def test_invalid_symbol_error_detection():
     for error_msg, expected_is_invalid in test_cases:
         error_str = error_msg.lower()
         
-        # Apply the same detection logic from broker_manager.py (with explicit parentheses)
-        is_invalid_symbol = (
-            (('invalid' in error_str) and ('product' in error_str or 'symbol' in error_str)) or
-            'productid is invalid' in error_str or
-            ('400' in error_str and 'invalid_argument' in error_str)
-        )
+        # Apply the same detection logic from broker_manager.py
+        has_invalid_keyword = 'invalid' in error_str and ('product' in error_str or 'symbol' in error_str)
+        is_productid_invalid = 'productid is invalid' in error_str
+        is_400_invalid_arg = '400' in error_str and 'invalid_argument' in error_str
+        is_invalid_symbol = has_invalid_keyword or is_productid_invalid or is_400_invalid_arg
         
         # Check if result matches expected
         if is_invalid_symbol == expected_is_invalid:
