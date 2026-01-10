@@ -1,5 +1,19 @@
 # BROKER INDEPENDENCE FIX - January 10, 2026
 
+## Table of Contents
+
+1. [Problem Identified](#problem-identified)
+2. [Root Cause Analysis](#root-cause-analysis)
+3. [Solution Implemented](#solution-implemented)
+4. [How It Works Now](#how-it-works-now)
+5. [Test Results](#test-results)
+6. [Benefits](#benefits)
+7. [Impact on Users](#impact-on-users)
+8. [Files Modified](#files-modified)
+9. [Summary](#summary)
+
+---
+
 ## Problem Identified
 
 User reported: **"Coinbase should not affect the other brokerages. Coinbase does not control the other brokerage. Coinbase is traded individually from all the other brokerages."**
