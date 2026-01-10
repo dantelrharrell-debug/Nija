@@ -2986,11 +2986,17 @@ class KrakenBroker(BaseBroker):
             
             if not api_key or not api_secret:
                 # Silently skip - Kraken is optional, no need for scary error messages
-                logging.info(f"⚠️  Kraken credentials not configured for {cred_label} (skipping)")
+                logger.info(f"⚠️  Kraken credentials not configured for {cred_label} (skipping)")
                 if self.account_type == AccountType.MASTER:
-                    logging.info("   To enable Kraken MASTER trading, set:")
-                    logging.info("      KRAKEN_MASTER_API_KEY=<your-api-key>")
-                    logging.info("      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+                    logger.info("   To enable Kraken MASTER trading, set:")
+                    logger.info("      KRAKEN_MASTER_API_KEY=<your-api-key>")
+                    logger.info("      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+                else:
+                    # USER account - provide specific instructions
+                    logger.info(f"   To enable Kraken USER trading for {self.user_id}, set:")
+                    logger.info(f"      KRAKEN_USER_{user_env_name}_API_KEY=<your-api-key>")
+                    logger.info(f"      KRAKEN_USER_{user_env_name}_API_SECRET=<your-api-secret>")
+                    logger.info("   See ENVIRONMENT_VARIABLES_GUIDE.md for deployment platform setup")
                 return False
             
             # Initialize Kraken API
@@ -3009,7 +3015,7 @@ class KrakenBroker(BaseBroker):
                         # Add delay before retry with exponential backoff
                         # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
                         delay = base_delay * (2 ** (attempt - 2))
-                        logging.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
+                        logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
                     
                     balance = self.api.query_private('Balance')
@@ -3029,21 +3035,21 @@ class KrakenBroker(BaseBroker):
                             ])
                             
                             if is_retryable and attempt < max_attempts:
-                                logging.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
+                                logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
                                 continue
                             else:
-                                logging.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
+                                logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
                                 return False
                     
                     if balance and 'result' in balance:
                         self.connected = True
                         
                         if attempt > 1:
-                            logging.info(f"✅ Connected to Kraken Pro API ({cred_label}) (succeeded on attempt {attempt})")
+                            logger.info(f"✅ Connected to Kraken Pro API ({cred_label}) (succeeded on attempt {attempt})")
                         
-                        logging.info("=" * 70)
-                        logging.info(f"✅ KRAKEN PRO CONNECTED ({cred_label})")
-                        logging.info("=" * 70)
+                        logger.info("=" * 70)
+                        logger.info(f"✅ KRAKEN PRO CONNECTED ({cred_label})")
+                        logger.info("=" * 70)
                         
                         # Log USD/USDT balance
                         result = balance.get('result', {})
@@ -3051,21 +3057,21 @@ class KrakenBroker(BaseBroker):
                         usdt_balance = float(result.get('USDT', 0))
                         
                         total = usd_balance + usdt_balance
-                        logging.info(f"   Account: {self.account_identifier}")
-                        logging.info(f"   USD Balance: ${usd_balance:.2f}")
-                        logging.info(f"   USDT Balance: ${usdt_balance:.2f}")
-                        logging.info(f"   Total: ${total:.2f}")
-                        logging.info("=" * 70)
+                        logger.info(f"   Account: {self.account_identifier}")
+                        logger.info(f"   USD Balance: ${usd_balance:.2f}")
+                        logger.info(f"   USDT Balance: ${usdt_balance:.2f}")
+                        logger.info(f"   Total: ${total:.2f}")
+                        logger.info("=" * 70)
                         
                         return True
                     else:
                         # No result, but could be retryable
                         error_msg = "No balance data returned"
                         if attempt < max_attempts:
-                            logging.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                            logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                             continue
                         else:
-                            logging.error(f"❌ Kraken connection test failed: {error_msg}")
+                            logger.error(f"❌ Kraken connection test failed: {error_msg}")
                             return False
                 
                 except Exception as e:
@@ -3082,21 +3088,21 @@ class KrakenBroker(BaseBroker):
                     ])
                     
                     if is_retryable and attempt < max_attempts:
-                        logging.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                        logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                         continue
                     else:
                         # Handle errors gracefully for non-retryable or final attempt
                         error_str = error_msg.lower()
                         if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
-                            logging.warning("⚠️  Kraken authentication failed - invalid or expired API credentials")
+                            logger.warning("⚠️  Kraken authentication failed - invalid or expired API credentials")
                         elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
-                            logging.warning("⚠️  Kraken connection failed - network issue or API unavailable")
+                            logger.warning("⚠️  Kraken connection failed - network issue or API unavailable")
                         else:
-                            logging.warning(f"⚠️  Kraken connection failed: {e}")
+                            logger.warning(f"⚠️  Kraken connection failed: {e}")
                         return False
             
             # Should never reach here, but just in case
-            logging.error("❌ Failed to connect to Kraken after maximum retry attempts")
+            logger.error("❌ Failed to connect to Kraken after maximum retry attempts")
             return False
                 
         except ImportError:
@@ -3119,7 +3125,7 @@ class KrakenBroker(BaseBroker):
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
-                logging.error(f"Error fetching Kraken balance ({self.account_identifier}): {error_msgs}")
+                logger.error(f"Error fetching Kraken balance ({self.account_identifier}): {error_msgs}")
                 return 0.0
             
             if balance and 'result' in balance:
@@ -3130,13 +3136,13 @@ class KrakenBroker(BaseBroker):
                 usdt_balance = float(result.get('USDT', 0))
                 
                 total = usd_balance + usdt_balance
-                logging.info(f"💰 Kraken Balance ({self.account_identifier}): USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
+                logger.info(f"💰 Kraken Balance ({self.account_identifier}): USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
                 return total
             
             return 0.0
             
         except Exception as e:
-            logging.error(f"Error fetching Kraken balance ({self.account_identifier}): {e}")
+            logger.error(f"Error fetching Kraken balance ({self.account_identifier}): {e}")
             return 0.0
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
