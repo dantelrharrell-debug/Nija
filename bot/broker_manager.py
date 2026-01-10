@@ -3885,7 +3885,28 @@ class OKXBroker(BaseBroker):
 
 
 class BrokerManager:
-    """Manages multiple broker connections"""
+    """
+    Manages multiple broker connections with independent operation.
+    
+    ARCHITECTURE (Jan 10, 2026 Update):
+    ------------------------------------
+    Each broker operates INDEPENDENTLY and should NOT affect other brokers.
+    
+    The "primary broker" concept exists only for backward compatibility:
+    - Used by legacy single-broker code paths
+    - Used for master account position cap enforcement
+    - Does NOT control independent broker trading
+    
+    For multi-broker trading, use IndependentBrokerTrader which:
+    - Runs each broker in its own thread
+    - Isolates errors between brokers
+    - Prevents cascade failures
+    - Ensures one broker's issues don't affect others
+    
+    CRITICAL: No broker should have automatic priority over others.
+    Previously, Coinbase was automatically set as primary, which caused
+    it to control trading decisions for all brokers. This has been fixed.
+    """
     
     def __init__(self):
         self.brokers: Dict[BrokerType, BaseBroker] = {}
@@ -3893,22 +3914,50 @@ class BrokerManager:
         self.primary_broker_type: Optional[BrokerType] = None
     
     def add_broker(self, broker: BaseBroker):
-        """Add a broker to the manager"""
+        """
+        Add a broker to the manager.
+        
+        IMPORTANT: Each broker is independent and should be treated equally.
+        No broker automatically becomes "primary" - this prevents one broker
+        from controlling or affecting trading decisions for other brokers.
+        
+        To set a primary broker for legacy compatibility, explicitly call
+        set_primary_broker() after adding brokers.
+        """
         self.brokers[broker.broker_type] = broker
         
-        # Auto-set as active broker if none is set yet
-        # Priority: Coinbase > Kraken > OKX > Binance > Alpaca
+        # CRITICAL FIX (Jan 10, 2026): Remove automatic primary broker selection
+        # Previously, Coinbase was automatically set as primary, which made it
+        # control trading logic for all other brokers. Each broker should operate
+        # independently without one broker affecting others.
+        # 
+        # Auto-set first broker as primary ONLY if no primary is set yet
+        # This maintains backward compatibility while removing Coinbase preference
         if self.active_broker is None:
             self.set_primary_broker(broker.broker_type)
-        elif broker.broker_type == BrokerType.COINBASE and self.active_broker.broker_type != BrokerType.COINBASE:
-            # Always prefer Coinbase as primary if available
-            self.set_primary_broker(BrokerType.COINBASE)
+            logging.info(f"   First broker {broker.broker_type.value} set as primary (for legacy compatibility)")
         
-        print(f"📊 Added {broker.broker_type.value} broker")
+        # NOTE: Removed automatic Coinbase priority logic
+        # Old logic: "Always prefer Coinbase as primary if available"
+        # This was causing Coinbase to control other brokerages
+        # Each broker now operates independently through IndependentBrokerTrader
+        
+        print(f"📊 Added {broker.broker_type.value} broker (independent operation)")
     
     def set_primary_broker(self, broker_type: BrokerType) -> bool:
         """
         Set a specific broker as the primary/active broker.
+        
+        NOTE: This method exists for backward compatibility with legacy code
+        that expects a "primary" broker. In modern multi-broker architecture,
+        each broker should operate independently via IndependentBrokerTrader.
+        
+        The primary broker is used only for:
+        - Legacy single-broker trading logic
+        - Position cap enforcement (shared across master account)
+        - Backward compatibility with older code
+        
+        It does NOT control or affect other brokers' independent trading.
         
         Args:
             broker_type: Type of broker to set as primary
