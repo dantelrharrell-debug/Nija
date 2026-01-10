@@ -138,17 +138,30 @@ if os.path.exists(log_file):
     print("📋 RECENT LOG ACTIVITY:")
     print("-" * 80)
     try:
-        with open(log_file, 'r') as f:
-            lines = f.readlines()
-            # Get last 20 lines
-            recent_lines = lines[-20:] if len(lines) > 20 else lines
-            for line in recent_lines:
+        # Use tail command if available for efficiency, otherwise read file
+        import subprocess
+        try:
+            tail_output = subprocess.check_output(['tail', '-n', '20', log_file], 
+                                                 universal_newlines=True, 
+                                                 stderr=subprocess.DEVNULL)
+            for line in tail_output.split('\n'):
                 # Only show important status lines
                 if any(keyword in line for keyword in [
                     'MASTER', 'USER', 'connected', 'TRADING', 'Cycle', 
                     'balance', 'Starting', 'THREADS RUNNING'
                 ]):
                     print(line.rstrip())
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # Fallback to Python if tail not available
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+                recent_lines = lines[-20:] if len(lines) > 20 else lines
+                for line in recent_lines:
+                    if any(keyword in line for keyword in [
+                        'MASTER', 'USER', 'connected', 'TRADING', 'Cycle', 
+                        'balance', 'Starting', 'THREADS RUNNING'
+                    ]):
+                        print(line.rstrip())
     except Exception as e:
         print(f"   ⚠️  Could not read log file: {e}")
 else:

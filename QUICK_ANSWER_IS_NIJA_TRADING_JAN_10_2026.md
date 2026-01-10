@@ -89,15 +89,8 @@ You're seeing a **snippet** of the full logs. The other brokers are likely runni
 # View all recent logs
 railway logs
 
-# Search for broker startup
-railway logs | grep "THREADS RUNNING"
-
-# Search for each broker
-railway logs | grep "coinbase - Cycle"
-railway logs | grep "kraken - Cycle"
-railway logs | grep "alpaca - Cycle"
-railway logs | grep "okx - Cycle"
-railway logs | grep "daivon_frazier"
+# Search for broker startup and all brokers in one command (efficient)
+railway logs | grep -E '(THREADS RUNNING|coinbase - Cycle|kraken - Cycle|alpaca - Cycle|okx - Cycle|daivon_frazier)'
 ```
 
 **Look for this at startup:**
