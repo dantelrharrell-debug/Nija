@@ -41,8 +41,8 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # This setting allows trading for learning/testing but profitability will be limited
 # STRONG RECOMMENDATION: Fund account to $30+ for viable trading
 
-# For $2-50 balance: Trade with 50% positions (leave 50% reserve)
-MIN_BALANCE_TO_TRADE = 2.0  # $2 minimum (LOWERED from $30 to allow very small accounts)
+# For $1-50 balance: Trade with 50% positions (leave 50% reserve)
+MIN_BALANCE_TO_TRADE = 1.0  # $1 minimum (LOWERED from $2 to allow trading with $1.37 balance)
 MICRO_BALANCE_THRESHOLD = 50.0
 MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position
 
