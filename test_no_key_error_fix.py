@@ -6,6 +6,8 @@ This script tests that errors like "'No key AACBR was found.'" are correctly
 identified as invalid symbol errors and don't trigger retries or circuit breakers.
 """
 
+import sys
+
 
 def test_no_key_error_detection():
     """Test that 'No key ... was found' errors are detected as invalid symbols"""
@@ -47,7 +49,8 @@ def test_no_key_error_detection():
             status = "❌ FAIL"
             failed += 1
         
-        print(f"  {status}: '{error_str[:50]}...'")
+        truncated = error_str if len(error_str) <= 50 else error_str[:50] + "..."
+        print(f"  {status}: '{truncated}'")
         print(f"         Expected: {expected_invalid}, Got: {is_invalid_symbol}")
     
     print()
@@ -73,4 +76,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())
