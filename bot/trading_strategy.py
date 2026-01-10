@@ -34,15 +34,18 @@ MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 1
 # Manual delay must be >= 6s to avoid conflicts and ensure proper rate limiting
 POSITION_CHECK_DELAY = 0.5  # 500ms delay between position checks (was 0.3s)
 SELL_ORDER_DELAY = 0.7      # 700ms delay between sell orders (was 0.5s)
-MARKET_SCAN_DELAY = 6.5     # 6500ms delay between market scans (increased from 4.0s to 6.5s)
-                            # CRITICAL: Must be >= 6.0s to align with RateLimiter (10 req/min for get_candles)
-                            # The 0.5s buffer (6.5s vs 6.0s) accounts for jitter and processing time
-                            # At 6.5s delay, we scan at ~0.15 req/s which prevents both 429 and 403 errors
-                            # At 15 markets per cycle with 6.5s delay, scanning takes ~97 seconds
+MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 6.5s to 8.0s for better rate limiting)
+                            # CRITICAL: Must be >= 7.5s to align with RateLimiter (8 req/min for get_candles)
+                            # The 0.5s buffer (8.0s vs 7.5s) accounts for jitter and processing time
+                            # At 8.0s delay, we scan at ~0.125 req/s which prevents both 429 and 403 errors
+                            # At 5-15 markets per cycle with 8.0s delay, scanning takes 40-120 seconds
                             # This conservative rate ensures API key never gets temporarily blocked
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
-MARKET_BATCH_SIZE = 15      # Number of markets to scan per cycle (same as MARKET_SCAN_LIMIT)
+# UPDATED (Jan 10, 2026): Adaptive batch sizing to prevent API rate limiting
+MARKET_BATCH_SIZE_MIN = 5   # Start with just 5 markets per cycle on fresh start
+MARKET_BATCH_SIZE_MAX = 15  # Maximum markets to scan per cycle after warmup
+MARKET_BATCH_WARMUP_CYCLES = 3  # Number of cycles to warm up before using max batch size
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # Exit strategy constants (no entry price required)
@@ -152,6 +155,10 @@ class TradingStrategy:
         self.all_markets_cache = []      # Cache of all available markets
         self.markets_cache_time = 0      # Timestamp of last market list refresh
         self.MARKETS_CACHE_TTL = 3600    # Refresh market list every hour
+        
+        # Rate limiting warmup state (prevents API bans on startup)
+        self.cycle_count = 0             # Track number of cycles for warmup
+        self.api_health_score = 100      # 0-100, degrades on errors, recovers on success
         
         # Candle data cache (prevents duplicate API calls for same market/timeframe)
         self.candle_cache = {}           # {symbol: (timestamp, candles_data)}
@@ -569,9 +576,14 @@ class TradingStrategy:
         """
         Get next batch of markets to scan using rotation strategy.
         
+        UPDATED (Jan 10, 2026): Added adaptive batch sizing to prevent API rate limiting
+        - Starts with small batch (5 markets) on fresh start or after API errors
+        - Gradually increases to max batch size (15 markets) over warmup period
+        - Reduces batch size when API health score is low
+        
         This prevents scanning the same markets every cycle and distributes
-        API load across time. With 730 markets and batch size of 100,
-        we complete a full rotation in ~8 cycles (20 minutes).
+        API load across time. With 730 markets and batch size of 5-15,
+        we complete a full rotation in multiple hours.
         
         Args:
             all_markets: Full list of available markets
@@ -579,14 +591,31 @@ class TradingStrategy:
         Returns:
             Subset of markets for this cycle
         """
-        if not MARKET_ROTATION_ENABLED or len(all_markets) <= MARKET_BATCH_SIZE:
+        # Calculate adaptive batch size based on warmup and API health
+        if self.cycle_count < MARKET_BATCH_WARMUP_CYCLES:
+            # Warmup phase: use minimum batch size
+            batch_size = MARKET_BATCH_SIZE_MIN
+            logger.info(f"   🔥 Warmup mode: cycle {self.cycle_count + 1}/{MARKET_BATCH_WARMUP_CYCLES}, batch size={batch_size}")
+        elif self.api_health_score < 50:
+            # API health degraded: reduce batch size
+            batch_size = MARKET_BATCH_SIZE_MIN
+            logger.warning(f"   ⚠️  API health low ({self.api_health_score}%), using reduced batch size={batch_size}")
+        elif self.api_health_score < 80:
+            # Moderate health: use mid-range batch size
+            batch_size = (MARKET_BATCH_SIZE_MIN + MARKET_BATCH_SIZE_MAX) // 2
+            logger.info(f"   📊 API health moderate ({self.api_health_score}%), batch size={batch_size}")
+        else:
+            # Good health: use maximum batch size
+            batch_size = MARKET_BATCH_SIZE_MAX
+        
+        if not MARKET_ROTATION_ENABLED or len(all_markets) <= batch_size:
             # If rotation disabled or fewer markets than batch size, use all markets
-            return all_markets[:MARKET_BATCH_SIZE]
+            return all_markets[:batch_size]
         
         # Calculate batch boundaries
         total_markets = len(all_markets)
         start_idx = self.market_rotation_offset
-        end_idx = start_idx + MARKET_BATCH_SIZE
+        end_idx = start_idx + batch_size
         
         # Handle wrap-around
         if end_idx <= total_markets:
@@ -1183,32 +1212,40 @@ class TradingStrategy:
                                 rate_limit_counter += 1
                                 error_counter += 1
                                 filter_stats['insufficient_data'] += 1
+                                
+                                # Degrade API health score on errors
+                                self.api_health_score = max(0, self.api_health_score - 5)
+                                
                                 logger.debug(f"   {symbol}: No candles returned (may be rate limited or no data)")
                                 
                                 # GLOBAL CIRCUIT BREAKER: If too many total errors, stop scanning entirely
                                 if error_counter >= max_total_errors:
                                     filter_stats['rate_limited'] += 1
                                     logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan to prevent API block")
-                                    logger.error(f"   💤 Waiting 20s for API to fully recover before next cycle...")
-                                    time.sleep(20.0)  # CRITICAL FIX (Jan 10): Increased from 10s to 20s for better recovery
+                                    logger.error(f"   💤 Waiting 30s for API to fully recover before next cycle...")
+                                    self.api_health_score = max(0, self.api_health_score - 20)  # Major penalty
+                                    time.sleep(30.0)  # CRITICAL FIX (Jan 10): Increased from 20s to 30s for better recovery
                                     break  # Exit the market scan loop entirely
                                 
                                 # If we're getting many consecutive failures, assume rate limiting
                                 if rate_limit_counter >= max_consecutive_rate_limits:
                                     filter_stats['rate_limited'] += 1
                                     logger.warning(f"   ⚠️ Possible rate limiting detected ({rate_limit_counter} consecutive failures)")
-                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 15s to allow API to recover...")
-                                    time.sleep(15.0)  # CRITICAL FIX (Jan 10): Increased from 8s to 15s for better recovery
+                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 20s to allow API to recover...")
+                                    self.api_health_score = max(0, self.api_health_score - 10)  # Moderate penalty
+                                    time.sleep(20.0)  # CRITICAL FIX (Jan 10): Increased from 15s to 20s for better recovery
                                     rate_limit_counter = 0  # Reset counter after delay
                                 continue
                             elif len(candles) < 100:
                                 rate_limit_counter = 0  # Reset on partial success
+                                self.api_health_score = min(100, self.api_health_score + 1)  # Small recovery
                                 filter_stats['insufficient_data'] += 1
                                 logger.debug(f"   {symbol}: Insufficient candles ({len(candles)}/100)")
                                 continue
                             else:
-                                # Success! Reset rate limit counter
+                                # Success! Reset rate limit counter and improve health
                                 rate_limit_counter = 0
+                                self.api_health_score = min(100, self.api_health_score + 2)  # Gradual recovery
                             
                             # Convert to DataFrame
                             df = pd.DataFrame(candles)
@@ -1331,6 +1368,9 @@ class TradingStrategy:
                 
                 reason_str = ", ".join(reasons) if reasons else "Unknown reason"
                 logger.info(f"   Skipping new entries: {reason_str}")
+            
+            # Increment cycle counter for warmup tracking
+            self.cycle_count += 1
             
         except Exception as e:
             # Never raise to keep bot loop alive

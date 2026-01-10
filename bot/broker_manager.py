@@ -56,8 +56,8 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
 # UPDATED (Jan 10, 2026): Increased 403 error delays to prevent persistent API blocks
 RATE_LIMIT_MAX_RETRIES = 3  # Maximum retries for rate limit errors (reduced from 6)
 RATE_LIMIT_BASE_DELAY = 5.0  # Base delay in seconds for exponential backoff on 429 errors
-FORBIDDEN_BASE_DELAY = 20.0  # Fixed delay for 403 "forbidden" errors (increased from 15s to 20s for API key ban)
-FORBIDDEN_JITTER_MAX = 10.0   # Maximum additional random delay for 403 errors (20-30s total, increased from 15-20s)
+FORBIDDEN_BASE_DELAY = 30.0  # Fixed delay for 403 "forbidden" errors (increased from 20s to 30s for API key ban)
+FORBIDDEN_JITTER_MAX = 15.0   # Maximum additional random delay for 403 errors (30-45s total, increased from 20-30s)
 
 # Fallback market list - popular crypto trading pairs used when API fails
 FALLBACK_MARKETS = [
@@ -229,12 +229,12 @@ class CoinbaseBroker(BaseBroker):
             self._rate_limiter = RateLimiter(
                 default_per_min=12,  # 12 requests per minute = 1 request every 5 seconds
                 per_key_overrides={
-                    'get_candles': 10,  # Even more conservative for candle fetching (6s between calls)
+                    'get_candles': 8,   # Very conservative for candle fetching (7.5s between calls = 8 req/min)
                     'get_product': 15,  # Slightly faster for product queries (4s between calls)
-                    'get_all_products': 6,  # Ultra conservative for bulk product fetching (10s between calls)
+                    'get_all_products': 5,  # Ultra conservative for bulk product fetching (12s between calls = 5 req/min)
                 }
             )
-            logger.info("✅ Rate limiter initialized (12 req/min default, 6 req/min for get_all_products)")
+            logger.info("✅ Rate limiter initialized (12 req/min default, 8 req/min for candles, 5 req/min for get_all_products)")
         else:
             self._rate_limiter = None
             logger.warning("⚠️ RateLimiter not available - using manual delays only")
@@ -714,6 +714,12 @@ class CoinbaseBroker(BaseBroker):
                 logging.info(f"✅ Successfully fetched {len(all_products)} USD/USDC trading pairs from Coinbase API")
                 if all_products:
                     logging.info(f"   Sample markets: {', '.join(all_products[:10])}")
+                
+                # CRITICAL FIX (Jan 10, 2026): Add cooldown after get_all_products to prevent burst
+                # This gives the API time to reset before we start scanning markets
+                logging.info("   💤 Cooling down for 10s after bulk product fetch to prevent rate limiting...")
+                time.sleep(10.0)
+                
                 return all_products
             
             # Fallback: Use curated list of popular crypto markets
