@@ -2974,7 +2974,6 @@ class KrakenBroker(BaseBroker):
                 api_key = os.getenv("KRAKEN_MASTER_API_KEY", "").strip()
                 api_secret = os.getenv("KRAKEN_MASTER_API_SECRET", "").strip()
                 cred_label = "MASTER"
-                user_env_name = None  # Not used for MASTER
             else:
                 # User account - construct env var name from user_id
                 # Convert user_id to uppercase for env var
@@ -2994,6 +2993,8 @@ class KrakenBroker(BaseBroker):
                     logger.info("      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
                 else:
                     # USER account - provide specific instructions
+                    # Re-extract user_env_name for error message (guaranteed to be in USER branch)
+                    user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
                     logger.info(f"   To enable Kraken USER trading for {self.user_id}, set:")
                     logger.info(f"      KRAKEN_USER_{user_env_name}_API_KEY=<your-api-key>")
                     logger.info(f"      KRAKEN_USER_{user_env_name}_API_SECRET=<your-api-secret>")
