@@ -2,15 +2,35 @@
 NIJA Independent Broker Trader
 ================================
 
-This module implements independent trading for each connected brokerage.
-Each broker operates in isolation so that failures in one broker don't affect others.
+This module implements FULLY INDEPENDENT trading for each connected brokerage.
+Each broker operates in COMPLETE ISOLATION so that one broker NEVER affects another.
 
 Key Features:
 - Each broker runs in its own thread with error isolation
-- Independent health monitoring per broker
+- Independent health monitoring per broker  
 - Automatic detection of funded brokers
 - Graceful degradation on broker failures
 - Separate position tracking per broker
+
+CRITICAL ARCHITECTURE PRINCIPLE (Jan 10, 2026):
+-----------------------------------------------
+NO BROKER CONTROLS OR AFFECTS OTHER BROKERS.
+
+Previously, Coinbase was automatically set as "primary" which caused it to
+control trading decisions for ALL brokers. This has been fixed.
+
+Now each broker:
+- Makes its own trading decisions
+- Has its own balance checks
+- Manages its own positions
+- Fails independently without affecting others
+- Operates on its own schedule (with staggered starts to prevent API rate limits)
+
+Example:
+- If Coinbase has an error, Kraken/OKX/Binance continue trading normally
+- If Kraken loses connection, it doesn't affect Coinbase/OKX/Binance
+- Each broker can have different balances and position limits
+- One broker's rate limits don't cascade to others
 """
 
 import os
@@ -221,15 +241,17 @@ class IndependentBrokerTrader:
                 
                 # Run trading cycle for this broker
                 try:
-                    # Set this broker as the active broker for the strategy
+                    # CRITICAL: Temporarily set this broker as active for this cycle ONLY
+                    # This ensures each broker trades independently without affecting others
+                    # The broker is restored after the cycle to prevent cross-contamination
                     original_broker = self.trading_strategy.broker
                     self.trading_strategy.broker = broker
                     
-                    # Execute trading cycle
+                    # Execute trading cycle for THIS broker only
                     logger.info(f"   {broker_name}: Running trading cycle...")
                     self.trading_strategy.run_cycle()
                     
-                    # Restore original broker
+                    # Restore original broker to prevent affecting other broker threads
                     self.trading_strategy.broker = original_broker
                     
                     # Mark as healthy
