@@ -201,82 +201,97 @@ class TradingStrategy:
             time.sleep(startup_delay)
             logger.info("✅ Startup delay complete, beginning broker connections...")
             
-            # Try to connect Coinbase (primary broker)
-            logger.info("📊 Attempting to connect Coinbase Advanced Trade...")
+            # Try to connect Coinbase (primary broker) - MASTER ACCOUNT
+            logger.info("📊 Attempting to connect Coinbase Advanced Trade (MASTER)...")
             try:
                 coinbase = CoinbaseBroker()
                 if coinbase.connect():
                     self.broker_manager.add_broker(coinbase)
+                    # Manually register in multi_account_manager (reuse same instance)
+                    self.multi_account_manager.master_brokers[BrokerType.COINBASE] = coinbase
                     connected_brokers.append("Coinbase")
-                    logger.info("   ✅ Coinbase connected")
+                    logger.info("   ✅ Coinbase MASTER connected")
+                    logger.info("   ✅ Coinbase registered as MASTER broker in multi-account manager")
                 else:
-                    logger.warning("   ⚠️  Coinbase connection failed")
+                    logger.warning("   ⚠️  Coinbase MASTER connection failed")
             except Exception as e:
-                logger.warning(f"   ⚠️  Coinbase error: {e}")
+                logger.warning(f"   ⚠️  Coinbase MASTER error: {e}")
             
             # Add delay between broker connections to avoid rate limiting
             time.sleep(2.0)  # Increased from 0.5s to 2.0s
             
-            # Try to connect Kraken Pro
-            logger.info("📊 Attempting to connect Kraken Pro...")
+            # Try to connect Kraken Pro - MASTER ACCOUNT
+            logger.info("📊 Attempting to connect Kraken Pro (MASTER)...")
             try:
-                kraken = KrakenBroker()
+                kraken = KrakenBroker(account_type=AccountType.MASTER)
                 if kraken.connect():
                     self.broker_manager.add_broker(kraken)
+                    # Manually register in multi_account_manager (reuse same instance)
+                    self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken
                     connected_brokers.append("Kraken")
-                    logger.info("   ✅ Kraken connected")
+                    logger.info("   ✅ Kraken MASTER connected")
+                    logger.info("   ✅ Kraken registered as MASTER broker in multi-account manager")
                 else:
-                    logger.warning("   ⚠️  Kraken connection failed")
+                    logger.warning("   ⚠️  Kraken MASTER connection failed")
             except Exception as e:
-                logger.warning(f"   ⚠️  Kraken error: {e}")
+                logger.warning(f"   ⚠️  Kraken MASTER error: {e}")
             
             # Add delay between broker connections
             time.sleep(0.5)
             
-            # Try to connect OKX
-            logger.info("📊 Attempting to connect OKX...")
+            # Try to connect OKX - MASTER ACCOUNT
+            logger.info("📊 Attempting to connect OKX (MASTER)...")
             try:
                 okx = OKXBroker()
                 if okx.connect():
                     self.broker_manager.add_broker(okx)
+                    # Manually register in multi_account_manager (reuse same instance)
+                    self.multi_account_manager.master_brokers[BrokerType.OKX] = okx
                     connected_brokers.append("OKX")
-                    logger.info("   ✅ OKX connected")
+                    logger.info("   ✅ OKX MASTER connected")
+                    logger.info("   ✅ OKX registered as MASTER broker in multi-account manager")
                 else:
-                    logger.warning("   ⚠️  OKX connection failed")
+                    logger.warning("   ⚠️  OKX MASTER connection failed")
             except Exception as e:
-                logger.warning(f"   ⚠️  OKX error: {e}")
+                logger.warning(f"   ⚠️  OKX MASTER error: {e}")
             
             # Add delay between broker connections
             time.sleep(0.5)
             
-            # Try to connect Binance
-            logger.info("📊 Attempting to connect Binance...")
+            # Try to connect Binance - MASTER ACCOUNT
+            logger.info("📊 Attempting to connect Binance (MASTER)...")
             try:
                 binance = BinanceBroker()
                 if binance.connect():
                     self.broker_manager.add_broker(binance)
+                    # Manually register in multi_account_manager (reuse same instance)
+                    self.multi_account_manager.master_brokers[BrokerType.BINANCE] = binance
                     connected_brokers.append("Binance")
-                    logger.info("   ✅ Binance connected")
+                    logger.info("   ✅ Binance MASTER connected")
+                    logger.info("   ✅ Binance registered as MASTER broker in multi-account manager")
                 else:
-                    logger.warning("   ⚠️  Binance connection failed")
+                    logger.warning("   ⚠️  Binance MASTER connection failed")
             except Exception as e:
-                logger.warning(f"   ⚠️  Binance error: {e}")
+                logger.warning(f"   ⚠️  Binance MASTER error: {e}")
             
             # Add delay between broker connections
             time.sleep(0.5)
             
-            # Try to connect Alpaca (for stocks)
-            logger.info("📊 Attempting to connect Alpaca...")
+            # Try to connect Alpaca (for stocks) - MASTER ACCOUNT
+            logger.info("📊 Attempting to connect Alpaca (MASTER - Paper Trading)...")
             try:
                 alpaca = AlpacaBroker()
                 if alpaca.connect():
                     self.broker_manager.add_broker(alpaca)
+                    # Manually register in multi_account_manager (reuse same instance)
+                    self.multi_account_manager.master_brokers[BrokerType.ALPACA] = alpaca
                     connected_brokers.append("Alpaca")
-                    logger.info("   ✅ Alpaca connected")
+                    logger.info("   ✅ Alpaca MASTER connected")
+                    logger.info("   ✅ Alpaca registered as MASTER broker in multi-account manager")
                 else:
-                    logger.warning("   ⚠️  Alpaca connection failed")
+                    logger.warning("   ⚠️  Alpaca MASTER connection failed")
             except Exception as e:
-                logger.warning(f"   ⚠️  Alpaca error: {e}")
+                logger.warning(f"   ⚠️  Alpaca MASTER error: {e}")
             
             # Add delay before user account connections
             time.sleep(1.0)
