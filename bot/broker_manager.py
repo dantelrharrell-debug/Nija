@@ -637,6 +637,7 @@ class CoinbaseBroker(BaseBroker):
                 # This prevents invalid symbols (e.g., 2Z-USD, AGLD-USD, HIO, BOE) from causing API errors
                 filtered_count = 0
                 invalid_status_count = 0
+                DEBUG_LOG_LIMIT = 5  # Maximum number of filtered products to log at debug level
                 
                 for i, product in enumerate(products):
                     product_id = None
@@ -679,14 +680,14 @@ class CoinbaseBroker(BaseBroker):
                     # This is the KEY fix - prevents delisted coins from being scanned
                     if status and status.lower() != 'online':
                         invalid_status_count += 1
-                        if invalid_status_count <= 5:  # Log first 5 for debugging
+                        if invalid_status_count <= DEBUG_LOG_LIMIT:  # Log first 5 for debugging
                             logging.debug(f"   Filtered out {product_id}: status={status}")
                         continue
                     
                     # 4. Trading must not be disabled
                     if trading_disabled:
                         invalid_status_count += 1
-                        if invalid_status_count <= 5:
+                        if invalid_status_count <= DEBUG_LOG_LIMIT:
                             logging.debug(f"   Filtered out {product_id}: trading_disabled=True")
                         continue
                     
@@ -695,7 +696,7 @@ class CoinbaseBroker(BaseBroker):
                     parts = product_id.split('-')
                     if len(parts) != 2 or len(parts[0]) < 2 or len(parts[0]) > 8:
                         invalid_status_count += 1
-                        if invalid_status_count <= 5:
+                        if invalid_status_count <= DEBUG_LOG_LIMIT:
                             logging.debug(f"   Filtered out {product_id}: invalid format (length)")
                         continue
                     
@@ -703,7 +704,7 @@ class CoinbaseBroker(BaseBroker):
                     all_products.append(product_id)
                 
                 if invalid_status_count > 0:
-                    logging.info(f"   Filtered out {invalid_status_count} inactive/delisted products")
+                    logging.info(f"   Filtered out {invalid_status_count} products (offline/delisted/disabled/invalid format)")
                 
                 logging.info(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
                 
@@ -2324,9 +2325,9 @@ class CoinbaseBroker(BaseBroker):
                 # Invalid symbols should not trigger retries or count toward rate limit errors
                 # This prevents delisted coins from causing circuit breaker activation
                 is_invalid_symbol = (
-                    'invalid' in error_str and ('product' in error_str or 'symbol' in error_str) or
+                    ('invalid' in error_str and ('product' in error_str or 'symbol' in error_str)) or
                     'productid is invalid' in error_str or
-                    '400' in error_str and 'invalid_argument' in error_str
+                    ('400' in error_str and 'invalid_argument' in error_str)
                 )
                 
                 # If invalid symbol, don't retry - just skip it

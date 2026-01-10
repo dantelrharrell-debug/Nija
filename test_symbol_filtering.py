@@ -168,9 +168,9 @@ def test_invalid_symbol_error_detection():
         
         # Apply the same detection logic from broker_manager.py
         is_invalid_symbol = (
-            'invalid' in error_str and ('product' in error_str or 'symbol' in error_str) or
+            ('invalid' in error_str and ('product' in error_str or 'symbol' in error_str)) or
             'productid is invalid' in error_str or
-            '400' in error_str and 'invalid_argument' in error_str
+            ('400' in error_str and 'invalid_argument' in error_str)
         )
         
         # Check if result matches expected
