@@ -731,7 +731,7 @@ class TradingStrategy:
             
             # CRITICAL: Enforce position cap first
             if self.enforcer:
-                logger.info("🔍 Enforcing position cap (max 5 - PROFITABILITY MODE)...")
+                logger.info(f"🔍 Enforcing position cap (max {MAX_POSITIONS_ALLOWED})...")
                 success, result = self.enforcer.enforce_cap()
                 if result['excess'] > 0:
                     logger.warning(f"⚠️ Excess positions detected: {result['excess']} over cap")
@@ -1174,8 +1174,10 @@ class TradingStrategy:
                     logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
                     
                     # Adaptive rate limiting: track consecutive errors (429, 403, or no data)
+                    # UPDATED (Jan 10, 2026): Distinguish invalid symbols from genuine errors
                     rate_limit_counter = 0
                     error_counter = 0  # Track total errors including exceptions
+                    invalid_symbol_counter = 0  # Track invalid/delisted symbols (don't count as errors)
                     max_consecutive_rate_limits = 2  # CRITICAL FIX (Jan 10): Reduced from 3 - activate circuit breaker faster
                     max_total_errors = 4  # CRITICAL FIX (Jan 10): Reduced from 5 - stop scan earlier to prevent API ban
                     
@@ -1207,8 +1209,15 @@ class TradingStrategy:
                             
                             # Check if we got candles or if rate limited
                             if not candles:
-                                # Could be rate limited or genuinely no data
-                                # We can't distinguish easily here, so increment counter conservatively
+                                # Empty candles could be:
+                                # 1. Invalid/delisted symbol (don't count as error)
+                                # 2. Rate limited (count as error)
+                                # 3. No data available (count as error)
+                                # We assume invalid symbol if we get consistent empty responses
+                                
+                                # Note: Invalid symbols are caught in get_candles() and return []
+                                # So if we get here with no candles, it's likely rate limiting or no data
+                                # We still increment counters but will check for invalid symbols in exceptions below
                                 rate_limit_counter += 1
                                 error_counter += 1
                                 filter_stats['insufficient_data'] += 1
@@ -1231,9 +1240,9 @@ class TradingStrategy:
                                 if rate_limit_counter >= max_consecutive_rate_limits:
                                     filter_stats['rate_limited'] += 1
                                     logger.warning(f"   ⚠️ Possible rate limiting detected ({rate_limit_counter} consecutive failures)")
-                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 20s to allow API to recover...")
+                                    logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 15s to allow API to recover...")
                                     self.api_health_score = max(0, self.api_health_score - 10)  # Moderate penalty
-                                    time.sleep(20.0)  # CRITICAL FIX (Jan 10): Increased from 15s to 20s for better recovery
+                                    time.sleep(15.0)  # CRITICAL FIX (Jan 10): Decreased from 20s to 15s for consistency
                                     rate_limit_counter = 0  # Reset counter after delay
                                 continue
                             elif len(candles) < 100:
@@ -1316,6 +1325,29 @@ class TradingStrategy:
                                     logger.error(f"   ❌ Failed to open position")
                         
                         except Exception as e:
+                            # CRITICAL FIX (Jan 10, 2026): Distinguish invalid symbols from rate limits
+                            # Invalid symbols should NOT trigger circuit breakers or count as errors
+                            error_str = str(e).lower()
+                            
+                            # More specific patterns to avoid false positives
+                            is_productid_invalid = 'productid is invalid' in error_str or 'product_id is invalid' in error_str
+                            is_invalid_argument = '400' in error_str and 'invalid_argument' in error_str
+                            is_invalid_product_symbol = (
+                                'invalid' in error_str and 
+                                ('product' in error_str or 'symbol' in error_str) and
+                                ('not found' in error_str or 'does not exist' in error_str or 'unknown' in error_str)
+                            )
+                            
+                            is_invalid_symbol = is_productid_invalid or is_invalid_argument or is_invalid_product_symbol
+                            
+                            if is_invalid_symbol:
+                                # Invalid/delisted symbol - skip silently without counting as error
+                                invalid_symbol_counter += 1
+                                filter_stats['market_filter'] += 1  # Count as filtered, not error
+                                logger.debug(f"   ⚠️ Invalid/delisted symbol: {symbol} - skipping")
+                                continue
+                            
+                            # Count as error only if not an invalid symbol
                             error_counter += 1
                             logger.debug(f"   Error scanning {symbol}: {e}")
                             
@@ -1347,6 +1379,11 @@ class TradingStrategy:
                     logger.info(f"   📊 Scan summary: {filter_stats['total']} markets scanned")
                     logger.info(f"      💡 Signals found: {filter_stats['signals_found']}")
                     logger.info(f"      📉 No data: {filter_stats['insufficient_data']}")
+                    
+                    # Report invalid symbols separately (informational, not errors)
+                    if invalid_symbol_counter > 0:
+                        logger.info(f"      ℹ️ Invalid/delisted symbols: {invalid_symbol_counter} (skipped)")
+                    
                     if filter_stats['rate_limited'] > 0:
                         logger.warning(f"      ⚠️ Rate limited: {filter_stats['rate_limited']} times")
                     logger.info(f"      🔇 Smart filter: {filter_stats['smart_filter']}")
