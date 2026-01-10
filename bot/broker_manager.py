@@ -57,8 +57,8 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
 # 403 "Forbidden Too many errors" indicates API key is temporarily banned - needs longer cooldown
 RATE_LIMIT_MAX_RETRIES = 3  # Maximum retries for rate limit errors (reduced from 6)
 RATE_LIMIT_BASE_DELAY = 5.0  # Base delay in seconds for exponential backoff on 429 errors
-FORBIDDEN_BASE_DELAY = 60.0  # Fixed delay for 403 "forbidden" errors (increased from 30s to 60s for API key temporary ban)
-FORBIDDEN_JITTER_MAX = 30.0   # Maximum additional random delay for 403 errors (60-90s total, increased from 30-45s)
+FORBIDDEN_BASE_DELAY = 60.0  # Fixed delay for 403 "Forbidden" errors (increased from 30s to 60s for API key temporary ban)
+FORBIDDEN_JITTER_MAX = 30.0   # Maximum additional random delay for 403 "Forbidden" errors (60-90s total, increased from 30-45s)
 
 # Fallback market list - popular crypto trading pairs used when API fails
 FALLBACK_MARKETS = [

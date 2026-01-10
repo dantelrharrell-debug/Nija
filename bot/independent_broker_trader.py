@@ -27,6 +27,11 @@ logger = logging.getLogger("nija.independent_trader")
 # Minimum balance required for active trading
 MINIMUM_FUNDED_BALANCE = 2.0  # Lowered from 10.0 to allow trading with small balances
 
+# Startup delay constants (Jan 10, 2026) - Prevent API rate limiting during initialization
+STARTUP_DELAY_MIN = 30.0  # Minimum delay before first trading cycle (seconds)
+STARTUP_DELAY_MAX = 60.0  # Maximum delay before first trading cycle (seconds)
+BROKER_STAGGER_DELAY = 10.0  # Delay between starting each broker thread (seconds)
+
 
 class IndependentBrokerTrader:
     """
@@ -182,7 +187,7 @@ class IndependentBrokerTrader:
         # - Portfolio detection, position checking, balance fetching all hit the API at once
         # This causes rate limiting before trading even begins
         # Wait 30-60 seconds before starting trading loop to let initialization settle
-        startup_delay = 30.0 + random.uniform(0, 30.0)  # 30-60 seconds random delay
+        startup_delay = STARTUP_DELAY_MIN + random.uniform(0, STARTUP_DELAY_MAX - STARTUP_DELAY_MIN)
         logger.info(f"   ⏳ {broker_name}: Waiting {startup_delay:.1f}s before first cycle (prevents rate limiting)...")
         stop_flag.wait(startup_delay)
         
@@ -298,9 +303,8 @@ class IndependentBrokerTrader:
             # If we start all brokers simultaneously, they all hit the API at once causing rate limits
             # Add a delay between each broker start (except the first one)
             if broker_start_count > 0:
-                stagger_delay = 10.0  # 10 seconds between broker starts
-                logger.info(f"   ⏳ Staggering start: waiting {stagger_delay:.0f}s before starting {broker_name}...")
-                time.sleep(stagger_delay)
+                logger.info(f"   ⏳ Staggering start: waiting {BROKER_STAGGER_DELAY:.0f}s before starting {broker_name}...")
+                time.sleep(BROKER_STAGGER_DELAY)
             
             # Create stop flag for this broker
             stop_flag = threading.Event()
