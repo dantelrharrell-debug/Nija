@@ -696,7 +696,7 @@ class CoinbaseBroker(BaseBroker):
                     if len(parts) != 2 or len(parts[0]) < 2 or len(parts[0]) > 8:
                         invalid_status_count += 1
                         if invalid_status_count <= 5:
-                            logging.debug(f"   Filtered out {product_id}: invalid format")
+                            logging.debug(f"   Filtered out {product_id}: invalid format (length)")
                         continue
                     
                     # Passed all filters - add to list
