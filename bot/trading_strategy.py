@@ -1112,6 +1112,12 @@ class TradingStrategy:
                     
                     logger.info(f"[{i}/{len(positions_to_exit)}] Selling {symbol} ({reason})")
                     
+                    # CRITICAL FIX (Jan 10, 2026): Validate symbol before placing order
+                    # Prevents "ProductID is invalid" errors
+                    if not symbol or not isinstance(symbol, str):
+                        logger.error(f"  ❌ SKIPPING: Invalid symbol (value: {symbol}, type: {type(symbol)})")
+                        continue
+                    
                     try:
                         result = self.broker.place_market_order(
                             symbol=symbol,
@@ -1128,6 +1134,20 @@ class TradingStrategy:
                             error_code = result.get('error') if result else None
                             logger.error(f"  ❌ {symbol} sell failed: {error_msg}")
                             logger.error(f"     Full result: {result}")
+                            
+                            # CRITICAL FIX (Jan 10, 2026): Handle INVALID_SYMBOL errors
+                            # These indicate the symbol format is wrong or the product doesn't exist
+                            is_invalid_symbol = (
+                                error_code == 'INVALID_SYMBOL' or
+                                'INVALID_SYMBOL' in str(error_msg) or
+                                'invalid symbol' in str(error_msg).lower()
+                            )
+                            if is_invalid_symbol:
+                                logger.error(f"     ⚠️ Symbol {symbol} is invalid or unsupported")
+                                logger.error(f"     💡 This position will be skipped in future cycles")
+                                self.unsellable_positions.add(symbol)
+                                continue
+                            
                             # If it's a dust/too-small position, mark it as unsellable to prevent infinite retries
                             # Check both error code and message for robustness
                             is_size_error = (
