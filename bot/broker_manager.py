@@ -53,11 +53,12 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
 ]
 
 # Rate limiting retry constants
-# UPDATED (Jan 10, 2026): Increased 403 error delays to prevent persistent API blocks
+# UPDATED (Jan 10, 2026): Significantly increased 403 error delays to prevent persistent API blocks
+# 403 "Forbidden Too many errors" indicates API key is temporarily banned - needs longer cooldown
 RATE_LIMIT_MAX_RETRIES = 3  # Maximum retries for rate limit errors (reduced from 6)
 RATE_LIMIT_BASE_DELAY = 5.0  # Base delay in seconds for exponential backoff on 429 errors
-FORBIDDEN_BASE_DELAY = 30.0  # Fixed delay for 403 "forbidden" errors (increased from 20s to 30s for API key ban)
-FORBIDDEN_JITTER_MAX = 15.0   # Maximum additional random delay for 403 errors (30-45s total, increased from 20-30s)
+FORBIDDEN_BASE_DELAY = 60.0  # Fixed delay for 403 "forbidden" errors (increased from 30s to 60s for API key temporary ban)
+FORBIDDEN_JITTER_MAX = 30.0   # Maximum additional random delay for 403 errors (60-90s total, increased from 30-45s)
 
 # Fallback market list - popular crypto trading pairs used when API fails
 FALLBACK_MARKETS = [
@@ -378,18 +379,9 @@ class CoinbaseBroker(BaseBroker):
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
             max_attempts = 10  # Increased from 6 to give more chances for API to recover from rate limits
-            base_delay = 15.0  # Increased from 10.0s to allow API key blocks to reset longer
             
             for attempt in range(1, max_attempts + 1):
                 try:
-                    if attempt > 1:
-                        # Add delay before retry with exponential backoff
-                        # For 403 errors, we need LONGER delays with cap: 15s, 30s, 60s, 120s, 120s... (attempts 2-10)
-                        # Cap maximum delay at 120 seconds to prevent excessive wait times
-                        delay = min(base_delay * (2 ** (attempt - 2)), 120.0)
-                        logging.info(f"🔄 Retrying connection in {delay}s (attempt {attempt}/{max_attempts})...")
-                        time.sleep(delay)
-                    
                     accounts_resp = self.client.get_accounts()
                     
                     # Cache accounts response to avoid redundant API calls during initialization
@@ -410,19 +402,47 @@ class CoinbaseBroker(BaseBroker):
                     
                 except Exception as e:
                     error_msg = str(e)
+                    error_msg_lower = error_msg.lower()
                     
-                    # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
-                    # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
-                    # These indicate rate limiting from Coinbase and need longer cooldown periods
-                    is_retryable = any(keyword in error_msg.lower() for keyword in [
-                        'timeout', 'connection', 'network', 'rate limit',
-                        'too many requests', 'service unavailable',
-                        '503', '504', '429', '403', 'forbidden', 
-                        'too many errors', 'temporary', 'try again'
+                    # Distinguish between 403 (API key temporarily blocked) and 429 (rate limit quota)
+                    is_403_forbidden = (
+                        '403' in error_msg_lower or 
+                        'forbidden' in error_msg_lower or 
+                        'too many errors' in error_msg_lower
+                    )
+                    is_429_rate_limit = (
+                        '429' in error_msg_lower or 
+                        'rate limit' in error_msg_lower or 
+                        'too many requests' in error_msg_lower
+                    )
+                    is_network_error = any(keyword in error_msg_lower for keyword in [
+                        'timeout', 'connection', 'network', 'service unavailable',
+                        '503', '504', 'temporary', 'try again'
                     ])
                     
+                    is_retryable = is_403_forbidden or is_429_rate_limit or is_network_error
+                    
                     if is_retryable and attempt < max_attempts:
-                        logging.warning(f"⚠️  Connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                        # Use different delays based on error type
+                        if is_403_forbidden:
+                            # 403 errors: API key temporarily blocked - use LONG fixed delay with jitter
+                            # This prevents rapid retries that make the block worse
+                            delay = FORBIDDEN_BASE_DELAY + random.uniform(0, FORBIDDEN_JITTER_MAX)
+                            logging.warning(f"⚠️  Connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                            logging.warning(f"   API key temporarily blocked - waiting {delay:.1f}s before retry...")
+                        elif is_429_rate_limit:
+                            # 429 errors: Rate limit quota - use exponential backoff
+                            delay = min(RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1)), 120.0)
+                            logging.warning(f"⚠️  Connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                            logging.warning(f"   Rate limit exceeded - waiting {delay:.1f}s before retry...")
+                        else:
+                            # Network errors: Moderate exponential backoff
+                            delay = min(10.0 * (2 ** (attempt - 1)), 60.0)
+                            logging.warning(f"⚠️  Connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                            logging.warning(f"   Network error - waiting {delay:.1f}s before retry...")
+                        
+                        logging.info(f"🔄 Retrying connection in {delay:.1f}s (attempt {attempt + 1}/{max_attempts})...")
+                        time.sleep(delay)
                         continue
                     else:
                         logging.error(f"❌ Failed to verify Coinbase connection: {e}")
