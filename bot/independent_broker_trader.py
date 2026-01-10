@@ -45,7 +45,7 @@ from datetime import datetime
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
-MINIMUM_FUNDED_BALANCE = 2.0  # Lowered from 10.0 to allow trading with small balances
+MINIMUM_FUNDED_BALANCE = 1.0  # Lowered from 2.0 to allow trading with very small balances (e.g., $1.37)
 
 # Startup delay constants (Jan 10, 2026) - Prevent API rate limiting during initialization
 STARTUP_DELAY_MIN = 30.0  # Minimum delay before first trading cycle (seconds)

@@ -89,7 +89,7 @@ STOP_LOSS_WARNING = -1.0  # Warn at -1% loss
 # STRONG RECOMMENDATION: Fund account to $30+ for better trading outcomes
 MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/micro positions)
 MIN_POSITION_SIZE_USD = 1.0  # Minimum position size in USD (lowered from $10 to allow very small accounts)
-MIN_BALANCE_TO_TRADE_USD = 2.0  # Minimum account balance to allow trading (lowered from $30 to allow very small accounts)
+MIN_BALANCE_TO_TRADE_USD = 1.0  # Minimum account balance to allow trading (lowered from $2 to allow trading with $1.37)
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """

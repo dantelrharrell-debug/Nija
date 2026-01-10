@@ -40,7 +40,7 @@ logger = logging.getLogger('nija.broker')
 #   - PROTECTION ($2.00): Absolute minimum to allow bot to start (hard requirement)
 #   - TRADING ($25.00): Recommended for optimal performance (warning only)
 #   This allows users to start with small balances while encouraging adequate funding
-MINIMUM_BALANCE_PROTECTION = 2.00  # Lowered from 10.50 to allow trading with small balances
+MINIMUM_BALANCE_PROTECTION = 1.00  # Lowered from 2.00 to allow trading with very small balances (e.g., $1.37)
 MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading (warning only, not enforced)
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
