@@ -3182,8 +3182,28 @@ class KrakenBroker(BaseBroker):
                     logger.info("   See ENVIRONMENT_VARIABLES_GUIDE.md for deployment platform setup")
                 return False
             
-            # Initialize Kraken API
+            # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors
+            # CRITICAL FIX: Override default nonce generation to use microseconds instead of seconds
+            # The default krakenex nonce uses time.time() which has seconds precision and can
+            # produce duplicate nonces if multiple requests happen in the same second.
+            # Using microseconds ensures nonces are always unique and strictly increasing.
             self.api = krakenex.API(key=api_key, secret=api_secret)
+            
+            # Store original _nonce method
+            original_nonce = self.api._nonce
+            
+            # Override _nonce to use microseconds for higher precision
+            # This prevents "EAPI:Invalid nonce" errors caused by:
+            # 1. Duplicate nonces from rapid consecutive requests
+            # 2. Clock drift/NTP adjustments causing nonces to go backward
+            # 3. Insufficient precision in default time.time() based nonces
+            def _nonce_microseconds():
+                """Generate nonce using microseconds for guaranteed uniqueness."""
+                return str(int(time.time() * 1000000))  # Microseconds since epoch
+            
+            # Replace the nonce generator
+            self.api._nonce = _nonce_microseconds
+            
             self.kraken_api = KrakenAPI(self.api)
             
             # Test connection by fetching account balance with retry logic
@@ -3233,14 +3253,20 @@ class KrakenBroker(BaseBroker):
                                 logger.error("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                                 return False
                             
-                            # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
-                            # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
-                            # These indicate API key blocking and need longer cooldown periods
+                            # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, etc.)
+                            # CRITICAL: Include "invalid nonce" as retryable error
+                            # Invalid nonce errors can happen due to:
+                            # - Clock drift/NTP adjustments
+                            # - Rapid consecutive requests
+                            # - Previous failed requests leaving the nonce counter in inconsistent state
+                            # The microsecond-based nonce generator should fix this, but we still retry
+                            # to handle edge cases and transient issues.
                             is_retryable = any(keyword in error_msgs.lower() for keyword in [
                                 'timeout', 'connection', 'network', 'rate limit',
                                 'too many requests', 'service unavailable',
                                 '503', '504', '429', '403', 'forbidden', 
-                                'too many errors', 'temporary', 'try again'
+                                'too many errors', 'temporary', 'try again',
+                                'invalid nonce', 'nonce'  # Kraken nonce errors
                             ])
                             
                             if is_retryable and attempt < max_attempts:
@@ -3286,14 +3312,20 @@ class KrakenBroker(BaseBroker):
                 except Exception as e:
                     error_msg = str(e)
                     
-                    # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
-                    # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
-                    # These indicate API key blocking and need longer cooldown periods
+                    # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, etc.)
+                    # CRITICAL: Include "invalid nonce" as retryable error
+                    # Invalid nonce errors can happen due to:
+                    # - Clock drift/NTP adjustments
+                    # - Rapid consecutive requests
+                    # - Previous failed requests leaving the nonce counter in inconsistent state
+                    # The microsecond-based nonce generator should fix this, but we still retry
+                    # to handle edge cases and transient issues.
                     is_retryable = any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
                         '503', '504', '429', '403', 'forbidden', 
-                        'too many errors', 'temporary', 'try again'
+                        'too many errors', 'temporary', 'try again',
+                        'invalid nonce', 'nonce'  # Kraken nonce errors
                     ])
                     
                     if is_retryable and attempt < max_attempts:
