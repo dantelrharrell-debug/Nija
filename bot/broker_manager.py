@@ -250,6 +250,48 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logger.warning(f"⚠️ Position tracker initialization failed: {e}")
             self.position_tracker = None
+        
+        # CRITICAL FIX (Jan 11, 2026): Install logging filter to suppress invalid ProductID errors
+        # The Coinbase SDK logs "ProductID is invalid" as ERROR before raising exceptions
+        # These errors are expected (delisted coins) and already handled by our exception logic
+        # This filter prevents log pollution while preserving our own error handling
+        self._install_logging_filter()
+    
+    def _install_logging_filter(self):
+        """Install logging filter to suppress Coinbase SDK invalid ProductID errors"""
+        class CoinbaseInvalidProductFilter(logging.Filter):
+            """Filter to suppress Coinbase SDK errors for invalid/delisted products"""
+            def filter(self, record):
+                # Only filter records from coinbase.RESTClient logger
+                if not record.name.startswith('coinbase'):
+                    return True
+                
+                # Check if this is an invalid ProductID error (400 Bad Request)
+                msg = str(record.getMessage()).lower()
+                is_invalid_product = (
+                    '400' in msg and 
+                    ('productid is invalid' in msg or 
+                     'product_id is invalid' in msg or
+                     'invalid_argument' in msg)
+                )
+                
+                # Completely suppress ERROR logs for invalid products
+                # Return False to prevent the log from being emitted at all
+                if is_invalid_product and record.levelno >= logging.ERROR:
+                    return False  # Filter out completely
+                
+                # Let all other logs through
+                return True
+        
+        # Apply filter to coinbase logger and its child loggers
+        coinbase_logger = logging.getLogger('coinbase')
+        coinbase_logger.addFilter(CoinbaseInvalidProductFilter())
+        
+        # Also apply to coinbase.RESTClient specifically
+        rest_logger = logging.getLogger('coinbase.RESTClient')
+        rest_logger.addFilter(CoinbaseInvalidProductFilter())
+        
+        logging.debug("✅ Coinbase SDK logging filter installed (suppresses invalid ProductID errors)")
     
     def _is_cache_valid(self, cache_time) -> bool:
         """
@@ -376,41 +418,6 @@ class CoinbaseBroker(BaseBroker):
             
             # Initialize REST client
             self.client = RESTClient(api_key=api_key, api_secret=api_secret)
-            
-            # CRITICAL FIX (Jan 11, 2026): Suppress Coinbase SDK ERROR logs for invalid ProductID
-            # The Coinbase SDK logs "ProductID is invalid" as ERROR before raising exceptions
-            # These errors are expected (delisted coins) and already handled by our exception logic
-            # This filter prevents log pollution while preserving our own error handling
-            class CoinbaseInvalidProductFilter(logging.Filter):
-                """Filter to suppress Coinbase SDK errors for invalid/delisted products"""
-                def filter(self, record):
-                    # Only filter records from coinbase.RESTClient logger
-                    if not record.name.startswith('coinbase'):
-                        return True
-                    
-                    # Check if this is an invalid ProductID error (400 Bad Request)
-                    msg = str(record.getMessage()).lower()
-                    is_invalid_product = (
-                        '400' in msg and 
-                        ('productid is invalid' in msg or 
-                         'product_id is invalid' in msg or
-                         'invalid_argument' in msg)
-                    )
-                    
-                    # Suppress ERROR logs for invalid products (downgrade to DEBUG)
-                    if is_invalid_product and record.levelno == logging.ERROR:
-                        # Change to DEBUG level so it doesn't pollute logs
-                        record.levelno = logging.DEBUG
-                        record.levelname = 'DEBUG'
-                        return True
-                    
-                    # Let all other logs through
-                    return True
-            
-            # Apply filter to coinbase logger to suppress invalid product errors
-            coinbase_logger = logging.getLogger('coinbase')
-            coinbase_logger.addFilter(CoinbaseInvalidProductFilter())
-            logging.debug("✅ Coinbase SDK logging filter installed (suppresses invalid ProductID errors)")
             
             # Test connection by fetching accounts with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
