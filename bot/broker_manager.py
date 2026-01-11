@@ -3247,6 +3247,14 @@ class KrakenBroker(BaseBroker):
                 logger.error("   Please report this issue with your krakenex version")
                 return False
             
+            # CRITICAL FIX: Refresh the _last_nonce right before first API call
+            # This ensures we start with the absolute latest timestamp, preventing
+            # conflicts with any previous sessions or constructor-time initialization
+            # that might have happened seconds ago
+            with self._nonce_lock:
+                self._last_nonce = int(time.time() * 1000000)
+                logger.debug(f"🔄 Refreshed nonce baseline to {self._last_nonce} for {cred_label}")
+            
             self.kraken_api = KrakenAPI(self.api)
             
             # Test connection by fetching account balance with retry logic
