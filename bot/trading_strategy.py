@@ -293,8 +293,10 @@ class TradingStrategy:
             except Exception as e:
                 logger.warning(f"   ⚠️  Alpaca MASTER error: {e}")
             
-            # Add delay before user account connections
-            time.sleep(1.0)
+            # Add delay before user account connections to ensure master account
+            # connection has completed and nonce ranges are separated
+            # Increased from 1.0s to 2.0s to reduce nonce collision risk
+            time.sleep(2.0)
             
             # Connect User #1 (Daivon Frazier) - Kraken account
             logger.info("=" * 70)
@@ -324,8 +326,10 @@ class TradingStrategy:
                 import traceback
                 logger.debug(traceback.format_exc())
             
-            # Add delay between user connections
-            time.sleep(1.0)
+            # Add delay between user connections to prevent nonce collisions
+            # Increased from 1.0s to 3.0s to give Kraken API time to process
+            # previous user's connection and avoid overlapping nonce ranges
+            time.sleep(3.0)
             
             # Connect User #2 (Tania Gilbert) - Kraken account
             # Define user #2 details for use in logging

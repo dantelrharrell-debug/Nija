@@ -3290,9 +3290,15 @@ class KrakenBroker(BaseBroker):
         
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
-        # Initialize to current time in microseconds to avoid conflicts with previous sessions
-        # (especially important after bot restarts where Kraken may still remember old nonces)
-        self._last_nonce = int(time.time() * 1000000)
+        # Initialize to current time in microseconds PLUS random offset to avoid conflicts
+        # when multiple broker instances are created at nearly the same time
+        # Random offset range: 0-999999 microseconds (just under 1 second)
+        # This is especially important for:
+        # - Multiple user accounts connecting sequentially
+        # - Bot restarts where Kraken may still remember old nonces
+        # - Retry attempts that create new nonce sequences
+        random_offset = random.randint(0, 999999)
+        self._last_nonce = int(time.time() * 1000000) + random_offset
         # Thread lock to ensure nonce generation is thread-safe
         # Prevents race conditions when multiple threads call API simultaneously
         self._nonce_lock = threading.Lock()
@@ -3421,6 +3427,27 @@ class KrakenBroker(BaseBroker):
                         delay = base_delay * (2 ** (attempt - 2))
                         logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
+                        
+                        # Jump nonce forward on retry to skip any potentially "burned" nonces
+                        # from the failed request. Kraken may have validated but not processed
+                        # the nonce, making it unusable for future requests.
+                        # Jump scales with attempt number:
+                        #   - Attempt 2 (first retry): 2M microseconds (2 seconds)
+                        #   - Attempt 3: 3M microseconds (3 seconds)
+                        #   - Attempt 4: 4M microseconds (4 seconds)
+                        #   - Attempt 5: 5M microseconds (5 seconds)
+                        # Larger jumps on later retries increase chance of success
+                        # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
+                        with self._nonce_lock:
+                            nonce_jump = 1000000 * attempt  # Formula: attempt * 1M (where attempt >= 2)
+                            # Calculate two candidate nonces and use the larger one:
+                            # - time_based: current time + jump (ensures we're ahead of wall clock time)
+                            # - increment_based: previous nonce + jump (ensures strict monotonic increase)
+                            # Both are needed because time can drift or move backwards (NTP, clock skew)
+                            time_based = int(time.time() * 1000000) + nonce_jump
+                            increment_based = self._last_nonce + nonce_jump
+                            self._last_nonce = max(time_based, increment_based)
+                            logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds for retry {attempt}")
                     
                     # The _nonce_monotonic() function automatically handles nonce generation
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
