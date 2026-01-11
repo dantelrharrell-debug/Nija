@@ -324,6 +324,33 @@ class TradingStrategy:
                 import traceback
                 logger.debug(traceback.format_exc())
             
+            # Add delay between user connections
+            time.sleep(1.0)
+            
+            # Connect User #2 (Tania Gilbert) - Kraken account
+            # Define user #2 details for use in logging
+            user2_id = "tania_gilbert"
+            user2_name = "Tania Gilbert"
+            user2_broker_type = BrokerType.KRAKEN
+            
+            logger.info(f"📊 Attempting to connect User #2 ({user2_name}) - {user2_broker_type.value.title()}...")
+            try:
+                user2_kraken = self.multi_account_manager.add_user_broker(user2_id, user2_broker_type)
+                if user2_kraken:
+                    user_brokers.append(f"User #2: {user2_broker_type.value.title()}")
+                    logger.info(f"   ✅ User #2 {user2_broker_type.value.title()} connected")
+                    try:
+                        user2_balance = user2_kraken.get_account_balance()
+                        logger.info(f"   💰 User #2 {user2_broker_type.value.title()} balance: ${user2_balance:,.2f}")
+                    except Exception as bal_err:
+                        logger.warning(f"   ⚠️  Could not get User #2 balance: {bal_err}")
+                else:
+                    logger.warning(f"   ⚠️  User #2 {user2_broker_type.value.title()} connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  User #2 {user2_broker_type.value.title()} error: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+            
             logger.info("=" * 70)
             logger.info("✅ Broker connection phase complete")
             if connected_brokers or user_brokers:
@@ -336,7 +363,10 @@ class TradingStrategy:
                 master_balance = self.broker_manager.get_total_balance()
                 user_total_balance = 0.0
                 if user_brokers:
-                    user_total_balance = self.multi_account_manager.get_user_balance(user1_id)
+                    # Get balances for all users
+                    user1_bal = self.multi_account_manager.get_user_balance(user1_id) if self.multi_account_manager.get_user_broker(user1_id, user1_broker_type) else 0.0
+                    user2_bal = self.multi_account_manager.get_user_balance(user2_id) if self.multi_account_manager.get_user_broker(user2_id, user2_broker_type) else 0.0
+                    user_total_balance = user1_bal + user2_bal
                 
                 total_balance = master_balance + user_total_balance
                 logger.info(f"💰 MASTER ACCOUNT BALANCE: ${master_balance:,.2f}")
@@ -360,14 +390,19 @@ class TradingStrategy:
                 else:
                     logger.warning("⚠️  No primary master broker available")
                 
-                # Store user #1 broker for user-specific trading
+                # Store user brokers for user-specific trading
                 self.user1_broker = self.multi_account_manager.get_user_broker(user1_id, user1_broker_type) if user_brokers else None
                 if self.user1_broker:
                     logger.info(f"👤 User #1 broker: {user1_broker_type.value.title()} ({user1_id})")
+                
+                self.user2_broker = self.multi_account_manager.get_user_broker(user2_id, user2_broker_type) if user_brokers else None
+                if self.user2_broker:
+                    logger.info(f"👤 User #2 broker: {user2_broker_type.value.title()} ({user2_id})")
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
                 self.broker = None
                 self.user1_broker = None
+                self.user2_broker = None
             
             # Log clear trading status summary
             logger.info("=" * 70)
@@ -385,6 +420,12 @@ class TradingStrategy:
                 logger.info(f"✅ USER #1 ({user1_name}): TRADING (Broker: {self.user1_broker.broker_type.value.title()})")
             else:
                 logger.info(f"❌ USER #1 ({user1_name}): NOT TRADING (Connection failed or not configured)")
+            
+            # User #2 status - always show explicit status
+            if self.user2_broker:
+                logger.info(f"✅ USER #2 ({user2_name}): TRADING (Broker: {self.user2_broker.broker_type.value.title()})")
+            else:
+                logger.info(f"❌ USER #2 ({user2_name}): NOT TRADING (Connection failed or not configured)")
             
             logger.info("=" * 70)
             
