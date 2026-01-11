@@ -68,7 +68,7 @@ This registry maintains a comprehensive record of all users and investors in the
   ```
 
 #### Performance Metrics
-- **Account Balance**: TBD
+- **Account Balance**: $30.00 USD
 - **Total Trades**: 0 (Just initialized)
 - **Winning Trades**: 0
 - **Losing Trades**: 0
@@ -87,6 +87,7 @@ This registry maintains a comprehensive record of all users and investors in the
 | 2026-01-08 | Permissions Set | Max $300 position, 7 concurrent | System Admin |
 | 2026-01-08 | Trading Enabled | Account activated | System Admin |
 | 2026-01-08 | Broker Updated | Changed from Coinbase to Kraken | System Admin |
+| 2026-01-11 | Balance Confirmed | Account balance verified at $30.00 | System Admin |
 
 #### Notes
 - First user in the layered architecture system
@@ -150,7 +151,7 @@ This registry maintains a comprehensive record of all users and investors in the
   ```
 
 #### Performance Metrics
-- **Account Balance**: TBD
+- **Account Balance**: $75.00 USD
 - **Total Trades**: 0 (Just initialized)
 - **Winning Trades**: 0
 - **Losing Trades**: 0
@@ -168,6 +169,7 @@ This registry maintains a comprehensive record of all users and investors in the
 | 2026-01-10 | API Keys Added | Encrypted credentials stored | System Admin |
 | 2026-01-10 | Permissions Set | Max $300 position, 7 concurrent | System Admin |
 | 2026-01-10 | Trading Enabled | Account activated | System Admin |
+| 2026-01-11 | Balance Confirmed | Account balance verified at $75.00 | System Admin |
 
 #### Notes
 - Second user in the multi-user Kraken system
@@ -259,7 +261,7 @@ If there are any discrepancies or issues with this registry:
 
 ---
 
-**Document Version**: 1.1  
+**Document Version**: 1.2  
 **Created**: January 8, 2026  
-**Last Modified**: January 10, 2026  
+**Last Modified**: January 11, 2026  
 **Next Review**: January 15, 2026
