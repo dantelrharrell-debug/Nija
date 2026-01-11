@@ -3371,7 +3371,7 @@ class KrakenBroker(BaseBroker):
                             
                             # Check if it's a permission error (EGeneral:Permission denied, EAPI:Invalid permission, etc.)
                             is_permission_error = any(keyword in error_msgs.lower() for keyword in [
-                                'permission denied', 'permission', 'egeneral:permission', 
+                                'permission denied', 'egeneral:permission', 
                                 'eapi:invalid permission', 'insufficient permission'
                             ])
                             

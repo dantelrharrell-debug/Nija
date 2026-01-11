@@ -37,7 +37,7 @@ def test_permission_error_detection():
     for error_msg, should_detect, description in test_cases:
         # This is the same detection logic used in broker_integration.py
         is_permission_error = any(keyword in error_msg.lower() for keyword in [
-            'permission denied', 'permission', 'egeneral:permission', 
+            'permission denied', 'egeneral:permission', 
             'eapi:invalid permission', 'insufficient permission'
         ])
         

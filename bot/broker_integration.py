@@ -422,7 +422,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 
                 # Check if it's a permission error
                 is_permission_error = any(keyword in error_msgs.lower() for keyword in [
-                    'permission denied', 'permission', 'egeneral:permission', 
+                    'permission denied', 'egeneral:permission', 
                     'eapi:invalid permission', 'insufficient permission'
                 ])
                 
