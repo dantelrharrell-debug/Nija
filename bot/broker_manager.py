@@ -3415,23 +3415,6 @@ class KrakenBroker(BaseBroker):
             
             for attempt in range(1, max_attempts + 1):
                 try:
-                    # CRITICAL FIX: Refresh nonce before EACH attempt (not just the first one)
-                    # This prevents "Invalid nonce" errors when:
-                    # 1. There's a delay between object creation and first API call
-                    # 2. Previous retry attempts may have left the nonce counter in an inconsistent state
-                    # 3. System clock adjustments (NTP sync) occur between retries
-                    # 
-                    # The nonce MUST be recent and strictly greater than any previous nonce
-                    # Kraken remembers nonces and rejects ones that are too old or have been used before
-                    with self._nonce_lock:
-                        # Set to current time in microseconds
-                        # This guarantees the nonce is fresh for this specific API call
-                        self._last_nonce = int(time.time() * 1000000)
-                        if attempt == 1:
-                            logger.debug(f"🔄 Initialized nonce baseline to {self._last_nonce} for {cred_label}")
-                        else:
-                            logger.debug(f"🔄 Refreshed nonce to {self._last_nonce} for retry attempt {attempt}")
-                    
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
                         # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
@@ -3439,6 +3422,9 @@ class KrakenBroker(BaseBroker):
                         logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
                     
+                    # The _nonce_monotonic() function automatically handles nonce generation
+                    # with guaranteed strict monotonic increase. No manual nonce refresh needed.
+                    # It will be called automatically by krakenex when query_private() is invoked.
                     balance = self.api.query_private('Balance')
                     
                     if balance and 'error' in balance:
