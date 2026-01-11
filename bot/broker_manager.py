@@ -3292,7 +3292,7 @@ class KrakenBroker(BaseBroker):
         # This prevents "Invalid nonce" errors from rapid consecutive requests
         # Initialize to current time in microseconds PLUS random offset to avoid conflicts
         # when multiple broker instances are created at nearly the same time
-        # Random offset range: 0-999999 microseconds (up to 1 second)
+        # Random offset range: 0-999999 microseconds (just under 1 second)
         # This is especially important for:
         # - Multiple user accounts connecting sequentially
         # - Bot restarts where Kraken may still remember old nonces
@@ -3431,11 +3431,15 @@ class KrakenBroker(BaseBroker):
                         # Jump nonce forward on retry to skip any potentially "burned" nonces
                         # from the failed request. Kraken may have validated but not processed
                         # the nonce, making it unusable for future requests.
-                        # Jump scales with attempt number: 2M, 3M, 4M, 5M microseconds (attempts 2-5)
+                        # Jump scales with attempt number:
+                        #   - Attempt 2 (first retry): 2M microseconds (2 seconds)
+                        #   - Attempt 3: 3M microseconds (3 seconds)
+                        #   - Attempt 4: 4M microseconds (4 seconds)
+                        #   - Attempt 5: 5M microseconds (5 seconds)
                         # Larger jumps on later retries increase chance of success
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
                         with self._nonce_lock:
-                            nonce_jump = 1000000 * attempt  # Scales: 2M, 3M, 4M, 5M microseconds
+                            nonce_jump = 1000000 * attempt  # Formula: attempt * 1M microseconds
                             # Use max to ensure new nonce is always greater than previous
                             time_based = int(time.time() * 1000000) + nonce_jump
                             increment_based = self._last_nonce + nonce_jump
