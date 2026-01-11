@@ -9,10 +9,11 @@ import sys
 
 # Add bot directory to path with existence check
 bot_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bot')
-if os.path.exists(bot_dir):
-    sys.path.insert(0, bot_dir)
-else:
-    print(f"⚠️  Warning: bot directory not found at {bot_dir}")
+if not os.path.exists(bot_dir):
+    print(f"❌ Error: bot directory not found at {bot_dir}")
+    print("   This script must be run from the Nija repository root directory.")
+    sys.exit(1)
+sys.path.insert(0, bot_dir)
 
 # Load environment variables
 try:

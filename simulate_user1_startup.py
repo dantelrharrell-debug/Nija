@@ -100,18 +100,18 @@ def simulate_initialization():
         print(f"⚠️  User #1 {user1_broker_type.value.title()} connection error: {ce}")
         print(f"   (Network error is expected in sandbox environment)")
         print(f"   Code structure is correct for User #1 initialization")
+        # Don't fail - connection code is correct, just no network
+    except (OSError, TimeoutError) as net_err:
+        print(f"⚠️  User #1 {user1_broker_type.value.title()} network error: {net_err}")
+        print(f"   (Network connectivity issue - expected in sandbox)")
+        print(f"   Code structure appears correct")
+        # Don't fail - code structure is correct
     except Exception as e:
         print(f"⚠️  User #1 {user1_broker_type.value.title()} error: {e}")
         # Log full traceback for debugging
         import traceback
         traceback.print_exc()
-        # Don't fail on expected network errors
-        error_str = str(e)
-        if any(msg in error_str for msg in ["Failed to resolve", "Max retries", "Connection refused"]):
-            print(f"   (Network connectivity issue - expected in sandbox)")
-            print(f"   Code structure appears correct")
-        else:
-            return False
+        return False  # Unexpected error - this should be investigated
     print()
     
     # Step 4: Verify user broker is stored
@@ -133,12 +133,19 @@ def simulate_initialization():
     print("-" * 80)
     
     # Need at least one broker for TradingStrategy to work
-    # Create a dummy primary broker for testing
+    # Create a minimal test broker with proper structure
     class DummyBroker:
+        """Minimal broker implementation for testing purposes."""
         connected = True
         broker_type = BrokerType.COINBASE
+        
         def get_account_balance(self):
+            """Return test balance."""
             return 100.0
+        
+        def get_positions(self):
+            """Return empty positions list."""
+            return []
     
     dummy_broker = DummyBroker()
     broker_manager.brokers[BrokerType.COINBASE] = dummy_broker
