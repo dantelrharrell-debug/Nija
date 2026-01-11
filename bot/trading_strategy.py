@@ -391,11 +391,11 @@ class TradingStrategy:
                     logger.warning("⚠️  No primary master broker available")
                 
                 # Store user brokers for user-specific trading
-                self.user1_broker = self.multi_account_manager.get_user_broker(user1_id, user1_broker_type) if user_brokers else None
+                self.user1_broker = self.multi_account_manager.get_user_broker(user1_id, user1_broker_type)
                 if self.user1_broker:
                     logger.info(f"👤 User #1 broker: {user1_broker_type.value.title()} ({user1_id})")
                 
-                self.user2_broker = self.multi_account_manager.get_user_broker(user2_id, user2_broker_type) if user_brokers else None
+                self.user2_broker = self.multi_account_manager.get_user_broker(user2_id, user2_broker_type)
                 if self.user2_broker:
                     logger.info(f"👤 User #2 broker: {user2_broker_type.value.title()} ({user2_id})")
             else:
