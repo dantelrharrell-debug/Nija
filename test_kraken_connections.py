@@ -17,7 +17,7 @@ load_dotenv()
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
-from broker_manager import KrakenBroker, BrokerType, AccountType
+from bot.broker_manager import KrakenBroker, BrokerType, AccountType
 
 def test_connection(account_name, account_type, user_id=None):
     """Test connection for a specific account"""
