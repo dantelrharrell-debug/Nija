@@ -3433,9 +3433,13 @@ class KrakenBroker(BaseBroker):
                         # the nonce, making it unusable for future requests.
                         # Jump by 1 second worth of microseconds (1,000,000) per retry attempt
                         # This ensures we use a completely fresh nonce range on each retry
+                        # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
                         with self._nonce_lock:
                             nonce_jump = 1000000 * attempt  # 1M, 2M, 3M, 4M microseconds
-                            self._last_nonce = int(time.time() * 1000000) + nonce_jump
+                            # Use max to ensure new nonce is always greater than previous
+                            time_based = int(time.time() * 1000000) + nonce_jump
+                            increment_based = self._last_nonce + nonce_jump
+                            self._last_nonce = max(time_based, increment_based)
                             logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds for retry {attempt}")
                     
                     # The _nonce_monotonic() function automatically handles nonce generation
