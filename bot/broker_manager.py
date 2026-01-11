@@ -14,6 +14,7 @@ import random
 import time
 import traceback
 import uuid
+import threading
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -3132,6 +3133,9 @@ class KrakenBroker(BaseBroker):
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
         self._last_nonce = 0
+        # Thread lock to ensure nonce generation is thread-safe
+        # Prevents race conditions when multiple threads call API simultaneously
+        self._nonce_lock = threading.Lock()
         
         # Set identifier for logging
         if account_type == AccountType.MASTER:
@@ -3200,28 +3204,38 @@ class KrakenBroker(BaseBroker):
             # 1. Duplicate nonces from rapid consecutive requests (even sub-microsecond)
             # 2. Clock drift/NTP adjustments causing nonces to go backward
             # 3. Insufficient precision in default time.time() based nonces
+            # 4. Race conditions in multi-threaded scenarios
             def _nonce_monotonic():
                 """
-                Generate nonce with guaranteed strict monotonic increase.
+                Generate nonce with guaranteed strict monotonic increase (thread-safe).
                 
                 Uses microseconds since epoch with tracking to ensure each nonce
                 is strictly greater than the previous one, preventing Kraken's
                 "Invalid nonce" error.
+                
+                Thread-safe: Uses a lock to prevent race conditions when multiple
+                threads call the API simultaneously.
                 """
-                # Get current time in microseconds
-                current_nonce = int(time.time() * 1000000)
-                
-                # Ensure strictly increasing - if current time equals or is less than
-                # last nonce (due to rapid requests or clock drift), increment by 1
-                if current_nonce <= self._last_nonce:
-                    current_nonce = self._last_nonce + 1
-                
-                # Update tracking
-                self._last_nonce = current_nonce
-                
-                return str(current_nonce)
+                with self._nonce_lock:
+                    # Get current time in microseconds
+                    current_nonce = int(time.time() * 1000000)
+                    
+                    # Ensure strictly increasing - if current time equals or is less than
+                    # last nonce (due to rapid requests or clock drift), increment by 1
+                    if current_nonce <= self._last_nonce:
+                        current_nonce = self._last_nonce + 1
+                    
+                    # Update tracking
+                    self._last_nonce = current_nonce
+                    
+                    return str(current_nonce)
             
             # Replace the nonce generator
+            # NOTE: This directly overrides the internal _nonce method of krakenex.API
+            # If krakenex changes its internal implementation, this may need updating.
+            # We use this approach because krakenex doesn't provide a clean way to
+            # inject a custom nonce generator. Alternative would be to subclass API,
+            # but that would require more extensive changes to KrakenAPI wrapper.
             self.api._nonce = _nonce_monotonic
             
             self.kraken_api = KrakenAPI(self.api)
