@@ -700,7 +700,9 @@ class TradingStrategy:
         Args:
             broker: Optional broker instance to use for this cycle. If not provided,
                    uses self.broker (default behavior for backward compatibility).
-                   This parameter enables thread-safe multi-broker trading.
+                   This parameter enables thread-safe multi-broker trading by avoiding
+                   shared state mutation - each thread passes its own broker instance
+                   instead of modifying the shared self.broker variable.
         
         Steps:
         1. Enforce position cap (auto-sell excess if needed)
