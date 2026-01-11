@@ -184,7 +184,7 @@ if total_brokers > 0:
     print("   To verify the bot is ACTIVELY RUNNING:")
     print()
     print("   1. Check process status:")
-    print("      ps aux | grep bot.py")
+    print("      ps aux | grep '[b]ot.py'")
     print()
     print("   2. Check recent logs:")
     print("      tail -f nija.log")

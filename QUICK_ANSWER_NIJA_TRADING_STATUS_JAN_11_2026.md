@@ -52,7 +52,7 @@
 
 **1. Check if bot is running:**
 ```bash
-ps aux | grep bot.py
+ps aux | grep '[b]ot.py'
 ```
 
 **2. Check logs:**

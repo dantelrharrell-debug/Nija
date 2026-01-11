@@ -156,7 +156,7 @@ This script will:
 
 ```bash
 # Check if bot is running
-ps aux | grep bot.py
+ps aux | grep '[b]ot.py'
 
 # Expected output:
 # runner  1234  ... python3 bot.py
@@ -227,24 +227,24 @@ Every 2.5 minutes (150 seconds), each broker independently:
 **Master Account:**
 ```bash
 # Coinbase
-COINBASE_API_KEY=organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/...
-COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----...
+COINBASE_API_KEY=organizations/YOUR_ORG_ID/apiKeys/YOUR_KEY_ID
+COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_PRIVATE_KEY_HERE\n-----END EC PRIVATE KEY-----
 
 # Kraken Master
-KRAKEN_MASTER_API_KEY=8zdYy7PMRjnyDraiJUtrAb3wmu8MFxKBON3nrTkjkwnJ9iIUQyKNGKP7
-KRAKEN_MASTER_API_SECRET=e2xaakHliGa5RwH7uXwuq6RLGospWaQhScaVJfsS...
+KRAKEN_MASTER_API_KEY=YOUR_KRAKEN_MASTER_API_KEY
+KRAKEN_MASTER_API_SECRET=YOUR_KRAKEN_MASTER_API_SECRET
 
 # Alpaca (Paper)
-ALPACA_API_KEY=PKS2NORMEX6BMN6P3T63C7ICZ2
-ALPACA_API_SECRET=GPmZyiXDoP3A8VcsjcdiCcmdBdzFQnBsmyGSTFQpWyPJ
+ALPACA_API_KEY=YOUR_ALPACA_API_KEY
+ALPACA_API_SECRET=YOUR_ALPACA_API_SECRET
 ALPACA_PAPER=true
 ```
 
 **User Accounts:**
 ```bash
 # User: Daivon Frazier
-KRAKEN_USER_DAIVON_API_KEY=HSo/f1zjeQALCM/rri9bjTB5JisQ/SPgurCRTx8W7kLD...
-KRAKEN_USER_DAIVON_API_SECRET=6WOxnBLq+r4ln2Zz7nT0Nvv8CMkaolHtjYdOgTm7...
+KRAKEN_USER_DAIVON_API_KEY=YOUR_USER_KRAKEN_API_KEY
+KRAKEN_USER_DAIVON_API_SECRET=YOUR_USER_KRAKEN_API_SECRET
 ```
 
 **Multi-Broker Configuration:**
@@ -330,7 +330,7 @@ The bot is **CONFIGURED** but may not be **RUNNING**. To start:
 
 3. **Verify Running:**
    ```bash
-   ps aux | grep bot.py
+   ps aux | grep '[b]ot.py'
    tail -f nija.log
    ```
 
