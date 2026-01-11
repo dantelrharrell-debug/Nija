@@ -121,8 +121,9 @@ def analyze_trade_history():
                         profitable_sells.append(entry)
                     elif pnl < 0:
                         losing_sells.append(entry)
-            except:
-                pass
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                # Skip malformed journal entries
+                continue
         
         print(f"   📥 BUY orders: {len(buys)}")
         print(f"   📤 SELL orders: {len(sells)}")
@@ -171,39 +172,42 @@ def analyze_trade_history():
     else:
         print("   ❌ Daily profit history file not found")
 
+# Broker configuration constants
+BROKER_CONFIGS = {
+    'Coinbase': {
+        'env_vars': ['COINBASE_API_KEY', 'COINBASE_API_SECRET'],
+        'account_type': 'Master',
+        'asset_class': 'Cryptocurrency'
+    },
+    'Kraken': {
+        'env_vars': ['KRAKEN_API_KEY', 'KRAKEN_API_SECRET'],
+        'account_type': 'Master',
+        'asset_class': 'Cryptocurrency'
+    },
+    'Kraken User 1': {
+        'env_vars': ['KRAKEN_USER1_API_KEY', 'KRAKEN_USER1_API_SECRET'],
+        'account_type': 'User (Daivon)',
+        'asset_class': 'Cryptocurrency'
+    },
+    'Alpaca': {
+        'env_vars': ['ALPACA_API_KEY', 'ALPACA_API_SECRET'],
+        'account_type': 'Master (Paper)',
+        'asset_class': 'Stocks'
+    },
+    'OKX': {
+        'env_vars': ['OKX_API_KEY', 'OKX_API_SECRET', 'OKX_PASSPHRASE'],
+        'account_type': 'Master',
+        'asset_class': 'Cryptocurrency'
+    }
+}
+
 def check_broker_configs():
     """Check which brokers are configured"""
     print_section("Broker Configuration Status")
     
     load_env_vars()
     
-    brokers = {
-        'Coinbase': {
-            'env_vars': ['COINBASE_API_KEY', 'COINBASE_API_SECRET'],
-            'account_type': 'Master',
-            'asset_class': 'Cryptocurrency'
-        },
-        'Kraken': {
-            'env_vars': ['KRAKEN_API_KEY', 'KRAKEN_API_SECRET'],
-            'account_type': 'Master',
-            'asset_class': 'Cryptocurrency'
-        },
-        'Kraken User 1': {
-            'env_vars': ['KRAKEN_USER1_API_KEY', 'KRAKEN_USER1_API_SECRET'],
-            'account_type': 'User (Daivon)',
-            'asset_class': 'Cryptocurrency'
-        },
-        'Alpaca': {
-            'env_vars': ['ALPACA_API_KEY', 'ALPACA_API_SECRET'],
-            'account_type': 'Master (Paper)',
-            'asset_class': 'Stocks'
-        },
-        'OKX': {
-            'env_vars': ['OKX_API_KEY', 'OKX_API_SECRET', 'OKX_PASSPHRASE'],
-            'account_type': 'Master',
-            'asset_class': 'Cryptocurrency'
-        }
-    }
+    brokers = BROKER_CONFIGS
     
     print("🔷 Master Accounts:")
     print()
@@ -241,18 +245,19 @@ def generate_summary():
     has_journal_profitable = False
     has_daily_profit = False
     
-    total_profit = 0.0
+    total_profit_from_history = 0.0
+    total_profit_from_journal = 0.0
     
-    # Check trade history
+    # Check trade history (completed trade cycles)
     if history_path.exists():
         with open(history_path) as f:
             trades = json.load(f)
             profitable = [t for t in trades if t.get('net_profit', 0) > 0]
             if profitable:
                 has_completed_profitable = True
-                total_profit += sum(t.get('net_profit', 0) for t in profitable)
+                total_profit_from_history = sum(t.get('net_profit', 0) for t in profitable)
     
-    # Check trade journal
+    # Check trade journal (individual orders - may overlap with history)
     if journal_path.exists():
         with open(journal_path) as f:
             for line in f:
@@ -260,9 +265,10 @@ def generate_summary():
                     entry = json.loads(line.strip())
                     if entry.get('side') == 'SELL' and entry.get('pnl_dollars', 0) > 0:
                         has_journal_profitable = True
-                        total_profit += entry.get('pnl_dollars', 0)
-                except:
-                    pass
+                        total_profit_from_journal += entry.get('pnl_dollars', 0)
+                except (json.JSONDecodeError, ValueError, KeyError):
+                    # Skip malformed entries
+                    continue
     
     # Check daily profits
     if daily_path.exists():
@@ -287,7 +293,15 @@ def generate_summary():
             print("   ✅ Positive daily profit records")
         
         print()
-        print(f"💰 Estimated total profit from available data: ${total_profit:.2f}")
+        # Note: Journal and history may overlap, so we show both separately
+        if total_profit_from_history > 0 and total_profit_from_journal > 0:
+            print(f"💰 Profit from completed trades: ${total_profit_from_history:.2f}")
+            print(f"💰 Profit from journal entries: ${total_profit_from_journal:.2f}")
+            print(f"   (Note: These may overlap - journal includes individual orders)")
+        elif total_profit_from_history > 0:
+            print(f"💰 Total profit from completed trades: ${total_profit_from_history:.2f}")
+        elif total_profit_from_journal > 0:
+            print(f"💰 Total profit from journal entries: ${total_profit_from_journal:.2f}")
         print()
         print("📊 Account Status:")
         print("   🔷 Master Coinbase:  Evidence of trades ✅")
