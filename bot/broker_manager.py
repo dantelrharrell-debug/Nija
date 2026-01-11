@@ -3431,11 +3431,11 @@ class KrakenBroker(BaseBroker):
                         # Jump nonce forward on retry to skip any potentially "burned" nonces
                         # from the failed request. Kraken may have validated but not processed
                         # the nonce, making it unusable for future requests.
-                        # Jump by 1 second worth of microseconds (1,000,000) per retry attempt
-                        # This ensures we use a completely fresh nonce range on each retry
+                        # Jump scales with attempt number: 2M, 3M, 4M, 5M microseconds (attempts 2-5)
+                        # Larger jumps on later retries increase chance of success
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
                         with self._nonce_lock:
-                            nonce_jump = 1000000 * attempt  # 1M, 2M, 3M, 4M microseconds
+                            nonce_jump = 1000000 * attempt  # Scales: 2M, 3M, 4M, 5M microseconds
                             # Use max to ensure new nonce is always greater than previous
                             time_based = int(time.time() * 1000000) + nonce_jump
                             increment_based = self._last_nonce + nonce_jump
