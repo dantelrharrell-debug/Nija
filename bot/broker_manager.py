@@ -213,6 +213,7 @@ class CoinbaseBroker(BaseBroker):
         self.client = None
         self.portfolio_uuid = None
         self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
+        self._invalid_symbols_cache = set()  # Cache for known invalid/delisted symbols (CRITICAL FIX Jan 11, 2026)
         
         # Cache for account data to prevent redundant API calls during initialization
         # NOTE: These caches are only accessed during bot startup in the main thread,
@@ -375,6 +376,41 @@ class CoinbaseBroker(BaseBroker):
             
             # Initialize REST client
             self.client = RESTClient(api_key=api_key, api_secret=api_secret)
+            
+            # CRITICAL FIX (Jan 11, 2026): Suppress Coinbase SDK ERROR logs for invalid ProductID
+            # The Coinbase SDK logs "ProductID is invalid" as ERROR before raising exceptions
+            # These errors are expected (delisted coins) and already handled by our exception logic
+            # This filter prevents log pollution while preserving our own error handling
+            class CoinbaseInvalidProductFilter(logging.Filter):
+                """Filter to suppress Coinbase SDK errors for invalid/delisted products"""
+                def filter(self, record):
+                    # Only filter records from coinbase.RESTClient logger
+                    if not record.name.startswith('coinbase'):
+                        return True
+                    
+                    # Check if this is an invalid ProductID error (400 Bad Request)
+                    msg = str(record.getMessage()).lower()
+                    is_invalid_product = (
+                        '400' in msg and 
+                        ('productid is invalid' in msg or 
+                         'product_id is invalid' in msg or
+                         'invalid_argument' in msg)
+                    )
+                    
+                    # Suppress ERROR logs for invalid products (downgrade to DEBUG)
+                    if is_invalid_product and record.levelno == logging.ERROR:
+                        # Change to DEBUG level so it doesn't pollute logs
+                        record.levelno = logging.DEBUG
+                        record.levelname = 'DEBUG'
+                        return True
+                    
+                    # Let all other logs through
+                    return True
+            
+            # Apply filter to coinbase logger to suppress invalid product errors
+            coinbase_logger = logging.getLogger('coinbase')
+            coinbase_logger.addFilter(CoinbaseInvalidProductFilter())
+            logging.debug("✅ Coinbase SDK logging filter installed (suppresses invalid ProductID errors)")
             
             # Test connection by fetching accounts with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
@@ -2378,7 +2414,17 @@ class CoinbaseBroker(BaseBroker):
         - Reduced max retries from 6 to 3 for 403 errors (API key ban, not transient)
         - 429 errors get standard retry with exponential backoff
         - Rate limiter prevents cascading retries that trigger API key bans
+        
+        UPDATED (Jan 11, 2026): Added invalid symbol caching to prevent repeated API calls
+        - Caches known invalid symbols to avoid wasted API calls
+        - Reduces log pollution from Coinbase SDK error messages
         """
+        
+        # CRITICAL FIX (Jan 11, 2026): Check invalid symbols cache first
+        # If symbol is known to be invalid, skip API call entirely
+        if symbol in self._invalid_symbols_cache:
+            logging.debug(f"⚠️  Skipping cached invalid symbol: {symbol}")
+            return []
         
         # Wrapper function for rate-limited API call
         def _fetch_candles():
@@ -2434,7 +2480,9 @@ class CoinbaseBroker(BaseBroker):
                 
                 # If invalid symbol, don't retry - just skip it
                 if is_invalid_symbol:
-                    logging.debug(f"⚠️  Invalid/delisted symbol: {symbol} - skipping")
+                    # CRITICAL FIX (Jan 11, 2026): Cache invalid symbol to prevent future API calls
+                    self._invalid_symbols_cache.add(symbol)
+                    logging.debug(f"⚠️  Invalid/delisted symbol: {symbol} - cached and skipping")
                     return []  # Return empty to signal "no data" without counting as error
                 
                 # Distinguish between 429 (rate limit) and 403 (too many errors / temporary ban)
