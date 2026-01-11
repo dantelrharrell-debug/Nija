@@ -1,1 +1,0 @@
-chmod +x RUN_IT_NOW.sh && bash RUN_IT_NOW.sh

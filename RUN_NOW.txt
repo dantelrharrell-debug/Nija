@@ -1,1 +1,0 @@
-chmod +x COMPLETE_FIX.sh && bash COMPLETE_FIX.sh

@@ -1,7 +1,0 @@
-# High Frequency Trading Update
-# Timestamp: 2025-12-03
-# Changes: 12+ trades/hour configuration
-# - Signal threshold: 2/5 (was 3/5)
-# - Cooldown: 0 seconds (was 120s)
-# - Scan interval: 2.5 minutes (was 5min)
-# - Max daily trades: 200 (was 15)

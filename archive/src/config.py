@@ -1,7 +1,0 @@
-# src/config.py
-import os
-
-LIVE_TRADING = os.getenv("LIVE_TRADING", "0") == "1"
-COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
-COINBASE_PEM_CONTENT = os.getenv("COINBASE_PEM_CONTENT")
