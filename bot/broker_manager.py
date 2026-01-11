@@ -3132,7 +3132,9 @@ class KrakenBroker(BaseBroker):
         
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
-        self._last_nonce = 0
+        # Initialize to current time in microseconds to avoid conflicts with previous sessions
+        # (especially important after bot restarts where Kraken may still remember old nonces)
+        self._last_nonce = int(time.time() * 1000000)
         # Thread lock to ensure nonce generation is thread-safe
         # Prevents race conditions when multiple threads call API simultaneously
         self._nonce_lock = threading.Lock()
@@ -3236,7 +3238,14 @@ class KrakenBroker(BaseBroker):
             # We use this approach because krakenex doesn't provide a clean way to
             # inject a custom nonce generator. Alternative would be to subclass API,
             # but that would require more extensive changes to KrakenAPI wrapper.
-            self.api._nonce = _nonce_monotonic
+            try:
+                self.api._nonce = _nonce_monotonic
+                logger.debug(f"✅ Custom nonce generator installed for {cred_label}")
+            except AttributeError as e:
+                logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
+                logger.error("   This may indicate a version incompatibility with krakenex library")
+                logger.error("   Please report this issue with your krakenex version")
+                return False
             
             self.kraken_api = KrakenAPI(self.api)
             
