@@ -203,6 +203,66 @@ class BaseBroker(ABC):
         return False
 
 
+# CRITICAL FIX (Jan 11, 2026): Invalid ProductID error detection
+# Used by both logging filter and exception handler for consistency
+def _is_invalid_product_error(error_message: str) -> bool:
+    """
+    Check if an error message indicates an invalid/delisted product.
+    
+    This function is used both for logging filter and exception handling to
+    maintain consistency in how we detect invalid ProductID errors.
+    
+    Args:
+        error_message: The error message to check (case-insensitive)
+    
+    Returns:
+        True if the error indicates an invalid product, False otherwise
+    """
+    error_str = str(error_message).lower()
+    
+    # Check for various patterns that indicate invalid/delisted products
+    has_invalid_keyword = 'invalid' in error_str and ('product' in error_str or 'symbol' in error_str)
+    is_productid_invalid = 'productid is invalid' in error_str
+    is_400_invalid_arg = '400' in error_str and 'invalid_argument' in error_str
+    is_no_key_error = 'no key' in error_str and 'was found' in error_str
+    
+    return has_invalid_keyword or is_productid_invalid or is_400_invalid_arg or is_no_key_error
+
+
+class _CoinbaseInvalidProductFilter(logging.Filter):
+    """Filter to suppress Coinbase SDK errors for invalid/delisted products"""
+    def filter(self, record):
+        """
+        Determine if a log record should be logged.
+        
+        Filters out ERROR-level logs from Coinbase SDK that contain
+        invalid ProductID error messages, as these are expected errors
+        that are already handled by exception handlers.
+        
+        Args:
+            record: LogRecord instance to be filtered
+        
+        Returns:
+            False if the record should be filtered out (invalid ProductID error),
+            True if the record should be logged normally
+        """
+        # Only filter records from coinbase.RESTClient logger
+        if not record.name.startswith('coinbase'):
+            return True
+        
+        # Check if this is an invalid ProductID error using shared detection logic
+        msg = record.getMessage()
+        is_invalid_product = _is_invalid_product_error(msg)
+        
+        # Completely suppress ERROR logs for invalid products
+        # Return False to prevent the log from being emitted at all
+        if is_invalid_product and record.levelno >= logging.ERROR:
+            return False  # Filter out completely
+        
+        # Let all other logs through
+        return True
+
+
 # Coinbase-specific broker implementation
 class CoinbaseBroker(BaseBroker):
     """Coinbase Advanced Trade broker implementation"""
@@ -213,6 +273,7 @@ class CoinbaseBroker(BaseBroker):
         self.client = None
         self.portfolio_uuid = None
         self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
+        self._invalid_symbols_cache = set()  # Cache for known invalid/delisted symbols (CRITICAL FIX Jan 11, 2026)
         
         # Cache for account data to prevent redundant API calls during initialization
         # NOTE: These caches are only accessed during bot startup in the main thread,
@@ -249,6 +310,28 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logger.warning(f"⚠️ Position tracker initialization failed: {e}")
             self.position_tracker = None
+        
+        # CRITICAL FIX (Jan 11, 2026): Install logging filter to suppress invalid ProductID errors
+        # The Coinbase SDK logs "ProductID is invalid" as ERROR before raising exceptions
+        # These errors are expected (delisted coins) and already handled by our exception logic
+        # This filter prevents log pollution while preserving our own error handling
+        self._install_logging_filter()
+    
+    def _install_logging_filter(self):
+        """Install logging filter to suppress Coinbase SDK invalid ProductID errors"""
+        # NOTE: Unlike handlers, filters are NOT inherited by child loggers.
+        # We must add the filter to both the parent and child loggers explicitly.
+        # See: https://docs.python.org/3/library/logging.html#filter-objects
+        
+        # Apply filter to parent 'coinbase' logger
+        coinbase_logger = logging.getLogger('coinbase')
+        coinbase_logger.addFilter(_CoinbaseInvalidProductFilter())
+        
+        # Apply filter to 'coinbase.RESTClient' child logger (not inherited from parent)
+        rest_logger = logging.getLogger('coinbase.RESTClient')
+        rest_logger.addFilter(_CoinbaseInvalidProductFilter())
+        
+        logging.debug("✅ Coinbase SDK logging filter installed (suppresses invalid ProductID errors)")
     
     def _is_cache_valid(self, cache_time) -> bool:
         """
@@ -2378,7 +2461,17 @@ class CoinbaseBroker(BaseBroker):
         - Reduced max retries from 6 to 3 for 403 errors (API key ban, not transient)
         - 429 errors get standard retry with exponential backoff
         - Rate limiter prevents cascading retries that trigger API key bans
+        
+        UPDATED (Jan 11, 2026): Added invalid symbol caching to prevent repeated API calls
+        - Caches known invalid symbols to avoid wasted API calls
+        - Reduces log pollution from Coinbase SDK error messages
         """
+        
+        # CRITICAL FIX (Jan 11, 2026): Check invalid symbols cache first
+        # If symbol is known to be invalid, skip API call entirely
+        if symbol in self._invalid_symbols_cache:
+            logging.debug(f"⚠️  Skipping cached invalid symbol: {symbol}")
+            return []
         
         # Wrapper function for rate-limited API call
         def _fetch_candles():
@@ -2425,16 +2518,14 @@ class CoinbaseBroker(BaseBroker):
                 # Invalid symbols should not trigger retries or count toward rate limit errors
                 # This prevents delisted coins from causing circuit breaker activation
                 
-                # Check for invalid product/symbol errors
-                has_invalid_keyword = 'invalid' in error_str and ('product' in error_str or 'symbol' in error_str)
-                is_productid_invalid = 'productid is invalid' in error_str
-                is_400_invalid_arg = '400' in error_str and 'invalid_argument' in error_str
-                is_no_key_error = 'no key' in error_str and 'was found' in error_str
-                is_invalid_symbol = has_invalid_keyword or is_productid_invalid or is_400_invalid_arg or is_no_key_error
+                # Check for invalid product/symbol errors using shared detection logic
+                is_invalid_symbol = _is_invalid_product_error(str(e))
                 
                 # If invalid symbol, don't retry - just skip it
                 if is_invalid_symbol:
-                    logging.debug(f"⚠️  Invalid/delisted symbol: {symbol} - skipping")
+                    # CRITICAL FIX (Jan 11, 2026): Cache invalid symbol to prevent future API calls
+                    self._invalid_symbols_cache.add(symbol)
+                    logging.debug(f"⚠️  Invalid/delisted symbol: {symbol} - cached and skipping")
                     return []  # Return empty to signal "no data" without counting as error
                 
                 # Distinguish between 429 (rate limit) and 403 (too many errors / temporary ban)
