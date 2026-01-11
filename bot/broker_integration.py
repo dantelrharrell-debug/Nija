@@ -418,7 +418,35 @@ class KrakenBrokerAdapter(BrokerInterface):
             balance = self.api.query_private('Balance')
             
             if balance and 'error' in balance and balance['error']:
-                logger.error(f"Kraken connection test failed: {', '.join(balance['error'])}")
+                error_msgs = ', '.join(balance['error'])
+                
+                # Check if it's a permission error
+                is_permission_error = any(keyword in error_msgs.lower() for keyword in [
+                    'permission denied', 'egeneral:permission', 
+                    'eapi:invalid permission', 'insufficient permission'
+                ])
+                
+                if is_permission_error:
+                    logger.error(f"❌ Kraken connection test failed: {error_msgs}")
+                    logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                    logger.error("   Your Kraken API key does not have the required permissions.")
+                    logger.error("")
+                    logger.error("   To fix this issue:")
+                    logger.error("   1. Go to https://www.kraken.com/u/security/api")
+                    logger.error("   2. Find your API key and edit its permissions")
+                    logger.error("   3. Enable these permissions:")
+                    logger.info("      ✅ Query Funds (required to check balance)")
+                    logger.info("      ✅ Query Open Orders & Trades (required for position tracking)")
+                    logger.info("      ✅ Query Closed Orders & Trades (required for trade history)")
+                    logger.info("      ✅ Create & Modify Orders (required to place trades)")
+                    logger.info("      ✅ Cancel/Close Orders (required for stop losses)")
+                    logger.error("   4. Save changes and restart the bot")
+                    logger.error("")
+                    logger.error("   For security, do NOT enable 'Withdraw Funds' permission")
+                    logger.error("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                else:
+                    logger.error(f"Kraken connection test failed: {error_msgs}")
+                
                 return False
             
             if balance and 'result' in balance:

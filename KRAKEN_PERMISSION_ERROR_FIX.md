@@ -1,6 +1,6 @@
 # Fix Kraken "Permission Denied" Error
 
-**Last Updated**: January 10, 2026
+**Last Updated**: January 11, 2026
 
 ---
 
