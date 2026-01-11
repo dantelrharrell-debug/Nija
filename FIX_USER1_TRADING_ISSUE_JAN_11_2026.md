@@ -299,7 +299,7 @@ Even if NIJA has a bug, the accounts stay separate because they use different AP
 ### What Was Fixed
 - Installed krakenex==2.2.2
 - Installed pykrakenapi==0.3.2  
-- Installed python-dotenv==1.2.1
+- Installed python-dotenv==1.0.0 (as specified in requirements.txt)
 - Created test script to verify User #1 configuration
 
 ### What Needs to Happen in Production

@@ -7,18 +7,22 @@ This simulates the initialization process in trading_strategy.py
 import os
 import sys
 
-# Add bot directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+# Add bot directory to path with existence check
+bot_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bot')
+if os.path.exists(bot_dir):
+    sys.path.insert(0, bot_dir)
+else:
+    print(f"⚠️  Warning: bot directory not found at {bot_dir}")
 
 # Load environment variables
 try:
     from dotenv import load_dotenv
     # Use relative path for .env file
-    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
     load_dotenv(dotenv_path=env_path)
     print("✅ Environment variables loaded")
 except ImportError:
-    print("⚠️  python-dotenv not available, using system environment")
+    print("⚠️  python-dotenv not available. Install with: pip install python-dotenv==1.0.0")
 
 def test_kraken_sdk():
     """Test if Kraken SDK is available."""
