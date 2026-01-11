@@ -309,18 +309,14 @@ class IndependentBrokerTrader:
                 
                 # Run trading cycle for this broker
                 try:
-                    # CRITICAL: Temporarily set this broker as active for this cycle ONLY
-                    # This ensures each broker trades independently without affecting others
-                    # The broker is restored after the cycle to prevent cross-contamination
-                    original_broker = self.trading_strategy.broker
-                    self.trading_strategy.broker = broker
+                    # CRITICAL FIX (Jan 11, 2026): Pass broker to run_cycle() instead of setting shared state
+                    # Previously, we set self.trading_strategy.broker = broker which caused race conditions
+                    # when multiple threads tried to set this shared variable simultaneously.
+                    # Now we pass the broker as a parameter, making each thread truly independent.
                     
-                    # Execute trading cycle for THIS broker only
+                    # Execute trading cycle for THIS broker only (thread-safe)
                     logger.info(f"   {broker_name}: Running trading cycle...")
-                    self.trading_strategy.run_cycle()
-                    
-                    # Restore original broker to prevent affecting other broker threads
-                    self.trading_strategy.broker = original_broker
+                    self.trading_strategy.run_cycle(broker=broker)
                     
                     # Mark as healthy
                     self.update_broker_health(broker_name, 'healthy', is_trading=True)
@@ -329,12 +325,6 @@ class IndependentBrokerTrader:
                 except Exception as trading_err:
                     logger.error(f"❌ {broker_name} trading cycle failed: {trading_err}")
                     logger.error(f"   Error type: {type(trading_err).__name__}")
-                    
-                    # Restore original broker on error
-                    try:
-                        self.trading_strategy.broker = original_broker
-                    except:
-                        pass
                     
                     # Update health status
                     self.update_broker_health(broker_name, 'degraded', 
@@ -416,25 +406,12 @@ class IndependentBrokerTrader:
                 
                 # Run trading cycle for this user broker
                 try:
-                    # CRITICAL: Set this user broker as active for this cycle ONLY
-                    # Store original state
-                    original_broker = self.trading_strategy.broker
-                    original_user1_broker = getattr(self.trading_strategy, 'user1_broker', None)
+                    # CRITICAL FIX (Jan 11, 2026): Pass broker to run_cycle() instead of setting shared state
+                    # This makes each user broker thread truly independent and thread-safe
                     
-                    # Temporarily set this user broker as the active broker
-                    # This ensures the trading strategy uses THIS user's account
-                    self.trading_strategy.broker = broker
-                    if user_id == "daivon_frazier":
-                        self.trading_strategy.user1_broker = broker
-                    
-                    # Execute trading cycle for THIS user broker only
+                    # Execute trading cycle for THIS user broker only (thread-safe)
                     logger.info(f"   {broker_name} (USER): Running trading cycle...")
-                    self.trading_strategy.run_cycle()
-                    
-                    # Restore original brokers to prevent affecting other threads
-                    self.trading_strategy.broker = original_broker
-                    if user_id == "daivon_frazier":
-                        self.trading_strategy.user1_broker = original_user1_broker
+                    self.trading_strategy.run_cycle(broker=broker)
                     
                     # Mark as healthy
                     if user_id not in self.user_broker_health:
@@ -451,14 +428,6 @@ class IndependentBrokerTrader:
                 except Exception as trading_err:
                     logger.error(f"❌ {broker_name} (USER) trading cycle failed: {trading_err}")
                     logger.error(f"   Error type: {type(trading_err).__name__}")
-                    
-                    # Restore original brokers on error
-                    try:
-                        self.trading_strategy.broker = original_broker
-                        if user_id == "daivon_frazier":
-                            self.trading_strategy.user1_broker = original_user1_broker
-                    except:
-                        pass
                     
                     # Update health status
                     if user_id not in self.user_broker_health:

@@ -599,7 +599,7 @@ class TradingStrategy:
         else:
             logger.info("📊 Single broker mode (independent trading not enabled)")
     
-    def _get_cached_candles(self, symbol: str, timeframe: str = '5m', count: int = 100):
+    def _get_cached_candles(self, symbol: str, timeframe: str = '5m', count: int = 100, broker=None):
         """
         Get candles with caching to reduce API calls.
         
@@ -607,10 +607,14 @@ class TradingStrategy:
             symbol: Trading pair symbol
             timeframe: Candle timeframe
             count: Number of candles
+            broker: Optional broker instance to use. If not provided, uses self.broker.
             
         Returns:
             List of candle dicts or empty list
         """
+        # Use provided broker or fall back to self.broker
+        active_broker = broker if broker is not None else self.broker
+        
         cache_key = f"{symbol}_{timeframe}_{count}"
         current_time = time.time()
         
@@ -622,7 +626,7 @@ class TradingStrategy:
                 return cached_data
         
         # Cache miss or expired - fetch fresh data
-        candles = self.broker.get_candles(symbol, timeframe, count)
+        candles = active_broker.get_candles(symbol, timeframe, count)
         
         # Cache the result (even if empty, to avoid repeated failed requests)
         self.candle_cache[cache_key] = (current_time, candles)
@@ -690,8 +694,13 @@ class TradingStrategy:
         
         return batch
 
-    def run_cycle(self):
+    def run_cycle(self, broker=None):
         """Execute a complete trading cycle with position cap enforcement.
+        
+        Args:
+            broker: Optional broker instance to use for this cycle. If not provided,
+                   uses self.broker (default behavior for backward compatibility).
+                   This parameter enables thread-safe multi-broker trading.
         
         Steps:
         1. Enforce position cap (auto-sell excess if needed)
@@ -700,6 +709,8 @@ class TradingStrategy:
         4. Update trailing stops and take profits
         5. Log cycle summary
         """
+        # Use provided broker or fall back to self.broker (thread-safe approach)
+        active_broker = broker if broker is not None else self.broker
         try:
             # 🚨 EMERGENCY: Check if LIQUIDATE_ALL mode is active
             liquidate_all_file = os.path.join(os.path.dirname(__file__), '..', 'LIQUIDATE_ALL_NOW.conf')
@@ -711,9 +722,9 @@ class TradingStrategy:
                 total_positions = 0
                 
                 try:
-                    if self.broker:
+                    if active_broker:
                         try:
-                            positions = call_with_timeout(self.broker.get_positions, timeout_seconds=30)
+                            positions = call_with_timeout(active_broker.get_positions, timeout_seconds=30)
                             if positions[1]:  # Error occurred
                                 logger.error(f"   Failed to get positions: {positions[1]}")
                                 positions = []
@@ -740,7 +751,7 @@ class TradingStrategy:
                                 
                                 try:
                                     result = call_with_timeout(
-                                        self.broker.place_market_order,
+                                        active_broker.place_market_order,
                                         args=(symbol, 'sell', quantity),
                                         kwargs={'size_type': 'base'},
                                         timeout_seconds=30
@@ -795,7 +806,7 @@ class TradingStrategy:
                     logger.info(f"   Sold {result['sold']} positions")
             
             # CRITICAL: Check if new entries are blocked
-            current_positions = self.broker.get_positions() if self.broker else []
+            current_positions = active_broker.get_positions() if active_broker else []
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
             
@@ -809,15 +820,15 @@ class TradingStrategy:
                 logger.info(f"✅ Position cap OK ({len(current_positions)}/{MAX_POSITIONS_ALLOWED}) - entries enabled")
             
             # Get account balance for position sizing
-            if not self.broker or not self.apex:
+            if not active_broker or not self.apex:
                 logger.info("📡 Monitor mode (strategy not loaded; no trades)")
                 return
             
             # Get detailed balance including crypto holdings
-            if hasattr(self.broker, 'get_account_balance_detailed'):
-                balance_data = self.broker.get_account_balance_detailed()
+            if hasattr(active_broker, 'get_account_balance_detailed'):
+                balance_data = active_broker.get_account_balance_detailed()
             else:
-                balance_data = {'trading_balance': self.broker.get_account_balance()}
+                balance_data = {'trading_balance': active_broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
             logger.info(f"💰 Trading balance: ${account_balance:.2f}")
             
@@ -853,7 +864,7 @@ class TradingStrategy:
                     logger.info(f"   Analyzing {symbol}...")
                     
                     # Get current price
-                    current_price = self.broker.get_current_price(symbol)
+                    current_price = active_broker.get_current_price(symbol)
                     if not current_price or current_price == 0:
                         logger.warning(f"   ⚠️ Could not get price for {symbol}")
                         continue
@@ -889,9 +900,9 @@ class TradingStrategy:
                     entry_time_available = False
                     position_age_hours = 0
                     
-                    if self.broker and hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
+                    if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                         try:
-                            tracked_position = self.broker.position_tracker.get_position(symbol)
+                            tracked_position = active_broker.position_tracker.get_position(symbol)
                             if tracked_position:
                                 entry_price_available = True
                                 
@@ -918,7 +929,7 @@ class TradingStrategy:
                                     except Exception as time_err:
                                         logger.debug(f"   Could not parse entry time for {symbol}: {time_err}")
                             
-                            pnl_data = self.broker.position_tracker.calculate_pnl(symbol, current_price)
+                            pnl_data = active_broker.position_tracker.calculate_pnl(symbol, current_price)
                             if pnl_data:
                                 entry_price_available = True
                                 pnl_percent = pnl_data['pnl_percent']
@@ -968,7 +979,7 @@ class TradingStrategy:
                         logger.warning(f"      💡 Run import_current_positions.py to track this position")
                     
                     # Get market data for analysis (use cached method to prevent rate limiting)
-                    candles = self._get_cached_candles(symbol, '5m', 100)
+                    candles = self._get_cached_candles(symbol, '5m', 100, broker=active_broker)
                     if not candles or len(candles) < MIN_CANDLES_REQUIRED:
                         logger.warning(f"   ⚠️ Insufficient data for {symbol} ({len(candles) if candles else 0} candles, need {MIN_CANDLES_REQUIRED})")
                         # CRITICAL: Exit positions we can't analyze to prevent blind holding
@@ -1110,7 +1121,7 @@ class TradingStrategy:
                 remaining_positions = [p for p in current_positions if p.get('symbol') not in symbols_to_exit]
                 
                 # Sort by USD value (smallest first - easiest to exit and lowest capital impact)
-                remaining_sorted = sorted(remaining_positions, key=lambda p: p.get('quantity', 0) * self.broker.get_current_price(p.get('symbol', '')))
+                remaining_sorted = sorted(remaining_positions, key=lambda p: p.get('quantity', 0) * active_broker.get_current_price(p.get('symbol', '')))
                 
                 # Force-sell smallest positions to get under cap
                 positions_needed = (len(current_positions) - MAX_POSITIONS_ALLOWED) - len(positions_to_exit)
@@ -1118,7 +1129,7 @@ class TradingStrategy:
                     symbol = pos.get('symbol')
                     quantity = pos.get('quantity', 0)
                     try:
-                        price = self.broker.get_current_price(symbol)
+                        price = active_broker.get_current_price(symbol)
                         value = quantity * price
                         logger.warning(f"   🔴 FORCE-EXIT to meet cap: {symbol} (${value:.2f})")
                         positions_to_exit.append({
@@ -1160,7 +1171,7 @@ class TradingStrategy:
                         continue
                     
                     try:
-                        result = self.broker.place_market_order(
+                        result = active_broker.place_market_order(
                             symbol=symbol,
                             side='sell',
                             quantity=quantity,
@@ -1228,7 +1239,7 @@ class TradingStrategy:
                     if (not self.all_markets_cache or 
                         current_time - self.markets_cache_time > self.MARKETS_CACHE_TTL):
                         logger.info("   🔄 Refreshing market list from API...")
-                        all_products = self.broker.get_all_products()
+                        all_products = active_broker.get_all_products()
                         if all_products:
                             self.all_markets_cache = all_products
                             self.markets_cache_time = current_time
@@ -1282,7 +1293,7 @@ class TradingStrategy:
                                 time.sleep(MARKET_SCAN_DELAY + jitter)
                             
                             # Get candles with caching to reduce duplicate API calls
-                            candles = self._get_cached_candles(symbol, '5m', 100)
+                            candles = self._get_cached_candles(symbol, '5m', 100, broker=active_broker)
                             
                             # Check if we got candles or if rate limited
                             if not candles:
