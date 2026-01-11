@@ -14,6 +14,7 @@ import random
 import time
 import traceback
 import uuid
+import threading
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -3129,6 +3130,15 @@ class KrakenBroker(BaseBroker):
         self.account_type = account_type
         self.user_id = user_id
         
+        # Nonce tracking for guaranteeing strict monotonic increase
+        # This prevents "Invalid nonce" errors from rapid consecutive requests
+        # Initialize to current time in microseconds to avoid conflicts with previous sessions
+        # (especially important after bot restarts where Kraken may still remember old nonces)
+        self._last_nonce = int(time.time() * 1000000)
+        # Thread lock to ensure nonce generation is thread-safe
+        # Prevents race conditions when multiple threads call API simultaneously
+        self._nonce_lock = threading.Lock()
+        
         # Set identifier for logging
         if account_type == AccountType.MASTER:
             self.account_identifier = "MASTER"
@@ -3182,8 +3192,61 @@ class KrakenBroker(BaseBroker):
                     logger.info("   See ENVIRONMENT_VARIABLES_GUIDE.md for deployment platform setup")
                 return False
             
-            # Initialize Kraken API
+            # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors
+            # CRITICAL FIX: Override default nonce generation to guarantee strict monotonic increase
+            # The default krakenex nonce uses time.time() which has seconds precision and can
+            # produce duplicate nonces if multiple requests happen in the same second.
+            # 
+            # SOLUTION: Use microseconds + tracking to ensure each nonce is strictly greater
+            # than the previous one, even if requests happen in the same microsecond.
             self.api = krakenex.API(key=api_key, secret=api_secret)
+            
+            # Override _nonce to use tracked microseconds for guaranteed uniqueness
+            # This prevents "EAPI:Invalid nonce" errors caused by:
+            # 1. Duplicate nonces from rapid consecutive requests (even sub-microsecond)
+            # 2. Clock drift/NTP adjustments causing nonces to go backward
+            # 3. Insufficient precision in default time.time() based nonces
+            # 4. Race conditions in multi-threaded scenarios
+            def _nonce_monotonic():
+                """
+                Generate nonce with guaranteed strict monotonic increase (thread-safe).
+                
+                Uses microseconds since epoch with tracking to ensure each nonce
+                is strictly greater than the previous one, preventing Kraken's
+                "Invalid nonce" error.
+                
+                Thread-safe: Uses a lock to prevent race conditions when multiple
+                threads call the API simultaneously.
+                """
+                with self._nonce_lock:
+                    # Get current time in microseconds
+                    current_nonce = int(time.time() * 1000000)
+                    
+                    # Ensure strictly increasing - if current time equals or is less than
+                    # last nonce (due to rapid requests or clock drift), increment by 1
+                    if current_nonce <= self._last_nonce:
+                        current_nonce = self._last_nonce + 1
+                    
+                    # Update tracking
+                    self._last_nonce = current_nonce
+                    
+                    return str(current_nonce)
+            
+            # Replace the nonce generator
+            # NOTE: This directly overrides the internal _nonce method of krakenex.API
+            # If krakenex changes its internal implementation, this may need updating.
+            # We use this approach because krakenex doesn't provide a clean way to
+            # inject a custom nonce generator. Alternative would be to subclass API,
+            # but that would require more extensive changes to KrakenAPI wrapper.
+            try:
+                self.api._nonce = _nonce_monotonic
+                logger.debug(f"✅ Custom nonce generator installed for {cred_label}")
+            except AttributeError as e:
+                logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
+                logger.error("   This may indicate a version incompatibility with krakenex library")
+                logger.error("   Please report this issue with your krakenex version")
+                return False
+            
             self.kraken_api = KrakenAPI(self.api)
             
             # Test connection by fetching account balance with retry logic
@@ -3233,14 +3296,20 @@ class KrakenBroker(BaseBroker):
                                 logger.error("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                                 return False
                             
-                            # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
-                            # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
-                            # These indicate API key blocking and need longer cooldown periods
+                            # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, etc.)
+                            # CRITICAL: Include "invalid nonce" as retryable error
+                            # Invalid nonce errors can happen due to:
+                            # - Clock drift/NTP adjustments
+                            # - Rapid consecutive requests
+                            # - Previous failed requests leaving the nonce counter in inconsistent state
+                            # The microsecond-based nonce generator should fix this, but we still retry
+                            # to handle edge cases and transient issues.
                             is_retryable = any(keyword in error_msgs.lower() for keyword in [
                                 'timeout', 'connection', 'network', 'rate limit',
                                 'too many requests', 'service unavailable',
                                 '503', '504', '429', '403', 'forbidden', 
-                                'too many errors', 'temporary', 'try again'
+                                'too many errors', 'temporary', 'try again',
+                                'invalid nonce', 'nonce'  # Kraken nonce errors
                             ])
                             
                             if is_retryable and attempt < max_attempts:
@@ -3286,14 +3355,20 @@ class KrakenBroker(BaseBroker):
                 except Exception as e:
                     error_msg = str(e)
                     
-                    # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
-                    # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
-                    # These indicate API key blocking and need longer cooldown periods
+                    # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, etc.)
+                    # CRITICAL: Include "invalid nonce" as retryable error
+                    # Invalid nonce errors can happen due to:
+                    # - Clock drift/NTP adjustments
+                    # - Rapid consecutive requests
+                    # - Previous failed requests leaving the nonce counter in inconsistent state
+                    # The microsecond-based nonce generator should fix this, but we still retry
+                    # to handle edge cases and transient issues.
                     is_retryable = any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
                         '503', '504', '429', '403', 'forbidden', 
-                        'too many errors', 'temporary', 'try again'
+                        'too many errors', 'temporary', 'try again',
+                        'invalid nonce', 'nonce'  # Kraken nonce errors
                     ])
                     
                     if is_retryable and attempt < max_attempts:
