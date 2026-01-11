@@ -3290,9 +3290,15 @@ class KrakenBroker(BaseBroker):
         
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
-        # Initialize to current time in microseconds to avoid conflicts with previous sessions
-        # (especially important after bot restarts where Kraken may still remember old nonces)
-        self._last_nonce = int(time.time() * 1000000)
+        # Initialize to current time in microseconds PLUS random offset to avoid conflicts
+        # when multiple broker instances are created at nearly the same time
+        # Random offset range: 0-999999 microseconds (up to 1 second)
+        # This is especially important for:
+        # - Multiple user accounts connecting sequentially
+        # - Bot restarts where Kraken may still remember old nonces
+        # - Retry attempts that create new nonce sequences
+        random_offset = random.randint(0, 999999)
+        self._last_nonce = int(time.time() * 1000000) + random_offset
         # Thread lock to ensure nonce generation is thread-safe
         # Prevents race conditions when multiple threads call API simultaneously
         self._nonce_lock = threading.Lock()
@@ -3421,6 +3427,16 @@ class KrakenBroker(BaseBroker):
                         delay = base_delay * (2 ** (attempt - 2))
                         logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
+                        
+                        # Jump nonce forward on retry to skip any potentially "burned" nonces
+                        # from the failed request. Kraken may have validated but not processed
+                        # the nonce, making it unusable for future requests.
+                        # Jump by 1 second worth of microseconds (1,000,000) per retry attempt
+                        # This ensures we use a completely fresh nonce range on each retry
+                        with self._nonce_lock:
+                            nonce_jump = 1000000 * attempt  # 1M, 2M, 3M, 4M microseconds
+                            self._last_nonce = int(time.time() * 1000000) + nonce_jump
+                            logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds for retry {attempt}")
                     
                     # The _nonce_monotonic() function automatically handles nonce generation
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
