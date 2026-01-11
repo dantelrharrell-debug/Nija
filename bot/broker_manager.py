@@ -3439,8 +3439,11 @@ class KrakenBroker(BaseBroker):
                         # Larger jumps on later retries increase chance of success
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
                         with self._nonce_lock:
-                            nonce_jump = 1000000 * attempt  # Formula: attempt * 1M microseconds
-                            # Use max to ensure new nonce is always greater than previous
+                            nonce_jump = 1000000 * attempt  # Formula: attempt * 1M (where attempt >= 2)
+                            # Calculate two candidate nonces and use the larger one:
+                            # - time_based: current time + jump (ensures we're ahead of wall clock time)
+                            # - increment_based: previous nonce + jump (ensures strict monotonic increase)
+                            # Both are needed because time can drift or move backwards (NTP, clock skew)
                             time_based = int(time.time() * 1000000) + nonce_jump
                             increment_based = self._last_nonce + nonce_jump
                             self._last_nonce = max(time_based, increment_based)
