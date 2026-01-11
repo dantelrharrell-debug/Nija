@@ -13,7 +13,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 # Load environment variables
 try:
     from dotenv import load_dotenv
-    load_dotenv(dotenv_path='/home/runner/work/Nija/Nija/.env')
+    # Use relative path for .env file
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    load_dotenv(dotenv_path=env_path)
     print("✅ Environment variables loaded")
 except ImportError:
     print("⚠️  python-dotenv not available, using system environment")
@@ -76,6 +78,10 @@ def test_broker_connection():
             print(f"❌ User #1 Kraken broker connection failed")
             return False
             
+    except ImportError as ie:
+        print(f"❌ Import error: {ie}")
+        print("   Required modules not available. Check requirements.txt installation.")
+        return False
     except Exception as e:
         print(f"❌ Broker connection test failed: {e}")
         import traceback

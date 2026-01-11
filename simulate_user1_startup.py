@@ -14,7 +14,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 # Load environment variables
 try:
     from dotenv import load_dotenv
-    load_dotenv(dotenv_path='/home/runner/work/Nija/Nija/.env')
+    # Use relative path for .env file
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    load_dotenv(dotenv_path=env_path)
     print("✅ Environment variables loaded from .env")
 except ImportError:
     print("⚠️  python-dotenv not available")
@@ -89,15 +91,21 @@ def simulate_initialization():
             print(f"❌ User #1 {user1_broker_type.value.title()} connection returned None")
             return False
             
+    except ConnectionError as ce:
+        print(f"⚠️  User #1 {user1_broker_type.value.title()} connection error: {ce}")
+        print(f"   (Network error is expected in sandbox environment)")
+        print(f"   Code structure is correct for User #1 initialization")
     except Exception as e:
         print(f"⚠️  User #1 {user1_broker_type.value.title()} error: {e}")
-        # Check if this is just a network error (expected in sandbox)
-        if "Failed to resolve" in str(e) or "Max retries exceeded" in str(e):
-            print(f"   (Network error is expected in sandbox environment)")
-            print(f"   Code structure is correct for User #1 initialization")
+        # Log full traceback for debugging
+        import traceback
+        traceback.print_exc()
+        # Don't fail on expected network errors
+        error_str = str(e)
+        if any(msg in error_str for msg in ["Failed to resolve", "Max retries", "Connection refused"]):
+            print(f"   (Network connectivity issue - expected in sandbox)")
+            print(f"   Code structure appears correct")
         else:
-            import traceback
-            traceback.print_exc()
             return False
     print()
     

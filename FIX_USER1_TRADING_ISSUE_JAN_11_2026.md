@@ -49,8 +49,10 @@ The issue was identified through systematic investigation:
 1. **Installed Missing Dependencies**:
    ```bash
    pip install krakenex==2.2.2 pykrakenapi==0.3.2
-   pip install python-dotenv==1.2.1
+   pip install python-dotenv==1.0.0
    ```
+   
+   **Note**: requirements.txt specifies python-dotenv==1.0.0. In testing, version 1.2.1 was temporarily used but production should use 1.0.0 as specified in requirements.txt for consistency.
 
 2. **Verified Installation**:
    - Created and ran `test_user1_connection.py` test script
