@@ -11,12 +11,19 @@ This test validates that:
 
 import time
 import threading
-from unittest.mock import MagicMock, patch
+import traceback
 import sys
 import os
 
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+
+# Import broker classes at module level
+try:
+    from broker_manager import KrakenBroker, AccountType
+except ImportError:
+    print("❌ Failed to import broker_manager. Make sure bot/broker_manager.py exists.")
+    sys.exit(1)
 
 def test_nonce_monotonic_increase():
     """Test that nonces are strictly monotonically increasing."""
@@ -25,8 +32,6 @@ def test_nonce_monotonic_increase():
     print("=" * 70)
     
     try:
-        from broker_manager import KrakenBroker, AccountType
-        
         # Create a Kraken broker instance (won't connect, just test nonce)
         broker = KrakenBroker(account_type=AccountType.MASTER)
         
@@ -75,7 +80,6 @@ def test_nonce_monotonic_increase():
         
     except Exception as e:
         print(f"❌ TEST 1 FAILED: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
@@ -87,8 +91,6 @@ def test_nonce_baseline_refresh():
     print("=" * 70)
     
     try:
-        from broker_manager import KrakenBroker, AccountType
-        
         # Create broker instance
         broker = KrakenBroker(account_type=AccountType.MASTER)
         initial_nonce = broker._last_nonce
@@ -116,7 +118,6 @@ def test_nonce_baseline_refresh():
         
     except Exception as e:
         print(f"❌ TEST 2 FAILED: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
@@ -128,8 +129,6 @@ def test_thread_safety():
     print("=" * 70)
     
     try:
-        from broker_manager import KrakenBroker, AccountType
-        
         broker = KrakenBroker(account_type=AccountType.MASTER)
         nonces = []
         nonce_lock = threading.Lock()
@@ -192,7 +191,6 @@ def test_thread_safety():
         
     except Exception as e:
         print(f"❌ TEST 3 FAILED: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
