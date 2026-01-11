@@ -2568,11 +2568,44 @@ class CoinbaseBroker(BaseBroker):
 
 
 class AlpacaBroker(BaseBroker):
-    """Alpaca integration for stocks"""
+    """
+    Alpaca integration for stocks and crypto.
     
-    def __init__(self):
+    Features:
+    - Stock trading (US equities)
+    - Crypto trading (select cryptocurrencies)
+    - Paper and live trading modes
+    - Multi-account support (master + user accounts)
+    
+    Documentation: https://alpaca.markets/docs/
+    """
+    
+    def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
+        """
+        Initialize Alpaca broker with account type support.
+        
+        Args:
+            account_type: MASTER for Nija system account, USER for individual user accounts
+            user_id: User ID for USER account_type (e.g., 'tania_gilbert')
+            
+        Raises:
+            ValueError: If account_type is USER but user_id is not provided
+        """
         super().__init__(BrokerType.ALPACA)
+        
+        # Validate that USER account_type has user_id
+        if account_type == AccountType.USER and not user_id:
+            raise ValueError("USER account_type requires user_id parameter")
+        
         self.api = None
+        self.account_type = account_type
+        self.user_id = user_id
+        
+        # Set identifier for logging
+        if account_type == AccountType.MASTER:
+            self.account_identifier = "MASTER"
+        else:
+            self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
     
     @property
     def client(self):
@@ -2580,23 +2613,57 @@ class AlpacaBroker(BaseBroker):
         return self.api
     
     def connect(self) -> bool:
-        """Connect to Alpaca with retry logic"""
+        """
+        Connect to Alpaca API with retry logic.
+        
+        Uses different credentials based on account_type:
+        - MASTER: ALPACA_API_KEY / ALPACA_API_SECRET / ALPACA_PAPER
+        - USER: ALPACA_USER_{user_id}_API_KEY / ALPACA_USER_{user_id}_API_SECRET / ALPACA_USER_{user_id}_PAPER
+        
+        Returns:
+            bool: True if connected successfully
+        """
         try:
             from alpaca.trading.client import TradingClient
             import time
             
-            api_key = os.getenv("ALPACA_API_KEY", "").strip()
-            api_secret = os.getenv("ALPACA_API_SECRET", "").strip()
-            paper = os.getenv("ALPACA_PAPER", "true").lower() == "true"
+            # Get credentials based on account type
+            if self.account_type == AccountType.MASTER:
+                api_key = os.getenv("ALPACA_API_KEY", "").strip()
+                api_secret = os.getenv("ALPACA_API_SECRET", "").strip()
+                paper = os.getenv("ALPACA_PAPER", "true").lower() == "true"
+                cred_label = "MASTER"
+            else:
+                # User account - construct env var name from user_id
+                # Convert user_id to uppercase for env var
+                # For user_id like 'tania_gilbert', extracts 'TANIA' for ALPACA_USER_TANIA_API_KEY
+                # For user_id like 'john', uses 'JOHN' for ALPACA_USER_JOHN_API_KEY
+                user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
+                api_key = os.getenv(f"ALPACA_USER_{user_env_name}_API_KEY", "").strip()
+                api_secret = os.getenv(f"ALPACA_USER_{user_env_name}_API_SECRET", "").strip()
+                paper_str = os.getenv(f"ALPACA_USER_{user_env_name}_PAPER", "true").strip()
+                paper = paper_str.lower() == "true"
+                cred_label = f"USER:{self.user_id}"
             
             if not api_key or not api_secret:
                 # Silently skip - Alpaca is optional
-                logging.info("⚠️  Alpaca credentials not configured (skipping)")
+                logger.info(f"⚠️  Alpaca credentials not configured for {cred_label} (skipping)")
+                if self.account_type == AccountType.MASTER:
+                    logger.info("   To enable Alpaca MASTER trading, set:")
+                    logger.info("      ALPACA_API_KEY=<your-api-key>")
+                    logger.info("      ALPACA_API_SECRET=<your-api-secret>")
+                    logger.info("      ALPACA_PAPER=true  # or false for live trading")
+                else:
+                    # USER account - provide specific instructions
+                    logger.info(f"   To enable Alpaca USER trading for {self.user_id}, set:")
+                    logger.info(f"      ALPACA_USER_{user_env_name}_API_KEY=<your-api-key>")
+                    logger.info(f"      ALPACA_USER_{user_env_name}_API_SECRET=<your-api-secret>")
+                    logger.info(f"      ALPACA_USER_{user_env_name}_PAPER=true  # or false for live trading")
                 return False
             
             # Log connection mode
             mode_str = "PAPER" if paper else "LIVE"
-            logging.info(f"📊 Attempting to connect Alpaca ({mode_str} mode)...")
+            logging.info(f"📊 Attempting to connect Alpaca {cred_label} ({mode_str} mode)...")
             
             self.api = TradingClient(api_key, api_secret, paper=paper)
             
@@ -2612,16 +2679,16 @@ class AlpacaBroker(BaseBroker):
                         # Add delay before retry with exponential backoff
                         # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
                         delay = base_delay * (2 ** (attempt - 2))
-                        logging.info(f"🔄 Retrying Alpaca connection in {delay}s (attempt {attempt}/{max_attempts})...")
+                        logging.info(f"🔄 Retrying Alpaca {cred_label} connection in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
                     
                     account = self.api.get_account()
                     self.connected = True
                     
                     if attempt > 1:
-                        logging.info(f"✅ Connected to Alpaca API (succeeded on attempt {attempt})")
+                        logging.info(f"✅ Connected to Alpaca {cred_label} API (succeeded on attempt {attempt})")
                     else:
-                        logging.info(f"✅ Alpaca connected ({'PAPER' if paper else 'LIVE'})")
+                        logging.info(f"✅ Alpaca {cred_label} connected ({'PAPER' if paper else 'LIVE'})")
                     
                     return True
                 
@@ -2630,8 +2697,8 @@ class AlpacaBroker(BaseBroker):
                     
                     # Special handling for paper trading being disabled
                     if "paper" in error_msg.lower() and "not" in error_msg.lower():
-                        logging.warning("⚠️  Alpaca paper trading may be disabled or account not configured for paper trading")
-                        logging.warning("   Try setting ALPACA_PAPER=false for live trading or verify account supports paper trading")
+                        logging.warning(f"⚠️  Alpaca {cred_label} paper trading may be disabled or account not configured for paper trading")
+                        logging.warning(f"   Try setting ALPACA{'_USER_' + user_env_name if self.account_type == AccountType.USER else ''}_PAPER=false for live trading")
                         return False
                     
                     # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
@@ -2645,14 +2712,14 @@ class AlpacaBroker(BaseBroker):
                     ])
                     
                     if is_retryable and attempt < max_attempts:
-                        logging.warning(f"⚠️  Alpaca connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                        logging.warning(f"⚠️  Alpaca {cred_label} connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                         continue
                     else:
-                        logging.warning(f"⚠️  Alpaca connection failed: {e}")
+                        logging.warning(f"⚠️  Alpaca {cred_label} connection failed: {e}")
                         return False
             
             # Should never reach here, but just in case
-            logging.error("❌ Failed to connect to Alpaca after maximum retry attempts")
+            logging.error(f"❌ Failed to connect to Alpaca {cred_label} after maximum retry attempts")
             return False
             
         except ImportError:

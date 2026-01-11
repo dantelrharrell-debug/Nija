@@ -95,7 +95,7 @@ class MultiAccountBrokerManager:
         Add a broker for a user account.
         
         Args:
-            user_id: User identifier (e.g., 'daivon_frazier')
+            user_id: User identifier (e.g., 'tania_gilbert')
             broker_type: Type of broker to add
             
         Returns:
@@ -106,9 +106,11 @@ class MultiAccountBrokerManager:
             
             if broker_type == BrokerType.KRAKEN:
                 broker = KrakenBroker(account_type=AccountType.USER, user_id=user_id)
+            elif broker_type == BrokerType.ALPACA:
+                broker = AlpacaBroker(account_type=AccountType.USER, user_id=user_id)
             else:
                 logger.warning(f"⚠️  Unsupported broker type for user: {broker_type.value}")
-                logger.warning(f"   Only KRAKEN is currently supported for user accounts")
+                logger.warning(f"   Only KRAKEN and ALPACA are currently supported for user accounts")
                 return None
             
             # Connect the broker

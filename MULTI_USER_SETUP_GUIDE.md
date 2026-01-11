@@ -25,6 +25,26 @@ NIJA now supports multiple users with individual API keys, permissions, and inde
 - Trailing stops: Enabled
 - Auto-compound: Enabled
 
+### User 2: Tania Gilbert
+- **User ID**: `tania_gilbert`
+- **Email**: Tanialgilbert@gmail.com
+- **Tier**: Pro
+- **Status**: Active ✅
+- **Setup Date**: January 11, 2026
+- **Broker**: Alpaca (https://api.alpaca.markets)
+
+**Permissions**:
+- Max position size: $200
+- Max daily loss: $100
+- Max concurrent positions: 5
+- Allowed pairs: AAPL, MSFT, GOOGL, AMZN, TSLA, NVDA, META, BTC/USD, ETH/USD, SOL/USD
+
+**Configuration**:
+- Risk level: Moderate
+- Trailing stops: Enabled
+- Auto-compound: Enabled
+- Trading mode: Paper (for testing)
+
 ## User Management Commands
 
 ### Check User Status
@@ -100,7 +120,7 @@ from auth import get_api_key_manager
 api_mgr = get_api_key_manager()
 api_mgr.store_user_api_key(
     user_id="new_user_id",
-    broker="coinbase",  # or binance, okx, kraken
+    broker="coinbase",  # or alpaca, binance, okx, kraken
     api_key="user_api_key_here",
     api_secret="user_api_secret_here",
     additional_params={
@@ -108,6 +128,14 @@ api_mgr.store_user_api_key(
         'email': 'user@example.com'
     }
 )
+```
+
+**Note for Alpaca users**: Set environment variables instead of storing in script:
+```bash
+# For user 'tania_gilbert', set:
+export ALPACA_USER_TANIA_API_KEY="your-api-key"
+export ALPACA_USER_TANIA_API_SECRET="your-api-secret"
+export ALPACA_USER_TANIA_PAPER="true"  # or false for live trading
 ```
 
 ### Step 3: Configure Permissions
