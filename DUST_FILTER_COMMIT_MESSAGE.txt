@@ -1,9 +1,0 @@
-Fix position enforcer dust filter and sell call signature
-
-- Added dust position filter to skip positions with usd_value < $0.01
-- Prevents infinite loops on near-zero balance positions (e.g., ADA $0)
-- Corrected liquidation sell_position call signature (positional client_order_id)
-- Ensures clean liquidation without missing base_size errors
-
-Status: Position enforcer now safely liquidates without getting stuck on dust
-Timeline: Ready for immediate Railway redeployment

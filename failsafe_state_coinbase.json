@@ -1,9 +1,0 @@
-{
-  "daily_pnl": -0.6000000000000001,
-  "daily_trades": 4,
-  "max_drawdown_today": -0.006000000000000001,
-  "last_reset": "2025-12-30",
-  "consecutive_losses": 3,
-  "emergency_stop_active": false,
-  "circuit_breaker_count": 1
-}

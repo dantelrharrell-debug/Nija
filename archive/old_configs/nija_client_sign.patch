@@ -1,9 +1,0 @@
-*** Begin Patch
-*** Add File: nija_client.py
-+""" 
-+Nija Coinbase client adapter / safe order wrapper.
-+...
-+(full file content exactly as in the "Full updated nija_client.py" section above)
-+...
-+"""
-*** End Patch

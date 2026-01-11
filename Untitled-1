@@ -1,3 +1,0 @@
-[python](http://_vscodecontentref_/11) [check_tradable_balance.py](http://_vscodecontentref_/12)
-bash [start.sh](http://_vscodecontentref_/13)
-tail -50 [nija_output.log](http://_vscodecontentref_/14) | grep -E "balance|positions|concurrent|SIGNAL"
