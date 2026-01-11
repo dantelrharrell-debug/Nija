@@ -232,6 +232,20 @@ def _is_invalid_product_error(error_message: str) -> bool:
 class _CoinbaseInvalidProductFilter(logging.Filter):
     """Filter to suppress Coinbase SDK errors for invalid/delisted products"""
     def filter(self, record):
+        """
+        Determine if a log record should be logged.
+        
+        Filters out ERROR-level logs from Coinbase SDK that contain
+        invalid ProductID error messages, as these are expected errors
+        that are already handled by exception handlers.
+        
+        Args:
+            record: LogRecord instance to be filtered
+        
+        Returns:
+            False if the record should be filtered out (invalid ProductID error),
+            True if the record should be logged normally
+        """
         # Only filter records from coinbase.RESTClient logger
         if not record.name.startswith('coinbase'):
             return True
@@ -305,11 +319,15 @@ class CoinbaseBroker(BaseBroker):
     
     def _install_logging_filter(self):
         """Install logging filter to suppress Coinbase SDK invalid ProductID errors"""
-        # Apply filter to coinbase logger and its child loggers
+        # NOTE: Unlike handlers, filters are NOT inherited by child loggers.
+        # We must add the filter to both the parent and child loggers explicitly.
+        # See: https://docs.python.org/3/library/logging.html#filter-objects
+        
+        # Apply filter to parent 'coinbase' logger
         coinbase_logger = logging.getLogger('coinbase')
         coinbase_logger.addFilter(_CoinbaseInvalidProductFilter())
         
-        # Also apply to coinbase.RESTClient specifically
+        # Apply filter to 'coinbase.RESTClient' child logger (not inherited from parent)
         rest_logger = logging.getLogger('coinbase.RESTClient')
         rest_logger.addFilter(_CoinbaseInvalidProductFilter())
         
