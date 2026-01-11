@@ -109,15 +109,12 @@ def test_integration():
     
     coinbase_logger = logging.getLogger('coinbase')
     has_filter = any(
-        isinstance(f, type) and f.__name__ == 'CoinbaseInvalidProductFilter'
-        for f in coinbase_logger.filters
-    ) or any(
-        f.__class__.__name__ == 'CoinbaseInvalidProductFilter'
+        f.__class__.__name__ == '_CoinbaseInvalidProductFilter'
         for f in coinbase_logger.filters
     )
     
     if not has_filter:
-        print("   ⚠️  Warning: Could not verify filter installation (may be installed differently)")
+        print("   ⚠️  Warning: Could not verify filter installation")
     else:
         print("   ✅ Logging filter is installed")
     
