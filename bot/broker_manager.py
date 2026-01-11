@@ -3129,6 +3129,10 @@ class KrakenBroker(BaseBroker):
         self.account_type = account_type
         self.user_id = user_id
         
+        # Nonce tracking for guaranteeing strict monotonic increase
+        # This prevents "Invalid nonce" errors from rapid consecutive requests
+        self._last_nonce = 0
+        
         # Set identifier for logging
         if account_type == AccountType.MASTER:
             self.account_identifier = "MASTER"
@@ -3183,26 +3187,42 @@ class KrakenBroker(BaseBroker):
                 return False
             
             # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors
-            # CRITICAL FIX: Override default nonce generation to use microseconds instead of seconds
+            # CRITICAL FIX: Override default nonce generation to guarantee strict monotonic increase
             # The default krakenex nonce uses time.time() which has seconds precision and can
             # produce duplicate nonces if multiple requests happen in the same second.
-            # Using microseconds ensures nonces are always unique and strictly increasing.
+            # 
+            # SOLUTION: Use microseconds + tracking to ensure each nonce is strictly greater
+            # than the previous one, even if requests happen in the same microsecond.
             self.api = krakenex.API(key=api_key, secret=api_secret)
             
-            # Store original _nonce method
-            original_nonce = self.api._nonce
-            
-            # Override _nonce to use microseconds for higher precision
+            # Override _nonce to use tracked microseconds for guaranteed uniqueness
             # This prevents "EAPI:Invalid nonce" errors caused by:
-            # 1. Duplicate nonces from rapid consecutive requests
+            # 1. Duplicate nonces from rapid consecutive requests (even sub-microsecond)
             # 2. Clock drift/NTP adjustments causing nonces to go backward
             # 3. Insufficient precision in default time.time() based nonces
-            def _nonce_microseconds():
-                """Generate nonce using microseconds for guaranteed uniqueness."""
-                return str(int(time.time() * 1000000))  # Microseconds since epoch
+            def _nonce_monotonic():
+                """
+                Generate nonce with guaranteed strict monotonic increase.
+                
+                Uses microseconds since epoch with tracking to ensure each nonce
+                is strictly greater than the previous one, preventing Kraken's
+                "Invalid nonce" error.
+                """
+                # Get current time in microseconds
+                current_nonce = int(time.time() * 1000000)
+                
+                # Ensure strictly increasing - if current time equals or is less than
+                # last nonce (due to rapid requests or clock drift), increment by 1
+                if current_nonce <= self._last_nonce:
+                    current_nonce = self._last_nonce + 1
+                
+                # Update tracking
+                self._last_nonce = current_nonce
+                
+                return str(current_nonce)
             
             # Replace the nonce generator
-            self.api._nonce = _nonce_microseconds
+            self.api._nonce = _nonce_monotonic
             
             self.kraken_api = KrakenAPI(self.api)
             
