@@ -1,0 +1,18 @@
+[
+  {
+    "user_id": "daivon_frazier",
+    "name": "Daivon Frazier",
+    "account_type": "retail",
+    "broker_type": "kraken",
+    "enabled": true,
+    "description": "Retail user - Kraken crypto account"
+  },
+  {
+    "user_id": "tania_gilbert",
+    "name": "Tania Gilbert",
+    "account_type": "retail",
+    "broker_type": "kraken",
+    "enabled": true,
+    "description": "Retail user - Kraken crypto account"
+  }
+]

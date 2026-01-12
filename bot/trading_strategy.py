@@ -298,62 +298,20 @@ class TradingStrategy:
             # Increased from 1.0s to 2.0s to reduce nonce collision risk
             time.sleep(2.0)
             
-            # Connect User #1 (Daivon Frazier) - Kraken account
+            # Connect User Accounts - Load from config files
             logger.info("=" * 70)
-            logger.info("👤 CONNECTING USER ACCOUNTS")
+            logger.info("👤 CONNECTING USER ACCOUNTS FROM CONFIG FILES")
             logger.info("=" * 70)
             
-            # Define user #1 details for use in logging
-            user1_id = "daivon_frazier"
-            user1_name = "Daivon Frazier"
-            user1_broker_type = BrokerType.KRAKEN
+            # Use the new config-based user loading system
+            connected_user_brokers = self.multi_account_manager.connect_users_from_config()
             
-            logger.info(f"📊 Attempting to connect User #1 ({user1_name}) - {user1_broker_type.value.title()}...")
-            try:
-                user1_kraken = self.multi_account_manager.add_user_broker(user1_id, user1_broker_type)
-                if user1_kraken:
-                    user_brokers.append(f"User #1: {user1_broker_type.value.title()}")
-                    logger.info(f"   ✅ User #1 {user1_broker_type.value.title()} connected")
-                    try:
-                        user1_balance = user1_kraken.get_account_balance()
-                        logger.info(f"   💰 User #1 {user1_broker_type.value.title()} balance: ${user1_balance:,.2f}")
-                    except Exception as bal_err:
-                        logger.warning(f"   ⚠️  Could not get User #1 balance: {bal_err}")
-                else:
-                    logger.warning(f"   ⚠️  User #1 {user1_broker_type.value.title()} connection failed")
-            except Exception as e:
-                logger.warning(f"   ⚠️  User #1 {user1_broker_type.value.title()} error: {e}")
-                import traceback
-                logger.debug(traceback.format_exc())
-            
-            # Add delay between user connections to prevent nonce collisions
-            # Increased from 1.0s to 3.0s to give Kraken API time to process
-            # previous user's connection and avoid overlapping nonce ranges
-            time.sleep(3.0)
-            
-            # Connect User #2 (Tania Gilbert) - Kraken account
-            # Define user #2 details for use in logging
-            user2_id = "tania_gilbert"
-            user2_name = "Tania Gilbert"
-            user2_broker_type = BrokerType.KRAKEN
-            
-            logger.info(f"📊 Attempting to connect User #2 ({user2_name}) - {user2_broker_type.value.title()}...")
-            try:
-                user2_kraken = self.multi_account_manager.add_user_broker(user2_id, user2_broker_type)
-                if user2_kraken:
-                    user_brokers.append(f"User #2: {user2_broker_type.value.title()}")
-                    logger.info(f"   ✅ User #2 {user2_broker_type.value.title()} connected")
-                    try:
-                        user2_balance = user2_kraken.get_account_balance()
-                        logger.info(f"   💰 User #2 {user2_broker_type.value.title()} balance: ${user2_balance:,.2f}")
-                    except Exception as bal_err:
-                        logger.warning(f"   ⚠️  Could not get User #2 balance: {bal_err}")
-                else:
-                    logger.warning(f"   ⚠️  User #2 {user2_broker_type.value.title()} connection failed")
-            except Exception as e:
-                logger.warning(f"   ⚠️  User #2 {user2_broker_type.value.title()} error: {e}")
-                import traceback
-                logger.debug(traceback.format_exc())
+            # Track which users were successfully connected
+            user_brokers = []
+            if connected_user_brokers:
+                for brokerage, user_ids in connected_user_brokers.items():
+                    for user_id in user_ids:
+                        user_brokers.append(f"{user_id}: {brokerage.title()}")
             
             logger.info("=" * 70)
             logger.info("✅ Broker connection phase complete")
@@ -385,28 +343,35 @@ class TradingStrategy:
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
                 
-                # Calculate total balance across all accounts
+                # CRITICAL: Master and users are COMPLETELY INDEPENDENT
+                # Master balance is ONLY for master account - users don't affect it
                 master_balance = self.broker_manager.get_total_balance()
-                user_total_balance = 0.0
-                if user_brokers:
-                    # Get balances for all users
-                    user1_bal = self.multi_account_manager.get_user_balance(user1_id) if self.multi_account_manager.get_user_broker(user1_id, user1_broker_type) else 0.0
-                    user2_bal = self.multi_account_manager.get_user_balance(user2_id) if self.multi_account_manager.get_user_broker(user2_id, user2_broker_type) else 0.0
-                    user_total_balance = user1_bal + user2_bal
                 
-                total_balance = master_balance + user_total_balance
+                # Get user balances dynamically from multi_account_manager (for reporting only)
+                user_total_balance = 0.0
+                if self.multi_account_manager.user_brokers:
+                    for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
+                        for broker_type, broker in user_broker_dict.items():
+                            try:
+                                if broker.connected:
+                                    user_balance = broker.get_account_balance()
+                                    user_total_balance += user_balance
+                            except Exception as e:
+                                logger.debug(f"Could not get balance for {user_id}: {e}")
+                
+                # Report balances separately - DO NOT combine them
                 logger.info(f"💰 MASTER ACCOUNT BALANCE: ${master_balance:,.2f}")
                 if user_total_balance > 0:
-                    logger.info(f"💰 USER ACCOUNTS BALANCE: ${user_total_balance:,.2f}")
-                logger.info(f"💰 TOTAL BALANCE (ALL ACCOUNTS): ${total_balance:,.2f}")
+                    logger.info(f"💰 USER ACCOUNTS BALANCE (INDEPENDENT): ${user_total_balance:,.2f}")
                 
-                # Update advanced manager with actual balance
-                if self.advanced_manager and total_balance > 0:
+                # CRITICAL: Update advanced manager with ONLY master balance
+                # Users are completely independent and don't affect master's capital allocation
+                if self.advanced_manager and master_balance > 0:
                     try:
-                        self.advanced_manager.capital_allocator.update_total_capital(total_balance)
-                        logger.info(f"   Updated capital allocation with ${total_balance:,.2f}")
+                        self.advanced_manager.capital_allocator.update_total_capital(master_balance)
+                        logger.info(f"   ✅ Master capital allocation: ${master_balance:,.2f}")
                     except Exception as e:
-                        logger.warning(f"   Failed to update capital allocation: {e}")
+                        logger.warning(f"   Failed to update master capital allocation: {e}")
                 
                 # Get the primary broker from broker_manager (auto-set when brokers were added)
                 # This is used for master account trading
@@ -415,20 +380,9 @@ class TradingStrategy:
                     logger.info(f"📌 Primary master broker: {self.broker.broker_type.value}")
                 else:
                     logger.warning("⚠️  No primary master broker available")
-                
-                # Store user brokers for user-specific trading
-                self.user1_broker = self.multi_account_manager.get_user_broker(user1_id, user1_broker_type)
-                if self.user1_broker:
-                    logger.info(f"👤 User #1 broker: {user1_broker_type.value.title()} ({user1_id})")
-                
-                self.user2_broker = self.multi_account_manager.get_user_broker(user2_id, user2_broker_type)
-                if self.user2_broker:
-                    logger.info(f"👤 User #2 broker: {user2_broker_type.value.title()} ({user2_id})")
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
                 self.broker = None
-                self.user1_broker = None
-                self.user2_broker = None
             
             # Log clear trading status summary
             logger.info("=" * 70)
@@ -441,17 +395,36 @@ class TradingStrategy:
             else:
                 logger.info("❌ MASTER ACCOUNT: NOT TRADING (No broker connected)")
             
-            # User #1 status - always show explicit status
-            if self.user1_broker:
-                logger.info(f"✅ USER #1 ({user1_name}): TRADING (Broker: {self.user1_broker.broker_type.value.title()})")
-            else:
-                logger.info(f"❌ USER #1 ({user1_name}): NOT TRADING (Connection failed or not configured)")
-            
-            # User #2 status - always show explicit status
-            if self.user2_broker:
-                logger.info(f"✅ USER #2 ({user2_name}): TRADING (Broker: {self.user2_broker.broker_type.value.title()})")
-            else:
-                logger.info(f"❌ USER #2 ({user2_name}): NOT TRADING (Connection failed or not configured)")
+            # User account status - dynamically load from config
+            try:
+                from config.user_loader import get_user_config_loader
+                user_loader = get_user_config_loader()
+                enabled_users = user_loader.get_all_enabled_users()
+                
+                if enabled_users:
+                    for user in enabled_users:
+                        # Check if this user is actually connected
+                        user_broker = self.multi_account_manager.get_user_broker(
+                            user.user_id, 
+                            BrokerType[user.broker_type.upper()]
+                        )
+                        
+                        if user_broker and user_broker.connected:
+                            logger.info(f"✅ USER: {user.name}: TRADING (Broker: {user.broker_type.title()})")
+                        else:
+                            logger.info(f"❌ USER: {user.name}: NOT TRADING (Connection failed or not configured)")
+                else:
+                    logger.info("⚪ No user accounts configured")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not load user status from config: {e}")
+                # Fallback: show status based on connected user brokers
+                if self.multi_account_manager.user_brokers:
+                    for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
+                        for broker_type, broker in user_broker_dict.items():
+                            if broker.connected:
+                                logger.info(f"✅ USER: {user_id}: TRADING (Broker: {broker_type.value.title()})")
+                            else:
+                                logger.info(f"❌ USER: {user_id}: NOT TRADING (Connection failed)")
             
             logger.info("=" * 70)
             
@@ -474,12 +447,14 @@ class TradingStrategy:
                 self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
                 
                 # Initialize broker failsafes (hard limits and circuit breakers)
+                # CRITICAL: Use ONLY master balance, not user balances
                 try:
                     from broker_failsafes import create_failsafe_for_broker
                     broker_name = self.broker.broker_type.value if hasattr(self.broker, 'broker_type') else 'coinbase'
-                    account_balance = total_balance if 'total_balance' in locals() else 100.0
+                    # Use master_balance only - users are completely independent
+                    account_balance = master_balance if master_balance > 0 else 100.0
                     self.failsafes = create_failsafe_for_broker(broker_name, account_balance)
-                    logger.info(f"🛡️  Broker failsafes initialized for {broker_name}")
+                    logger.info(f"🛡️  Broker failsafes initialized for {broker_name} (Master balance: ${account_balance:,.2f})")
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to initialize broker failsafes: {e}")
                     self.failsafes = None

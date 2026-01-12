@@ -278,6 +278,104 @@ class MultiAccountBrokerManager:
         lines.append("\n" + "=" * 70)
         
         return "\n".join(lines)
+    
+    def connect_users_from_config(self) -> Dict[str, List[str]]:
+        """
+        Connect all users from configuration files.
+        
+        Loads user configurations from config/users/*.json files and connects
+        each enabled user to their specified brokerage.
+        
+        Returns:
+            dict: Summary of connected users by brokerage
+                  Format: {brokerage: [user_ids]}
+        """
+        # Import user loader
+        try:
+            from config.user_loader import get_user_config_loader
+        except ImportError:
+            try:
+                import sys
+                import os
+                sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                from config.user_loader import get_user_config_loader
+            except ImportError:
+                logger.error("❌ Failed to import user_loader - cannot load user configurations")
+                return {}
+        
+        # Load user configurations
+        user_loader = get_user_config_loader()
+        enabled_users = user_loader.get_all_enabled_users()
+        
+        if not enabled_users:
+            logger.info("⚪ No enabled users found in configuration files")
+            return {}
+        
+        logger.info("=" * 70)
+        logger.info("👤 CONNECTING USERS FROM CONFIG FILES")
+        logger.info("=" * 70)
+        
+        connected_users = {}
+        
+        for user in enabled_users:
+            # Convert broker_type string to BrokerType enum
+            try:
+                if user.broker_type.upper() == 'KRAKEN':
+                    broker_type = BrokerType.KRAKEN
+                elif user.broker_type.upper() == 'ALPACA':
+                    broker_type = BrokerType.ALPACA
+                elif user.broker_type.upper() == 'COINBASE':
+                    broker_type = BrokerType.COINBASE
+                else:
+                    logger.warning(f"⚠️  Unsupported broker type '{user.broker_type}' for {user.name}")
+                    continue
+            except Exception as e:
+                logger.warning(f"⚠️  Error mapping broker type for {user.name}: {e}")
+                continue
+            
+            logger.info(f"📊 Connecting {user.name} ({user.user_id}) to {broker_type.value.title()}...")
+            
+            try:
+                broker = self.add_user_broker(user.user_id, broker_type)
+                
+                if broker:
+                    # Track connected user
+                    if broker_type.value not in connected_users:
+                        connected_users[broker_type.value] = []
+                    connected_users[broker_type.value].append(user.user_id)
+                    
+                    logger.info(f"   ✅ {user.name} connected to {broker_type.value.title()}")
+                    
+                    # Try to get and log balance
+                    try:
+                        balance = broker.get_account_balance()
+                        logger.info(f"   💰 {user.name} balance: ${balance:,.2f}")
+                    except Exception as bal_err:
+                        logger.warning(f"   ⚠️  Could not get balance for {user.name}: {bal_err}")
+                else:
+                    logger.warning(f"   ⚠️  Failed to connect {user.name} to {broker_type.value.title()}")
+            
+            except Exception as e:
+                logger.warning(f"   ⚠️  Error connecting {user.name}: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+            
+            # Add delay between connections to prevent API issues
+            import time
+            time.sleep(3.0)
+        
+        # Log summary
+        logger.info("=" * 70)
+        if connected_users:
+            total_connected = sum(len(users) for users in connected_users.values())
+            logger.info(f"✅ Connected {total_connected} user(s) across {len(connected_users)} brokerage(s)")
+            for brokerage, user_ids in connected_users.items():
+                logger.info(f"   • {brokerage.upper()}: {len(user_ids)} user(s)")
+        else:
+            logger.warning("⚠️  No users connected")
+        logger.info("=" * 70)
+        
+        return connected_users
 
 
 # Global instance

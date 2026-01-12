@@ -5,16 +5,34 @@ NIJA Independent Broker Trader
 This module implements FULLY INDEPENDENT trading for each connected brokerage.
 Each broker operates in COMPLETE ISOLATION so that one broker NEVER affects another.
 
+CRITICAL ARCHITECTURE PRINCIPLES (Updated Jan 12, 2026):
+---------------------------------------------------------
+1. MASTER ACCOUNT IS COMPLETELY INDEPENDENT OF USER ACCOUNTS
+   - Master (NIJA system) controls itself
+   - Users don't affect Master's decisions
+   - Master balance != User balances
+
+2. NO BROKER CONTROLS OR AFFECTS OTHER BROKERS
+   - Each broker makes its own trading decisions
+   - Each broker has its own balance checks
+   - Each broker manages its own positions
+
+3. USER ACCOUNTS ARE COMPLETELY INDEPENDENT
+   - Each user trades independently on their own brokerage
+   - User #1 doesn't affect User #2
+   - Users don't affect Master account
+
+4. FAILURES ARE ISOLATED
+   - If Master fails, users keep trading
+   - If User #1 fails, Master and other users keep trading
+   - If one broker has errors, others continue normally
+
 Key Features:
 - Each broker runs in its own thread with error isolation
 - Independent health monitoring per broker  
 - Automatic detection of funded brokers
 - Graceful degradation on broker failures
 - Separate position tracking per broker
-
-CRITICAL ARCHITECTURE PRINCIPLE (Jan 10, 2026):
------------------------------------------------
-NO BROKER CONTROLS OR AFFECTS OTHER BROKERS.
 
 Previously, Coinbase was automatically set as "primary" which caused it to
 control trading decisions for ALL brokers. This has been fixed.
@@ -31,6 +49,7 @@ Example:
 - If Kraken loses connection, it doesn't affect Coinbase/OKX/Binance
 - Each broker can have different balances and position limits
 - One broker's rate limits don't cascade to others
+- Master account trades independently from all user accounts
 """
 
 import os

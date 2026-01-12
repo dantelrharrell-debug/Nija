@@ -205,8 +205,24 @@ def get_config_manager() -> ConfigManager:
     return _config_manager
 
 
+# Import user loader
+try:
+    from config.user_loader import UserConfig as UserConfigData, UserConfigLoader, get_user_config_loader
+except ImportError:
+    try:
+        from .user_loader import UserConfig as UserConfigData, UserConfigLoader, get_user_config_loader
+    except ImportError:
+        # Fallback if user_loader not available
+        UserConfigData = None
+        UserConfigLoader = None
+        get_user_config_loader = None
+
+
 __all__ = [
     'UserConfig',
     'ConfigManager',
     'get_config_manager',
+    'UserConfigData',
+    'UserConfigLoader',
+    'get_user_config_loader',
 ]
