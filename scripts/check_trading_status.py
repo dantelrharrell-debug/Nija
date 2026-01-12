@@ -88,28 +88,62 @@ def check_master_credentials() -> dict:
     return credentials
 
 
+def load_user_configs() -> dict:
+    """Load user configurations from config files."""
+    users = {}
+    
+    # Try to load from config files
+    user_config_dir = Path("config/users")
+    if user_config_dir.exists():
+        for config_file in user_config_dir.glob("*.json"):
+            if config_file.name == "README.md":
+                continue
+            try:
+                with open(config_file, 'r') as f:
+                    user_list = json.load(f)
+                    if isinstance(user_list, list):
+                        for user in user_list:
+                            if user.get('enabled'):
+                                user_id = user.get('user_id')
+                                broker = user.get('broker_type')
+                                if user_id and broker:
+                                    if user_id not in users:
+                                        users[user_id] = {}
+                                    users[user_id][broker] = False  # Will check creds below
+            except Exception as e:
+                logger.warning(f"Error loading user config {config_file}: {e}")
+    
+    # Fallback to hardcoded users if no config files
+    if not users:
+        users = {
+            'daivon_frazier': {'kraken': False, 'alpaca': False},
+            'tania_gilbert': {'kraken': False, 'alpaca': False}
+        }
+    
+    return users
+
+
 def check_user_credentials() -> dict:
     """Check which users have credentials configured."""
-    users = {
-        'daivon_frazier': {'kraken': False, 'alpaca': False},
-        'tania_gilbert': {'kraken': False, 'alpaca': False}
-    }
+    users = load_user_configs()
     
-    # Daivon Frazier - Kraken
-    if os.getenv('KRAKEN_USER_DAIVON_API_KEY') and os.getenv('KRAKEN_USER_DAIVON_API_SECRET'):
-        users['daivon_frazier']['kraken'] = True
-    
-    # Tania Gilbert - Kraken
-    if os.getenv('KRAKEN_USER_TANIA_API_KEY') and os.getenv('KRAKEN_USER_TANIA_API_SECRET'):
-        users['tania_gilbert']['kraken'] = True
-    
-    # Daivon Frazier - Alpaca
-    if os.getenv('ALPACA_USER_DAIVON_API_KEY') and os.getenv('ALPACA_USER_DAIVON_API_SECRET'):
-        users['daivon_frazier']['alpaca'] = True
-    
-    # Tania Gilbert - Alpaca
-    if os.getenv('ALPACA_USER_TANIA_API_KEY') and os.getenv('ALPACA_USER_TANIA_API_SECRET'):
-        users['tania_gilbert']['alpaca'] = True
+    # Check credentials for each user
+    for user_id in list(users.keys()):
+        user_firstname = user_id.split('_')[0].upper()
+        
+        # Check Kraken credentials
+        if 'kraken' in users[user_id]:
+            kraken_key = f'KRAKEN_USER_{user_firstname}_API_KEY'
+            kraken_secret = f'KRAKEN_USER_{user_firstname}_API_SECRET'
+            if os.getenv(kraken_key) and os.getenv(kraken_secret):
+                users[user_id]['kraken'] = True
+        
+        # Check Alpaca credentials
+        if 'alpaca' in users[user_id]:
+            alpaca_key = f'ALPACA_USER_{user_firstname}_API_KEY'
+            alpaca_secret = f'ALPACA_USER_{user_firstname}_API_SECRET'
+            if os.getenv(alpaca_key) and os.getenv(alpaca_secret):
+                users[user_id]['alpaca'] = True
     
     return users
 
@@ -117,7 +151,11 @@ def check_user_credentials() -> dict:
 def get_coinbase_balance() -> float:
     """Get Coinbase balance for master account."""
     try:
-        from coinbase.rest import RESTClient
+        try:
+            from coinbase.rest import RESTClient
+        except ImportError:
+            logger.warning("coinbase package not installed, cannot retrieve balance")
+            return None
         
         api_key = os.getenv('COINBASE_API_KEY')
         api_secret = os.getenv('COINBASE_API_SECRET')
@@ -147,12 +185,17 @@ def get_coinbase_balance() -> float:
         return None
 
 
+# Constants
+MAX_RECENT_TRADES = 20  # Maximum number of recent trades to display
+
+
 def load_trade_history() -> dict:
     """Load trade history from data files."""
     history = {
         'total_trades': 0,
         'profitable_trades': 0,
         'losing_trades': 0,
+        'breakeven_trades': 0,
         'total_profit': 0.0,
         'recent_trades': []
     }
@@ -171,8 +214,10 @@ def load_trade_history() -> dict:
                             history['total_profit'] += profit
                             if profit > 0:
                                 history['profitable_trades'] += 1
-                            else:
+                            elif profit < 0:
                                 history['losing_trades'] += 1
+                            else:
+                                history['breakeven_trades'] += 1
                         history['recent_trades'].append(trade)
         except Exception as e:
             logger.warning(f"Error loading trade_history.json: {e}")
@@ -190,7 +235,7 @@ def load_trade_history() -> dict:
             
             # If we have more trades in journal than in history, use journal
             if len(journal_trades) > len(history['recent_trades']):
-                history['recent_trades'] = journal_trades[-20:]  # Last 20 trades
+                history['recent_trades'] = journal_trades[-MAX_RECENT_TRADES:]
         except Exception as e:
             logger.warning(f"Error loading trade_journal.jsonl: {e}")
     
@@ -298,6 +343,8 @@ def main():
     print(f"   Total Trades: {trade_history['total_trades']}")
     print(f"   Profitable Trades: {trade_history['profitable_trades']}")
     print(f"   Losing Trades: {trade_history['losing_trades']}")
+    if trade_history['breakeven_trades'] > 0:
+        print(f"   Breakeven Trades: {trade_history['breakeven_trades']}")
     
     if trade_history['total_trades'] > 0:
         win_rate = (trade_history['profitable_trades'] / trade_history['total_trades']) * 100
