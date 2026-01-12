@@ -165,7 +165,7 @@ If deployed on Railway:
 After setting credentials, run the verification script:
 
 ```bash
-python3 /tmp/check_kraken_connection.py
+python3 check_kraken_status.py
 ```
 
 Expected output when configured:
