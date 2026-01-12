@@ -14,7 +14,7 @@ Each account trades independently with its own:
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
 # Import broker classes
@@ -54,7 +54,7 @@ class MultiAccountBrokerManager:
         
         # Track users with failed connections to avoid repeated attempts in same session
         # Structure: {(user_id, broker_type): error_reason}
-        self._failed_user_connections: Dict[tuple, str] = {}
+        self._failed_user_connections: Dict[Tuple[str, BrokerType], str] = {}
         
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
@@ -376,8 +376,12 @@ class MultiAccountBrokerManager:
             except Exception as e:
                 logger.warning(f"   ⚠️  Error connecting {user.name}: {e}")
                 # Track the failed connection to avoid repeated attempts
-                # Truncate error message to prevent excessive memory usage
-                error_msg = str(e)[:self.MAX_ERROR_MESSAGE_LENGTH]
+                # Truncate error message to prevent excessive memory usage, add ellipsis if truncated
+                error_str = str(e)
+                if len(error_str) > self.MAX_ERROR_MESSAGE_LENGTH:
+                    error_msg = error_str[:self.MAX_ERROR_MESSAGE_LENGTH - 3] + '...'
+                else:
+                    error_msg = error_str
                 self._failed_user_connections[connection_key] = error_msg
                 import traceback
                 logger.debug(traceback.format_exc())
