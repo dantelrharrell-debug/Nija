@@ -380,7 +380,7 @@ class TradingStrategy:
                         logger.warning("✓ More resilient trading (if one exchange has issues)")
                         logger.warning("✓ Access to different cryptocurrency pairs")
                         logger.warning("")
-                        logger.warning("📖 See MULTI_EXCHANGE_STATUS_2026_01_12.md for detailed instructions")
+                        logger.warning("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for detailed instructions")
                         logger.warning("=" * 70)
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
@@ -1352,7 +1352,7 @@ class TradingStrategy:
                                     logger.error(f"   Exchange: {broker_name} | API health: {self.api_health_score}%")
                                     logger.error(f"   💤 Waiting 30s for API to fully recover before next cycle...")
                                     logger.error(f"   💡 TIP: Enable additional exchanges (Kraken, OKX, Binance) to distribute load")
-                                    logger.error(f"   📖 See MULTI_EXCHANGE_STATUS_2026_01_12.md for setup instructions")
+                                    logger.error(f"   📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
                                     self.api_health_score = max(0, self.api_health_score - 20)  # Major penalty
                                     time.sleep(30.0)  # CRITICAL FIX (Jan 10): Increased from 20s to 30s for better recovery
                                     break  # Exit the market scan loop entirely
@@ -1486,7 +1486,7 @@ class TradingStrategy:
                                     logger.error(f"   Exchange: {broker_name} | API health: {self.api_health_score}%")
                                     logger.error(f"   💤 Waiting 10s for API to fully recover...")
                                     logger.error(f"   💡 TIP: Enable additional exchanges (Kraken, OKX, Binance) to distribute load")
-                                    logger.error(f"   📖 See MULTI_EXCHANGE_STATUS_2026_01_12.md for setup instructions")
+                                    logger.error(f"   📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
                                     time.sleep(10.0)
                                     break  # Exit market scan loop
                                 
