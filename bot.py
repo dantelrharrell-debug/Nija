@@ -171,6 +171,106 @@ def main():
     else:
         logger.info("🔧 Portfolio override in use: <none>")
 
+    # Pre-flight check: Verify at least one exchange is configured
+    logger.info("=" * 70)
+    logger.info("🔍 PRE-FLIGHT: Checking Exchange Credentials")
+    logger.info("=" * 70)
+    
+    exchanges_configured = 0
+    exchange_status = []
+    
+    # Check Coinbase
+    if os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET"):
+        exchanges_configured += 1
+        exchange_status.append("✅ Coinbase")
+        logger.info("✅ Coinbase credentials detected")
+    else:
+        exchange_status.append("❌ Coinbase")
+        logger.warning("⚠️  Coinbase credentials not configured")
+    
+    # Check Kraken Master
+    if os.getenv("KRAKEN_MASTER_API_KEY") and os.getenv("KRAKEN_MASTER_API_SECRET"):
+        exchanges_configured += 1
+        exchange_status.append("✅ Kraken (Master)")
+        logger.info("✅ Kraken Master credentials detected")
+    else:
+        exchange_status.append("❌ Kraken (Master)")
+        logger.warning("⚠️  Kraken Master credentials not configured")
+    
+    # Check Kraken User accounts
+    if os.getenv("KRAKEN_USER_DAIVON_API_KEY") and os.getenv("KRAKEN_USER_DAIVON_API_SECRET"):
+        logger.info("✅ Kraken User #1 (Daivon) credentials detected")
+    else:
+        logger.warning("⚠️  Kraken User #1 (Daivon) credentials not configured")
+    
+    if os.getenv("KRAKEN_USER_TANIA_API_KEY") and os.getenv("KRAKEN_USER_TANIA_API_SECRET"):
+        logger.info("✅ Kraken User #2 (Tania) credentials detected")
+    else:
+        logger.warning("⚠️  Kraken User #2 (Tania) credentials not configured")
+    
+    # Check OKX
+    if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
+        exchanges_configured += 1
+        exchange_status.append("✅ OKX")
+        logger.info("✅ OKX credentials detected")
+    else:
+        exchange_status.append("❌ OKX")
+        logger.warning("⚠️  OKX credentials not configured")
+    
+    # Check Binance
+    if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
+        exchanges_configured += 1
+        exchange_status.append("✅ Binance")
+        logger.info("✅ Binance credentials detected")
+    else:
+        exchange_status.append("❌ Binance")
+        logger.warning("⚠️  Binance credentials not configured")
+    
+    # Check Alpaca
+    if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET"):
+        exchanges_configured += 1
+        exchange_status.append("✅ Alpaca")
+        logger.info("✅ Alpaca credentials detected")
+    else:
+        exchange_status.append("❌ Alpaca")
+        logger.warning("⚠️  Alpaca credentials not configured")
+    
+    logger.info("=" * 70)
+    logger.info(f"📊 EXCHANGE CREDENTIAL SUMMARY: {exchanges_configured} configured")
+    logger.info("   " + " | ".join(exchange_status))
+    logger.info("=" * 70)
+    
+    if exchanges_configured == 0:
+        logger.error("=" * 70)
+        logger.error("❌ CRITICAL: NO EXCHANGE CREDENTIALS CONFIGURED")
+        logger.error("=" * 70)
+        logger.error("The bot cannot trade without exchange API credentials.")
+        logger.error("")
+        logger.error("If you've added credentials to Railway/Render but they're not")
+        logger.error("showing up here, you need to RESTART the deployment:")
+        logger.error("")
+        logger.error("Railway: Dashboard → Service → '...' menu → 'Restart Deployment'")
+        logger.error("Render:  Dashboard → Service → 'Manual Deploy' → 'Deploy latest commit'")
+        logger.error("")
+        logger.error("For detailed help, see:")
+        logger.error("  • SOLUTION_ENABLE_EXCHANGES.md")
+        logger.error("  • RESTART_DEPLOYMENT.md")
+        logger.error("  • Run: python3 diagnose_env_vars.py")
+        logger.error("=" * 70)
+        logger.error("Exiting - No trading possible without credentials")
+        sys.exit(1)
+    elif exchanges_configured < 2:
+        logger.warning("=" * 70)
+        logger.warning("⚠️  SINGLE EXCHANGE TRADING")
+        logger.warning("=" * 70)
+        logger.warning(f"Only {exchanges_configured} exchange configured. Consider enabling more for:")
+        logger.warning("  • Better diversification")
+        logger.warning("  • Reduced API rate limiting")
+        logger.warning("  • More resilient trading")
+        logger.warning("")
+        logger.warning("See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
+        logger.warning("=" * 70)
+
     try:
         logger.info("Initializing trading strategy...")
         # Start health server if PORT is provided by platform (e.g., Railway)
