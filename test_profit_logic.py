@@ -161,7 +161,7 @@ if __name__ == "__main__":
     print("\n")
     if config_ok:
         print("✅ ALL TESTS PASSED")
-        exit(0)
+        sys.exit(0)
     else:
         print("⚠️  TESTS COMPLETED WITH WARNINGS")
-        exit(0)  # Still exit 0 so we don't block deployment
+        sys.exit(0)  # Exit 0 even with warnings since warnings are informational, not errors
