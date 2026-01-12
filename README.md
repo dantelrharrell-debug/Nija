@@ -72,7 +72,8 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 
 **Broker Status** 🌐:
 - **Currently Active**: Coinbase Advanced Trade ✅
-- **Kraken Trading**: ✅ ENABLED - [Setup Complete](KRAKEN_TRADING_ENABLED.md)
+- **Kraken Trading**: ⚠️ CODE READY - Credentials Not Configured - [Check Status](KRAKEN_CONNECTION_STATUS.md)
+  - Run `python check_kraken_status.py` to verify Kraken connection
 - **Check all brokers**: `python check_broker_status.py`
 - **Multi-Broker Guide**: [MULTI_BROKER_STATUS.md](MULTI_BROKER_STATUS.md)
 
