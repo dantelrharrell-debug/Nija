@@ -12,18 +12,21 @@ NIJA now supports multiple users with individual API keys, permissions, and inde
 - **Tier**: Pro
 - **Status**: Active ✅
 - **Setup Date**: January 8, 2026
-- **Broker**: Coinbase
+- **Broker**: Kraken (configured, credentials needed)
+- **Previous Broker**: Coinbase
 
 **Permissions**:
 - Max position size: $300
 - Max daily loss: $150
 - Max concurrent positions: 7
-- Allowed pairs: BTC-USD, ETH-USD, SOL-USD, AVAX-USD, MATIC-USD, DOT-USD, LINK-USD, ADA-USD
+- Allowed pairs: Cryptocurrency pairs on Kraken
 
 **Configuration**:
 - Risk level: Moderate
 - Trailing stops: Enabled
 - Auto-compound: Enabled
+
+**Setup**: Kraken API credentials required - see [KRAKEN_SETUP_GUIDE.md](KRAKEN_SETUP_GUIDE.md)
 
 ### User 2: Tania Gilbert
 - **User ID**: `tania_gilbert`
@@ -31,19 +34,21 @@ NIJA now supports multiple users with individual API keys, permissions, and inde
 - **Tier**: Pro
 - **Status**: Active ✅
 - **Setup Date**: January 11, 2026
-- **Broker**: Alpaca (https://api.alpaca.markets)
+- **Broker**: Kraken (configured, credentials needed)
+- **Previous Broker**: Alpaca
 
 **Permissions**:
 - Max position size: $200
 - Max daily loss: $100
 - Max concurrent positions: 5
-- Allowed pairs: AAPL, MSFT, GOOGL, AMZN, TSLA, NVDA, META, BTC/USD, ETH/USD, SOL/USD
+- Allowed pairs: Cryptocurrency pairs on Kraken
 
 **Configuration**:
 - Risk level: Moderate
 - Trailing stops: Enabled
 - Auto-compound: Enabled
-- Trading mode: Paper (for testing)
+
+**Setup**: Kraken API credentials required - see [KRAKEN_SETUP_GUIDE.md](KRAKEN_SETUP_GUIDE.md)
 
 ## User Management Commands
 
