@@ -3,14 +3,27 @@
 Test script to verify profit-taking and stop-loss logic
 """
 
+import sys
+import os
+
+# Add bot directory to path (do this once at the top)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+
+# Import constants from trading_strategy
+from trading_strategy import (
+    PROFIT_TARGETS, 
+    STOP_LOSS_THRESHOLD, 
+    RSI_OVERBOUGHT_THRESHOLD, 
+    RSI_OVERSOLD_THRESHOLD
+)
+
+# Fee percentage - should match Coinbase fees used in trading_strategy
+# This is ~1.4% round-trip (0.6% entry + 0.6% exit + 0.2% spread)
+FEE_PCT = 1.4
+
+
 def test_profit_targets():
     """Test that profit targets are correctly defined"""
-    # Import the constants from trading_strategy
-    import sys
-    import os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
-    
-    from trading_strategy import PROFIT_TARGETS, STOP_LOSS_THRESHOLD, RSI_OVERBOUGHT_THRESHOLD, RSI_OVERSOLD_THRESHOLD
     
     print("=" * 80)
     print("PROFIT-TAKING & STOP-LOSS CONFIGURATION TEST")
@@ -19,8 +32,6 @@ def test_profit_targets():
     # Test profit targets
     print("\n📈 PROFIT TARGETS:")
     print(f"   Number of targets: {len(PROFIT_TARGETS)}")
-    
-    FEE_PCT = 1.4  # Coinbase round-trip fees
     
     for i, (target_pct, description) in enumerate(PROFIT_TARGETS, 1):
         net_profit = target_pct - FEE_PCT
@@ -99,14 +110,6 @@ def test_exit_scenarios():
     print("\n\n" + "=" * 80)
     print("EXIT SCENARIO TESTING")
     print("=" * 80)
-    
-    # Import
-    import sys
-    import os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
-    from trading_strategy import PROFIT_TARGETS, STOP_LOSS_THRESHOLD
-    
-    FEE_PCT = 1.4
     
     scenarios = [
         ("Position at +3.5% profit", 3.5),
