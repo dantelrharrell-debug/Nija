@@ -14,7 +14,7 @@ Each account trades independently with its own:
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
 # Import broker classes
@@ -40,6 +40,10 @@ class MultiAccountBrokerManager:
     Accounts are completely isolated from each other.
     """
     
+    # Maximum length for error messages stored in failed connection tracking
+    # Prevents excessive memory usage from very long error strings
+    MAX_ERROR_MESSAGE_LENGTH = 50
+    
     def __init__(self):
         """Initialize multi-account broker manager."""
         # Master account brokers
@@ -47,6 +51,10 @@ class MultiAccountBrokerManager:
         
         # User account brokers - structure: {user_id: {BrokerType: BaseBroker}}
         self.user_brokers: Dict[str, Dict[BrokerType, BaseBroker]] = {}
+        
+        # Track users with failed connections to avoid repeated attempts in same session
+        # Structure: {(user_id, broker_type): error_reason}
+        self._failed_user_connections: Dict[Tuple[str, BrokerType], str] = {}
         
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
@@ -335,6 +343,14 @@ class MultiAccountBrokerManager:
             
             logger.info(f"📊 Connecting {user.name} ({user.user_id}) to {broker_type.value.title()}...")
             
+            # Check if this user-broker combination already failed in this session
+            connection_key = (user.user_id, broker_type)
+            if connection_key in self._failed_user_connections:
+                reason = self._failed_user_connections[connection_key]
+                logger.warning(f"   ⏭️  Skipping {user.name} - previous connection failed ({reason})")
+                logger.warning(f"   Fix the issue and restart the bot to retry connection")
+                continue
+            
             try:
                 broker = self.add_user_broker(user.user_id, broker_type)
                 
@@ -354,9 +370,19 @@ class MultiAccountBrokerManager:
                         logger.warning(f"   ⚠️  Could not get balance for {user.name}: {bal_err}")
                 else:
                     logger.warning(f"   ⚠️  Failed to connect {user.name} to {broker_type.value.title()}")
+                    # Track the failed connection to avoid repeated attempts
+                    self._failed_user_connections[connection_key] = "connection_failed"
             
             except Exception as e:
                 logger.warning(f"   ⚠️  Error connecting {user.name}: {e}")
+                # Track the failed connection to avoid repeated attempts
+                # Truncate error message to prevent excessive memory usage, add ellipsis if truncated
+                error_str = str(e)
+                if len(error_str) > self.MAX_ERROR_MESSAGE_LENGTH:
+                    error_msg = error_str[:self.MAX_ERROR_MESSAGE_LENGTH - 3] + '...'
+                else:
+                    error_msg = error_str
+                self._failed_user_connections[connection_key] = error_msg
                 import traceback
                 logger.debug(traceback.format_exc())
             
