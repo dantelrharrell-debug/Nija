@@ -343,10 +343,11 @@ class TradingStrategy:
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
                 
-                # Calculate total balance across all accounts
+                # CRITICAL: Master and users are COMPLETELY INDEPENDENT
+                # Master balance is ONLY for master account - users don't affect it
                 master_balance = self.broker_manager.get_total_balance()
                 
-                # Get user balances dynamically from multi_account_manager
+                # Get user balances dynamically from multi_account_manager (for reporting only)
                 user_total_balance = 0.0
                 if self.multi_account_manager.user_brokers:
                     for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
@@ -358,19 +359,19 @@ class TradingStrategy:
                             except Exception as e:
                                 logger.debug(f"Could not get balance for {user_id}: {e}")
                 
-                total_balance = master_balance + user_total_balance
+                # Report balances separately - DO NOT combine them
                 logger.info(f"💰 MASTER ACCOUNT BALANCE: ${master_balance:,.2f}")
                 if user_total_balance > 0:
-                    logger.info(f"💰 USER ACCOUNTS BALANCE: ${user_total_balance:,.2f}")
-                logger.info(f"💰 TOTAL BALANCE (ALL ACCOUNTS): ${total_balance:,.2f}")
+                    logger.info(f"💰 USER ACCOUNTS BALANCE (INDEPENDENT): ${user_total_balance:,.2f}")
                 
-                # Update advanced manager with actual balance
-                if self.advanced_manager and total_balance > 0:
+                # CRITICAL: Update advanced manager with ONLY master balance
+                # Users are completely independent and don't affect master's capital allocation
+                if self.advanced_manager and master_balance > 0:
                     try:
-                        self.advanced_manager.capital_allocator.update_total_capital(total_balance)
-                        logger.info(f"   Updated capital allocation with ${total_balance:,.2f}")
+                        self.advanced_manager.capital_allocator.update_total_capital(master_balance)
+                        logger.info(f"   ✅ Master capital allocation: ${master_balance:,.2f}")
                     except Exception as e:
-                        logger.warning(f"   Failed to update capital allocation: {e}")
+                        logger.warning(f"   Failed to update master capital allocation: {e}")
                 
                 # Get the primary broker from broker_manager (auto-set when brokers were added)
                 # This is used for master account trading
@@ -446,12 +447,14 @@ class TradingStrategy:
                 self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
                 
                 # Initialize broker failsafes (hard limits and circuit breakers)
+                # CRITICAL: Use ONLY master balance, not user balances
                 try:
                     from broker_failsafes import create_failsafe_for_broker
                     broker_name = self.broker.broker_type.value if hasattr(self.broker, 'broker_type') else 'coinbase'
-                    account_balance = total_balance if 'total_balance' in locals() else 100.0
+                    # Use master_balance only - users are completely independent
+                    account_balance = master_balance if master_balance > 0 else 100.0
                     self.failsafes = create_failsafe_for_broker(broker_name, account_balance)
-                    logger.info(f"🛡️  Broker failsafes initialized for {broker_name}")
+                    logger.info(f"🛡️  Broker failsafes initialized for {broker_name} (Master balance: ${account_balance:,.2f})")
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to initialize broker failsafes: {e}")
                     self.failsafes = None
