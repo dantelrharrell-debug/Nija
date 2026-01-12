@@ -198,7 +198,10 @@ Status: ✅ CONFIGURED - READY TO TRADE
 ## 🔧 Quick Diagnosis Commands
 
 ```bash
-# Check if Kraken credentials are set
+# RECOMMENDED: Enhanced diagnostic with actionable recommendations
+python3 diagnose_kraken_connection.py
+
+# Check if Kraken credentials are set (quick summary)
 python3 check_kraken_status.py
 
 # Verify all environment variables

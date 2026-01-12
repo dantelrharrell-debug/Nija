@@ -258,7 +258,7 @@ def main():
         logger.info("      • KRAKEN_MASTER_API_SECRET=<your-api-secret>")
         logger.info("   3. Restart the deployment to apply changes")
         logger.info("   📖 See KRAKEN_NOT_CONNECTING_DIAGNOSIS.md for step-by-step guide")
-        logger.info("   📖 Run: python3 check_kraken_status.py to verify setup")
+        logger.info("   🔧 Run: python3 diagnose_kraken_connection.py for detailed help")
         logger.info("=" * 70)
     
     if exchanges_configured == 0:
