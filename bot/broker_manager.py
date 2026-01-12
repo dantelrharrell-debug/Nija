@@ -3426,14 +3426,16 @@ class KrakenBroker(BaseBroker):
                 try:
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
-                        # For "Temporary lockout" errors, use much longer delays: 120s, 240s, 360s (2min, 4min, 6min)
+                        # For "Temporary lockout" errors, use much longer delays: 120s, 240s, 360s, 480s (2min, 4min, 6min, 8min)
                         # For other errors, use shorter delays: 5s, 10s, 20s, 40s
                         if last_error_was_lockout:
-                            delay = lockout_base_delay * attempt  # Linear scaling for lockout: 120s, 240s, 360s, 480s
+                            # Linear scaling for lockout: (attempt-1) * 120s = 120s, 240s, 360s, 480s for attempts 2,3,4,5
+                            delay = lockout_base_delay * (attempt - 1)
                             logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
                             logger.info(f"   ⏰ Long delay due to Kraken temporary lockout (API key needs time to unlock)")
                         else:
-                            delay = base_delay * (2 ** (attempt - 2))  # Exponential backoff for normal errors
+                            # Exponential backoff for normal errors: 5s, 10s, 20s, 40s for attempts 2,3,4,5
+                            delay = base_delay * (2 ** (attempt - 2))
                             logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
                         
