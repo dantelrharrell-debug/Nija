@@ -51,19 +51,76 @@ if [ -f ./.env ]; then
     set +a
 fi
 
-# Debug: Show credential status
+# Debug: Show credential status for ALL exchanges
 echo ""
-echo "🔍 CREDENTIAL STATUS:"
-if [ -n "${COINBASE_API_KEY}" ]; then
-    echo "   ✅ COINBASE_API_KEY is set (${#COINBASE_API_KEY} chars)"
+echo "🔍 EXCHANGE CREDENTIAL STATUS:"
+echo "   ────────────────────────────────────────────────────────"
+
+# Coinbase
+echo "   📊 COINBASE (Master):"
+if [ -n "${COINBASE_API_KEY}" ] && [ -n "${COINBASE_API_SECRET}" ]; then
+    echo "      ✅ Configured (Key: ${#COINBASE_API_KEY} chars, Secret: ${#COINBASE_API_SECRET} chars)"
 else
-    echo "   ❌ COINBASE_API_KEY is missing or empty"
+    echo "      ❌ Not configured"
 fi
-if [ -n "${COINBASE_API_SECRET}" ]; then
-    echo "   ✅ COINBASE_API_SECRET is set (${#COINBASE_API_SECRET} chars)"
+
+# Kraken - Master
+echo "   📊 KRAKEN (Master):"
+if [ -n "${KRAKEN_MASTER_API_KEY}" ] && [ -n "${KRAKEN_MASTER_API_SECRET}" ]; then
+    echo "      ✅ Configured (Key: ${#KRAKEN_MASTER_API_KEY} chars, Secret: ${#KRAKEN_MASTER_API_SECRET} chars)"
 else
-    echo "   ❌ COINBASE_API_SECRET is missing or empty"
+    echo "      ❌ Not configured"
 fi
+
+# Kraken - User #1 (Daivon)
+echo "   👤 KRAKEN (User #1: Daivon):"
+if [ -n "${KRAKEN_USER_DAIVON_API_KEY}" ] && [ -n "${KRAKEN_USER_DAIVON_API_SECRET}" ]; then
+    echo "      ✅ Configured (Key: ${#KRAKEN_USER_DAIVON_API_KEY} chars, Secret: ${#KRAKEN_USER_DAIVON_API_SECRET} chars)"
+else
+    echo "      ❌ Not configured"
+fi
+
+# Kraken - User #2 (Tania)
+echo "   👤 KRAKEN (User #2: Tania):"
+if [ -n "${KRAKEN_USER_TANIA_API_KEY}" ] && [ -n "${KRAKEN_USER_TANIA_API_SECRET}" ]; then
+    echo "      ✅ Configured (Key: ${#KRAKEN_USER_TANIA_API_KEY} chars, Secret: ${#KRAKEN_USER_TANIA_API_SECRET} chars)"
+else
+    echo "      ❌ Not configured"
+fi
+
+# OKX
+echo "   📊 OKX (Master):"
+if [ -n "${OKX_API_KEY}" ] && [ -n "${OKX_API_SECRET}" ] && [ -n "${OKX_PASSPHRASE}" ]; then
+    echo "      ✅ Configured (Key: ${#OKX_API_KEY} chars, Secret: ${#OKX_API_SECRET} chars)"
+else
+    echo "      ❌ Not configured"
+fi
+
+# Binance
+echo "   📊 BINANCE (Master):"
+if [ -n "${BINANCE_API_KEY}" ] && [ -n "${BINANCE_API_SECRET}" ]; then
+    echo "      ✅ Configured (Key: ${#BINANCE_API_KEY} chars, Secret: ${#BINANCE_API_SECRET} chars)"
+else
+    echo "      ❌ Not configured"
+fi
+
+# Alpaca - Master
+echo "   📊 ALPACA (Master):"
+if [ -n "${ALPACA_API_KEY}" ] && [ -n "${ALPACA_API_SECRET}" ]; then
+    echo "      ✅ Configured (Key: ${#ALPACA_API_KEY} chars, Secret: ${#ALPACA_API_SECRET} chars, Paper: ${ALPACA_PAPER:-true})"
+else
+    echo "      ❌ Not configured"
+fi
+
+# Alpaca - User #2 (Tania)
+echo "   👤 ALPACA (User #2: Tania):"
+if [ -n "${ALPACA_USER_TANIA_API_KEY}" ] && [ -n "${ALPACA_USER_TANIA_API_SECRET}" ]; then
+    echo "      ✅ Configured (Key: ${#ALPACA_USER_TANIA_API_KEY} chars, Secret: ${#ALPACA_USER_TANIA_API_SECRET} chars, Paper: ${ALPACA_USER_TANIA_PAPER:-true})"
+else
+    echo "      ❌ Not configured"
+fi
+
+echo "   ────────────────────────────────────────────────────────"
 echo ""
 echo "🔧 Trading Guards:"
 echo "   MIN_CASH_TO_BUY=${MIN_CASH_TO_BUY:-5.0}"
