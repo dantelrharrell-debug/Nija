@@ -92,11 +92,11 @@ To complete the setup, you need to configure your API credentials:
 
 4. **Open .env in your editor and fill in the values:**
    ```
-   nano .env
-   # or
-   vim .env
-   # or
-   code .env  # VS Code
+   # Use your preferred text editor:
+   nano .env      # Simple terminal editor
+   vim .env       # Vim
+   code .env      # VS Code
+   # Or any other editor
    ```
 
 5. **Verify your configuration:**
