@@ -360,6 +360,28 @@ class TradingStrategy:
             if connected_brokers or user_brokers:
                 if connected_brokers:
                     logger.info(f"✅ MASTER ACCOUNT BROKERS: {', '.join(connected_brokers)}")
+                    
+                    # HELPFUL TIP: If only Coinbase is connected, suggest enabling Kraken
+                    if len(connected_brokers) == 1 and "Coinbase" in connected_brokers:
+                        logger.warning("=" * 70)
+                        logger.warning("⚠️  SINGLE EXCHANGE TRADING - CONSIDER ENABLING KRAKEN")
+                        logger.warning("=" * 70)
+                        logger.warning("You're trading on Coinbase only, which may cause rate limiting.")
+                        logger.warning("Enable Kraken to distribute load across multiple exchanges:")
+                        logger.warning("")
+                        logger.warning("1. Get API credentials from https://www.kraken.com/u/security/api")
+                        logger.warning("2. Set environment variables:")
+                        logger.warning("   KRAKEN_MASTER_API_KEY=<your-api-key>")
+                        logger.warning("   KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+                        logger.warning("3. Restart the bot")
+                        logger.warning("")
+                        logger.warning("Benefits:")
+                        logger.warning("✓ Reduced API rate limiting (load split across exchanges)")
+                        logger.warning("✓ More resilient trading (if one exchange has issues)")
+                        logger.warning("✓ Access to different cryptocurrency pairs")
+                        logger.warning("")
+                        logger.warning("📖 See MULTI_EXCHANGE_STATUS_2026_01_12.md for detailed instructions")
+                        logger.warning("=" * 70)
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
                 
@@ -1324,8 +1346,13 @@ class TradingStrategy:
                                 # GLOBAL CIRCUIT BREAKER: If too many total errors, stop scanning entirely
                                 if error_counter >= max_total_errors:
                                     filter_stats['rate_limited'] += 1
+                                    # Get broker name for logging
+                                    broker_name = active_broker.broker_type.value if active_broker and hasattr(active_broker, 'broker_type') else 'unknown'
                                     logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan to prevent API block")
+                                    logger.error(f"   Exchange: {broker_name} | API health: {self.api_health_score}%")
                                     logger.error(f"   💤 Waiting 30s for API to fully recover before next cycle...")
+                                    logger.error(f"   💡 TIP: Enable additional exchanges (Kraken, OKX, Binance) to distribute load")
+                                    logger.error(f"   📖 See MULTI_EXCHANGE_STATUS_2026_01_12.md for setup instructions")
                                     self.api_health_score = max(0, self.api_health_score - 20)  # Major penalty
                                     time.sleep(30.0)  # CRITICAL FIX (Jan 10): Increased from 20s to 30s for better recovery
                                     break  # Exit the market scan loop entirely
@@ -1453,8 +1480,13 @@ class TradingStrategy:
                                 
                                 # GLOBAL CIRCUIT BREAKER: Too many errors = stop scanning
                                 if error_counter >= max_total_errors:
+                                    # Get broker name for logging
+                                    broker_name = active_broker.broker_type.value if active_broker and hasattr(active_broker, 'broker_type') else 'unknown'
                                     logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan")
+                                    logger.error(f"   Exchange: {broker_name} | API health: {self.api_health_score}%")
                                     logger.error(f"   💤 Waiting 10s for API to fully recover...")
+                                    logger.error(f"   💡 TIP: Enable additional exchanges (Kraken, OKX, Binance) to distribute load")
+                                    logger.error(f"   📖 See MULTI_EXCHANGE_STATUS_2026_01_12.md for setup instructions")
                                     time.sleep(10.0)
                                     break  # Exit market scan loop
                                 
