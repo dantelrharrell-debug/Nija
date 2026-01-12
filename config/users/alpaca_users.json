@@ -1,0 +1,9 @@
+[
+  {
+    "user_id": "tania_gilbert",
+    "name": "Tania Gilbert",
+    "broker_type": "alpaca",
+    "enabled": false,
+    "description": "Tania's Alpaca (stocks) account - disabled by default"
+  }
+]
