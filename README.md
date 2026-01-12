@@ -74,12 +74,12 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 **Broker Status** 🌐:
 - **Currently Active**: Coinbase Advanced Trade ✅
 - **Kraken Trading**: ⚠️ CODE READY - Credentials Not Configured
-  - **❓ Is Kraken Connected?**: [ANSWER_KRAKEN_DEPLOYMENT.md](ANSWER_KRAKEN_DEPLOYMENT.md) - Quick answer
-  - **🚀 Deployment Setup**: [DEPLOYMENT_KRAKEN_STATUS.md](DEPLOYMENT_KRAKEN_STATUS.md) - Railway & Render configuration
+  - **❓ Is Kraken Connected?**: [KRAKEN_DEPLOYMENT_ANSWER.md](KRAKEN_DEPLOYMENT_ANSWER.md) - Quick answer
+  - **🚀 Deployment Setup**: [KRAKEN_RAILWAY_RENDER_SETUP.md](KRAKEN_RAILWAY_RENDER_SETUP.md) - Railway & Render configuration
   - **📋 Environment Variables**: [KRAKEN_ENV_VARS_REFERENCE.md](KRAKEN_ENV_VARS_REFERENCE.md) - Exact variable names
   - **📖 Quick Setup**: [KRAKEN_SETUP_GUIDE.md](KRAKEN_SETUP_GUIDE.md) - Step-by-step instructions
   - **🔍 Status Check**: Run `python check_kraken_status.py` to verify local connection
-  - **🔍 Deployment Check**: Run `python verify_deployment_kraken.py` to verify Railway/Render
+  - **🔍 Deployment Check**: Run `python kraken_deployment_verify.py` to verify Railway/Render
   - **📊 Detailed Status**: [KRAKEN_CONNECTION_STATUS.md](KRAKEN_CONNECTION_STATUS.md)
 - **Check all brokers**: `python check_broker_status.py`
 - **Multi-Broker Guide**: [MULTI_BROKER_STATUS.md](MULTI_BROKER_STATUS.md)

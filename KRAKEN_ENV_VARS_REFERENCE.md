@@ -155,7 +155,7 @@ Expected output:
 
 ### Check Deployment Status
 ```bash
-python3 verify_deployment_kraken.py
+python3 kraken_deployment_verify.py
 ```
 
 Expected output:
