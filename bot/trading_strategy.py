@@ -659,6 +659,18 @@ class TradingStrategy:
         
         return candles
     
+    def _get_broker_name(self, broker) -> str:
+        """
+        Get broker name for logging from broker instance.
+        
+        Args:
+            broker: Broker instance (may be None or lack broker_type)
+            
+        Returns:
+            str: Broker name (e.g., 'coinbase', 'kraken') or 'unknown'
+        """
+        return broker.broker_type.value if broker and hasattr(broker, 'broker_type') else 'unknown'
+    
     def _get_rotated_markets(self, all_markets: list) -> list:
         """
         Get next batch of markets to scan using rotation strategy.
@@ -1346,8 +1358,7 @@ class TradingStrategy:
                                 # GLOBAL CIRCUIT BREAKER: If too many total errors, stop scanning entirely
                                 if error_counter >= max_total_errors:
                                     filter_stats['rate_limited'] += 1
-                                    # Get broker name for logging
-                                    broker_name = active_broker.broker_type.value if active_broker and hasattr(active_broker, 'broker_type') else 'unknown'
+                                    broker_name = self._get_broker_name(active_broker)
                                     logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan to prevent API block")
                                     logger.error(f"   Exchange: {broker_name} | API health: {self.api_health_score}%")
                                     logger.error(f"   💤 Waiting 30s for API to fully recover before next cycle...")
@@ -1480,8 +1491,7 @@ class TradingStrategy:
                                 
                                 # GLOBAL CIRCUIT BREAKER: Too many errors = stop scanning
                                 if error_counter >= max_total_errors:
-                                    # Get broker name for logging
-                                    broker_name = active_broker.broker_type.value if active_broker and hasattr(active_broker, 'broker_type') else 'unknown'
+                                    broker_name = self._get_broker_name(active_broker)
                                     logger.error(f"   🚨 GLOBAL CIRCUIT BREAKER: {error_counter} total errors - stopping scan")
                                     logger.error(f"   Exchange: {broker_name} | API health: {self.api_health_score}%")
                                     logger.error(f"   💤 Waiting 10s for API to fully recover...")
