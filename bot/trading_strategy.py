@@ -50,35 +50,35 @@ MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each c
 
 # Exit strategy constants (no entry price required)
 MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
-RSI_OVERBOUGHT_THRESHOLD = 65  # Exit when RSI exceeds this (lock gains) - LOWERED from 70
-RSI_OVERSOLD_THRESHOLD = 35  # Exit when RSI below this (cut losses) - RAISED from 30
+RSI_OVERBOUGHT_THRESHOLD = 60  # Exit when RSI exceeds this (lock gains) - LOWERED from 65 for faster profit-taking
+RSI_OVERSOLD_THRESHOLD = 40  # Exit when RSI below this (cut losses) - RAISED from 35 for faster loss-cutting
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
 # Time-based exit thresholds (prevent indefinite holding)
 MAX_POSITION_HOLD_HOURS = 48  # Auto-exit positions held longer than this (2 days)
 STALE_POSITION_WARNING_HOURS = 24  # Warn about positions held this long (1 day)
 
-# Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE V7.2
-# Updated Dec 28, 2025 - PROFITABILITY FIX for small accounts
-# CRITICAL: With small positions (<$5), we need FASTER exits to lock gains
+# Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE V7.3
+# Updated Jan 12, 2026 - PROFITABILITY FIX: Aggressive profit-taking to lock gains
+# CRITICAL: With small positions, we need FASTER exits to lock gains
 # Coinbase fees are ~1.4%, so minimum 1.5% needed for net profit
 # Strategy: Exit FULL position at FIRST target hit, checking from HIGHEST to LOWEST
-# This prioritizes larger gains while providing safety nets for quick reversals
+# This prioritizes larger gains while providing emergency exit near breakeven
 PROFIT_TARGETS = [
-    (3.0, "Profit target +3.0% (Net ~1.6% after fees) - EXCELLENT"),  # Check first
-    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - GOOD"),       # Check second
-    (1.0, "Profit target +1.0% (Net -0.4% after fees) - QUICK EXIT to protect gains from reversal"),  # Safety net
-    (0.5, "Profit target +0.5% (Net -0.9% after fees) - ULTRA FAST EXIT to prevent loss"),            # Emergency exit
+    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - EXCELLENT"),     # Check first - best profit
+    (1.5, "Profit target +1.5% (Net ~0.1% after fees) - GOOD"),          # Check second - still profitable
+    (1.2, "Profit target +1.2% (Net ~-0.2% after fees) - EMERGENCY"),    # Emergency exit to prevent larger reversal loss
 ]
-# NOTE: 1.0% and 0.5% targets are PROTECTIVE measures, not profit targets
-# They prevent positions from turning profitable gains into losses during sudden reversals
-# The bot checks targets from TOP to BOTTOM, so it exits at 3% if available, 2% if not, etc.
-# This ensures we prioritize profit but have safety mechanisms for volatile markets
+# First two targets are NET profitable after fees (2.0% and 1.5%)
+# Third target (1.2%) is an emergency exit that takes a small loss (-0.2%) to prevent
+# positions from reversing into larger losses. Better to take -0.2% than wait for -1.5% stop loss.
+# The bot checks targets from TOP to BOTTOM, so it exits at 2% if available, 1.5% if not, etc.
 
-# Stop loss thresholds - WIDENED to prevent premature exits (V7.2 IMPROVEMENT)
-# Key insight: Crypto is volatile, -1% stops get hit on normal price action
-# Better to use wider stops and exit on technical breakdown instead
-STOP_LOSS_THRESHOLD = -2.0  # Exit at -2% loss (WIDENED from -1% to reduce stop hunts)
+# Stop loss thresholds - TIGHTENED to preserve capital (V7.3 FIX)
+# Jan 12, 2026: Tightened to -1.5% to cut losses earlier
+# Holding onto -2% losses bleeds capital - better to exit and find new opportunities
+# Combined with technical exits (RSI, trend breakdown) for comprehensive protection
+STOP_LOSS_THRESHOLD = -1.5  # Exit at -1.5% loss (TIGHTENED from -2.0% to preserve capital)
 STOP_LOSS_WARNING = -1.0  # Warn at -1% loss
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
@@ -1034,9 +1034,9 @@ class TradingStrategy:
                     rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI
                     
                     # ULTRA AGGRESSIVE: Exit on multiple signals to lock gains faster
-                    # Dec 28, 2025: Lowered thresholds to sell positions before reversals eat profits
+                    # Jan 12, 2026: TIGHTENED thresholds to sell positions before reversals eat profits
                     
-                    # Strong overbought (RSI > 65) - likely near top, take profits (LOWERED from 70)
+                    # Strong overbought (RSI > 60) - likely near top, take profits (LOWERED from 65)
                     if rsi > RSI_OVERBOUGHT_THRESHOLD:
                         logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f})")
                         positions_to_exit.append({
@@ -1046,9 +1046,9 @@ class TradingStrategy:
                         })
                         continue
                     
-                    # Moderate overbought (RSI > 55) + weak momentum = exit (LOWERED from 60)
+                    # Moderate overbought (RSI > 52) + weak momentum = exit (LOWERED from 55)
                     # This catches positions that are up but losing steam
-                    if rsi > 55:
+                    if rsi > 52:
                         # Check if price is below short-term EMA (momentum weakening)
                         ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
                         if current_price < ema9:
@@ -1060,9 +1060,10 @@ class TradingStrategy:
                             })
                             continue
                     
-                    # NEW: Profit protection - exit if in profit zone (RSI 50-65) but price crosses below EMA9
+                    # NEW: Profit protection - exit if in profit zone (RSI 48-60) but price crosses below EMA9
                     # This prevents giving back profits when momentum shifts
-                    if 50 < rsi < 65:
+                    # TIGHTENED range from 50-65 to 48-60 for earlier exits
+                    if 48 < rsi < 60:
                         ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
                         ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
                         # If price crosses below both EMAs, momentum is shifting - protect gains
@@ -1075,7 +1076,7 @@ class TradingStrategy:
                             })
                             continue
                     
-                    # Oversold (RSI < 35) - prevent further losses (RAISED from 30)
+                    # Oversold (RSI < 40) - prevent further losses (RAISED from 35)
                     if rsi < RSI_OVERSOLD_THRESHOLD:
                         logger.info(f"   📉 RSI OVERSOLD EXIT: {symbol} (RSI={rsi:.1f}) - cutting losses")
                         positions_to_exit.append({
@@ -1085,9 +1086,9 @@ class TradingStrategy:
                         })
                         continue
                     
-                    # Moderate oversold (RSI < 45) + downtrend = exit (RAISED from 40)
+                    # Moderate oversold (RSI < 48) + downtrend = exit (RAISED from 45)
                     # This catches positions that are down and still falling
-                    if rsi < 45:
+                    if rsi < 48:
                         # Check if price is in downtrend (below EMA21)
                         ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
                         if current_price < ema21:
