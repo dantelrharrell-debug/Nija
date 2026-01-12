@@ -3416,16 +3416,25 @@ class KrakenBroker(BaseBroker):
             # Test connection by fetching account balance with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
+            # Special handling for "Temporary lockout" errors which require much longer delays (2-5 minutes)
             max_attempts = 5
-            base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
+            base_delay = 5.0  # Base delay for normal retryable errors
+            lockout_base_delay = 120.0  # 2 minutes base delay for "Temporary lockout" errors
+            last_error_was_lockout = False  # Track if previous attempt was a lockout error
             
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
-                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
-                        delay = base_delay * (2 ** (attempt - 2))
-                        logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
+                        # For "Temporary lockout" errors, use much longer delays: 120s, 240s, 360s (2min, 4min, 6min)
+                        # For other errors, use shorter delays: 5s, 10s, 20s, 40s
+                        if last_error_was_lockout:
+                            delay = lockout_base_delay * attempt  # Linear scaling for lockout: 120s, 240s, 360s, 480s
+                            logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
+                            logger.info(f"   ⏰ Long delay due to Kraken temporary lockout (API key needs time to unlock)")
+                        else:
+                            delay = base_delay * (2 ** (attempt - 2))  # Exponential backoff for normal errors
+                            logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
                         
                         # Jump nonce forward on retry to skip any potentially "burned" nonces
@@ -3484,15 +3493,18 @@ class KrakenBroker(BaseBroker):
                                 logger.error("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                                 return False
                             
-                            # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, etc.)
-                            # CRITICAL: Include "invalid nonce" as retryable error
+                            # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, lockout, etc.)
+                            # CRITICAL: Include "invalid nonce" and "lockout" as retryable errors
                             # Invalid nonce errors can happen due to:
                             # - Clock drift/NTP adjustments
                             # - Rapid consecutive requests
                             # - Previous failed requests leaving the nonce counter in inconsistent state
                             # The microsecond-based nonce generator should fix this, but we still retry
                             # to handle edge cases and transient issues.
-                            is_retryable = any(keyword in error_msgs.lower() for keyword in [
+                            # 
+                            # "Temporary lockout" errors require special handling with longer delays (minutes, not seconds)
+                            is_lockout_error = 'lockout' in error_msgs.lower()
+                            is_retryable = is_lockout_error or any(keyword in error_msgs.lower() for keyword in [
                                 'timeout', 'connection', 'network', 'rate limit',
                                 'too many requests', 'service unavailable',
                                 '503', '504', '429', '403', 'forbidden', 
@@ -3501,7 +3513,13 @@ class KrakenBroker(BaseBroker):
                             ])
                             
                             if is_retryable and attempt < max_attempts:
-                                logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
+                                # Set flag for lockout errors to use longer delays on next retry
+                                last_error_was_lockout = is_lockout_error
+                                if is_lockout_error:
+                                    logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
+                                    logger.warning(f"   🔒 Temporary lockout detected - will use longer delay on next retry")
+                                else:
+                                    logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
                                 continue
                             else:
                                 logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
@@ -3543,15 +3561,18 @@ class KrakenBroker(BaseBroker):
                 except Exception as e:
                     error_msg = str(e)
                     
-                    # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, etc.)
-                    # CRITICAL: Include "invalid nonce" as retryable error
+                    # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, lockout, etc.)
+                    # CRITICAL: Include "invalid nonce" and "lockout" as retryable errors
                     # Invalid nonce errors can happen due to:
                     # - Clock drift/NTP adjustments
                     # - Rapid consecutive requests
                     # - Previous failed requests leaving the nonce counter in inconsistent state
                     # The microsecond-based nonce generator should fix this, but we still retry
                     # to handle edge cases and transient issues.
-                    is_retryable = any(keyword in error_msg.lower() for keyword in [
+                    # 
+                    # "Temporary lockout" errors require special handling with longer delays (minutes, not seconds)
+                    is_lockout_error = 'lockout' in error_msg.lower()
+                    is_retryable = is_lockout_error or any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
                         '503', '504', '429', '403', 'forbidden', 
@@ -3560,7 +3581,13 @@ class KrakenBroker(BaseBroker):
                     ])
                     
                     if is_retryable and attempt < max_attempts:
-                        logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
+                        # Set flag for lockout errors to use longer delays on next retry
+                        last_error_was_lockout = is_lockout_error
+                        if is_lockout_error:
+                            logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
+                            logger.warning(f"   🔒 Temporary lockout detected - will use longer delay on next retry")
+                        else:
+                            logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
                         continue
                     else:
                         # Handle errors gracefully for non-retryable or final attempt
