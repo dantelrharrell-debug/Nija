@@ -55,8 +55,8 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **[USER_COMMUNICATION_LOG.md](USER_COMMUNICATION_LOG.md)** - 💬 Communication history
 
 **Current Users**: 2 users configured
-- **User #1**: Daivon Frazier (daivon_frazier) - Pro tier, Kraken integration (credentials needed) ✅
-- **User #2**: Tania Gilbert (tania_gilbert) - Pro tier, Kraken integration (credentials needed) ✅
+- **User #1**: Daivon Frazier (daivon_frazier) - Pro tier, Kraken integration (credentials needed) ⚙️
+- **User #2**: Tania Gilbert (tania_gilbert) - Pro tier, Kraken integration (credentials needed) ⚙️
 
 **User Management**:
 - **Quick check if User #1 is trading**: `python is_user1_trading.py` or `./check_user1_trading.sh`

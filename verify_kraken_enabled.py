@@ -70,7 +70,12 @@ def check_environment_variables():
         value = os.getenv(var_name, '').strip()
         if value:
             # Hide the actual value for security
-            masked_value = value[:4] + '...' + value[-4:] if len(value) > 8 else '***'
+            # Show first 4 and last 4 chars for values longer than 8 chars
+            # For shorter values, just show '***' to avoid exposing the secret
+            if len(value) > 12:
+                masked_value = value[:4] + '...' + value[-4:]
+            else:
+                masked_value = '***'
             print(f"  ✅ {var_name:<35} SET ({masked_value})")
             configured_count += 1
         else:
