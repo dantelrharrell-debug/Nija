@@ -77,8 +77,10 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 
 **Broker Status** 🌐:
 - **Currently Active**: Coinbase Advanced Trade ✅
-- **Kraken Trading**: ⚠️ CODE READY - Credentials Not Configured
-  - **❓ Is Kraken Connected?**: [KRAKEN_DEPLOYMENT_ANSWER.md](KRAKEN_DEPLOYMENT_ANSWER.md) - Quick answer
+- **Kraken Trading**: ❌ **NOT CONNECTED** - Credentials Not Configured
+  - **⚡ Quick Answer**: [ANSWER_KRAKEN_STATUS.txt](ANSWER_KRAKEN_STATUS.txt) - One-line status
+  - **📊 Trading Status**: [KRAKEN_TRADING_STATUS.md](KRAKEN_TRADING_STATUS.md) - Is NIJA trading on Kraken?
+  - **❓ Is Kraken Connected?**: [KRAKEN_DEPLOYMENT_ANSWER.md](KRAKEN_DEPLOYMENT_ANSWER.md) - Detailed answer
   - **🚀 Deployment Setup**: [KRAKEN_RAILWAY_RENDER_SETUP.md](KRAKEN_RAILWAY_RENDER_SETUP.md) - Railway & Render configuration
   - **📋 Environment Variables**: [KRAKEN_ENV_VARS_REFERENCE.md](KRAKEN_ENV_VARS_REFERENCE.md) - Exact variable names
   - **📖 Quick Setup**: [KRAKEN_SETUP_GUIDE.md](KRAKEN_SETUP_GUIDE.md) - Step-by-step instructions
