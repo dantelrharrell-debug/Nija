@@ -3268,7 +3268,9 @@ class KrakenBroker(BaseBroker):
     
     # Class-level set to track accounts that have already logged permission errors
     # This prevents spamming the logs with duplicate permission error messages
+    # Thread-safe: uses lock for concurrent access protection
     _permission_errors_logged = set()
+    _permission_errors_lock = threading.Lock()
     
     def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         """
@@ -3484,8 +3486,15 @@ class KrakenBroker(BaseBroker):
                                 
                                 # Only log detailed permission error instructions once per account
                                 # This prevents spamming logs if the bot restarts or retries
-                                if cred_label not in KrakenBroker._permission_errors_logged:
-                                    KrakenBroker._permission_errors_logged.add(cred_label)
+                                # Thread-safe check using class-level lock
+                                with KrakenBroker._permission_errors_lock:
+                                    if cred_label not in KrakenBroker._permission_errors_logged:
+                                        KrakenBroker._permission_errors_logged.add(cred_label)
+                                        should_log_details = True
+                                    else:
+                                        should_log_details = False
+                                
+                                if should_log_details:
                                     logger.error("   ⚠️  API KEY PERMISSION ERROR")
                                     logger.error("   Your Kraken API key does not have the required permissions.")
                                     logger.error("")

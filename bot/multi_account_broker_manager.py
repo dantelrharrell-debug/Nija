@@ -40,6 +40,10 @@ class MultiAccountBrokerManager:
     Accounts are completely isolated from each other.
     """
     
+    # Maximum length for error messages stored in failed connection tracking
+    # Prevents excessive memory usage from very long error strings
+    MAX_ERROR_MESSAGE_LENGTH = 50
+    
     def __init__(self):
         """Initialize multi-account broker manager."""
         # Master account brokers
@@ -372,7 +376,9 @@ class MultiAccountBrokerManager:
             except Exception as e:
                 logger.warning(f"   ⚠️  Error connecting {user.name}: {e}")
                 # Track the failed connection to avoid repeated attempts
-                self._failed_user_connections[connection_key] = str(e)[:50]  # First 50 chars of error
+                # Truncate error message to prevent excessive memory usage
+                error_msg = str(e)[:self.MAX_ERROR_MESSAGE_LENGTH]
+                self._failed_user_connections[connection_key] = error_msg
                 import traceback
                 logger.debug(traceback.format_exc())
             
