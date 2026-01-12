@@ -59,20 +59,20 @@ MAX_POSITION_HOLD_HOURS = 48  # Auto-exit positions held longer than this (2 day
 STALE_POSITION_WARNING_HOURS = 24  # Warn about positions held this long (1 day)
 
 # Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE V7.3
-# Updated Jan 12, 2026 - PROFITABILITY FIX: All targets now NET profitable after fees
+# Updated Jan 12, 2026 - PROFITABILITY FIX: Aggressive profit-taking to lock gains
 # CRITICAL: With small positions, we need FASTER exits to lock gains
 # Coinbase fees are ~1.4%, so minimum 1.5% needed for net profit
 # Strategy: Exit FULL position at FIRST target hit, checking from HIGHEST to LOWEST
-# This prioritizes larger gains while ensuring ALL exits are profitable
+# This prioritizes larger gains while providing emergency exit near breakeven
 PROFIT_TARGETS = [
-    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - EXCELLENT"),   # Check first - best profit
-    (1.5, "Profit target +1.5% (Net ~0.1% after fees) - GOOD"),        # Check second - still profitable
-    (1.2, "Profit target +1.2% (Net ~-0.2% after fees) - BREAKEVEN"),  # Emergency exit near breakeven
+    (2.0, "Profit target +2.0% (Net ~0.6% after fees) - EXCELLENT"),     # Check first - best profit
+    (1.5, "Profit target +1.5% (Net ~0.1% after fees) - GOOD"),          # Check second - still profitable
+    (1.2, "Profit target +1.2% (Net ~-0.2% after fees) - EMERGENCY"),    # Emergency exit to prevent larger reversal loss
 ]
-# All targets are designed to sell for a profit (or near breakeven for emergency)
+# First two targets are NET profitable after fees (2.0% and 1.5%)
+# Third target (1.2%) is an emergency exit that takes a small loss (-0.2%) to prevent
+# positions from reversing into larger losses. Better to take -0.2% than wait for -1.5% stop loss.
 # The bot checks targets from TOP to BOTTOM, so it exits at 2% if available, 1.5% if not, etc.
-# REMOVED losing targets (1.0% and 0.5%) which resulted in NET LOSSES after fees
-# This ensures we ONLY sell when profitable, not when taking losses
 
 # Stop loss thresholds - TIGHTENED to preserve capital (V7.3 FIX)
 # Jan 12, 2026: Tightened to -1.5% to cut losses earlier
