@@ -238,7 +238,7 @@ def main():
     logger.info("=" * 70)
     logger.info(f"📊 EXCHANGE CREDENTIAL SUMMARY: {exchanges_configured} configured")
     logger.info("   " + " | ".join(exchange_status))
-    logger.info("=" * 70)
+    logger.info("=" * 41)
     
     if exchanges_configured == 0:
         logger.error("=" * 70)
