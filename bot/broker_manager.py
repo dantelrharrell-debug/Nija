@@ -3266,6 +3266,10 @@ class KrakenBroker(BaseBroker):
     Python wrapper: https://github.com/veox/python3-krakenex
     """
     
+    # Class-level set to track accounts that have already logged permission errors
+    # This prevents spamming the logs with duplicate permission error messages
+    _permission_errors_logged = set()
+    
     def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         """
         Initialize Kraken broker with account type support.
@@ -3477,22 +3481,30 @@ class KrakenBroker(BaseBroker):
                             
                             if is_permission_error:
                                 logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
-                                logger.error("   ⚠️  API KEY PERMISSION ERROR")
-                                logger.error("   Your Kraken API key does not have the required permissions.")
-                                logger.error("")
-                                logger.error("   To fix this issue:")
-                                logger.error("   1. Go to https://www.kraken.com/u/security/api")
-                                logger.error("   2. Find your API key and edit its permissions")
-                                logger.error("   3. Enable these permissions:")
-                                logger.error("      ✅ Query Funds (required to check balance)")
-                                logger.error("      ✅ Query Open Orders & Trades (required for position tracking)")
-                                logger.error("      ✅ Query Closed Orders & Trades (required for trade history)")
-                                logger.error("      ✅ Create & Modify Orders (required to place trades)")
-                                logger.error("      ✅ Cancel/Close Orders (required for stop losses)")
-                                logger.error("   4. Save changes and restart the bot")
-                                logger.error("")
-                                logger.error("   For security, do NOT enable 'Withdraw Funds' permission")
-                                logger.error("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                                
+                                # Only log detailed permission error instructions once per account
+                                # This prevents spamming logs if the bot restarts or retries
+                                if cred_label not in KrakenBroker._permission_errors_logged:
+                                    KrakenBroker._permission_errors_logged.add(cred_label)
+                                    logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                                    logger.error("   Your Kraken API key does not have the required permissions.")
+                                    logger.error("")
+                                    logger.error("   To fix this issue:")
+                                    logger.error("   1. Go to https://www.kraken.com/u/security/api")
+                                    logger.error("   2. Find your API key and edit its permissions")
+                                    logger.error("   3. Enable these permissions:")
+                                    logger.error("      ✅ Query Funds (required to check balance)")
+                                    logger.error("      ✅ Query Open Orders & Trades (required for position tracking)")
+                                    logger.error("      ✅ Query Closed Orders & Trades (required for trade history)")
+                                    logger.error("      ✅ Create & Modify Orders (required to place trades)")
+                                    logger.error("      ✅ Cancel/Close Orders (required for stop losses)")
+                                    logger.error("   4. Save changes and restart the bot")
+                                    logger.error("")
+                                    logger.error("   For security, do NOT enable 'Withdraw Funds' permission")
+                                    logger.error("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                                else:
+                                    logger.error(f"   (Permission error details already logged for {cred_label})")
+                                
                                 return False
                             
                             # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, lockout, etc.)
