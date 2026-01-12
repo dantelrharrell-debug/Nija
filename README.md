@@ -1,5 +1,7 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
+**🚀 New to NIJA?** See the **[Getting Started Guide](GETTING_STARTED.md)** for 5-minute setup!
+
 **What is NIJA?** NIJA is a sophisticated, AI-powered autonomous trading platform that goes far beyond simple cryptocurrency trading. It's a comprehensive algorithmic trading system featuring:
 
 - 🤖 **Multi-Asset Trading**: Cryptocurrencies (732+ pairs) AND traditional stocks via Alpaca
@@ -57,6 +59,8 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 **Current Users**: 2 users configured
 - **User #1**: Daivon Frazier (daivon_frazier) - Pro tier, Kraken integration (credentials needed) ⚙️
 - **User #2**: Tania Gilbert (tania_gilbert) - Pro tier, Kraken integration (credentials needed) ⚙️
+
+> ⚠️ **Note**: If you see "NOT TRADING (Connection failed or not configured)" for these users in the logs, this is **expected behavior** when Kraken credentials are not configured. The master account will still trade successfully. See [GETTING_STARTED.md](GETTING_STARTED.md#why-you-see-not-trading-for-user-accounts) for details.
 
 **User Management**:
 - **Quick check if User #1 is trading**: `python is_user1_trading.py` or `./check_user1_trading.sh`
