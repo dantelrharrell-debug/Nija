@@ -189,24 +189,32 @@ def main():
         logger.warning("⚠️  Coinbase credentials not configured")
     
     # Check Kraken Master
+    kraken_master_configured = False
     if os.getenv("KRAKEN_MASTER_API_KEY") and os.getenv("KRAKEN_MASTER_API_SECRET"):
         exchanges_configured += 1
         exchange_status.append("✅ Kraken (Master)")
         logger.info("✅ Kraken Master credentials detected")
+        kraken_master_configured = True
     else:
         exchange_status.append("❌ Kraken (Master)")
-        logger.warning("⚠️  Kraken Master credentials not configured")
+        logger.warning("⚠️  Kraken Master credentials NOT SET")
+        logger.warning("   → Kraken will NOT connect without these environment variables:")
+        logger.warning("      KRAKEN_MASTER_API_KEY")
+        logger.warning("      KRAKEN_MASTER_API_SECRET")
     
     # Check Kraken User accounts
+    kraken_users_configured = 0
     if os.getenv("KRAKEN_USER_DAIVON_API_KEY") and os.getenv("KRAKEN_USER_DAIVON_API_SECRET"):
         logger.info("✅ Kraken User #1 (Daivon) credentials detected")
+        kraken_users_configured += 1
     else:
-        logger.warning("⚠️  Kraken User #1 (Daivon) credentials not configured")
+        logger.warning("⚠️  Kraken User #1 (Daivon) credentials NOT SET")
     
     if os.getenv("KRAKEN_USER_TANIA_API_KEY") and os.getenv("KRAKEN_USER_TANIA_API_SECRET"):
         logger.info("✅ Kraken User #2 (Tania) credentials detected")
+        kraken_users_configured += 1
     else:
-        logger.warning("⚠️  Kraken User #2 (Tania) credentials not configured")
+        logger.warning("⚠️  Kraken User #2 (Tania) credentials NOT SET")
     
     # Check OKX
     if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
@@ -238,7 +246,20 @@ def main():
     logger.info("=" * 70)
     logger.info(f"📊 EXCHANGE CREDENTIAL SUMMARY: {exchanges_configured} configured")
     logger.info("   " + " | ".join(exchange_status))
-    logger.info("=" * 41)
+    logger.info("=" * 70)
+    
+    # Add specific Kraken help if it's not configured
+    if not kraken_master_configured and kraken_users_configured == 0:
+        logger.info("")
+        logger.info("💡 KRAKEN NOT CONNECTED - To enable Kraken trading:")
+        logger.info("   1. Get API credentials from https://www.kraken.com/u/security/api")
+        logger.info("   2. Set environment variables in Railway/Render dashboard:")
+        logger.info("      • KRAKEN_MASTER_API_KEY=<your-api-key>")
+        logger.info("      • KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+        logger.info("   3. Restart the deployment to apply changes")
+        logger.info("   📖 See KRAKEN_NOT_CONNECTING_DIAGNOSIS.md for step-by-step guide")
+        logger.info("   🔧 Run: python3 diagnose_kraken_connection.py for detailed help")
+        logger.info("=" * 70)
     
     if exchanges_configured == 0:
         logger.error("=" * 70)
