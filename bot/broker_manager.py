@@ -2817,17 +2817,12 @@ class AlpacaBroker(BaseBroker):
             return candles[-count:] if len(candles) > count else candles
             
         except Exception as e:
-            error_str = str(e).lower()
-            
-            # CRITICAL FIX (Jan 10, 2026): Distinguish invalid symbols from other errors
-            # Alpaca returns "invalid symbol" errors for delisted/invalid stocks
+            # CRITICAL FIX (Jan 13, 2026): Use centralized error detection function
+            # Alpaca returns various error messages for invalid/delisted stocks:
+            # - "invalid symbol", "symbol not found", "asset not found"
+            # - "No key SYMBOL was found" (common for delisted stocks)
             # These should not trigger retries or count toward rate limit errors
-            is_invalid_symbol = (
-                'invalid symbol' in error_str or
-                'symbol not found' in error_str or
-                'asset not found' in error_str or
-                'no data' in error_str
-            )
+            is_invalid_symbol = _is_invalid_product_error(str(e))
             
             # Log invalid symbols at debug level (not error) since it's expected
             if is_invalid_symbol:
