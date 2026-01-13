@@ -3343,12 +3343,13 @@ class KrakenBroker(BaseBroker):
         # This prevents "Invalid nonce" errors from rapid consecutive requests
         # Initialize to current time in microseconds PLUS random offset to avoid conflicts
         # when multiple broker instances are created at nearly the same time
-        # Random offset range: 0-999999 microseconds (just under 1 second)
+        # Random offset range: 0-2999999 microseconds (up to 3 seconds)
+        # INCREASED from 1s to 3s to provide better separation between sequential user connections
         # This is especially important for:
         # - Multiple user accounts connecting sequentially
         # - Bot restarts where Kraken may still remember old nonces
         # - Retry attempts that create new nonce sequences
-        random_offset = random.randint(0, 999999)
+        random_offset = random.randint(0, 2999999)
         self._last_nonce = int(time.time() * 1000000) + random_offset
         # Thread lock to ensure nonce generation is thread-safe
         # Prevents race conditions when multiple threads call API simultaneously
@@ -4112,6 +4113,8 @@ class OKXBroker(BaseBroker):
             if passphrase in PLACEHOLDER_PASSPHRASE_VALUES:
                 logging.warning("⚠️  OKX passphrase appears to be a placeholder value")
                 logging.warning("   Please set a valid OKX_PASSPHRASE in your environment")
+                logging.warning("   Current value looks like a placeholder (e.g., 'your_passphrase')")
+                logging.warning("   Replace it with your actual OKX API passphrase from https://www.okx.com/account/my-api")
                 return False
             
             # Determine API flag (0 = live, 1 = testnet)
