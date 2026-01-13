@@ -21,6 +21,9 @@ import json
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+# Constants
+MIN_CREDENTIAL_LENGTH = 10  # Minimum expected length for API keys
+
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
@@ -49,9 +52,9 @@ def check_env_var(var_name: str) -> Tuple[bool, str]:
     if not value.strip():
         return False, "⚠️  SET but EMPTY (whitespace only)"
     
-    # Check if it looks like a real credential (at least 10 chars)
-    if len(value.strip()) < 10:
-        return False, f"⚠️  TOO SHORT ({len(value.strip())} chars, need 10+)"
+    # Check if it looks like a real credential (at least MIN_CREDENTIAL_LENGTH chars)
+    if len(value.strip()) < MIN_CREDENTIAL_LENGTH:
+        return False, f"⚠️  TOO SHORT ({len(value.strip())} chars, need {MIN_CREDENTIAL_LENGTH}+)"
     
     return True, f"✅ VALID ({len(value.strip())} chars)"
 
@@ -72,6 +75,28 @@ def load_user_config(config_path: Path) -> List[Dict]:
     except Exception as e:
         print(f"⚠️  Error loading {config_path}: {e}")
         return []
+
+
+def get_user_env_var_names(user_id: str) -> Tuple[str, str]:
+    """
+    Get environment variable names for a user ID.
+    
+    Args:
+        user_id: User identifier (e.g., 'daivon_frazier', 'tania_gilbert')
+        
+    Returns:
+        Tuple of (api_key_var_name, api_secret_var_name)
+    """
+    # Convert user_id to uppercase, extract first part before underscore
+    if '_' in user_id:
+        user_env_name = user_id.split('_')[0].upper()
+    else:
+        user_env_name = user_id.upper()
+    
+    key_var = f"KRAKEN_USER_{user_env_name}_API_KEY"
+    secret_var = f"KRAKEN_USER_{user_env_name}_API_SECRET"
+    
+    return key_var, secret_var
 
 
 def main():
@@ -142,15 +167,8 @@ def main():
                 print()
                 continue
             
-            # Determine environment variable names
-            # Convert user_id to uppercase, extract first part before underscore
-            if '_' in user_id:
-                user_env_name = user_id.split('_')[0].upper()
-            else:
-                user_env_name = user_id.upper()
-            
-            key_var = f"KRAKEN_USER_{user_env_name}_API_KEY"
-            secret_var = f"KRAKEN_USER_{user_env_name}_API_SECRET"
+            # Get environment variable names using shared utility
+            key_var, secret_var = get_user_env_var_names(user_id)
             
             key_valid, key_status = check_env_var(key_var)
             secret_valid, secret_status = check_env_var(secret_var)
@@ -200,7 +218,7 @@ def main():
         print()
         print("   4. Restart the bot after adding credentials")
         print()
-        print("📖 See ENVIRONMENT_VARIABLES_GUIDE.md for detailed instructions")
+        print("📖 See SETUP_KRAKEN_USERS.md for detailed step-by-step instructions")
     
     print("=" * 80)
     

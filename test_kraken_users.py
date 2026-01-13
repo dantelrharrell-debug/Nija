@@ -11,10 +11,34 @@ import os
 import sys
 import logging
 from pathlib import Path
+from typing import Tuple
 
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
+
+
+def get_user_env_var_names(user_id: str) -> Tuple[str, str]:
+    """
+    Get environment variable names for a user ID.
+    
+    Args:
+        user_id: User identifier (e.g., 'daivon_frazier', 'tania_gilbert')
+        
+    Returns:
+        Tuple of (api_key_var_name, api_secret_var_name)
+    """
+    # Convert user_id to uppercase, extract first part before underscore
+    if '_' in user_id:
+        user_env_name = user_id.split('_')[0].upper()
+    else:
+        user_env_name = user_id.upper()
+    
+    key_var = f"KRAKEN_USER_{user_env_name}_API_KEY"
+    secret_var = f"KRAKEN_USER_{user_env_name}_API_SECRET"
+    
+    return key_var, secret_var
+
 
 # Setup logging
 logging.basicConfig(
@@ -87,10 +111,8 @@ def test_user_connection(user_id: str, user_name: str):
             print(f"❌ {user_name} connection FAILED")
             print()
             
-            # Determine env var names
-            user_env_name = user_id.split('_')[0].upper() if '_' in user_id else user_id.upper()
-            key_var = f"KRAKEN_USER_{user_env_name}_API_KEY"
-            secret_var = f"KRAKEN_USER_{user_env_name}_API_SECRET"
+            # Get environment variable names using shared utility
+            key_var, secret_var = get_user_env_var_names(user_id)
             
             print("   Possible causes:")
             print(f"   1. Missing credentials ({key_var}/SECRET not set)")
