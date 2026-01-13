@@ -84,6 +84,8 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 **Broker Status** 🌐:
 - **Currently Active**: Coinbase Advanced Trade ✅, Kraken ✅ (when configured)
 - **Kraken Trading**: Ready for configuration
+  - **🚀 QUICK START**: [HOW_TO_ENABLE_KRAKEN.md](HOW_TO_ENABLE_KRAKEN.md) - **START HERE** for step-by-step guide
+  - **🧪 Live Test**: Run `python3 test_kraken_connection_live.py` to test credentials in Railway/Render
   - **⚡ Railway Setup**: [RAILWAY_KRAKEN_SETUP.md](RAILWAY_KRAKEN_SETUP.md) - Complete Railway deployment guide
   - **⚡ Quick Answer**: [ANSWER_KRAKEN_STATUS.txt](ANSWER_KRAKEN_STATUS.txt) - One-line status
   - **🔧 TROUBLESHOOTING "Unseen Variables"**: [QUICK_FIX_UNSEEN_VARIABLES.md](QUICK_FIX_UNSEEN_VARIABLES.md) - Fix whitespace-only credentials
@@ -93,11 +95,11 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
   - **🚀 Deployment Setup**: [KRAKEN_RAILWAY_RENDER_SETUP.md](KRAKEN_RAILWAY_RENDER_SETUP.md) - Railway & Render configuration
   - **📋 Environment Variables**: [KRAKEN_ENV_VARS_REFERENCE.md](KRAKEN_ENV_VARS_REFERENCE.md) - Exact variable names
   - **📖 Quick Setup**: [KRAKEN_SETUP_GUIDE.md](KRAKEN_SETUP_GUIDE.md) - Step-by-step instructions
-  - **🔍 Status Check**: Run `python check_kraken_status.py` to verify local connection
-  - **🔍 Deployment Check**: Run `python kraken_deployment_verify.py` to verify Railway/Render
-  - **✅ Config Validator**: Run `python verify_kraken_config.py` to validate configuration
+  - **🔍 Status Check**: Run `python3 check_kraken_status.py` to verify local connection
+  - **🔍 Deployment Check**: Run `python3 kraken_deployment_verify.py` to verify Railway/Render
+  - **✅ Config Validator**: Run `python3 verify_kraken_config.py` to validate configuration
   - **📊 Detailed Status**: [KRAKEN_CONNECTION_STATUS.md](KRAKEN_CONNECTION_STATUS.md)
-- **Check all brokers**: `python check_broker_status.py`
+- **Check all brokers**: `python3 check_broker_status.py`
 - **Multi-Broker Guide**: [MULTI_BROKER_STATUS.md](MULTI_BROKER_STATUS.md)
 
 ---
