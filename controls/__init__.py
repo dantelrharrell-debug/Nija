@@ -73,8 +73,33 @@ class HardControls:
         self.daily_loss_trackers: Dict[str, DailyLossTracker] = {}
         self.user_error_counts: Dict[str, int] = {}
         self.strategy_locked = True  # Strategy is always locked
+        
+        # Enable trading for master account and all user accounts
+        self._initialize_trading_accounts()
+        
         logger.info("Hard controls initialized")
         logger.info(f"Position limits: {self.MIN_POSITION_PCT*100:.0f}% - {self.MAX_POSITION_PCT*100:.0f}%")
+    
+    def _initialize_trading_accounts(self):
+        """
+        Initialize trading accounts with ACTIVE status.
+        Enables trading for master account and all configured user accounts.
+        """
+        # Enable master account
+        self.user_kill_switches['master'] = KillSwitchStatus.ACTIVE
+        logger.info("✅ Master account trading ENABLED")
+        
+        # Enable all configured user accounts
+        configured_users = [
+            'daivon_frazier',  # User #1 - Kraken account
+            'tania_gilbert',   # User #2 - Kraken + Alpaca account
+        ]
+        
+        for user_id in configured_users:
+            self.user_kill_switches[user_id] = KillSwitchStatus.ACTIVE
+            logger.info(f"✅ User account '{user_id}' trading ENABLED")
+        
+        logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
     
     def validate_position_size(
         self,
