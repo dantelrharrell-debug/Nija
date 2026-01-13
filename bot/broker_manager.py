@@ -2853,14 +2853,13 @@ class AlpacaBroker(BaseBroker):
                     time.sleep(delay)
                     continue
                 else:
-                    # Not rate limited or max retries reached - log as WARNING not ERROR
-                    # This prevents flooding console with error messages for expected rate limits
+                    # Not rate limited or max retries reached
                     if is_rate_limited:
+                        # Rate limit persisted after retries - log at WARNING level
                         logging.warning(f"⚠️  Alpaca rate limit exceeded for {symbol} after {RATE_LIMIT_MAX_RETRIES} retries")
                     else:
-                        # Only log non-rate-limit errors as errors
-                        if not is_rate_limited:
-                            logging.error(f"Error fetching candles for {symbol}: {e}")
+                        # Non-rate-limit error - log at ERROR level
+                        logging.error(f"Error fetching candles for {symbol}: {e}")
                     return []
         
         return []
