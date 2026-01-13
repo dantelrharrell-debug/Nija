@@ -3332,9 +3332,31 @@ class KrakenBroker(BaseBroker):
             import time
             
             # Get credentials based on account type
+            # Enhanced credential detection to identify "set but invalid" variables
             if self.account_type == AccountType.MASTER:
-                api_key = os.getenv("KRAKEN_MASTER_API_KEY", "").strip()
-                api_secret = os.getenv("KRAKEN_MASTER_API_SECRET", "").strip()
+                key_name = "KRAKEN_MASTER_API_KEY"
+                secret_name = "KRAKEN_MASTER_API_SECRET"
+                api_key_raw = os.getenv(key_name, "")
+                api_secret_raw = os.getenv(secret_name, "")
+                
+                # Fallback to legacy credentials if master credentials not set
+                # This provides backward compatibility for deployments using KRAKEN_API_KEY
+                if not api_key_raw:
+                    legacy_key = os.getenv("KRAKEN_API_KEY", "")
+                    if legacy_key:
+                        api_key_raw = legacy_key
+                        key_name = "KRAKEN_API_KEY (legacy)"
+                        logger.info("   Using legacy KRAKEN_API_KEY for master account")
+                
+                if not api_secret_raw:
+                    legacy_secret = os.getenv("KRAKEN_API_SECRET", "")
+                    if legacy_secret:
+                        api_secret_raw = legacy_secret
+                        secret_name = "KRAKEN_API_SECRET (legacy)"
+                        logger.info("   Using legacy KRAKEN_API_SECRET for master account")
+                
+                api_key = api_key_raw.strip()
+                api_secret = api_secret_raw.strip()
                 cred_label = "MASTER"
             else:
                 # User account - construct env var name from user_id
@@ -3342,9 +3364,35 @@ class KrakenBroker(BaseBroker):
                 # For user_id like 'daivon_frazier', extracts 'DAIVON' for KRAKEN_USER_DAIVON_API_KEY
                 # For user_id like 'john', uses 'JOHN' for KRAKEN_USER_JOHN_API_KEY
                 user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
-                api_key = os.getenv(f"KRAKEN_USER_{user_env_name}_API_KEY", "").strip()
-                api_secret = os.getenv(f"KRAKEN_USER_{user_env_name}_API_SECRET", "").strip()
+                key_name = f"KRAKEN_USER_{user_env_name}_API_KEY"
+                secret_name = f"KRAKEN_USER_{user_env_name}_API_SECRET"
+                api_key_raw = os.getenv(key_name, "")
+                api_secret_raw = os.getenv(secret_name, "")
+                api_key = api_key_raw.strip()
+                api_secret = api_secret_raw.strip()
                 cred_label = f"USER:{self.user_id}"
+            
+            # Enhanced validation: detect if variables are set but contain only whitespace
+            key_is_set = api_key_raw != ""
+            secret_is_set = api_secret_raw != ""
+            key_valid_after_strip = bool(api_key)
+            secret_valid_after_strip = bool(api_secret)
+            
+            # Check for malformed credentials (set but empty after stripping)
+            if (key_is_set and not key_valid_after_strip) or (secret_is_set and not secret_valid_after_strip):
+                logger.warning(f"⚠️  Kraken credentials DETECTED but INVALID for {cred_label}")
+                
+                # Determine status messages for each credential
+                key_status = 'SET but contains only whitespace/invisible characters' if (key_is_set and not key_valid_after_strip) else 'valid'
+                secret_status = 'SET but contains only whitespace/invisible characters' if (secret_is_set and not secret_valid_after_strip) else 'valid'
+                
+                logger.warning(f"   {key_name}: {key_status}")
+                logger.warning(f"   {secret_name}: {secret_status}")
+                logger.warning("   🔧 FIX: Check your deployment platform (Railway/Render) environment variables:")
+                logger.warning("      1. Remove any leading/trailing spaces or newlines from the values")
+                logger.warning("      2. Ensure the values are not just whitespace characters")
+                logger.warning("      3. Re-deploy after fixing the values")
+                return False
             
             if not api_key or not api_secret:
                 # Silently skip - Kraken is optional, no need for scary error messages
@@ -3353,6 +3401,9 @@ class KrakenBroker(BaseBroker):
                     logger.info("   To enable Kraken MASTER trading, set:")
                     logger.info("      KRAKEN_MASTER_API_KEY=<your-api-key>")
                     logger.info("      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+                    logger.info("   OR use legacy credentials:")
+                    logger.info("      KRAKEN_API_KEY=<your-api-key>")
+                    logger.info("      KRAKEN_API_SECRET=<your-api-secret>")
                 else:
                     # USER account - provide specific instructions
                     # Note: user_env_name is guaranteed to be defined from the else block above
