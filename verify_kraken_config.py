@@ -46,6 +46,36 @@ def print_info(text):
     """Print info message"""
     print(f"{BLUE}ℹ️  {text}{RESET}")
 
+def mask_credential(value, show_last=6):
+    """
+    Securely mask a credential value.
+    
+    Always shows a fixed number of asterisks followed by a few characters from the end.
+    This prevents exposure of short credentials while still providing verification info.
+    
+    Args:
+        value: The credential value to mask
+        show_last: Number of characters to show from the end (default: 6)
+    
+    Returns:
+        Masked string in format: '***********...last6'
+    """
+    if not value:
+        return '(not set)'
+    
+    # Always show at least 15 asterisks, regardless of actual length
+    # This prevents length-based guessing attacks
+    masked_prefix = '*' * 15
+    
+    # Show last N characters if the key is long enough
+    # For very short keys (<=show_last), still show the pattern to avoid full exposure
+    if len(value) > show_last:
+        suffix = value[-show_last:]
+        return f"{masked_prefix}...{suffix}"
+    else:
+        # For short keys, just show masked pattern
+        return f"{masked_prefix}...(too short to show suffix)"
+
 def check_master_credentials():
     """Check if master Kraken credentials are set"""
     print_header("CHECKING MASTER ACCOUNT CREDENTIALS")
@@ -63,13 +93,13 @@ def check_master_credentials():
     
     if has_new_creds:
         print_success("Master credentials found (new format)")
-        print(f"   KRAKEN_MASTER_API_KEY: {'*' * min(10, len(master_key))}{master_key[-10:] if len(master_key) > 10 else ''}")
-        print(f"   KRAKEN_MASTER_API_SECRET: {'*' * 20}... ({len(master_secret)} chars)")
+        print(f"   KRAKEN_MASTER_API_KEY: {mask_credential(master_key)}")
+        print(f"   KRAKEN_MASTER_API_SECRET: {mask_credential(master_secret, show_last=4)} ({len(master_secret)} chars)")
         return True
     elif has_legacy_creds:
         print_success("Master credentials found (legacy format)")
-        print(f"   KRAKEN_API_KEY: {'*' * min(10, len(legacy_key))}{legacy_key[-10:] if len(legacy_key) > 10 else ''}")
-        print(f"   KRAKEN_API_SECRET: {'*' * 20}... ({len(legacy_secret)} chars)")
+        print(f"   KRAKEN_API_KEY: {mask_credential(legacy_key)}")
+        print(f"   KRAKEN_API_SECRET: {mask_credential(legacy_secret, show_last=4)} ({len(legacy_secret)} chars)")
         print_info("Consider migrating to KRAKEN_MASTER_API_KEY format")
         return True
     else:
@@ -249,8 +279,8 @@ def check_alpaca_users():
         if success:
             key_var, secret_var, key_val, secret_val = result
             print_success(f"User {name} ({user_id}): Credentials found")
-            print(f"   {key_var}: {'*' * min(10, len(key_val))}{key_val[-10:] if len(key_val) > 10 else ''}")
-            print(f"   {secret_var}: {'*' * 20}... ({len(secret_val)} chars)")
+            print(f"   {key_var}: {mask_credential(key_val)}")
+            print(f"   {secret_var}: {mask_credential(secret_val, show_last=4)} ({len(secret_val)} chars)")
             
             # Check paper trading flag
             prefix = get_env_var_prefix(user_id)
@@ -278,19 +308,8 @@ def check_coinbase_credentials():
     
     if api_key and api_secret:
         print_success("Coinbase credentials found")
-        # Mask the key for security
-        if api_key.startswith("organizations/"):
-            # New format - show org part but mask key ID
-            parts = api_key.split('/')
-            if len(parts) >= 4:
-                masked = f"{parts[0]}/{parts[1]}/apiKeys/***{parts[3][-6:]}"
-            else:
-                masked = "***" + api_key[-10:]
-            print(f"   COINBASE_API_KEY: {masked}")
-        else:
-            # Old format or unknown - mask it
-            print(f"   COINBASE_API_KEY: {'*' * min(10, len(api_key))}{api_key[-10:] if len(api_key) > 10 else ''}")
-        print(f"   COINBASE_API_SECRET: {'*' * 20}... ({len(api_secret)} chars)")
+        print(f"   COINBASE_API_KEY: {mask_credential(api_key, show_last=8)}")
+        print(f"   COINBASE_API_SECRET: {mask_credential(api_secret, show_last=4)} ({len(api_secret)} chars)")
         return True
     else:
         print_info("Coinbase credentials not set (optional)")
