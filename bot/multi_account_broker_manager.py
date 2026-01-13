@@ -14,6 +14,7 @@ Each account trades independently with its own:
 """
 
 import logging
+import time
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
@@ -30,6 +31,10 @@ except ImportError:
     )
 
 logger = logging.getLogger('nija.multi_account')
+
+# Minimum delay between sequential connections to the same broker type
+# This helps prevent nonce conflicts and API rate limiting, especially for Kraken
+MIN_CONNECTION_DELAY = 2.0  # seconds
 
 
 class MultiAccountBrokerManager:
@@ -327,7 +332,6 @@ class MultiAccountBrokerManager:
         
         # Track last connection time for each broker type to add delays between sequential connections
         # This prevents nonce conflicts and server-side rate limiting issues, especially for Kraken
-        import time
         last_connection_time = {}
         
         for user in enabled_users:
@@ -350,8 +354,8 @@ class MultiAccountBrokerManager:
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
             if broker_type in last_connection_time:
                 time_since_last = time.time() - last_connection_time[broker_type]
-                if time_since_last < 2.0:  # Minimum 2 seconds between connections to same broker type
-                    delay = 2.0 - time_since_last
+                if time_since_last < MIN_CONNECTION_DELAY:
+                    delay = MIN_CONNECTION_DELAY - time_since_last
                     logger.info(f"⏱️  Waiting {delay:.1f}s before connecting next user to {broker_type.value.title()}...")
                     time.sleep(delay)
             
