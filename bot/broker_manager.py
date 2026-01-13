@@ -3364,8 +3364,13 @@ class KrakenBroker(BaseBroker):
             # Check for malformed credentials (set but empty after stripping)
             if (key_is_set and not key_valid_after_strip) or (secret_is_set and not secret_valid_after_strip):
                 logger.warning(f"⚠️  Kraken credentials DETECTED but INVALID for {cred_label}")
-                logger.warning(f"   {key_name}: {'SET but contains only whitespace/invisible characters' if key_is_set and not key_valid_after_strip else 'valid'}")
-                logger.warning(f"   {secret_name}: {'SET but contains only whitespace/invisible characters' if secret_is_set and not secret_valid_after_strip else 'valid'}")
+                
+                # Determine status messages for each credential
+                key_status = 'SET but contains only whitespace/invisible characters' if (key_is_set and not key_valid_after_strip) else 'valid'
+                secret_status = 'SET but contains only whitespace/invisible characters' if (secret_is_set and not secret_valid_after_strip) else 'valid'
+                
+                logger.warning(f"   {key_name}: {key_status}")
+                logger.warning(f"   {secret_name}: {secret_status}")
                 logger.warning("   🔧 FIX: Check your deployment platform (Railway/Render) environment variables:")
                 logger.warning("      1. Remove any leading/trailing spaces or newlines from the values")
                 logger.warning("      2. Ensure the values are not just whitespace characters")
