@@ -133,15 +133,19 @@ User accounts allow NIJA to manage multiple trading accounts independently. This
 - Separating personal and business trading
 - Pro-tier features with isolated accounts
 
-### Why You See "NOT TRADING" for User Accounts
+### Why You See "No user accounts configured"
 
-The messages:
+If you see:
 ```
-❌ USER #1 (Daivon Frazier): NOT TRADING (Connection failed or not configured)
-❌ USER #2 (Tania Gilbert): NOT TRADING (Connection failed or not configured)
+⚪ No user accounts configured
 ```
 
-These appear because Kraken API credentials for these users are not configured. **This is expected behavior** if you haven't set up these accounts yet.
+This is **normal and expected** when user accounts are disabled in the configuration files. User accounts are completely optional - NIJA works perfectly with just the master account.
+
+User accounts in `config/users/*.json` files are **disabled by default** (`"enabled": false`) and should only be enabled after:
+1. You have API credentials for that user
+2. You've added those credentials to your environment variables
+3. You want NIJA to manage that account
 
 ### To Enable User #1 (Daivon Frazier)
 
@@ -163,23 +167,41 @@ These appear because Kraken API credentials for these users are not configured. 
    KRAKEN_USER_DAIVON_API_SECRET=your-daivon-private-key
    ```
 
-3. **Restart NIJA:**
+3. **Enable the user in config file:**
+   Edit `config/users/retail_kraken.json` and change Daivon's `"enabled"` from `false` to `true`:
+   ```json
+   {
+     "user_id": "daivon_frazier",
+     "name": "Daivon Frazier",
+     "account_type": "retail",
+     "broker_type": "kraken",
+     "enabled": true,
+     "description": "Retail user - Kraken crypto account"
+   }
+   ```
+
+4. **Restart NIJA:**
    ```bash
    python3 bot.py
    ```
 
 You should now see:
 ```
-✅ USER #1 (Daivon Frazier): TRADING (Broker: Kraken)
+✅ USER: Daivon Frazier: TRADING (Broker: Kraken)
 ```
 
 ### To Enable User #2 (Tania Gilbert)
 
-Follow the same process as User #1, but use:
-```bash
-KRAKEN_USER_TANIA_API_KEY=your-tania-api-key
-KRAKEN_USER_TANIA_API_SECRET=your-tania-private-key
-```
+Follow the same process as User #1:
+
+1. Get Kraken API credentials for Tania
+2. Add to `.env` file:
+   ```bash
+   KRAKEN_USER_TANIA_API_KEY=your-tania-api-key
+   KRAKEN_USER_TANIA_API_SECRET=your-tania-private-key
+   ```
+3. Enable in `config/users/retail_kraken.json` by changing `"enabled"` to `true`
+4. Restart NIJA
 
 ### Verify Configuration
 

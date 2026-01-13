@@ -4,15 +4,15 @@
     "name": "Daivon Frazier",
     "account_type": "retail",
     "broker_type": "kraken",
-    "enabled": true,
-    "description": "Retail user - Kraken crypto account"
+    "enabled": false,
+    "description": "Retail user - Kraken crypto account (disabled - set to true after adding credentials)"
   },
   {
     "user_id": "tania_gilbert",
     "name": "Tania Gilbert",
     "account_type": "retail",
     "broker_type": "kraken",
-    "enabled": true,
-    "description": "Retail user - Kraken crypto account"
+    "enabled": false,
+    "description": "Retail user - Kraken crypto account (disabled - set to true after adding credentials)"
   }
 ]
