@@ -686,7 +686,7 @@ class IndependentBrokerTrader:
     
     def log_status_summary(self):
         """
-        Log a summary of all broker trading statuses.
+        Log a summary of all broker trading statuses with active positions.
         """
         summary = self.get_status_summary()
         
@@ -709,3 +709,85 @@ class IndependentBrokerTrader:
                 logger.info(f"   ⚠️  Recent Errors: {details['error_count']}")
         
         logger.info("=" * 70)
+        
+        # Log active positions for all funded brokers (master and users)
+        self._log_all_active_positions()
+    
+    def _log_all_active_positions(self):
+        """
+        Log active positions for all funded brokers (master and users).
+        Shows which brokerages have active trades and position details.
+        """
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info("📈 ACTIVE POSITIONS ACROSS ALL FUNDED BROKERS")
+        logger.info("=" * 70)
+        
+        total_positions = 0
+        brokers_with_positions = 0
+        
+        # Check master brokers
+        if self.multi_account_manager and self.multi_account_manager.master_brokers:
+            for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                if broker and broker.connected:
+                    try:
+                        # Check if broker is funded
+                        balance = broker.get_account_balance()
+                        if balance >= MINIMUM_FUNDED_BALANCE:
+                            positions = broker.get_positions()
+                            if positions:
+                                brokers_with_positions += 1
+                                total_positions += len(positions)
+                                self._log_broker_positions(
+                                    f"🔷 MASTER - {broker_type.value.upper()}",
+                                    balance,
+                                    positions
+                                )
+                            else:
+                                logger.info(f"⚪ MASTER - {broker_type.value.upper()}: No open positions")
+                    except Exception as e:
+                        logger.warning(f"⚠️  Could not get positions for MASTER {broker_type.value.upper()}: {e}")
+        
+        # Check user brokers
+        if self.multi_account_manager and self.multi_account_manager.user_brokers:
+            for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
+                for broker_type, broker in user_broker_dict.items():
+                    if broker and broker.connected:
+                        try:
+                            # Check if this user broker is funded
+                            balance = broker.get_account_balance()
+                            if balance >= MINIMUM_FUNDED_BALANCE:
+                                positions = broker.get_positions()
+                                if positions:
+                                    brokers_with_positions += 1
+                                    total_positions += len(positions)
+                                    self._log_broker_positions(
+                                        f"👤 USER - {user_id.upper()} ({broker_type.value.upper()})",
+                                        balance,
+                                        positions
+                                    )
+                                else:
+                                    logger.info(f"⚪ USER - {user_id.upper()} ({broker_type.value.upper()}): No open positions")
+                        except Exception as e:
+                            logger.warning(f"⚠️  Could not get positions for USER {user_id} ({broker_type.value.upper()}): {e}")
+        
+        logger.info("=" * 70)
+        logger.info(f"📊 SUMMARY: {total_positions} total position(s) across {brokers_with_positions} funded broker(s)")
+        logger.info("=" * 70)
+    
+    def _log_broker_positions(self, label: str, balance: float, positions: list):
+        """
+        Helper method to log broker positions in a consistent format.
+        
+        Args:
+            label: Broker label (e.g., "🔷 MASTER - COINBASE")
+            balance: Broker account balance
+            positions: List of position dicts
+        """
+        logger.info(f"{label}:")
+        logger.info(f"   💰 Balance: ${balance:,.2f}")
+        logger.info(f"   📊 Active Positions: {len(positions)}")
+        for pos in positions:
+            symbol = pos.get('symbol', 'UNKNOWN')
+            quantity = pos.get('quantity', 0)
+            logger.info(f"      • {symbol}: {quantity:.8f}")

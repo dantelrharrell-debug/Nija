@@ -425,7 +425,7 @@ class TradingStrategy:
                             logger.info(f"✅ USER: {user.name}: TRADING (Broker: {user.broker_type.upper()})")
                             active_user_count += 1
                         else:
-                            logger.info(f"❌ USER: {user.name}: NOT TRADING (Connection failed)")
+                            logger.info(f"❌ USER: {user.name}: NOT TRADING (Broker: {user.broker_type.upper()}, Connection failed)")
                 else:
                     logger.info("⚪ No user accounts configured")
             except Exception as e:
@@ -438,7 +438,7 @@ class TradingStrategy:
                                 logger.info(f"✅ USER: {user_id}: TRADING (Broker: {broker_type.value.upper()})")
                                 active_user_count += 1
                             else:
-                                logger.info(f"❌ USER: {user_id}: NOT TRADING (Connection failed)")
+                                logger.info(f"❌ USER: {user_id}: NOT TRADING (Broker: {broker_type.value.upper()}, Connection failed)")
             
             logger.info("=" * 70)
             
