@@ -12,6 +12,13 @@ This script tests that:
 import os
 import sys
 
+# Try to load .env file if available (for local testing)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not available, env vars should be set externally
+
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 

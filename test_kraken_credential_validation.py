@@ -9,6 +9,13 @@ import os
 import sys
 import logging
 
+# Try to load .env file if available (for local testing)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not available, env vars should be set externally
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 
