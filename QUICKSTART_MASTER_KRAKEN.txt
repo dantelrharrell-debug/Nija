@@ -1,0 +1,137 @@
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃                                                                              ┃
+┃                    🔧 CONNECT MASTER KRAKEN ACCOUNT                          ┃
+┃                         Quick 5-Minute Guide                                 ┃
+┃                                                                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+📊 CURRENT STATUS:
+   ✅ KRAKEN User #1 (Daivon)  - Configured
+   ✅ KRAKEN User #2 (Tania)   - Configured  
+   ✅ OKX Master               - Configured
+   ❌ KRAKEN Master            - MISSING (you need to add this)
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  STEP 1: Get Your Kraken API Credentials                                    ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+  1. Go to: https://www.kraken.com
+  2. Log in → Settings → API → Create API Key
+  3. Set Name: "NIJA Master Trading Bot"
+  4. Enable Permissions:
+     ✅ Query Funds
+     ✅ Query Open Orders & Trades
+     ✅ Query Closed Orders & Trades
+     ✅ Create & Modify Orders
+     ✅ Cancel/Close Orders
+  5. Click "Generate Key"
+  6. ⚠️  COPY BOTH values immediately (you won't see them again!)
+     • API Key (56 chars)
+     • Private Key / API Secret (88 chars)
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  STEP 2: Add to Your Deployment                                             ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+  🚂 RAILWAY:
+     1. https://railway.app/ → Your NIJA Project
+     2. Click Service → "Variables" tab
+     3. Add two variables:
+        
+        KRAKEN_MASTER_API_KEY     = [paste your API key]
+        KRAKEN_MASTER_API_SECRET  = [paste your private key]
+        
+     4. Railway auto-restarts → Wait 2-3 minutes
+     5. ✅ Done!
+
+  🎨 RENDER:
+     1. https://dashboard.render.com/ → Your NIJA Service
+     2. Click "Environment" tab (left sidebar)
+     3. Add two variables:
+        
+        KRAKEN_MASTER_API_KEY     = [paste your API key]
+        KRAKEN_MASTER_API_SECRET  = [paste your private key]
+        
+     4. Click "Save Changes"
+     5. Click "Manual Deploy" → "Deploy latest commit"
+     6. Wait 3-5 minutes
+     7. ✅ Done!
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  STEP 3: Verify It Worked                                                   ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+  Check your deployment logs. You should see:
+
+  🔍 EXCHANGE CREDENTIAL STATUS:
+     📊 KRAKEN (Master):
+        ✅ Configured (Key: 56 chars, Secret: 88 chars)  ← Should be ✅ now!
+     👤 KRAKEN (User #1: Daivon):
+        ✅ Configured (Key: 56 chars, Secret: 88 chars)
+     👤 KRAKEN (User #2: Tania):
+        ✅ Configured (Key: 56 chars, Secret: 88 chars)
+
+  Later in logs:
+
+  📊 Attempting to connect Kraken Pro (MASTER)...
+     ✅ Connected to Kraken Pro API (MASTER)
+     💰 Kraken balance: $X,XXX.XX
+
+  If you see all ✅ → You're done! 🎉
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  ⚠️  Common Issues                                                           ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+  Problem: Still shows "❌ Not configured" after restart
+  Fix: 
+    • Check variable names are EXACTLY:
+      - KRAKEN_MASTER_API_KEY (case-sensitive)
+      - KRAKEN_MASTER_API_SECRET (case-sensitive)
+    • Remove spaces before/after values
+    • Verify you're on the correct service/project
+
+  Problem: "Invalid API key" or "Authentication failed"  
+  Fix:
+    • Double-check values copied correctly from Kraken
+    • Verify all 5 permissions are enabled
+    • Try regenerating a new API key
+
+  Problem: Connection errors
+  Fix:
+    • Check Kraken status: https://status.kraken.com/
+    • Wait a few minutes and retry
+    • Check logs for specific error message
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📚 Need More Help?                                                          ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+  Run these for detailed help:
+
+    python3 setup_kraken_master.py       # Interactive setup guide
+    python3 check_kraken_status.py       # Check connection status
+    python3 diagnose_kraken_connection.py  # Diagnose issues
+
+  Or read these guides:
+
+    SETUP_MASTER_KRAKEN.md              # Full step-by-step guide
+    KRAKEN_SETUP_GUIDE.md               # Complete Kraken setup
+    KRAKEN_RAILWAY_RENDER_SETUP.md      # Platform-specific setup
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🔒 Security Reminders                                                       ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+  ⚠️  Never share API keys publicly
+  ⚠️  Never commit to git repositories
+  ⚠️  Enable 2FA on Kraken account
+  ⚠️  Use password manager to store keys
+  ⚠️  Rotate keys every 3-6 months
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃                         THAT'S IT! YOU'RE ALL SET!                           ┃
+┃                                                                              ┃
+┃  Total time: ~5 minutes (if you already have a Kraken account)               ┃
+┃  Your bot will now trade on Kraken with the master account! 🚀               ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛

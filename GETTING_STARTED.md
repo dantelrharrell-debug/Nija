@@ -81,6 +81,51 @@ You should see:
 
 ---
 
+## Adding Kraken Master Account (Optional)
+
+Want to expand your trading to Kraken? You can enable Kraken for the master account to trade on multiple exchanges simultaneously.
+
+### Quick Setup for Kraken Master
+
+**🚀 NEW: Quick Guide Available!**
+
+For the fastest setup, check out:
+- **QUICKSTART_MASTER_KRAKEN.txt** - Visual one-page guide
+- **SETUP_MASTER_KRAKEN.md** - Detailed step-by-step instructions
+- Run: `python3 setup_kraken_master.py` - Interactive setup wizard
+
+### Manual Setup (5 minutes)
+
+1. **Get Kraken API credentials:**
+   - Log in to Kraken: https://www.kraken.com/u/security/api
+   - Click "Generate New Key"
+   - Name it "NIJA Trading Bot - Master"
+   - Enable permissions:
+     - ✅ Query Funds
+     - ✅ Query Open Orders & Trades
+     - ✅ Query Closed Orders & Trades
+     - ✅ Create & Modify Orders
+     - ✅ Cancel/Close Orders
+   - Save both the API key and private key
+
+2. **Add to `.env` file (local) OR Railway/Render (production):**
+   ```bash
+   KRAKEN_MASTER_API_KEY=your-master-api-key
+   KRAKEN_MASTER_API_SECRET=your-master-private-key
+   ```
+
+3. **Restart NIJA**
+
+You should now see:
+```
+📊 KRAKEN (Master):
+   ✅ Configured (Key: 56 chars, Secret: 88 chars)
+```
+
+**For Railway/Render deployments:** See SETUP_MASTER_KRAKEN.md for platform-specific instructions.
+
+---
+
 ## Enabling User Accounts
 
 User accounts allow NIJA to manage multiple trading accounts independently. This is useful for:
