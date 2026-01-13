@@ -56,11 +56,11 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **[USER_INVESTOR_TRACKING.md](USER_INVESTOR_TRACKING.md)** - 📊 Tracking system guide
 - **[USER_COMMUNICATION_LOG.md](USER_COMMUNICATION_LOG.md)** - 💬 Communication history
 
-**Current Users**: 2 users configured
-- **User #1**: Daivon Frazier (daivon_frazier) - Pro tier, Kraken integration (credentials needed) ⚙️
-- **User #2**: Tania Gilbert (tania_gilbert) - Pro tier, Kraken integration (credentials needed) ⚙️
+**Current Users**: 2 users pre-configured (disabled by default)
+- **User #1**: Daivon Frazier (daivon_frazier) - Pro tier, Kraken integration (disabled - enable after adding credentials)
+- **User #2**: Tania Gilbert (tania_gilbert) - Pro tier, Kraken integration (disabled - enable after adding credentials)
 
-> ⚠️ **Note**: If you see "NOT TRADING (Connection failed or not configured)" for these users in the logs, this is **expected behavior** when Kraken credentials are not configured. The master account will still trade successfully. See [GETTING_STARTED.md](GETTING_STARTED.md#why-you-see-not-trading-for-user-accounts) for details.
+> ℹ️ **Note**: User accounts are **disabled by default** in `config/users/*.json` files. They should only be enabled after adding the appropriate API credentials to your environment. See [GETTING_STARTED.md](GETTING_STARTED.md#enabling-user-accounts) for setup instructions.
 
 **User Management**:
 - **Quick check if User #1 is trading**: `python is_user1_trading.py` or `./check_user1_trading.sh`
