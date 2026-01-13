@@ -188,9 +188,31 @@ def main():
         exchange_status.append("❌ Coinbase")
         logger.warning("⚠️  Coinbase credentials not configured")
     
-    # Check Kraken Master
+    # Check Kraken Master (with enhanced validation)
     kraken_master_configured = False
-    if os.getenv("KRAKEN_MASTER_API_KEY") and os.getenv("KRAKEN_MASTER_API_SECRET"):
+    kraken_master_key_raw = os.getenv("KRAKEN_MASTER_API_KEY", "")
+    kraken_master_secret_raw = os.getenv("KRAKEN_MASTER_API_SECRET", "")
+    kraken_master_key = kraken_master_key_raw.strip()
+    kraken_master_secret = kraken_master_secret_raw.strip()
+    
+    # Check for whitespace-only credentials (common configuration error)
+    kraken_master_key_malformed = (kraken_master_key_raw != "" and kraken_master_key == "")
+    kraken_master_secret_malformed = (kraken_master_secret_raw != "" and kraken_master_secret == "")
+    
+    if kraken_master_key_malformed or kraken_master_secret_malformed:
+        exchange_status.append("⚠️ Kraken (Master - MALFORMED)")
+        logger.warning("⚠️  Kraken Master credentials ARE SET but CONTAIN ONLY WHITESPACE")
+        logger.warning("   This is a common error when copying/pasting credentials!")
+        if kraken_master_key_malformed:
+            logger.warning("   → KRAKEN_MASTER_API_KEY: SET but empty after removing whitespace")
+        if kraken_master_secret_malformed:
+            logger.warning("   → KRAKEN_MASTER_API_SECRET: SET but empty after removing whitespace")
+        logger.warning("")
+        logger.warning("   🔧 FIX in Railway/Render dashboard:")
+        logger.warning("      1. Check for leading/trailing spaces or newlines in the values")
+        logger.warning("      2. Re-paste the credentials without extra whitespace")
+        logger.warning("      3. Click 'Save' and restart the deployment")
+    elif kraken_master_key and kraken_master_secret:
         exchanges_configured += 1
         exchange_status.append("✅ Kraken (Master)")
         logger.info("✅ Kraken Master credentials detected")
@@ -202,15 +224,44 @@ def main():
         logger.warning("      KRAKEN_MASTER_API_KEY")
         logger.warning("      KRAKEN_MASTER_API_SECRET")
     
-    # Check Kraken User accounts
+    # Check Kraken User accounts (with enhanced validation)
     kraken_users_configured = 0
-    if os.getenv("KRAKEN_USER_DAIVON_API_KEY") and os.getenv("KRAKEN_USER_DAIVON_API_SECRET"):
+    
+    # User #1: Daivon
+    daivon_key_raw = os.getenv("KRAKEN_USER_DAIVON_API_KEY", "")
+    daivon_secret_raw = os.getenv("KRAKEN_USER_DAIVON_API_SECRET", "")
+    daivon_key = daivon_key_raw.strip()
+    daivon_secret = daivon_secret_raw.strip()
+    daivon_key_malformed = (daivon_key_raw != "" and daivon_key == "")
+    daivon_secret_malformed = (daivon_secret_raw != "" and daivon_secret == "")
+    
+    if daivon_key_malformed or daivon_secret_malformed:
+        logger.warning("⚠️  Kraken User #1 (Daivon) credentials ARE SET but CONTAIN ONLY WHITESPACE")
+        if daivon_key_malformed:
+            logger.warning("   → KRAKEN_USER_DAIVON_API_KEY: SET but empty after stripping")
+        if daivon_secret_malformed:
+            logger.warning("   → KRAKEN_USER_DAIVON_API_SECRET: SET but empty after stripping")
+    elif daivon_key and daivon_secret:
         logger.info("✅ Kraken User #1 (Daivon) credentials detected")
         kraken_users_configured += 1
     else:
         logger.warning("⚠️  Kraken User #1 (Daivon) credentials NOT SET")
     
-    if os.getenv("KRAKEN_USER_TANIA_API_KEY") and os.getenv("KRAKEN_USER_TANIA_API_SECRET"):
+    # User #2: Tania
+    tania_key_raw = os.getenv("KRAKEN_USER_TANIA_API_KEY", "")
+    tania_secret_raw = os.getenv("KRAKEN_USER_TANIA_API_SECRET", "")
+    tania_key = tania_key_raw.strip()
+    tania_secret = tania_secret_raw.strip()
+    tania_key_malformed = (tania_key_raw != "" and tania_key == "")
+    tania_secret_malformed = (tania_secret_raw != "" and tania_secret == "")
+    
+    if tania_key_malformed or tania_secret_malformed:
+        logger.warning("⚠️  Kraken User #2 (Tania) credentials ARE SET but CONTAIN ONLY WHITESPACE")
+        if tania_key_malformed:
+            logger.warning("   → KRAKEN_USER_TANIA_API_KEY: SET but empty after stripping")
+        if tania_secret_malformed:
+            logger.warning("   → KRAKEN_USER_TANIA_API_SECRET: SET but empty after stripping")
+    elif tania_key and tania_secret:
         logger.info("✅ Kraken User #2 (Tania) credentials detected")
         kraken_users_configured += 1
     else:
@@ -252,13 +303,41 @@ def main():
     if not kraken_master_configured and kraken_users_configured == 0:
         logger.info("")
         logger.info("💡 KRAKEN NOT CONNECTED - To enable Kraken trading:")
-        logger.info("   1. Get API credentials from https://www.kraken.com/u/security/api")
-        logger.info("   2. Set environment variables in Railway/Render dashboard:")
+        logger.info("")
+        logger.info("   📋 REQUIRED ENVIRONMENT VARIABLES:")
         logger.info("      • KRAKEN_MASTER_API_KEY=<your-api-key>")
         logger.info("      • KRAKEN_MASTER_API_SECRET=<your-api-secret>")
-        logger.info("   3. Restart the deployment to apply changes")
-        logger.info("   📖 See KRAKEN_NOT_CONNECTING_DIAGNOSIS.md for step-by-step guide")
-        logger.info("   🔧 Run: python3 diagnose_kraken_connection.py for detailed help")
+        logger.info("      • KRAKEN_USER_DAIVON_API_KEY=<user-api-key>  (optional)")
+        logger.info("      • KRAKEN_USER_DAIVON_API_SECRET=<user-api-secret>  (optional)")
+        logger.info("      • KRAKEN_USER_TANIA_API_KEY=<user-api-key>  (optional)")
+        logger.info("      • KRAKEN_USER_TANIA_API_SECRET=<user-api-secret>  (optional)")
+        logger.info("")
+        logger.info("   🔧 HOW TO ADD IN RAILWAY:")
+        logger.info("      1. Dashboard → Your Service → 'Variables' tab")
+        logger.info("      2. Click '+ New Variable' for each variable above")
+        logger.info("      3. Railway auto-restarts after saving")
+        logger.info("")
+        logger.info("   🔧 HOW TO ADD IN RENDER:")
+        logger.info("      1. Dashboard → Your Service → 'Environment' tab")
+        logger.info("      2. Add each variable above")
+        logger.info("      3. Click 'Save Changes'")
+        logger.info("      4. Click 'Manual Deploy' → 'Deploy latest commit'")
+        logger.info("")
+        logger.info("   🔑 GET API CREDENTIALS:")
+        logger.info("      1. Go to https://www.kraken.com/u/security/api")
+        logger.info("      2. Create API key with these permissions:")
+        logger.info("         ✅ Query Funds")
+        logger.info("         ✅ Query Open Orders & Trades")
+        logger.info("         ✅ Query Closed Orders & Trades")
+        logger.info("         ✅ Create & Modify Orders")
+        logger.info("         ✅ Cancel/Close Orders")
+        logger.info("      3. Copy the API Key and Private Key")
+        logger.info("")
+        logger.info("   📖 DETAILED GUIDES:")
+        logger.info("      • KRAKEN_RAILWAY_RENDER_SETUP.md (step-by-step for platforms)")
+        logger.info("      • KRAKEN_NOT_CONNECTING_DIAGNOSIS.md (troubleshooting)")
+        logger.info("      • Run: python3 test_kraken_connection_live.py (test credentials)")
+        logger.info("      • Run: python3 diagnose_kraken_connection.py (diagnose issues)")
         logger.info("=" * 70)
     
     if exchanges_configured == 0:
@@ -306,10 +385,16 @@ def main():
         
         # Check which master brokers are connected
         connected_master_brokers = []
+        failed_master_brokers = []
+        
         if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
             for broker_type, broker in strategy.multi_account_manager.master_brokers.items():
                 if broker and broker.connected:
                     connected_master_brokers.append(broker_type.value.upper())
+        
+        # Check if Kraken was expected but didn't connect
+        if kraken_master_configured and 'KRAKEN' not in connected_master_brokers:
+            failed_master_brokers.append('KRAKEN')
         
         if connected_master_brokers:
             logger.info("✅ NIJA IS READY TO TRADE!")
@@ -317,6 +402,18 @@ def main():
             logger.info("Active Master Exchanges:")
             for exchange in connected_master_brokers:
                 logger.info(f"   ✅ {exchange}")
+            
+            # Show failed brokers if any were expected to connect
+            if failed_master_brokers:
+                logger.info("")
+                logger.warning("⚠️  Expected but NOT Connected:")
+                for exchange in failed_master_brokers:
+                    logger.warning(f"   ❌ {exchange}")
+                    if exchange == 'KRAKEN':
+                        logger.warning("      → Check logs above for Kraken connection errors")
+                        logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
+                        logger.warning("      → Run: python3 test_kraken_connection_live.py to diagnose")
+            
             logger.info("")
             logger.info(f"📈 Trading will occur on {len(connected_master_brokers)} exchange(s)")
             logger.info("💡 Each exchange operates independently")
