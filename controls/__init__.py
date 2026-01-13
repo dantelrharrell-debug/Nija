@@ -96,18 +96,16 @@ class HardControls:
             
             if get_user_config_loader is not None:
                 loader = get_user_config_loader()
-                loader.load_all_users()
+                # Note: load_all_users() is already called by get_user_config_loader()
                 
-                # Enable all enabled users from config files
-                # Use a set to track unique user_ids since a user may appear in multiple broker configs
+                # Get all enabled users and deduplicate by user_id
+                # (users may appear multiple times if they have accounts on multiple brokers)
                 enabled_users = loader.get_all_enabled_users()
-                unique_user_ids = set()
+                unique_users = {user.user_id: user for user in enabled_users}.values()
                 
-                for user in enabled_users:
-                    if user.user_id not in unique_user_ids:
-                        unique_user_ids.add(user.user_id)
-                        self.user_kill_switches[user.user_id] = KillSwitchStatus.ACTIVE
-                        logger.info(f"✅ User account '{user.user_id}' ({user.name}) trading ENABLED")
+                for user in unique_users:
+                    self.user_kill_switches[user.user_id] = KillSwitchStatus.ACTIVE
+                    logger.info(f"✅ User account '{user.user_id}' ({user.name}) trading ENABLED")
                 
                 if not enabled_users:
                     logger.info("ℹ️  No user accounts configured in config files")
