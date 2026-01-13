@@ -84,20 +84,39 @@ class HardControls:
         """
         Initialize trading accounts with ACTIVE status.
         Enables trading for master account and all configured user accounts.
+        Dynamically loads users from configuration files.
         """
         # Enable master account
         self.user_kill_switches['master'] = KillSwitchStatus.ACTIVE
         logger.info("✅ Master account trading ENABLED")
         
-        # Enable all configured user accounts
-        configured_users = [
-            'daivon_frazier',  # User #1 - Kraken account
-            'tania_gilbert',   # User #2 - Kraken + Alpaca account
-        ]
+        # Dynamically load and enable all configured user accounts
+        try:
+            from config import get_user_config_loader
+            
+            if get_user_config_loader is not None:
+                loader = get_user_config_loader()
+                loader.load_all_users()
+                
+                # Enable all enabled users from config files
+                # Use a set to track unique user_ids since a user may appear in multiple broker configs
+                enabled_users = loader.get_all_enabled_users()
+                unique_user_ids = set()
+                
+                for user in enabled_users:
+                    if user.user_id not in unique_user_ids:
+                        unique_user_ids.add(user.user_id)
+                        self.user_kill_switches[user.user_id] = KillSwitchStatus.ACTIVE
+                        logger.info(f"✅ User account '{user.user_id}' ({user.name}) trading ENABLED")
+                
+                if not enabled_users:
+                    logger.info("ℹ️  No user accounts configured in config files")
+            else:
+                logger.warning("⚠️  User config loader not available, skipping user account initialization")
         
-        for user_id in configured_users:
-            self.user_kill_switches[user_id] = KillSwitchStatus.ACTIVE
-            logger.info(f"✅ User account '{user_id}' trading ENABLED")
+        except Exception as e:
+            logger.warning(f"⚠️  Could not load user accounts from config: {e}")
+            logger.warning("   Continuing with master account only")
         
         logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
     
