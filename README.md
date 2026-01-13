@@ -2,10 +2,31 @@
 
 **🚀 New to NIJA?** See the **[Getting Started Guide](GETTING_STARTED.md)** for 5-minute setup!
 
+## ⚠️ IMPORTANT: Kraken Status (January 13, 2026)
+
+**Current Status**: ❌ **NOT TRADING ON KRAKEN** - Credentials required
+
+| What | Status | Action Needed |
+|------|--------|---------------|
+| **Code Infrastructure** | ✅ Complete | None - ready to use |
+| **API Credentials** | ❌ Missing | Set environment variables |
+| **Trading Status** | ❌ Inactive | Configure credentials → restart |
+
+**Quick Fix**: Run `python3 setup_kraken_credentials.py` - Interactive setup wizard (~10 minutes)
+
+**Details**: See [CURRENT_KRAKEN_STATUS.md](CURRENT_KRAKEN_STATUS.md) for complete status and setup instructions
+
+**This applies to**:
+- Master account (NIJA system) - `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET` not set
+- User #1 (Daivon Frazier) - `KRAKEN_USER_DAIVON_API_KEY` and `KRAKEN_USER_DAIVON_API_SECRET` not set  
+- User #2 (Tania Gilbert) - `KRAKEN_USER_TANIA_API_KEY` and `KRAKEN_USER_TANIA_API_SECRET` not set
+
+---
+
 **What is NIJA?** NIJA is a sophisticated, AI-powered autonomous trading platform that goes far beyond simple cryptocurrency trading. It's a comprehensive algorithmic trading system featuring:
 
 - 🤖 **Multi-Asset Trading**: Cryptocurrencies (732+ pairs) AND traditional stocks via Alpaca
-- 🌍 **Multi-Exchange Support**: ✅ **Kraken NOW CONNECTED**, Coinbase, OKX, Binance, and Alpaca integrations
+- 🌍 **Multi-Exchange Support**: Coinbase ✅ (active), Kraken ⚙️ (ready - needs credentials), OKX, Binance, and Alpaca integrations
 - 🧠 **Advanced AI Strategy Engine**: APEX v7.1/v7.2 with dual RSI, machine learning filters, and adaptive growth management
 - 🎯 **Intelligent Risk Management**: Dynamic position sizing, circuit breakers, stop-loss automation, and profit-taking systems
 - 📊 **Real-Time Analytics**: P&L tracking, position monitoring, performance metrics, and trade journaling
@@ -56,17 +77,33 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **[USER_INVESTOR_TRACKING.md](USER_INVESTOR_TRACKING.md)** - 📊 Tracking system guide
 - **[USER_COMMUNICATION_LOG.md](USER_COMMUNICATION_LOG.md)** - 💬 Communication history
 
-**Current Users**: 2 users configured for Kraken
-- **User #1**: Daivon Frazier (daivon_frazier) - Retail tier, Kraken integration (enabled - add credentials to activate)
-- **User #2**: Tania Gilbert (tania_gilbert) - Retail tier, Kraken + Alpaca integration (enabled - add credentials to activate)
+**Current Users**: 2 users configured for Kraken (Master + 2 users = 3 accounts total)
 
-> ⚠️ **IMPORTANT**: User accounts are **enabled** in `config/users/*.json` files but **require environment variables** with API credentials to connect.
+| Account | User ID | Config Status | Credentials Status | Trading Status |
+|---------|---------|---------------|-------------------|----------------|
+| **Master** | system | ✅ Enabled | ❌ NOT SET | ❌ NOT TRADING |
+| **User #1** | daivon_frazier | ✅ Enabled | ❌ NOT SET | ❌ NOT TRADING |
+| **User #2** | tania_gilbert | ✅ Enabled | ❌ NOT SET | ❌ NOT TRADING |
+
+- **User #1**: Daivon Frazier (daivon_frazier) - Retail tier, Kraken integration
+  - Config: ✅ Enabled in `config/users/retail_kraken.json`
+  - Credentials: ❌ `KRAKEN_USER_DAIVON_API_KEY` and `KRAKEN_USER_DAIVON_API_SECRET` not set
+  - Status: ❌ **NOT TRADING** - Add credentials to activate
+  
+- **User #2**: Tania Gilbert (tania_gilbert) - Retail tier, Kraken + Alpaca integration
+  - Config: ✅ Enabled in `config/users/retail_kraken.json`
+  - Credentials: ❌ `KRAKEN_USER_TANIA_API_KEY` and `KRAKEN_USER_TANIA_API_SECRET` not set
+  - Status: ❌ **NOT TRADING** - Add credentials to activate
+
+> ⚠️ **IMPORTANT**: All user accounts are **enabled** in `config/users/*.json` files but **require environment variables** with API credentials to actually trade.
 > 
-> **If users show "NOT TRADING (Connection failed or not configured)":**
-> - ✅ **Quick Fix**: See [ANSWER_KRAKEN_USER_SETUP.md](ANSWER_KRAKEN_USER_SETUP.md) (10-minute fix)
-> - 📖 **Detailed Guide**: See [SETUP_KRAKEN_USERS.md](SETUP_KRAKEN_USERS.md)
-> - 🔍 **Verify Status**: Run `python3 verify_kraken_users.py`
-> - 🚀 **Railway Setup**: See [RAILWAY_KRAKEN_SETUP.md](RAILWAY_KRAKEN_SETUP.md)
+> **Current Status**: ❌ **NO ACCOUNTS TRADING** - All 3 accounts (Master + 2 users) need API credentials configured
+> 
+> **To Fix**:
+> 1. ⚡ **Quick Setup**: Run `python3 setup_kraken_credentials.py` - Interactive setup wizard
+> 2. 🔍 **Check Status**: Run `python3 verify_kraken_users.py` - See detailed credential status
+> 3. 📖 **Full Guide**: See [CURRENT_KRAKEN_STATUS.md](CURRENT_KRAKEN_STATUS.md) - Complete setup instructions
+> 4. 🚀 **Railway**: See [RAILWAY_KRAKEN_SETUP.md](RAILWAY_KRAKEN_SETUP.md) - Railway deployment guide
 
 **User Management**:
 - **Quick check if User #1 is trading**: `python is_user1_trading.py` or `./check_user1_trading.sh`
