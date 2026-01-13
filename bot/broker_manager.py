@@ -3342,7 +3342,7 @@ class KrakenBroker(BaseBroker):
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
         # 
-        # CRITICAL FIX (Jan 13, 2026): Initialize nonce well ahead of current time
+        # CRITICAL FIX: Initialize nonce well ahead of current time
         # When bot restarts, Kraken remembers the last nonce from the previous session
         # for a certain time window. If we start with current_time + small_offset, and the bot
         # restarted recently (< 60 seconds), the new nonce could be LOWER than the last nonce
@@ -3540,11 +3540,12 @@ class KrakenBroker(BaseBroker):
             try:
                 self.api._nonce = _nonce_monotonic
                 logger.debug(f"✅ Custom nonce generator installed for {cred_label}")
-                # Log initial nonce value for debugging nonce-related issues
+                # Log initial nonce value for debugging nonce-related issues (only if debug enabled)
                 # This helps diagnose if the initial nonce is too high or too low
-                current_time_us = int(time.time() * 1000000)
-                offset_seconds = (self._last_nonce - current_time_us) / 1000000.0
-                logger.debug(f"   Initial nonce: {self._last_nonce} (current time + {offset_seconds:.2f}s)")
+                if logger.isEnabledFor(logging.DEBUG):
+                    current_time_us = int(time.time() * 1000000)
+                    offset_seconds = (self._last_nonce - current_time_us) / 1000000.0
+                    logger.debug(f"   Initial nonce: {self._last_nonce} (current time + {offset_seconds:.2f}s)")
             except AttributeError as e:
                 logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
                 logger.error("   This may indicate a version incompatibility with krakenex library")
