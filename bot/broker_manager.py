@@ -2774,7 +2774,7 @@ class AlpacaBroker(BaseBroker):
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """Get candle data with retry logic for rate limiting"""
-        # Import dependencies outside retry loop to avoid overhead
+        # Import Alpaca SDK dependencies (method-level import to avoid import errors when SDK not installed)
         try:
             from alpaca.data.historical import StockHistoricalDataClient
             from alpaca.data.requests import StockBarsRequest
