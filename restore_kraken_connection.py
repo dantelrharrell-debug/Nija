@@ -11,6 +11,8 @@ This script helps you restore Kraken connection by:
 
 import os
 import sys
+import shutil
+import traceback
 
 def print_header(title):
     """Print formatted header"""
@@ -215,7 +217,6 @@ def main():
             if os.path.exists(env_path):
                 backup = input(f"\n  .env file already exists. Create backup? (y/n): ").strip().lower()
                 if backup == 'y':
-                    import shutil
                     shutil.copy(env_path, f"{env_path}.backup")
                     print(f"  ✅ Backup created: {env_path}.backup")
             
@@ -230,7 +231,7 @@ def main():
                 # Write existing lines, updating any matching variables
                 written_vars = set()
                 for line in existing_lines:
-                    var_name = line.split('=')[0].strip() if '=' in line else None
+                    var_name = line.split('=', 1)[0].strip() if '=' in line else None
                     if var_name in credentials:
                         f.write(f"{var_name}={credentials[var_name]}\n")
                         written_vars.add(var_name)
@@ -325,6 +326,5 @@ if __name__ == "__main__":
         sys.exit(1)
     except Exception as e:
         print(f"\n\n❌ ERROR: {e}")
-        import traceback
         traceback.print_exc()
         sys.exit(1)
