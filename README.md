@@ -82,19 +82,29 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **Complete guide**: [ACTIVE_TRADING_STATUS.md](ACTIVE_TRADING_STATUS.md)
 
 **Broker Status** 🌐:
-- **Currently Active**: Coinbase Advanced Trade ✅, Kraken ✅
-- **✅ KRAKEN IS NOW CONNECTED**: Full integration complete with multi-user support
-  - **📋 CONFIRMATION**: [KRAKEN_CONNECTION_CONFIRMED.md](KRAKEN_CONNECTION_CONFIRMED.md) - ✅ **Kraken connection verified**
-  - **🔍 Verify Infrastructure**: Run `python3 verify_kraken_infrastructure.py` - No credentials needed
-  - **🚀 QUICK START**: [HOW_TO_ENABLE_KRAKEN.md](HOW_TO_ENABLE_KRAKEN.md) - **START HERE** for step-by-step guide
-  - **🔍 Status Check**: Run `python3 check_kraken_status.py` to verify credential configuration
-  - **🧪 Live Test**: Run `python3 test_kraken_connection_live.py` to test actual API connection
+- **Currently Active**: Coinbase Advanced Trade ✅
+- **Kraken Status**: ⚙️ **INFRASTRUCTURE READY** - Credentials required to enable trading
+  - **📊 CURRENT STATUS**: [CURRENT_KRAKEN_STATUS.md](CURRENT_KRAKEN_STATUS.md) - ⚠️ **READ THIS FIRST** - Clear status & setup guide
+  - **⚡ QUICK SETUP**: Run `python3 setup_kraken_credentials.py` - Interactive credential setup wizard
+  - **🔍 Status Check**: Run `python3 check_kraken_status.py` - See which accounts have credentials configured
+  - **🧪 Live Test**: Run `python3 test_kraken_connection_live.py` - Test actual API connection (requires credentials)
+  - **🚀 QUICK START**: [HOW_TO_ENABLE_KRAKEN.md](HOW_TO_ENABLE_KRAKEN.md) - Step-by-step guide
+  - **📖 Full Setup**: [KRAKEN_SETUP_GUIDE.md](KRAKEN_SETUP_GUIDE.md) - Comprehensive setup instructions
   - **⚡ Railway Setup**: [RAILWAY_KRAKEN_SETUP.md](RAILWAY_KRAKEN_SETUP.md) - Complete Railway deployment guide
-  - **📖 Quick Setup**: [KRAKEN_SETUP_GUIDE.md](KRAKEN_SETUP_GUIDE.md) - Step-by-step instructions
-  - **✅ Config Validator**: Run `python3 verify_kraken_config.py` to validate configuration
-  - **📊 Detailed Status**: [KRAKEN_CONNECTION_STATUS.md](KRAKEN_CONNECTION_STATUS.md)
-  - **📊 Trading Status**: [KRAKEN_TRADING_STATUS.md](KRAKEN_TRADING_STATUS.md) - Is NIJA trading on Kraken?
-  - **🔧 TROUBLESHOOTING**: [KRAKEN_CREDENTIAL_TROUBLESHOOTING.md](KRAKEN_CREDENTIAL_TROUBLESHOOTING.md) - Comprehensive credential issues
+  - **🔧 TROUBLESHOOTING**: [KRAKEN_CREDENTIAL_TROUBLESHOOTING.md](KRAKEN_CREDENTIAL_TROUBLESHOOTING.md) - Common issues
+  
+  **What you need**:
+  - ✅ Code infrastructure: **COMPLETE** (no code changes needed)
+  - ❌ API credentials: **MISSING** (set environment variables to enable)
+  - ⏱️ Time to enable: **~60 minutes** (get API keys → set env vars → restart)
+  
+  **Quick Summary**:
+  - Master account (NIJA system): ❌ NOT CONFIGURED - Set `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET`
+  - User #1 (Daivon Frazier): ❌ NOT CONFIGURED - Set `KRAKEN_USER_DAIVON_API_KEY` and `KRAKEN_USER_DAIVON_API_SECRET`
+  - User #2 (Tania Gilbert): ❌ NOT CONFIGURED - Set `KRAKEN_USER_TANIA_API_KEY` and `KRAKEN_USER_TANIA_API_SECRET`
+  
+  **To enable Kraken trading**: Get API keys from https://www.kraken.com/u/security/api → Set environment variables → Restart bot
+  
 - **Check all brokers**: `python3 check_broker_status.py`
 - **Multi-Broker Guide**: [MULTI_BROKER_STATUS.md](MULTI_BROKER_STATUS.md)
 
