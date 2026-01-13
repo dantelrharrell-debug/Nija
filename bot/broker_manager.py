@@ -2856,8 +2856,10 @@ class AlpacaBroker(BaseBroker):
                         logging.warning(f"⚠️  Alpaca rate limit (403 Forbidden): API key temporarily blocked for {symbol}")
                         logging.warning(f"   Waiting {delay:.1f}s before retry {attempt}/{RATE_LIMIT_MAX_RETRIES}...")
                     else:
-                        # 429 errors: Use exponential backoff (attempt is 1-based, so adjust for exponential calc)
-                        delay = RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1))
+                        # 429 errors: Use exponential backoff with jitter (prevent thundering herd)
+                        base_delay = RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1))
+                        jitter = random.uniform(0, base_delay * 0.3)  # 30% jitter
+                        delay = base_delay + jitter
                         logging.warning(f"⚠️  Alpaca rate limit (429): Too many requests for {symbol}")
                         logging.warning(f"   Waiting {delay:.1f}s before retry {attempt}/{RATE_LIMIT_MAX_RETRIES}...")
                     
