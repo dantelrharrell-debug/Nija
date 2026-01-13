@@ -14,7 +14,6 @@ Usage:
 
 import os
 import sys
-import time
 from datetime import datetime
 
 def print_header(title, char="="):
@@ -91,8 +90,7 @@ def test_kraken_master():
     print("  📦 Checking Kraken SDK...")
     try:
         import krakenex
-        from pykrakenapi import KrakenAPI
-        print("  ✅ krakenex and pykrakenapi imported successfully")
+        print("  ✅ krakenex imported successfully")
     except ImportError as e:
         print(f"  ❌ Failed to import Kraken SDK: {e}")
         print("  💡 Install with: pip install krakenex pykrakenapi")
@@ -223,8 +221,7 @@ def test_kraken_user(user_name, user_id):
     print("  📦 Checking Kraken SDK...")
     try:
         import krakenex
-        from pykrakenapi import KrakenAPI
-        print("  ✅ krakenex and pykrakenapi imported successfully")
+        print("  ✅ krakenex imported successfully")
     except ImportError as e:
         print(f"  ❌ Failed to import Kraken SDK: {e}")
         return False
