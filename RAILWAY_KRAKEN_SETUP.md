@@ -217,27 +217,29 @@ For additional help:
 
 ## Example: Complete Railway Environment Variables
 
+**⚠️ SECURITY WARNING**: The credentials below are EXAMPLES ONLY for demonstration purposes. These are NOT real working credentials. Never commit real API keys to version control or share them publicly.
+
 Here's what a complete Railway environment configuration looks like:
 
 ```bash
-# Master Kraken
+# Master Kraken (EXAMPLE - replace with your real credentials)
 KRAKEN_API_KEY=8zdYy7PMRjnyDraiJUtrAb3wmu8MFxKBON3nrTkjkwnJ9iIUQyKNGKP7
 KRAKEN_API_SECRET=e2xaakHliGa5RwH7uXwuq6RLGospWaQhScaVJfsS6wIa9huHxmx+HgeQCax8A+gvqV3P9jXD9YbR3wtsipdpRA==
 
-# User: Daivon
+# User: Daivon (EXAMPLE - replace with user's real credentials)
 KRAKEN_USER_DAIVON_API_KEY=HSo/f1zjeQALCM/rri9bjTB5JisQ/SPgurCRTx8W7kLD7psjcv2PXEf+
 KRAKEN_USER_DAIVON_API_SECRET=6WOxnBLq+r4ln2Zz7nT0Nvv8CMkaolHtjYdOgTm7NWIq/mJqV8KbDA2XaThP65bHK9QvpEabRr1u38FrBJntaQ==
 
-# User: Tania (Kraken)
+# User: Tania (Kraken) (EXAMPLE - replace with user's real credentials)
 KRAKEN_USER_TANIA_API_KEY=XEB37FsbsQ2Wj/bknOy6HPZTFqs25nyU10M2oxF/ja//Yh/r2kSRCAp/
 KRAKEN_USER_TANIA_API_SECRET=iINPAKFyVe9rTfYCKnauFCpOfqdsm9+lBFxzx2KLFkArjStbjAQ9Rr+FuA5lZgnzpZ85wMwnzKpkO07iHmMLmw==
 
-# User: Tania (Alpaca - optional)
+# User: Tania (Alpaca - optional) (EXAMPLE - replace with user's real credentials)
 ALPACA_USER_TANIA_API_KEY=AKG546YWGRDFHUHOOOXZXUCDV5
 ALPACA_USER_TANIA_API_SECRET=Fss3zVU5yme6V96X833rsJe4aD3j2fY9TmGZC7UTMfb6
 ALPACA_USER_TANIA_PAPER=true
 
-# Coinbase (optional)
+# Coinbase (optional) (EXAMPLE - replace with your real credentials)
 COINBASE_API_KEY=organizations/ce77e4ea-ecca-42ec-912a-b6b4455ab9d0/apiKeys/05067708-2a5d-43a5-a4c6-732176c05e7c
 COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----
 MHcCAQEEIIpbqWDgEUayl0/GuwoWe04zjdwyliPABAzHTRlzhJbFoAoGCCqGSM49
@@ -245,7 +247,7 @@ AwEHoUQDQgAEqoQqw6ZbWDfB1ElbpHfYAJCBof7ala7v5e3TqqiWiYqtprUajjD+
 mqoVbKN6pqHMcnFwC86rM/jRId+1rgf31A==
 -----END EC PRIVATE KEY-----"
 
-# Trading config
+# Trading config (these values can be used as-is or customized)
 LIVE_TRADING=1
 DEFAULT_TRADE_PERCENT=0.02
 MAX_CONCURRENT_POSITIONS=7
@@ -253,5 +255,7 @@ MIN_CASH_TO_BUY=5.50
 MINIMUM_TRADING_BALANCE=25.0
 ALLOW_CONSUMER_USD=True
 ```
+
+**⚠️ IMPORTANT**: Replace ALL example credentials above with your own real API keys before deploying!
 
 ✅ After setting these variables and restarting, NIJA will trade on Kraken for master and all configured users!

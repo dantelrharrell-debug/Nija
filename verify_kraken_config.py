@@ -63,12 +63,12 @@ def check_master_credentials():
     
     if has_new_creds:
         print_success("Master credentials found (new format)")
-        print(f"   KRAKEN_MASTER_API_KEY: {'*' * 10}{master_key[-10:] if len(master_key) > 10 else '***'}")
+        print(f"   KRAKEN_MASTER_API_KEY: {'*' * min(10, len(master_key))}{master_key[-10:] if len(master_key) > 10 else ''}")
         print(f"   KRAKEN_MASTER_API_SECRET: {'*' * 20}... ({len(master_secret)} chars)")
         return True
     elif has_legacy_creds:
         print_success("Master credentials found (legacy format)")
-        print(f"   KRAKEN_API_KEY: {'*' * 10}{legacy_key[-10:] if len(legacy_key) > 10 else '***'}")
+        print(f"   KRAKEN_API_KEY: {'*' * min(10, len(legacy_key))}{legacy_key[-10:] if len(legacy_key) > 10 else ''}")
         print(f"   KRAKEN_API_SECRET: {'*' * 20}... ({len(legacy_secret)} chars)")
         print_info("Consider migrating to KRAKEN_MASTER_API_KEY format")
         return True
@@ -249,7 +249,7 @@ def check_alpaca_users():
         if success:
             key_var, secret_var, key_val, secret_val = result
             print_success(f"User {name} ({user_id}): Credentials found")
-            print(f"   {key_var}: {'*' * 10}{key_val[-10:] if len(key_val) > 10 else '***'}")
+            print(f"   {key_var}: {'*' * min(10, len(key_val))}{key_val[-10:] if len(key_val) > 10 else ''}")
             print(f"   {secret_var}: {'*' * 20}... ({len(secret_val)} chars)")
             
             # Check paper trading flag
@@ -280,11 +280,16 @@ def check_coinbase_credentials():
         print_success("Coinbase credentials found")
         # Mask the key for security
         if api_key.startswith("organizations/"):
-            # New format
-            masked = api_key[:30] + "..." + api_key[-20:]
+            # New format - show org part but mask key ID
+            parts = api_key.split('/')
+            if len(parts) >= 4:
+                masked = f"{parts[0]}/{parts[1]}/apiKeys/***{parts[3][-6:]}"
+            else:
+                masked = "***" + api_key[-10:]
             print(f"   COINBASE_API_KEY: {masked}")
         else:
-            print(f"   COINBASE_API_KEY: {'*' * 10}{api_key[-10:] if len(api_key) > 10 else '***'}")
+            # Old format or unknown - mask it
+            print(f"   COINBASE_API_KEY: {'*' * min(10, len(api_key))}{api_key[-10:] if len(api_key) > 10 else ''}")
         print(f"   COINBASE_API_SECRET: {'*' * 20}... ({len(api_secret)} chars)")
         return True
     else:
