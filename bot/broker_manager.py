@@ -3660,7 +3660,10 @@ class KrakenBroker(BaseBroker):
                             # "Temporary lockout" errors require special handling with longer delays (minutes, not seconds)
                             # "Invalid nonce" errors require moderate delays (30s increments) and aggressive nonce jumps (10x)
                             is_lockout_error = 'lockout' in error_msgs.lower()
-                            is_nonce_error = any(keyword in error_msgs.lower() for keyword in ['invalid nonce', 'nonce'])
+                            # Be specific about nonce errors - match exact Kraken error messages
+                            is_nonce_error = any(keyword in error_msgs.lower() for keyword in [
+                                'invalid nonce', 'eapi:invalid nonce', 'nonce window'
+                            ])
                             is_retryable = is_lockout_error or is_nonce_error or any(keyword in error_msgs.lower() for keyword in [
                                 'timeout', 'connection', 'network', 'rate limit',
                                 'too many requests', 'service unavailable',
@@ -3777,7 +3780,10 @@ class KrakenBroker(BaseBroker):
                     # "Temporary lockout" errors require special handling with longer delays (minutes, not seconds)
                     # "Invalid nonce" errors require moderate delays (30s increments) and aggressive nonce jumps (10x)
                     is_lockout_error = 'lockout' in error_msg.lower()
-                    is_nonce_error = any(keyword in error_msg.lower() for keyword in ['invalid nonce', 'nonce'])
+                    # Be specific about nonce errors - match exact Kraken error messages
+                    is_nonce_error = any(keyword in error_msg.lower() for keyword in [
+                        'invalid nonce', 'eapi:invalid nonce', 'nonce window'
+                    ])
                     is_retryable = is_lockout_error or is_nonce_error or any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
