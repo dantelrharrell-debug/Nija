@@ -2774,28 +2774,39 @@ class AlpacaBroker(BaseBroker):
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """Get candle data with retry logic for rate limiting"""
+        # Import dependencies outside retry loop to avoid overhead
+        try:
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockBarsRequest
+            from alpaca.data.timeframe import TimeFrame
+            from datetime import datetime, timedelta
+        except ImportError:
+            logging.error("Alpaca SDK not installed. Run: pip install alpaca-py")
+            return []
+        
+        # Get credentials and create client outside retry loop (doesn't change between retries)
+        api_key = os.getenv("ALPACA_API_KEY")
+        api_secret = os.getenv("ALPACA_API_SECRET")
+        
+        if not api_key or not api_secret:
+            logging.error("Alpaca API credentials not configured")
+            return []
+        
+        data_client = StockHistoricalDataClient(api_key, api_secret)
+        
+        # Timeframe mapping (constant for all retries)
+        timeframe_map = {
+            "1m": TimeFrame.Minute,
+            "5m": TimeFrame(5, TimeFrame.Minute),
+            "15m": TimeFrame(15, TimeFrame.Minute),
+            "1h": TimeFrame.Hour,
+            "1d": TimeFrame.Day
+        }
+        tf = timeframe_map.get(timeframe, TimeFrame(5, TimeFrame.Minute))
+        
+        # Retry loop for API call
         for attempt in range(RATE_LIMIT_MAX_RETRIES):
             try:
-                from alpaca.data.historical import StockHistoricalDataClient
-                from alpaca.data.requests import StockBarsRequest
-                from alpaca.data.timeframe import TimeFrame
-                from datetime import datetime, timedelta
-                
-                api_key = os.getenv("ALPACA_API_KEY")
-                api_secret = os.getenv("ALPACA_API_SECRET")
-                
-                data_client = StockHistoricalDataClient(api_key, api_secret)
-                
-                timeframe_map = {
-                    "1m": TimeFrame.Minute,
-                    "5m": TimeFrame(5, TimeFrame.Minute),
-                    "15m": TimeFrame(15, TimeFrame.Minute),
-                    "1h": TimeFrame.Hour,
-                    "1d": TimeFrame.Day
-                }
-                
-                tf = timeframe_map.get(timeframe, TimeFrame(5, TimeFrame.Minute))
-                
                 request_params = StockBarsRequest(
                     symbol_or_symbols=symbol,
                     timeframe=tf,
