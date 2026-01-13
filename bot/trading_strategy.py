@@ -396,9 +396,13 @@ class TradingStrategy:
             logger.info("📊 ACCOUNT TRADING STATUS SUMMARY")
             logger.info("=" * 70)
             
+            # Count active trading accounts
+            active_master_count = 1 if self.broker else 0
+            active_user_count = 0
+            
             # Master account status
             if self.broker:
-                logger.info(f"✅ MASTER ACCOUNT: TRADING (Broker: {self.broker.broker_type.value})")
+                logger.info(f"✅ MASTER ACCOUNT: TRADING (Broker: {self.broker.broker_type.value.upper()})")
             else:
                 logger.info("❌ MASTER ACCOUNT: NOT TRADING (No broker connected)")
             
@@ -417,9 +421,10 @@ class TradingStrategy:
                         )
                         
                         if user_broker and user_broker.connected:
-                            logger.info(f"✅ USER: {user.name}: TRADING (Broker: {user.broker_type.title()})")
+                            logger.info(f"✅ USER: {user.name}: TRADING (Broker: {user.broker_type.upper()})")
+                            active_user_count += 1
                         else:
-                            logger.info(f"❌ USER: {user.name}: NOT TRADING (Connection failed or not configured)")
+                            logger.info(f"❌ USER: {user.name}: NOT TRADING (Connection failed)")
                 else:
                     logger.info("⚪ No user accounts configured")
             except Exception as e:
@@ -429,9 +434,36 @@ class TradingStrategy:
                     for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
                         for broker_type, broker in user_broker_dict.items():
                             if broker.connected:
-                                logger.info(f"✅ USER: {user_id}: TRADING (Broker: {broker_type.value.title()})")
+                                logger.info(f"✅ USER: {user_id}: TRADING (Broker: {broker_type.value.upper()})")
+                                active_user_count += 1
                             else:
                                 logger.info(f"❌ USER: {user_id}: NOT TRADING (Connection failed)")
+            
+            logger.info("=" * 70)
+            
+            # Overall status and recommendations
+            total_active = active_master_count + active_user_count
+            if total_active > 0:
+                logger.info(f"🚀 TRADING ACTIVE: {total_active} account(s) ready")
+                logger.info("")
+                logger.info("Next steps:")
+                logger.info("   • Bot will start scanning markets in ~45 seconds")
+                logger.info("   • Trades will execute automatically when signals are found")
+                logger.info("   • Monitor logs with: tail -f nija.log")
+                logger.info("")
+                if active_master_count == 0:
+                    logger.warning("⚠️  Master account not trading - only user accounts active")
+                if active_user_count == 0:
+                    logger.info("💡 Tip: Add user accounts to enable multi-user trading")
+                    logger.info("   See config/users/ for user configuration")
+            else:
+                logger.error("❌ NO TRADING ACTIVE - All connection attempts failed")
+                logger.error("")
+                logger.error("Troubleshooting:")
+                logger.error("   1. Run: python3 validate_all_env_vars.py")
+                logger.error("   2. Fix any missing credentials")
+                logger.error("   3. Restart the bot")
+                logger.error("   4. See BROKER_CONNECTION_TROUBLESHOOTING.md for help")
             
             logger.info("=" * 70)
             
