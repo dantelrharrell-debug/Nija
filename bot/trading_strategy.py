@@ -181,7 +181,7 @@ class TradingStrategy:
                 BrokerManager, CoinbaseBroker, KrakenBroker, 
                 OKXBroker, BinanceBroker, AlpacaBroker, BrokerType, AccountType
             )
-            from multi_account_broker_manager import MultiAccountBrokerManager
+            from multi_account_broker_manager import multi_account_broker_manager
             from position_cap_enforcer import PositionCapEnforcer
             from nija_apex_strategy_v71 import NIJAApexStrategyV71
             
@@ -192,7 +192,8 @@ class TradingStrategy:
             logger.info("   Master account + User accounts trading independently")
             logger.info("=" * 70)
             
-            self.multi_account_manager = MultiAccountBrokerManager()
+            # Use the global singleton instance to ensure failed connection tracking persists
+            self.multi_account_manager = multi_account_broker_manager
             self.broker_manager = BrokerManager()  # Keep for backward compatibility
             connected_brokers = []
             user_brokers = []
