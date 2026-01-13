@@ -3338,6 +3338,23 @@ class KrakenBroker(BaseBroker):
                 secret_name = "KRAKEN_MASTER_API_SECRET"
                 api_key_raw = os.getenv(key_name, "")
                 api_secret_raw = os.getenv(secret_name, "")
+                
+                # Fallback to legacy credentials if master credentials not set
+                # This provides backward compatibility for deployments using KRAKEN_API_KEY
+                if not api_key_raw:
+                    legacy_key = os.getenv("KRAKEN_API_KEY", "")
+                    if legacy_key:
+                        api_key_raw = legacy_key
+                        key_name = "KRAKEN_API_KEY (legacy)"
+                        logger.info("   Using legacy KRAKEN_API_KEY for master account")
+                
+                if not api_secret_raw:
+                    legacy_secret = os.getenv("KRAKEN_API_SECRET", "")
+                    if legacy_secret:
+                        api_secret_raw = legacy_secret
+                        secret_name = "KRAKEN_API_SECRET (legacy)"
+                        logger.info("   Using legacy KRAKEN_API_SECRET for master account")
+                
                 api_key = api_key_raw.strip()
                 api_secret = api_secret_raw.strip()
                 cred_label = "MASTER"
@@ -3384,6 +3401,9 @@ class KrakenBroker(BaseBroker):
                     logger.info("   To enable Kraken MASTER trading, set:")
                     logger.info("      KRAKEN_MASTER_API_KEY=<your-api-key>")
                     logger.info("      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+                    logger.info("   OR use legacy credentials:")
+                    logger.info("      KRAKEN_API_KEY=<your-api-key>")
+                    logger.info("      KRAKEN_API_SECRET=<your-api-secret>")
                 else:
                     # USER account - provide specific instructions
                     # Note: user_env_name is guaranteed to be defined from the else block above
