@@ -94,18 +94,21 @@ class HardControls:
         try:
             from config import get_user_config_loader
             
-            # Check if user config loader is available (may be None if import failed)
+            # Check if user config loader is available
+            # (will be None if config.user_loader module failed to import)
             if get_user_config_loader is None:
-                logger.warning("⚠️  User config loader not available, skipping user account initialization")
+                logger.warning("⚠️  User config loader module not available, skipping user account initialization")
                 logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
                 return
             
+            # Get the singleton loader instance
+            # Note: The singleton loads users on first access via load_all_users()
             loader = get_user_config_loader()
-            # Note: load_all_users() is already called by get_user_config_loader()
             
             # Get all enabled users and deduplicate by user_id
-            # (users may appear multiple times if they have accounts on multiple brokers)
-            # We keep the first occurrence of each user_id
+            # Users may appear multiple times if they have accounts on multiple brokers
+            # (e.g., tania_gilbert has both Kraken and Alpaca accounts)
+            # We keep the first occurrence of each unique user_id
             enabled_users = loader.get_all_enabled_users()
             seen_user_ids = set()
             
@@ -118,11 +121,14 @@ class HardControls:
             if not enabled_users:
                 logger.info("ℹ️  No user accounts configured in config files")
         
-        except ImportError:
-            logger.warning("⚠️  Could not import user config loader, skipping user account initialization")
+        except ImportError as e:
+            logger.warning(f"⚠️  Could not import user config loader: {e}")
+            logger.warning("   Continuing with master account only")
+        except (FileNotFoundError, OSError) as e:
+            logger.warning(f"⚠️  Config files not accessible: {e}")
             logger.warning("   Continuing with master account only")
         except Exception as e:
-            logger.warning(f"⚠️  Could not load user accounts from config: {e}")
+            logger.warning(f"⚠️  Unexpected error loading user accounts: {e}")
             logger.warning("   Continuing with master account only")
         
         logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
