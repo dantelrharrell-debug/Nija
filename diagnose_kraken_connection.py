@@ -38,16 +38,34 @@ def print_section(title):
 
 
 def check_env_var(var_name):
-    """Check if environment variable is set and return its value (masked)"""
-    value = os.getenv(var_name, '').strip()
-    if value:
+    """
+    Check if environment variable is set and return its value (masked).
+    
+    Returns:
+        tuple: (is_valid, masked_value, is_malformed)
+            - is_valid: True if variable is set and has valid content after stripping
+            - masked_value: Masked representation of the value for security
+            - is_malformed: True if variable is set but contains only whitespace
+    """
+    value_raw = os.getenv(var_name, '')
+    value_stripped = value_raw.strip()
+    
+    # Check if variable is set but becomes empty after stripping (malformed)
+    is_malformed = (value_raw != '' and value_stripped == '')
+    
+    if value_stripped:
         # Mask the value for security (show first 4 and last 4 chars)
-        if len(value) > 12:
-            masked = f"{value[:4]}...{value[-4:]}"
+        if len(value_stripped) > 12:
+            masked = f"{value_stripped[:4]}...{value_stripped[-4:]}"
         else:
             masked = "***"
-        return True, masked
-    return False, None
+        return True, masked, False
+    elif is_malformed:
+        # Variable is set but only contains whitespace
+        return False, None, True
+    else:
+        # Variable is not set at all
+        return False, None, False
 
 
 def main():
@@ -65,25 +83,52 @@ def main():
     # Check Master Account
     print_section("MASTER ACCOUNT (NIJA System)")
     
-    master_key_set, master_key_val = check_env_var("KRAKEN_MASTER_API_KEY")
-    master_secret_set, master_secret_val = check_env_var("KRAKEN_MASTER_API_SECRET")
+    master_key_set, master_key_val, master_key_malformed = check_env_var("KRAKEN_MASTER_API_KEY")
+    master_secret_set, master_secret_val, master_secret_malformed = check_env_var("KRAKEN_MASTER_API_SECRET")
     
-    if master_key_set:
+    if master_key_malformed:
+        print(f"  ⚠️  KRAKEN_MASTER_API_KEY: SET BUT INVALID (contains only whitespace/invisible characters)")
+        issues_found.append("Master API key is set but contains only whitespace")
+    elif master_key_set:
         print(f"  ✅ KRAKEN_MASTER_API_KEY: SET ({master_key_val})")
     else:
         print(f"  ❌ KRAKEN_MASTER_API_KEY: NOT SET")
         issues_found.append("Master API key missing")
     
-    if master_secret_set:
+    if master_secret_malformed:
+        print(f"  ⚠️  KRAKEN_MASTER_API_SECRET: SET BUT INVALID (contains only whitespace/invisible characters)")
+        issues_found.append("Master API secret is set but contains only whitespace")
+    elif master_secret_set:
         print(f"  ✅ KRAKEN_MASTER_API_SECRET: SET ({master_secret_val})")
     else:
         print(f"  ❌ KRAKEN_MASTER_API_SECRET: NOT SET")
         issues_found.append("Master API secret missing")
     
     master_configured = master_key_set and master_secret_set
+    master_has_malformed = master_key_malformed or master_secret_malformed
     
     if master_configured:
         print(f"\n  ✅ RESULT: Master account is configured for Kraken")
+    elif master_has_malformed:
+        print(f"\n  ⚠️  RESULT: Master account credentials are SET but INVALID")
+        print(f"     The environment variables contain only whitespace or invisible characters")
+        recommendations.append({
+            'title': 'Fix Malformed Master Credentials',
+            'steps': [
+                '1. Go to your deployment platform (Railway/Render)',
+                '2. Navigate to Environment Variables settings',
+                '3. Check KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET',
+                '4. Remove any leading/trailing spaces or newlines',
+                '5. Ensure values contain only the actual API key/secret (no extra whitespace)',
+                '6. Save and re-deploy',
+                '',
+                '⚠️  Common issues:',
+                '   • Accidentally pasted newline characters from text editor',
+                '   • Extra spaces before or after the value',
+                '   • Tab characters mixed with the value',
+                '   • Copy-paste artifacts from formatted documents'
+            ]
+        })
     else:
         print(f"\n  ❌ RESULT: Master account CANNOT connect to Kraken")
         recommendations.append({
@@ -104,46 +149,60 @@ def main():
     # Check User #1 (Daivon)
     print_section("USER #1: Daivon Frazier (daivon_frazier)")
     
-    daivon_key_set, daivon_key_val = check_env_var("KRAKEN_USER_DAIVON_API_KEY")
-    daivon_secret_set, daivon_secret_val = check_env_var("KRAKEN_USER_DAIVON_API_SECRET")
+    daivon_key_set, daivon_key_val, daivon_key_malformed = check_env_var("KRAKEN_USER_DAIVON_API_KEY")
+    daivon_secret_set, daivon_secret_val, daivon_secret_malformed = check_env_var("KRAKEN_USER_DAIVON_API_SECRET")
     
-    if daivon_key_set:
+    if daivon_key_malformed:
+        print(f"  ⚠️  KRAKEN_USER_DAIVON_API_KEY: SET BUT INVALID (contains only whitespace/invisible characters)")
+    elif daivon_key_set:
         print(f"  ✅ KRAKEN_USER_DAIVON_API_KEY: SET ({daivon_key_val})")
     else:
         print(f"  ❌ KRAKEN_USER_DAIVON_API_KEY: NOT SET")
     
-    if daivon_secret_set:
+    if daivon_secret_malformed:
+        print(f"  ⚠️  KRAKEN_USER_DAIVON_API_SECRET: SET BUT INVALID (contains only whitespace/invisible characters)")
+    elif daivon_secret_set:
         print(f"  ✅ KRAKEN_USER_DAIVON_API_SECRET: SET ({daivon_secret_val})")
     else:
         print(f"  ❌ KRAKEN_USER_DAIVON_API_SECRET: NOT SET")
     
     daivon_configured = daivon_key_set and daivon_secret_set
+    daivon_has_malformed = daivon_key_malformed or daivon_secret_malformed
     
     if daivon_configured:
         print(f"\n  ✅ RESULT: User #1 (Daivon) is configured for Kraken")
+    elif daivon_has_malformed:
+        print(f"\n  ⚠️  RESULT: User #1 (Daivon) credentials are SET but INVALID (whitespace only)")
     else:
         print(f"\n  ⚠️  RESULT: User #1 (Daivon) CANNOT trade on Kraken")
     
     # Check User #2 (Tania)
     print_section("USER #2: Tania Gilbert (tania_gilbert)")
     
-    tania_key_set, tania_key_val = check_env_var("KRAKEN_USER_TANIA_API_KEY")
-    tania_secret_set, tania_secret_val = check_env_var("KRAKEN_USER_TANIA_API_SECRET")
+    tania_key_set, tania_key_val, tania_key_malformed = check_env_var("KRAKEN_USER_TANIA_API_KEY")
+    tania_secret_set, tania_secret_val, tania_secret_malformed = check_env_var("KRAKEN_USER_TANIA_API_SECRET")
     
-    if tania_key_set:
+    if tania_key_malformed:
+        print(f"  ⚠️  KRAKEN_USER_TANIA_API_KEY: SET BUT INVALID (contains only whitespace/invisible characters)")
+    elif tania_key_set:
         print(f"  ✅ KRAKEN_USER_TANIA_API_KEY: SET ({tania_key_val})")
     else:
         print(f"  ❌ KRAKEN_USER_TANIA_API_KEY: NOT SET")
     
-    if tania_secret_set:
+    if tania_secret_malformed:
+        print(f"  ⚠️  KRAKEN_USER_TANIA_API_SECRET: SET BUT INVALID (contains only whitespace/invisible characters)")
+    elif tania_secret_set:
         print(f"  ✅ KRAKEN_USER_TANIA_API_SECRET: SET ({tania_secret_val})")
     else:
         print(f"  ❌ KRAKEN_USER_TANIA_API_SECRET: NOT SET")
     
     tania_configured = tania_key_set and tania_secret_set
+    tania_has_malformed = tania_key_malformed or tania_secret_malformed
     
     if tania_configured:
         print(f"\n  ✅ RESULT: User #2 (Tania) is configured for Kraken")
+    elif tania_has_malformed:
+        print(f"\n  ⚠️  RESULT: User #2 (Tania) credentials are SET but INVALID (whitespace only)")
     else:
         print(f"\n  ⚠️  RESULT: User #2 (Tania) CANNOT trade on Kraken")
     
