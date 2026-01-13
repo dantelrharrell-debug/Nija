@@ -2773,65 +2773,109 @@ class AlpacaBroker(BaseBroker):
             return []
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
-        """Get candle data"""
+        """Get candle data with retry logic for rate limiting"""
+        # Import Alpaca SDK dependencies (method-level import to avoid import errors when SDK not installed)
         try:
             from alpaca.data.historical import StockHistoricalDataClient
             from alpaca.data.requests import StockBarsRequest
             from alpaca.data.timeframe import TimeFrame
             from datetime import datetime, timedelta
-            
-            api_key = os.getenv("ALPACA_API_KEY")
-            api_secret = os.getenv("ALPACA_API_SECRET")
-            
-            data_client = StockHistoricalDataClient(api_key, api_secret)
-            
-            timeframe_map = {
-                "1m": TimeFrame.Minute,
-                "5m": TimeFrame(5, TimeFrame.Minute),
-                "15m": TimeFrame(15, TimeFrame.Minute),
-                "1h": TimeFrame.Hour,
-                "1d": TimeFrame.Day
-            }
-            
-            tf = timeframe_map.get(timeframe, TimeFrame(5, TimeFrame.Minute))
-            
-            request_params = StockBarsRequest(
-                symbol_or_symbols=symbol,
-                timeframe=tf,
-                start=datetime.now() - timedelta(days=7)
-            )
-            
-            bars = data_client.get_stock_bars(request_params)
-            
-            candles = []
-            for bar in bars[symbol]:
-                candles.append({
-                    'time': bar.timestamp,
-                    'open': float(bar.open),
-                    'high': float(bar.high),
-                    'low': float(bar.low),
-                    'close': float(bar.close),
-                    'volume': float(bar.volume)
-                })
-            
-            return candles[-count:] if len(candles) > count else candles
-            
-        except Exception as e:
-            # CRITICAL FIX (Jan 13, 2026): Use centralized error detection function
-            # Alpaca returns various error messages for invalid/delisted stocks:
-            # - "invalid symbol", "symbol not found", "asset not found"
-            # - "No key SYMBOL was found" (common for delisted stocks)
-            # These should not trigger retries or count toward rate limit errors
-            is_invalid_symbol = _is_invalid_product_error(str(e))
-            
-            # Log invalid symbols at debug level (not error) since it's expected
-            if is_invalid_symbol:
-                logging.debug(f"⚠️  Invalid/delisted stock symbol: {symbol} - skipping")
-            else:
-                # Only log actual errors
-                print(f"Error fetching candles: {e}")
-            
+        except ImportError:
+            logging.error("Alpaca SDK not installed. Run: pip install alpaca-py")
             return []
+        
+        # Get credentials and create client outside retry loop (doesn't change between retries)
+        api_key = os.getenv("ALPACA_API_KEY")
+        api_secret = os.getenv("ALPACA_API_SECRET")
+        
+        if not api_key or not api_secret:
+            logging.error("Alpaca API credentials not configured")
+            return []
+        
+        data_client = StockHistoricalDataClient(api_key, api_secret)
+        
+        # Timeframe mapping (constant for all retries)
+        timeframe_map = {
+            "1m": TimeFrame.Minute,
+            "5m": TimeFrame(5, TimeFrame.Minute),
+            "15m": TimeFrame(15, TimeFrame.Minute),
+            "1h": TimeFrame.Hour,
+            "1d": TimeFrame.Day
+        }
+        tf = timeframe_map.get(timeframe, TimeFrame(5, TimeFrame.Minute))
+        
+        # Retry loop for API call (1-based indexing for clearer log messages)
+        for attempt in range(1, RATE_LIMIT_MAX_RETRIES + 1):
+            try:
+                request_params = StockBarsRequest(
+                    symbol_or_symbols=symbol,
+                    timeframe=tf,
+                    start=datetime.now() - timedelta(days=7)
+                )
+                
+                bars = data_client.get_stock_bars(request_params)
+                
+                candles = []
+                for bar in bars[symbol]:
+                    candles.append({
+                        'time': bar.timestamp,
+                        'open': float(bar.open),
+                        'high': float(bar.high),
+                        'low': float(bar.low),
+                        'close': float(bar.close),
+                        'volume': float(bar.volume)
+                    })
+                
+                return candles[-count:] if len(candles) > count else candles
+                
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # CRITICAL FIX (Jan 13, 2026): Use centralized error detection function
+                # Alpaca returns various error messages for invalid/delisted stocks:
+                # - "invalid symbol", "symbol not found", "asset not found"
+                # - "No key SYMBOL was found" (common for delisted stocks)
+                # These should not trigger retries or count toward rate limit errors
+                is_invalid_symbol = _is_invalid_product_error(str(e))
+                
+                # Log invalid symbols at debug level (not error) since it's expected
+                if is_invalid_symbol:
+                    logging.debug(f"⚠️  Invalid/delisted stock symbol: {symbol} - skipping")
+                    return []  # Return empty to signal "no data" without counting as error
+                
+                # Distinguish between 429 (rate limit) and 403 (too many errors / temporary ban)
+                is_403_forbidden = '403' in error_str or 'forbidden' in error_str or 'too many errors' in error_str
+                is_429_rate_limit = '429' in error_str or 'rate limit' in error_str or 'too many requests' in error_str
+                is_rate_limited = is_403_forbidden or is_429_rate_limit
+                
+                if is_rate_limited and attempt < RATE_LIMIT_MAX_RETRIES:
+                    # Different handling for 403 vs 429
+                    if is_403_forbidden:
+                        # 403 errors: Use fixed delay with jitter (API key temporarily blocked)
+                        delay = FORBIDDEN_BASE_DELAY + random.uniform(0, FORBIDDEN_JITTER_MAX)
+                        logging.warning(f"⚠️  Alpaca rate limit (403 Forbidden): API key temporarily blocked for {symbol}")
+                        logging.warning(f"   Waiting {delay:.1f}s before retry {attempt}/{RATE_LIMIT_MAX_RETRIES}...")
+                    else:
+                        # 429 errors: Use exponential backoff with jitter (prevent thundering herd)
+                        base_delay = RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1))
+                        jitter = random.uniform(0, base_delay * 0.3)  # 30% jitter
+                        delay = base_delay + jitter
+                        logging.warning(f"⚠️  Alpaca rate limit (429): Too many requests for {symbol}")
+                        logging.warning(f"   Waiting {delay:.1f}s before retry {attempt}/{RATE_LIMIT_MAX_RETRIES}...")
+                    
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Not rate limited or max retries reached
+                    if is_rate_limited:
+                        # Rate limit persisted after retries - log at WARNING level
+                        logging.warning(f"⚠️  Alpaca rate limit exceeded for {symbol} after {RATE_LIMIT_MAX_RETRIES} retries")
+                    else:
+                        # Non-rate-limit error - log at ERROR level
+                        logging.error(f"Error fetching candles for {symbol}: {e}")
+                    return []
+        
+        return []
     
     def supports_asset_class(self, asset_class: str) -> bool:
         """Alpaca supports stocks"""
