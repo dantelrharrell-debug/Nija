@@ -2804,8 +2804,8 @@ class AlpacaBroker(BaseBroker):
         }
         tf = timeframe_map.get(timeframe, TimeFrame(5, TimeFrame.Minute))
         
-        # Retry loop for API call
-        for attempt in range(RATE_LIMIT_MAX_RETRIES):
+        # Retry loop for API call (1-based indexing for clearer log messages)
+        for attempt in range(1, RATE_LIMIT_MAX_RETRIES + 1):
             try:
                 request_params = StockBarsRequest(
                     symbol_or_symbols=symbol,
@@ -2848,18 +2848,18 @@ class AlpacaBroker(BaseBroker):
                 is_429_rate_limit = '429' in error_str or 'rate limit' in error_str or 'too many requests' in error_str
                 is_rate_limited = is_403_forbidden or is_429_rate_limit
                 
-                if is_rate_limited and attempt < RATE_LIMIT_MAX_RETRIES - 1:
+                if is_rate_limited and attempt < RATE_LIMIT_MAX_RETRIES:
                     # Different handling for 403 vs 429
                     if is_403_forbidden:
                         # 403 errors: Use fixed delay with jitter (API key temporarily blocked)
                         delay = FORBIDDEN_BASE_DELAY + random.uniform(0, FORBIDDEN_JITTER_MAX)
                         logging.warning(f"⚠️  Alpaca rate limit (403 Forbidden): API key temporarily blocked for {symbol}")
-                        logging.warning(f"   Waiting {delay:.1f}s before retry {attempt + 1}/{RATE_LIMIT_MAX_RETRIES}...")
+                        logging.warning(f"   Waiting {delay:.1f}s before retry {attempt}/{RATE_LIMIT_MAX_RETRIES}...")
                     else:
-                        # 429 errors: Use exponential backoff
-                        delay = RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+                        # 429 errors: Use exponential backoff (attempt is 1-based, so adjust for exponential calc)
+                        delay = RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1))
                         logging.warning(f"⚠️  Alpaca rate limit (429): Too many requests for {symbol}")
-                        logging.warning(f"   Waiting {delay:.1f}s before retry {attempt + 1}/{RATE_LIMIT_MAX_RETRIES}...")
+                        logging.warning(f"   Waiting {delay:.1f}s before retry {attempt}/{RATE_LIMIT_MAX_RETRIES}...")
                     
                     time.sleep(delay)
                     continue
