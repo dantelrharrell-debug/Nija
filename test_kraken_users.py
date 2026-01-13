@@ -13,6 +13,13 @@ import logging
 from pathlib import Path
 from typing import Tuple
 
+# Try to load .env file if available (for local testing)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not available, env vars should be set externally
+
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
