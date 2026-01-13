@@ -3537,22 +3537,32 @@ class KrakenBroker(BaseBroker):
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
             # Special handling for "Temporary lockout" errors which require much longer delays (2-5 minutes)
+            # Special handling for "Invalid nonce" errors which require longer delays and aggressive nonce jumps
             max_attempts = 5
             base_delay = 5.0  # Base delay for normal retryable errors
+            nonce_base_delay = 30.0  # 30 seconds base delay for "Invalid nonce" errors
             lockout_base_delay = 120.0  # 2 minutes base delay for "Temporary lockout" errors
             last_error_was_lockout = False  # Track if previous attempt was a lockout error
+            last_error_was_nonce = False  # Track if previous attempt was a nonce error
             
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
                         # For "Temporary lockout" errors, use much longer delays: 120s, 240s, 360s, 480s (2min, 4min, 6min, 8min)
+                        # For "Invalid nonce" errors, use moderate delays: 30s, 60s, 90s, 120s (30s increments)
                         # For other errors, use shorter delays: 5s, 10s, 20s, 40s
                         if last_error_was_lockout:
                             # Linear scaling for lockout: (attempt-1) * 120s = 120s, 240s, 360s, 480s for attempts 2,3,4,5
                             delay = lockout_base_delay * (attempt - 1)
                             logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
                             logger.info(f"   ⏰ Long delay due to Kraken temporary lockout (API key needs time to unlock)")
+                        elif last_error_was_nonce:
+                            # Linear scaling for nonce errors: (attempt-1) * 30s = 30s, 60s, 90s, 120s for attempts 2,3,4,5
+                            # Nonce errors need time for Kraken to "forget" the burned nonce window
+                            delay = nonce_base_delay * (attempt - 1)
+                            logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
+                            logger.info(f"   ⏰ Moderate delay due to invalid nonce - allowing nonce window to clear")
                         else:
                             # Exponential backoff for normal errors: 5s, 10s, 20s, 40s for attempts 2,3,4,5
                             delay = base_delay * (2 ** (attempt - 2))
@@ -3562,15 +3572,15 @@ class KrakenBroker(BaseBroker):
                         # Jump nonce forward on retry to skip any potentially "burned" nonces
                         # from the failed request. Kraken may have validated but not processed
                         # the nonce, making it unusable for future requests.
-                        # Jump scales with attempt number:
-                        #   - Attempt 2 (first retry): 2M microseconds (2 seconds)
-                        #   - Attempt 3: 3M microseconds (3 seconds)
-                        #   - Attempt 4: 4M microseconds (4 seconds)
-                        #   - Attempt 5: 5M microseconds (5 seconds)
-                        # Larger jumps on later retries increase chance of success
+                        # Jump scales with attempt number and error type:
+                        #   - Normal errors: attempt * 1M microseconds (2M, 3M, 4M, 5M for attempts 2,3,4,5)
+                        #   - Nonce errors: attempt * 10M microseconds (20M, 30M, 40M, 50M) - 10x larger jumps
+                        # Larger jumps for nonce errors ensure we skip well beyond the burned nonce window
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
                         with self._nonce_lock:
-                            nonce_jump = 1000000 * attempt  # Formula: attempt * 1M (where attempt >= 2)
+                            # Use 10x larger nonce jump for nonce-specific errors
+                            nonce_multiplier = 10 if last_error_was_nonce else 1
+                            nonce_jump = nonce_multiplier * 1000000 * attempt  # Formula: multiplier * attempt * 1M
                             # Calculate two candidate nonces and use the larger one:
                             # - time_based: current time + jump (ensures we're ahead of wall clock time)
                             # - increment_based: previous nonce + jump (ensures strict monotonic increase)
@@ -3578,7 +3588,10 @@ class KrakenBroker(BaseBroker):
                             time_based = int(time.time() * 1000000) + nonce_jump
                             increment_based = self._last_nonce + nonce_jump
                             self._last_nonce = max(time_based, increment_based)
-                            logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds for retry {attempt}")
+                            if last_error_was_nonce:
+                                logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds (10x jump for nonce error)")
+                            else:
+                                logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds for retry {attempt}")
                     
                     # The _nonce_monotonic() function automatically handles nonce generation
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
@@ -3645,21 +3658,26 @@ class KrakenBroker(BaseBroker):
                             # to handle edge cases and transient issues.
                             # 
                             # "Temporary lockout" errors require special handling with longer delays (minutes, not seconds)
+                            # "Invalid nonce" errors require moderate delays (30s increments) and aggressive nonce jumps (10x)
                             is_lockout_error = 'lockout' in error_msgs.lower()
-                            is_retryable = is_lockout_error or any(keyword in error_msgs.lower() for keyword in [
+                            is_nonce_error = any(keyword in error_msgs.lower() for keyword in ['invalid nonce', 'nonce'])
+                            is_retryable = is_lockout_error or is_nonce_error or any(keyword in error_msgs.lower() for keyword in [
                                 'timeout', 'connection', 'network', 'rate limit',
                                 'too many requests', 'service unavailable',
                                 '503', '504', '429', '403', 'forbidden', 
-                                'too many errors', 'temporary', 'try again',
-                                'invalid nonce', 'nonce'  # Kraken nonce errors
+                                'too many errors', 'temporary', 'try again'
                             ])
                             
                             if is_retryable and attempt < max_attempts:
-                                # Set flag for lockout errors to use longer delays on next retry
+                                # Set flags for special error types to use appropriate delays on next retry
                                 last_error_was_lockout = is_lockout_error
+                                last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
                                 if is_lockout_error:
                                     logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
                                     logger.warning(f"   🔒 Temporary lockout detected - will use longer delay on next retry")
+                                elif is_nonce_error:
+                                    logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
+                                    logger.warning(f"   🔢 Invalid nonce detected - will use moderate delay and aggressive nonce jump on next retry")
                                 else:
                                     logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
                                 continue
@@ -3757,21 +3775,26 @@ class KrakenBroker(BaseBroker):
                     # to handle edge cases and transient issues.
                     # 
                     # "Temporary lockout" errors require special handling with longer delays (minutes, not seconds)
+                    # "Invalid nonce" errors require moderate delays (30s increments) and aggressive nonce jumps (10x)
                     is_lockout_error = 'lockout' in error_msg.lower()
-                    is_retryable = is_lockout_error or any(keyword in error_msg.lower() for keyword in [
+                    is_nonce_error = any(keyword in error_msg.lower() for keyword in ['invalid nonce', 'nonce'])
+                    is_retryable = is_lockout_error or is_nonce_error or any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
                         '503', '504', '429', '403', 'forbidden', 
-                        'too many errors', 'temporary', 'try again',
-                        'invalid nonce', 'nonce'  # Kraken nonce errors
+                        'too many errors', 'temporary', 'try again'
                     ])
                     
                     if is_retryable and attempt < max_attempts:
-                        # Set flag for lockout errors to use longer delays on next retry
+                        # Set flags for special error types to use appropriate delays on next retry
                         last_error_was_lockout = is_lockout_error
+                        last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
                         if is_lockout_error:
                             logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
                             logger.warning(f"   🔒 Temporary lockout detected - will use longer delay on next retry")
+                        elif is_nonce_error:
+                            logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
+                            logger.warning(f"   🔢 Invalid nonce detected - will use moderate delay and aggressive nonce jump on next retry")
                         else:
                             logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
                         continue
