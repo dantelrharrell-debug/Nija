@@ -299,6 +299,39 @@ def main():
         _start_health_server()
         strategy = TradingStrategy()
 
+        # Log clear trading readiness status
+        logger.info("=" * 70)
+        logger.info("📊 TRADING READINESS STATUS")
+        logger.info("=" * 70)
+        
+        # Check which master brokers are connected
+        connected_master_brokers = []
+        if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
+            for broker_type, broker in strategy.multi_account_manager.master_brokers.items():
+                if broker and broker.connected:
+                    connected_master_brokers.append(broker_type.value.upper())
+        
+        if connected_master_brokers:
+            logger.info("✅ NIJA IS READY TO TRADE!")
+            logger.info("")
+            logger.info("Active Master Exchanges:")
+            for exchange in connected_master_brokers:
+                logger.info(f"   ✅ {exchange}")
+            logger.info("")
+            logger.info(f"📈 Trading will occur on {len(connected_master_brokers)} exchange(s)")
+            logger.info("💡 Each exchange operates independently")
+            logger.info("🛡️  Failures on one exchange won't affect others")
+        else:
+            logger.warning("⚠️  NO MASTER EXCHANGES CONNECTED")
+            logger.warning("Bot is running in MONITOR MODE (no trades will execute)")
+            logger.warning("")
+            logger.warning("To enable trading:")
+            logger.warning("   1. Run: python3 validate_all_env_vars.py")
+            logger.warning("   2. Configure at least one master exchange")
+            logger.warning("   3. Restart the bot")
+        
+        logger.info("=" * 70)
+
         # Check if we should use independent multi-broker trading mode
         use_independent_trading = os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
         
