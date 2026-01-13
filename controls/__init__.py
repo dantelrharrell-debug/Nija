@@ -73,8 +73,67 @@ class HardControls:
         self.daily_loss_trackers: Dict[str, DailyLossTracker] = {}
         self.user_error_counts: Dict[str, int] = {}
         self.strategy_locked = True  # Strategy is always locked
+        
+        # Enable trading for master account and all user accounts
+        self._initialize_trading_accounts()
+        
         logger.info("Hard controls initialized")
         logger.info(f"Position limits: {self.MIN_POSITION_PCT*100:.0f}% - {self.MAX_POSITION_PCT*100:.0f}%")
+    
+    def _initialize_trading_accounts(self):
+        """
+        Initialize trading accounts with ACTIVE status.
+        Enables trading for master account and all configured user accounts.
+        Dynamically loads users from configuration files.
+        """
+        # Enable master account
+        self.user_kill_switches['master'] = KillSwitchStatus.ACTIVE
+        logger.info("✅ Master account trading ENABLED")
+        
+        # Dynamically load and enable all configured user accounts
+        try:
+            from config import get_user_config_loader
+            
+            # Check if user config loader is available
+            # (will be None if config.user_loader module failed to import)
+            if get_user_config_loader is None or not callable(get_user_config_loader):
+                self._log_fallback_to_master("User config loader module not available")
+                return
+            
+            # Get the singleton loader instance
+            # Note: The singleton loads users on first access via load_all_users()
+            loader = get_user_config_loader()
+            
+            # Get all enabled users and deduplicate by user_id
+            # Users may appear multiple times if they have accounts on multiple brokers
+            # (e.g., tania_gilbert has both Kraken and Alpaca accounts)
+            # We keep the first occurrence of each unique user_id
+            enabled_users = loader.get_all_enabled_users()
+            seen_user_ids = set()
+            
+            for user in enabled_users:
+                if user.user_id not in seen_user_ids:
+                    seen_user_ids.add(user.user_id)
+                    self.user_kill_switches[user.user_id] = KillSwitchStatus.ACTIVE
+                    logger.info(f"✅ User account '{user.user_id}' ({user.name}) trading ENABLED")
+            
+            if not enabled_users:
+                logger.info("ℹ️  No user accounts configured in config files")
+        
+        except ImportError as e:
+            self._log_fallback_to_master(f"Could not import user config loader: {e}")
+        except (FileNotFoundError, OSError) as e:
+            self._log_fallback_to_master(f"Config files not accessible: {e}")
+        except Exception as e:
+            self._log_fallback_to_master(f"Unexpected error loading user accounts: {e}")
+        
+        logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
+    
+    def _log_fallback_to_master(self, reason: str):
+        """Log warning message when falling back to master-only mode."""
+        logger.warning(f"⚠️  {reason}")
+        logger.warning("   Continuing with master account only")
+        logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
     
     def validate_position_size(
         self,
