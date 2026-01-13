@@ -3341,16 +3341,31 @@ class KrakenBroker(BaseBroker):
         
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
-        # Initialize to current time in microseconds PLUS random offset to avoid conflicts
-        # when multiple broker instances are created at nearly the same time
-        # Random offset range: 0-2999999 microseconds (up to 3 seconds)
-        # INCREASED from 1s to 3s to provide better separation between sequential user connections
+        # 
+        # CRITICAL FIX (Jan 13, 2026): Initialize nonce well ahead of current time
+        # When bot restarts, Kraken remembers the last nonce from the previous session
+        # for a certain time window. If we start with current_time + small_offset, and the bot
+        # restarted recently (< 60 seconds), the new nonce could be LOWER than the last nonce
+        # Kraken saw, causing "Invalid nonce" error even on first attempt.
+        # 
+        # SOLUTION: Use current time + LARGE forward offset (10-20 seconds) + randomization
+        # This ensures new nonces are always ahead of any previous session's nonces,
+        # even if bot restarts frequently.
+        # 
+        # Offset components:
+        # - Base offset: 10,000,000 microseconds (10 seconds) - ensures we're ahead of recent restarts
+        # - Random jitter: 0-10,000,000 microseconds (0-10 seconds) - prevents instance collisions
+        # Total range: 10-20 seconds ahead of current time
+        # 
         # This is especially important for:
-        # - Multiple user accounts connecting sequentially
-        # - Bot restarts where Kraken may still remember old nonces
+        # - Bot restarts within 60 seconds of previous run
+        # - Multiple user accounts connecting sequentially  
         # - Retry attempts that create new nonce sequences
-        random_offset = random.randint(0, 2999999)
-        self._last_nonce = int(time.time() * 1000000) + random_offset
+        # - Deployment platforms that auto-restart frequently (Railway, Render)
+        base_offset = 10000000  # 10 seconds in microseconds
+        random_jitter = random.randint(0, 10000000)  # 0-10 seconds of randomization
+        total_offset = base_offset + random_jitter
+        self._last_nonce = int(time.time() * 1000000) + total_offset
         # Thread lock to ensure nonce generation is thread-safe
         # Prevents race conditions when multiple threads call API simultaneously
         self._nonce_lock = threading.Lock()
@@ -3525,6 +3540,11 @@ class KrakenBroker(BaseBroker):
             try:
                 self.api._nonce = _nonce_monotonic
                 logger.debug(f"✅ Custom nonce generator installed for {cred_label}")
+                # Log initial nonce value for debugging nonce-related issues
+                # This helps diagnose if the initial nonce is too high or too low
+                current_time_us = int(time.time() * 1000000)
+                offset_seconds = (self._last_nonce - current_time_us) / 1000000.0
+                logger.debug(f"   Initial nonce: {self._last_nonce} (current time + {offset_seconds:.2f}s)")
             except AttributeError as e:
                 logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
                 logger.error("   This may indicate a version incompatibility with krakenex library")
