@@ -123,7 +123,10 @@ def test_priority_handling():
     error_msg = "Temporary lockout due to invalid nonce"
     
     is_lockout_error = 'lockout' in error_msg.lower()
-    is_nonce_error = any(keyword in error_msg.lower() for keyword in ['invalid nonce', 'nonce'])
+    # Use the same specific detection as production code
+    is_nonce_error = any(keyword in error_msg.lower() for keyword in [
+        'invalid nonce', 'eapi:invalid nonce', 'nonce window'
+    ])
     
     # Lockout takes precedence
     last_error_was_lockout = is_lockout_error
