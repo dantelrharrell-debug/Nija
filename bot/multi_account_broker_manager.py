@@ -14,6 +14,7 @@ Each account trades independently with its own:
 """
 
 import logging
+import time
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
@@ -30,6 +31,10 @@ except ImportError:
     )
 
 logger = logging.getLogger('nija.multi_account')
+
+# Minimum delay between sequential connections to the same broker type
+# This helps prevent nonce conflicts and API rate limiting, especially for Kraken
+MIN_CONNECTION_DELAY = 2.0  # seconds
 
 
 class MultiAccountBrokerManager:
@@ -325,6 +330,10 @@ class MultiAccountBrokerManager:
         
         connected_users = {}
         
+        # Track last connection time for each broker type to add delays between sequential connections
+        # This prevents nonce conflicts and server-side rate limiting issues, especially for Kraken
+        last_connection_time = {}
+        
         for user in enabled_users:
             # Convert broker_type string to BrokerType enum
             try:
@@ -340,6 +349,15 @@ class MultiAccountBrokerManager:
             except Exception as e:
                 logger.warning(f"⚠️  Error mapping broker type for {user.name}: {e}")
                 continue
+            
+            # Add delay between sequential connections to the same broker type
+            # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
+            if broker_type in last_connection_time:
+                time_since_last = time.time() - last_connection_time[broker_type]
+                if time_since_last < MIN_CONNECTION_DELAY:
+                    delay = MIN_CONNECTION_DELAY - time_since_last
+                    logger.info(f"⏱️  Waiting {delay:.1f}s before connecting next user to {broker_type.value.title()}...")
+                    time.sleep(delay)
             
             logger.info(f"📊 Connecting {user.name} ({user.user_id}) to {broker_type.value.title()}...")
             
@@ -386,9 +404,8 @@ class MultiAccountBrokerManager:
                 import traceback
                 logger.debug(traceback.format_exc())
             
-            # Add delay between connections to prevent API issues
-            import time
-            time.sleep(3.0)
+            # Track connection time for this broker type
+            last_connection_time[broker_type] = time.time()
         
         # Log summary
         logger.info("=" * 70)
