@@ -221,8 +221,8 @@ def check_kraken_users():
         if success:
             key_var, secret_var, key_val, secret_val = result
             print_success(f"User {name} ({user_id}): Credentials found")
-            print(f"   {key_var}: {'*' * 10}{key_val[-10:] if len(key_val) > 10 else '***'}")
-            print(f"   {secret_var}: {'*' * 20}... ({len(secret_val)} chars)")
+            print(f"   {key_var}: {mask_credential(key_val)}")
+            print(f"   {secret_var}: {mask_credential(secret_val, show_last=4)} ({len(secret_val)} chars)")
         else:
             print_error(f"User {name} ({user_id}): {result}")
             missing_creds_count += 1
