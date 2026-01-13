@@ -90,19 +90,24 @@ def main():
     legacy_key_set, legacy_key_val, legacy_key_malformed = check_env_var("KRAKEN_API_KEY")
     legacy_secret_set, legacy_secret_val, legacy_secret_malformed = check_env_var("KRAKEN_API_SECRET")
     
+    # Legacy credentials are only valid if BOTH are set and valid
+    legacy_configured = legacy_key_set and legacy_secret_set and not legacy_key_malformed and not legacy_secret_malformed
+    
     if master_key_malformed:
         print(f"  ⚠️  KRAKEN_MASTER_API_KEY: SET BUT INVALID (contains only whitespace/invisible characters)")
         issues_found.append("Master API key is set but contains only whitespace")
     elif master_key_set:
         print(f"  ✅ KRAKEN_MASTER_API_KEY: SET ({master_key_val})")
-    elif legacy_key_set and not legacy_key_malformed:
+    elif legacy_configured:
         print(f"  💡 KRAKEN_MASTER_API_KEY: NOT SET (will use legacy KRAKEN_API_KEY: {legacy_key_val})")
     else:
         print(f"  ❌ KRAKEN_MASTER_API_KEY: NOT SET")
-        if legacy_key_set:
-            print(f"  ⚠️  KRAKEN_API_KEY (legacy): SET BUT INVALID (contains only whitespace)")
+        if legacy_key_set and legacy_key_malformed:
+            print(f"     ⚠️  KRAKEN_API_KEY (legacy) is SET BUT INVALID (whitespace only)")
             issues_found.append("Legacy API key is set but contains only whitespace")
-        else:
+        elif legacy_key_set and not legacy_secret_set:
+            print(f"     ⚠️  KRAKEN_API_KEY (legacy) is set but KRAKEN_API_SECRET is missing")
+        elif not legacy_key_set:
             issues_found.append("Master API key missing")
     
     if master_secret_malformed:
@@ -110,19 +115,20 @@ def main():
         issues_found.append("Master API secret is set but contains only whitespace")
     elif master_secret_set:
         print(f"  ✅ KRAKEN_MASTER_API_SECRET: SET ({master_secret_val})")
-    elif legacy_secret_set and not legacy_secret_malformed:
+    elif legacy_configured:
         print(f"  💡 KRAKEN_MASTER_API_SECRET: NOT SET (will use legacy KRAKEN_API_SECRET: {legacy_secret_val})")
     else:
         print(f"  ❌ KRAKEN_MASTER_API_SECRET: NOT SET")
-        if legacy_secret_set:
-            print(f"  ⚠️  KRAKEN_API_SECRET (legacy): SET BUT INVALID (contains only whitespace)")
+        if legacy_secret_set and legacy_secret_malformed:
+            print(f"     ⚠️  KRAKEN_API_SECRET (legacy) is SET BUT INVALID (whitespace only)")
             issues_found.append("Legacy API secret is set but contains only whitespace")
-        else:
+        elif legacy_secret_set and not legacy_key_set:
+            print(f"     ⚠️  KRAKEN_API_SECRET (legacy) is set but KRAKEN_API_KEY is missing")
+        elif not legacy_secret_set:
             issues_found.append("Master API secret missing")
     
     master_configured = master_key_set and master_secret_set
     master_has_malformed = master_key_malformed or master_secret_malformed
-    legacy_configured = legacy_key_set and legacy_secret_set and not legacy_key_malformed and not legacy_secret_malformed
     
     if master_configured:
         print(f"\n  ✅ RESULT: Master account is configured for Kraken")
