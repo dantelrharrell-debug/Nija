@@ -74,9 +74,10 @@ PROFIT_TARGETS = [
 ]
 # CRITICAL FIX (Jan 13, 2026): Tightened profit targets to lock gains faster
 # NIJA is for PROFIT - take gains quickly before reversals
-# First target (1.5%) is NET profitable after Coinbase fees (1.4%)
-# Second target (1.2%) accepts small loss to prevent larger reversal (-0.2% vs -1.0% stop)
-# Third target (1.0%) is emergency exit - better to take -0.4% than wait for -1.0% stop loss
+# Fee structure: See fee_aware_config.py - MARKET_ORDER_ROUND_TRIP = 1.4% (default)
+# First target (1.5%) is NET profitable after fees: 1.5% - 1.4% = +0.1% profit
+# Second target (1.2%) accepts small loss to prevent larger reversal: 1.2% - 1.4% = -0.2% (vs -1.0% stop)
+# Third target (1.0%) is emergency exit: 1.0% - 1.4% = -0.4% (still better than -1.0% stop loss)
 # The bot checks targets from TOP to BOTTOM, so it exits at 1.5% if available, 1.2% if not, etc.
 
 # Stop loss thresholds - AGGRESSIVE to cut losses fast (V7.3 FIX)
@@ -85,7 +86,7 @@ PROFIT_TARGETS = [
 # Any position at -1% is likely to continue falling - better to exit and find new opportunities
 # Combined with 8-hour max hold time and technical exits for triple protection
 STOP_LOSS_THRESHOLD = -1.0  # Exit at -1.0% loss (AGGRESSIVE - cut losses fast)
-STOP_LOSS_WARNING = -0.5  # Warn at -0.5% loss (early warning)
+STOP_LOSS_WARNING = -0.7  # Warn at -0.7% loss (meaningful early warning without noise)
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Updated Dec 30, 2025: Lowered minimums to allow very small account trading
