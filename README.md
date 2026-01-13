@@ -60,7 +60,13 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **User #1**: Daivon Frazier (daivon_frazier) - Retail tier, Kraken integration (enabled - add credentials to activate)
 - **User #2**: Tania Gilbert (tania_gilbert) - Retail tier, Kraken + Alpaca integration (enabled - add credentials to activate)
 
-> ℹ️ **Note**: User accounts are **enabled** in `config/users/*.json` files but require environment variables with API credentials to connect. See [RAILWAY_KRAKEN_SETUP.md](RAILWAY_KRAKEN_SETUP.md) for Railway deployment setup.
+> ⚠️ **IMPORTANT**: User accounts are **enabled** in `config/users/*.json` files but **require environment variables** with API credentials to connect.
+> 
+> **If users show "NOT TRADING (Connection failed or not configured)":**
+> - ✅ **Quick Fix**: See [ANSWER_KRAKEN_USER_SETUP.md](ANSWER_KRAKEN_USER_SETUP.md) (10-minute fix)
+> - 📖 **Detailed Guide**: See [SETUP_KRAKEN_USERS.md](SETUP_KRAKEN_USERS.md)
+> - 🔍 **Verify Status**: Run `python3 verify_kraken_users.py`
+> - 🚀 **Railway Setup**: See [RAILWAY_KRAKEN_SETUP.md](RAILWAY_KRAKEN_SETUP.md)
 
 **User Management**:
 - **Quick check if User #1 is trading**: `python is_user1_trading.py` or `./check_user1_trading.sh`
