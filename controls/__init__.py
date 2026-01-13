@@ -96,9 +96,8 @@ class HardControls:
             
             # Check if user config loader is available
             # (will be None if config.user_loader module failed to import)
-            if get_user_config_loader is None:
-                logger.warning("⚠️  User config loader module not available, skipping user account initialization")
-                logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
+            if get_user_config_loader is None or not callable(get_user_config_loader):
+                self._log_fallback_to_master("User config loader module not available")
                 return
             
             # Get the singleton loader instance
@@ -122,15 +121,18 @@ class HardControls:
                 logger.info("ℹ️  No user accounts configured in config files")
         
         except ImportError as e:
-            logger.warning(f"⚠️  Could not import user config loader: {e}")
-            logger.warning("   Continuing with master account only")
+            self._log_fallback_to_master(f"Could not import user config loader: {e}")
         except (FileNotFoundError, OSError) as e:
-            logger.warning(f"⚠️  Config files not accessible: {e}")
-            logger.warning("   Continuing with master account only")
+            self._log_fallback_to_master(f"Config files not accessible: {e}")
         except Exception as e:
-            logger.warning(f"⚠️  Unexpected error loading user accounts: {e}")
-            logger.warning("   Continuing with master account only")
+            self._log_fallback_to_master(f"Unexpected error loading user accounts: {e}")
         
+        logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
+    
+    def _log_fallback_to_master(self, reason: str):
+        """Log warning message when falling back to master-only mode."""
+        logger.warning(f"⚠️  {reason}")
+        logger.warning("   Continuing with master account only")
         logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
     
     def validate_position_size(
