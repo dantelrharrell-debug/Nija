@@ -94,24 +94,33 @@ class HardControls:
         try:
             from config import get_user_config_loader
             
-            if get_user_config_loader is not None:
-                loader = get_user_config_loader()
-                # Note: load_all_users() is already called by get_user_config_loader()
-                
-                # Get all enabled users and deduplicate by user_id
-                # (users may appear multiple times if they have accounts on multiple brokers)
-                enabled_users = loader.get_all_enabled_users()
-                unique_users = {user.user_id: user for user in enabled_users}.values()
-                
-                for user in unique_users:
+            # Check if user config loader is available (may be None if import failed)
+            if get_user_config_loader is None:
+                logger.warning("⚠️  User config loader not available, skipping user account initialization")
+                logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
+                return
+            
+            loader = get_user_config_loader()
+            # Note: load_all_users() is already called by get_user_config_loader()
+            
+            # Get all enabled users and deduplicate by user_id
+            # (users may appear multiple times if they have accounts on multiple brokers)
+            # We keep the first occurrence of each user_id
+            enabled_users = loader.get_all_enabled_users()
+            seen_user_ids = set()
+            
+            for user in enabled_users:
+                if user.user_id not in seen_user_ids:
+                    seen_user_ids.add(user.user_id)
                     self.user_kill_switches[user.user_id] = KillSwitchStatus.ACTIVE
                     logger.info(f"✅ User account '{user.user_id}' ({user.name}) trading ENABLED")
-                
-                if not enabled_users:
-                    logger.info("ℹ️  No user accounts configured in config files")
-            else:
-                logger.warning("⚠️  User config loader not available, skipping user account initialization")
+            
+            if not enabled_users:
+                logger.info("ℹ️  No user accounts configured in config files")
         
+        except ImportError:
+            logger.warning("⚠️  Could not import user config loader, skipping user account initialization")
+            logger.warning("   Continuing with master account only")
         except Exception as e:
             logger.warning(f"⚠️  Could not load user accounts from config: {e}")
             logger.warning("   Continuing with master account only")
