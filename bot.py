@@ -269,8 +269,8 @@ def main():
     
     # Update Kraken status if users are configured but master isn't
     if not kraken_master_configured and kraken_users_configured > 0:
-        # Remove the "❌ Kraken (Master)" status that was added earlier
-        exchange_status = [s for s in exchange_status if "Kraken" not in s]
+        # Remove only the "❌ Kraken (Master)" status (keep MALFORMED if present)
+        exchange_status = [s for s in exchange_status if s != "❌ Kraken (Master)"]
         # Add updated status showing user accounts
         exchanges_configured += 1
         exchange_status.append(f"✅ Kraken (Users: {kraken_users_configured})")
