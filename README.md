@@ -56,11 +56,11 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **[USER_INVESTOR_TRACKING.md](USER_INVESTOR_TRACKING.md)** - 📊 Tracking system guide
 - **[USER_COMMUNICATION_LOG.md](USER_COMMUNICATION_LOG.md)** - 💬 Communication history
 
-**Current Users**: 2 users pre-configured (disabled by default)
-- **User #1**: Daivon Frazier (daivon_frazier) - Pro tier, Kraken integration (disabled - enable after adding credentials)
-- **User #2**: Tania Gilbert (tania_gilbert) - Pro tier, Kraken integration (disabled - enable after adding credentials)
+**Current Users**: 2 users configured for Kraken
+- **User #1**: Daivon Frazier (daivon_frazier) - Retail tier, Kraken integration (enabled - add credentials to activate)
+- **User #2**: Tania Gilbert (tania_gilbert) - Retail tier, Kraken + Alpaca integration (enabled - add credentials to activate)
 
-> ℹ️ **Note**: User accounts are **disabled by default** in `config/users/*.json` files. They should only be enabled after adding the appropriate API credentials to your environment. See [GETTING_STARTED.md](GETTING_STARTED.md#enabling-user-accounts) for setup instructions.
+> ℹ️ **Note**: User accounts are **enabled** in `config/users/*.json` files but require environment variables with API credentials to connect. See [RAILWAY_KRAKEN_SETUP.md](RAILWAY_KRAKEN_SETUP.md) for Railway deployment setup.
 
 **User Management**:
 - **Quick check if User #1 is trading**: `python is_user1_trading.py` or `./check_user1_trading.sh`
@@ -76,8 +76,9 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **Complete guide**: [ACTIVE_TRADING_STATUS.md](ACTIVE_TRADING_STATUS.md)
 
 **Broker Status** 🌐:
-- **Currently Active**: Coinbase Advanced Trade ✅
-- **Kraken Trading**: ❌ **NOT CONNECTED** - Credentials Not Configured
+- **Currently Active**: Coinbase Advanced Trade ✅, Kraken ✅ (when configured)
+- **Kraken Trading**: Ready for configuration
+  - **⚡ Railway Setup**: [RAILWAY_KRAKEN_SETUP.md](RAILWAY_KRAKEN_SETUP.md) - Complete Railway deployment guide
   - **⚡ Quick Answer**: [ANSWER_KRAKEN_STATUS.txt](ANSWER_KRAKEN_STATUS.txt) - One-line status
   - **🔧 TROUBLESHOOTING "Unseen Variables"**: [QUICK_FIX_UNSEEN_VARIABLES.md](QUICK_FIX_UNSEEN_VARIABLES.md) - Fix whitespace-only credentials
   - **📘 Full Troubleshooting Guide**: [KRAKEN_CREDENTIAL_TROUBLESHOOTING.md](KRAKEN_CREDENTIAL_TROUBLESHOOTING.md) - Comprehensive credential issues
@@ -88,6 +89,7 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
   - **📖 Quick Setup**: [KRAKEN_SETUP_GUIDE.md](KRAKEN_SETUP_GUIDE.md) - Step-by-step instructions
   - **🔍 Status Check**: Run `python check_kraken_status.py` to verify local connection
   - **🔍 Deployment Check**: Run `python kraken_deployment_verify.py` to verify Railway/Render
+  - **✅ Config Validator**: Run `python verify_kraken_config.py` to validate configuration
   - **📊 Detailed Status**: [KRAKEN_CONNECTION_STATUS.md](KRAKEN_CONNECTION_STATUS.md)
 - **Check all brokers**: `python check_broker_status.py`
 - **Multi-Broker Guide**: [MULTI_BROKER_STATUS.md](MULTI_BROKER_STATUS.md)
