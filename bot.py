@@ -267,6 +267,14 @@ def main():
     else:
         logger.warning("⚠️  Kraken User #2 (Tania) credentials NOT SET")
     
+    # Update Kraken status if users are configured but master isn't
+    if not kraken_master_configured and kraken_users_configured > 0:
+        # Remove only the "❌ Kraken (Master)" status (keep MALFORMED if present)
+        exchange_status = [s for s in exchange_status if s != "❌ Kraken (Master)"]
+        # Add updated status showing user accounts
+        exchanges_configured += 1
+        exchange_status.append(f"✅ Kraken (Users: {kraken_users_configured})")
+    
     # Check OKX
     if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
         exchanges_configured += 1
