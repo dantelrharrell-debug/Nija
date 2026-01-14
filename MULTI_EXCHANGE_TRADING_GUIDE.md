@@ -89,6 +89,34 @@ Error fetching candles: {"message": "too many requests."}
 
 ---
 
+## Suppressing the Single Exchange Warning
+
+If you prefer to use only Coinbase and want to suppress the single exchange trading warning, you can set an environment variable:
+
+### For Railway/Render Deployment:
+1. Go to your deployment platform dashboard
+2. Navigate to **Variables** or **Environment Variables** tab
+3. Add this variable:
+   ```
+   SUPPRESS_SINGLE_EXCHANGE_WARNING = true
+   ```
+4. Redeploy to apply changes
+
+### For Local Development:
+1. Edit `.env` file in project root
+2. Add this line:
+   ```bash
+   SUPPRESS_SINGLE_EXCHANGE_WARNING=true
+   ```
+3. Restart bot: `./start.sh`
+
+**Note**: While this suppresses the warning, using multiple exchanges is still recommended for:
+- Reduced API rate limiting
+- Better trading resilience
+- Access to more cryptocurrency pairs
+
+---
+
 ## Quick Fix: Enable Kraken Trading
 
 ### Why This Helps

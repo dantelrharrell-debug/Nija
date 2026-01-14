@@ -328,7 +328,9 @@ class TradingStrategy:
                     logger.info(f"✅ MASTER ACCOUNT BROKERS: {', '.join(connected_brokers)}")
                     
                     # HELPFUL TIP: If only Coinbase is connected, suggest enabling Kraken
-                    if len(connected_brokers) == 1 and "Coinbase" in connected_brokers:
+                    # Can be suppressed by setting SUPPRESS_SINGLE_EXCHANGE_WARNING=true
+                    suppress_warning = os.getenv("SUPPRESS_SINGLE_EXCHANGE_WARNING", "false").lower() in ("true", "1", "yes")
+                    if len(connected_brokers) == 1 and "Coinbase" in connected_brokers and not suppress_warning:
                         logger.warning("=" * 70)
                         logger.warning("⚠️  SINGLE EXCHANGE TRADING - CONSIDER ENABLING KRAKEN")
                         logger.warning("=" * 70)
@@ -347,6 +349,7 @@ class TradingStrategy:
                         logger.warning("✓ Access to different cryptocurrency pairs")
                         logger.warning("")
                         logger.warning("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for detailed instructions")
+                        logger.warning("To suppress this warning, set SUPPRESS_SINGLE_EXCHANGE_WARNING=true")
                         logger.warning("=" * 70)
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")

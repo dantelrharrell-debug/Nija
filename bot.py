@@ -368,16 +368,20 @@ def main():
         logger.error("Exiting - No trading possible without credentials")
         sys.exit(1)
     elif exchanges_configured < 2:
-        logger.warning("=" * 70)
-        logger.warning("⚠️  SINGLE EXCHANGE TRADING")
-        logger.warning("=" * 70)
-        logger.warning(f"Only {exchanges_configured} exchange configured. Consider enabling more for:")
-        logger.warning("  • Better diversification")
-        logger.warning("  • Reduced API rate limiting")
-        logger.warning("  • More resilient trading")
-        logger.warning("")
-        logger.warning("See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
-        logger.warning("=" * 70)
+        # Can be suppressed by setting SUPPRESS_SINGLE_EXCHANGE_WARNING=true
+        suppress_warning = os.getenv("SUPPRESS_SINGLE_EXCHANGE_WARNING", "false").lower() in ("true", "1", "yes")
+        if not suppress_warning:
+            logger.warning("=" * 70)
+            logger.warning("⚠️  SINGLE EXCHANGE TRADING")
+            logger.warning("=" * 70)
+            logger.warning(f"Only {exchanges_configured} exchange configured. Consider enabling more for:")
+            logger.warning("  • Better diversification")
+            logger.warning("  • Reduced API rate limiting")
+            logger.warning("  • More resilient trading")
+            logger.warning("")
+            logger.warning("See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
+            logger.warning("To suppress this warning, set SUPPRESS_SINGLE_EXCHANGE_WARNING=true")
+            logger.warning("=" * 70)
 
     try:
         logger.info("Initializing trading strategy...")
