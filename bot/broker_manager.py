@@ -3342,33 +3342,32 @@ class KrakenBroker(BaseBroker):
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
         # 
-        # CRITICAL FIX: Initialize nonce well ahead of current time
-        # When bot restarts, Kraken remembers the last nonce from the previous session
-        # for a certain time window (3+ minutes based on empirical testing). If we start with
-        # current_time + small_offset, and the bot restarted recently (< 3 minutes), the new
-        # nonce could be LOWER than the last nonce Kraken saw, causing "Invalid nonce" error
-        # even on first attempt.
+        # CRITICAL FIX (Jan 14, 2026): Use current time with minimal offset
+        # Previous approach used large forward offsets (180-240 seconds), but this was WRONG.
         # 
-        # SOLUTION: Use current time + LARGE forward offset (180-240 seconds / 3-4 minutes) + randomization
-        # This ensures new nonces are always ahead of any previous session's nonces in >99% of cases,
-        # even with frequent bot restarts. Edge cases are handled by retry logic with nonce jumps.
+        # Research findings from Kraken API documentation:
+        # - Nonces should be based on current UNIX timestamp (milliseconds or microseconds)
+        # - The "nonce window" setting is for BACKWARD tolerance (allowing slightly old nonces)
+        # - Nonces far in the FUTURE may be rejected by Kraken's validation
+        # - Best practice: Use current time, not future-dated timestamps
+        # 
+        # Why previous large offsets FAILED:
+        # - 180-240 seconds ahead likely exceeded Kraken's acceptable nonce range
+        # - Each "fix" made the offset larger, making the problem WORSE
+        # - The strict monotonic counter ALREADY prevents collisions
+        # 
+        # CORRECT SOLUTION: Minimal offset + strict monotonic counter
+        # - Use current time or very small offset (0-5 seconds)
+        # - Strict monotonic counter guarantees uniqueness
+        # - On nonce error, immediate 60s jump provides recovery
+        # - This aligns with Kraken's documented best practices
         # 
         # Offset components:
-        # - Base offset: 180,000,000 microseconds (180 seconds / 3 minutes) - ensures we're well ahead of Kraken's nonce window
-        # - Random jitter: 0-60,000,000 microseconds (0-60 seconds inclusive) - prevents instance collisions
-        # Total range: 180-240 seconds (3-4 minutes) ahead of current time
-        # 
-        # This aggressive offset is necessary because:
-        # - Kraken's nonce window appears to be ~180+ seconds (3+ minutes) based on production logs
-        # - Previous 60-90s offset was insufficient and caused "Invalid nonce" errors on first attempt
-        # - Bot restarts within 3-4 minutes of previous run are common (auto-restart, manual restart, crash recovery)
-        # - Multiple user accounts connecting sequentially need separation
-        # - Deployment platforms that auto-restart frequently (Railway, Render, Heroku)
-        # - Ensures first connection attempt succeeds without nonce errors in >99% of cases
-        # - Edge case: Very rapid restart (<60s) with worst-case offset combo may still hit nonce error,
-        #   but will recover immediately via retry logic with nonce jumps
-        base_offset = 180000000  # 180 seconds (3 minutes) in microseconds
-        random_jitter = random.randint(0, 60000000)  # 0-60 seconds inclusive
+        # - Base offset: 0 microseconds (current time)
+        # - Random jitter: 0-5,000,000 microseconds (0-5 seconds) - prevents multi-instance collisions
+        # Total range: 0-5 seconds ahead of current time (SAFE for Kraken)
+        base_offset = 0  # Use current time (was 180 seconds - TOO LARGE!)
+        random_jitter = random.randint(0, 5000000)  # 0-5 seconds (was 0-60 seconds)
         total_offset = base_offset + random_jitter
         self._last_nonce = int(time.time() * 1000000) + total_offset
         # Thread lock to ensure nonce generation is thread-safe
