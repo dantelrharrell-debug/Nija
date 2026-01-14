@@ -607,9 +607,9 @@ class TradingStrategy:
             return False
         
         try:
-            # Start independent trading threads
-            self.independent_trader.start_independent_trading()
-            return True
+            # Start independent trading threads and check if any were started
+            success = self.independent_trader.start_independent_trading()
+            return success if success is not None else False
         except Exception as e:
             logger.error(f"❌ Failed to start independent trading: {e}")
             return False

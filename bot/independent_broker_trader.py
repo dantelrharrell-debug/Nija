@@ -486,6 +486,9 @@ class IndependentBrokerTrader:
         Start independent trading threads for all funded brokers.
         Each broker operates completely independently.
         Includes both MASTER brokers and USER brokers.
+        
+        Returns:
+            bool: True if at least one trading thread was started, False otherwise
         """
         logger.info("=" * 70)
         logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING")
@@ -499,7 +502,7 @@ class IndependentBrokerTrader:
         
         if not funded and not funded_users:
             logger.error("❌ No funded brokers detected (master or user). Cannot start trading.")
-            return
+            return False
         
         total_threads = 0
         
@@ -614,6 +617,9 @@ class IndependentBrokerTrader:
             user_broker_list = ", ".join(user_broker_names)
             logger.info(f"   👤 User brokers ({total_user_threads}): {user_broker_list}")
         logger.info("=" * 70)
+        
+        # Return True if at least one thread was started
+        return total_threads > 0
     
     def stop_all_trading(self):
         """
