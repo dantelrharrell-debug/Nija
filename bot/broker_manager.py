@@ -3434,22 +3434,11 @@ class KrakenBroker(BaseBroker):
             from pykrakenapi import KrakenAPI
             import time
             
-            # CRITICAL FIX: Check if this account already failed with a permission error
-            # Permission errors cannot be resolved by retrying - they require the user to
-            # fix API key permissions on Kraken's website. Attempting to retry wastes time
-            # and API quota, and may trigger "Invalid nonce" errors.
-            # Thread-safe check using class-level lock
-            with KrakenBroker._permission_errors_lock:
-                # Build account key for tracking (same format as cred_label below)
-                if self.account_type == AccountType.MASTER:
-                    account_key = "MASTER"
-                else:
-                    account_key = f"USER:{self.user_id}"
-                
-                if account_key in KrakenBroker._permission_failed_accounts:
-                    logger.warning(f"⚠️  Skipping Kraken connection for {account_key} - previous permission error")
-                    logger.warning(f"   Fix API key permissions at https://www.kraken.com/u/security/api and restart bot")
-                    return False
+            # Build account key for tracking (used for permission error cache)
+            if self.account_type == AccountType.MASTER:
+                account_key = "MASTER"
+            else:
+                account_key = f"USER:{self.user_id}"
             
             # Get credentials based on account type
             # Enhanced credential detection to identify "set but invalid" variables
@@ -3535,6 +3524,16 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   📖 Each user must create their own API key at: https://www.kraken.com/u/security/api")
                     logger.info("   📖 Setup guide: KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX.md")
                 return False
+            
+            # SMART CACHE MANAGEMENT: If credentials exist NOW, clear any previous permission error cache
+            # This allows users to fix their credentials/permissions and have the bot retry automatically
+            # without requiring a full restart. The cache is meant to prevent retry loops during a single
+            # session with the SAME bad credentials, not to permanently block an account.
+            with KrakenBroker._permission_errors_lock:
+                if account_key in KrakenBroker._permission_failed_accounts:
+                    logger.info(f"🔄 Clearing previous permission error cache for {account_key} - credentials now available")
+                    logger.info(f"   Will retry connection with current credentials")
+                    KrakenBroker._permission_failed_accounts.discard(account_key)
             
             # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors
             # CRITICAL FIX: Override default nonce generation to guarantee strict monotonic increase
@@ -3684,9 +3683,8 @@ class KrakenBroker(BaseBroker):
                             if is_permission_error:
                                 logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
                                 
-                                # CRITICAL FIX: Track this account as permanently failed due to permission error
-                                # This prevents any future retry attempts for this account until the bot is restarted
-                                # and the user has fixed the API key permissions
+                                # Track this account as failed due to permission error for this session
+                                # The cache will be automatically cleared if valid credentials are detected later
                                 # Thread-safe update using class-level lock
                                 with KrakenBroker._permission_errors_lock:
                                     KrakenBroker._permission_failed_accounts.add(cred_label)
@@ -3810,7 +3808,8 @@ class KrakenBroker(BaseBroker):
                     if is_permission_error:
                         logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msg}")
                         
-                        # Track this account as permanently failed due to permission error
+                        # Track this account as failed due to permission error for this session
+                        # The cache will be automatically cleared if valid credentials are detected later
                         # Thread-safe update using class-level lock
                         with KrakenBroker._permission_errors_lock:
                             KrakenBroker._permission_failed_accounts.add(cred_label)
