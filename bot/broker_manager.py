@@ -3762,11 +3762,22 @@ class KrakenBroker(BaseBroker):
                                 if is_nonce_error:
                                     self._immediate_nonce_jump()
                                 
-                                # Reduce log spam - only log on first error or DEBUG level
-                                # Show compact error type instead of verbose messages
-                                if attempt == 1 or logger.isEnabledFor(logging.DEBUG):
-                                    error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
+                                # Reduce log spam for transient errors
+                                # - Nonce errors: Only log at DEBUG level (transient, will auto-retry)
+                                # - Other retryable errors: Log as WARNING only on first attempt
+                                # - All errors: Log at DEBUG level for diagnostics
+                                error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
+                                
+                                # For nonce errors, only log at DEBUG level to reduce spam
+                                # These are transient and automatically retried with nonce jumps
+                                if is_nonce_error:
+                                    logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
+                                # For lockout/other errors, log at WARNING on first attempt only
+                                elif attempt == 1:
                                     logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
+                                # All retries after first attempt: DEBUG level only
+                                else:
+                                    logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
                                 continue
                             else:
                                 logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
@@ -3886,11 +3897,22 @@ class KrakenBroker(BaseBroker):
                         if is_nonce_error:
                             self._immediate_nonce_jump()
                         
-                        # Reduce log spam - only log on first error or DEBUG level
-                        # Show compact error type instead of verbose messages
-                        if attempt == 1 or logger.isEnabledFor(logging.DEBUG):
-                            error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
+                        # Reduce log spam for transient errors
+                        # - Nonce errors: Only log at DEBUG level (transient, will auto-retry)
+                        # - Other retryable errors: Log as WARNING only on first attempt
+                        # - All errors: Log at DEBUG level for diagnostics
+                        error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
+                        
+                        # For nonce errors, only log at DEBUG level to reduce spam
+                        # These are transient and automatically retried with nonce jumps
+                        if is_nonce_error:
+                            logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msg}")
+                        # For lockout/other errors, log at WARNING on first attempt only
+                        elif attempt == 1:
                             logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msg}")
+                        # All retries after first attempt: DEBUG level only
+                        else:
+                            logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msg}")
                         continue
                     else:
                         # Handle errors gracefully for non-retryable or final attempt

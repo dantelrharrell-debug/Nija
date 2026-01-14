@@ -34,8 +34,9 @@ def simulate_retry_logic():
     
     for attempt in range(1, max_attempts + 1):
         # Simulate first attempt failure logging
+        # NEW BEHAVIOR: Nonce errors log at DEBUG level only (reduced spam)
         if attempt == 1:
-            logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed (nonce): EAPI:Invalid nonce")
+            logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): EAPI:Invalid nonce")
         
         # Simulate retry delay and logging (attempts 2-5)
         if attempt > 1:
@@ -63,13 +64,17 @@ def simulate_retry_logic():
     print("\n" + "=" * 70)
     print("✅ TEST COMPLETE - Review logs above")
     print("=" * 70)
+    print("\nNEW BEHAVIOR (post-fix):")
+    print("  - Nonce errors are logged at DEBUG level only")
+    print("  - This reduces log spam for transient/auto-retry errors")
+    print("  - Final failure still logged as ERROR with full details")
     print("\nExpected output:")
-    print("  1. One WARNING for attempt 1")
+    print("  1. No WARNING messages (nonce errors are DEBUG only)")
     print("  2. No INFO 'Retrying' messages (only DEBUG)")
     print("  3. Sleep messages for attempts 2-5")
     print("  4. Final ERROR summary")
-    print("\nActual messages logged:")
-    print("  - 1 WARNING message (attempt 1 failure)")
+    print("\nActual messages logged (at INFO level):")
+    print("  - 0 WARNING messages (nonce errors reduced to DEBUG)")
     print("  - 3 ERROR messages (final failure summary)")
     print("  - 0 INFO 'Retrying' messages (spam eliminated)")
     print("=" * 70 + "\n")
@@ -81,6 +86,7 @@ def simulate_with_debug():
     print("\n" + "=" * 70)
     print("SIMULATING KRAKEN RETRY LOGIC (DEBUG LEVEL)")
     print("Expected: All retry messages visible at DEBUG level")
+    print("NOTE: With new fix, nonce errors ALWAYS log at DEBUG level")
     print("=" * 70 + "\n")
     
     # Enable DEBUG logging
@@ -93,7 +99,8 @@ def simulate_with_debug():
     
     for attempt in range(1, max_attempts + 1):
         if attempt == 1:
-            logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed (nonce): EAPI:Invalid nonce")
+            # NEW BEHAVIOR: Nonce errors log at DEBUG level only
+            logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): EAPI:Invalid nonce")
         
         if attempt > 1:
             if last_error_was_nonce:
