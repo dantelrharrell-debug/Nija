@@ -64,6 +64,10 @@ class MultiAccountBrokerManager:
         # Structure: {(user_id, broker_type): error_reason}
         self._failed_user_connections: Dict[Tuple[str, BrokerType], str] = {}
         
+        # Track users without credentials (not an error - credentials are optional)
+        # Structure: {(user_id, broker_type): True}
+        self._users_without_credentials: Dict[Tuple[str, BrokerType], bool] = {}
+        
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
@@ -115,7 +119,7 @@ class MultiAccountBrokerManager:
             broker_type: Type of broker to add
             
         Returns:
-            BaseBroker instance or None if failed
+            BaseBroker instance (even if not connected) or None if broker type unsupported
         """
         try:
             broker = None
@@ -136,10 +140,11 @@ class MultiAccountBrokerManager:
                 
                 self.user_brokers[user_id][broker_type] = broker
                 logger.info(f"✅ User broker added: {user_id} -> {broker_type.value}")
-                return broker
             else:
+                # Connection failed, but return broker object so caller can check credentials_configured
                 logger.warning(f"⚠️  Failed to connect user broker: {user_id} -> {broker_type.value}")
-                return None
+            
+            return broker
                 
         except Exception as e:
             logger.error(f"❌ Error adding user broker {broker_type.value} for {user_id}: {e}")
@@ -170,6 +175,27 @@ class MultiAccountBrokerManager:
         """
         user_brokers = self.user_brokers.get(user_id, {})
         return user_brokers.get(broker_type)
+    
+    def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
+        """
+        Check if a user has credentials configured for a broker type.
+        
+        Args:
+            user_id: User identifier
+            broker_type: Type of broker
+            
+        Returns:
+            bool: True if credentials are configured, False if not or unknown
+        """
+        connection_key = (user_id, broker_type)
+        # If tracked as no credentials, return False
+        if connection_key in self._users_without_credentials:
+            return False
+        # If successfully connected, credentials were configured
+        if user_id in self.user_brokers and broker_type in self.user_brokers[user_id]:
+            return True
+        # Unknown or failed - assume credentials exist (could be wrong credentials or connection issue)
+        return connection_key in self._failed_user_connections
     
     def get_master_balance(self, broker_type: Optional[BrokerType] = None) -> float:
         """
@@ -375,7 +401,8 @@ class MultiAccountBrokerManager:
             try:
                 broker = self.add_user_broker(user.user_id, broker_type)
                 
-                if broker:
+                if broker and broker.connected:
+                    # Successfully connected
                     # Track connected user
                     if broker_type.value not in connected_users:
                         connected_users[broker_type.value] = []
@@ -389,10 +416,21 @@ class MultiAccountBrokerManager:
                         logger.info(f"   💰 {user.name} balance: ${balance:,.2f}")
                     except Exception as bal_err:
                         logger.warning(f"   ⚠️  Could not get balance for {user.name}: {bal_err}")
-                else:
+                elif broker and not broker.credentials_configured:
+                    # Credentials not configured - this is expected, not an error
+                    # The broker's connect() method already logged informational messages
+                    # Track this so we can show proper status later
+                    self._users_without_credentials[connection_key] = True
+                    logger.info(f"   ⚪ {user.name} - credentials not configured (optional)")
+                elif broker:
+                    # Actual connection failure with configured credentials
                     logger.warning(f"   ⚠️  Failed to connect {user.name} to {broker_type.value.title()}")
                     # Track the failed connection to avoid repeated attempts
                     self._failed_user_connections[connection_key] = "connection_failed"
+                else:
+                    # broker is None - unsupported broker type or exception
+                    logger.warning(f"   ⚠️  Could not create broker for {user.name}")
+                    self._failed_user_connections[connection_key] = "broker_creation_failed"
             
             except Exception as e:
                 logger.warning(f"   ⚠️  Error connecting {user.name}: {e}")
@@ -418,7 +456,20 @@ class MultiAccountBrokerManager:
             for brokerage, user_ids in connected_users.items():
                 logger.info(f"   • {brokerage.upper()}: {len(user_ids)} user(s)")
         else:
-            logger.warning("⚠️  No users connected")
+            # Check if there are users without credentials vs actual failures
+            total_without_creds = len(self._users_without_credentials)
+            total_failed = len(self._failed_user_connections)
+            
+            if total_without_creds > 0 and total_failed == 0:
+                # Only users without credentials - this is informational
+                logger.info(f"⚪ No users connected ({total_without_creds} user(s) have no credentials configured)")
+                logger.info("   User accounts are optional. To enable, configure API credentials in environment variables.")
+            elif total_failed > 0:
+                # Some actual connection failures
+                logger.warning(f"⚠️  No users connected ({total_failed} connection failure(s), {total_without_creds} without credentials)")
+            else:
+                # No users configured at all
+                logger.info("⚪ No user accounts configured")
         logger.info("=" * 70)
         
         return connected_users
