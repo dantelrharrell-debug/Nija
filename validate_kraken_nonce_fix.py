@@ -18,7 +18,7 @@ import time
 
 
 def test_initial_offset_range():
-    """Test that initial nonce offset is in 120-180 second range"""
+    """Test that initial nonce offset is in 180-240 second range"""
     print("=" * 80)
     print("TEST 1: Initial Nonce Offset Range")
     print("=" * 80)
@@ -26,7 +26,7 @@ def test_initial_offset_range():
     # Simulate the new initialization logic
     import random
     
-    base_offset = 120000000  # 120 seconds in microseconds
+    base_offset = 180000000  # 180 seconds in microseconds
     random_jitter = random.randint(0, 60000000)  # 0-60 seconds inclusive
     total_offset = base_offset + random_jitter
     
@@ -38,11 +38,11 @@ def test_initial_offset_range():
     print(f"  Total offset: {offset_seconds:.2f}s")
     
     # Validate range
-    if 120.0 <= offset_seconds <= 180.0:
-        print(f"  ✅ PASS: Offset {offset_seconds:.2f}s is within 120-180s range")
+    if 180.0 <= offset_seconds <= 240.0:
+        print(f"  ✅ PASS: Offset {offset_seconds:.2f}s is within 180-240s range")
         return True
     else:
-        print(f"  ❌ FAIL: Offset {offset_seconds:.2f}s is outside 120-180s range")
+        print(f"  ❌ FAIL: Offset {offset_seconds:.2f}s is outside 180-240s range")
         return False
 
 
@@ -75,11 +75,11 @@ def test_combined_jump_strategy():
     # Simulate nonce tracking
     current_time_us = int(time.time() * 1000000)
     
-    # Initial offset (120-180s)
-    initial_offset = 120000000 + 30000000  # 150 seconds (example)
+    # Initial offset (180-240s)
+    initial_offset = 180000000 + 30000000  # 210 seconds (example)
     last_nonce = current_time_us + initial_offset
     
-    print(f"  Initial nonce: {last_nonce} (current_time + 150s)")
+    print(f"  Initial nonce: {last_nonce} (current_time + 210s)")
     print()
     
     # Simulate nonce error on attempt 1
@@ -92,7 +92,7 @@ def test_combined_jump_strategy():
         last_nonce + immediate_jump
     )
     print(f"    ⚡ Immediate jump: +60s")
-    print(f"    New nonce position: +210s from original time")
+    print(f"    New nonce position: +270s from original time")
     
     # Retry jump (10x multiplier for nonce errors, attempt 2)
     # Production logic: nonce_multiplier = 10 if last_error_was_nonce else 1
@@ -105,7 +105,7 @@ def test_combined_jump_strategy():
         last_nonce + nonce_jump
     )
     print(f"    🔄 Retry jump: +{nonce_jump / 1000000:.0f}s (10x multiplier × {attempt}M us)")
-    print(f"    New nonce position: +230s from original time")
+    print(f"    New nonce position: +290s from original time")
     print()
     
     # Expected total advancement (immediate + retry)
@@ -192,7 +192,7 @@ def test_monotonic_guarantee():
     
     # Simulate nonce generation with jumps
     current_time_us = int(time.time() * 1000000)
-    last_nonce = current_time_us + 120000000  # Initial: +120s
+    last_nonce = current_time_us + 180000000  # Initial: +180s
     
     print(f"  Initial nonce: {last_nonce}")
     
@@ -265,10 +265,10 @@ def main():
         print("🎉 All tests passed! Nonce fix is validated.")
         print()
         print("Expected behavior:")
-        print("  - Initial nonce: 120-180s (2-3 minutes) ahead of current time")
+        print("  - Initial nonce: 180-240s (3-4 minutes) ahead of current time")
         print("  - On nonce error: Immediate 60s jump + retry jump")
-        print("  - By attempt 2: ~230-250s total advancement")
-        print("  - By attempt 3: ~330-350s total advancement")
+        print("  - By attempt 2: ~290-310s total advancement")
+        print("  - By attempt 3: ~390-410s total advancement")
         print("  - Success rate: >99% (should succeed on first attempt)")
         print()
         return 0
