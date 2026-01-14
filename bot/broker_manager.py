@@ -3516,7 +3516,7 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"      KRAKEN_USER_{user_env_name}_API_SECRET=<your-api-secret>")
                     logger.info(f"   ⚠️  NOTE: {self.user_id} needs THEIR OWN Kraken account (not a sub-account)")
                     logger.info(f"   📖 Each user must create their own API key at: https://www.kraken.com/u/security/api")
-                    logger.info("   📖 Setup guide: KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX.md")
+                    logger.info("   📖 Setup guide: KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX")
                 return False
             
             # SMART CACHE MANAGEMENT: If credentials exist NOW, clear any previous permission error cache
@@ -3707,7 +3707,7 @@ class KrakenBroker(BaseBroker):
                                     logger.warning("   4. Save changes and restart the bot")
                                     logger.warning("")
                                     logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
-                                    logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                                    logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX for detailed instructions")
                                 else:
                                     logger.error(f"   (Permission error details already logged for {cred_label})")
                                 
@@ -3831,7 +3831,7 @@ class KrakenBroker(BaseBroker):
                             logger.warning("   4. Save changes and restart the bot")
                             logger.warning("")
                             logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
-                            logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                            logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX for detailed instructions")
                         else:
                             logger.error(f"   (Permission error details already logged for {cred_label})")
                         

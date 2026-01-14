@@ -350,14 +350,14 @@ class TradingStrategy:
                         logger.warning("✓ More resilient trading (if one exchange has issues)")
                         logger.warning("✓ Access to different cryptocurrency pairs")
                         logger.warning("")
-                        logger.warning("📖 Setup Guide: KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX.md")
-                        logger.warning("📖 Multi-Exchange Trading: MULTI_EXCHANGE_TRADING_GUIDE.md")
+                        logger.warning("📖 Setup Guide: KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX")
+                        logger.warning("📖 Multi-Exchange Trading: MULTI_EXCHANGE_TRADING_GUIDE")
                         logger.warning("To suppress this warning, set SUPPRESS_SINGLE_EXCHANGE_WARNING=true")
                         logger.warning("=" * 70)
                     if len(connected_brokers) == 1 and "Coinbase" in connected_brokers:
                         broker = connected_brokers[0]  # Get the single connected broker
                         logger.warning(f"⚠️  Single exchange trading ({broker} only). Consider enabling Kraken for better resilience and reduced rate limiting.")
-                        logger.info("📖 To enable Kraken: See KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX.md for step-by-step instructions.")
+                        logger.info("📖 To enable Kraken: See KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX for step-by-step instructions.")
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
                 
