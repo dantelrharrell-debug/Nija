@@ -2722,8 +2722,17 @@ class AlpacaBroker(BaseBroker):
             logging.error(f"❌ Failed to connect to Alpaca {cred_label} after maximum retry attempts")
             return False
             
-        except ImportError:
-            # SDK not installed - skip silently
+        except ImportError as e:
+            # SDK not installed or import failed
+            logging.error(f"❌ Alpaca connection failed ({self.account_identifier}): SDK import error")
+            logging.error(f"   ImportError: {e}")
+            logging.error("   The Alpaca SDK (alpaca-py) failed to import")
+            logging.error("")
+            logging.error("   📋 Troubleshooting steps:")
+            logging.error("      1. Verify alpaca-py is in requirements.txt")
+            logging.error("      2. Check deployment logs for package installation errors")
+            logging.error("      3. Try manual install: pip install alpaca-py")
+            logging.error("      4. Check for dependency conflicts with: pip check")
             return False
     
     def get_account_balance(self) -> float:
@@ -3058,8 +3067,17 @@ class BinanceBroker(BaseBroker):
             logging.error("❌ Failed to connect to Binance after maximum retry attempts")
             return False
                 
-        except ImportError:
-            # SDK not installed - skip silently (it's optional)
+        except ImportError as e:
+            # SDK not installed or import failed
+            logging.error("❌ Binance connection failed: SDK import error")
+            logging.error(f"   ImportError: {e}")
+            logging.error("   The Binance SDK (python-binance) failed to import")
+            logging.error("")
+            logging.error("   📋 Troubleshooting steps:")
+            logging.error("      1. Verify python-binance is in requirements.txt")
+            logging.error("      2. Check deployment logs for package installation errors")
+            logging.error("      3. Try manual install: pip install python-binance")
+            logging.error("      4. Check for dependency conflicts with: pip check")
             return False
     
     def get_account_balance(self) -> float:
@@ -3881,8 +3899,20 @@ class KrakenBroker(BaseBroker):
                 logger.error("   Wait 5-10 minutes before restarting")
             return False
                 
-        except ImportError:
-            # SDK not installed - skip silently (it's optional)
+        except ImportError as e:
+            # SDK not installed or import failed
+            logger.error(f"❌ Kraken connection failed ({self.account_identifier}): SDK import error")
+            logger.error(f"   ImportError: {e}")
+            logger.error("   The Kraken SDK (krakenex or pykrakenapi) failed to import")
+            logger.error("")
+            logger.error("   📋 Troubleshooting steps:")
+            logger.error("      1. Verify krakenex and pykrakenapi are in requirements.txt")
+            logger.error("      2. Check deployment logs for package installation errors")
+            logger.error("      3. Try manual install: pip install krakenex pykrakenapi")
+            logger.error("      4. Check for dependency conflicts with: pip check")
+            logger.error("")
+            logger.error("   If the packages are installed but import still fails,")
+            logger.error("   there may be a dependency version conflict.")
             return False
     
     def get_account_balance(self) -> float:
@@ -4303,8 +4333,17 @@ class OKXBroker(BaseBroker):
             logging.error("❌ Failed to connect to OKX after maximum retry attempts")
             return False
                 
-        except ImportError:
-            # SDK not installed - skip silently (it's optional)
+        except ImportError as e:
+            # SDK not installed or import failed
+            logging.error("❌ OKX connection failed: SDK import error")
+            logging.error(f"   ImportError: {e}")
+            logging.error("   The OKX SDK (okx) failed to import")
+            logging.error("")
+            logging.error("   📋 Troubleshooting steps:")
+            logging.error("      1. Verify okx is in requirements.txt")
+            logging.error("      2. Check deployment logs for package installation errors")
+            logging.error("      3. Try manual install: pip install okx")
+            logging.error("      4. Check for dependency conflicts with: pip check")
             return False
     
     def get_account_balance(self) -> float:
