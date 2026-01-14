@@ -382,6 +382,8 @@ def main():
             logger.warning("See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
             logger.warning("To suppress this warning, set SUPPRESS_SINGLE_EXCHANGE_WARNING=true")
             logger.warning("=" * 70)
+        logger.warning(f"⚠️  Single exchange trading ({exchanges_configured} exchange configured). Consider enabling more exchanges for better diversification and resilience.")
+        logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
 
     try:
         logger.info("Initializing trading strategy...")
