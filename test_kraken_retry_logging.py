@@ -69,8 +69,9 @@ def simulate_retry_logic():
     print("  3. Sleep messages for attempts 2-5")
     print("  4. Final ERROR summary")
     print("\nActual messages logged:")
-    print("  - Should see 1 WARNING + 3 ERROR messages")
-    print("  - Should NOT see any INFO 'Retrying' messages")
+    print("  - 1 WARNING message (attempt 1 failure)")
+    print("  - 3 ERROR messages (final failure summary)")
+    print("  - 0 INFO 'Retrying' messages (spam eliminated)")
     print("=" * 70 + "\n")
 
 def simulate_with_debug():
