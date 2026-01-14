@@ -3348,22 +3348,24 @@ class KrakenBroker(BaseBroker):
         # restarted recently (< 60 seconds), the new nonce could be LOWER than the last nonce
         # Kraken saw, causing "Invalid nonce" error even on first attempt.
         # 
-        # SOLUTION: Use current time + LARGE forward offset (10-20 seconds) + randomization
+        # SOLUTION: Use current time + LARGE forward offset (60-90 seconds) + randomization
         # This ensures new nonces are always ahead of any previous session's nonces,
-        # even if bot restarts frequently.
+        # even if bot restarts frequently or rapidly.
         # 
         # Offset components:
-        # - Base offset: 10,000,000 microseconds (10 seconds) - ensures we're ahead of recent restarts
-        # - Random jitter: 0-10,000,000 microseconds (0-10 seconds) - prevents instance collisions
-        # Total range: 10-20 seconds ahead of current time
+        # - Base offset: 60,000,000 microseconds (60 seconds) - ensures we're well ahead of Kraken's nonce window
+        # - Random jitter: 0-30,000,000 microseconds (0-30 seconds) - prevents instance collisions
+        # Total range: 60-90 seconds ahead of current time
         # 
-        # This is especially important for:
-        # - Bot restarts within 60 seconds of previous run
-        # - Multiple user accounts connecting sequentially  
-        # - Retry attempts that create new nonce sequences
+        # This aggressive offset is necessary because:
+        # - Kraken's nonce window appears to be ~60 seconds
+        # - Previous 10-20s offset was insufficient based on production logs
+        # - Bot restarts within 60 seconds of previous run are common
+        # - Multiple user accounts connecting sequentially need separation
         # - Deployment platforms that auto-restart frequently (Railway, Render)
-        base_offset = 10000000  # 10 seconds in microseconds
-        random_jitter = random.randint(0, 10000000)  # 0-10 seconds of randomization
+        # - Ensures first connection attempt succeeds without nonce errors
+        base_offset = 60000000  # 60 seconds in microseconds
+        random_jitter = random.randint(0, 30000000)  # 0-30 seconds of randomization
         total_offset = base_offset + random_jitter
         self._last_nonce = int(time.time() * 1000000) + total_offset
         # Thread lock to ensure nonce generation is thread-safe
@@ -3375,6 +3377,23 @@ class KrakenBroker(BaseBroker):
             self.account_identifier = "MASTER"
         else:
             self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
+    
+    def _immediate_nonce_jump(self):
+        """
+        Immediately jump nonce forward by 60 seconds when a nonce error is detected.
+        
+        This clears the "burned" nonce window before retry delays, providing
+        faster recovery from nonce errors. The jump is applied immediately upon
+        error detection, rather than waiting for the retry delay to complete.
+        
+        Thread-safe: Uses the nonce lock to prevent race conditions.
+        """
+        with self._nonce_lock:
+            immediate_jump = 60000000  # 60 seconds in microseconds
+            time_based = int(time.time() * 1000000) + immediate_jump
+            increment_based = self._last_nonce + immediate_jump
+            self._last_nonce = max(time_based, increment_based)
+            logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000000:.0f}s to clear burned nonce window")
     
     def connect(self) -> bool:
         """
@@ -3696,6 +3715,12 @@ class KrakenBroker(BaseBroker):
                                 # Set flags for special error types to use appropriate delays on next retry
                                 last_error_was_lockout = is_lockout_error
                                 last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
+                                
+                                # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
+                                # Don't wait until the next retry iteration - do it now to clear the burned nonce
+                                if is_nonce_error:
+                                    self._immediate_nonce_jump()
+                                
                                 if is_lockout_error:
                                     logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
                                     logger.warning(f"   🔒 Temporary lockout detected - will use longer delay on next retry")
@@ -3816,6 +3841,12 @@ class KrakenBroker(BaseBroker):
                         # Set flags for special error types to use appropriate delays on next retry
                         last_error_was_lockout = is_lockout_error
                         last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
+                        
+                        # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
+                        # Don't wait until the next retry iteration - do it now to clear the burned nonce
+                        if is_nonce_error:
+                            self._immediate_nonce_jump()
+                        
                         if is_lockout_error:
                             logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
                             logger.warning(f"   🔒 Temporary lockout detected - will use longer delay on next retry")
