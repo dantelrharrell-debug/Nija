@@ -3355,7 +3355,7 @@ class KrakenBroker(BaseBroker):
         # 
         # Offset components:
         # - Base offset: 120,000,000 microseconds (120 seconds / 2 minutes) - ensures we're well ahead of Kraken's nonce window
-        # - Random jitter: 0-60,000,000 microseconds (0-60 seconds) - prevents instance collisions
+        # - Random jitter: 0-60,000,000 microseconds (0-60 seconds inclusive) - prevents instance collisions
         # Total range: 120-180 seconds (2-3 minutes) ahead of current time
         # 
         # This aggressive offset is necessary because:
@@ -3366,7 +3366,7 @@ class KrakenBroker(BaseBroker):
         # - Deployment platforms that auto-restart frequently (Railway, Render, Heroku)
         # - Ensures first connection attempt succeeds without nonce errors
         base_offset = 120000000  # 120 seconds (2 minutes) in microseconds
-        random_jitter = random.randint(0, 60000000)  # 0-60 seconds of randomization
+        random_jitter = random.randint(0, 60000000)  # 0-60 seconds inclusive
         total_offset = base_offset + random_jitter
         self._last_nonce = int(time.time() * 1000000) + total_offset
         # Thread lock to ensure nonce generation is thread-safe

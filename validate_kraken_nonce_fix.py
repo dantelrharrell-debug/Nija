@@ -27,7 +27,7 @@ def test_initial_offset_range():
     import random
     
     base_offset = 120000000  # 120 seconds in microseconds
-    random_jitter = random.randint(0, 60000000)  # 0-60 seconds
+    random_jitter = random.randint(0, 60000000)  # 0-60 seconds inclusive
     total_offset = base_offset + random_jitter
     
     # Convert to seconds for human readability
