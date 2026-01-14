@@ -329,7 +329,8 @@ class TradingStrategy:
                     
                     # HELPFUL TIP: If only Coinbase is connected, suggest enabling Kraken
                     if len(connected_brokers) == 1 and "Coinbase" in connected_brokers:
-                        logger.warning("⚠️  Single exchange trading (Coinbase only). Consider enabling Kraken for better resilience and reduced rate limiting.")
+                        broker = connected_brokers[0]  # Get the single connected broker
+                        logger.warning(f"⚠️  Single exchange trading ({broker} only). Consider enabling Kraken for better resilience and reduced rate limiting.")
                         logger.info("📖 To enable Kraken: Set KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET environment variables. See MULTI_EXCHANGE_TRADING_GUIDE.md for instructions.")
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
