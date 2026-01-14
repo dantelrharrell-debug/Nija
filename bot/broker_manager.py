@@ -3595,18 +3595,22 @@ class KrakenBroker(BaseBroker):
                         if last_error_was_lockout:
                             # Linear scaling for lockout: (attempt-1) * 120s = 120s, 240s, 360s, 480s for attempts 2,3,4,5
                             delay = lockout_base_delay * (attempt - 1)
-                            logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
-                            logger.info(f"   ⏰ Long delay due to Kraken temporary lockout (API key needs time to unlock)")
+                            # Only log retry on final attempt or DEBUG level to reduce log spam
+                            if attempt == max_attempts or logger.isEnabledFor(logging.DEBUG):
+                                logger.info(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
                         elif last_error_was_nonce:
                             # Linear scaling for nonce errors: (attempt-1) * 30s = 30s, 60s, 90s, 120s for attempts 2,3,4,5
                             # Nonce errors need time for Kraken to "forget" the burned nonce window
                             delay = nonce_base_delay * (attempt - 1)
-                            logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
-                            logger.info(f"   ⏰ Moderate delay due to invalid nonce - allowing nonce window to clear")
+                            # Only log retry on final attempt or DEBUG level to reduce log spam
+                            if attempt == max_attempts or logger.isEnabledFor(logging.DEBUG):
+                                logger.info(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, nonce)")
                         else:
                             # Exponential backoff for normal errors: 5s, 10s, 20s, 40s for attempts 2,3,4,5
                             delay = base_delay * (2 ** (attempt - 2))
-                            logger.info(f"🔄 Retrying Kraken connection ({cred_label}) in {delay}s (attempt {attempt}/{max_attempts})...")
+                            # Only log retry on final attempt or DEBUG level to reduce log spam
+                            if attempt == max_attempts or logger.isEnabledFor(logging.DEBUG):
+                                logger.info(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
                         time.sleep(delay)
                         
                         # Jump nonce forward on retry to skip any potentially "burned" nonces
@@ -3721,14 +3725,11 @@ class KrakenBroker(BaseBroker):
                                 if is_nonce_error:
                                     self._immediate_nonce_jump()
                                 
-                                if is_lockout_error:
-                                    logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
-                                    logger.warning(f"   🔒 Temporary lockout detected - will use longer delay on next retry")
-                                elif is_nonce_error:
-                                    logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
-                                    logger.warning(f"   🔢 Invalid nonce detected - will use moderate delay and aggressive nonce jump on next retry")
-                                else:
-                                    logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
+                                # Reduce log spam - only log on first error or DEBUG level
+                                # Show compact error type instead of verbose messages
+                                if attempt == 1 or logger.isEnabledFor(logging.DEBUG):
+                                    error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
+                                    logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
                                 continue
                             else:
                                 logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
@@ -3847,14 +3848,11 @@ class KrakenBroker(BaseBroker):
                         if is_nonce_error:
                             self._immediate_nonce_jump()
                         
-                        if is_lockout_error:
-                            logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
-                            logger.warning(f"   🔒 Temporary lockout detected - will use longer delay on next retry")
-                        elif is_nonce_error:
-                            logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
-                            logger.warning(f"   🔢 Invalid nonce detected - will use moderate delay and aggressive nonce jump on next retry")
-                        else:
-                            logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
+                        # Reduce log spam - only log on first error or DEBUG level
+                        # Show compact error type instead of verbose messages
+                        if attempt == 1 or logger.isEnabledFor(logging.DEBUG):
+                            error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
+                            logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msg}")
                         continue
                     else:
                         # Handle errors gracefully for non-retryable or final attempt
@@ -3868,7 +3866,14 @@ class KrakenBroker(BaseBroker):
                         return False
             
             # Should never reach here, but just in case
-            logger.error("❌ Failed to connect to Kraken after maximum retry attempts")
+            # Log summary of all failed attempts to help with debugging
+            logger.error(f"❌ Kraken ({cred_label}) failed after {max_attempts} attempts")
+            if last_error_was_nonce:
+                logger.error("   Last error was: Invalid nonce (API nonce synchronization issue)")
+                logger.error("   This usually resolves after waiting 1-2 minutes")
+            elif last_error_was_lockout:
+                logger.error("   Last error was: Temporary lockout (too many failed requests)")
+                logger.error("   Wait 5-10 minutes before restarting")
             return False
                 
         except ImportError:
