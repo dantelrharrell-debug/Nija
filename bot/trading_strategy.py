@@ -329,25 +329,8 @@ class TradingStrategy:
                     
                     # HELPFUL TIP: If only Coinbase is connected, suggest enabling Kraken
                     if len(connected_brokers) == 1 and "Coinbase" in connected_brokers:
-                        logger.warning("=" * 70)
-                        logger.warning("⚠️  SINGLE EXCHANGE TRADING - CONSIDER ENABLING KRAKEN")
-                        logger.warning("=" * 70)
-                        logger.warning("You're trading on Coinbase only, which may cause rate limiting.")
-                        logger.warning("Enable Kraken to distribute load across multiple exchanges:")
-                        logger.warning("")
-                        logger.warning("1. Get API credentials from https://www.kraken.com/u/security/api")
-                        logger.warning("2. Set environment variables:")
-                        logger.warning("   KRAKEN_MASTER_API_KEY=<your-api-key>")
-                        logger.warning("   KRAKEN_MASTER_API_SECRET=<your-api-secret>")
-                        logger.warning("3. Restart the bot")
-                        logger.warning("")
-                        logger.warning("Benefits:")
-                        logger.warning("✓ Reduced API rate limiting (load split across exchanges)")
-                        logger.warning("✓ More resilient trading (if one exchange has issues)")
-                        logger.warning("✓ Access to different cryptocurrency pairs")
-                        logger.warning("")
-                        logger.warning("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for detailed instructions")
-                        logger.warning("=" * 70)
+                        logger.warning("⚠️  Single exchange trading (Coinbase only). Consider enabling Kraken for better resilience and reduced rate limiting.")
+                        logger.info("📖 To enable Kraken: Set KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET environment variables. See MULTI_EXCHANGE_TRADING_GUIDE.md for instructions.")
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
                 

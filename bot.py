@@ -368,16 +368,8 @@ def main():
         logger.error("Exiting - No trading possible without credentials")
         sys.exit(1)
     elif exchanges_configured < 2:
-        logger.warning("=" * 70)
-        logger.warning("⚠️  SINGLE EXCHANGE TRADING")
-        logger.warning("=" * 70)
-        logger.warning(f"Only {exchanges_configured} exchange configured. Consider enabling more for:")
-        logger.warning("  • Better diversification")
-        logger.warning("  • Reduced API rate limiting")
-        logger.warning("  • More resilient trading")
-        logger.warning("")
-        logger.warning("See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
-        logger.warning("=" * 70)
+        logger.warning(f"⚠️  Single exchange trading ({exchanges_configured} exchange configured). Consider enabling more exchanges for better diversification and resilience.")
+        logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
 
     try:
         logger.info("Initializing trading strategy...")
