@@ -132,3 +132,4 @@ nija_profit_capability_report.json
 
 # Cleanup script (temporary)
 cleanup_repository.sh
+test_user_connection_status.py
