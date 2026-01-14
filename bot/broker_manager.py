@@ -3378,6 +3378,23 @@ class KrakenBroker(BaseBroker):
         else:
             self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
     
+    def _immediate_nonce_jump(self):
+        """
+        Immediately jump nonce forward by 60 seconds when a nonce error is detected.
+        
+        This clears the "burned" nonce window before retry delays, providing
+        faster recovery from nonce errors. The jump is applied immediately upon
+        error detection, rather than waiting for the retry delay to complete.
+        
+        Thread-safe: Uses the nonce lock to prevent race conditions.
+        """
+        with self._nonce_lock:
+            immediate_jump = 60000000  # 60 seconds in microseconds
+            time_based = int(time.time() * 1000000) + immediate_jump
+            increment_based = self._last_nonce + immediate_jump
+            self._last_nonce = max(time_based, increment_based)
+            logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000000:.0f}s to clear burned nonce window")
+    
     def connect(self) -> bool:
         """
         Connect to Kraken Pro API with retry logic.
@@ -3501,24 +3518,6 @@ class KrakenBroker(BaseBroker):
             # SOLUTION: Use microseconds + tracking to ensure each nonce is strictly greater
             # than the previous one, even if requests happen in the same microsecond.
             self.api = krakenex.API(key=api_key, secret=api_secret)
-            
-            # Helper method for immediate nonce jumping on error detection
-            def _immediate_nonce_jump():
-                """
-                Immediately jump nonce forward by 60 seconds when a nonce error is detected.
-                
-                This clears the "burned" nonce window before retry delays, providing
-                faster recovery from nonce errors. The jump is applied immediately upon
-                error detection, rather than waiting for the retry delay to complete.
-                
-                Thread-safe: Uses the nonce lock to prevent race conditions.
-                """
-                with self._nonce_lock:
-                    immediate_jump = 60000000  # 60 seconds in microseconds
-                    time_based = int(time.time() * 1000000) + immediate_jump
-                    increment_based = self._last_nonce + immediate_jump
-                    self._last_nonce = max(time_based, increment_based)
-                    logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000000:.0f}s to clear burned nonce window")
             
             # Override _nonce to use tracked microseconds for guaranteed uniqueness
             # This prevents "EAPI:Invalid nonce" errors caused by:
@@ -3720,7 +3719,7 @@ class KrakenBroker(BaseBroker):
                                 # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
                                 # Don't wait until the next retry iteration - do it now to clear the burned nonce
                                 if is_nonce_error:
-                                    _immediate_nonce_jump()
+                                    self._immediate_nonce_jump()
                                 
                                 if is_lockout_error:
                                     logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
@@ -3846,7 +3845,7 @@ class KrakenBroker(BaseBroker):
                         # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
                         # Don't wait until the next retry iteration - do it now to clear the burned nonce
                         if is_nonce_error:
-                            _immediate_nonce_jump()
+                            self._immediate_nonce_jump()
                         
                         if is_lockout_error:
                             logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")
