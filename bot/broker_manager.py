@@ -3502,6 +3502,24 @@ class KrakenBroker(BaseBroker):
             # than the previous one, even if requests happen in the same microsecond.
             self.api = krakenex.API(key=api_key, secret=api_secret)
             
+            # Helper method for immediate nonce jumping on error detection
+            def _immediate_nonce_jump():
+                """
+                Immediately jump nonce forward by 60 seconds when a nonce error is detected.
+                
+                This clears the "burned" nonce window before retry delays, providing
+                faster recovery from nonce errors. The jump is applied immediately upon
+                error detection, rather than waiting for the retry delay to complete.
+                
+                Thread-safe: Uses the nonce lock to prevent race conditions.
+                """
+                with self._nonce_lock:
+                    immediate_jump = 60000000  # 60 seconds in microseconds
+                    time_based = int(time.time() * 1000000) + immediate_jump
+                    increment_based = self._last_nonce + immediate_jump
+                    self._last_nonce = max(time_based, increment_based)
+                    logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000000:.0f}s to clear burned nonce window")
+            
             # Override _nonce to use tracked microseconds for guaranteed uniqueness
             # This prevents "EAPI:Invalid nonce" errors caused by:
             # 1. Duplicate nonces from rapid consecutive requests (even sub-microsecond)
@@ -3702,16 +3720,7 @@ class KrakenBroker(BaseBroker):
                                 # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
                                 # Don't wait until the next retry iteration - do it now to clear the burned nonce
                                 if is_nonce_error:
-                                    with self._nonce_lock:
-                                        # Aggressive immediate jump: 60 seconds (60M microseconds)
-                                        # This is MUCH larger than the normal retry jumps (20-50s)
-                                        # Rationale: If we got a nonce error despite the 60-90s initial offset,
-                                        # the Kraken nonce window is clearly further ahead than expected
-                                        immediate_jump = 60000000  # 60 seconds
-                                        time_based = int(time.time() * 1000000) + immediate_jump
-                                        increment_based = self._last_nonce + immediate_jump
-                                        self._last_nonce = max(time_based, increment_based)
-                                        logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000000:.0f}s to clear burned nonce window")
+                                    _immediate_nonce_jump()
                                 
                                 if is_lockout_error:
                                     logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msgs}")
@@ -3837,16 +3846,7 @@ class KrakenBroker(BaseBroker):
                         # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
                         # Don't wait until the next retry iteration - do it now to clear the burned nonce
                         if is_nonce_error:
-                            with self._nonce_lock:
-                                # Aggressive immediate jump: 60 seconds (60M microseconds)
-                                # This is MUCH larger than the normal retry jumps (20-50s)
-                                # Rationale: If we got a nonce error despite the 60-90s initial offset,
-                                # the Kraken nonce window is clearly further ahead than expected
-                                immediate_jump = 60000000  # 60 seconds
-                                time_based = int(time.time() * 1000000) + immediate_jump
-                                increment_based = self._last_nonce + immediate_jump
-                                self._last_nonce = max(time_based, increment_based)
-                                logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000000:.0f}s to clear burned nonce window")
+                            _immediate_nonce_jump()
                         
                         if is_lockout_error:
                             logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable, {cred_label}): {error_msg}")

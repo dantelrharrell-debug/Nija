@@ -85,7 +85,7 @@ def test_combined_jump_strategy():
     # Simulate nonce error on attempt 1
     print("  Attempt 1 fails with nonce error:")
     
-    # Immediate jump
+    # Immediate jump (as implemented in production code)
     immediate_jump = 60000000  # 60 seconds
     last_nonce = max(
         int(time.time() * 1000000) + immediate_jump,
@@ -94,24 +94,26 @@ def test_combined_jump_strategy():
     print(f"    ⚡ Immediate jump: +60s")
     print(f"    New nonce position: +135s from original time")
     
-    # Retry jump (10x multiplier for attempt 2)
+    # Retry jump (10x multiplier for nonce errors, attempt 2)
+    # Production logic: nonce_multiplier = 10 if last_error_was_nonce else 1
+    # Production formula: nonce_jump = nonce_multiplier * 1000000 * attempt
     attempt = 2
-    nonce_multiplier = 10
-    nonce_jump = nonce_multiplier * 1000000 * attempt  # 20M microseconds
+    nonce_multiplier = 10  # For nonce errors (last_error_was_nonce = True)
+    nonce_jump = nonce_multiplier * 1000000 * attempt  # 20,000,000 microseconds = 20s
     last_nonce = max(
         int(time.time() * 1000000) + nonce_jump,
         last_nonce + nonce_jump
     )
-    print(f"    🔄 Retry jump: +{nonce_jump / 1000000:.0f}s")
+    print(f"    🔄 Retry jump: +{nonce_jump / 1000000:.0f}s (10x multiplier × {attempt}M us)")
     print(f"    New nonce position: +155s from original time")
     print()
     
-    # Expected total advancement
+    # Expected total advancement (immediate + retry)
     expected_min = 60 + 20  # immediate + retry
     actual_advancement = (last_nonce - current_time_us) / 1000000.0
     
     print(f"  Total nonce advancement from attempt 1:")
-    print(f"    Expected: >{expected_min}s")
+    print(f"    Expected: >{expected_min}s (immediate 60s + retry 20s)")
     print(f"    Actual: ~{actual_advancement:.0f}s")
     
     if actual_advancement >= expected_min:
@@ -128,37 +130,49 @@ def test_multi_attempt_recovery():
     print("TEST 4: Multi-Attempt Recovery Strategy")
     print("=" * 80)
     
-    immediate_jump = 60000000  # 60 seconds
+    # Constants from production code
+    immediate_jump_us = 60000000  # 60 seconds in microseconds
+    nonce_multiplier = 10  # For nonce errors (last_error_was_nonce = True)
     
+    # Production formula: nonce_jump = nonce_multiplier * 1000000 * attempt
+    # This creates jumps of: 20M, 30M, 40M microseconds for attempts 2, 3, 4
     attempts = [
-        (1, 0, 60, 20),   # Attempt 1 → immediate 60s + retry 20s
-        (2, 60, 60, 30),  # Attempt 2 → immediate 60s + retry 30s (after 60s delay)
-        (3, 150, 60, 40), # Attempt 3 → immediate 60s + retry 40s (after 90s delay)
+        # (attempt_num, cumulative_delay, immediate_jump_s, retry_jump_s)
+        (1, 0, 60, 20),    # Attempt 1 → immediate 60s + retry 20s (2 * 10M)
+        (2, 60, 60, 30),   # Attempt 2 → immediate 60s + retry 30s (3 * 10M, after 60s delay)
+        (3, 150, 60, 40),  # Attempt 3 → immediate 60s + retry 40s (4 * 10M, after 90s delay)
     ]
     
     print("  Simulating multi-attempt nonce recovery:")
+    print("  (Using production formula: nonce_multiplier * 1M * attempt)")
     print()
     
     total_advancement = 0
     all_passed = True
     
     for attempt_num, cumulative_delay, immediate, retry in attempts:
+        # Verify retry jump matches production formula
+        # For attempt N, retry happens at iteration N+1
+        # Formula: 10 * 1M * (N+1) microseconds = 10 * (N+1) seconds
+        next_attempt = attempt_num + 1
+        expected_retry = nonce_multiplier * next_attempt  # 10 * (N+1) seconds
+        
         total_jump = immediate + retry
         total_advancement += total_jump
         
         print(f"  Attempt {attempt_num} nonce error:")
         print(f"    Cumulative wait time: {cumulative_delay}s")
         print(f"    Immediate jump: +{immediate}s")
-        print(f"    Retry jump: +{retry}s")
+        print(f"    Retry jump: +{retry}s (10x multiplier × {next_attempt}M us)")
         print(f"    Attempt jump total: +{total_jump}s")
         print(f"    Cumulative advancement: +{total_advancement}s")
         
-        # Validate jumps are increasing
-        if attempt_num > 1 and retry <= attempts[attempt_num - 2][3]:
-            print(f"    ❌ FAIL: Retry jump should increase with attempts")
-            all_passed = False
+        # Validate retry jump matches formula
+        if retry == expected_retry:
+            print(f"    ✅ Retry jump matches production formula")
         else:
-            print(f"    ✅ Adequate jump for attempt {attempt_num}")
+            print(f"    ❌ FAIL: Expected {expected_retry}s, got {retry}s")
+            all_passed = False
         print()
     
     # By attempt 3, should have advanced ~250-270 seconds
