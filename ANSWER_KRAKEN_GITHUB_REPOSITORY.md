@@ -1,6 +1,6 @@
 # Kraken GitHub Repository Connection - Answer
 
-**Date**: January 14, 2026  
+**Date**: January 14, 2026
 **Question**: "Is there a kraken repository here on github we can connect to that will fix our issue?"
 
 ---

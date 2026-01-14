@@ -105,11 +105,11 @@ pykrakenapi==0.3.2
 grep -n "krakenex\|pykrakenapi" bot/broker_manager.py | head -5
 ```
 
-Expected output:
+Expected output (lines may vary):
 ```
-3305:    Python wrapper: https://github.com/veox/python3-krakenex
-3410:            import krakenex
-3411:            from pykrakenapi import KrakenAPI
+<line>:    Python wrapper: https://github.com/veox/python3-krakenex
+<line>:            import krakenex
+<line>:            from pykrakenapi import KrakenAPI
 ...
 ```
 
