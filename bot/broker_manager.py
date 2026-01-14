@@ -2724,7 +2724,7 @@ class AlpacaBroker(BaseBroker):
             
         except ImportError as e:
             # SDK not installed or import failed
-            logger.error(f"❌ Alpaca connection failed ({cred_label}): SDK import error")
+            logger.error(f"❌ Alpaca connection failed ({self.account_identifier}): SDK import error")
             logger.error(f"   ImportError: {e}")
             logger.error("   The Alpaca SDK (alpaca-py) failed to import")
             logger.error("")
@@ -3901,7 +3901,7 @@ class KrakenBroker(BaseBroker):
                 
         except ImportError as e:
             # SDK not installed or import failed
-            logger.error(f"❌ Kraken connection failed ({cred_label}): SDK import error")
+            logger.error(f"❌ Kraken connection failed ({self.account_identifier}): SDK import error")
             logger.error(f"   ImportError: {e}")
             logger.error("   The Kraken SDK (krakenex or pykrakenapi) failed to import")
             logger.error("")
