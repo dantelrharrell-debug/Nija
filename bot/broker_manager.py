@@ -2724,15 +2724,15 @@ class AlpacaBroker(BaseBroker):
             
         except ImportError as e:
             # SDK not installed or import failed
-            logger.error(f"❌ Alpaca connection failed ({self.account_identifier}): SDK import error")
-            logger.error(f"   ImportError: {e}")
-            logger.error("   The Alpaca SDK (alpaca-py) failed to import")
-            logger.error("")
-            logger.error("   📋 Troubleshooting steps:")
-            logger.error("      1. Verify alpaca-py is in requirements.txt")
-            logger.error("      2. Check deployment logs for package installation errors")
-            logger.error("      3. Try manual install: pip install alpaca-py")
-            logger.error("      4. Check for dependency conflicts with: pip check")
+            logging.error(f"❌ Alpaca connection failed ({self.account_identifier}): SDK import error")
+            logging.error(f"   ImportError: {e}")
+            logging.error("   The Alpaca SDK (alpaca-py) failed to import")
+            logging.error("")
+            logging.error("   📋 Troubleshooting steps:")
+            logging.error("      1. Verify alpaca-py is in requirements.txt")
+            logging.error("      2. Check deployment logs for package installation errors")
+            logging.error("      3. Try manual install: pip install alpaca-py")
+            logging.error("      4. Check for dependency conflicts with: pip check")
             return False
     
     def get_account_balance(self) -> float:
