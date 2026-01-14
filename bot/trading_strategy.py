@@ -303,8 +303,10 @@ class TradingStrategy:
             
             # Add delay before user account connections to ensure master account
             # connection has completed and nonce ranges are separated
-            # Increased from 1.0s to 2.0s to reduce nonce collision risk
-            time.sleep(2.0)
+            # CRITICAL (Jan 14, 2026): Increased from 2.0s to 5.0s to prevent Kraken nonce conflicts
+            # Master Kraken connection may still be using nonces in the current time window.
+            # User connections should wait long enough to ensure non-overlapping nonce ranges.
+            time.sleep(5.0)
             
             # Connect User Accounts - Load from config files
             logger.info("=" * 70)
