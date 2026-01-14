@@ -70,11 +70,9 @@ kraken_master_secret = os.getenv("KRAKEN_MASTER_API_SECRET", "")
 if kraken_master_key and kraken_master_secret:
     print("✅ KRAKEN_MASTER_API_KEY: SET")
     print(f"   Length: {len(kraken_master_key)} characters")
-    print(f"   Starts with: {kraken_master_key[:10]}...")
     print()
     print("✅ KRAKEN_MASTER_API_SECRET: SET")
     print(f"   Length: {len(kraken_master_secret)} characters")
-    print(f"   Starts with: {kraken_master_secret[:10]}...")
 else:
     print("⚠️  WARNING: KRAKEN_MASTER_API_KEY and/or KRAKEN_MASTER_API_SECRET not set")
     print()
