@@ -3762,7 +3762,7 @@ class KrakenBroker(BaseBroker):
                                     logger.warning("   4. Save changes and restart the bot")
                                     logger.warning("")
                                     logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
-                                    logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX for detailed instructions")
+                                    logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                                 else:
                                     logger.error("   ⚠️  Permission error (see above for fix instructions)")
                                 
@@ -3898,7 +3898,7 @@ class KrakenBroker(BaseBroker):
                             logger.warning("   4. Save changes and restart the bot")
                             logger.warning("")
                             logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
-                            logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX for detailed instructions")
+                            logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                         else:
                             logger.error("   ⚠️  Permission error (see above for fix instructions)")
                         
