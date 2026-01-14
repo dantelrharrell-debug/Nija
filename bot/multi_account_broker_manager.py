@@ -34,7 +34,10 @@ logger = logging.getLogger('nija.multi_account')
 
 # Minimum delay between sequential connections to the same broker type
 # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
-MIN_CONNECTION_DELAY = 2.0  # seconds
+# CRITICAL (Jan 14, 2026): Increased from 2.0s to 5.0s to further reduce Kraken nonce conflicts
+# Each Kraken broker instance initializes with a random 0-5 second nonce offset.
+# A 5-second delay ensures the nonce ranges don't overlap even in worst case.
+MIN_CONNECTION_DELAY = 5.0  # seconds
 
 
 class MultiAccountBrokerManager:

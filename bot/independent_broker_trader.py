@@ -129,6 +129,16 @@ class IndependentBrokerTrader:
             
             try:
                 balance = broker.get_account_balance()
+                
+                # CRITICAL FIX (Jan 14, 2026): Coinbase API can return stale/cached $0 balance
+                # immediately after connection due to API-side caching. If we get $0, retry
+                # once after a short delay to get fresh data.
+                if balance == 0.0 and broker_type.value == 'coinbase':
+                    logger.debug(f"   Coinbase returned $0.00, retrying after 2s delay (API cache issue)...")
+                    time.sleep(2.0)
+                    balance = broker.get_account_balance()
+                    logger.debug(f"   Retry returned: ${balance:.2f}")
+                
                 logger.info(f"   💰 {broker_type.value}: ${balance:,.2f}")
                 
                 if balance >= MINIMUM_FUNDED_BALANCE:
@@ -486,6 +496,9 @@ class IndependentBrokerTrader:
         Start independent trading threads for all funded brokers.
         Each broker operates completely independently.
         Includes both MASTER brokers and USER brokers.
+        
+        Returns:
+            bool: True if at least one trading thread was started, False otherwise
         """
         logger.info("=" * 70)
         logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING")
@@ -499,7 +512,7 @@ class IndependentBrokerTrader:
         
         if not funded and not funded_users:
             logger.error("❌ No funded brokers detected (master or user). Cannot start trading.")
-            return
+            return False
         
         total_threads = 0
         
@@ -614,6 +627,9 @@ class IndependentBrokerTrader:
             user_broker_list = ", ".join(user_broker_names)
             logger.info(f"   👤 User brokers ({total_user_threads}): {user_broker_list}")
         logger.info("=" * 70)
+        
+        # Return True if at least one thread was started
+        return total_threads > 0
     
     def stop_all_trading(self):
         """
