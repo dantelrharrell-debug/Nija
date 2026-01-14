@@ -396,13 +396,17 @@ class MultiAccountBrokerManager:
             
             logger.info(f"📊 Connecting {user.name} ({user.user_id}) to {broker_type.value.title()}...")
             
-            # Check if this user-broker combination already failed in this session
+            # SMART CACHE MANAGEMENT: Clear failed connection cache to allow retry
+            # This allows automatic reconnection when credentials are added/fixed without requiring bot restart
             connection_key = (user.user_id, broker_type)
             if connection_key in self._failed_user_connections:
+                # Always retry on each connect_users_from_config() call - if credentials were fixed,
+                # connection will succeed; if still broken, it will fail again and be re-cached.
+                # This gives users automatic retry on every bot restart without manual intervention.
                 reason = self._failed_user_connections[connection_key]
-                logger.warning(f"   ⏭️  Skipping {user.name} - previous connection failed ({reason})")
-                logger.warning(f"   Fix the issue and restart the bot to retry connection")
-                continue
+                logger.info(f"   🔄 Clearing previous connection failure cache for {user.name} ({reason})")
+                logger.info(f"   Will retry connection - credentials may have been added/fixed")
+                del self._failed_user_connections[connection_key]
             
             try:
                 broker = self.add_user_broker(user.user_id, broker_type)
