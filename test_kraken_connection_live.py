@@ -50,7 +50,7 @@ def mask_credential(value):
     return "***"
 
 
-def test_kraken_master():
+def check_kraken_master():
     """Test Kraken master account connection"""
     print_section("🔍 TESTING KRAKEN MASTER ACCOUNT")
     
@@ -192,7 +192,7 @@ def test_kraken_master():
         return False
 
 
-def test_kraken_user(user_name, user_id):
+def check_kraken_user(user_name, user_id):
     """Test Kraken user account connection"""
     print_section(f"👤 TESTING USER: {user_name} ({user_id})")
     
@@ -291,11 +291,11 @@ def main():
     results = {}
     
     # Test master account
-    results['master'] = test_kraken_master()
+    results['master'] = check_kraken_master()
     
     # Test user accounts
-    results['daivon'] = test_kraken_user("Daivon Frazier", "daivon_frazier")
-    results['tania'] = test_kraken_user("Tania Gilbert", "tania_gilbert")
+    results['daivon'] = check_kraken_user("Daivon Frazier", "daivon_frazier")
+    results['tania'] = check_kraken_user("Tania Gilbert", "tania_gilbert")
     
     # Summary
     print_header("📊 TEST SUMMARY")
