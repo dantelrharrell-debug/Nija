@@ -65,7 +65,7 @@ Edit the appropriate file (e.g., `retail_kraken.json` for a retail Kraken accoun
     "account_type": "retail",
     "broker_type": "kraken",
     "enabled": true,
-    "description": "New user added on 2026-01-14"
+    "description": "New user added on 2024-01-14"
   }
 ]
 ```
@@ -121,7 +121,7 @@ COINBASE_USER_{FIRSTNAME}_API_SECRET=...
 1. **Use descriptive user_ids**: `firstname_lastname` format
 2. **Enable only funded accounts with credentials**: Set `enabled: false` for accounts without API credentials configured
 3. **Add descriptions**: Note when users were added and why
-4. **One user per brokerage**: If a user has multiple brokerage accounts, add them to each account type + brokerage file
+4. **One user per brokerage**: If a user has multiple brokerage accounts, add them to the corresponding file for each account type and brokerage combination
 5. **Keep credentials secure**: Never commit `.env` files with real credentials
 6. **Disable before removing credentials**: If removing a user's API credentials, first set `enabled: false` in the config file
 
