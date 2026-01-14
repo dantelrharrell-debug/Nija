@@ -23,6 +23,10 @@
 
 **Deployment**: Credentials are configured on both Railway and Render. Bot will auto-connect on startup.
 
+**Library**: NIJA uses the official Kraken Python library from GitHub: [`python3-krakenex`](https://github.com/veox/python3-krakenex)
+- See: **[ANSWER_KRAKEN_GITHUB_REPOSITORY.md](ANSWER_KRAKEN_GITHUB_REPOSITORY.md)** for library details and troubleshooting
+- Quick reference: **[QUICK_ANSWER_KRAKEN_GITHUB_REPO.md](QUICK_ANSWER_KRAKEN_GITHUB_REPO.md)**
+
 ---
 
 **What is NIJA?** NIJA is a sophisticated, AI-powered autonomous trading platform that goes far beyond simple cryptocurrency trading. It's a comprehensive algorithmic trading system featuring:
