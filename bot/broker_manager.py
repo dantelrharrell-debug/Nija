@@ -3497,6 +3497,19 @@ class KrakenBroker(BaseBroker):
                 logger.warning("      3. Re-deploy after fixing the values")
                 return False
             
+            # SMART CACHE MANAGEMENT: If credentials exist NOW, clear any previous permission error cache
+            # This allows users to fix their credentials/permissions and have the bot retry automatically
+            # without requiring a full restart. The cache is meant to prevent retry loops during a single
+            # session with the SAME bad credentials, not to permanently block an account.
+            # NOTE: This must happen BEFORE the missing credentials check below, so that if credentials
+            # are added after a previous failure, we clear the cache before discovering they're still missing.
+            if api_key and api_secret:
+                with KrakenBroker._permission_errors_lock:
+                    if cred_label in KrakenBroker._permission_failed_accounts:
+                        logger.info(f"🔄 Clearing previous permission error cache for {cred_label} - credentials now available")
+                        logger.info(f"   Will retry connection with current credentials")
+                        KrakenBroker._permission_failed_accounts.discard(cred_label)
+            
             if not api_key or not api_secret:
                 # Silently skip - Kraken is optional, no need for scary error messages
                 logger.info(f"⚠️  Kraken credentials not configured for {cred_label} (skipping)")
@@ -3518,16 +3531,6 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   📖 Each user must create their own API key at: https://www.kraken.com/u/security/api")
                     logger.info("   📖 Setup guide: KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX")
                 return False
-            
-            # SMART CACHE MANAGEMENT: If credentials exist NOW, clear any previous permission error cache
-            # This allows users to fix their credentials/permissions and have the bot retry automatically
-            # without requiring a full restart. The cache is meant to prevent retry loops during a single
-            # session with the SAME bad credentials, not to permanently block an account.
-            with KrakenBroker._permission_errors_lock:
-                if cred_label in KrakenBroker._permission_failed_accounts:
-                    logger.info(f"🔄 Clearing previous permission error cache for {cred_label} - credentials now available")
-                    logger.info(f"   Will retry connection with current credentials")
-                    KrakenBroker._permission_failed_accounts.discard(cred_label)
             
             # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors
             # CRITICAL FIX: Override default nonce generation to guarantee strict monotonic increase
