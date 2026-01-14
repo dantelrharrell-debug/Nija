@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import logging
+import threading
 
 logger = logging.getLogger("nija.broker")
 
@@ -386,6 +387,13 @@ class KrakenBrokerAdapter(BrokerInterface):
     Documentation: https://docs.kraken.com/rest/
     """
     
+    # Class-level flag to track if detailed permission error instructions have been logged
+    # This prevents spamming the logs with duplicate permission error messages
+    # The detailed instructions are logged ONCE GLOBALLY across all adapter instances
+    # Thread-safe: uses lock for concurrent access protection
+    _permission_error_details_logged = False
+    _permission_errors_lock = threading.Lock()
+    
     def __init__(self, api_key: str = None, api_secret: str = None):
         """
         Initialize Kraken broker adapter.
@@ -428,22 +436,38 @@ class KrakenBrokerAdapter(BrokerInterface):
                 
                 if is_permission_error:
                     logger.error(f"❌ Kraken connection test failed: {error_msgs}")
-                    logger.error("   ⚠️  API KEY PERMISSION ERROR")
-                    logger.error("   Your Kraken API key does not have the required permissions.")
-                    logger.warning("")
-                    logger.warning("   To fix this issue:")
-                    logger.warning("   1. Go to https://www.kraken.com/u/security/api")
-                    logger.warning("   2. Find your API key and edit its permissions")
-                    logger.warning("   3. Enable these permissions:")
-                    logger.warning("      ✅ Query Funds (required to check balance)")
-                    logger.warning("      ✅ Query Open Orders & Trades (required for position tracking)")
-                    logger.warning("      ✅ Query Closed Orders & Trades (required for trade history)")
-                    logger.warning("      ✅ Create & Modify Orders (required to place trades)")
-                    logger.warning("      ✅ Cancel/Close Orders (required for stop losses)")
-                    logger.warning("   4. Save changes and restart the bot")
-                    logger.warning("")
-                    logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
-                    logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                    
+                    # Thread-safe check and update of global flag
+                    with KrakenBrokerAdapter._permission_errors_lock:
+                        # Only log detailed permission error instructions ONCE GLOBALLY
+                        # After the first Kraken permission error, subsequent errors
+                        # get a brief reference message instead of full instructions
+                        # This prevents log spam when multiple adapters have permission errors
+                        if not KrakenBrokerAdapter._permission_error_details_logged:
+                            KrakenBrokerAdapter._permission_error_details_logged = True
+                            should_log_details = True
+                        else:
+                            should_log_details = False
+                    
+                    if should_log_details:
+                        logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                        logger.error("   Your Kraken API key does not have the required permissions.")
+                        logger.warning("")
+                        logger.warning("   To fix this issue:")
+                        logger.warning("   1. Go to https://www.kraken.com/u/security/api")
+                        logger.warning("   2. Find your API key and edit its permissions")
+                        logger.warning("   3. Enable these permissions:")
+                        logger.warning("      ✅ Query Funds (required to check balance)")
+                        logger.warning("      ✅ Query Open Orders & Trades (required for position tracking)")
+                        logger.warning("      ✅ Query Closed Orders & Trades (required for trade history)")
+                        logger.warning("      ✅ Create & Modify Orders (required to place trades)")
+                        logger.warning("      ✅ Cancel/Close Orders (required for stop losses)")
+                        logger.warning("   4. Save changes and restart the bot")
+                        logger.warning("")
+                        logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
+                        logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                    else:
+                        logger.error("   ⚠️  Permission error (see above for fix instructions)")
                 else:
                     logger.error(f"Kraken connection test failed: {error_msgs}")
                 

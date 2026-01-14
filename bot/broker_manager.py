@@ -3367,16 +3367,18 @@ class KrakenBroker(BaseBroker):
     Python wrapper: https://github.com/veox/python3-krakenex
     """
     
-    # Class-level set to track accounts that have already logged permission errors
+    # Class-level flag to track if detailed permission error instructions have been logged
     # This prevents spamming the logs with duplicate permission error messages
+    # The detailed instructions are logged ONCE GLOBALLY (not once per account)
+    # because the fix instructions are the same for all accounts
     # Thread-safe: uses lock for concurrent access protection
-    _permission_errors_logged = set()
+    _permission_error_details_logged = False
     _permission_errors_lock = threading.Lock()
     
     # Class-level set to track accounts that have had permission errors
     # This prevents retrying connections for accounts with permission errors
     # Permission errors require user action (fixing API key permissions) and cannot
-    # be resolved by retrying. Thread-safe: uses same lock as _permission_errors_logged
+    # be resolved by retrying. Thread-safe: uses same lock as _permission_error_details_logged
     _permission_failed_accounts = set()
     
     def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
@@ -3734,10 +3736,12 @@ class KrakenBroker(BaseBroker):
                                 with KrakenBroker._permission_errors_lock:
                                     KrakenBroker._permission_failed_accounts.add(cred_label)
                                     
-                                    # Only log detailed permission error instructions once per account
-                                    # This prevents spamming logs if the bot restarts or retries
-                                    if cred_label not in KrakenBroker._permission_errors_logged:
-                                        KrakenBroker._permission_errors_logged.add(cred_label)
+                                    # Only log detailed permission error instructions ONCE GLOBALLY
+                                    # After the first account with permission error, subsequent accounts
+                                    # get a brief reference message instead of full instructions
+                                    # This prevents log spam when multiple users have permission errors
+                                    if not KrakenBroker._permission_error_details_logged:
+                                        KrakenBroker._permission_error_details_logged = True
                                         should_log_details = True
                                     else:
                                         should_log_details = False
@@ -3760,7 +3764,7 @@ class KrakenBroker(BaseBroker):
                                     logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
                                     logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX for detailed instructions")
                                 else:
-                                    logger.error(f"   (Permission error details already logged for {cred_label})")
+                                    logger.error("   ⚠️  Permission error (see above for fix instructions)")
                                 
                                 return False
                             
@@ -3870,9 +3874,10 @@ class KrakenBroker(BaseBroker):
                         with KrakenBroker._permission_errors_lock:
                             KrakenBroker._permission_failed_accounts.add(cred_label)
                             
-                            # Only log detailed instructions once per account
-                            if cred_label not in KrakenBroker._permission_errors_logged:
-                                KrakenBroker._permission_errors_logged.add(cred_label)
+                            # Only log detailed instructions ONCE GLOBALLY (not once per account)
+                            # This prevents log spam when multiple users have permission errors
+                            if not KrakenBroker._permission_error_details_logged:
+                                KrakenBroker._permission_error_details_logged = True
                                 should_log_details = True
                             else:
                                 should_log_details = False
@@ -3895,7 +3900,7 @@ class KrakenBroker(BaseBroker):
                             logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
                             logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX for detailed instructions")
                         else:
-                            logger.error(f"   (Permission error details already logged for {cred_label})")
+                            logger.error("   ⚠️  Permission error (see above for fix instructions)")
                         
                         return False
                     
