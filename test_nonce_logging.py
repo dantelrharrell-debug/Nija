@@ -10,6 +10,26 @@ import logging
 import sys
 from io import StringIO
 
+def log_kraken_error(logger, is_nonce_error, attempt, max_attempts, cred_label, error_msgs):
+    """
+    Helper function to apply the Kraken error logging logic.
+    
+    This matches the logic from broker_manager.py KrakenBroker.connect()
+    """
+    error_type = "nonce" if is_nonce_error else "retryable"
+    
+    # For nonce errors, only log at DEBUG level to reduce spam
+    # These are transient and automatically retried with nonce jumps
+    if is_nonce_error:
+        logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
+    # For lockout/other errors, log at WARNING on first attempt only
+    elif attempt == 1:
+        logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
+    # All retries after first attempt: DEBUG level only
+    else:
+        logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
+
+
 def test_nonce_error_logging_logic():
     """Test the logging logic for nonce errors"""
     
@@ -29,24 +49,17 @@ def test_nonce_error_logging_logic():
     handler.setFormatter(formatter)
     test_logger.addHandler(handler)
     
-    # Simulate the logging logic from broker_manager.py
+    # Test parameters
     attempt = 1
     max_attempts = 5
     cred_label = "MASTER"
-    error_msgs = "EAPI:Invalid nonce"
     
     # Test case 1: Nonce error on first attempt
+    error_msgs = "EAPI:Invalid nonce"
     is_nonce_error = True
-    is_lockout_error = False
-    error_type = "nonce" if is_nonce_error else "retryable"
     
-    # This is the new logic - should log at DEBUG level
-    if is_nonce_error:
-        test_logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
-    elif attempt == 1:
-        test_logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
-    else:
-        test_logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
+    # Apply the logging logic
+    log_kraken_error(test_logger, is_nonce_error, attempt, max_attempts, cred_label, error_msgs)
     
     # Check the log output
     log_output = log_stream.getvalue()
@@ -65,15 +78,9 @@ def test_nonce_error_logging_logic():
     log_stream.seek(0)
     
     is_nonce_error = False
-    error_type = "retryable"
     error_msgs = "503 Service Unavailable"
     
-    if is_nonce_error:
-        test_logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
-    elif attempt == 1:
-        test_logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
-    else:
-        test_logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
+    log_kraken_error(test_logger, is_nonce_error, attempt, max_attempts, cred_label, error_msgs)
     
     log_output = log_stream.getvalue()
     print("Log output for non-nonce error (attempt 1):")
@@ -90,12 +97,7 @@ def test_nonce_error_logging_logic():
     
     attempt = 2
     
-    if is_nonce_error:
-        test_logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
-    elif attempt == 1:
-        test_logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
-    else:
-        test_logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
+    log_kraken_error(test_logger, is_nonce_error, attempt, max_attempts, cred_label, error_msgs)
     
     log_output = log_stream.getvalue()
     print("Log output for non-nonce error (attempt 2):")
