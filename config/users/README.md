@@ -1,13 +1,16 @@
 # User Configuration Files
 
-This directory contains user configuration files for each supported brokerage.
+This directory contains user configuration files organized by account type and brokerage.
 
 ## Structure
 
-Each brokerage has its own user configuration file:
-- `kraken_users.json` - Users trading on Kraken
-- `alpaca_users.json` - Users trading on Alpaca (stocks)
-- `coinbase_users.json` - Users trading on Coinbase (future use)
+Configuration files are organized by account type (retail/investor) and brokerage:
+- `retail_kraken.json` - Retail users trading on Kraken
+- `retail_alpaca.json` - Retail users trading on Alpaca (stocks)
+- `retail_coinbase.json` - Retail users trading on Coinbase (future use)
+- `investor_kraken.json` - Investor accounts trading on Kraken
+- `investor_alpaca.json` - Investor accounts trading on Alpaca (stocks)
+- `investor_coinbase.json` - Investor accounts trading on Coinbase (future use)
 
 ## User Configuration Format
 
@@ -18,6 +21,7 @@ Each user configuration file is a JSON array of user objects:
   {
     "user_id": "john_doe",
     "name": "John Doe",
+    "account_type": "retail",
     "broker_type": "kraken",
     "enabled": true,
     "description": "Optional description"
@@ -32,30 +36,36 @@ Each user configuration file is a JSON array of user objects:
   - Format: `firstname_lastname` or just `firstname`
   
 - **name** (required): Display name for the user (used in logs)
+
+- **account_type** (required): Type of account
+  - `"retail"` - Individual retail trading account
+  - `"investor"` - Investor/institutional account
+  - Must match the filename (e.g., "retail" for retail_kraken.json)
   
 - **broker_type** (required): The brokerage this user account is for
-  - Must match the filename (e.g., "kraken" for kraken_users.json)
+  - Must match the filename (e.g., "kraken" for retail_kraken.json)
   
 - **enabled** (required): Whether this user account is active
   - `true` - Bot will attempt to connect and trade
-  - `false` - Bot will skip this user
+  - `false` - Bot will skip this user (use this when credentials are not configured)
   
 - **description** (optional): Human-readable description or notes
 
 ## Adding a New User
 
-### Step 1: Add user to appropriate brokerage file
+### Step 1: Add user to appropriate account type and brokerage file
 
-Edit the brokerage-specific file (e.g., `kraken_users.json`):
+Edit the appropriate file (e.g., `retail_kraken.json` for a retail Kraken account):
 
 ```json
 [
   {
     "user_id": "jane_smith",
     "name": "Jane Smith",
+    "account_type": "retail",
     "broker_type": "kraken",
     "enabled": true,
-    "description": "New user added on 2026-01-12"
+    "description": "New user added on 2024-01-14"
   }
 ]
 ```
@@ -109,20 +119,23 @@ COINBASE_USER_{FIRSTNAME}_API_SECRET=...
 ## Best Practices
 
 1. **Use descriptive user_ids**: `firstname_lastname` format
-2. **Enable only funded accounts**: Set `enabled: false` for unfunded accounts
+2. **Enable only funded accounts with credentials**: Set `enabled: false` for accounts without API credentials configured
 3. **Add descriptions**: Note when users were added and why
-4. **One user per brokerage**: If a user has multiple brokerage accounts, add them to each brokerage file
+4. **One user per brokerage**: If a user has multiple brokerage accounts, add them to the corresponding file for each account type and brokerage combination
 5. **Keep credentials secure**: Never commit `.env` files with real credentials
+6. **Disable before removing credentials**: If removing a user's API credentials, first set `enabled: false` in the config file
 
 ## Troubleshooting
 
-### User shows "NOT TRADING (Connection failed or not configured)"
+### User shows "NOT TRADING (Connection failed)"
 
-Check:
-1. User is enabled in config file (`"enabled": true`)
-2. Environment variables are set correctly
-3. User credentials are valid on the brokerage
-4. Bot has been restarted after adding user
+This message appears when a user is enabled but credentials are not configured or invalid.
+
+**Solution:**
+1. If credentials are not configured: Set `"enabled": false` in the config file to avoid connection attempts
+2. If credentials should be configured: Check environment variables are set correctly
+3. Verify user credentials are valid on the brokerage
+4. Restart the bot after making changes
 
 ### "Invalid user_id format" error
 
