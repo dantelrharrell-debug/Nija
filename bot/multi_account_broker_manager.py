@@ -188,14 +188,20 @@ class MultiAccountBrokerManager:
             bool: True if credentials are configured, False if not or unknown
         """
         connection_key = (user_id, broker_type)
-        # If tracked as no credentials, return False
+        # If explicitly tracked as no credentials, return False
         if connection_key in self._users_without_credentials:
             return False
-        # If successfully connected, credentials were configured
+        # Check if broker exists in user_brokers (only added when connected)
+        # If connected, credentials must have been configured
         if user_id in self.user_brokers and broker_type in self.user_brokers[user_id]:
+            broker = self.user_brokers[user_id][broker_type]
+            # Double-check the credentials_configured flag for safety
+            return broker.credentials_configured if hasattr(broker, 'credentials_configured') else True
+        # If tracked as failed connection, credentials likely exist (but may be invalid)
+        if connection_key in self._failed_user_connections:
             return True
-        # Unknown or failed - assume credentials exist (could be wrong credentials or connection issue)
-        return connection_key in self._failed_user_connections
+        # Unknown state - default to False (no credentials)
+        return False
     
     def get_master_balance(self, broker_type: Optional[BrokerType] = None) -> float:
         """
