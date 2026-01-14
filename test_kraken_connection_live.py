@@ -51,7 +51,7 @@ def mask_credential(value):
 
 
 def check_kraken_master():
-    """Test Kraken master account connection"""
+    """Check Kraken master account connection"""
     print_section("🔍 TESTING KRAKEN MASTER ACCOUNT")
     
     # Check environment variables
@@ -193,7 +193,7 @@ def check_kraken_master():
 
 
 def check_kraken_user(user_name, user_id):
-    """Test Kraken user account connection"""
+    """Check Kraken user account connection"""
     print_section(f"👤 TESTING USER: {user_name} ({user_id})")
     
     # Extract first name for env var
