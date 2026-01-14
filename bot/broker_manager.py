@@ -3524,13 +3524,16 @@ class KrakenBroker(BaseBroker):
                     logger.info("   OR use legacy credentials:")
                     logger.info("      KRAKEN_API_KEY=<your-api-key>")
                     logger.info("      KRAKEN_API_SECRET=<your-api-secret>")
+                    logger.info("   📖 Get credentials: https://www.kraken.com/u/security/api")
                 else:
                     # USER account - provide specific instructions
                     # Note: user_env_name is guaranteed to be defined from the else block above
                     logger.info(f"   To enable Kraken USER trading for {self.user_id}, set:")
                     logger.info(f"      KRAKEN_USER_{user_env_name}_API_KEY=<your-api-key>")
                     logger.info(f"      KRAKEN_USER_{user_env_name}_API_SECRET=<your-api-secret>")
-                    logger.info("   See ENVIRONMENT_VARIABLES_GUIDE.md for deployment platform setup")
+                    logger.info(f"   ⚠️  NOTE: {self.user_id} needs THEIR OWN Kraken account (not a sub-account)")
+                    logger.info(f"   📖 Each user must create their own API key at: https://www.kraken.com/u/security/api")
+                    logger.info("   📖 Setup guide: KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX.md")
                 return False
             
             # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors
