@@ -155,6 +155,7 @@ class BaseBroker(ABC):
     def __init__(self, broker_type: BrokerType):
         self.broker_type = broker_type
         self.connected = False
+        self.credentials_configured = False  # Track if credentials were provided
     
     @abstractmethod
     def connect(self) -> bool:
@@ -2649,6 +2650,8 @@ class AlpacaBroker(BaseBroker):
                 cred_label = f"USER:{self.user_id}"
             
             if not api_key or not api_secret:
+                # Mark that credentials were not configured (not an error, just not set up)
+                self.credentials_configured = False
                 # Silently skip - Alpaca is optional
                 logger.info(f"⚠️  Alpaca credentials not configured for {cred_label} (skipping)")
                 if self.account_type == AccountType.MASTER:
@@ -2669,6 +2672,9 @@ class AlpacaBroker(BaseBroker):
             logging.info(f"📊 Attempting to connect Alpaca {cred_label} ({mode_str} mode)...")
             
             self.api = TradingClient(api_key, api_secret, paper=paper)
+            
+            # Mark that credentials were configured (we have API key and secret)
+            self.credentials_configured = True
             
             # Test connection with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
@@ -3483,6 +3489,8 @@ class KrakenBroker(BaseBroker):
             
             # Check for malformed credentials (set but empty after stripping)
             if (key_is_set and not key_valid_after_strip) or (secret_is_set and not secret_valid_after_strip):
+                # Mark that credentials were configured but invalid
+                self.credentials_configured = True
                 logger.warning(f"⚠️  Kraken credentials DETECTED but INVALID for {cred_label}")
                 
                 # Determine status messages for each credential
@@ -3511,6 +3519,8 @@ class KrakenBroker(BaseBroker):
                         KrakenBroker._permission_failed_accounts.discard(cred_label)
             
             if not api_key or not api_secret:
+                # Mark that credentials were not configured (not an error, just not set up)
+                self.credentials_configured = False
                 # Silently skip - Kraken is optional, no need for scary error messages
                 logger.info(f"⚠️  Kraken credentials not configured for {cred_label} (skipping)")
                 if self.account_type == AccountType.MASTER:
@@ -3540,6 +3550,9 @@ class KrakenBroker(BaseBroker):
             # SOLUTION: Use microseconds + tracking to ensure each nonce is strictly greater
             # than the previous one, even if requests happen in the same microsecond.
             self.api = krakenex.API(key=api_key, secret=api_secret)
+            
+            # Mark that credentials were configured (we have API key and secret)
+            self.credentials_configured = True
             
             # Override _nonce to use tracked microseconds for guaranteed uniqueness
             # This prevents "EAPI:Invalid nonce" errors caused by:

@@ -435,7 +435,17 @@ class TradingStrategy:
                             logger.info(f"✅ USER: {user.name}: TRADING (Broker: {user.broker_type.upper()})")
                             active_user_count += 1
                         else:
-                            logger.info(f"❌ USER: {user.name}: NOT TRADING (Broker: {user.broker_type.upper()}, Connection failed)")
+                            # Check if credentials are configured
+                            has_creds = self.multi_account_manager.user_has_credentials(
+                                user.user_id,
+                                BrokerType[user.broker_type.upper()]
+                            )
+                            if has_creds:
+                                # Credentials configured but connection failed
+                                logger.info(f"❌ USER: {user.name}: NOT TRADING (Broker: {user.broker_type.upper()}, Connection failed)")
+                            else:
+                                # Credentials not configured - informational, not an error
+                                logger.info(f"⚪ USER: {user.name}: NOT CONFIGURED (Broker: {user.broker_type.upper()}, Credentials not set)")
                 else:
                     logger.info("⚪ No user accounts configured")
             except Exception as e:
