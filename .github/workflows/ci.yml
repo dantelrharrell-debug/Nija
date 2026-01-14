@@ -1,4 +1,3 @@
-[paste the YAML from above here]
 name: CI
 
 on:
@@ -22,14 +21,12 @@ jobs:
 
       # Add SSH key and known_hosts only when a private key secret exists
       - name: Start SSH agent and add private key
-        if: ${{ secrets.SSH_PRIVATE_KEY }}
         if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Ensure github.com known host
-        if: ${{ secrets.SSH_PRIVATE_KEY }}
         if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         run: |
           mkdir -p ~/.ssh
