@@ -3434,12 +3434,6 @@ class KrakenBroker(BaseBroker):
             from pykrakenapi import KrakenAPI
             import time
             
-            # Build account key for tracking (used for permission error cache)
-            if self.account_type == AccountType.MASTER:
-                account_key = "MASTER"
-            else:
-                account_key = f"USER:{self.user_id}"
-            
             # Get credentials based on account type
             # Enhanced credential detection to identify "set but invalid" variables
             if self.account_type == AccountType.MASTER:
@@ -3530,10 +3524,10 @@ class KrakenBroker(BaseBroker):
             # without requiring a full restart. The cache is meant to prevent retry loops during a single
             # session with the SAME bad credentials, not to permanently block an account.
             with KrakenBroker._permission_errors_lock:
-                if account_key in KrakenBroker._permission_failed_accounts:
-                    logger.info(f"🔄 Clearing previous permission error cache for {account_key} - credentials now available")
+                if cred_label in KrakenBroker._permission_failed_accounts:
+                    logger.info(f"🔄 Clearing previous permission error cache for {cred_label} - credentials now available")
                     logger.info(f"   Will retry connection with current credentials")
-                    KrakenBroker._permission_failed_accounts.discard(account_key)
+                    KrakenBroker._permission_failed_accounts.discard(cred_label)
             
             # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors
             # CRITICAL FIX: Override default nonce generation to guarantee strict monotonic increase
