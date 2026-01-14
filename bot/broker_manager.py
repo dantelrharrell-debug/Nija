@@ -348,7 +348,7 @@ class CoinbaseBroker(BaseBroker):
     
     def _api_call_with_retry(self, api_func, *args, max_retries=5, base_delay=5.0, **kwargs):
         """
-        Execute an API call with exponential backoff retry logic for rate limiting errors.
+        Execute an API call with exponential backoff retry logic for rate limiting and connection errors.
         
         Args:
             api_func: The API function to call
@@ -368,8 +368,22 @@ class CoinbaseBroker(BaseBroker):
                 return api_func(*args, **kwargs)
             except Exception as e:
                 # Catch all exceptions to handle various API error types (HTTP errors, network errors, etc.)
-                # This is intentionally broad to ensure all rate limiting errors are caught
+                # This is intentionally broad to ensure all rate limiting and connection errors are caught
                 error_msg = str(e).lower()
+                
+                # Check if this is a connection error (network issues, connection reset, etc.)
+                is_connection_error = (
+                    'connection' in error_msg or
+                    'connectionreseterror' in error_msg or
+                    'connection reset' in error_msg or
+                    'connection aborted' in error_msg or
+                    'timeout' in error_msg or
+                    'timed out' in error_msg or
+                    'network' in error_msg or
+                    'unreachable' in error_msg or
+                    'eof occurred' in error_msg or
+                    'broken pipe' in error_msg
+                )
                 
                 # Check if this is a rate limiting error (403, 429, or "too many" errors)
                 # Use precise pattern matching to avoid false positives
@@ -386,18 +400,27 @@ class CoinbaseBroker(BaseBroker):
                 )
                 is_rate_limit = is_403_error or is_429_error
                 
-                # If this is the last attempt or not a rate limit error, raise
-                if attempt >= max_retries - 1 or not is_rate_limit:
+                # Determine if error is retryable
+                is_retryable = is_rate_limit or is_connection_error
+                
+                # If this is the last attempt or not a retryable error, raise
+                if attempt >= max_retries - 1 or not is_retryable:
                     raise
                 
                 # Calculate exponential backoff delay with maximum cap
+                # For connection errors, use moderate delays
                 # For 403 errors, use longer delays (more aggressive backoff)
-                if is_403_error:
+                if is_connection_error:
+                    delay = min(base_delay * (1.5 ** attempt), 30.0)  # 5s, 7.5s, 11.25s, 16.88s, 25.31s (capped at 30s)
+                    error_type = "Connection error"
+                elif is_403_error:
                     delay = min(base_delay * (3 ** attempt), 120.0)  # 5s, 15s, 45s, 120s (capped), 120s (capped)
+                    error_type = "Rate limit (403)"
                 else:
                     delay = min(base_delay * (2 ** attempt), 60.0)  # 5s, 10s, 20s, 40s, 60s (capped)
+                    error_type = "Rate limit (429)"
                 
-                logging.warning(f"⚠️  API rate limit hit (attempt {attempt + 1}/{max_retries}): {e}")
+                logging.warning(f"⚠️  API {error_type} (attempt {attempt + 1}/{max_retries}): {e}")
                 logging.warning(f"   Waiting {delay:.1f}s before retry...")
                 time.sleep(delay)
     
@@ -947,7 +970,19 @@ class CoinbaseBroker(BaseBroker):
             else:
                 logging.warning("⚠️  No default portfolio found; falling back to get_accounts()")
         except Exception as e:
-            logging.warning(f"⚠️  Portfolio breakdown failed, falling back to get_accounts(): {e}")
+            # Format connection errors more clearly for better readability
+            error_msg = str(e)
+            if 'ConnectionResetError' in error_msg or 'Connection reset' in error_msg:
+                logging.warning("⚠️  Portfolio breakdown failed: Network connection reset by Coinbase API")
+                logging.warning("   Falling back to get_accounts() method...")
+            elif 'Connection aborted' in error_msg or 'ConnectionAbortedError' in error_msg:
+                logging.warning("⚠️  Portfolio breakdown failed: Network connection aborted")
+                logging.warning("   Falling back to get_accounts() method...")
+            elif 'timeout' in error_msg.lower() or 'timed out' in error_msg.lower():
+                logging.warning("⚠️  Portfolio breakdown failed: API request timed out")
+                logging.warning("   Falling back to get_accounts() method...")
+            else:
+                logging.warning(f"⚠️  Portfolio breakdown failed, falling back to get_accounts(): {error_msg}")
 
         try:
             logging.info("💰 Fetching account balance (Advanced Trade only)...")
