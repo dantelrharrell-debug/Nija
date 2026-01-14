@@ -133,7 +133,7 @@ class IndependentBrokerTrader:
                 # CRITICAL FIX (Jan 14, 2026): Coinbase API can return stale/cached $0 balance
                 # immediately after connection due to API-side caching. If we get $0, retry
                 # once after a short delay to get fresh data.
-                if balance == 0.0 and broker_type.value.lower() == 'coinbase':
+                if balance == 0.0 and broker_type.value == 'coinbase':
                     logger.debug(f"   Coinbase returned $0.00, retrying after 2s delay (API cache issue)...")
                     time.sleep(2.0)
                     balance = broker.get_account_balance()
