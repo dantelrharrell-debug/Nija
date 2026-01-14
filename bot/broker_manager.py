@@ -1117,10 +1117,10 @@ class CoinbaseBroker(BaseBroker):
         """
         balance_data = self._get_account_balance_detailed()
         if balance_data is None:
-            logging.warning(f"⚠️  get_account_balance() received None from _get_account_balance_detailed(), returning 0.0")
+            logger.warning(f"⚠️  get_account_balance() received None from _get_account_balance_detailed(), returning 0.0")
             return 0.0
         result = float(balance_data.get('trading_balance', 0.0))
-        logging.debug(f"get_account_balance() returning: ${result:.2f}")
+        logger.debug(f"get_account_balance() returning: ${result:.2f}")
         return result
     
     def get_account_balance_detailed(self) -> dict:
