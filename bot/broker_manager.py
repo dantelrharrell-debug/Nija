@@ -3598,22 +3598,25 @@ class KrakenBroker(BaseBroker):
                         if last_error_was_lockout:
                             # Linear scaling for lockout: (attempt-1) * 120s = 120s, 240s, 360s, 480s for attempts 2,3,4,5
                             delay = lockout_base_delay * (attempt - 1)
-                            # Only log retry on final attempt or DEBUG level to reduce log spam
-                            if attempt == max_attempts or logger.isEnabledFor(logging.DEBUG):
-                                logger.info(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
+                            # Only log retry BEFORE final attempt to reduce log spam
+                            # Don't log on final attempt since we're not retrying after that
+                            if attempt < max_attempts and logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
                         elif last_error_was_nonce:
                             # Linear scaling for nonce errors: (attempt-1) * 30s = 30s, 60s, 90s, 120s for attempts 2,3,4,5
                             # Nonce errors need time for Kraken to "forget" the burned nonce window
                             delay = nonce_base_delay * (attempt - 1)
-                            # Only log retry on final attempt or DEBUG level to reduce log spam
-                            if attempt == max_attempts or logger.isEnabledFor(logging.DEBUG):
-                                logger.info(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, nonce)")
+                            # Only log retry BEFORE final attempt to reduce log spam
+                            # Don't log on final attempt since we're not retrying after that
+                            if attempt < max_attempts and logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, nonce)")
                         else:
                             # Exponential backoff for normal errors: 5s, 10s, 20s, 40s for attempts 2,3,4,5
                             delay = base_delay * (2 ** (attempt - 2))
-                            # Only log retry on final attempt or DEBUG level to reduce log spam
-                            if attempt == max_attempts or logger.isEnabledFor(logging.DEBUG):
-                                logger.info(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
+                            # Only log retry BEFORE final attempt to reduce log spam
+                            # Don't log on final attempt since we're not retrying after that
+                            if attempt < max_attempts and logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
                         time.sleep(delay)
                         
                         # Jump nonce forward on retry to skip any potentially "burned" nonces
