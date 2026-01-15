@@ -148,10 +148,11 @@ class MultiAccountBrokerManager:
                     self.user_brokers[user_id] = {}
                 
                 self.user_brokers[user_id][broker_type] = broker
-                logger.info(f"✅ User broker added: {user_id} -> {broker_type.value}")
+                # Note: Success/failure messages are logged by the caller (connect_users_from_config)
+                # which has access to user.name for more user-friendly messages
             else:
                 # Connection failed, but return broker object so caller can check credentials_configured
-                logger.warning(f"⚠️  Failed to connect user broker: {user_id} -> {broker_type.value}")
+                pass  # Caller will log appropriate message
             
             return broker
                 
