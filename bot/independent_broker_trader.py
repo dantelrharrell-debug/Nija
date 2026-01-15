@@ -130,14 +130,27 @@ class IndependentBrokerTrader:
             try:
                 balance = broker.get_account_balance()
                 
-                # CRITICAL FIX (Jan 14, 2026): Coinbase API can return stale/cached $0 balance
+                # CRITICAL FIX (Jan 14, 2026 + Jan 15, 2026): Coinbase API can return stale/cached $0 balance
                 # immediately after connection due to API-side caching. If we get $0, retry
-                # once after a short delay to get fresh data.
+                # multiple times with increasing delays to get fresh data.
                 if balance == 0.0 and broker_type.value == 'coinbase':
-                    logger.debug(f"   Coinbase returned $0.00, retrying after 2s delay (API cache issue)...")
-                    time.sleep(2.0)
-                    balance = broker.get_account_balance()
-                    logger.debug(f"   Retry returned: ${balance:.2f}")
+                    logger.warning(f"   Coinbase returned $0.00, retrying with delays to bypass API cache...")
+                    for retry_attempt in range(1, 4):  # Try 3 times with increasing delays
+                        delay = retry_attempt * 2.0  # 2s, 4s, 6s
+                        logger.debug(f"   Retry #{retry_attempt}: waiting {delay:.0f}s before retry...")
+                        time.sleep(delay)
+                        balance = broker.get_account_balance()
+                        logger.debug(f"   Retry #{retry_attempt} returned: ${balance:.2f}")
+                        if balance > 0:
+                            logger.info(f"   ✅ Balance detected after retry #{retry_attempt}")
+                            break
+                    else:
+                        # All retries exhausted, still $0
+                        logger.warning(f"   ⚠️  All retries exhausted, balance still $0.00")
+                        logger.warning(f"   This likely means:")
+                        logger.warning(f"      1. No funds in Advanced Trade portfolio")
+                        logger.warning(f"      2. Funds may be in Consumer wallet (not API-accessible)")
+                        logger.warning(f"      3. Transfer funds: https://www.coinbase.com/advanced-portfolio")
                 
                 logger.info(f"   💰 {broker_type.value}: ${balance:,.2f}")
                 
@@ -189,6 +202,29 @@ class IndependentBrokerTrader:
                 
                 try:
                     balance = broker.get_account_balance()
+                    
+                    # CRITICAL FIX (Jan 15, 2026): Coinbase API can return stale/cached $0 balance
+                    # immediately after connection due to API-side caching. If we get $0, retry
+                    # multiple times with increasing delays to get fresh data.
+                    if balance == 0.0 and broker_type.value == 'coinbase':
+                        logger.warning(f"   User {user_id} Coinbase returned $0.00, retrying with delays to bypass API cache...")
+                        for retry_attempt in range(1, 4):  # Try 3 times with increasing delays
+                            delay = retry_attempt * 2.0  # 2s, 4s, 6s
+                            logger.debug(f"   Retry #{retry_attempt}: waiting {delay:.0f}s before retry...")
+                            time.sleep(delay)
+                            balance = broker.get_account_balance()
+                            logger.debug(f"   Retry #{retry_attempt} returned: ${balance:.2f}")
+                            if balance > 0:
+                                logger.info(f"   ✅ Balance detected after retry #{retry_attempt}")
+                                break
+                        else:
+                            # All retries exhausted, still $0
+                            logger.warning(f"   ⚠️  All retries exhausted, balance still $0.00")
+                            logger.warning(f"   This likely means:")
+                            logger.warning(f"      1. No funds in Advanced Trade portfolio for user {user_id}")
+                            logger.warning(f"      2. Funds may be in Consumer wallet (not API-accessible)")
+                            logger.warning(f"      3. Transfer funds: https://www.coinbase.com/advanced-portfolio")
+                    
                     logger.info(f"   💰 User: {user_id} | {broker_type.value}: ${balance:,.2f}")
                     
                     if balance >= MINIMUM_FUNDED_BALANCE:
