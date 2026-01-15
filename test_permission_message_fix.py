@@ -37,7 +37,7 @@ def test_permission_error_message_in_code():
             all_passed = False
             continue
         
-        with open(full_path, 'r') as f:
+        with open(full_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
         # Check that old message is gone
