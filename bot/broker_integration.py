@@ -467,7 +467,11 @@ class KrakenBrokerAdapter(BrokerInterface):
                         logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
                         logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                     else:
-                        logger.error("   ⚠️  Permission error (see above for fix instructions)")
+                        logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                        logger.error("   Your Kraken API key does not have the required permissions.")
+                        logger.error("   Fix: Enable 'Query Funds', 'Query/Create/Cancel Orders' permissions at:")
+                        logger.error("   https://www.kraken.com/u/security/api")
+                        logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                 else:
                     logger.error(f"Kraken connection test failed: {error_msgs}")
                 
