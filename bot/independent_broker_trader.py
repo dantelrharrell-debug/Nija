@@ -133,16 +133,28 @@ class IndependentBrokerTrader:
                 # CRITICAL FIX (Jan 14, 2026 + Jan 15, 2026): Coinbase API can return stale/cached $0 balance
                 # immediately after connection due to API-side caching. If we get $0, retry
                 # multiple times with increasing delays to get fresh data.
+                # Also clear balance and accounts cache to force fresh API calls.
                 if balance == 0.0 and broker_type.value == 'coinbase':
                     logger.warning(f"   Coinbase returned $0.00, retrying with delays to bypass API cache...")
                     for retry_attempt in range(1, 4):  # Try 3 times with increasing delays
                         delay = retry_attempt * 2.0  # 2s, 4s, 6s
                         logger.debug(f"   Retry #{retry_attempt}: waiting {delay:.0f}s before retry...")
                         time.sleep(delay)
+                        
+                        # Clear both balance and accounts cache to force fresh API calls
+                        if hasattr(broker, '_balance_cache'):
+                            broker._balance_cache = None
+                            broker._balance_cache_time = None
+                        if hasattr(broker, '_accounts_cache'):
+                            broker._accounts_cache = None
+                            broker._accounts_cache_time = None
+                        logger.debug(f"   Caches cleared, fetching fresh balance...")
+                        
                         balance = broker.get_account_balance()
                         logger.debug(f"   Retry #{retry_attempt} returned: ${balance:.2f}")
                         if balance > 0:
                             logger.info(f"   ✅ Balance detected after retry #{retry_attempt}")
+                            break
                             break
                     else:
                         # All retries exhausted, still $0
@@ -206,16 +218,28 @@ class IndependentBrokerTrader:
                     # CRITICAL FIX (Jan 15, 2026): Coinbase API can return stale/cached $0 balance
                     # immediately after connection due to API-side caching. If we get $0, retry
                     # multiple times with increasing delays to get fresh data.
+                    # Also clear balance and accounts cache to force fresh API calls.
                     if balance == 0.0 and broker_type.value == 'coinbase':
                         logger.warning(f"   User {user_id} Coinbase returned $0.00, retrying with delays to bypass API cache...")
                         for retry_attempt in range(1, 4):  # Try 3 times with increasing delays
                             delay = retry_attempt * 2.0  # 2s, 4s, 6s
                             logger.debug(f"   Retry #{retry_attempt}: waiting {delay:.0f}s before retry...")
                             time.sleep(delay)
+                            
+                            # Clear both balance and accounts cache to force fresh API calls
+                            if hasattr(broker, '_balance_cache'):
+                                broker._balance_cache = None
+                                broker._balance_cache_time = None
+                            if hasattr(broker, '_accounts_cache'):
+                                broker._accounts_cache = None
+                                broker._accounts_cache_time = None
+                            logger.debug(f"   Caches cleared, fetching fresh balance...")
+                            
                             balance = broker.get_account_balance()
                             logger.debug(f"   Retry #{retry_attempt} returned: ${balance:.2f}")
                             if balance > 0:
                                 logger.info(f"   ✅ Balance detected after retry #{retry_attempt}")
+                                break
                                 break
                         else:
                             # All retries exhausted, still $0
