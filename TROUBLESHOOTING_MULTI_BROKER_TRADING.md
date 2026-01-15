@@ -391,3 +391,142 @@ The most common reasons for "only Coinbase trading" are:
 4. ✅ **User accounts not enabled** → Check config files
 
 Run `python3 diagnose_multi_broker_trading.py` to identify which applies to your situation.
+
+---
+
+## Issue: "NO FUNDED BROKERS DETECTED" Despite Having Funds
+
+### Symptoms
+- Bot shows "NO FUNDED USER BROKERS DETECTED" or "NO FUNDED BROKERS DETECTED"
+- Falls back to single-broker mode
+- You know you have funds in your Coinbase account
+
+### Root Cause
+Coinbase Advanced Trade API can return a stale/cached $0 balance immediately after connection due to API-side caching. This was particularly problematic for user broker accounts which had no retry logic.
+
+### Solution (Implemented Jan 15, 2026)
+The bot now has enhanced balance detection with:
+- **3 retry attempts** with increasing delays (2s, 4s, 6s) for Coinbase
+- **Cache clearing** before each retry to force fresh API calls
+- **Improved logging** showing retry progress and diagnostics
+- **User broker support** - user accounts now get same retry logic as master
+
+### What to Look For in Logs
+
+**Successful Balance Detection:**
+```
+🔍 Detecting funded brokers...
+   💰 coinbase: $123.45
+      ✅ FUNDED - Ready to trade
+✅ FUNDED BROKERS: 1
+💰 TOTAL TRADING CAPITAL: $123.45
+```
+
+**Balance Detection with Retries:**
+```
+🔍 Detecting funded brokers...
+   Coinbase returned $0.00, retrying with delays to bypass API cache...
+   Retry #1/3: waiting 2s before retry...
+   Cache cleared, fetching fresh balance...
+   Retry #1/3 returned: $123.45
+   ✅ Balance detected after retry #1/3
+   💰 coinbase: $123.45
+      ✅ FUNDED - Ready to trade
+```
+
+**Truly Unfunded Account:**
+```
+🔍 Detecting funded brokers...
+   Coinbase returned $0.00, retrying with delays to bypass API cache...
+   Retry #1/3: waiting 2s before retry...
+   Retry #2/3: waiting 4s before retry...
+   Retry #3/3: waiting 6s before retry...
+   ⚠️  All 3 retries exhausted, balance still $0.00
+   This likely means:
+      1. No funds in Advanced Trade portfolio
+      2. Funds may be in Consumer wallet (not API-accessible)
+      3. Transfer funds: https://www.coinbase.com/advanced-portfolio
+   💰 coinbase: $0.00
+      ⚠️  Underfunded (minimum: $1.00)
+⚠️  NO FUNDED BROKERS DETECTED
+```
+
+### If Balance Still Shows $0 After Retries
+
+1. **Check Advanced Trade Portfolio:**
+   - Visit: https://www.coinbase.com/advanced-portfolio
+   - Verify you have USD or USDC balance there (not in Consumer wallet)
+   - Minimum required: $1.00
+
+2. **Check Consumer Wallet:**
+   - Coinbase has two types of wallets:
+     - **Consumer Wallet**: Used for buying/selling crypto on Coinbase.com
+     - **Advanced Trade Portfolio**: Used for API trading
+   - Funds in Consumer wallet CANNOT be used for bot trading
+   - You must manually transfer funds from Consumer → Advanced Trade
+   
+   **To Transfer:**
+   - Go to: https://www.coinbase.com/advanced-portfolio
+   - Click "Deposit" or "Transfer"
+   - Select amount and confirm transfer
+   - Wait 1-2 minutes for transfer to complete
+   - Restart the bot
+
+3. **Verify API Permissions:**
+   - Go to: https://portal.cloud.coinbase.com/access/api
+   - Ensure your API key has "View" permission
+   - Ensure API key is not expired or disabled
+
+4. **Check API Credentials:**
+   ```bash
+   # Verify environment variables are set
+   echo $COINBASE_API_KEY
+   echo $COINBASE_API_SECRET
+   ```
+   - Both should show values (not empty)
+   - Check for typos or extra whitespace
+
+### Testing the Fix
+
+**Manual Test:**
+```bash
+python3 test_balance_detection.py
+```
+
+This will:
+- Connect to Coinbase
+- Fetch balance immediately
+- Retry after delays with cache clearing
+- Show detailed balance information
+
+**Diagnostic Test:**
+```bash
+python3 diagnose_multi_broker_trading.py
+```
+
+This will:
+- Check all exchange credentials
+- Test connections
+- Show balances
+- Identify funded accounts
+- Provide specific recommendations
+
+### Technical Details
+
+**Files Modified:**
+- `bot/independent_broker_trader.py` - Enhanced retry logic
+- `bot/broker_manager.py` - Added `clear_cache()` method
+
+**Key Changes:**
+- Created `_retry_coinbase_balance_if_zero()` helper method
+- Enhanced `detect_funded_brokers()` with retry logic
+- Added retry logic to `detect_funded_user_brokers()` (was missing)
+- Retry timing: 2s + 4s + 6s = 12 seconds total max
+- Clears both `_balance_cache` and `_accounts_cache` before each retry
+
+### Related Issues
+
+If you're still experiencing issues:
+- See **Issue 2: Exchanges Underfunded** (above) for general funding guidance
+- See **BROKER_CONNECTION_TROUBLESHOOTING.md** for connection issues
+- Run `python3 diagnose_multi_broker_trading.py` for automated diagnosis

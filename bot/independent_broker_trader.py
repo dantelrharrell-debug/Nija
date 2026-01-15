@@ -111,6 +111,64 @@ class IndependentBrokerTrader:
             logger.info("   ✅ Multi-account support enabled (user trading)")
         logger.info("=" * 70)
     
+    def _retry_coinbase_balance_if_zero(self, broker, broker_name: str) -> float:
+        """
+        Retry balance fetch for Coinbase if initial result is $0.
+        
+        Coinbase API can return stale/cached $0 balance immediately after connection
+        due to API-side caching. This method retries with increasing delays and
+        cache clearing to get fresh balance data.
+        
+        Args:
+            broker: Broker instance (must be Coinbase)
+            broker_name: Human-readable broker name for logging
+            
+        Returns:
+            float: Balance after retries, or 0.0 if still zero after all attempts
+        """
+        balance = broker.get_account_balance()
+        
+        if balance > 0:
+            return balance  # No need to retry if we got a balance
+        
+        # Balance is $0, start retry logic
+        logger.warning(f"   {broker_name} returned $0.00, retrying with delays to bypass API cache...")
+        
+        for attempt in range(3):  # Try 3 times
+            retry_num = attempt + 1
+            delay = retry_num * 2.0  # 2s, 4s, 6s
+            logger.debug(f"   Retry #{retry_num}/3: waiting {delay:.0f}s before retry...")
+            time.sleep(delay)
+            
+            # Clear cache to force fresh API calls
+            if hasattr(broker, 'clear_cache'):
+                broker.clear_cache()
+            else:
+                # Fallback for brokers without clear_cache method
+                if hasattr(broker, '_balance_cache'):
+                    broker._balance_cache = None
+                    broker._balance_cache_time = None
+                if hasattr(broker, '_accounts_cache'):
+                    broker._accounts_cache = None
+                    broker._accounts_cache_time = None
+            logger.debug(f"   Cache cleared, fetching fresh balance...")
+            
+            balance = broker.get_account_balance()
+            logger.debug(f"   Retry #{retry_num}/3 returned: ${balance:.2f}")
+            
+            if balance > 0:
+                logger.info(f"   ✅ Balance detected after retry #{retry_num}/3")
+                return balance
+        
+        # All retries exhausted, still $0
+        logger.warning(f"   ⚠️  All 3 retries exhausted, balance still $0.00")
+        logger.warning(f"   This likely means:")
+        logger.warning(f"      1. No funds in Advanced Trade portfolio")
+        logger.warning(f"      2. Funds may be in Consumer wallet (not API-accessible)")
+        logger.warning(f"      3. Transfer funds: https://www.coinbase.com/advanced-portfolio")
+        
+        return 0.0
+    
     def detect_funded_brokers(self) -> Dict[str, float]:
         """
         Detect which brokers are funded and ready to trade.
@@ -128,16 +186,11 @@ class IndependentBrokerTrader:
                 continue
             
             try:
-                balance = broker.get_account_balance()
-                
-                # CRITICAL FIX (Jan 14, 2026): Coinbase API can return stale/cached $0 balance
-                # immediately after connection due to API-side caching. If we get $0, retry
-                # once after a short delay to get fresh data.
-                if balance == 0.0 and broker_type.value == 'coinbase':
-                    logger.debug(f"   Coinbase returned $0.00, retrying after 2s delay (API cache issue)...")
-                    time.sleep(2.0)
+                # Fetch balance, with retry logic for Coinbase if needed
+                if broker_type.value == 'coinbase':
+                    balance = self._retry_coinbase_balance_if_zero(broker, broker_type.value)
+                else:
                     balance = broker.get_account_balance()
-                    logger.debug(f"   Retry returned: ${balance:.2f}")
                 
                 logger.info(f"   💰 {broker_type.value}: ${balance:,.2f}")
                 
@@ -188,7 +241,12 @@ class IndependentBrokerTrader:
                     continue
                 
                 try:
-                    balance = broker.get_account_balance()
+                    # Fetch balance, with retry logic for Coinbase if needed
+                    if broker_type.value == 'coinbase':
+                        balance = self._retry_coinbase_balance_if_zero(broker, f"User {user_id} Coinbase")
+                    else:
+                        balance = broker.get_account_balance()
+                    
                     logger.info(f"   💰 User: {user_id} | {broker_type.value}: ${balance:,.2f}")
                     
                     if balance >= MINIMUM_FUNDED_BALANCE:
