@@ -49,8 +49,8 @@ def test_no_redundant_messages():
         manager = MultiAccountBrokerManager()
         
         print("\n2. Attempting to add user broker with invalid credentials...")
-        log_capture.truncate(0)
         log_capture.seek(0)
+        log_capture.truncate(0)
         
         broker = manager.add_user_broker('test_user', BrokerType.KRAKEN)
         log_output = log_capture.getvalue()
@@ -74,10 +74,11 @@ def test_no_redundant_messages():
             return 1
     
     finally:
+        # Clean up environment variables - remove test keys first, then restore original values
+        for key in original_env.keys():
+            os.environ.pop(key, None)
         for key, value in original_env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
+            if value is not None:
                 os.environ[key] = value
         root_logger.removeHandler(handler)
         root_logger.removeHandler(stdout_handler)
