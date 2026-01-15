@@ -69,6 +69,10 @@ class MultiAccountBrokerManager:
         # Structure: {(user_id, broker_type): True}
         self._users_without_credentials: Dict[Tuple[str, BrokerType], bool] = {}
         
+        # Track all user broker objects (even disconnected) to check credentials_configured flag
+        # Structure: {(user_id, broker_type): BaseBroker}
+        self._all_user_brokers: Dict[Tuple[str, BrokerType], BaseBroker] = {}
+        
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
@@ -134,6 +138,10 @@ class MultiAccountBrokerManager:
                 logger.warning(f"   Only KRAKEN and ALPACA are currently supported for user accounts")
                 return None
             
+            # Store broker object in all_user_brokers for credential checking, even if connection fails
+            connection_key = (user_id, broker_type)
+            self._all_user_brokers[connection_key] = broker
+            
             # Connect the broker
             if broker.connect():
                 if user_id not in self.user_brokers:
@@ -189,18 +197,23 @@ class MultiAccountBrokerManager:
             bool: True if credentials are configured, False if not or unknown
         """
         connection_key = (user_id, broker_type)
+        
         # If explicitly tracked as no credentials, return False
         if connection_key in self._users_without_credentials:
             return False
+        
+        # Check if we have a broker object (even if disconnected) to check credentials
+        if connection_key in self._all_user_brokers:
+            broker = self._all_user_brokers[connection_key]
+            return broker.credentials_configured if hasattr(broker, 'credentials_configured') else False
+        
         # Check if broker exists in user_brokers (only added when connected)
         # If connected, credentials must have been configured
         if user_id in self.user_brokers and broker_type in self.user_brokers[user_id]:
             broker = self.user_brokers[user_id][broker_type]
             # Double-check the credentials_configured flag for safety
             return broker.credentials_configured if hasattr(broker, 'credentials_configured') else True
-        # If tracked as failed connection, credentials likely exist (but may be invalid)
-        if connection_key in self._failed_user_connections:
-            return True
+        
         # Unknown state - default to False (no credentials)
         return False
     
