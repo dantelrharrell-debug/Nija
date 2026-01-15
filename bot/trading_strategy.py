@@ -233,6 +233,7 @@ class TradingStrategy:
             
             # Try to connect Kraken Pro - MASTER ACCOUNT
             logger.info("📊 Attempting to connect Kraken Pro (MASTER)...")
+            kraken = None  # Initialize to ensure variable exists for exception handler
             try:
                 kraken = KrakenBroker(account_type=AccountType.MASTER)
                 if kraken.connect():
@@ -247,8 +248,8 @@ class TradingStrategy:
                     self.failed_brokers[BrokerType.KRAKEN] = kraken
                     logger.warning("   ⚠️  Kraken MASTER connection failed")
             except Exception as e:
-                # Store failed broker instance even for exceptions
-                if 'kraken' in locals():
+                # Store failed broker instance even for exceptions (if it was created)
+                if kraken is not None:
                     self.failed_brokers[BrokerType.KRAKEN] = kraken
                 logger.warning(f"   ⚠️  Kraken MASTER error: {e}")
             

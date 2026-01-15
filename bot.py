@@ -14,6 +14,14 @@ import signal
 import threading
 import subprocess
 
+# Import broker types for error reporting
+try:
+    from bot.broker_manager import BrokerType
+except ImportError:
+    # Fallback if running from different directory
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+    from broker_manager import BrokerType
+
 # EMERGENCY STOP CHECK
 if os.path.exists('EMERGENCY_STOP'):
     print("\n" + "="*80)
@@ -427,7 +435,6 @@ def main():
                     logger.warning(f"   ❌ {exchange}")
                     if exchange == 'KRAKEN':
                         # Try to get the specific error from the failed broker instance
-                        from broker_manager import BrokerType
                         error_msg = None
                         if hasattr(strategy, 'failed_brokers') and BrokerType.KRAKEN in strategy.failed_brokers:
                             failed_broker = strategy.failed_brokers[BrokerType.KRAKEN]
