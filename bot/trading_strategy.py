@@ -157,6 +157,9 @@ class TradingStrategy:
         # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
         self.unsellable_positions = set()  # Set of symbols that failed to sell due to size issues
         
+        # Track failed broker connections for error reporting
+        self.failed_brokers = {}  # Dict of BrokerType -> broker instance for failed connections
+        
         # Market rotation state (prevents scanning same markets every cycle)
         self.market_rotation_offset = 0  # Tracks which batch of markets to scan next
         self.all_markets_cache = []      # Cache of all available markets
@@ -240,6 +243,8 @@ class TradingStrategy:
                     logger.info("   ✅ Kraken MASTER connected")
                     logger.info("   ✅ Kraken registered as MASTER broker in multi-account manager")
                 else:
+                    # Store failed broker instance to access error message later
+                    self.failed_brokers[BrokerType.KRAKEN] = kraken
                     logger.warning("   ⚠️  Kraken MASTER connection failed")
             except Exception as e:
                 logger.warning(f"   ⚠️  Kraken MASTER error: {e}")
