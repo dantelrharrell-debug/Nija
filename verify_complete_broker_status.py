@@ -17,6 +17,10 @@ import sys
 # Add bot directory to path
 sys.path.insert(0, 'bot')
 
+# Constants
+MIN_API_KEY_LENGTH = 10  # Minimum length for valid API key
+ROUND_TRIP_MULTIPLIER = 2  # Round-trip trading fees multiplier (buy + sell)
+
 def print_header(title):
     """Print formatted header"""
     print()
@@ -75,7 +79,7 @@ def check_user_configuration():
         user_loader = get_user_config_loader()
         enabled_users = user_loader.get_all_enabled_users()
         
-        kraken_users = [u for u in enabled_users if u.broker_type.upper() == 'KRAKEN']
+        kraken_users = [u for u in enabled_users if getattr(u, 'broker_type', '').upper() == 'KRAKEN']
         
         print(f"✅ User configuration system working")
         print(f"   • Total enabled users: {len(enabled_users)}")
@@ -113,7 +117,7 @@ def check_profit_taking_logic():
             for exchange, profile in EXCHANGE_PROFILES.items():
                 min_target = profile.get('min_profit_target_pct', 0) * 100
                 fees = profile.get('trading_fee_pct', 0) * 100
-                net_profit = min_target - (fees * 2)  # Round-trip fees
+                net_profit = min_target - (fees * ROUND_TRIP_MULTIPLIER)  # Round-trip fees
                 
                 print(f"   • {exchange.upper():12} - Target: {min_target:4.1f}%, Fees: {fees:4.2f}%, Net: +{net_profit:4.2f}%")
         except Exception as e:
@@ -135,7 +139,7 @@ def check_credentials():
     coinbase_key = os.getenv('COINBASE_API_KEY')
     coinbase_secret = os.getenv('COINBASE_API_SECRET')
     
-    if coinbase_key and coinbase_secret and len(coinbase_key) > 10:
+    if coinbase_key and coinbase_secret and len(coinbase_key) > MIN_API_KEY_LENGTH:
         print("✅ Master credentials CONFIGURED")
         credentials_status['coinbase_master'] = True
     else:
@@ -147,7 +151,7 @@ def check_credentials():
     kraken_master_key = os.getenv('KRAKEN_MASTER_API_KEY')
     kraken_master_secret = os.getenv('KRAKEN_MASTER_API_SECRET')
     
-    if kraken_master_key and kraken_master_secret and len(kraken_master_key) > 10:
+    if kraken_master_key and kraken_master_secret and len(kraken_master_key) > MIN_API_KEY_LENGTH:
         print("✅ Master credentials CONFIGURED")
         credentials_status['kraken_master'] = True
     else:
@@ -168,7 +172,7 @@ def check_credentials():
         key = os.getenv(f'KRAKEN_USER_{prefix}_API_KEY')
         secret = os.getenv(f'KRAKEN_USER_{prefix}_API_SECRET')
         
-        if key and secret and len(key) > 10:
+        if key and secret and len(key) > MIN_API_KEY_LENGTH:
             print(f"✅ {name} ({user_id}) - CONFIGURED")
             credentials_status[f'kraken_user_{prefix.lower()}'] = True
             kraken_users_configured += 1
@@ -186,7 +190,7 @@ def check_credentials():
     okx_secret = os.getenv('OKX_API_SECRET')
     okx_passphrase = os.getenv('OKX_PASSPHRASE')
     
-    if okx_key and okx_secret and okx_passphrase and len(okx_key) > 10:
+    if okx_key and okx_secret and okx_passphrase and len(okx_key) > MIN_API_KEY_LENGTH:
         print("✅ OKX credentials CONFIGURED")
         credentials_status['okx'] = True
     else:
