@@ -203,18 +203,19 @@ class MultiAccountBrokerManager:
             return False
         
         # Check if we have a broker object (even if disconnected) to check credentials
+        # This is the primary and most reliable check since all brokers inherit credentials_configured from BaseBroker
         if connection_key in self._all_user_brokers:
             broker = self._all_user_brokers[connection_key]
-            return broker.credentials_configured if hasattr(broker, 'credentials_configured') else False
+            return broker.credentials_configured
         
         # Check if broker exists in user_brokers (only added when connected)
         # If connected, credentials must have been configured
         if user_id in self.user_brokers and broker_type in self.user_brokers[user_id]:
             broker = self.user_brokers[user_id][broker_type]
-            # Double-check the credentials_configured flag for safety
-            return broker.credentials_configured if hasattr(broker, 'credentials_configured') else True
+            return broker.credentials_configured
         
         # Unknown state - default to False (no credentials)
+        # This is the safe default: if we don't know, assume no credentials
         return False
     
     def get_master_balance(self, broker_type: Optional[BrokerType] = None) -> float:
