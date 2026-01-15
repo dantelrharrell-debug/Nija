@@ -114,6 +114,8 @@ if not logger.hasHandlers():
     file_handler.setFormatter(formatter)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
+    # Ensure immediate flushing to prevent log message interleaving
+    console_handler.flush = lambda: sys.stdout.flush()
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
