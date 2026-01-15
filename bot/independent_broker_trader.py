@@ -155,7 +155,6 @@ class IndependentBrokerTrader:
                         if balance > 0:
                             logger.info(f"   ✅ Balance detected after retry #{retry_attempt}")
                             break
-                            break
                     else:
                         # All retries exhausted, still $0
                         logger.warning(f"   ⚠️  All retries exhausted, balance still $0.00")
@@ -239,7 +238,6 @@ class IndependentBrokerTrader:
                             logger.debug(f"   Retry #{retry_attempt} returned: ${balance:.2f}")
                             if balance > 0:
                                 logger.info(f"   ✅ Balance detected after retry #{retry_attempt}")
-                                break
                                 break
                         else:
                             # All retries exhausted, still $0
