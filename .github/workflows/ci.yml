@@ -46,4 +46,4 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest -q
+          python -m unittest discover -s . -p 'test_*.py' -v
