@@ -2,26 +2,35 @@
 
 **🚀 New to NIJA?** See the **[Getting Started Guide](GETTING_STARTED.md)** for 5-minute setup!
 
-## ✅ Kraken Status (January 13, 2026) - CONFIGURED & ACTIVE
+## 🚨 Kraken Status (January 15, 2026) - NOT CONNECTED
 
-**Current Status**: ✅ **TRADING ON KRAKEN** - All credentials configured
+**Current Status**: ❌ **NOT TRADING ON KRAKEN** - API credentials not configured in deployment environment
 
 | What | Status | Details |
 |------|--------|---------|
 | **Code Infrastructure** | ✅ Complete | Ready to use |
-| **API Credentials** | ✅ Configured | All 3 accounts have credentials set |
-| **Trading Status** | ✅ Active | Bot will trade on Kraken when started |
+| **API Credentials** | ❌ NOT SET | Environment variables missing |
+| **Trading Status** | ❌ Inactive | No credentials = no connection |
 
-**Credential Status**:
-- ✅ Master account (NIJA system) - `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` configured (legacy format)
-- ✅ User #1 (Daivon Frazier) - `KRAKEN_USER_DAIVON_API_KEY` and `KRAKEN_USER_DAIVON_API_SECRET` configured
-- ✅ User #2 (Tania Gilbert) - `KRAKEN_USER_TANIA_API_KEY` and `KRAKEN_USER_TANIA_API_SECRET` configured
+**What's Missing**:
+- ❌ Master account - `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET` **NOT SET**
+- ❌ User #1 (Daivon) - `KRAKEN_USER_DAIVON_API_KEY` and `KRAKEN_USER_DAIVON_API_SECRET` **NOT SET**
+- ❌ User #2 (Tania) - `KRAKEN_USER_TANIA_API_KEY` and `KRAKEN_USER_TANIA_API_SECRET` **NOT SET**
 
-**All 3 accounts will connect and trade on Kraken!**
+### 🔧 How to Fix:
 
-**To verify**: Run `python3 check_kraken_status.py` to confirm all credentials are detected
+**Step 1**: Check current status:
+```bash
+python3 diagnose_kraken_status.py
+```
 
-**Deployment**: Credentials are configured on both Railway and Render. Bot will auto-connect on startup.
+**Step 2**: Read the solution guide:
+- 📖 **[URGENT_KRAKEN_NOT_CONNECTED.md](URGENT_KRAKEN_NOT_CONNECTED.md)** - Quick fix guide
+- 📖 **[KRAKEN_NOT_CONNECTED_SOLUTION.md](KRAKEN_NOT_CONNECTED_SOLUTION.md)** - Detailed step-by-step
+
+**Step 3**: Add API credentials to Railway/Render and restart
+
+**Time Required**: ~1 hour to get API keys and configure
 
 **Library**: NIJA uses the official Kraken Python library from GitHub: [`python3-krakenex`](https://github.com/veox/python3-krakenex)
 - See: **[ANSWER_KRAKEN_GITHUB_REPOSITORY.md](ANSWER_KRAKEN_GITHUB_REPOSITORY.md)** for library details and troubleshooting
@@ -83,34 +92,37 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **[USER_INVESTOR_TRACKING.md](USER_INVESTOR_TRACKING.md)** - 📊 Tracking system guide
 - **[USER_COMMUNICATION_LOG.md](USER_COMMUNICATION_LOG.md)** - 💬 Communication history
 
-**Current Users**: 2 users configured for Kraken (Master + 2 users = 3 accounts total) - **ALL ACTIVE ✅**
+**Current Users**: 2 users configured in code (Master + 2 users = 3 accounts total) - **NOT ACTIVE** ❌
 
 | Account | User ID | Config Status | Credentials Status | Trading Status |
 |---------|---------|---------------|-------------------|----------------|
-| **Master** | system | ✅ Enabled | ✅ SET (legacy) | ✅ **TRADING** |
-| **User #1** | daivon_frazier | ✅ Enabled | ✅ SET | ✅ **TRADING** |
-| **User #2** | tania_gilbert | ✅ Enabled | ✅ SET | ✅ **TRADING** |
+| **Master** | system | ✅ Enabled | ❌ NOT SET | ❌ **NOT TRADING** |
+| **User #1** | daivon_frazier | ✅ Enabled | ❌ NOT SET | ❌ **NOT TRADING** |
+| **User #2** | tania_gilbert | ✅ Enabled | ❌ NOT SET | ❌ **NOT TRADING** |
+
+**To enable trading**: See [URGENT_KRAKEN_NOT_CONNECTED.md](URGENT_KRAKEN_NOT_CONNECTED.md) for setup instructions.
 
 - **User #1**: Daivon Frazier (daivon_frazier) - Retail tier, Kraken integration
   - Config: ✅ Enabled in `config/users/retail_kraken.json`
-  - Credentials: ✅ `KRAKEN_USER_DAIVON_API_KEY` and `KRAKEN_USER_DAIVON_API_SECRET` configured
-  - Status: ✅ **TRADING ACTIVE** on Kraken
+  - Credentials: ❌ `KRAKEN_USER_DAIVON_API_KEY` and `KRAKEN_USER_DAIVON_API_SECRET` **NOT SET**
+  - Status: ❌ **NOT TRADING** - Credentials required
   
 - **User #2**: Tania Gilbert (tania_gilbert) - Retail tier, Kraken + Alpaca integration
   - Config: ✅ Enabled in `config/users/retail_kraken.json`
-  - Credentials: ✅ `KRAKEN_USER_TANIA_API_KEY` and `KRAKEN_USER_TANIA_API_SECRET` configured
-  - Status: ✅ **TRADING ACTIVE** on Kraken + Alpaca
+  - Credentials: ❌ Kraken: `KRAKEN_USER_TANIA_API_KEY` and `KRAKEN_USER_TANIA_API_SECRET` **NOT SET**
+  - Status: ❌ **NOT TRADING ON KRAKEN** - Credentials required
 
-> ✅ **ALL ACCOUNTS CONFIGURED**: All user accounts are **enabled** in `config/users/*.json` files AND **have API credentials configured**.
+> ❌ **CREDENTIALS NOT CONFIGURED**: All user accounts are **enabled** in `config/users/*.json` files BUT **API credentials are NOT configured in environment variables**.
 > 
-> **Current Status**: ✅ **ALL ACCOUNTS TRADING** - All 3 accounts (Master + 2 users) have credentials and will trade on Kraken
+> **Current Status**: ❌ **NO ACCOUNTS TRADING ON KRAKEN** - Environment variables not set
 > 
-> **Verify Status**:
-> 1. 🔍 **Check Status**: Run `python3 check_kraken_status.py` - Verify all credentials are detected
-> 2. 📊 **User Status**: Run `python3 verify_kraken_users.py` - See detailed user status
-> 3. 🧪 **Test Live**: Run `python3 test_kraken_connection_live.py` - Test actual Kraken API connection
+> **Fix This**:
+> 1. 🔍 **Check Status**: Run `python3 diagnose_kraken_status.py` - See what's missing
+> 2. 📖 **Solution Guide**: Read `URGENT_KRAKEN_NOT_CONNECTED.md` - Step-by-step fix
+> 3. 🔧 **Configure**: Add API keys to Railway/Render environment variables
+> 4. 🔄 **Restart**: Deployment will auto-connect after restart
 > 
-> **Credentials are configured on Railway and Render** - Bot will auto-connect on startup
+> **See**: [URGENT_KRAKEN_NOT_CONNECTED.md](URGENT_KRAKEN_NOT_CONNECTED.md) for complete setup instructions
 
 **User Management**:
 - **Quick check if User #1 is trading**: `python is_user1_trading.py` or `./check_user1_trading.sh`
@@ -126,17 +138,18 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **Complete guide**: [ACTIVE_TRADING_STATUS.md](ACTIVE_TRADING_STATUS.md)
 
 **Broker Status** 🌐:
-- **Currently Active**: Coinbase Advanced Trade ✅, **Kraken ✅ (ALL ACCOUNTS CONFIGURED & TRADING)**
-- **Kraken Status**: ✅ **FULLY CONFIGURED & ACTIVE** - All 3 accounts ready to trade
+- **Currently Active**: Coinbase Advanced Trade ✅
+- **Kraken Status**: ❌ **NOT CONFIGURED** - No credentials in environment variables
   - **Credential Status**:
-    - ✅ Master account: `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` (legacy format) - **CONFIGURED**
-    - ✅ User #1 (Daivon): `KRAKEN_USER_DAIVON_API_KEY` / `KRAKEN_USER_DAIVON_API_SECRET` - **CONFIGURED**
-    - ✅ User #2 (Tania): `KRAKEN_USER_TANIA_API_KEY` / `KRAKEN_USER_TANIA_API_SECRET` - **CONFIGURED**
+    - ❌ Master account: `KRAKEN_MASTER_API_KEY` / `KRAKEN_MASTER_API_SECRET` - **NOT SET**
+    - ❌ User #1 (Daivon): `KRAKEN_USER_DAIVON_API_KEY` / `KRAKEN_USER_DAIVON_API_SECRET` - **NOT SET**
+    - ❌ User #2 (Tania): `KRAKEN_USER_TANIA_API_KEY` / `KRAKEN_USER_TANIA_API_SECRET` - **NOT SET**
   
-  - **Deployment Status**:
-    - ✅ Railway: All credentials configured in environment variables
-    - ✅ Render: All credentials configured in environment variables
-    - ✅ Bot will auto-connect to Kraken on startup
+  - **To Enable Kraken**:
+    - 📖 Read: [URGENT_KRAKEN_NOT_CONNECTED.md](URGENT_KRAKEN_NOT_CONNECTED.md)
+    - 🔍 Diagnose: `python3 diagnose_kraken_status.py`
+    - 🔧 Add API credentials to Railway/Render environment variables
+    - 🔄 Restart deployment to connect
   
   - **Verification Commands**:
     - 🔍 `python3 check_kraken_status.py` - Verify all credentials detected
