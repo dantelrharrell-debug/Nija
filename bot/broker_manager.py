@@ -3576,7 +3576,7 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"      KRAKEN_USER_{user_env_name}_API_SECRET=<your-api-secret>")
                     logger.info(f"   ⚠️  NOTE: {self.user_id} needs THEIR OWN Kraken account (not a sub-account)")
                     logger.info(f"   📖 Each user must create their own API key at: https://www.kraken.com/u/security/api")
-                    logger.info("   📖 Setup guide: KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX")
+                    logger.info("   📖 Setup guide: KRAKEN_QUICK_START.md")
                 return False
             
             # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors

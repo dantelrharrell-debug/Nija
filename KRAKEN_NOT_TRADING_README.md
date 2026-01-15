@@ -38,7 +38,7 @@ If you see these messages in your logs:
 - Daivon needs his own Kraken account → `KRAKEN_USER_DAIVON_API_KEY/SECRET`
 - Tania needs her own Kraken account → `KRAKEN_USER_TANIA_API_KEY/SECRET`
 
-See [KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX.md](KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX.md) for complete instructions.
+See [KRAKEN_QUICK_START.md](KRAKEN_QUICK_START.md) for complete instructions.
 
 ## Verify Configuration
 
@@ -49,7 +49,7 @@ python3 test_kraken_users.py    # Tests actual connections
 
 ## Documentation
 
-- **Setup Guide:** [KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX.md](KRAKEN_CONNECTION_DIAGNOSIS_AND_FIX.md)
+- **Setup Guide:** [KRAKEN_QUICK_START.md](KRAKEN_QUICK_START.md)
 - **Quick Start:** [QUICKFIX_KRAKEN_USERS.md](QUICKFIX_KRAKEN_USERS.md)
 - **Environment Variables:** [.env.example](.env.example)
 
