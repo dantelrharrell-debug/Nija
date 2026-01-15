@@ -167,7 +167,7 @@ This will test the connection without starting the full bot.
 ### Still having issues?
 Run the diagnostic script:
 ```bash
-python3 diagnose_kraken_connection.py
+python3 diagnose_kraken_status.py
 ```
 
 This will provide detailed information about what's wrong.

@@ -21,12 +21,13 @@ except ImportError:
 
 def check_env_var(var_name):
     """Check if an environment variable is set and valid."""
-    value = os.getenv(var_name, "")
     raw_value = os.getenv(var_name, None)
     
     if raw_value is None:
         return False, "NOT SET"
-    elif value.strip() == "":
+    
+    value = raw_value.strip()
+    if value == "":
         return False, "SET but contains only whitespace (INVALID)"
     else:
         # Show first 8 and last 4 chars for verification
