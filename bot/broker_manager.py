@@ -3767,7 +3767,11 @@ class KrakenBroker(BaseBroker):
                                     for handler in logger.handlers:
                                         handler.flush()
                                 else:
-                                    logger.error("   ⚠️  Permission error (see above for fix instructions)")
+                                    logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                                    logger.error("   Your Kraken API key does not have the required permissions.")
+                                    logger.error("   Fix: Enable 'Query Funds', 'Query/Create/Cancel Orders' permissions at:")
+                                    logger.error("   https://www.kraken.com/u/security/api")
+                                    logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                                 
                                 return False
                             
@@ -3906,7 +3910,11 @@ class KrakenBroker(BaseBroker):
                             for handler in logger.handlers:
                                 handler.flush()
                         else:
-                            logger.error("   ⚠️  Permission error (see above for fix instructions)")
+                            logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                            logger.error("   Your Kraken API key does not have the required permissions.")
+                            logger.error("   Fix: Enable 'Query Funds', 'Query/Create/Cancel Orders' permissions at:")
+                            logger.error("   https://www.kraken.com/u/security/api")
+                            logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                         
                         return False
                     
