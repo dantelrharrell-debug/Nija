@@ -140,14 +140,18 @@ class IndependentBrokerTrader:
             logger.debug(f"   Retry #{retry_num}/3: waiting {delay:.0f}s before retry...")
             time.sleep(delay)
             
-            # Clear both balance and accounts cache to force fresh API calls
-            if hasattr(broker, '_balance_cache'):
-                broker._balance_cache = None
-                broker._balance_cache_time = None
-            if hasattr(broker, '_accounts_cache'):
-                broker._accounts_cache = None
-                broker._accounts_cache_time = None
-            logger.debug(f"   Caches cleared, fetching fresh balance...")
+            # Clear cache to force fresh API calls
+            if hasattr(broker, 'clear_cache'):
+                broker.clear_cache()
+            else:
+                # Fallback for brokers without clear_cache method
+                if hasattr(broker, '_balance_cache'):
+                    broker._balance_cache = None
+                    broker._balance_cache_time = None
+                if hasattr(broker, '_accounts_cache'):
+                    broker._accounts_cache = None
+                    broker._accounts_cache_time = None
+            logger.debug(f"   Cache cleared, fetching fresh balance...")
             
             balance = broker.get_account_balance()
             logger.debug(f"   Retry #{retry_num}/3 returned: ${balance:.2f}")

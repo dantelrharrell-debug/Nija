@@ -346,6 +346,19 @@ class CoinbaseBroker(BaseBroker):
         """
         return cache_time is not None and (time.time() - cache_time) < self._cache_ttl
     
+    def clear_cache(self):
+        """
+        Clear all cached data to force fresh API calls.
+        
+        This is useful when stale cached data needs to be refreshed,
+        particularly for balance checking immediately after connection.
+        """
+        self._balance_cache = None
+        self._balance_cache_time = None
+        self._accounts_cache = None
+        self._accounts_cache_time = None
+        logger.debug("Cache cleared (balance and accounts)")
+    
     def _api_call_with_retry(self, api_func, *args, max_retries=5, base_delay=5.0, **kwargs):
         """
         Execute an API call with exponential backoff retry logic for rate limiting and connection errors.

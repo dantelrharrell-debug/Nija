@@ -56,16 +56,14 @@ def test_coinbase_balance():
     
     # Test 3: Clear cache and try again
     logger.info("TEST 3: Clear balance cache and try again")
-    broker._balance_cache = None
-    broker._balance_cache_time = None
+    broker.clear_cache()
     balance3 = broker.get_account_balance()
     logger.info(f"   Result: ${balance3:.2f}")
     logger.info("")
     
     # Test 4: Call _get_account_balance_detailed() directly
     logger.info("TEST 4: Call _get_account_balance_detailed() directly")
-    broker._balance_cache = None
-    broker._balance_cache_time = None
+    broker.clear_cache()
     balance_data = broker._get_account_balance_detailed()
     if balance_data:
         logger.info(f"   USD: ${balance_data.get('usd', 0):.2f}")
