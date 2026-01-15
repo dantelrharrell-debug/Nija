@@ -247,6 +247,9 @@ class TradingStrategy:
                     self.failed_brokers[BrokerType.KRAKEN] = kraken
                     logger.warning("   ⚠️  Kraken MASTER connection failed")
             except Exception as e:
+                # Store failed broker instance even for exceptions
+                if 'kraken' in locals():
+                    self.failed_brokers[BrokerType.KRAKEN] = kraken
                 logger.warning(f"   ⚠️  Kraken MASTER error: {e}")
             
             # Add delay between broker connections
