@@ -14,6 +14,7 @@ Each account trades independently with its own:
 """
 
 import logging
+import sys
 import time
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
@@ -395,6 +396,9 @@ class MultiAccountBrokerManager:
                     time.sleep(delay)
             
             logger.info(f"📊 Connecting {user.name} ({user.user_id}) to {broker_type.value.title()}...")
+            # Flush to ensure this message appears before connection attempt logs
+            for handler in logger.handlers:
+                handler.flush()
             
             # SMART CACHE MANAGEMENT: Clear failed connection cache to allow retry
             # This allows automatic reconnection when credentials are added/fixed without requiring bot restart

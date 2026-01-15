@@ -2785,7 +2785,7 @@ class AlpacaBroker(BaseBroker):
             account = self.api.get_account()
             return float(account.cash)
         except Exception as e:
-            print(f"Error fetching Alpaca balance: {e}")
+            logger.error(f"Error fetching Alpaca balance: {e}")
             return 0.0
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
@@ -2807,7 +2807,7 @@ class AlpacaBroker(BaseBroker):
             return {"status": "submitted", "order": order}
             
         except Exception as e:
-            print(f"Alpaca order error: {e}")
+            logger.error(f"Alpaca order error: {e}")
             return {"status": "error", "error": str(e)}
     
     def get_positions(self) -> List[Dict]:
@@ -2822,7 +2822,7 @@ class AlpacaBroker(BaseBroker):
                 'unrealized_pl': float(pos.unrealized_pl)
             } for pos in positions]
         except Exception as e:
-            print(f"Error fetching positions: {e}")
+            logger.error(f"Error fetching positions: {e}")
             return []
     
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
@@ -3763,6 +3763,9 @@ class KrakenBroker(BaseBroker):
                                     logger.warning("")
                                     logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
                                     logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                                    # Flush handlers to ensure all permission error messages appear together
+                                    for handler in logger.handlers:
+                                        handler.flush()
                                 else:
                                     logger.error("   ⚠️  Permission error (see above for fix instructions)")
                                 
@@ -3899,6 +3902,9 @@ class KrakenBroker(BaseBroker):
                             logger.warning("")
                             logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
                             logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                            # Flush handlers to ensure all permission error messages appear together
+                            for handler in logger.handlers:
+                                handler.flush()
                         else:
                             logger.error("   ⚠️  Permission error (see above for fix instructions)")
                         
@@ -4727,7 +4733,7 @@ class BrokerManager:
         # This was causing Coinbase to control other brokerages
         # Each broker now operates independently through IndependentBrokerTrader
         
-        print(f"📊 Added {broker.broker_type.value} broker (independent operation)")
+        logger.info(f"📊 Added {broker.broker_type.value} broker (independent operation)")
     
     def set_primary_broker(self, broker_type: BrokerType) -> bool:
         """
@@ -4770,7 +4776,8 @@ class BrokerManager:
     
     def connect_all(self):
         """Connect to all configured brokers"""
-        print("\n🔌 Connecting to brokers...")
+        logger.info("")
+        logger.info("🔌 Connecting to brokers...")
         for broker in self.brokers.values():
             broker.connect()
     
@@ -4808,7 +4815,7 @@ class BrokerManager:
                 "error": f"No broker available for {symbol}"
             }
         
-        print(f"📤 Routing {side} order for {symbol} to {broker.broker_type.value}")
+        logger.info(f"📤 Routing {side} order for {symbol} to {broker.broker_type.value}")
         return broker.place_market_order(symbol, side, quantity)
     
     def get_total_balance(self) -> float:
