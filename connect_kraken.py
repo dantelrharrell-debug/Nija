@@ -19,6 +19,7 @@ import os
 import sys
 import time
 import logging
+import traceback
 
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
@@ -156,7 +157,6 @@ def test_master_connection():
         return False
     except Exception as e:
         print(f"  ❌ Connection error: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
@@ -210,7 +210,6 @@ def test_user_connection(user_id, user_name):
             
     except Exception as e:
         print(f"  ❌ Connection error: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
