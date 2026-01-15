@@ -3526,8 +3526,9 @@ class KrakenBroker(BaseBroker):
             
             # Check for malformed credentials (set but empty after stripping)
             if (key_is_set and not key_valid_after_strip) or (secret_is_set and not secret_valid_after_strip):
-                # Mark that credentials were configured but invalid
-                self.credentials_configured = True
+                # Mark that credentials were NOT properly configured (empty/whitespace = not configured)
+                # This ensures the status display shows "NOT CONFIGURED" instead of "Connection failed"
+                self.credentials_configured = False
                 logger.warning(f"⚠️  Kraken credentials DETECTED but INVALID for {cred_label}")
                 
                 # Determine status messages for each credential
