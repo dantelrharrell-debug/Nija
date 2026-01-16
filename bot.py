@@ -447,7 +447,16 @@ def main():
                         if error_msg:
                             logger.warning(f"      → Error: {error_msg}")
                             # Provide specific guidance based on error type
-                            if "import" in error_msg.lower() or "sdk" in error_msg.lower():
+                            # Check for SDK import errors (more specific patterns to avoid false positives)
+                            is_sdk_error = any(pattern in error_msg.lower() for pattern in [
+                                "sdk import error",
+                                "modulenotfounderror",
+                                "no module named 'krakenex'",
+                                "no module named 'pykrakenapi'",
+                                "cannot import name",
+                                "importerror"
+                            ])
+                            if is_sdk_error:
                                 logger.error("")
                                 logger.error("      ❌ KRAKEN SDK NOT INSTALLED")
                                 logger.error("      The Kraken libraries (krakenex/pykrakenapi) are missing!")
