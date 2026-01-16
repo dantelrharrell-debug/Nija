@@ -15,7 +15,7 @@ Based on current strategy (AGGRESSIVE_SELL_FIX_JAN_13_2026.md):
 - Warning at: -0.7% loss, 4 hours hold
 
 Usage:
-    python3 verify_no_losing_coinbase_trades.py
+    python3 audit_coinbase_positions.py
 """
 
 import os

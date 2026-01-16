@@ -51,10 +51,15 @@ class CoinbaseConfig:
     def __post_init__(self):
         """Initialize profit targets after dataclass creation"""
         if self.profit_targets is None:
+            # NOTE: With 1.4% fees, targets below 1.4% are net-negative
+            # These targets are ordered by preference (check highest first)
+            # 1.5% target: Net +0.1% after fees (minimal but positive profit)
+            # 1.2% target: Net -0.2% (accepts small loss to avoid larger reversal)
+            # 1.0% target: Net -0.4% (emergency exit, still better than -1.0% stop loss)
             self.profit_targets = [
-                (0.015, "Profit target +1.5% (Net ~0.1% after fees) - GOOD"),
-                (0.012, "Profit target +1.2% (Net ~-0.2% after fees) - ACCEPTABLE"),
-                (0.010, "Profit target +1.0% (Net ~-0.4% after fees) - EMERGENCY"),
+                (0.015, "Profit target +1.5% (Net +0.1% after 1.4% fees) - ONLY PROFITABLE TARGET"),
+                (0.012, "Profit target +1.2% (Net -0.2% after fees) - DAMAGE CONTROL vs reversal"),
+                (0.010, "Profit target +1.0% (Net -0.4% after fees) - EMERGENCY vs -1.0% stop"),
             ]
     
     # Stop loss (aggressive to preserve capital with high fees)

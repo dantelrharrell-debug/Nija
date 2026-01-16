@@ -219,28 +219,37 @@ class BrokerStrategySelector:
         print("BROKER STRATEGY COMPARISON".center(80))
         print("="*80)
         
-        if COINBASE_CONFIG:
+        coinbase = self.configs.get('coinbase')
+        kraken = self.configs.get('kraken')
+        
+        if coinbase:
             print("\n🔵 COINBASE (High-Fee Exchange)")
             print("-" * 80)
-            print(COINBASE_CONFIG.get_config_summary())
+            print(coinbase.get_config_summary())
         
-        if KRAKEN_CONFIG:
+        if kraken:
             print("\n🟣 KRAKEN (Low-Fee Exchange)")
             print("-" * 80)
-            print(KRAKEN_CONFIG.get_config_summary())
+            print(kraken.get_config_summary())
         
-        print("\n" + "="*80)
-        print("KEY DIFFERENCES:".center(80))
-        print("="*80)
-        print("""
+        # Calculate comparisons from actual config values
+        if coinbase and kraken:
+            fee_ratio = coinbase.round_trip_cost / kraken.round_trip_cost
+            hold_ratio = kraken.max_hold_hours / coinbase.max_hold_hours
+            min_pos_ratio = coinbase.min_position_usd / kraken.min_position_usd
+            
+            print("\n" + "="*80)
+            print("KEY DIFFERENCES:".center(80))
+            print("="*80)
+            print(f"""
 Coinbase vs Kraken:
-  Fees:         1.40% vs 0.36% (Kraken is 4x cheaper!)
-  Strategy:     Buy-only vs Bidirectional
-  Profit Target: 1.5% vs 1.0% (Kraken can profit with lower targets)
-  Stop Loss:    -1.0% vs -0.7% (Kraken can use tighter stops)
-  Max Hold:     8h vs 24h (Kraken can hold 3x longer)
-  Min Position: $10 vs $5 (Kraken profitable with smaller positions)
-  Short Selling: Unprofitable vs PROFITABLE
+  Fees:         {coinbase.round_trip_cost*100:.2f}% vs {kraken.round_trip_cost*100:.2f}% (Kraken is {fee_ratio:.1f}x cheaper!)
+  Strategy:     {'Buy-only' if not coinbase.bidirectional else 'Bidirectional'} vs {'Bidirectional' if kraken.bidirectional else 'Buy-only'}
+  Profit Target: {coinbase.profit_targets[0][0]*100:.1f}% vs {kraken.profit_targets[0][0]*100:.1f}%
+  Stop Loss:    {coinbase.stop_loss*100:.1f}% vs {kraken.stop_loss*100:.1f}%
+  Max Hold:     {coinbase.max_hold_hours:.0f}h vs {kraken.max_hold_hours:.0f}h (Kraken {hold_ratio:.1f}x longer)
+  Min Position: ${coinbase.min_position_usd:.0f} vs ${kraken.min_position_usd:.0f} (Kraken {min_pos_ratio:.1f}x smaller)
+  Short Selling: {'Unprofitable' if not coinbase.sell_preferred else 'Profitable'} vs {'PROFITABLE' if kraken.sell_preferred else 'Unprofitable'}
   
 CONCLUSION: Kraken is superior for:
   ✅ More trading opportunities (bidirectional)

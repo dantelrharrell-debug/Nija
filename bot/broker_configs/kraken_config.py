@@ -52,10 +52,15 @@ class KrakenConfig:
     def __post_init__(self):
         """Initialize profit targets after dataclass creation"""
         if self.profit_targets is None:
+            # NOTE: With 0.36% fees, all targets are net-positive
+            # Recommended to add ~0.1-0.2% buffer for slippage/market impact
+            # 1.0% target: Net +0.64% after fees (excellent for crypto)
+            # 0.7% target: Net +0.34% after fees (good, accounts for some slippage)
+            # 0.5% target: Net +0.14% after fees (minimal profit, tight margin)
             self.profit_targets = [
-                (0.010, "Profit target +1.0% (Net ~0.64% after fees) - EXCELLENT"),
-                (0.007, "Profit target +0.7% (Net ~0.34% after fees) - GOOD"),
-                (0.005, "Profit target +0.5% (Net ~0.14% after fees) - ACCEPTABLE"),
+                (0.010, "Profit target +1.0% (Net +0.64% after 0.36% fees) - EXCELLENT"),
+                (0.007, "Profit target +0.7% (Net +0.34% after fees) - GOOD"),
+                (0.005, "Profit target +0.5% (Net +0.14% after fees) - MINIMAL, watch slippage"),
             ]
     
     # Stop loss (can be tighter due to lower fees)
@@ -234,11 +239,12 @@ class KrakenConfig:
         """Get configuration summary for logging"""
         futures_status = "Enabled" if self.enable_futures else "Disabled"
         options_status = "Enabled" if self.enable_options else "Disabled"
+        fee_advantage = 1.4 / 0.36  # Calculate dynamically: Coinbase 1.4% / Kraken 0.36%
         
         return f"""
 Kraken Trading Configuration:
   Broker: {self.broker_display_name}
-  Fees: {self.round_trip_cost*100:.2f}% round-trip (4x cheaper than Coinbase!)
+  Fees: {self.round_trip_cost*100:.2f}% round-trip ({fee_advantage:.1f}x cheaper than Coinbase)
   Strategy: BIDIRECTIONAL (profit both ways)
   Profit Targets: {', '.join([f'{t[0]*100:.1f}%' for t in self.profit_targets])}
   Stop Loss: {self.stop_loss*100:.1f}%
