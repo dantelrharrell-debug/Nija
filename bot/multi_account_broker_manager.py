@@ -33,6 +33,11 @@ except ImportError:
 
 logger = logging.getLogger('nija.multi_account')
 
+# Root nija logger for flushing all handlers
+# Child loggers (like 'nija.multi_account', 'nija.broker') propagate to this logger
+# but don't have their own handlers, so we need to flush the root logger's handlers
+_root_logger = logging.getLogger('nija')
+
 # Minimum delay between sequential connections to the same broker type
 # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
 # CRITICAL (Jan 14, 2026): Increased from 2.0s to 5.0s to further reduce Kraken nonce conflicts
@@ -416,8 +421,7 @@ class MultiAccountBrokerManager:
             # Child loggers (like 'nija.multi_account', 'nija.broker') propagate to parent but
             # don't have their own handlers. Flushing logger.handlers does nothing since it's empty.
             # We need to flush the parent 'nija' logger's handlers to ensure all logs are written.
-            root_nija_logger = logging.getLogger("nija")
-            for handler in root_nija_logger.handlers:
+            for handler in _root_logger.handlers:
                 handler.flush()
             
             # SMART CACHE MANAGEMENT: Clear failed connection cache to allow retry
