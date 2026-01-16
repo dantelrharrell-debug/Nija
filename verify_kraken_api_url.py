@@ -19,6 +19,13 @@ import os
 EXPECTED_KRAKEN_URI = "https://api.kraken.com"
 EXPECTED_KRAKEN_VERSION = "0"
 
+# Forbidden patterns that indicate manual URL override (instead of using library defaults)
+# Format: (pattern, description)
+FORBIDDEN_URL_PATTERNS = [
+    ("self.api.uri =", "manual URI assignment after API initialization"),
+    ("self.api.apiversion =", "manual API version override"),
+]
+
 # Add bot directory to path for imports when run from repository root
 # This allows running: python3 verify_kraken_api_url.py
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -108,16 +115,8 @@ def verify_nija_broker_integration():
         import inspect
         source = inspect.getsource(KrakenBrokerAdapter)
         
-        # Look for any URI overrides (should not exist)
-        # Note: We check for assignment patterns that would override the krakenex defaults
-        # Comments and documentation strings containing these patterns are acceptable
-        forbidden_patterns = [
-            ("self.api.uri =", "manual URI assignment after API initialization"),
-            ("api.apiversion =", "manual API version override"),
-        ]
-        
         print("\nChecking for URL overrides (should be none):")
-        for pattern, description in forbidden_patterns:
+        for pattern, description in FORBIDDEN_URL_PATTERNS:
             if pattern in source:
                 print(f"  ❌ FAIL: Found forbidden pattern: {pattern}")
                 print(f"     Issue: {description}")
@@ -161,14 +160,8 @@ def verify_nija_broker_manager():
         import inspect
         source = inspect.getsource(KrakenBroker)
         
-        # Look for any URI overrides (should not exist)
-        forbidden_patterns = [
-            ("self.api.uri =", "manual URI assignment after API initialization"),
-            ("api.apiversion =", "manual API version override"),
-        ]
-        
         print("\nChecking for URL overrides (should be none):")
-        for pattern, description in forbidden_patterns:
+        for pattern, description in FORBIDDEN_URL_PATTERNS:
             if pattern in source:
                 print(f"  ❌ FAIL: Found forbidden pattern: {pattern}")
                 print(f"     Issue: {description}")
