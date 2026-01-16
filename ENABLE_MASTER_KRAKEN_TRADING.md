@@ -330,7 +330,6 @@ If you've followed all steps and master Kraken still won't connect:
 
 ---
 
-**Last Updated**: January 16, 2026  
 **Issue**: Master Kraken not trading while users can trade on Kraken  
 **Root Cause**: Master credentials not set in deployment environment  
 **Fix Time**: 5-10 minutes  

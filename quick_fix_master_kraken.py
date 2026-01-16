@@ -216,11 +216,18 @@ def main():
             try:
                 from bot.broker_manager import KrakenBroker, AccountType
             except ImportError:
-                # Fallback
+                # Fallback - add bot directory to path
                 bot_path = os.path.join(os.path.dirname(__file__), 'bot')
                 if bot_path not in sys.path:
                     sys.path.insert(0, bot_path)
-                from broker_manager import KrakenBroker, AccountType
+                try:
+                    from broker_manager import KrakenBroker, AccountType
+                except ImportError as e:
+                    print(f"❌ Cannot import Kraken broker modules: {e}")
+                    print("   The Kraken SDK may not be installed.")
+                    print("   Install with: pip install krakenex pykrakenapi")
+                    print("   Or check requirements.txt")
+                    return
             
             # Create and test master broker
             master_broker = KrakenBroker(account_type=AccountType.MASTER)
@@ -280,7 +287,10 @@ def main():
         print("\n✅ Master credentials are set - check logs for connection status")
     
     print("\n" + "=" * 70)
-    print("For more help, see: KRAKEN_MASTER_NOT_CONNECTING_JAN_16_2026.md")
+    print("For more help, see documentation in the repository:")
+    print("  • ENABLE_MASTER_KRAKEN_TRADING.md")
+    print("  • KRAKEN_MASTER_NOT_CONNECTING_*.md")
+    print("  • setup_kraken_master.py")
     print("=" * 70 + "\n")
 
 if __name__ == "__main__":
