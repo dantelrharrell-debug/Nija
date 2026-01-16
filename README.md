@@ -15,41 +15,45 @@
 
 ### 🚀 Quick Start - Enable Kraken in 5 Minutes
 
-**Step 1**: Verify your setup
-```bash
-python3 verify_kraken_status.py
-```
+**📖 See: [SETUP_KRAKEN_MASTER_QUICK.md](SETUP_KRAKEN_MASTER_QUICK.md)** for the fastest setup!
 
-**Step 2**: Get API credentials from [Kraken](https://www.kraken.com/u/security/api)
+**Step 1**: Get API credentials from [Kraken](https://www.kraken.com/u/security/api)
 - Enable: Query Funds, Query/Create/Cancel Orders, Query Trades
 - Copy API Key and Private Key
 
-**Step 3**: Add to your platform (Railway/Render/Local):
+**Step 2**: Add to your platform (Railway/Render/Local):
 ```bash
 KRAKEN_MASTER_API_KEY=your-api-key-here
 KRAKEN_MASTER_API_SECRET=your-private-key-here
 ```
 
-**Step 4**: Restart and watch Kraken trade automatically!
+**Step 3**: Restart and watch Kraken trade automatically!
 
-### 📖 Complete Guide
+**Verify:**
+```bash
+python3 check_trading_status.py
+```
 
-See **[ENABLE_KRAKEN_README.md](ENABLE_KRAKEN_README.md)** for:
-- ✅ Step-by-step setup for Railway, Render, and local
-- ✅ API credential generation
-- ✅ Troubleshooting guide
+### 📖 Complete Guides
+
+- **[CONFIGURE_KRAKEN_MASTER.md](CONFIGURE_KRAKEN_MASTER.md)** - Comprehensive setup guide with troubleshooting
+- **[ENABLE_KRAKEN_README.md](ENABLE_KRAKEN_README.md)** - Multi-broker architecture and user accounts
+- **[SETUP_KRAKEN_MASTER_QUICK.md](SETUP_KRAKEN_MASTER_QUICK.md)** - 5-minute quick reference
+
+**Guides include:**
+- ✅ Step-by-step setup for Railway, Render, and local deployment
+- ✅ API credential generation and permissions
+- ✅ Troubleshooting common issues
 - ✅ Multi-broker architecture explanation
 - ✅ User account configuration (optional)
 
-**Time Required**: 5 minutes to add credentials + restart
+### 🔍 Verification & Diagnostics
 
-### 🔍 Additional Resources
-
-- **[verify_kraken_status.py](verify_kraken_status.py)** - Check current status and find issues
-- **[KRAKEN_QUICK_START.md](KRAKEN_QUICK_START.md)** - Original quick start guide
-- **[MULTI_EXCHANGE_TRADING_GUIDE.md](MULTI_EXCHANGE_TRADING_GUIDE.md)** - Multi-broker architecture
-- **[diagnose_kraken_connection.py](diagnose_kraken_connection.py)** - Connection diagnostics
-- **[test_kraken_connection_live.py](test_kraken_connection_live.py)** - Live API test
+- **[check_trading_status.py](check_trading_status.py)** - Check overall trading status
+- **[audit_coinbase_positions.py](audit_coinbase_positions.py)** - Verify no stuck losing positions
+- **[setup_kraken_master.py](setup_kraken_master.py)** - Interactive setup wizard for Kraken master
+- **[diagnose_master_kraken_issue.py](diagnose_master_kraken_issue.py)** - Diagnose master account issues
+- **[test_kraken_connection_live.py](test_kraken_connection_live.py)** - Live API connection test
 
 **Library**: NIJA uses official Kraken SDKs: [`krakenex`](https://github.com/veox/python3-krakenex) + [`pykrakenapi`](https://github.com/dominiktraxl/pykrakenapi)
 
