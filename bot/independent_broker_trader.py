@@ -111,6 +111,18 @@ class IndependentBrokerTrader:
             logger.info("   ✅ Multi-account support enabled (user trading)")
         logger.info("=" * 70)
     
+    def _get_master_broker_source(self):
+        """
+        Get the authoritative source for master brokers.
+        
+        Returns the multi_account_manager.master_brokers if available,
+        otherwise falls back to the legacy broker_manager.brokers.
+        
+        Returns:
+            dict: Dictionary of BrokerType -> BaseBroker instances
+        """
+        return self.multi_account_manager.master_brokers if self.multi_account_manager else self.broker_manager.brokers
+    
     def _retry_coinbase_balance_if_zero(self, broker, broker_name: str) -> float:
         """
         Retry balance fetch for Coinbase if initial result is $0.
@@ -183,7 +195,7 @@ class IndependentBrokerTrader:
         # CRITICAL FIX (Jan 16, 2026): Use multi_account_manager.master_brokers instead of broker_manager.brokers
         # The old broker_manager is kept for backward compatibility, but master brokers are now
         # managed through multi_account_manager for consistency with user broker management
-        broker_source = self.multi_account_manager.master_brokers if self.multi_account_manager else self.broker_manager.brokers
+        broker_source = self._get_master_broker_source()
         
         for broker_type, broker in broker_source.items():
             if not broker.connected:
@@ -587,7 +599,7 @@ class IndependentBrokerTrader:
             
             # CRITICAL FIX (Jan 16, 2026): Use multi_account_manager.master_brokers instead of broker_manager.brokers
             # This ensures we iterate over the same broker instances that were checked in detect_funded_brokers()
-            broker_source = self.multi_account_manager.master_brokers if self.multi_account_manager else self.broker_manager.brokers
+            broker_source = self._get_master_broker_source()
             
             broker_start_count = 0
             for broker_type, broker in broker_source.items():
@@ -744,7 +756,7 @@ class IndependentBrokerTrader:
             dict: Summary of broker health and trading status
         """
         # CRITICAL FIX (Jan 16, 2026): Use multi_account_manager.master_brokers for accurate counts
-        broker_source = self.multi_account_manager.master_brokers if self.multi_account_manager else self.broker_manager.brokers
+        broker_source = self._get_master_broker_source()
         
         summary = {
             'total_brokers': len(broker_source),

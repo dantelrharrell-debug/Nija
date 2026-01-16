@@ -77,28 +77,40 @@ print("=" * 70)
 print("📋 USER CREDENTIALS CHECK")
 print("-" * 70)
 
-# Check both users
-users = [
-    ("daivon_frazier", "DAIVON"),
-    ("tania_gilbert", "TANIA")
-]
-
+# Dynamically find all KRAKEN_USER_* credentials
 user_results = {}
+all_env_vars = dict(os.environ)
 
-for user_id, env_name in users:
-    print(f"\nUser: {user_id}")
-    print(f"Expected env prefix: KRAKEN_USER_{env_name}_")
-    
-    user_key_raw = os.getenv(f"KRAKEN_USER_{env_name}_API_KEY", "")
-    user_secret_raw = os.getenv(f"KRAKEN_USER_{env_name}_API_SECRET", "")
-    
-    user_key = user_key_raw.strip()
-    user_secret = user_secret_raw.strip()
-    
-    key_ok = check_credential(f"  KRAKEN_USER_{env_name}_API_KEY", user_key_raw, user_key)
-    secret_ok = check_credential(f"  KRAKEN_USER_{env_name}_API_SECRET", user_secret_raw, user_secret)
-    
-    user_results[user_id] = (key_ok and secret_ok)
+# Find all user credential pairs
+user_prefixes = set()
+for key in all_env_vars:
+    if key.startswith("KRAKEN_USER_") and key.endswith("_API_KEY"):
+        # Extract the username portion (between KRAKEN_USER_ and _API_KEY)
+        username = key[len("KRAKEN_USER_"):-len("_API_KEY")]
+        user_prefixes.add(username)
+
+if not user_prefixes:
+    print("⚪ No user credentials found")
+    print("   (No environment variables matching KRAKEN_USER_*_API_KEY)")
+else:
+    for username in sorted(user_prefixes):
+        # Convert username to user_id format (e.g., "TANIA" -> "tania_gilbert")
+        # This is for display purposes only - we use the env var name directly
+        user_id = username.lower().replace("_", " ").title().replace(" ", "_")
+        
+        print(f"\nUser: {user_id}")
+        print(f"Environment variable prefix: KRAKEN_USER_{username}_")
+        
+        user_key_raw = os.getenv(f"KRAKEN_USER_{username}_API_KEY", "")
+        user_secret_raw = os.getenv(f"KRAKEN_USER_{username}_API_SECRET", "")
+        
+        user_key = user_key_raw.strip()
+        user_secret = user_secret_raw.strip()
+        
+        key_ok = check_credential(f"  KRAKEN_USER_{username}_API_KEY", user_key_raw, user_key)
+        secret_ok = check_credential(f"  KRAKEN_USER_{username}_API_SECRET", user_secret_raw, user_secret)
+        
+        user_results[user_id] = (key_ok and secret_ok)
 
 print()
 print("User credential summary:")
@@ -167,10 +179,16 @@ else:
     print()
     
     try:
-        # Add bot directory to path
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
-        
-        from broker_manager import KrakenBroker, AccountType
+        # Try to import broker modules - use proper package import
+        try:
+            from bot.broker_manager import KrakenBroker, AccountType
+        except ImportError:
+            # Fallback: add bot directory to path only if direct import fails
+            import sys
+            bot_path = os.path.join(os.path.dirname(__file__), 'bot')
+            if bot_path not in sys.path:
+                sys.path.insert(0, bot_path)
+            from broker_manager import KrakenBroker, AccountType
         
         # Test master connection
         print("Creating master KrakenBroker instance...")
