@@ -22,7 +22,10 @@ fi
 $PY --version
 
 # Test Coinbase module
-$PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')"
+$PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')" || {
+    echo "❌ Coinbase REST client not available - check requirements.txt installation"
+    exit 1
+}
 
 # Test Kraken module
 $PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" 2>/dev/null || echo "⚠️  Kraken SDK not installed (optional)"
