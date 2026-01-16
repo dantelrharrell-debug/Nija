@@ -18,6 +18,7 @@ import os
 # Expected Kraken API configuration constants
 EXPECTED_KRAKEN_URI = "https://api.kraken.com"
 EXPECTED_KRAKEN_VERSION = "0"
+EXPECTED_KRAKEN_DOMAIN = "api.kraken.com"  # Domain without protocol
 
 # Forbidden patterns that indicate manual URL override (instead of using library defaults)
 # Format: (pattern, description)
@@ -231,8 +232,8 @@ def main():
     if all_passed:
         print("\n🎉 ALL TESTS PASSED")
         print("\n✅ CONCLUSION: NIJA is using the correct Kraken API endpoints")
-        print(f"   - Base: {EXPECTED_KRAKEN_URI.replace('https://', '')}")
-        print(f"   - Private endpoints: {EXPECTED_KRAKEN_URI.replace('https://', '')}/{EXPECTED_KRAKEN_VERSION}/private/{{method}}")
+        print(f"   - Base: {EXPECTED_KRAKEN_DOMAIN}")
+        print(f"   - Private endpoints: {EXPECTED_KRAKEN_DOMAIN}/{EXPECTED_KRAKEN_VERSION}/private/{{method}}")
         print("   - No changes required")
         print("\n" + "=" * 70)
         return 0
