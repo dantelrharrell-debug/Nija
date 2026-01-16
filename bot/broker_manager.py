@@ -3781,7 +3781,9 @@ class KrakenBroker(BaseBroker):
                                     logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
                                     logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                                     # Flush handlers to ensure all permission error messages appear together
-                                    for handler in logger.handlers:
+                                    # CRITICAL: Flush root 'nija' logger handlers, not child logger (which has no handlers)
+                                    root_nija_logger = logging.getLogger("nija")
+                                    for handler in root_nija_logger.handlers:
                                         handler.flush()
                                 else:
                                     logger.error("   ⚠️  API KEY PERMISSION ERROR")
@@ -3927,7 +3929,9 @@ class KrakenBroker(BaseBroker):
                             logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
                             logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                             # Flush handlers to ensure all permission error messages appear together
-                            for handler in logger.handlers:
+                            # CRITICAL: Flush root 'nija' logger handlers, not child logger (which has no handlers)
+                            root_nija_logger = logging.getLogger("nija")
+                            for handler in root_nija_logger.handlers:
                                 handler.flush()
                         else:
                             logger.error("   ⚠️  API KEY PERMISSION ERROR")
