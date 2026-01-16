@@ -252,7 +252,8 @@ If you see this error, it usually resolves after waiting 1-2 minutes.
 The Kraken SDK should already be in `requirements.txt`, but if it's missing:
 
 ```bash
-pip install krakenex==2.2.2 pykrakenapi==0.3.2
+# Check requirements.txt for exact versions
+pip install krakenex pykrakenapi
 ```
 
 Then restart the bot.
@@ -408,7 +409,5 @@ If you're still having issues after following this guide:
    - What you've tried
 
 ---
-
-**Last Updated**: January 16, 2026
 
 **Status**: ✅ Kraken is fully implemented and tested
