@@ -57,9 +57,15 @@ DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
 # Time-based exit thresholds (prevent indefinite holding)
 # CRITICAL FIX (Jan 13, 2026): Reduced from 48h to 8h to force exits on losing positions
+# Jan 16, 2026: Added EMERGENCY exit at 12 hours as absolute failsafe
 # NIJA is for PROFIT, not losses - positions should sell within 8 hours max
 MAX_POSITION_HOLD_HOURS = 8  # Auto-exit positions held longer than this (8 hours)
+MAX_POSITION_HOLD_EMERGENCY = 12  # EMERGENCY exit - force sell ALL positions after 12 hours
 STALE_POSITION_WARNING_HOURS = 4  # Warn about positions held this long (4 hours)
+# Unsellable position retry timeout (prevent permanent blocking)
+# After this many hours, retry selling positions that were previously marked unsellable
+# This handles cases where position grew enough to be sellable, or API errors were temporary
+UNSELLABLE_RETRY_HOURS = 24  # Retry selling "unsellable" positions after 24 hours
 
 # Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE V7.3
 # Updated Jan 12, 2026 - PROFITABILITY FIX: Aggressive profit-taking to lock gains
@@ -82,10 +88,12 @@ PROFIT_TARGETS = [
 
 # Stop loss thresholds - AGGRESSIVE to cut losses fast (V7.3 FIX)
 # Jan 13, 2026: Tightened to -1.0% to cut losses IMMEDIATELY
+# Jan 16, 2026: Added EMERGENCY stop loss at -5% as failsafe
 # NIJA is for PROFIT, not losses - exit losing trades fast to preserve capital
 # Any position at -1% is likely to continue falling - better to exit and find new opportunities
 # Combined with 8-hour max hold time and technical exits for triple protection
 STOP_LOSS_THRESHOLD = -1.0  # Exit at -1.0% loss (AGGRESSIVE - cut losses fast)
+STOP_LOSS_EMERGENCY = -5.0  # EMERGENCY exit at -5% loss (FAILSAFE - force exit on major losses)
 STOP_LOSS_WARNING = -0.7  # Warn at -0.7% loss (meaningful early warning without noise)
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
@@ -155,7 +163,9 @@ class TradingStrategy:
         logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
         
         # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
-        self.unsellable_positions = set()  # Set of symbols that failed to sell due to size issues
+        # NEW (Jan 16, 2026): Track with timestamps to allow retry after timeout
+        self.unsellable_positions = {}  # Dict of symbol -> timestamp when marked unsellable
+        self.unsellable_retry_timeout = UNSELLABLE_RETRY_HOURS * 3600  # Convert hours to seconds
         
         # Track failed broker connections for error reporting
         self.failed_brokers = {}  # Dict of BrokerType -> broker instance for failed connections
@@ -941,9 +951,18 @@ class TradingStrategy:
                         continue
                     
                     # Skip positions we know can't be sold (too small/dust)
+                    # But allow retry after timeout in case position grew or API error was temporary
                     if symbol in self.unsellable_positions:
-                        logger.debug(f"   ⏭️ Skipping {symbol} (marked as unsellable/dust)")
-                        continue
+                        # Check if enough time has passed to retry
+                        marked_time = self.unsellable_positions[symbol]
+                        time_since_marked = time.time() - marked_time
+                        if time_since_marked < self.unsellable_retry_timeout:
+                            logger.debug(f"   ⏭️ Skipping {symbol} (marked unsellable {time_since_marked/3600:.1f}h ago, retry in {(self.unsellable_retry_timeout - time_since_marked)/3600:.1f}h)")
+                            continue
+                        else:
+                            logger.info(f"   🔄 Retrying {symbol} (marked unsellable {time_since_marked/3600:.1f}h ago - timeout reached)")
+                            # Remove from unsellable dict to allow full processing
+                            del self.unsellable_positions[symbol]
                     
                     logger.info(f"   Analyzing {symbol}...")
                     
@@ -999,8 +1018,18 @@ class TradingStrategy:
                                         position_age_hours = (now - entry_dt).total_seconds() / 3600
                                         entry_time_available = True
                                         
+                                        # EMERGENCY TIME-BASED EXIT: Force exit ALL positions after 12 hours (FAILSAFE)
+                                        if position_age_hours >= MAX_POSITION_HOLD_EMERGENCY:
+                                            logger.error(f"   🚨 EMERGENCY TIME EXIT: {symbol} held for {position_age_hours:.1f} hours (emergency max: {MAX_POSITION_HOLD_EMERGENCY})")
+                                            logger.error(f"   💥 FORCE SELLING to prevent indefinite holding!")
+                                            positions_to_exit.append({
+                                                'symbol': symbol,
+                                                'quantity': quantity,
+                                                'reason': f'EMERGENCY time exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_EMERGENCY}h)'
+                                            })
+                                            continue
                                         # TIME-BASED EXIT: Auto-exit stale positions
-                                        if position_age_hours >= MAX_POSITION_HOLD_HOURS:
+                                        elif position_age_hours >= MAX_POSITION_HOLD_HOURS:
                                             logger.warning(f"   ⏰ STALE POSITION EXIT: {symbol} held for {position_age_hours:.1f} hours (max: {MAX_POSITION_HOLD_HOURS})")
                                             positions_to_exit.append({
                                                 'symbol': symbol,
@@ -1036,7 +1065,16 @@ class TradingStrategy:
                                         break  # Exit the for loop, continue to next position
                                 else:
                                     # No profit target hit, check stop loss
-                                    if pnl_percent <= STOP_LOSS_THRESHOLD:
+                                    # EMERGENCY STOP LOSS: Force exit at -5% or worse (FAILSAFE)
+                                    if pnl_percent <= STOP_LOSS_EMERGENCY:
+                                        logger.error(f"   🚨 EMERGENCY STOP LOSS: {symbol} at {pnl_percent:.2f}% (emergency: {STOP_LOSS_EMERGENCY}%)")
+                                        logger.error(f"   💥 FORCE SELLING to prevent catastrophic loss!")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'EMERGENCY STOP LOSS {STOP_LOSS_EMERGENCY}% (actual: {pnl_percent:.2f}%)'
+                                        })
+                                    elif pnl_percent <= STOP_LOSS_THRESHOLD:
                                         logger.warning(f"   🛑 STOP LOSS HIT: {symbol} at {pnl_percent:.2f}% (stop: {STOP_LOSS_THRESHOLD}%)")
                                         positions_to_exit.append({
                                             'symbol': symbol,
@@ -1264,8 +1302,9 @@ class TradingStrategy:
                         )
                         if result and result.get('status') not in ['error', 'unfilled']:
                             logger.info(f"  ✅ {symbol} SOLD successfully!")
-                            # Remove from unsellable set if it was there (position grew and became sellable)
-                            self.unsellable_positions.discard(symbol)
+                            # Remove from unsellable dict if it was there (position grew and became sellable)
+                            if symbol in self.unsellable_positions:
+                                del self.unsellable_positions[symbol]
                         else:
                             error_msg = result.get('error', result.get('message', 'Unknown')) if result else 'No response'
                             error_code = result.get('error') if result else None
@@ -1281,8 +1320,8 @@ class TradingStrategy:
                             )
                             if is_invalid_symbol:
                                 logger.error(f"     ⚠️ Symbol {symbol} is invalid or unsupported")
-                                logger.error(f"     💡 This position will be skipped in future cycles")
-                                self.unsellable_positions.add(symbol)
+                                logger.error(f"     💡 This position will be skipped for 24 hours")
+                                self.unsellable_positions[symbol] = time.time()
                                 continue
                             
                             # If it's a dust/too-small position, mark it as unsellable to prevent infinite retries
@@ -1295,8 +1334,8 @@ class TradingStrategy:
                             )
                             if is_size_error:
                                 logger.warning(f"     💡 Position {symbol} is too small to sell via API - marking as dust")
-                                logger.warning(f"     💡 This position will be skipped in future cycles to prevent infinite loops")
-                                self.unsellable_positions.add(symbol)
+                                logger.warning(f"     💡 Will retry after 24 hours in case position grows")
+                                self.unsellable_positions[symbol] = time.time()
                     except Exception as sell_err:
                         logger.error(f"  ❌ {symbol} exception during sell: {sell_err}")
                         logger.error(f"     Error type: {type(sell_err).__name__}")
