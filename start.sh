@@ -24,6 +24,9 @@ $PY --version
 # Test Coinbase module
 $PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')"
 
+# Test Kraken module
+$PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" 2>/dev/null || echo "⚠️  Kraken SDK not installed (optional)"
+
 BRANCH_VAL=${GIT_BRANCH}
 COMMIT_VAL=${GIT_COMMIT}
 
