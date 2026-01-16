@@ -420,6 +420,9 @@ def main():
         if kraken_master_configured and 'KRAKEN' not in connected_master_brokers:
             failed_master_brokers.append('KRAKEN')
         
+        # Track if Kraken credentials were not configured at all
+        kraken_not_configured = not kraken_master_configured
+        
         if connected_master_brokers:
             logger.info("✅ NIJA IS READY TO TRADE!")
             logger.info("")
@@ -462,6 +465,21 @@ def main():
                             logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
                         
                         logger.warning("      → Run: python3 test_kraken_connection_live.py to diagnose")
+            
+            # Show warning if Kraken Master credentials are not configured
+            if kraken_not_configured:
+                logger.info("")
+                logger.warning("💡 MASTER KRAKEN NOT CONFIGURED")
+                logger.warning("   ⚠️  Kraken Master credentials are not set")
+                logger.warning("   ℹ️  This is OPTIONAL - only set if you want MASTER Kraken trading")
+                logger.warning("")
+                logger.warning("   To enable MASTER Kraken trading, set in your deployment platform:")
+                logger.warning("      KRAKEN_MASTER_API_KEY=<your-master-api-key>")
+                logger.warning("      KRAKEN_MASTER_API_SECRET=<your-master-api-secret>")
+                logger.warning("")
+                logger.warning("   📖 Get credentials: https://www.kraken.com/u/security/api")
+                logger.warning("   📖 Setup guide: SOLUTION_MASTER_KRAKEN_NOT_TRADING.md")
+                logger.warning("   🔍 Diagnostic tool: python3 diagnose_master_kraken_live.py")
             
             logger.info("")
             logger.info(f"📈 Trading will occur on {len(connected_master_brokers)} exchange(s)")
