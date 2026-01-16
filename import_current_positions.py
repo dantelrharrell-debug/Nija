@@ -41,6 +41,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Strategy tag for imported positions
+IMPORTED_STRATEGY_TAG = "IMPORTED"
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -142,7 +145,7 @@ def import_positions():
                         entry_price=current_price,  # ESTIMATE: Use current price
                         quantity=quantity,
                         size_usd=size_usd,
-                        strategy="IMPORTED"
+                        strategy=IMPORTED_STRATEGY_TAG
                     )
                     
                     if success:

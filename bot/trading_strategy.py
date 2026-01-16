@@ -1100,9 +1100,9 @@ class TradingStrategy:
                         logger.warning(f"   ⚠️ No entry price tracked for {symbol} - using fallback exit logic")
                         logger.warning(f"      💡 Run import_current_positions.py to track this position")
                         
-                        # CRITICAL FIX: For positions without entry price, estimate if they're losing
-                        # Use conservative exit strategy to prevent holding losing positions
-                        # Exit if position value is declining or time-based limits are reached
+                        # CRITICAL FIX: For positions without entry price, use technical indicators
+                        # to determine if position is weakening (RSI < 52, price < EMA9)
+                        # This conservative exit strategy prevents holding potentially losing positions
                         
                         # Check if position was entered recently (less than 1 hour ago)
                         # If not, it's likely an old position that should be exited
@@ -1174,7 +1174,7 @@ class TradingStrategy:
                         ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
                         ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
                         
-                        # Exit if RSI below 52 (slightly below neutral) - assume position is losing
+                        # Exit if RSI below 52 (slightly below neutral) - indicates weakening momentum
                         if rsi < 52:
                             logger.warning(f"   🚨 ORPHANED POSITION EXIT: {symbol} (RSI={rsi:.1f} < 52, no entry price)")
                             logger.warning(f"      Exiting aggressively to prevent holding potential loser")
