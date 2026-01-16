@@ -12,7 +12,7 @@
     "name": "Tania Gilbert",
     "account_type": "retail",
     "broker_type": "kraken",
-    "enabled": false,
+    "enabled": true,
     "description": "Retail user - Kraken crypto account"
   }
 ]
