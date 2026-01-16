@@ -94,12 +94,12 @@ if not user_prefixes:
     print("   (No environment variables matching KRAKEN_USER_*_API_KEY)")
 else:
     for username in sorted(user_prefixes):
-        # Convert username to user_id format (e.g., "TANIA" -> "tania_gilbert")
-        # This is for display purposes only - we use the env var name directly
-        user_id = username.lower().replace("_", " ").title().replace(" ", "_")
+        # Use the username from environment variable for display
+        # Note: This may not exactly match the user_id in config files
+        user_display = username.lower().replace("_", " ").title()
         
-        print(f"\nUser: {user_id}")
-        print(f"Environment variable prefix: KRAKEN_USER_{username}_")
+        print(f"\nUser environment variable: KRAKEN_USER_{username}_*")
+        print(f"Display name: {user_display}")
         
         user_key_raw = os.getenv(f"KRAKEN_USER_{username}_API_KEY", "")
         user_secret_raw = os.getenv(f"KRAKEN_USER_{username}_API_SECRET", "")
@@ -110,7 +110,7 @@ else:
         key_ok = check_credential(f"  KRAKEN_USER_{username}_API_KEY", user_key_raw, user_key)
         secret_ok = check_credential(f"  KRAKEN_USER_{username}_API_SECRET", user_secret_raw, user_secret)
         
-        user_results[user_id] = (key_ok and secret_ok)
+        user_results[user_display] = (key_ok and secret_ok)
 
 print()
 print("User credential summary:")
@@ -184,7 +184,6 @@ else:
             from bot.broker_manager import KrakenBroker, AccountType
         except ImportError:
             # Fallback: add bot directory to path only if direct import fails
-            import sys
             bot_path = os.path.join(os.path.dirname(__file__), 'bot')
             if bot_path not in sys.path:
                 sys.path.insert(0, bot_path)
