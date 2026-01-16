@@ -4,7 +4,7 @@
     "name": "Daivon Frazier",
     "account_type": "retail",
     "broker_type": "kraken",
-    "enabled": true,
+    "enabled": false,
     "description": "Retail user - Kraken crypto account"
   },
   {
@@ -12,7 +12,7 @@
     "name": "Tania Gilbert",
     "account_type": "retail",
     "broker_type": "kraken",
-    "enabled": true,
+    "enabled": false,
     "description": "Retail user - Kraken crypto account"
   }
 ]
