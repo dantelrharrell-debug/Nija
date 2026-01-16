@@ -29,11 +29,19 @@ RUN python3 -m pip install --no-cache-dir \
     numpy>=1.26.0 \
     coinbase-advanced-py==1.8.2
 
+# Install Kraken SDK and its dependencies
+RUN python3 -m pip install --no-cache-dir \
+    krakenex==2.2.2 \
+    pykrakenapi==0.3.2
+
 # Install remaining requirements
 RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
 # Preflight: Verify coinbase installation and imports
 RUN python3 -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client import successful')"
+
+# Preflight: Verify kraken installation and imports
+RUN python3 -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) import successful')"
 
 # Optional: show installed packages for debug
 RUN python3 -m pip list
