@@ -447,7 +447,27 @@ def main():
                         if error_msg:
                             logger.warning(f"      → Error: {error_msg}")
                             # Provide specific guidance based on error type
-                            if "permission" in error_msg.lower():
+                            if "import" in error_msg.lower() or "sdk" in error_msg.lower():
+                                logger.error("")
+                                logger.error("      ❌ KRAKEN SDK NOT INSTALLED")
+                                logger.error("      The Kraken libraries (krakenex/pykrakenapi) are missing!")
+                                logger.error("")
+                                logger.error("      🔧 IMMEDIATE FIX REQUIRED:")
+                                logger.error("      1. Verify your deployment platform is using the Dockerfile")
+                                logger.error("         Railway: Should auto-detect Dockerfile")
+                                logger.error("         Render: Check 'Docker' is selected as environment")
+                                logger.error("")
+                                logger.error("      2. If using Railway/Render without Docker:")
+                                logger.error("         Add these lines to your start command:")
+                                logger.error("         pip install krakenex==2.2.2 pykrakenapi==0.3.2")
+                                logger.error("")
+                                logger.error("      3. Trigger a fresh deployment (not just restart):")
+                                logger.error("         Railway: Settings → 'Redeploy'")
+                                logger.error("         Render: Manual Deploy → 'Clear build cache & deploy'")
+                                logger.error("")
+                                logger.error("      📖 See SOLUTION_KRAKEN_LIBRARY_NOT_INSTALLED.md for details")
+                                logger.error("")
+                            elif "permission" in error_msg.lower():
                                 logger.warning("      → Fix: Enable required permissions at https://www.kraken.com/u/security/api")
                                 logger.warning("      → Required: Query Funds, Query/Create/Cancel Orders")
                             elif "nonce" in error_msg.lower():
@@ -456,8 +476,6 @@ def main():
                                 logger.warning("      → Fix: Wait 5-10 minutes before restarting")
                             elif "whitespace" in error_msg.lower():
                                 logger.warning("      → Fix: Remove spaces/newlines from credentials in Railway/Render")
-                            elif "import" in error_msg.lower() or "sdk" in error_msg.lower():
-                                logger.warning("      → Fix: Ensure krakenex and pykrakenapi are installed")
                             else:
                                 logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
                         else:
