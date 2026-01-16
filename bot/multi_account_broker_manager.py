@@ -191,6 +191,18 @@ class MultiAccountBrokerManager:
         user_brokers = self.user_brokers.get(user_id, {})
         return user_brokers.get(broker_type)
     
+    def is_master_connected(self, broker_type: BrokerType) -> bool:
+        """
+        Check if a master account is connected for a given broker type.
+        
+        Args:
+            broker_type: Type of broker to check
+            
+        Returns:
+            bool: True if master is connected, False otherwise
+        """
+        return broker_type in self.master_brokers and self.master_brokers[broker_type].connected
+    
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
         """
         Check if a user has credentials configured for a broker type.
@@ -383,6 +395,8 @@ class MultiAccountBrokerManager:
         logger.info("=" * 70)
         logger.info("👤 CONNECTING USERS FROM CONFIG FILES")
         logger.info("=" * 70)
+        logger.info("ℹ️  Users are SECONDARY accounts - Master accounts have priority")
+        logger.info("=" * 70)
         
         connected_users = {}
         
@@ -406,6 +420,22 @@ class MultiAccountBrokerManager:
                 logger.warning(f"⚠️  Error mapping broker type for {user.name}: {e}")
                 continue
             
+            # Check if Master account is connected for this broker type
+            # IMPORTANT: Master accounts should connect first and be primary
+            # User accounts are SECONDARY and should not connect if Master isn't connected
+            master_connected = self.is_master_connected(broker_type)
+            
+            if not master_connected:
+                logger.warning("=" * 70)
+                logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Master account!")
+                logger.warning(f"   User: {user.name} ({user.user_id})")
+                logger.warning(f"   Master {broker_type.value.upper()} account is NOT connected")
+                logger.warning("   🔧 RECOMMENDATION: Configure Master account credentials first")
+                logger.warning(f"      Master should be PRIMARY, users should be SECONDARY")
+                logger.warning("=" * 70)
+                # Allow connection to proceed - user may want to trade with just user account
+                # But log the warning so they know this is not the ideal setup
+            
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
             if broker_type in last_connection_time:
@@ -416,6 +446,10 @@ class MultiAccountBrokerManager:
                     time.sleep(delay)
             
             logger.info(f"📊 Connecting {user.name} ({user.user_id}) to {broker_type.value.title()}...")
+            if master_connected:
+                logger.info(f"   ✅ Master {broker_type.value.upper()} is connected (correct priority)")
+            else:
+                logger.info(f"   ⚠️  Master {broker_type.value.upper()} is NOT connected (user will be primary)")
             # Flush to ensure this message appears before connection attempt logs
             # CRITICAL FIX: Must flush the root 'nija' logger's handlers, not the child logger's
             # Child loggers (like 'nija.multi_account', 'nija.broker') propagate to parent but
@@ -488,9 +522,26 @@ class MultiAccountBrokerManager:
         
         # Log summary
         logger.info("=" * 70)
+        logger.info("📊 ACCOUNT HIERARCHY REPORT")
+        logger.info("=" * 70)
+        logger.info("🎯 MASTER accounts are PRIMARY - User accounts are SECONDARY")
+        logger.info("=" * 70)
+        
+        # Show Master broker status
+        logger.info("🔷 MASTER ACCOUNTS (Primary Trading Accounts):")
+        if self.master_brokers:
+            for broker_type, broker in self.master_brokers.items():
+                status = "✅ CONNECTED" if broker.connected else "❌ NOT CONNECTED"
+                logger.info(f"   • {broker_type.value.upper()}: {status}")
+        else:
+            logger.info("   ⚠️  No master brokers connected")
+        
+        logger.info("")
+        logger.info("👤 USER ACCOUNTS (Secondary Trading Accounts):")
+        
         if connected_users:
             total_connected = sum(len(users) for users in connected_users.values())
-            logger.info(f"✅ Connected {total_connected} user(s) across {len(connected_users)} brokerage(s)")
+            logger.info(f"   ✅ {total_connected} user(s) connected across {len(connected_users)} brokerage(s)")
             for brokerage, user_ids in connected_users.items():
                 logger.info(f"   • {brokerage.upper()}: {len(user_ids)} user(s)")
         else:
@@ -500,14 +551,39 @@ class MultiAccountBrokerManager:
             
             if total_without_creds > 0 and total_failed == 0:
                 # Only users without credentials - this is informational
-                logger.info(f"⚪ No users connected ({total_without_creds} user(s) have no credentials configured)")
+                logger.info(f"   ⚪ No users connected ({total_without_creds} user(s) have no credentials configured)")
                 logger.info("   User accounts are optional. To enable, configure API credentials in environment variables.")
             elif total_failed > 0:
                 # Some actual connection failures
-                logger.warning(f"⚠️  No users connected ({total_failed} connection failure(s), {total_without_creds} without credentials)")
+                logger.warning(f"   ⚠️  No users connected ({total_failed} connection failure(s), {total_without_creds} without credentials)")
             else:
                 # No users configured at all
-                logger.info("⚪ No user accounts configured")
+                logger.info("   ⚪ No user accounts configured")
+        
+        # Log warnings for problematic setups
+        logger.info("")
+        logger.info("⚠️  ACCOUNT PRIORITY WARNINGS:")
+        users_without_master = []
+        for brokerage, user_ids in connected_users.items():
+            try:
+                # Safely convert brokerage string to BrokerType enum
+                # connected_users keys are lowercase broker names from broker_type.value
+                broker_type = BrokerType[brokerage.upper()]
+                master_connected = self.is_master_connected(broker_type)
+                if not master_connected and user_ids:
+                    users_without_master.append(brokerage.upper())
+            except KeyError:
+                # Invalid broker type - this shouldn't happen, but handle gracefully
+                logger.warning(f"   ⚠️  Unknown broker type in connected users: {brokerage}")
+                continue
+        
+        if users_without_master:
+            logger.warning(f"   ⚠️  User accounts trading WITHOUT Master account on: {', '.join(users_without_master)}")
+            logger.warning(f"   🔧 RECOMMENDATION: Configure Master credentials for {', '.join(users_without_master)}")
+            logger.warning(f"      Master should always be PRIMARY, users should be SECONDARY")
+        else:
+            logger.info("   ✅ All user accounts have corresponding Master accounts (correct hierarchy)")
+        
         logger.info("=" * 70)
         
         return connected_users
