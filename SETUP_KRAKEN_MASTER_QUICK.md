@@ -75,7 +75,7 @@ python3 diagnose_master_kraken_issue.py
 python3 check_trading_status.py
 
 # Verify no losing Coinbase positions
-python3 check_coinbase_losing_positions.py
+python3 audit_coinbase_positions.py
 ```
 
 ---
