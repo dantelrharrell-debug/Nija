@@ -191,6 +191,18 @@ class MultiAccountBrokerManager:
         user_brokers = self.user_brokers.get(user_id, {})
         return user_brokers.get(broker_type)
     
+    def is_master_connected(self, broker_type: BrokerType) -> bool:
+        """
+        Check if a master account is connected for a given broker type.
+        
+        Args:
+            broker_type: Type of broker to check
+            
+        Returns:
+            bool: True if master is connected, False otherwise
+        """
+        return broker_type in self.master_brokers and self.master_brokers[broker_type].connected
+    
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
         """
         Check if a user has credentials configured for a broker type.
@@ -411,7 +423,7 @@ class MultiAccountBrokerManager:
             # Check if Master account is connected for this broker type
             # IMPORTANT: Master accounts should connect first and be primary
             # User accounts are SECONDARY and should not connect if Master isn't connected
-            master_connected = broker_type in self.master_brokers and self.master_brokers[broker_type].connected
+            master_connected = self.is_master_connected(broker_type)
             
             if not master_connected:
                 logger.warning("=" * 70)
@@ -553,10 +565,17 @@ class MultiAccountBrokerManager:
         logger.info("⚠️  ACCOUNT PRIORITY WARNINGS:")
         users_without_master = []
         for brokerage, user_ids in connected_users.items():
-            broker_type = BrokerType[brokerage.upper()]
-            master_connected = broker_type in self.master_brokers and self.master_brokers[broker_type].connected
-            if not master_connected and user_ids:
-                users_without_master.append(brokerage.upper())
+            try:
+                # Safely convert brokerage string to BrokerType enum
+                # connected_users keys are lowercase broker names from broker_type.value
+                broker_type = BrokerType[brokerage.upper()]
+                master_connected = self.is_master_connected(broker_type)
+                if not master_connected and user_ids:
+                    users_without_master.append(brokerage.upper())
+            except KeyError:
+                # Invalid broker type - this shouldn't happen, but handle gracefully
+                logger.warning(f"   ⚠️  Unknown broker type in connected users: {brokerage}")
+                continue
         
         if users_without_master:
             logger.warning(f"   ⚠️  User accounts trading WITHOUT Master account on: {', '.join(users_without_master)}")
