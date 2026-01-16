@@ -4272,7 +4272,7 @@ class KrakenBroker(BaseBroker):
                 logging.warning("⚠️  Kraken not connected, cannot fetch products")
                 return []
             
-            # Get all tradeable asset pairs (returns pandas DataFrame)
+            # Get all tradable asset pairs (returns pandas DataFrame)
             asset_pairs = self.kraken_api.get_tradable_asset_pairs()
             
             # Extract pairs that trade against USD or USDT
@@ -4290,7 +4290,7 @@ class KrakenBroker(BaseBroker):
                     symbol = wsname.replace('/', '-')
                     symbols.append(symbol)
             
-            logging.info(f"📊 Kraken: Found {len(symbols)} tradeable USD/USDT pairs")
+            logging.info(f"📊 Kraken: Found {len(symbols)} tradable USD/USDT pairs")
             return symbols
             
         except Exception as e:
