@@ -1099,6 +1099,29 @@ class TradingStrategy:
                     if not entry_price_available:
                         logger.warning(f"   ⚠️ No entry price tracked for {symbol} - using fallback exit logic")
                         logger.warning(f"      💡 Run import_current_positions.py to track this position")
+                        
+                        # CRITICAL FIX: For positions without entry price, use technical indicators
+                        # to determine if position is weakening (RSI < 52, price < EMA9)
+                        # This conservative exit strategy prevents holding potentially losing positions
+                        
+                        # Check if position was entered recently (less than 1 hour ago)
+                        # If not, it's likely an old position that should be exited
+                        if entry_time_available:
+                            # We have time but no price - unusual, but use time-based exit
+                            if position_age_hours >= MAX_POSITION_HOLD_HOURS:
+                                logger.warning(f"   ⏰ FALLBACK TIME EXIT: {symbol} held {position_age_hours:.1f}h (max: {MAX_POSITION_HOLD_HOURS}h)")
+                                positions_to_exit.append({
+                                    'symbol': symbol,
+                                    'quantity': quantity,
+                                    'reason': f'Time-based exit without entry price (held {position_age_hours:.1f}h)'
+                                })
+                                continue
+                        else:
+                            # No entry time AND no entry price - this is an orphaned position
+                            # These are likely old positions from before tracking was implemented
+                            # Be conservative: exit if position shows any signs of weakness
+                            logger.warning(f"   ⚠️ ORPHANED POSITION: {symbol} has no entry price or time tracking")
+                            logger.warning(f"      This position will be exited aggressively to prevent losses")
                     
                     # Get market data for analysis (use cached method to prevent rate limiting)
                     candles = self._get_cached_candles(symbol, '5m', 100, broker=active_broker)
@@ -1139,6 +1162,43 @@ class TradingStrategy:
                     # This helps lock in gains on strong moves and cut losses on weak positions
                     
                     rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI
+                    
+                    # CRITICAL FIX (Jan 16, 2026): ORPHANED POSITION PROTECTION
+                    # Positions without entry prices are more likely to be losing trades
+                    # Apply ULTRA-AGGRESSIVE exits to prevent holding losers
+                    if not entry_price_available:
+                        # For orphaned positions, exit on ANY weakness signal
+                        # This includes: RSI < 52 (below neutral), price below any EMA, or any downtrend
+                        
+                        # Get EMAs for trend analysis
+                        ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
+                        ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
+                        
+                        # Exit if RSI below 52 (slightly below neutral) - indicates weakening momentum
+                        if rsi < 52:
+                            logger.warning(f"   🚨 ORPHANED POSITION EXIT: {symbol} (RSI={rsi:.1f} < 52, no entry price)")
+                            logger.warning(f"      Exiting aggressively to prevent holding potential loser")
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': f'Orphaned position with weak RSI ({rsi:.1f}) - preventing loss'
+                            })
+                            continue
+                        
+                        # Exit if price is below EMA9 (short-term weakness)
+                        if current_price < ema9:
+                            logger.warning(f"   🚨 ORPHANED POSITION EXIT: {symbol} (price ${current_price:.2f} < EMA9 ${ema9:.2f})")
+                            logger.warning(f"      Exiting aggressively to prevent holding potential loser")
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': f'Orphaned position below EMA9 - preventing loss'
+                            })
+                            continue
+                        
+                        # If orphaned position made it here, it's showing strength - still monitor closely
+                        logger.info(f"   ✅ ORPHANED POSITION SHOWING STRENGTH: {symbol} (RSI={rsi:.1f}, price above EMA9)")
+                        logger.info(f"      Will continue monitoring with strict exit criteria")
                     
                     # ULTRA AGGRESSIVE: Exit on multiple signals to lock gains faster
                     # Jan 13, 2026: AGGRESSIVE thresholds to sell positions before reversals eat profits
