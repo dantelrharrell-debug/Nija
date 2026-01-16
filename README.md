@@ -15,7 +15,7 @@
 
 ### 🚀 Quick Start - Enable Kraken in 5 Minutes
 
-**📖 See: [QUICK_SETUP_MASTER_KRAKEN.md](QUICK_SETUP_MASTER_KRAKEN.md)** for the fastest setup!
+**📖 See: [SETUP_KRAKEN_MASTER_QUICK.md](SETUP_KRAKEN_MASTER_QUICK.md)** for the fastest setup!
 
 **Step 1**: Get API credentials from [Kraken](https://www.kraken.com/u/security/api)
 - Enable: Query Funds, Query/Create/Cancel Orders, Query Trades
@@ -31,14 +31,14 @@ KRAKEN_MASTER_API_SECRET=your-private-key-here
 
 **Verify:**
 ```bash
-python3 verify_kraken_status.py
+python3 check_trading_status.py
 ```
 
 ### 📖 Complete Guides
 
 - **[CONFIGURE_KRAKEN_MASTER.md](CONFIGURE_KRAKEN_MASTER.md)** - Comprehensive setup guide with troubleshooting
 - **[ENABLE_KRAKEN_README.md](ENABLE_KRAKEN_README.md)** - Multi-broker architecture and user accounts
-- **[QUICK_SETUP_MASTER_KRAKEN.md](QUICK_SETUP_MASTER_KRAKEN.md)** - 5-minute quick reference
+- **[SETUP_KRAKEN_MASTER_QUICK.md](SETUP_KRAKEN_MASTER_QUICK.md)** - 5-minute quick reference
 
 **Guides include:**
 - ✅ Step-by-step setup for Railway, Render, and local deployment
@@ -49,12 +49,11 @@ python3 verify_kraken_status.py
 
 ### 🔍 Verification & Diagnostics
 
-- **[verify_kraken_status.py](verify_kraken_status.py)** - Check Kraken connection status
-- **[verify_no_losing_coinbase_trades.py](verify_no_losing_coinbase_trades.py)** - Verify no stuck losing positions
+- **[check_trading_status.py](check_trading_status.py)** - Check overall trading status
+- **[check_coinbase_losing_positions.py](check_coinbase_losing_positions.py)** - Verify no stuck losing positions
+- **[setup_kraken_master.py](setup_kraken_master.py)** - Interactive setup wizard for Kraken master
 - **[diagnose_master_kraken_issue.py](diagnose_master_kraken_issue.py)** - Diagnose master account issues
-- **[diagnose_kraken_connection.py](diagnose_kraken_connection.py)** - General connection diagnostics
 - **[test_kraken_connection_live.py](test_kraken_connection_live.py)** - Live API connection test
-- **[setup_kraken_master.py](setup_kraken_master.py)** - Interactive setup wizard
 
 **Library**: NIJA uses official Kraken SDKs: [`krakenex`](https://github.com/veox/python3-krakenex) + [`pykrakenapi`](https://github.com/dominiktraxl/pykrakenapi)
 
