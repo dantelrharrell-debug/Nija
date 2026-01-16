@@ -111,6 +111,18 @@ class IndependentBrokerTrader:
             logger.info("   ✅ Multi-account support enabled (user trading)")
         logger.info("=" * 70)
     
+    def _get_master_broker_source(self):
+        """
+        Get the authoritative source for master brokers.
+        
+        Returns the multi_account_manager.master_brokers if available,
+        otherwise falls back to the legacy broker_manager.brokers.
+        
+        Returns:
+            dict: Dictionary of BrokerType -> BaseBroker instances
+        """
+        return self.multi_account_manager.master_brokers if self.multi_account_manager else self.broker_manager.brokers
+    
     def _retry_coinbase_balance_if_zero(self, broker, broker_name: str) -> float:
         """
         Retry balance fetch for Coinbase if initial result is $0.
@@ -180,7 +192,12 @@ class IndependentBrokerTrader:
         
         logger.info("🔍 Detecting funded brokers...")
         
-        for broker_type, broker in self.broker_manager.brokers.items():
+        # CRITICAL FIX (Jan 16, 2026): Use multi_account_manager.master_brokers instead of broker_manager.brokers
+        # The old broker_manager is kept for backward compatibility, but master brokers are now
+        # managed through multi_account_manager for consistency with user broker management
+        broker_source = self._get_master_broker_source()
+        
+        for broker_type, broker in broker_source.items():
             if not broker.connected:
                 logger.info(f"   ⚪ {broker_type.value}: Not connected")
                 continue
@@ -580,8 +597,12 @@ class IndependentBrokerTrader:
             logger.info("🔷 STARTING MASTER BROKER THREADS")
             logger.info("=" * 70)
             
+            # CRITICAL FIX (Jan 16, 2026): Use multi_account_manager.master_brokers instead of broker_manager.brokers
+            # This ensures we iterate over the same broker instances that were checked in detect_funded_brokers()
+            broker_source = self._get_master_broker_source()
+            
             broker_start_count = 0
-            for broker_type, broker in self.broker_manager.brokers.items():
+            for broker_type, broker in broker_source.items():
                 broker_name = broker_type.value
                 
                 # Only start threads for funded brokers
@@ -734,9 +755,12 @@ class IndependentBrokerTrader:
         Returns:
             dict: Summary of broker health and trading status
         """
+        # CRITICAL FIX (Jan 16, 2026): Use multi_account_manager.master_brokers for accurate counts
+        broker_source = self._get_master_broker_source()
+        
         summary = {
-            'total_brokers': len(self.broker_manager.brokers),
-            'connected_brokers': sum(1 for b in self.broker_manager.brokers.values() if b.connected),
+            'total_brokers': len(broker_source),
+            'connected_brokers': sum(1 for b in broker_source.values() if b.connected),
             'funded_brokers': len(self.funded_brokers),
             'trading_threads': len(self.broker_threads),
             'broker_details': {}
