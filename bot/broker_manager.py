@@ -156,6 +156,7 @@ class BaseBroker(ABC):
         self.broker_type = broker_type
         self.connected = False
         self.credentials_configured = False  # Track if credentials were provided
+        self.last_connection_error = None  # Track last connection error for troubleshooting
     
     @abstractmethod
     def connect(self) -> bool:
@@ -3542,6 +3543,7 @@ class KrakenBroker(BaseBroker):
                 # Mark that credentials were NOT properly configured (empty/whitespace = not configured)
                 # This ensures the status display shows "NOT CONFIGURED" instead of "Connection failed"
                 self.credentials_configured = False
+                self.last_connection_error = "Credentials contain only whitespace"
                 logger.warning(f"⚠️  Kraken credentials DETECTED but INVALID for {cred_label}")
                 
                 # Determine status messages for each credential
@@ -3742,6 +3744,7 @@ class KrakenBroker(BaseBroker):
                             ])
                             
                             if is_permission_error:
+                                self.last_connection_error = f"Permission denied: {error_msgs}"
                                 logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
                                 
                                 # Track this account as failed due to permission error for this session
@@ -3840,6 +3843,7 @@ class KrakenBroker(BaseBroker):
                                     logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
                                 continue
                             else:
+                                self.last_connection_error = error_msgs
                                 logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
                                 return False
                     
@@ -3873,6 +3877,7 @@ class KrakenBroker(BaseBroker):
                             logger.warning(f"⚠️  Kraken connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                             continue
                         else:
+                            self.last_connection_error = error_msg
                             logger.error(f"❌ Kraken connection test failed: {error_msg}")
                             return False
                 
@@ -3887,6 +3892,7 @@ class KrakenBroker(BaseBroker):
                     ])
                     
                     if is_permission_error:
+                        self.last_connection_error = f"Permission denied: {error_msg}"
                         logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msg}")
                         
                         # Track this account as failed due to permission error for this session
@@ -3984,6 +3990,7 @@ class KrakenBroker(BaseBroker):
                         continue
                     else:
                         # Handle errors gracefully for non-retryable or final attempt
+                        self.last_connection_error = error_msg
                         error_str = error_msg.lower()
                         if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
                             logger.warning("⚠️  Kraken authentication failed - invalid or expired API credentials")
@@ -3995,17 +4002,21 @@ class KrakenBroker(BaseBroker):
             
             # Should never reach here, but just in case
             # Log summary of all failed attempts to help with debugging
+            self.last_connection_error = "Failed after max retry attempts"
             logger.error(f"❌ Kraken ({cred_label}) failed after {max_attempts} attempts")
             if last_error_was_nonce:
+                self.last_connection_error = "Invalid nonce (retry exhausted)"
                 logger.error("   Last error was: Invalid nonce (API nonce synchronization issue)")
                 logger.error("   This usually resolves after waiting 1-2 minutes")
             elif last_error_was_lockout:
+                self.last_connection_error = "Temporary lockout (retry exhausted)"
                 logger.error("   Last error was: Temporary lockout (too many failed requests)")
                 logger.error("   Wait 5-10 minutes before restarting")
             return False
                 
         except ImportError as e:
             # SDK not installed or import failed
+            self.last_connection_error = f"SDK import error: {str(e)}"
             logger.error(f"❌ Kraken connection failed ({self.account_identifier}): SDK import error")
             logger.error(f"   ImportError: {e}")
             logger.error("   The Kraken SDK (krakenex or pykrakenapi) failed to import")

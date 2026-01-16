@@ -14,6 +14,14 @@ import signal
 import threading
 import subprocess
 
+# Import broker types for error reporting
+try:
+    from bot.broker_manager import BrokerType
+except ImportError:
+    # Fallback if running from different directory
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+    from broker_manager import BrokerType
+
 # EMERGENCY STOP CHECK
 if os.path.exists('EMERGENCY_STOP'):
     print("\n" + "="*80)
@@ -426,8 +434,33 @@ def main():
                 for exchange in failed_master_brokers:
                     logger.warning(f"   ❌ {exchange}")
                     if exchange == 'KRAKEN':
-                        logger.warning("      → Check logs above for Kraken connection errors")
-                        logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
+                        # Try to get the specific error from the failed broker instance
+                        error_msg = None
+                        if hasattr(strategy, 'failed_brokers') and BrokerType.KRAKEN in strategy.failed_brokers:
+                            failed_broker = strategy.failed_brokers[BrokerType.KRAKEN]
+                            if hasattr(failed_broker, 'last_connection_error') and failed_broker.last_connection_error:
+                                error_msg = failed_broker.last_connection_error
+                        
+                        if error_msg:
+                            logger.warning(f"      → Error: {error_msg}")
+                            # Provide specific guidance based on error type
+                            if "permission" in error_msg.lower():
+                                logger.warning("      → Fix: Enable required permissions at https://www.kraken.com/u/security/api")
+                                logger.warning("      → Required: Query Funds, Query/Create/Cancel Orders")
+                            elif "nonce" in error_msg.lower():
+                                logger.warning("      → Fix: Wait 1-2 minutes and restart the bot")
+                            elif "lockout" in error_msg.lower():
+                                logger.warning("      → Fix: Wait 5-10 minutes before restarting")
+                            elif "whitespace" in error_msg.lower():
+                                logger.warning("      → Fix: Remove spaces/newlines from credentials in Railway/Render")
+                            elif "import" in error_msg.lower() or "sdk" in error_msg.lower():
+                                logger.warning("      → Fix: Ensure krakenex and pykrakenapi are installed")
+                            else:
+                                logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
+                        else:
+                            logger.warning("      → Check logs above for Kraken connection errors")
+                            logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
+                        
                         logger.warning("      → Run: python3 test_kraken_connection_live.py to diagnose")
             
             logger.info("")
