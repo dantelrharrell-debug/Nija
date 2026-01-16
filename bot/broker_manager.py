@@ -36,6 +36,11 @@ except ImportError:
 # Configure logger for broker operations
 logger = logging.getLogger('nija.broker')
 
+# Root nija logger for flushing all handlers
+# Child loggers (like 'nija.broker', 'nija.multi_account') propagate to this logger
+# but don't have their own handlers, so we need to flush the root logger's handlers
+_root_logger = logging.getLogger('nija')
+
 # Balance threshold constants
 # Note: Large gap between PROTECTION and TRADING thresholds is intentional:
 #   - PROTECTION ($0.50): Absolute minimum to allow bot to start (hard requirement)
@@ -3781,7 +3786,8 @@ class KrakenBroker(BaseBroker):
                                     logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
                                     logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                                     # Flush handlers to ensure all permission error messages appear together
-                                    for handler in logger.handlers:
+                                    # CRITICAL: Flush root 'nija' logger handlers, not child logger (which has no handlers)
+                                    for handler in _root_logger.handlers:
                                         handler.flush()
                                 else:
                                     logger.error("   ⚠️  API KEY PERMISSION ERROR")
@@ -3927,7 +3933,8 @@ class KrakenBroker(BaseBroker):
                             logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
                             logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                             # Flush handlers to ensure all permission error messages appear together
-                            for handler in logger.handlers:
+                            # CRITICAL: Flush root 'nija' logger handlers, not child logger (which has no handlers)
+                            for handler in _root_logger.handlers:
                                 handler.flush()
                         else:
                             logger.error("   ⚠️  API KEY PERMISSION ERROR")
