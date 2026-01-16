@@ -17,3 +17,7 @@ services:
         sync: false
       - key: COINBASE_API_SECRET
         sync: false
+      - key: KRAKEN_MASTER_API_KEY
+        sync: false
+      - key: KRAKEN_MASTER_API_SECRET
+        sync: false
