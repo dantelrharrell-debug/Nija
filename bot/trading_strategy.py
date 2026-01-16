@@ -188,6 +188,17 @@ class TradingStrategy:
         self.advanced_manager = None
         self._init_advanced_features()
         
+        # Initialize credential health monitoring to detect credential loss
+        # This helps diagnose recurring disconnection issues
+        try:
+            from credential_health_monitor import start_credential_monitoring
+            logger.info("🔍 Starting credential health monitoring...")
+            self.credential_monitor = start_credential_monitoring(check_interval=300)  # Check every 5 minutes
+            logger.info("   ✅ Credential monitoring active (checks every 5 minutes)")
+        except Exception as e:
+            logger.warning(f"⚠️  Could not start credential monitoring: {e}")
+            self.credential_monitor = None
+        
         try:
             # Lazy imports to avoid circular deps and allow fallback
             from broker_manager import (
