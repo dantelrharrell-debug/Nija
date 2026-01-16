@@ -4272,14 +4272,17 @@ class KrakenBroker(BaseBroker):
                 logging.warning("⚠️  Kraken not connected, cannot fetch products")
                 return []
             
-            # Get all tradeable asset pairs
+            # Get all tradeable asset pairs (returns pandas DataFrame)
             asset_pairs = self.kraken_api.get_tradable_asset_pairs()
             
             # Extract pairs that trade against USD or USDT
             symbols = []
-            for pair_name, pair_info in asset_pairs.items():
+            # Iterate over DataFrame rows using iterrows()
+            # pykrakenapi returns DataFrame with pair info including 'wsname' column
+            for pair_name, pair_info in asset_pairs.iterrows():
                 # Kraken uses format like 'XXBTZUSD' for BTC/USD
                 # Convert to our standard format BTC-USD
+                # Access DataFrame column value - pair_info is a pandas Series
                 wsname = pair_info.get('wsname', '')
                 if wsname and ('USD' in wsname or 'USDT' in wsname):
                     # Convert from Kraken format to standard format
