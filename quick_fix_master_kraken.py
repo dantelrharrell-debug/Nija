@@ -36,6 +36,25 @@ def check_env_var(name):
     else:
         return True, f"SET ({len(stripped_value)} chars)"
 
+def check_for_common_typos():
+    """Check for common typos in environment variable names"""
+    common_typos = [
+        "KRAKEN_MASTR_API_KEY",  # Missing E
+        "KRAKEN_MASTER_APIKEY",   # Missing underscore
+        "KRAKEN_MASTER_KEY",      # Too short
+        "KRAKON_MASTER_API_KEY",  # Typo in KRAKEN
+        "KRAKEN_MSTR_API_KEY",    # Abbreviated
+        "KRAKEN_MASTER_API_SECRET_KEY",  # Too long
+        "MASTER_KRAKEN_API_KEY",  # Reversed order
+    ]
+    
+    found_typos = []
+    for typo in common_typos:
+        if os.getenv(typo):
+            found_typos.append(typo)
+    
+    return found_typos
+
 def main():
     print_header("MASTER KRAKEN TRADING - QUICK FIX")
     
@@ -71,6 +90,18 @@ def main():
     else:
         print("\n❌ Master Kraken credentials are NOT properly configured")
         cred_type = None
+        
+        # Check for common typos
+        typos = check_for_common_typos()
+        if typos:
+            print("\n⚠️  COMMON TYPO DETECTED!")
+            print("   Found these misspelled environment variables:")
+            for typo in typos:
+                print(f"      • {typo}")
+            print("\n   These should be:")
+            print("      • KRAKEN_MASTER_API_KEY")
+            print("      • KRAKEN_MASTER_API_SECRET")
+            print("\n   Fix: Rename or delete the misspelled variables and create correctly named ones.")
     
     # Check User Credentials
     print_section("📋 STEP 2: Check User Kraken Credentials")
