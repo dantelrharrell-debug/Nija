@@ -191,7 +191,7 @@ class TradingStrategy:
         # Initialize credential health monitoring to detect credential loss
         # This helps diagnose recurring disconnection issues
         try:
-            from credential_health_monitor import start_credential_monitoring
+            from .credential_health_monitor import start_credential_monitoring
             logger.info("🔍 Starting credential health monitoring...")
             self.credential_monitor = start_credential_monitoring(check_interval=300)  # Check every 5 minutes
             logger.info("   ✅ Credential monitoring active (checks every 5 minutes)")

@@ -216,7 +216,13 @@ def check_credential_persistence() -> bool:
 
 
 def generate_credential_setup_commands(missing_creds: List[str]) -> str:
-    """Generate commands to set missing credentials."""
+    """
+    Generate commands to set missing credentials.
+    
+    Returns:
+        str: Formatted command instructions for setting missing credentials, 
+             or empty string if none missing.
+    """
     if not missing_creds:
         return ""
     

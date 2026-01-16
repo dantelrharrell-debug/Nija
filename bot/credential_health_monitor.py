@@ -123,6 +123,9 @@ class CredentialHealthMonitor:
         except Exception as e:
             logger.debug(f"Could not load user credentials for monitoring: {e}")
         
+        # Log how many credential categories were loaded
+        logger.debug(f"Monitoring {len(creds)} credential categories (master + users)")
+        
         return creds
     
     def _hash_value(self, value: str) -> str:
