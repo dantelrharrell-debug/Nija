@@ -189,10 +189,10 @@ If stuck:
 ## ✅ Success Criteria
 
 You're done when:
-- [x] All 6 environment variables set
-- [x] `check_kraken_status.py` shows 3/3 configured
-- [x] Logs show all 3 accounts connected
-- [x] Trading occurs on both Coinbase and Kraken
-- [x] Kraken trades visible in Kraken account
+- [ ] All 6 environment variables set
+- [ ] `check_kraken_status.py` shows 3/3 configured
+- [ ] Logs show all 3 accounts connected
+- [ ] Trading occurs on both Coinbase and Kraken
+- [ ] Kraken trades visible in Kraken account
 
 **Expected Time**: 10-15 minutes total

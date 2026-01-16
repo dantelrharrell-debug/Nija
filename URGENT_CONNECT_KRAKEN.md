@@ -56,9 +56,9 @@ Add 6 environment variables to your deployment platform.
 ### Cost Comparison
 | Exchange | Fee per $20 trade | Daily (10 trades) | Monthly |
 |----------|-------------------|-------------------|---------|
-| Coinbase | $0.48 (2.4%) | $4.80 | $144 |
-| Kraken | $0.06 (0.3%) | $0.60 | $18 |
-| **Savings** | **$0.42** | **$4.20** | **$126** |
+| Coinbase | $0.28 (1.40%) | $2.80 | $84 |
+| Kraken | $0.06 (0.30%) | $0.60 | $18 |
+| **Savings** | **$0.22** | **$2.20** | **$66** |
 
 **With your $34 balance, Kraken saves you MORE than your daily profit target.**
 
