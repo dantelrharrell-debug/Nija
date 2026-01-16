@@ -27,6 +27,7 @@ import os
 import sys
 import json
 import logging
+import traceback
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
@@ -242,12 +243,18 @@ def test_master_connection() -> bool:
             print("   📊 Account Balance:")
             
             result = balance.get('result', {})
+            # Kraken can return USD as 'ZUSD', 'USD', or 'USDT'
             usd_balance = float(result.get('ZUSD', 0))
+            usd_direct = float(result.get('USD', 0))
             usdt_balance = float(result.get('USDT', 0))
-            total = usd_balance + usdt_balance
+            total = usd_balance + usd_direct + usdt_balance
             
-            print(f"      USD (ZUSD): ${usd_balance:.2f}")
-            print(f"      USDT: ${usdt_balance:.2f}")
+            if usd_balance > 0:
+                print(f"      USD (ZUSD): ${usd_balance:.2f}")
+            if usd_direct > 0:
+                print(f"      USD: ${usd_direct:.2f}")
+            if usdt_balance > 0:
+                print(f"      USDT: ${usdt_balance:.2f}")
             print(f"      Total: ${total:.2f}")
             
             if total < 1.0:
@@ -266,7 +273,6 @@ def test_master_connection() -> bool:
             
     except Exception as e:
         print(f"   ❌ Exception during connection test: {type(e).__name__}: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
@@ -344,12 +350,18 @@ def test_user_connection(user_id: str, user_name: str) -> bool:
             print("   📊 Account Balance:")
             
             result = balance.get('result', {})
+            # Kraken can return USD as 'ZUSD', 'USD', or 'USDT'
             usd_balance = float(result.get('ZUSD', 0))
+            usd_direct = float(result.get('USD', 0))
             usdt_balance = float(result.get('USDT', 0))
-            total = usd_balance + usdt_balance
+            total = usd_balance + usd_direct + usdt_balance
             
-            print(f"      USD (ZUSD): ${usd_balance:.2f}")
-            print(f"      USDT: ${usdt_balance:.2f}")
+            if usd_balance > 0:
+                print(f"      USD (ZUSD): ${usd_balance:.2f}")
+            if usd_direct > 0:
+                print(f"      USD: ${usd_direct:.2f}")
+            if usdt_balance > 0:
+                print(f"      USDT: ${usdt_balance:.2f}")
             print(f"      Total: ${total:.2f}")
             
             if total < 1.0:
@@ -366,7 +378,6 @@ def test_user_connection(user_id: str, user_name: str) -> bool:
             
     except Exception as e:
         print(f"   ❌ Exception during connection test: {type(e).__name__}: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
@@ -514,7 +525,7 @@ def main():
         print("      - KRAKEN_USER_TANIA_API_SECRET")
         print("   3. Restart deployment and re-run this test")
         print()
-        print("   📖 See SETUP_KRAKEN_USERS.md for detailed instructions")
+        print("   📖 See KRAKEN_CONNECTION_CHECKLIST.md for detailed instructions")
         print()
         return 2
 
