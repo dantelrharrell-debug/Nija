@@ -447,14 +447,14 @@ def main():
                         if error_msg:
                             logger.warning(f"      → Error: {error_msg}")
                             # Provide specific guidance based on error type
-                            # Check for SDK import errors (more specific patterns to avoid false positives)
+                            # Check for SDK import errors (Kraken-specific patterns to avoid false positives)
                             is_sdk_error = any(pattern in error_msg.lower() for pattern in [
-                                "sdk import error",
-                                "modulenotfounderror",
-                                "no module named 'krakenex'",
-                                "no module named 'pykrakenapi'",
-                                "cannot import name",
-                                "importerror"
+                                "sdk import error",  # Set by KrakenBroker.connect() ImportError handler
+                                "modulenotfounderror",  # Python exception when module not found
+                                "no module named 'krakenex'",  # Specific krakenex import failure
+                                "no module named 'pykrakenapi'",  # Specific pykrakenapi import failure
+                                "no module named \"krakenex\"",  # Alternative quote style
+                                "no module named \"pykrakenapi\"",  # Alternative quote style
                             ])
                             if is_sdk_error:
                                 logger.error("")
@@ -467,8 +467,8 @@ def main():
                                 logger.error("         Render: Check 'Docker' is selected as environment")
                                 logger.error("")
                                 logger.error("      2. If using Railway/Render without Docker:")
-                                logger.error("         Add these lines to your start command:")
-                                logger.error("         pip install krakenex==2.2.2 pykrakenapi==0.3.2")
+                                logger.error("         Add to your start command:")
+                                logger.error("         pip install krakenex pykrakenapi")
                                 logger.error("")
                                 logger.error("      3. Trigger a fresh deployment (not just restart):")
                                 logger.error("         Railway: Settings → 'Redeploy'")
