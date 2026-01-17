@@ -15,6 +15,9 @@ load_dotenv()
 
 logger = logging.getLogger("nija")
 
+# Time conversion constants
+MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
+
 # Configuration constants
 # CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
 # Coinbase has strict rate limits (~10 req/s burst, lower sustained)
@@ -56,10 +59,14 @@ RSI_OVERSOLD_THRESHOLD = 45  # Exit when RSI below this (cut losses) - RAISED fr
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
 # Time-based exit thresholds (prevent indefinite holding)
-# CRITICAL FIX (Jan 13, 2026): Reduced from 48h to 8h to force exits on losing positions
+# CRITICAL FIX (Jan 17, 2026): ULTRA-AGGRESSIVE exits for losing trades
+# LOSING TRADES: NEVER hold for more than 30 minutes
+# PROFITABLE TRADES: Can run up to 8 hours to capture gains
 # Jan 16, 2026: Added EMERGENCY exit at 12 hours as absolute failsafe
-# NIJA is for PROFIT, not losses - positions should sell within 8 hours max
-MAX_POSITION_HOLD_HOURS = 8  # Auto-exit positions held longer than this (8 hours)
+# NIJA is for PROFIT, not losses - losing positions MUST exit within 30 minutes
+MAX_LOSING_POSITION_HOLD_MINUTES = 30  # CRITICAL: Exit losing trades (P&L < 0%) after 30 minutes MAX
+LOSING_POSITION_WARNING_MINUTES = 5  # Warn about losing positions after just 5 minutes
+MAX_POSITION_HOLD_HOURS = 8  # Auto-exit ALL positions held longer than this (8 hours) - failsafe
 MAX_POSITION_HOLD_EMERGENCY = 12  # EMERGENCY exit - force sell ALL positions after 12 hours
 STALE_POSITION_WARNING_HOURS = 4  # Warn about positions held this long (4 hours)
 # Unsellable position retry timeout (prevent permanent blocking)
@@ -1061,6 +1068,29 @@ class TradingStrategy:
                                 entry_price = pnl_data['entry_price']
                                 
                                 logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent:+.2f}%) | Entry: ${entry_price:.2f}")
+                                
+                                # CRITICAL FIX (Jan 17, 2026): ULTRA-AGGRESSIVE exit for LOSING trades
+                                # NEVER hold losing positions for more than 30 minutes
+                                # This ensures NIJA is ALWAYS in profiting trades, not losses
+                                # Note: entry_time_available=True ensures position_age_hours was calculated successfully
+                                if pnl_percent < 0 and entry_time_available:
+                                    # Position is losing - check how long it's been held
+                                    position_age_minutes = position_age_hours * MINUTES_PER_HOUR
+                                    
+                                    # CRITICAL: Exit ANY losing position after 30 minutes
+                                    if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
+                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
+                                        logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Losing trade held too long ({position_age_minutes:.1f}m, max {MAX_LOSING_POSITION_HOLD_MINUTES}m, P&L {pnl_percent:.2f}%)'
+                                        })
+                                        continue
+                                    # Warn early about losing positions (5 minutes)
+                                    elif position_age_minutes >= LOSING_POSITION_WARNING_MINUTES:
+                                        minutes_remaining = MAX_LOSING_POSITION_HOLD_MINUTES - position_age_minutes
+                                        logger.warning(f"   ⚠️ LOSING TRADE: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f}min (will auto-exit in {minutes_remaining:.1f}min)")
                                 
                                 # STEPPED PROFIT TAKING - Exit portions at profit targets
                                 # This locks in gains and frees capital for new opportunities
