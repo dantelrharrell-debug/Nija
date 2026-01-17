@@ -1,8 +1,9 @@
 # SOLUTION: Kraken Library Not Installed
 
-**Date**: January 14, 2026  
+**Date**: January 17, 2026 (Updated)  
 **Issue**: Kraken not connecting despite having all environment variables configured  
-**Root Cause**: `krakenex` library is not installed in the deployment environment
+**Root Cause**: `krakenex` library is not installed in the deployment environment  
+**New Fix**: Force Railway to use Dockerfile instead of Nixpacks buildpack
 
 ---
 
@@ -11,12 +12,23 @@
 Your environment variables are **PERFECT** ✅. I can see:
 - `KRAKEN_MASTER_API_KEY` - ✅ Set
 - `KRAKEN_MASTER_API_SECRET` - ✅ Set
-- `KRAKEN_USER_DAIVON_API_KEY` - ✅ Set
-- `KRAKEN_USER_DAIVON_API_SECRET` - ✅ Set
-- `KRAKEN_USER_TANIA_API_KEY` - ✅ Set
-- `KRAKEN_USER_TANIA_API_SECRET` - ✅ Set
+- `KRAKEN_USER_DAIVON_API_KEY` - ✅ Set (optional)
+- `KRAKEN_USER_DAIVON_API_SECRET` - ✅ Set (optional)
+- `KRAKEN_USER_TANIA_API_KEY` - ✅ Set (optional)
+- `KRAKEN_USER_TANIA_API_SECRET` - ✅ Set (optional)
 
 **BUT** the Kraken Python library (`krakenex`) is **NOT INSTALLED** in your deployment.
+
+## What's Different (Jan 17, 2026 Update)
+
+We discovered that Railway's **Nixpacks buildpack** sometimes **silently fails** to install the Kraken SDK, even though it's in `requirements.txt`.
+
+**The fix**: We've updated `railway.json` to force Railway to use the **Dockerfile** instead, which:
+1. Explicitly installs Kraken SDK with proper dependencies
+2. Includes preflight checks to verify installation
+3. **Fails the build** if SDK doesn't install (preventing broken deployments)
+
+Additionally, `start.sh` now **fails fast** if Kraken credentials are set but SDK is missing, providing clear error messages.
 
 ## Diagnosis
 
@@ -31,30 +43,45 @@ Expected error:
    Error: No module named 'krakenex'
 ```
 
-## The Fix
+## The Fix (UPDATED - Jan 17, 2026)
 
-### For Railway
+### For Railway (Recommended - Uses Docker)
 
-#### Option 1: Force Rebuild (Recommended)
+**Important**: The repository now forces Docker builds via `railway.json`. This ensures reliable SDK installation.
+
+#### Step 1: Verify Configuration
+The latest `railway.json` now contains:
+```json
+{
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
+  }
+}
+```
+
+This forces Railway to use the Dockerfile instead of Nixpacks.
+
+#### Step 2: Redeploy with Fresh Build
 1. Go to your Railway dashboard
 2. Click on your service
 3. Go to **Settings** tab
 4. Scroll down to **Danger Zone**
 5. Click **"Restart Deployment"** or **"Redeploy"**
-6. Railway will reinstall all dependencies from `requirements.txt`
+6. **Important**: This MUST be a REDEPLOY (not just Restart)
+   - "Restart" reuses existing container (SDK still missing)
+   - "Redeploy" rebuilds from Dockerfile (SDK will be installed)
 
-#### Option 2: Clear Build Cache
-1. Railway dashboard → Your service
-2. Settings → Danger Zone
-3. Click **"Clear Build Cache"**
-4. Then redeploy
-
-#### Option 3: Trigger Rebuild via Git
-```bash
-# Make a dummy change to force rebuild
-git commit --allow-empty -m "Force rebuild to install krakenex"
-git push
+#### Step 3: Verify Build Uses Docker
+Check deployment logs for:
 ```
+Building with Dockerfile
+...
+RUN python3 -m pip install krakenex==2.2.2 pykrakenapi==0.3.2
+✅ Kraken SDK (krakenex + pykrakenapi) import successful
+```
+
+If you see "Building with Nixpacks" instead, the configuration didn't take effect. See troubleshooting below.
 
 ### For Render
 
@@ -124,19 +151,95 @@ Expected output (after fix):
 
 ---
 
-## Why This Happened
+## Why This Happened (UPDATED)
 
-### Possible Causes
+### Root Cause: Railway Buildpack vs Docker
 
-1. **Build Cache**: Railway/Render cached the build before `krakenex` was added to `requirements.txt`
-2. **Installation Error**: The library failed to install but deployment continued
-3. **Requirements Not Run**: The platform didn't execute `pip install -r requirements.txt`
+**Original Issue**: Railway's Nixpacks buildpack silently failed to install Kraken SDK
+- `krakenex` and `pykrakenapi` have dependencies on `pandas` and `numpy`
+- Nixpacks sometimes fails to resolve version conflicts
+- Installation errors don't always appear in logs
+- The bot started anyway because SDK check was optional
 
-### How to Prevent
+**Why Docker Fixes It**:
+1. **Explicit installation order**: Core deps → Coinbase SDK → Kraken SDK → Other packages
+2. **Preflight checks**: Build fails if SDK doesn't import
+3. **Version pinning**: Uses exact tested versions of all dependencies
+4. **Clear error messages**: If anything fails, build stops immediately
 
-1. **Always clear build cache** when adding new dependencies
-2. **Check deployment logs** for successful installation
-3. **Run diagnostic scripts** after deployment
+### Previous Build Method (Nixpacks)
+```toml
+[phases.install]
+cmds = [
+  'python3 -m pip install -r requirements.txt'
+]
+```
+→ Packages install in arbitrary order, conflicts may occur, errors may be silent
+
+### New Build Method (Dockerfile)
+```dockerfile
+# Install Kraken SDK explicitly
+RUN python3 -m pip install --no-cache-dir \
+    krakenex==2.2.2 \
+    pykrakenapi==0.3.2
+
+# Verify installation
+RUN python3 -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK import successful')"
+```
+→ Controlled installation order, immediate verification, fails fast on errors
+
+---
+
+## Troubleshooting
+
+### Railway Still Uses Nixpacks After Update
+
+**Symptom**: Deployment logs show "Building with Nixpacks" instead of "Building with Dockerfile"
+
+**Cause**: Railway caches the build configuration for existing services
+
+**Fix Options**:
+
+1. **Delete and Recreate Service** (Most Reliable)
+   - Delete the service in Railway dashboard
+   - Recreate service from the same GitHub repository
+   - Railway will read fresh `railway.json` and use Docker
+   - **Warning**: This will reset your deployment URL
+
+2. **Force Configuration Refresh**
+   - Railway CLI: `railway link` then `railway up`
+   - Or contact Railway support to refresh configuration
+
+3. **Override via Dashboard** (If available)
+   - Railway Dashboard → Service → Settings
+   - Look for "Build Settings" or "Builder"
+   - Change from "RAILPACK" to "DOCKERFILE"
+
+### Deployment Fails with "Kraken SDK NOT installed" Error
+
+**Good!** This is the new fail-fast behavior.
+
+**What it means**:
+- Kraken credentials are configured ✅
+- Kraken SDK failed to install ❌
+- Bot refuses to start (preventing silent failures) ✅
+
+**To fix**:
+1. Check if deployment uses Docker (see above)
+2. If using Nixpacks, force Docker build
+3. If using Docker but still failing, check Docker build logs for errors
+
+### Manual Installation (Temporary Workaround)
+
+If you can't redeploy immediately but need Kraken working:
+
+```bash
+# SSH into your Railway container (if enabled)
+pip install krakenex==2.2.2 pykrakenapi==0.3.2
+
+# Restart the bot process
+# Note: This is temporary - will reset on next deployment
+```
 
 ---
 

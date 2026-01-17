@@ -28,7 +28,31 @@ $PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client av
 }
 
 # Test Kraken module
-$PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" 2>/dev/null || echo "⚠️  Kraken SDK not installed (optional)"
+# CRITICAL: If Kraken Master credentials are set, SDK MUST be installed
+if [ -n "${KRAKEN_MASTER_API_KEY}" ] && [ -n "${KRAKEN_MASTER_API_SECRET}" ]; then
+    $PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" || {
+        echo ""
+        echo "❌ CRITICAL: Kraken Master credentials are set but Kraken SDK is NOT installed"
+        echo ""
+        echo "The Kraken SDK (krakenex + pykrakenapi) is required when Kraken credentials are configured."
+        echo ""
+        echo "🔧 SOLUTION:"
+        echo "   1. Verify railway.json uses 'builder': 'DOCKERFILE' (not RAILPACK)"
+        echo "   2. Trigger a fresh deployment (not just restart):"
+        echo "      Railway: Settings → 'Redeploy'"
+        echo "      Render: Manual Deploy → 'Clear build cache & deploy'"
+        echo ""
+        echo "   The Dockerfile includes explicit installation of krakenex and pykrakenapi."
+        echo "   If using Nixpacks/Railway buildpack instead of Docker, the installation may fail silently."
+        echo ""
+        echo "📖 See SOLUTION_KRAKEN_LIBRARY_NOT_INSTALLED.md for detailed troubleshooting"
+        echo ""
+        exit 1
+    }
+else
+    # Kraken credentials not set - SDK is optional
+    $PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" 2>/dev/null || echo "⚠️  Kraken SDK not installed (optional - no Kraken credentials configured)"
+fi
 
 BRANCH_VAL=${GIT_BRANCH}
 COMMIT_VAL=${GIT_COMMIT}
