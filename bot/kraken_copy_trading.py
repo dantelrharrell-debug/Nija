@@ -42,6 +42,15 @@ try:
 except ImportError:
     from broker_manager import KrakenBroker, AccountType, BrokerType
 
+# Try to import Kraken API libraries
+# These may not be available in all environments (e.g., test environments)
+try:
+    import krakenex
+    from pykrakenapi import KrakenAPI
+    KRAKEN_API_AVAILABLE = True
+except ImportError:
+    KRAKEN_API_AVAILABLE = False
+
 logger = logging.getLogger('nija.kraken_copy')
 
 # Safety Configuration
@@ -61,6 +70,8 @@ class NonceStore:
         
         Args:
             account_identifier: Unique identifier (e.g., 'master', 'user_daivon')
+                               Should contain only alphanumeric characters and underscores
+                               to ensure safe file naming. Path separators are not allowed.
         """
         self.account_identifier = account_identifier
         self.lock = threading.RLock()  # Use RLock for reentrant locking
@@ -216,8 +227,6 @@ class KrakenClient:
         """
         with self.lock:
             try:
-                import krakenex
-                
                 # Initialize API connection if not already done
                 if not hasattr(self, 'api'):
                     self.api = krakenex.API()
@@ -318,6 +327,10 @@ def initialize_kraken_users() -> int:
                 continue
             
             # Get environment variable names
+            # Convention: 'first_last' user_id becomes 'FIRST' in env var name
+            # e.g., 'daivon_frazier' → KRAKEN_USER_DAIVON_API_KEY
+            # e.g., 'tania_gilbert' → KRAKEN_USER_TANIA_API_KEY
+            # For user_ids without underscore (e.g., 'john'), uses the full name (KRAKEN_USER_JOHN_API_KEY)
             if '_' in user_id:
                 user_env_name = user_id.split('_')[0].upper()
             else:
@@ -375,6 +388,26 @@ def initialize_kraken_users() -> int:
         return 0
 
 
+def _convert_symbol_to_kraken_format(symbol: str) -> str:
+    """
+    Convert standard symbol format to Kraken format.
+    
+    Args:
+        symbol: Standard symbol (e.g., 'BTC-USD', 'ETH-USD')
+    
+    Returns:
+        Kraken format symbol (e.g., 'XXBTZUSD', 'XETHZUSD')
+    """
+    # Remove dashes and convert to uppercase
+    kraken_symbol = symbol.replace('-', '').upper()
+    
+    # Kraken uses X prefix for BTC (XBTZUSD instead of BTCUSD)
+    if kraken_symbol.startswith('BTC'):
+        kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+    
+    return kraken_symbol
+
+
 def get_price(pair: str) -> float:
     """
     Get current price for a trading pair.
@@ -386,9 +419,6 @@ def get_price(pair: str) -> float:
         Current price or 0.0 if error
     """
     try:
-        import krakenex
-        from pykrakenapi import KrakenAPI
-        
         # Use public API (no auth needed)
         api = krakenex.API()
         k = KrakenAPI(api)
@@ -671,10 +701,8 @@ def wrap_kraken_broker_for_copy_trading(kraken_broker):
         
         # Only copy if master order succeeded
         if result.get('status') == 'filled':
-            # Convert symbol to Kraken format
-            kraken_symbol = symbol.replace('-', '').upper()
-            if kraken_symbol.startswith('BTC'):
-                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            # Convert symbol to Kraken format using shared utility
+            kraken_symbol = _convert_symbol_to_kraken_format(symbol)
             
             # Get master balance
             try:
