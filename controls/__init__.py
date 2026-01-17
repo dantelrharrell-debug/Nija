@@ -272,12 +272,13 @@ class HardControls:
         
         return True, None
     
-    def record_api_error(self, user_id: str) -> bool:
+    def record_api_error(self, user_id: str, error_type: str = "general") -> bool:
         """
         Record API error and auto-disable if threshold exceeded.
         
         Args:
             user_id: User identifier
+            error_type: Type of error (general, nonce, auth, connection)
             
         Returns:
             bool: True if user should be disabled
@@ -286,12 +287,17 @@ class HardControls:
             self.user_error_counts[user_id] = 0
         
         self.user_error_counts[user_id] += 1
+        error_count = self.user_error_counts[user_id]
         
-        if self.user_error_counts[user_id] >= self.ERROR_THRESHOLD:
+        # Log the error with type
+        logger.warning(f"⚠️  API error for user {user_id}: {error_type} (count: {error_count}/{self.ERROR_THRESHOLD})")
+        
+        if error_count >= self.ERROR_THRESHOLD:
             self.trigger_user_kill_switch(
                 user_id,
-                f"Excessive API errors ({self.user_error_counts[user_id]})"
+                f"Excessive API errors ({error_count}): {error_type}"
             )
+            logger.critical(f"🚨 AUTO-DISABLED user {user_id} due to {error_count} {error_type} errors")
             return True
         
         return False
