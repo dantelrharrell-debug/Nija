@@ -904,7 +904,7 @@ class TradingStrategy:
                    This parameter enables thread-safe multi-broker trading by avoiding
                    shared state mutation - each thread passes its own broker instance
                    instead of modifying the shared self.broker variable.
-            user_mode: CRITICAL (Jan 17, 2026) - If True, runs in USER mode which:
+            user_mode: If True, runs in USER mode which:
                       - DISABLES strategy execution (no signal generation)
                       - ONLY manages existing positions (exits, stops, targets)
                       - Users receive signals via CopyTradeEngine, not from strategy
@@ -920,7 +920,7 @@ class TradingStrategy:
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
         
-        # CRITICAL (Jan 17, 2026): Log mode for clarity
+        # Log mode for clarity
         mode_label = "USER (position management only)" if user_mode else "MASTER (full strategy)"
         logger.info(f"🔄 Trading cycle mode: {mode_label}")
         try:
@@ -1609,10 +1609,9 @@ class TradingStrategy:
                 logger.info(f"")
             
             # STEP 2: Look for new entry opportunities (only if entries allowed)
-            # CRITICAL FIX (Jan 17, 2026): USER accounts NEVER generate entry signals
-            # Users receive entry signals via CopyTradeEngine from master account
+            # USER accounts NEVER generate entry signals - they receive signals via CopyTradeEngine
             # Only MASTER accounts scan markets and generate buy signals
-            # CRITICAL PROFITABILITY FIX: Use module-level constants for consistency
+            # PROFITABILITY FIX: Use module-level constants for consistency
             
             if user_mode:
                 # USER MODE: Skip market scanning and entry signal generation entirely

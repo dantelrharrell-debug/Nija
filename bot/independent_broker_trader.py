@@ -515,7 +515,7 @@ class IndependentBrokerTrader:
                 
                 # Run trading cycle for this user broker
                 try:
-                    # CRITICAL FIX (Jan 17, 2026): USER accounts should NEVER generate signals
+                    # USER accounts should NEVER generate signals
                     # Users only execute copy trades from master - they don't run strategy themselves
                     # This prevents users from making independent trading decisions
                     # Copy trading is handled by the CopyTradeEngine which listens for master signals
