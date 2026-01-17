@@ -25,6 +25,8 @@ except ImportError:
     except ImportError:
         # If broker_manager is not available, define placeholder enums
         # This allows the module to load even if broker_manager is missing
+        # NOTE: These values MUST match the enums defined in broker_manager.py
+        # Source of truth: bot/broker_manager.py lines 160-177
         from enum import Enum
         
         class BrokerType(Enum):
