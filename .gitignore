@@ -40,6 +40,14 @@ nija.log.*
 kraken_nonce.txt
 bot/kraken_nonce.txt
 data/kraken_nonce*.txt
+data/kraken_nonce.txt
+data/kraken_nonce_*.txt
+
+# User management data files (test data, should not be committed)
+data/pnl_test_*.json
+data/risk_state_test_*.json
+data/risk_limits_test_*.json
+data/webhook_config_test_*.json
 
 # Temporary test files
 test_broker_get_all_products.py
