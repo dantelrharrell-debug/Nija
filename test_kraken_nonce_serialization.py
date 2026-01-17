@@ -14,11 +14,12 @@ Run: python3 test_kraken_nonce_serialization.py
 import sys
 import time
 import threading
+import os
 from unittest.mock import Mock, MagicMock, patch
 from typing import List
 
-# Add bot directory to path
-sys.path.insert(0, '/home/runner/work/Nija/Nija')
+# Add bot directory to path dynamically
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bot.broker_manager import KrakenBroker, AccountType
 
@@ -37,12 +38,16 @@ class NonceTracker:
     
     def get_stats(self):
         with self.lock:
+            is_monotonic = (
+                len(self.nonces) <= 1 or 
+                all(self.nonces[i] < self.nonces[i+1] for i in range(len(self.nonces)-1))
+            )
             return {
                 'nonces': self.nonces.copy(),
                 'call_times': self.call_times.copy(),
                 'total_calls': len(self.nonces),
                 'unique_nonces': len(set(self.nonces)),
-                'is_monotonic': all(self.nonces[i] < self.nonces[i+1] for i in range(len(self.nonces)-1))
+                'is_monotonic': is_monotonic
             }
 
 

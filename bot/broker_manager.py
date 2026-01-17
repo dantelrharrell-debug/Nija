@@ -16,7 +16,6 @@ import time
 import traceback
 import uuid
 import threading
-import queue
 
 # Import requests exceptions for proper timeout error handling
 # These are used in KrakenBroker.connect() to detect network timeouts
