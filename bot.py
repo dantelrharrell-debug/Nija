@@ -22,6 +22,11 @@ except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
     from broker_manager import BrokerType
 
+# Constants for error formatting
+# Separator length of 63 matches the width of the error message
+# "🚨 KRAKEN MASTER CREDENTIALS ARE SET BUT CONNECTION FAILED" (61 chars + 2 spaces padding)
+ERROR_SEPARATOR = "═" * 63
+
 # EMERGENCY STOP CHECK
 if os.path.exists('EMERGENCY_STOP'):
     print("\n" + "="*80)
@@ -130,6 +135,24 @@ if not logger.hasHandlers():
 def _handle_signal(sig, frame):
     logger.info(f"Received signal {sig}, shutting down gracefully")
     sys.exit(0)
+
+
+def _log_kraken_connection_error_header(error_msg):
+    """
+    Log Kraken Master connection error header with consistent formatting.
+    
+    Args:
+        error_msg: The error message to display, or None if no specific error
+    """
+    logger.error("")
+    logger.error(f"      {ERROR_SEPARATOR}")
+    logger.error(f"      🚨 KRAKEN MASTER CREDENTIALS ARE SET BUT CONNECTION FAILED")
+    logger.error(f"      {ERROR_SEPARATOR}")
+    if error_msg:
+        logger.error(f"      ❌ Error: {error_msg}")
+    else:
+        logger.error("      ❌ No specific error message was captured")
+    logger.error("")
 
 
 def main():
@@ -416,6 +439,12 @@ def main():
                 if broker and broker.connected:
                     connected_master_brokers.append(broker_type.value.upper())
         
+        # CRITICAL FIX: Check for brokers with credentials configured but failed to connect
+        # This catches cases where credentials are set but connection failed due to:
+        # - SDK not installed (krakenex/pykrakenapi missing)
+        # - Permission errors (API key lacks required permissions)
+        # - Nonce errors (timing issues)
+        # - Network errors
         # Check if Kraken was expected but didn't connect
         if kraken_master_configured and 'KRAKEN' not in connected_master_brokers:
             failed_master_brokers.append('KRAKEN')
@@ -445,7 +474,7 @@ def main():
                                 error_msg = failed_broker.last_connection_error
                         
                         if error_msg:
-                            logger.warning(f"      → Error: {error_msg}")
+                            _log_kraken_connection_error_header(error_msg)
                             # Provide specific guidance based on error type
                             # Check for SDK import errors (Kraken-specific patterns to avoid false positives)
                             is_sdk_error = any(pattern in error_msg.lower() for pattern in [
@@ -477,21 +506,42 @@ def main():
                                 logger.error("      📖 See SOLUTION_KRAKEN_LIBRARY_NOT_INSTALLED.md for details")
                                 logger.error("")
                             elif "permission" in error_msg.lower():
-                                logger.warning("      → Fix: Enable required permissions at https://www.kraken.com/u/security/api")
-                                logger.warning("      → Required: Query Funds, Query/Create/Cancel Orders")
+                                logger.error("      → Fix: Enable required permissions at https://www.kraken.com/u/security/api")
+                                logger.error("      → Required: Query Funds, Query/Create/Cancel Orders")
                             elif "nonce" in error_msg.lower():
-                                logger.warning("      → Fix: Wait 1-2 minutes and restart the bot")
+                                logger.error("      → Fix: Wait 1-2 minutes and restart the bot")
                             elif "lockout" in error_msg.lower():
-                                logger.warning("      → Fix: Wait 5-10 minutes before restarting")
+                                logger.error("      → Fix: Wait 5-10 minutes before restarting")
                             elif "whitespace" in error_msg.lower():
-                                logger.warning("      → Fix: Remove spaces/newlines from credentials in Railway/Render")
+                                logger.error("      → Fix: Remove spaces/newlines from credentials in Railway/Render")
                             else:
-                                logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
+                                logger.error("      → Verify credentials at https://www.kraken.com/u/security/api")
                         else:
-                            logger.warning("      → Check logs above for Kraken connection errors")
-                            logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
-                        
-                        logger.warning("      → Run: python3 test_kraken_connection_live.py to diagnose")
+                            # No error message was captured - this shouldn't happen but handle gracefully
+                            _log_kraken_connection_error_header(None)
+                            logger.error("      📋 POSSIBLE CAUSES:")
+                            logger.error("         1. Kraken SDK not installed (krakenex/pykrakenapi)")
+                            logger.error("         2. API key permissions insufficient")
+                            logger.error("         3. Network connectivity issues")
+                            logger.error("         4. Nonce synchronization errors")
+                            logger.error("         5. API key expired or invalid")
+                            logger.error("")
+                            logger.error("      🔧 TROUBLESHOOTING STEPS:")
+                            logger.error("         1. Check logs above for 'Kraken connection' errors")
+                            logger.error("         2. Verify SDK installation:")
+                            logger.error("            python3 -c 'import krakenex; import pykrakenapi; print(\"OK\")'")
+                            logger.error("         3. Test credentials:")
+                            logger.error("            python3 test_kraken_connection_live.py")
+                            logger.error("         4. Verify API permissions at:")
+                            logger.error("            https://www.kraken.com/u/security/api")
+                            logger.error("            Required: Query Funds, Query/Create/Cancel Orders")
+                            logger.error("")
+                            logger.error("      📖 DETAILED GUIDES:")
+                            logger.error("         • SOLUTION_KRAKEN_LIBRARY_NOT_INSTALLED.md")
+                            logger.error("         • KRAKEN_PERMISSION_ERROR_FIX.md")
+                            logger.error("         • KRAKEN_NOT_CONNECTING_DIAGNOSIS.md")
+                            logger.error(f"      {ERROR_SEPARATOR}")
+                            logger.error("")
             
             # Show warning if Kraken Master credentials are not configured
             if kraken_not_configured:
