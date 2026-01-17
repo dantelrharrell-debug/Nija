@@ -19,6 +19,8 @@ import threading
 
 # Import requests exceptions for proper timeout error handling
 # These are used in KrakenBroker.connect() to detect network timeouts
+# Note: The flag name is specific to clarify we're checking for timeout exception classes,
+# not just whether requests is available (it's used elsewhere for HTTP calls)
 try:
     from requests.exceptions import (
         Timeout, 
@@ -26,11 +28,11 @@ try:
         ConnectTimeout, 
         ConnectionError as RequestsConnectionError  # Avoid shadowing built-in ConnectionError
     )
-    REQUESTS_EXCEPTIONS_AVAILABLE = True
+    REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     # If requests isn't available, we'll fallback to string matching
     # ModuleNotFoundError is more specific but we catch both for compatibility
-    REQUESTS_EXCEPTIONS_AVAILABLE = False
+    REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE = False
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -3948,7 +3950,9 @@ class KrakenBroker(BaseBroker):
                     # Check if this is a timeout or connection error from requests library
                     # These errors should be logged clearly and are always retryable
                     # Use the module-level flag to avoid repeated import attempts
-                    if REQUESTS_EXCEPTIONS_AVAILABLE:
+                    # NOTE: The imported exception classes (Timeout, etc.) are only defined when
+                    # REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE is True, so they're only used inside that branch
+                    if REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE:
                         # Include both timeout and connection errors (network issues)
                         # Note: Using RequestsConnectionError alias to avoid shadowing built-in ConnectionError
                         is_timeout_error = isinstance(e, (Timeout, ReadTimeout, ConnectTimeout, RequestsConnectionError))
@@ -3963,7 +3967,7 @@ class KrakenBroker(BaseBroker):
                     if is_timeout_error:
                         # Timeout/connection errors are common and expected - log at INFO level, not ERROR
                         # After logging, we 'continue' to the next iteration which applies exponential
-                        # backoff via the retry logic at the top of the loop (lines 3708-3732)
+                        # backoff via the retry delay logic at the top of the loop
                         if attempt < max_attempts:
                             logger.info(f"   ⏱️  Connection timeout/network error ({cred_label}) - attempt {attempt}/{max_attempts}")
                             logger.info(f"   Will retry with exponential backoff...")
