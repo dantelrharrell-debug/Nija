@@ -7,7 +7,7 @@ Displays the configuration status of all supported brokers and accounts
 in a clean, easy-to-read format.
 
 Usage:
-    python3 check_broker_status.py
+    python3 display_broker_status.py
 """
 
 import os
