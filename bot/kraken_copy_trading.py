@@ -21,6 +21,11 @@ Features:
     ✅ Position size scaling based on balance ratio
     ✅ Per-user risk limits (10% max)
     ✅ Global kill switch
+    
+Integration:
+    Call initialize_copy_trading_system() at bot startup.
+    The system will automatically intercept Kraken MASTER trades
+    and copy them to all configured user accounts.
 """
 
 import logging
@@ -619,11 +624,112 @@ def initialize_copy_trading_system() -> bool:
     return True
 
 
+def wrap_kraken_broker_for_copy_trading(kraken_broker):
+    """
+    Wrap a KrakenBroker instance to enable copy trading on all orders.
+    
+    This function monkey-patches the broker's place_market_order method
+    to automatically trigger copy trading after master orders execute.
+    
+    Args:
+        kraken_broker: KrakenBroker instance (must be MASTER account)
+    
+    Returns:
+        The same broker instance (modified in-place)
+    """
+    # Only wrap MASTER accounts
+    if not hasattr(kraken_broker, 'account_type'):
+        logger.warning("⚠️  Cannot wrap broker - missing account_type attribute")
+        return kraken_broker
+    
+    try:
+        from bot.broker_manager import AccountType
+    except ImportError:
+        from broker_manager import AccountType
+    
+    if kraken_broker.account_type != AccountType.MASTER:
+        logger.warning(f"⚠️  Not wrapping non-MASTER broker: {kraken_broker.account_identifier}")
+        return kraken_broker
+    
+    # Store original method
+    original_place_market_order = kraken_broker.place_market_order
+    
+    def place_market_order_with_copy(symbol: str, side: str, quantity: float) -> Dict:
+        """
+        Wrapped place_market_order that triggers copy trading.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USD' or 'XBTUSDT')
+            side: 'buy' or 'sell'
+            quantity: Order size (in USD for buys, base currency for sells)
+        
+        Returns:
+            dict: Order result from master execution
+        """
+        # Execute on master first
+        result = original_place_market_order(symbol, side, quantity)
+        
+        # Only copy if master order succeeded
+        if result.get('status') == 'filled':
+            # Convert symbol to Kraken format
+            kraken_symbol = symbol.replace('-', '').upper()
+            if kraken_symbol.startswith('BTC'):
+                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            
+            # Get master balance
+            try:
+                master_balance = kraken_broker.get_account_balance()
+                
+                # Get price from result or calculate from quantity
+                price = result.get('filled_price', 0)
+                if price <= 0:
+                    # Fallback: get current price
+                    price = get_price(kraken_symbol)
+                
+                if price > 0:
+                    # Calculate USD size
+                    if side == 'buy':
+                        usd_size = quantity  # For buys, quantity is already in USD
+                    else:
+                        # For sells, quantity is in base currency
+                        usd_size = quantity * price
+                    
+                    # Create master trade object
+                    master_trade = {
+                        "pair": kraken_symbol,
+                        "side": side,
+                        "volume": quantity,
+                        "usd_size": usd_size,
+                        "master_balance": master_balance,
+                        "price": price,
+                        "order_id": result.get('order_id', 'unknown')
+                    }
+                    
+                    # Trigger copy trading
+                    logger.info(f"🔄 Master order filled - triggering copy trading for {symbol}")
+                    copy_trade_to_kraken_users(master_trade)
+                else:
+                    logger.warning(f"⚠️  Cannot copy trade - price unavailable for {symbol}")
+                    
+            except Exception as copy_err:
+                logger.error(f"❌ Copy trading failed for {symbol}: {copy_err}")
+                # Don't fail the master order if copy trading fails
+        
+        return result
+    
+    # Replace method
+    kraken_broker.place_market_order = place_market_order_with_copy
+    
+    logger.info(f"✅ Kraken broker wrapped for copy trading: {kraken_broker.account_identifier}")
+    return kraken_broker
+
+
 # Export public API
 __all__ = [
     'KrakenClient',
     'NonceStore',
     'initialize_copy_trading_system',
+    'wrap_kraken_broker_for_copy_trading',
     'execute_master_trade',
     'copy_trade_to_kraken_users',
     'KRAKEN_MASTER',
