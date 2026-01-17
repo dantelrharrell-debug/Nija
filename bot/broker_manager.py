@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 import traceback
 import uuid
@@ -3471,7 +3472,10 @@ def get_kraken_nonce_file(account_identifier: str = "master") -> str:
     # Sanitize account_identifier for safe filename
     # Convert 'USER:daivon_frazier' -> 'user_daivon_frazier'
     # Convert 'MASTER' -> 'master'
+    # Remove any characters that aren't alphanumeric, underscore, or hyphen
     safe_identifier = account_identifier.lower().replace(':', '_').replace(' ', '_')
+    # Remove any remaining unsafe characters (keep only alphanumeric, underscore, hyphen)
+    safe_identifier = re.sub(r'[^a-z0-9_\-]', '', safe_identifier)
     
     # Ensure data directory exists
     os.makedirs(_data_dir, exist_ok=True)
@@ -3512,7 +3516,7 @@ def get_kraken_nonce(account_identifier: str = "master"):
         # BACKWARD COMPATIBILITY: Migrate legacy MASTER nonce file
         # If this is the MASTER account and the new file doesn't exist but the old one does,
         # migrate the nonce value from the old file to preserve continuity
-        if account_identifier.lower() in ["master", "MASTER"] and not os.path.exists(nonce_file):
+        if account_identifier.lower() == "master" and not os.path.exists(nonce_file):
             legacy_nonce_file = os.path.join(_data_dir, "kraken_nonce.txt")
             if os.path.exists(legacy_nonce_file):
                 try:
