@@ -15,6 +15,9 @@ load_dotenv()
 
 logger = logging.getLogger("nija")
 
+# Time conversion constants
+MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
+
 # Configuration constants
 # CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
 # Coinbase has strict rate limits (~10 req/s burst, lower sustained)
@@ -1072,7 +1075,7 @@ class TradingStrategy:
                                 # Note: entry_time_available=True ensures position_age_hours was calculated successfully
                                 if pnl_percent < 0 and entry_time_available:
                                     # Position is losing - check how long it's been held
-                                    position_age_minutes = position_age_hours * 60
+                                    position_age_minutes = position_age_hours * MINUTES_PER_HOUR
                                     
                                     # CRITICAL: Exit ANY losing position after 30 minutes
                                     if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
