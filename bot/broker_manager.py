@@ -7,6 +7,7 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
+import functools
 import json
 import logging
 import os
@@ -3618,7 +3619,13 @@ class KrakenBroker(BaseBroker):
             # This can cause the bot to hang indefinitely if Kraken API is slow or unresponsive.
             # Solution: Patch the session's request method to always include a 30-second timeout
             # This ensures connection attempts fail gracefully instead of hanging forever.
-            import functools
+            # 
+            # NOTE: Using functools.partial is the recommended pattern for krakenex timeout config
+            # (see: https://stackoverflow.com/questions/41295142/ and krakenex documentation)
+            # This is safe because:
+            # - We're adding a default timeout kwarg, not changing the signature
+            # - The timeout can still be overridden per-call if needed
+            # - This is the standard pattern used by the Python/requests community
             try:
                 # Set 30-second timeout for all API calls (connection + read)
                 # This is a reasonable timeout for Kraken's API which normally responds in 1-5 seconds
@@ -3914,11 +3921,16 @@ class KrakenBroker(BaseBroker):
                     
                     # Check if this is a timeout error from requests library
                     # Timeout errors should be logged clearly and are always retryable
-                    is_timeout_error = (
-                        'timeout' in error_msg.lower() or
-                        'timed out' in error_msg.lower() or
-                        type(e).__name__ in ['Timeout', 'ReadTimeout', 'ConnectTimeout', 'ConnectionTimeout']
-                    )
+                    # Import requests.exceptions for proper type checking
+                    try:
+                        from requests.exceptions import Timeout, ReadTimeout, ConnectTimeout, ConnectionError
+                        is_timeout_error = isinstance(e, (Timeout, ReadTimeout, ConnectTimeout))
+                    except ImportError:
+                        # Fallback to string matching if requests isn't available
+                        is_timeout_error = (
+                            'timeout' in error_msg.lower() or
+                            'timed out' in error_msg.lower()
+                        )
                     
                     if is_timeout_error:
                         # Timeout errors are common and expected - log at INFO level, not ERROR
