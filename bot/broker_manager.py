@@ -3457,7 +3457,7 @@ def get_kraken_nonce():
     Generate Kraken nonce with persistence across restarts.
     
     This function:
-    1. Loads last nonce from kraken_nonce.txt (if exists)
+    1. Loads last nonce from data/kraken_nonce.txt (if exists)
     2. Generates new nonce = max(current_time_us, last_nonce + 1)
     3. Persists new nonce to file
     4. Returns new nonce
