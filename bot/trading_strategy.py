@@ -1069,7 +1069,7 @@ class TradingStrategy:
                                 # CRITICAL FIX (Jan 17, 2026): ULTRA-AGGRESSIVE exit for LOSING trades
                                 # NEVER hold losing positions for more than 30 minutes
                                 # This ensures NIJA is ALWAYS in profiting trades, not losses
-                                if pnl_percent < 0 and entry_time_available:
+                                if pnl_percent < 0 and entry_time_available and position_age_hours > 0:
                                     # Position is losing - check how long it's been held
                                     position_age_minutes = position_age_hours * 60
                                     
