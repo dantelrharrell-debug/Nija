@@ -1069,14 +1069,15 @@ class TradingStrategy:
                                 # CRITICAL FIX (Jan 17, 2026): ULTRA-AGGRESSIVE exit for LOSING trades
                                 # NEVER hold losing positions for more than 30 minutes
                                 # This ensures NIJA is ALWAYS in profiting trades, not losses
-                                if pnl_percent < 0 and entry_time_available and position_age_hours > 0:
+                                # Note: entry_time_available=True ensures position_age_hours was calculated successfully
+                                if pnl_percent < 0 and entry_time_available:
                                     # Position is losing - check how long it's been held
                                     position_age_minutes = position_age_hours * 60
                                     
                                     # CRITICAL: Exit ANY losing position after 30 minutes
                                     if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
-                                        logger.error(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
-                                        logger.error(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
+                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
+                                        logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
