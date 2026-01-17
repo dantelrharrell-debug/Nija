@@ -3404,6 +3404,11 @@ class KrakenBroker(BaseBroker):
     Python wrapper: https://github.com/veox/python3-krakenex
     """
     
+    # HTTP timeout for Kraken API calls (in seconds)
+    # This prevents indefinite hanging if the API is slow or unresponsive
+    # 30 seconds is reasonable as Kraken normally responds in 1-5 seconds
+    API_TIMEOUT_SECONDS = 30
+    
     # Class-level flag to track if detailed permission error instructions have been logged
     # This prevents spamming the logs with duplicate permission error messages
     # The detailed instructions are logged ONCE GLOBALLY (not once per account)
@@ -3632,33 +3637,15 @@ class KrakenBroker(BaseBroker):
             self.api = krakenex.API(key=api_key, secret=api_secret)
             
             # CRITICAL FIX (Jan 17, 2026): Set timeout on HTTP requests to prevent hanging
-            # krakenex uses requests.Session internally, but doesn't set a default timeout.
-            # This can cause the bot to hang indefinitely if Kraken API is slow or unresponsive.
-            # Solution: Patch the session's request method to always include a 30-second timeout
-            # This ensures connection attempts fail gracefully instead of hanging forever.
-            # 
-            # IMPLEMENTATION NOTES:
-            # - Using functools.partial is the standard/recommended pattern for krakenex
-            #   (see: https://stackoverflow.com/questions/41295142/ and krakenex docs)
-            # - Alternative approaches were considered but rejected:
-            #   * Creating a custom Session class: more complex, requires subclassing
-            #   * Wrapping every API call: duplicates code, easy to miss new calls
-            #   * Using a context manager: not compatible with krakenex's design
-            # - This pattern is safe because:
-            #   * We're adding a default timeout kwarg, not changing the method signature
-            #   * The timeout can still be overridden per-call if needed
-            #   * Used widely in the Python/requests community for exactly this purpose
-            #   * Each KrakenBroker instance has its own API object with its own session
-            #     so modifications are isolated to this specific broker instance
-            #   * No global state is modified - only this instance's session
-            # - The try-except ensures backward compatibility if krakenex changes internals
-            # - If krakenex removes the session attribute, the bot will log a warning and
-            #   continue (degrading gracefully to potentially longer connection attempts)
+            # krakenex doesn't set a default timeout, causing indefinite hangs if API is slow.
+            # We use functools.partial to patch the session (standard pattern for krakenex).
+            # Per-instance modification - no global state affected. Degrades gracefully if session changes.
             try:
-                # Set 30-second timeout for all API calls (connection + read)
-                # This is a reasonable timeout for Kraken's API which normally responds in 1-5 seconds
-                self.api.session.request = functools.partial(self.api.session.request, timeout=30)
-                logger.debug(f"✅ HTTP timeout configured (30s) for {cred_label}")
+                self.api.session.request = functools.partial(
+                    self.api.session.request, 
+                    timeout=self.API_TIMEOUT_SECONDS
+                )
+                logger.debug(f"✅ HTTP timeout configured ({self.API_TIMEOUT_SECONDS}s) for {cred_label}")
             except AttributeError as e:
                 # If session attribute doesn't exist, log warning but continue
                 # This maintains backward compatibility if krakenex changes its internals
