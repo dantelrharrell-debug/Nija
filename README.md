@@ -49,6 +49,7 @@ python3 check_trading_status.py
 
 ### 🔍 Verification & Diagnostics
 
+- **[display_broker_status.py](display_broker_status.py)** - Display configuration status for all brokers
 - **[check_trading_status.py](check_trading_status.py)** - Check overall trading status
 - **[audit_coinbase_positions.py](audit_coinbase_positions.py)** - Verify no stuck losing positions
 - **[setup_kraken_master.py](setup_kraken_master.py)** - Interactive setup wizard for Kraken master
