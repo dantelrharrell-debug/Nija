@@ -83,13 +83,15 @@ The `.env` file is for local development only. For production deployment:
 1. Go to your Railway/Render project settings
 2. Navigate to the "Variables" or "Environment Variables" section
 3. Add each credential as a separate environment variable:
-   - `KRAKEN_MASTER_API_KEY=8zdYy7PMRjnyDraiJUtrAb3wmu8MFxKBON3nrTkjkwnJ9iIUQyKNGKP7`
-   - `KRAKEN_MASTER_API_SECRET=e2xaakHliGa5RwH7uXwuq6RLGospWaQhScaVJfsS6wIa9huHxmx+HgeQCax8A+gvqV3P9jXD9YbR3wtsipdpRA==`
-   - `KRAKEN_USER_DAIVON_API_KEY=HSo/f1zjeQALCM/rri9bjTB5JisQ/SPgurCRTx8W7kLD7psjcv2PXEf+`
-   - `KRAKEN_USER_DAIVON_API_SECRET=6WOxnBLq+r4ln2Zz7nT0Nvv8CMkaolHtjYdOgTm7NWIq/mJqV8KbDA2XaThP65bHK9QvpEabRr1u38FrBJntaQ==`
-   - `KRAKEN_USER_TANIA_API_KEY=XEB37FsbsQ2Wj/bknOy6HPZTFqs25nyU10M2oxF/ja//Yh/r2kSRCAp/`
-   - `KRAKEN_USER_TANIA_API_SECRET=iINPAKFyVe9rTfYCKnauFCpOfqdsm9+lBFxzx2KLFkArjStbjAQ9Rr+FuA5lZgnzpZ85wMwnzKpkO07iHmMLmw==`
+   - `KRAKEN_MASTER_API_KEY=<your-master-api-key>`
+   - `KRAKEN_MASTER_API_SECRET=<your-master-api-secret>`
+   - `KRAKEN_USER_DAIVON_API_KEY=<daivon-api-key>`
+   - `KRAKEN_USER_DAIVON_API_SECRET=<daivon-api-secret>`
+   - `KRAKEN_USER_TANIA_API_KEY=<tania-api-key>`
+   - `KRAKEN_USER_TANIA_API_SECRET=<tania-api-secret>`
 4. Restart/redeploy the application
+
+**Note:** Use the actual API credentials from your local `.env` file when setting up production deployment.
 
 **Note:** Railway and Render do not use the `.env` file - they use their own environment variable system.
 
