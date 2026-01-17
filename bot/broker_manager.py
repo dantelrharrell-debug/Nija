@@ -3454,7 +3454,11 @@ _data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 # DEPRECATED: Use get_kraken_nonce_file() instead to get account-specific nonce file path
 NONCE_FILE = os.path.join(_data_dir, "kraken_nonce.txt")
 
-def get_kraken_nonce_file(account_identifier: str = "master") -> str:
+# MASTER account identifier constant (Jan 17, 2026)
+# Used for nonce file migration and account identification
+MASTER_ACCOUNT_IDENTIFIER = "master"
+
+def get_kraken_nonce_file(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER) -> str:
     """
     Get the nonce file path for a specific Kraken account.
     
@@ -3475,14 +3479,15 @@ def get_kraken_nonce_file(account_identifier: str = "master") -> str:
     # Remove any characters that aren't alphanumeric, underscore, or hyphen
     safe_identifier = account_identifier.lower().replace(':', '_').replace(' ', '_')
     # Remove any remaining unsafe characters (keep only alphanumeric, underscore, hyphen)
-    safe_identifier = re.sub(r'[^a-z0-9_\-]', '', safe_identifier)
+    # Place hyphen at the start of character class to avoid needing escape
+    safe_identifier = re.sub(r'[^-a-z0-9_]', '', safe_identifier)
     
     # Ensure data directory exists
     os.makedirs(_data_dir, exist_ok=True)
     
     return os.path.join(_data_dir, f"kraken_nonce_{safe_identifier}.txt")
 
-def get_kraken_nonce(account_identifier: str = "master"):
+def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
     """
     Generate Kraken nonce with persistence across restarts.
     
@@ -3516,7 +3521,7 @@ def get_kraken_nonce(account_identifier: str = "master"):
         # BACKWARD COMPATIBILITY: Migrate legacy MASTER nonce file
         # If this is the MASTER account and the new file doesn't exist but the old one does,
         # migrate the nonce value from the old file to preserve continuity
-        if account_identifier.lower() == "master" and not os.path.exists(nonce_file):
+        if account_identifier.lower() == MASTER_ACCOUNT_IDENTIFIER and not os.path.exists(nonce_file):
             legacy_nonce_file = os.path.join(_data_dir, "kraken_nonce.txt")
             if os.path.exists(legacy_nonce_file):
                 try:
