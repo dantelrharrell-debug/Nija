@@ -29,7 +29,11 @@ This auto-configures **paper trading mode** with virtual $10,000 - zero risk, ze
 
 ### 🚀 Quick Start - Enable Kraken in 5 Minutes
 
-**📖 See: [SETUP_KRAKEN_MASTER_QUICK.md](SETUP_KRAKEN_MASTER_QUICK.md)** for the fastest setup!
+**⚡ FASTEST:** [QUICKSTART_ENABLE_KRAKEN_MASTER.md](QUICKSTART_ENABLE_KRAKEN_MASTER.md) - Get started in 5 minutes!
+
+**📖 COMPLETE:** [KRAKEN_MASTER_SETUP_COMPLETE_GUIDE.md](KRAKEN_MASTER_SETUP_COMPLETE_GUIDE.md) - Full documentation with troubleshooting
+
+**🔍 VALIDATE:** Run `python3 validate_kraken_master_setup.py` to verify your setup
 
 **Step 1**: Get API credentials from [Kraken](https://www.kraken.com/u/security/api)
 - Enable: Query Funds, Query/Create/Cancel Orders, Query Trades
@@ -63,11 +67,12 @@ python3 check_trading_status.py
 
 ### 🔍 Verification & Diagnostics
 
+- **[validate_kraken_master_setup.py](validate_kraken_master_setup.py)** - 🆕 **Complete validation** (recommended)
+- **[diagnose_master_kraken_issue.py](diagnose_master_kraken_issue.py)** - Diagnose master account issues
 - **[display_broker_status.py](display_broker_status.py)** - Display configuration status for all brokers
 - **[check_trading_status.py](check_trading_status.py)** - Check overall trading status
 - **[audit_coinbase_positions.py](audit_coinbase_positions.py)** - Verify no stuck losing positions
 - **[setup_kraken_master.py](setup_kraken_master.py)** - Interactive setup wizard for Kraken master
-- **[diagnose_master_kraken_issue.py](diagnose_master_kraken_issue.py)** - Diagnose master account issues
 - **[test_kraken_connection_live.py](test_kraken_connection_live.py)** - Live API connection test
 
 **Library**: NIJA uses official Kraken SDKs: [`krakenex`](https://github.com/veox/python3-krakenex) + [`pykrakenapi`](https://github.com/dominiktraxl/pykrakenapi)
