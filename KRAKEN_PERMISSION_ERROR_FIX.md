@@ -10,26 +10,177 @@ If you see this error when starting the bot:
    Your Kraken API key does not have the required permissions.
 ```
 
-This means your Kraken API key doesn't have the correct permissions enabled.
+This means your Kraken API key doesn't have the correct permissions enabled or the wrong key type is being used.
+
+## Complete Fix Checklist
+
+### 🔧 FIX #1 — Add Kraken MASTER keys to your environment
+
+Make sure you're using the correct environment variable names:
+
+**For Master Account:**
+```bash
+KRAKEN_MASTER_API_KEY=your-master-api-key-here
+KRAKEN_MASTER_API_SECRET=your-master-private-key-here
+```
+
+**NOT the legacy format:**
+```bash
+# ❌ Don't use these (legacy)
+KRAKEN_API_KEY=...
+KRAKEN_API_SECRET=...
+```
+
+**For User Accounts:**
+```bash
+# User accounts use first name in uppercase
+KRAKEN_USER_DAIVON_API_KEY=daivon-key-here
+KRAKEN_USER_DAIVON_API_SECRET=daivon-secret-here
+
+KRAKEN_USER_TANIA_API_KEY=tania-key-here
+KRAKEN_USER_TANIA_API_SECRET=tania-secret-here
+```
+
+### 🔧 FIX #2 — Fix USER Kraken API permissions (this is mandatory)
+
+Each Kraken API key MUST have the following permissions enabled:
+
+1. **Go to Kraken API Management:**
+   - Log in to: https://www.kraken.com/u/security/api
+   - Find the API key you're using with NIJA bot
+
+2. **Edit API Key Permissions:**
+   Click "Edit" and enable these permissions:
+
+   **Required Permissions (all mandatory):**
+   - ✅ **Query Funds** - Allows the bot to check your account balance
+   - ✅ **Query Open Orders & Trades** - Allows the bot to track active positions
+   - ✅ **Query Closed Orders & Trades** - Allows the bot to review trade history
+   - ✅ **Create & Modify Orders** - Allows the bot to place trades
+   - ✅ **Cancel/Close Orders** - Allows the bot to place stop losses and exit positions
+
+   **DO NOT Enable (security risk):**
+   - ❌ **Withdraw Funds** - The bot does NOT need withdrawal permissions
+
+3. **Save and Wait:**
+   - Click "Save" to save the permission changes
+   - Wait 1-5 minutes for changes to propagate
+   - Restart your NIJA bot
+
+### 🔧 FIX #3 — Confirm Kraken key type
+
+**CRITICAL:** You must use a **Classic API key**, NOT OAuth or App keys.
+
+**To verify your key type:**
+1. Go to: https://www.kraken.com/u/security/api
+2. Look at your API key - it should show "Classic API Key"
+3. If it says "OAuth" or "App Key", you need to create a new Classic API key
+
+**To create a Classic API key:**
+1. Go to: https://www.kraken.com/u/security/api
+2. Click **"Generate New Key"** (NOT "Create OAuth Application")
+3. Set a descriptive name (e.g., "NIJA Trading Bot - Master")
+4. Enable all required permissions (see FIX #2 above)
+5. Click "Generate Key"
+6. Copy both the **API Key** and **Private Key** immediately
+   - You won't be able to see the Private Key again!
+7. Update your environment variables with the new credentials
+
+**Key Types Explained:**
+- ✅ **Classic API Key**: Direct REST API access (what NIJA needs)
+- ❌ **OAuth Key**: For third-party applications (not compatible)
+- ❌ **App Key**: For mobile/web apps (not compatible)
+
+### 🔧 FIX #4 — Confirm Kraken nonce handling (if still failing)
+
+**Good news:** The bot automatically handles nonce correctly! It uses:
+- ✅ **Microsecond precision** (better than milliseconds)
+- ✅ **Monotonically increasing** nonces (guaranteed to never decrease)
+- ✅ **10-20 second forward offset** to prevent restart conflicts
+- ✅ **Thread-safe generation** to prevent race conditions
+
+**If you still see nonce errors after fixes #1-3:**
+
+1. **Check system clock synchronization:**
+   ```bash
+   # On Linux/Mac
+   sudo ntpdate -s time.nist.gov
+   
+   # Or use systemd-timesyncd
+   sudo timedatectl set-ntp true
+   ```
+
+2. **Verify no other applications are using the same API key:**
+   - Each application/bot must have its own API key
+   - Using the same key in multiple places causes nonce conflicts
+
+3. **Check for clock drift:**
+   - Ensure your server's clock is accurate
+   - Enable NTP (Network Time Protocol) synchronization
+   - For cloud servers, this is usually automatic
 
 ## Why This Happens
-Kraken API keys can be created with limited permissions for security. By default, new API keys may not have all the permissions needed for automated trading.
+Kraken API keys can be created with limited permissions for security. Additionally, there are different types of API keys, and only Classic API keys work with trading bots.
+
+**Common Causes:**
+1. **Wrong key type**: Using OAuth or App key instead of Classic API key
+2. **Missing permissions**: API key doesn't have Query/Create/Cancel permissions
+3. **Wrong environment variables**: Using legacy KRAKEN_API_KEY instead of KRAKEN_MASTER_API_KEY
+4. **Nonce issues**: System clock drift or duplicate API key usage
 
 ## How to Fix
 
-### Step 1: Go to Kraken API Management
+Follow all four fixes in order:
+
+### Step 1: Verify Environment Variables (FIX #1)
+
+Make sure you're using the correct environment variable names based on your deployment:
+
+#### Local Development (.env file)
+```bash
+# Master account - CORRECT format
+KRAKEN_MASTER_API_KEY=your-master-api-key-here
+KRAKEN_MASTER_API_SECRET=your-master-private-key-here
+
+# User accounts - CORRECT format  
+KRAKEN_USER_DAIVON_API_KEY=daivon-api-key-here
+KRAKEN_USER_DAIVON_API_SECRET=daivon-private-key-here
+```
+
+#### Production (Railway/Render)
+Add these exact variable names in your deployment platform's environment variables section.
+
+### Step 2: Fix API Permissions (FIX #2)
+
+This is **mandatory** - all permissions must be enabled:
 1. Log in to your Kraken account
 2. Go to: https://www.kraken.com/u/security/api
 3. Find the API key you're using with NIJA bot
    - If you're not sure which one, check your environment variables:
      - `KRAKEN_MASTER_API_KEY` for master account
      - `KRAKEN_USER_{NAME}_API_KEY` for user accounts
+4. Click "Edit" or the settings icon next to your API key
 
-### Step 2: Edit API Key Permissions
-1. Click "Edit" or the settings icon next to your API key
-2. Enable the following permissions:
+### Step 3: Confirm Classic API Key Type (FIX #3)
 
-   **Required Permissions:**
+**Before editing permissions**, verify you have a Classic API key:
+
+1. **Check the key type** on the API management page
+   - It should say **"Classic API Key"** or just "API Key"
+   - If it says "OAuth" or "App Key", you have the WRONG type
+
+2. **If wrong type, create a new Classic API key:**
+   - Click **"Generate New Key"** (NOT "Create OAuth Application")
+   - Set a descriptive name: "NIJA Trading Bot - Master" or "NIJA Trading Bot - [Username]"
+   - Continue to Step 4 to set permissions
+   - After creating, update your environment variables with the new credentials
+
+3. **If correct type (Classic)**, proceed to Step 4 to verify permissions
+
+### Step 4: Enable Required Permissions (FIX #2 continued)
+1. In the API key edit screen, enable the following permissions:
+
+   **Required Permissions (ALL must be checked):**
    - ✅ **Query Funds** - Allows the bot to check your account balance
    - ✅ **Query Open Orders & Trades** - Allows the bot to track active positions
    - ✅ **Query Closed Orders & Trades** - Allows the bot to review trade history
@@ -37,16 +188,41 @@ Kraken API keys can be created with limited permissions for security. By default
    - ✅ **Cancel/Close Orders** - Allows the bot to place stop losses and exit positions
 
    **DO NOT Enable:**
-   - ❌ **Withdraw Funds** - For security, the bot does not need withdrawal permissions
+   - ❌ **Withdraw Funds** - For security, the bot does NOT need withdrawal permissions
 
-### Step 3: Save and Restart
-1. Click "Save" or "Update" to save the permission changes
-2. **Important**: Changes may take a few minutes to propagate
-3. Restart your NIJA bot
-   - On Railway/Render: Trigger a new deployment
-   - On local machine: Stop and restart the bot
+2. Click "Save" or "Update" to save the permission changes
 
-### Step 4: Verify Fix
+### Step 5: Verify Nonce Handling (FIX #4)
+
+The bot automatically handles nonce correctly, but verify these items:
+
+1. **System Clock Sync (for VPS/cloud servers):**
+   ```bash
+   # Check if NTP is enabled
+   timedatectl status | grep "NTP synchronized"
+   
+   # If not synchronized, enable it
+   sudo timedatectl set-ntp true
+   ```
+
+2. **No Duplicate API Key Usage:**
+   - Each bot instance must have its own unique API key
+   - Don't use the same API key in multiple applications/bots
+   - Don't share API keys between master and user accounts
+
+3. **Bot Nonce Status:**
+   - The bot uses **microsecond precision** nonces (1,000,000 nonces per second)
+   - Nonces are **monotonically increasing** (never decrease)
+   - Each restart uses a **10-20 second forward offset** to prevent conflicts
+
+### Step 6: Save, Wait, and Restart
+1. After making all changes, **wait 1-5 minutes** for Kraken to propagate the changes
+2. Restart your NIJA bot:
+   - **Railway/Render**: Trigger a new deployment or restart service
+   - **Local machine**: Stop (Ctrl+C) and restart: `./start.sh`
+   - **Docker**: `docker restart nija-bot`
+
+### Step 7: Verify Fix
 After restarting, you should see:
 ```
 ✅ KRAKEN PRO CONNECTED (MASTER)
