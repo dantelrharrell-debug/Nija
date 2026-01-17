@@ -3450,7 +3450,6 @@ _nonce_lock = threading.Lock()
 # is stored in /data directory. Nonce file should follow the same pattern.
 # This ensures proper persistence in containerized deployments (Railway, Docker, etc.)
 _data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-os.makedirs(_data_dir, exist_ok=True)  # Ensure data directory exists
 NONCE_FILE = os.path.join(_data_dir, "kraken_nonce.txt")
 
 def get_kraken_nonce():
@@ -3470,6 +3469,9 @@ def get_kraken_nonce():
         int: New nonce (microseconds since epoch)
     """
     with _nonce_lock:
+        # Ensure data directory exists (lazy initialization)
+        os.makedirs(_data_dir, exist_ok=True)
+        
         last_nonce = 0
         if os.path.exists(NONCE_FILE):
             try:
