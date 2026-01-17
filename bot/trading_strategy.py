@@ -1138,31 +1138,68 @@ class TradingStrategy:
                     
                     # Log if no entry price available - this helps debug why positions aren't taking profit
                     if not entry_price_available:
-                        logger.warning(f"   ⚠️ No entry price tracked for {symbol} - using fallback exit logic")
-                        logger.warning(f"      💡 Run import_current_positions.py to track this position")
+                        logger.warning(f"   ⚠️ No entry price tracked for {symbol} - attempting auto-import")
                         
-                        # CRITICAL FIX: For positions without entry price, use technical indicators
-                        # to determine if position is weakening (RSI < 52, price < EMA9)
-                        # This conservative exit strategy prevents holding potentially losing positions
+                        # CRITICAL FIX (Jan 17, 2026): Auto-import orphaned positions instead of aggressive exit
+                        # This prevents selling potentially profitable positions
+                        # Import uses current price as estimated entry (P&L starts from zero)
+                        auto_import_success = False
+                        if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                            try:
+                                # Calculate position size
+                                size_usd = quantity * current_price
+                                
+                                # Track the position with current price as estimated entry
+                                # This gives the position a chance to be managed by profit targets
+                                auto_import_success = active_broker.position_tracker.track_entry(
+                                    symbol=symbol,
+                                    entry_price=current_price,  # ESTIMATE: Use current price
+                                    quantity=quantity,
+                                    size_usd=size_usd,
+                                    strategy="AUTO_IMPORTED"
+                                )
+                                
+                                if auto_import_success:
+                                    logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0)")
+                                    logger.info(f"      Position now tracked - will use profit targets instead of aggressive exit")
+                                    # Mark that entry price is now available
+                                    entry_price_available = True
+                                    # Update entry time as now
+                                    entry_time_available = True
+                                    position_age_hours = 0
+                                    # Continue to normal position management (profit targets, stop loss, etc.)
+                                else:
+                                    logger.error(f"   ❌ Auto-import failed for {symbol} - will use fallback exit logic")
+                            except Exception as import_err:
+                                logger.error(f"   ❌ Error auto-importing {symbol}: {import_err}")
+                                logger.error(f"      Will use fallback exit logic")
                         
-                        # Check if position was entered recently (less than 1 hour ago)
-                        # If not, it's likely an old position that should be exited
-                        if entry_time_available:
-                            # We have time but no price - unusual, but use time-based exit
-                            if position_age_hours >= MAX_POSITION_HOLD_HOURS:
-                                logger.warning(f"   ⏰ FALLBACK TIME EXIT: {symbol} held {position_age_hours:.1f}h (max: {MAX_POSITION_HOLD_HOURS}h)")
-                                positions_to_exit.append({
-                                    'symbol': symbol,
-                                    'quantity': quantity,
-                                    'reason': f'Time-based exit without entry price (held {position_age_hours:.1f}h)'
-                                })
-                                continue
-                        else:
-                            # No entry time AND no entry price - this is an orphaned position
-                            # These are likely old positions from before tracking was implemented
-                            # Be conservative: exit if position shows any signs of weakness
-                            logger.warning(f"   ⚠️ ORPHANED POSITION: {symbol} has no entry price or time tracking")
-                            logger.warning(f"      This position will be exited aggressively to prevent losses")
+                        # If auto-import failed or not available, use fallback logic
+                        if not auto_import_success:
+                            logger.warning(f"      💡 Auto-import unavailable - using fallback exit logic")
+                            
+                            # CRITICAL FIX: For positions without entry price, use technical indicators
+                            # to determine if position is weakening (RSI < 52, price < EMA9)
+                            # This conservative exit strategy prevents holding potentially losing positions
+                            
+                            # Check if position was entered recently (less than 1 hour ago)
+                            # If not, it's likely an old position that should be exited
+                            if entry_time_available:
+                                # We have time but no price - unusual, but use time-based exit
+                                if position_age_hours >= MAX_POSITION_HOLD_HOURS:
+                                    logger.warning(f"   ⏰ FALLBACK TIME EXIT: {symbol} held {position_age_hours:.1f}h (max: {MAX_POSITION_HOLD_HOURS}h)")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Time-based exit without entry price (held {position_age_hours:.1f}h)'
+                                    })
+                                    continue
+                            else:
+                                # No entry time AND no entry price - this is an orphaned position
+                                # These are likely old positions from before tracking was implemented
+                                # Be conservative: exit if position shows any signs of weakness
+                                logger.warning(f"   ⚠️ ORPHANED POSITION: {symbol} has no entry price or time tracking")
+                                logger.warning(f"      This position will be exited aggressively to prevent losses")
                     
                     # Get market data for analysis (use cached method to prevent rate limiting)
                     candles = self._get_cached_candles(symbol, '5m', 100, broker=active_broker)
