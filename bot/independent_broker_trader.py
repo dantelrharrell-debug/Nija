@@ -515,12 +515,15 @@ class IndependentBrokerTrader:
                 
                 # Run trading cycle for this user broker
                 try:
-                    # CRITICAL FIX (Jan 11, 2026): Pass broker to run_cycle() instead of setting shared state
-                    # This makes each user broker thread truly independent and thread-safe
+                    # CRITICAL FIX (Jan 17, 2026): USER accounts should NEVER generate signals
+                    # Users only execute copy trades from master - they don't run strategy themselves
+                    # This prevents users from making independent trading decisions
+                    # Copy trading is handled by the CopyTradeEngine which listens for master signals
                     
                     # Execute trading cycle for THIS user broker only (thread-safe)
-                    logger.info(f"   {broker_name} (USER): Running trading cycle...")
-                    self.trading_strategy.run_cycle(broker=broker)
+                    # USER accounts ONLY do position management (exits), NOT entry signals
+                    logger.info(f"   {broker_name} (USER): Running position management (NO signal generation)...")
+                    self.trading_strategy.run_cycle(broker=broker, user_mode=True)
                     
                     # Mark as healthy
                     if user_id not in self.user_broker_health:

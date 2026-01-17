@@ -895,7 +895,7 @@ class TradingStrategy:
         
         return batch
 
-    def run_cycle(self, broker=None):
+    def run_cycle(self, broker=None, user_mode=False):
         """Execute a complete trading cycle with position cap enforcement.
         
         Args:
@@ -904,16 +904,25 @@ class TradingStrategy:
                    This parameter enables thread-safe multi-broker trading by avoiding
                    shared state mutation - each thread passes its own broker instance
                    instead of modifying the shared self.broker variable.
+            user_mode: CRITICAL (Jan 17, 2026) - If True, runs in USER mode which:
+                      - DISABLES strategy execution (no signal generation)
+                      - ONLY manages existing positions (exits, stops, targets)
+                      - Users receive signals via CopyTradeEngine, not from strategy
+                      Default False for MASTER accounts (full strategy execution)
         
         Steps:
         1. Enforce position cap (auto-sell excess if needed)
-        2. Scan markets for opportunities
-        3. Execute entry/exit logic
+        2. [MASTER ONLY] Scan markets for opportunities
+        3. [MASTER ONLY] Execute entry logic / [USER] Execute position exits only
         4. Update trailing stops and take profits
         5. Log cycle summary
         """
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
+        
+        # CRITICAL (Jan 17, 2026): Log mode for clarity
+        mode_label = "USER (position management only)" if user_mode else "MASTER (full strategy)"
+        logger.info(f"🔄 Trading cycle mode: {mode_label}")
         try:
             # 🚨 EMERGENCY: Check if LIQUIDATE_ALL mode is active
             liquidate_all_file = os.path.join(os.path.dirname(__file__), '..', 'LIQUIDATE_ALL_NOW.conf')
@@ -1600,9 +1609,15 @@ class TradingStrategy:
                 logger.info(f"")
             
             # STEP 2: Look for new entry opportunities (only if entries allowed)
+            # CRITICAL FIX (Jan 17, 2026): USER accounts NEVER generate entry signals
+            # Users receive entry signals via CopyTradeEngine from master account
+            # Only MASTER accounts scan markets and generate buy signals
             # CRITICAL PROFITABILITY FIX: Use module-level constants for consistency
             
-            if not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD:
+            if user_mode:
+                # USER MODE: Skip market scanning and entry signal generation entirely
+                logger.info("📊 USER MODE: Skipping market scan (signals come from copy trade engine)")
+            elif not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD:
                 logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
                 
                 # Get top market candidates (limit scan to prevent timeouts)
