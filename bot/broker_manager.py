@@ -3654,6 +3654,15 @@ class KrakenBroker(BaseBroker):
         # - USER accounts: data/kraken_nonce_user_daivon_frazier.txt, etc.
         self._nonce_file = get_kraken_nonce_file(self.account_identifier)
         
+        # VERIFICATION: Ensure nonce file path is unique per account (prevent cross-contamination)
+        # This assertion protects against regression bugs where nonce files might be shared
+        if account_type == AccountType.MASTER:
+            assert "master" in self._nonce_file.lower(), f"MASTER nonce file must contain 'master': {self._nonce_file}"
+        else:
+            assert user_id.lower() in self._nonce_file.lower(), f"USER nonce file must contain user_id '{user_id}': {self._nonce_file}"
+        
+        logger.debug(f"   Nonce file for {self.account_identifier}: {self._nonce_file}")
+        
         # CRITICAL FIX (Jan 17, 2026): Load persisted nonce from file
         # - This prevents "Invalid nonce" errors on restart
         # - Kraken remembers last nonce for 60+ seconds
