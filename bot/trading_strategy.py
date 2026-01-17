@@ -15,6 +15,32 @@ load_dotenv()
 
 logger = logging.getLogger("nija")
 
+# Import BrokerType and AccountType at module level for use throughout the class
+# These are needed in _register_kraken_for_retry and other methods outside __init__
+try:
+    from broker_manager import BrokerType, AccountType
+except ImportError:
+    try:
+        from bot.broker_manager import BrokerType, AccountType
+    except ImportError:
+        # If broker_manager is not available, define placeholder enums
+        # This allows the module to load even if broker_manager is missing
+        from enum import Enum
+        
+        class BrokerType(Enum):
+            COINBASE = "coinbase"
+            BINANCE = "binance"
+            KRAKEN = "kraken"
+            OKX = "okx"
+            INTERACTIVE_BROKERS = "interactive_brokers"
+            TD_AMERITRADE = "td_ameritrade"
+            ALPACA = "alpaca"
+            TRADIER = "tradier"
+        
+        class AccountType(Enum):
+            MASTER = "master"
+            USER = "user"
+
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
@@ -208,9 +234,10 @@ class TradingStrategy:
         
         try:
             # Lazy imports to avoid circular deps and allow fallback
+            # Note: BrokerType and AccountType are now imported at module level
             from broker_manager import (
                 BrokerManager, CoinbaseBroker, KrakenBroker, 
-                OKXBroker, BinanceBroker, AlpacaBroker, BrokerType, AccountType
+                OKXBroker, BinanceBroker, AlpacaBroker
             )
             from multi_account_broker_manager import multi_account_broker_manager
             from position_cap_enforcer import PositionCapEnforcer
