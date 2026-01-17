@@ -91,7 +91,7 @@ def verify_code_changes():
         'KRAKEN_MASTER_API_KEY mentioned': 'KRAKEN_MASTER_API_KEY' in content,
         'Classic API key mentioned': 'Classic API key' in content,
         'OAuth mentioned': 'OAuth' in content,
-        'millisecond-precision nonces mentioned': 'millisecond-precision nonces' in content or 'microsecond precision' in content,
+        'microsecond-precision nonces mentioned': 'microsecond-precision nonces' in content or 'microsecond precision' in content,
     }
     
     print("\nVerifying code changes:")
