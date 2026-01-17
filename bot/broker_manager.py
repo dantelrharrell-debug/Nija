@@ -3450,46 +3450,100 @@ _nonce_lock = threading.Lock()
 # is stored in /data directory. Nonce file should follow the same pattern.
 # This ensures proper persistence in containerized deployments (Railway, Docker, etc.)
 _data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+# DEPRECATED: Use get_kraken_nonce_file() instead to get account-specific nonce file path
 NONCE_FILE = os.path.join(_data_dir, "kraken_nonce.txt")
 
-def get_kraken_nonce():
+def get_kraken_nonce_file(account_identifier: str = "master") -> str:
+    """
+    Get the nonce file path for a specific Kraken account.
+    
+    CRITICAL FIX (Jan 17, 2026): Each account needs its own nonce file to prevent collisions.
+    - MASTER account: data/kraken_nonce_master.txt
+    - USER accounts: data/kraken_nonce_user_daivon.txt, etc.
+    
+    Args:
+        account_identifier: Account identifier (e.g., 'master', 'user_daivon_frazier', 'USER:daivon_frazier')
+                           Will be sanitized to safe filename format.
+    
+    Returns:
+        str: Full path to account-specific nonce file
+    """
+    # Sanitize account_identifier for safe filename
+    # Convert 'USER:daivon_frazier' -> 'user_daivon_frazier'
+    # Convert 'MASTER' -> 'master'
+    safe_identifier = account_identifier.lower().replace(':', '_').replace(' ', '_')
+    
+    # Ensure data directory exists
+    os.makedirs(_data_dir, exist_ok=True)
+    
+    return os.path.join(_data_dir, f"kraken_nonce_{safe_identifier}.txt")
+
+def get_kraken_nonce(account_identifier: str = "master"):
     """
     Generate Kraken nonce with persistence across restarts.
     
+    CRITICAL FIX (Jan 17, 2026): Now supports account-specific nonce files to prevent
+    nonce collisions between MASTER and USER accounts.
+    
     This function:
-    1. Loads last nonce from data/kraken_nonce.txt (if exists)
-    2. Generates new nonce = max(current_time_us, last_nonce + 1)
-    3. Persists new nonce to file
-    4. Returns new nonce
+    1. Loads last nonce from account-specific nonce file (if exists)
+    2. Migrates from legacy nonce file for MASTER account (backward compatibility)
+    3. Generates new nonce = max(current_time_us, last_nonce + 1)
+    4. Persists new nonce to account-specific file
+    5. Returns new nonce
     
     Thread-safe: Uses lock to prevent race conditions
     Restart-safe: Persists to file for next restart
+    Account-isolated: Each account has its own nonce file
+    
+    Args:
+        account_identifier: Account identifier (default: "master")
+                           Examples: "master", "user_daivon_frazier", "USER:tania_gilbert"
     
     Returns:
         int: New nonce (microseconds since epoch)
     """
     with _nonce_lock:
-        # Ensure data directory exists (lazy initialization)
-        os.makedirs(_data_dir, exist_ok=True)
+        # Get account-specific nonce file
+        nonce_file = get_kraken_nonce_file(account_identifier)
         
         last_nonce = 0
-        if os.path.exists(NONCE_FILE):
+        
+        # BACKWARD COMPATIBILITY: Migrate legacy MASTER nonce file
+        # If this is the MASTER account and the new file doesn't exist but the old one does,
+        # migrate the nonce value from the old file to preserve continuity
+        if account_identifier.lower() in ["master", "MASTER"] and not os.path.exists(nonce_file):
+            legacy_nonce_file = os.path.join(_data_dir, "kraken_nonce.txt")
+            if os.path.exists(legacy_nonce_file):
+                try:
+                    with open(legacy_nonce_file, "r") as f:
+                        content = f.read().strip()
+                        if content:
+                            last_nonce = int(content)
+                            logging.info(f"📦 Migrated MASTER nonce from legacy file: {last_nonce}")
+                except (ValueError, IOError) as e:
+                    logging.debug(f"Could not migrate legacy nonce file: {e}")
+        
+        # Read existing nonce from account-specific file
+        if os.path.exists(nonce_file):
             try:
-                with open(NONCE_FILE, "r") as f:
+                with open(nonce_file, "r") as f:
                     content = f.read().strip()
                     if content:
-                        last_nonce = int(content)
+                        file_nonce = int(content)
+                        # Use the higher value (from migration or existing file)
+                        last_nonce = max(last_nonce, file_nonce)
             except (ValueError, IOError) as e:
-                logging.debug(f"Could not read nonce file: {e}, starting fresh")
+                logging.debug(f"Could not read nonce file for {account_identifier}: {e}, starting fresh")
 
         now = int(time.time() * 1000000)  # Use microseconds to match existing implementation
         nonce = max(now, last_nonce + 1)
 
         try:
-            with open(NONCE_FILE, "w") as f:
+            with open(nonce_file, "w") as f:
                 f.write(str(nonce))
         except IOError as e:
-            logging.debug(f"Could not write nonce file: {e}")
+            logging.debug(f"Could not write nonce file for {account_identifier}: {e}")
 
         return nonce
 
@@ -3579,17 +3633,30 @@ class KrakenBroker(BaseBroker):
         # - This guarantees each nonce is unique and increasing
         # - No large forward offset needed for restart protection
         # 
+        # Set identifier for logging (must be set BEFORE nonce initialization)
+        if account_type == AccountType.MASTER:
+            self.account_identifier = "MASTER"
+        else:
+            self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
+        
+        # CRITICAL FIX (Jan 17, 2026): Each account uses its own nonce file
+        # This prevents nonce collisions between MASTER and USER accounts
+        # - MASTER: data/kraken_nonce_master.txt
+        # - USER accounts: data/kraken_nonce_user_daivon_frazier.txt, etc.
+        self._nonce_file = get_kraken_nonce_file(self.account_identifier)
+        
         # CRITICAL FIX (Jan 17, 2026): Load persisted nonce from file
         # - This prevents "Invalid nonce" errors on restart
         # - Kraken remembers last nonce for 60+ seconds
         # - File persistence ensures we always use a higher nonce than previous session
         # - Random jitter prevents multi-instance collisions
+        # - Each account has isolated nonce tracking
         base_offset = 0  # Use current time (Kraken's recommended practice)
         random_jitter = random.randint(0, 5000000)  # 0-5 seconds
         total_offset = base_offset + random_jitter
         
-        # Load persisted nonce and ensure we're ahead of it
-        persisted_nonce = get_kraken_nonce()
+        # Load persisted nonce for THIS account and ensure we're ahead of it
+        persisted_nonce = get_kraken_nonce(self.account_identifier)
         time_based_nonce = int(time.time() * 1000000) + total_offset
         self._last_nonce = max(persisted_nonce, time_based_nonce)
         
@@ -3609,12 +3676,6 @@ class KrakenBroker(BaseBroker):
         # Ensures minimum delay between consecutive Kraken API calls
         self._last_api_call_time = 0.0
         self._min_call_interval = 0.2  # 200ms minimum between calls (safety margin)
-        
-        # Set identifier for logging
-        if account_type == AccountType.MASTER:
-            self.account_identifier = "MASTER"
-        else:
-            self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
     
     def _immediate_nonce_jump(self):
         """
@@ -3626,7 +3687,7 @@ class KrakenBroker(BaseBroker):
         
         Thread-safe: Uses the nonce lock to prevent race conditions.
         
-        CRITICAL FIX (Jan 17, 2026): Persists nonce after jump.
+        CRITICAL FIX (Jan 17, 2026): Persists nonce after jump to account-specific file.
         """
         with self._nonce_lock:
             immediate_jump = 60000000  # 60 seconds in microseconds
@@ -3634,9 +3695,9 @@ class KrakenBroker(BaseBroker):
             increment_based = self._last_nonce + immediate_jump
             self._last_nonce = max(time_based, increment_based)
             
-            # Persist the jumped nonce
+            # Persist the jumped nonce to account-specific file
             try:
-                with open(NONCE_FILE, "w") as f:
+                with open(self._nonce_file, "w") as f:
                     f.write(str(self._last_nonce))
             except IOError as e:
                 logging.debug(f"Could not persist jumped nonce: {e}")
@@ -3860,8 +3921,9 @@ class KrakenBroker(BaseBroker):
                 Thread-safe: Uses a lock to prevent race conditions when multiple
                 threads call the API simultaneously.
                 
-                CRITICAL FIX (Jan 17, 2026): Persists nonce to file after generation
-                to ensure restart-safety.
+                CRITICAL FIX (Jan 17, 2026): Persists nonce to account-specific file
+                after generation to ensure restart-safety and prevent collisions
+                between MASTER and USER accounts.
                 """
                 with self._nonce_lock:
                     # Get current time in microseconds
@@ -3875,9 +3937,9 @@ class KrakenBroker(BaseBroker):
                     # Update tracking
                     self._last_nonce = current_nonce
                     
-                    # Persist to file for restart-safety
+                    # Persist to account-specific file for restart-safety
                     try:
-                        with open(NONCE_FILE, "w") as f:
+                        with open(self._nonce_file, "w") as f:
                             f.write(str(current_nonce))
                     except IOError as e:
                         logging.debug(f"Could not persist nonce: {e}")
@@ -3982,9 +4044,9 @@ class KrakenBroker(BaseBroker):
                             increment_based = self._last_nonce + nonce_jump
                             self._last_nonce = max(time_based, increment_based)
                             
-                            # Persist the jumped nonce
+                            # Persist the jumped nonce to account-specific file
                             try:
-                                with open(NONCE_FILE, "w") as f:
+                                with open(self._nonce_file, "w") as f:
                                     f.write(str(self._last_nonce))
                             except IOError as e:
                                 logging.debug(f"Could not persist jumped nonce: {e}")
