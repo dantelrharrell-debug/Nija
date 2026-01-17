@@ -61,6 +61,9 @@ import threading
 from typing import Dict, List, Optional, Set
 from datetime import datetime
 
+# Import BrokerType for connection order enforcement
+from broker_manager import BrokerType
+
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
@@ -658,6 +661,18 @@ class IndependentBrokerTrader:
             for user_id, user_brokers in self.multi_account_manager.user_brokers.items():
                 for broker_type, broker in user_brokers.items():
                     broker_name = f"{user_id}_{broker_type.value}"
+                    
+                    # CRITICAL FIX (Jan 17, 2026): Disable independent strategy loops for Kraken USER accounts
+                    # When copy trading is active, Kraken users should ONLY execute copied trades from master
+                    # They should NOT run their own independent strategy loops (prevents conflicting signals)
+                    if broker_type == BrokerType.KRAKEN:
+                        # Check if Kraken master is connected (indicates copy trading is active)
+                        kraken_master_connected = self.multi_account_manager.is_master_connected(BrokerType.KRAKEN)
+                        if kraken_master_connected:
+                            logger.info(f"⏭️  Skipping {broker_name} - Kraken copy trading active (users receive copied trades only)")
+                            logger.info(f"   ℹ️  {user_id} will execute trades copied from Kraken MASTER")
+                            logger.info(f"   ℹ️  Independent strategy loop disabled for copy trading mode")
+                            continue
                     
                     # Only start threads for funded user brokers
                     if user_id not in funded_users or broker_type.value not in funded_users[user_id]:

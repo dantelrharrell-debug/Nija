@@ -426,15 +426,35 @@ class MultiAccountBrokerManager:
             master_connected = self.is_master_connected(broker_type)
             
             if not master_connected:
-                logger.warning("=" * 70)
-                logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Master account!")
-                logger.warning(f"   User: {user.name} ({user.user_id})")
-                logger.warning(f"   Master {broker_type.value.upper()} account is NOT connected")
-                logger.warning("   🔧 RECOMMENDATION: Configure Master account credentials first")
-                logger.warning(f"      Master should be PRIMARY, users should be SECONDARY")
-                logger.warning("=" * 70)
-                # Allow connection to proceed - user may want to trade with just user account
-                # But log the warning so they know this is not the ideal setup
+                # CRITICAL FIX (Jan 17, 2026): ENFORCE connection order for Kraken copy trading
+                # For Kraken, user accounts MUST NOT connect without master (prevents nonce conflicts & broken copy trading)
+                # For other brokers, allow connection with warning (user may want standalone trading)
+                if broker_type == BrokerType.KRAKEN:
+                    logger.error("=" * 70)
+                    logger.error(f"❌ KRAKEN USER CONNECTION BLOCKED: Master NOT connected")
+                    logger.error(f"   User: {user.name} ({user.user_id})")
+                    logger.error(f"   Master Kraken account is NOT connected")
+                    logger.error("")
+                    logger.error("   🔧 REQUIRED STEPS:")
+                    logger.error("      1. Connect Kraken MASTER account first")
+                    logger.error("      2. Confirm MASTER is registered and connected")
+                    logger.error("      3. Initialize copy trading engine")
+                    logger.error("      4. Then connect USER accounts")
+                    logger.error("")
+                    logger.error("   📖 This ensures proper copy trading and prevents nonce conflicts")
+                    logger.error("=" * 70)
+                    # Skip this user - do not attempt connection
+                    continue
+                else:
+                    logger.warning("=" * 70)
+                    logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Master account!")
+                    logger.warning(f"   User: {user.name} ({user.user_id})")
+                    logger.warning(f"   Master {broker_type.value.upper()} account is NOT connected")
+                    logger.warning("   🔧 RECOMMENDATION: Configure Master account credentials first")
+                    logger.warning(f"      Master should be PRIMARY, users should be SECONDARY")
+                    logger.warning("=" * 70)
+                    # Allow connection to proceed for non-Kraken brokers - user may want standalone trading
+                    # But log the warning so they know this is not the ideal setup
             
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
