@@ -61,6 +61,12 @@ import threading
 from typing import Dict, List, Optional, Set
 from datetime import datetime
 
+# Import BrokerType for connection order enforcement
+try:
+    from bot.broker_manager import BrokerType
+except ImportError:
+    from broker_manager import BrokerType
+
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
@@ -659,12 +665,6 @@ class IndependentBrokerTrader:
                     # CRITICAL FIX (Jan 17, 2026): Disable independent strategy loops for Kraken USER accounts
                     # When copy trading is active, Kraken users should ONLY execute copied trades from master
                     # They should NOT run their own independent strategy loops (prevents conflicting signals)
-                    # Import at runtime to avoid circular dependency
-                    try:
-                        from bot.broker_manager import BrokerType
-                    except ImportError:
-                        from broker_manager import BrokerType
-                    
                     if broker_type == BrokerType.KRAKEN:
                         # Check if Kraken master is connected (indicates copy trading is active)
                         kraken_master_connected = self.multi_account_manager.is_master_connected(BrokerType.KRAKEN)
