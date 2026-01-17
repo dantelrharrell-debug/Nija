@@ -37,6 +37,7 @@ nija.log.*
 
 # Kraken nonce persistence (contains state, should not be committed)
 kraken_nonce.txt
+bot/kraken_nonce.txt
 
 # Temporary test files
 test_broker_get_all_products.py

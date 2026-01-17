@@ -30,15 +30,15 @@ def test_nonce_persistence():
     # Clean up any existing nonce file
     if os.path.exists(NONCE_FILE):
         os.remove(NONCE_FILE)
-        print(f"✓ Cleaned up existing {NONCE_FILE}")
+        print(f"✓ Cleaned up existing nonce file")
     
     print("\n--- TEST 1: Initial nonce generation and persistence ---")
     nonce1 = get_kraken_nonce()
     print(f"Generated nonce: {nonce1}")
     
     # Verify file was created
-    assert os.path.exists(NONCE_FILE), f"❌ FAIL: {NONCE_FILE} not created"
-    print(f"✓ {NONCE_FILE} created")
+    assert os.path.exists(NONCE_FILE), f"❌ FAIL: Nonce file not created"
+    print(f"✓ Nonce file created")
     
     # Read file content
     with open(NONCE_FILE, "r") as f:
@@ -131,7 +131,7 @@ def test_nonce_persistence():
     # Cleanup
     if os.path.exists(NONCE_FILE):
         os.remove(NONCE_FILE)
-        print(f"✓ Cleaned up {NONCE_FILE}")
+        print(f"✓ Cleaned up nonce file")
     
     return True
 

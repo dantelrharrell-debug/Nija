@@ -3406,7 +3406,7 @@ class BinanceBroker(BaseBroker):
 # ============================================================================
 
 _nonce_lock = threading.Lock()
-NONCE_FILE = "kraken_nonce.txt"
+NONCE_FILE = os.path.join(os.path.dirname(__file__), "kraken_nonce.txt")
 
 def get_kraken_nonce():
     """
@@ -3429,10 +3429,11 @@ def get_kraken_nonce():
         if os.path.exists(NONCE_FILE):
             try:
                 with open(NONCE_FILE, "r") as f:
-                    last_nonce = int(f.read().strip() or 0)
+                    content = f.read().strip()
+                    if content:
+                        last_nonce = int(content)
             except (ValueError, IOError) as e:
                 logging.debug(f"Could not read nonce file: {e}, starting fresh")
-                last_nonce = 0
 
         now = int(time.time() * 1000000)  # Use microseconds to match existing implementation
         nonce = max(now, last_nonce + 1)
@@ -3441,7 +3442,7 @@ def get_kraken_nonce():
             with open(NONCE_FILE, "w") as f:
                 f.write(str(nonce))
         except IOError as e:
-            logging.warning(f"Could not write nonce file: {e}")
+            logging.debug(f"Could not write nonce file: {e}")
 
         return nonce
 
