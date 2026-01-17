@@ -1,6 +1,20 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-**🚀 New to NIJA?** See the **[Getting Started Guide](GETTING_STARTED.md)** for 5-minute setup!
+## ⚡ **QUICK START: Start Trading in 60 Seconds**
+
+**No credentials? No problem!** Get NIJA trading immediately:
+
+```bash
+python3 enable_trading_now.py
+```
+
+This auto-configures **paper trading mode** with virtual $10,000 - zero risk, zero setup!
+
+**See**: [START_TRADING_NOW.md](START_TRADING_NOW.md) for all options (paper mode, Kraken demo, production)
+
+---
+
+**🚀 New to NIJA?** See the **[Getting Started Guide](GETTING_STARTED.md)** for complete setup!
 
 ## 💎 Kraken Trading - Fully Enabled
 
