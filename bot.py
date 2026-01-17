@@ -416,6 +416,12 @@ def main():
                 if broker and broker.connected:
                     connected_master_brokers.append(broker_type.value.upper())
         
+        # CRITICAL FIX: Check for brokers with credentials configured but failed to connect
+        # This catches cases where credentials are set but connection failed due to:
+        # - SDK not installed (krakenex/pykrakenapi missing)
+        # - Permission errors (API key lacks required permissions)
+        # - Nonce errors (timing issues)
+        # - Network errors
         # Check if Kraken was expected but didn't connect
         if kraken_master_configured and 'KRAKEN' not in connected_master_brokers:
             failed_master_brokers.append('KRAKEN')
@@ -445,7 +451,12 @@ def main():
                                 error_msg = failed_broker.last_connection_error
                         
                         if error_msg:
-                            logger.warning(f"      → Error: {error_msg}")
+                            logger.error("")
+                            logger.error("      ═══════════════════════════════════════════════════════════")
+                            logger.error(f"      🚨 KRAKEN MASTER CREDENTIALS ARE SET BUT CONNECTION FAILED")
+                            logger.error("      ═══════════════════════════════════════════════════════════")
+                            logger.error(f"      ❌ Error: {error_msg}")
+                            logger.error("")
                             # Provide specific guidance based on error type
                             # Check for SDK import errors (Kraken-specific patterns to avoid false positives)
                             is_sdk_error = any(pattern in error_msg.lower() for pattern in [
@@ -488,10 +499,36 @@ def main():
                             else:
                                 logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
                         else:
-                            logger.warning("      → Check logs above for Kraken connection errors")
-                            logger.warning("      → Verify credentials at https://www.kraken.com/u/security/api")
-                        
-                        logger.warning("      → Run: python3 test_kraken_connection_live.py to diagnose")
+                            # No error message was captured - this shouldn't happen but handle gracefully
+                            logger.error("")
+                            logger.error("      ═══════════════════════════════════════════════════════════")
+                            logger.error(f"      🚨 KRAKEN MASTER CREDENTIALS ARE SET BUT CONNECTION FAILED")
+                            logger.error("      ═══════════════════════════════════════════════════════════")
+                            logger.error("      ❌ No specific error message was captured")
+                            logger.error("")
+                            logger.error("      📋 POSSIBLE CAUSES:")
+                            logger.error("         1. Kraken SDK not installed (krakenex/pykrakenapi)")
+                            logger.error("         2. API key permissions insufficient")
+                            logger.error("         3. Network connectivity issues")
+                            logger.error("         4. Nonce synchronization errors")
+                            logger.error("         5. API key expired or invalid")
+                            logger.error("")
+                            logger.error("      🔧 TROUBLESHOOTING STEPS:")
+                            logger.error("         1. Check logs above for 'Kraken connection' errors")
+                            logger.error("         2. Verify SDK installation:")
+                            logger.error("            python3 -c 'import krakenex; import pykrakenapi; print(\"OK\")'")
+                            logger.error("         3. Test credentials:")
+                            logger.error("            python3 test_kraken_connection_live.py")
+                            logger.error("         4. Verify API permissions at:")
+                            logger.error("            https://www.kraken.com/u/security/api")
+                            logger.error("            Required: Query Funds, Query/Create/Cancel Orders")
+                            logger.error("")
+                            logger.error("      📖 DETAILED GUIDES:")
+                            logger.error("         • SOLUTION_KRAKEN_LIBRARY_NOT_INSTALLED.md")
+                            logger.error("         • KRAKEN_PERMISSION_ERROR_FIX.md")
+                            logger.error("         • KRAKEN_NOT_CONNECTING_DIAGNOSIS.md")
+                            logger.error("      ═══════════════════════════════════════════════════════════")
+                            logger.error("")
             
             # Show warning if Kraken Master credentials are not configured
             if kraken_not_configured:
