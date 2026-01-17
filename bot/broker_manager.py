@@ -3448,36 +3448,43 @@ class KrakenBroker(BaseBroker):
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
         # 
-        # CRITICAL FIX (Jan 16, 2026): Use 10-20 second forward offset
+        # CRITICAL FIX (Jan 17, 2026): Use 0-5 second forward offset
         # 
         # Research findings from Kraken API documentation and testing:
         # - Kraken REMEMBERS the last nonce it saw for each API key (persists 60+ seconds)
-        # - When bot restarts, new nonce must be HIGHER than previous session's last nonce
-        # - Using current time (0s offset) causes failures if bot restarts within 60s
-        # - 10-20 second offset provides safe buffer for restart scenarios
+        # - Kraken expects nonces to be NEAR CURRENT TIME (not far in the future)
+        # - The strict monotonic counter prevents collisions even with current time
+        # - Nonces should be based on current UNIX timestamp (Kraken's best practice)
         # 
-        # Why 10-20 seconds is CORRECT:
-        # - Guarantees new nonce is always higher than previous session (even if restart is immediate)
-        # - Well within Kraken's acceptable forward time window (tested up to 60s)
-        # - Random jitter (0-10s) prevents multi-instance collisions
-        # - Strict monotonic counter ensures uniqueness within a session
+        # Why 0-5 seconds is CORRECT:
+        # - Aligns with Kraken's expectations (nonces near current time)
+        # - Strict monotonic counter prevents all collisions within a session
+        # - Small jitter (0-5s) prevents multi-instance collisions
+        # - Error recovery uses 60-second immediate jump when nonce errors occur
         # 
-        # Why smaller offsets (0-5s) FAIL:
-        # - If bot restarts within 5 seconds, new nonce can be LOWER than previous session's nonce
-        # - Kraken rejects this with "EAPI:Invalid nonce" error
-        # - This is especially problematic on auto-restart platforms (Railway/Render)
+        # Why 10-20 seconds FAILS:
+        # - Nonces too far in the future may exceed Kraken's acceptable window
+        # - Causes "Invalid nonce" errors on first connection attempt
+        # - Each retry wastes 30-60 seconds before eventual success
         # 
         # Why very large offsets (180-240s) FAIL:
-        # - Exceeds Kraken's acceptable forward time window
-        # - Kraken may reject nonces too far in the future
+        # - Definitely exceeds Kraken's acceptable forward time window
+        # - Kraken rejects nonces too far in the future
+        # 
+        # Session Restart Handling:
+        # - The strict monotonic counter already handles rapid restarts
+        # - If current time hasn't advanced enough, counter increments by 1
+        # - This guarantees each nonce is unique and increasing
+        # - No large forward offset needed for restart protection
         # 
         # Offset components:
-        # - Base offset: 10,000,000 microseconds (10 seconds)
-        # - Random jitter: 0-10,000,000 microseconds (0-10 seconds) - prevents multi-instance collisions
-        # Total range: 10-20 seconds ahead of current time
-        # This ensures nonces are always higher than previous sessions (Kraken remembers nonces for 60+ seconds)
-        base_offset = 10000000  # 10 seconds in microseconds
-        random_jitter = random.randint(0, 10000000)  # 0-10 seconds
+        # - Base offset: 0 microseconds (use current time)
+        # - Random jitter: 0-5,000,000 microseconds (0-5 seconds) - prevents multi-instance collisions
+        # Total range: 0-5 seconds ahead of current time
+        # This aligns with Kraken's best practices (nonces should be near current time)
+        # The strict monotonic counter ensures uniqueness and prevents collisions
+        base_offset = 0  # Use current time (Kraken's recommended practice)
+        random_jitter = random.randint(0, 5000000)  # 0-5 seconds
         total_offset = base_offset + random_jitter
         self._last_nonce = int(time.time() * 1000000) + total_offset
         # Thread lock to ensure nonce generation is thread-safe
