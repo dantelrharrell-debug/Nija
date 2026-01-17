@@ -3663,6 +3663,7 @@ class KrakenBroker(BaseBroker):
                     offset_seconds = (self._last_nonce - current_time_us) / 1000000.0
                     logger.debug(f"   Initial nonce: {self._last_nonce} (current time + {offset_seconds:.2f}s)")
             except AttributeError as e:
+                self.last_connection_error = f"Nonce generator override failed: {str(e)}"
                 logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
                 logger.error("   This may indicate a version incompatibility with krakenex library")
                 logger.error("   Please report this issue with your krakenex version")
@@ -4008,7 +4009,7 @@ class KrakenBroker(BaseBroker):
                         elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
                             logger.warning("⚠️  Kraken connection failed - network issue or API unavailable")
                         else:
-                            logger.warning(f"⚠️  Kraken connection failed: {e}")
+                            logger.warning(f"⚠️  Kraken connection failed: {error_msg}")
                         return False
             
             # Should never reach here, but just in case
