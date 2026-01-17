@@ -7,6 +7,7 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
+import functools
 import json
 import logging
 import os
@@ -15,6 +16,23 @@ import time
 import traceback
 import uuid
 import threading
+
+# Import requests exceptions for proper timeout error handling
+# These are used in KrakenBroker.connect() to detect network timeouts
+# Note: The flag name is specific to clarify we're checking for timeout exception classes,
+# not just whether requests is available (it's used elsewhere for HTTP calls)
+try:
+    from requests.exceptions import (
+        Timeout, 
+        ReadTimeout, 
+        ConnectTimeout, 
+        ConnectionError as RequestsConnectionError  # Avoid shadowing built-in ConnectionError
+    )
+    REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    # If requests isn't available, we'll fallback to string matching
+    # ModuleNotFoundError is more specific but we catch both for compatibility
+    REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE = False
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -3386,6 +3404,11 @@ class KrakenBroker(BaseBroker):
     Python wrapper: https://github.com/veox/python3-krakenex
     """
     
+    # HTTP timeout for Kraken API calls (in seconds)
+    # This prevents indefinite hanging if the API is slow or unresponsive
+    # 30 seconds is reasonable as Kraken normally responds in 1-5 seconds
+    API_TIMEOUT_SECONDS = 30
+    
     # Class-level flag to track if detailed permission error instructions have been logged
     # This prevents spamming the logs with duplicate permission error messages
     # The detailed instructions are logged ONCE GLOBALLY (not once per account)
@@ -3613,6 +3636,21 @@ class KrakenBroker(BaseBroker):
             # than the previous one, even if requests happen in the same microsecond.
             self.api = krakenex.API(key=api_key, secret=api_secret)
             
+            # CRITICAL FIX (Jan 17, 2026): Set timeout on HTTP requests to prevent hanging
+            # krakenex doesn't set a default timeout, causing indefinite hangs if API is slow.
+            # We use functools.partial to patch the session (standard pattern for krakenex).
+            # Per-instance modification - no global state affected. Degrades gracefully if session changes.
+            try:
+                self.api.session.request = functools.partial(
+                    self.api.session.request, 
+                    timeout=self.API_TIMEOUT_SECONDS
+                )
+                logger.debug(f"✅ HTTP timeout configured ({self.API_TIMEOUT_SECONDS}s) for {cred_label}")
+            except AttributeError as e:
+                # If session attribute doesn't exist, log warning but continue
+                # This maintains backward compatibility if krakenex changes its internals
+                logger.warning(f"⚠️  Could not configure HTTP timeout: {e}")
+            
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
             
@@ -3685,6 +3723,10 @@ class KrakenBroker(BaseBroker):
             
             for attempt in range(1, max_attempts + 1):
                 try:
+                    # Log connection attempt at INFO level so users can see progress
+                    if attempt == 1:
+                        logger.info(f"   Testing Kraken connection ({cred_label})...")
+                    
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
                         # For "Temporary lockout" errors, use much longer delays: 120s, 240s, 360s, 480s (2min, 4min, 6min, 8min)
@@ -3693,25 +3735,22 @@ class KrakenBroker(BaseBroker):
                         if last_error_was_lockout:
                             # Linear scaling for lockout: (attempt-1) * 120s = 120s, 240s, 360s, 480s for attempts 2,3,4,5
                             delay = lockout_base_delay * (attempt - 1)
-                            # Only log retry BEFORE final attempt to reduce log spam
-                            # Don't log on final attempt since we're not retrying after that
-                            if attempt < max_attempts and logger.isEnabledFor(logging.DEBUG):
-                                logger.debug(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
+                            # Log at INFO level for long delays so users know why it's taking time
+                            if attempt < max_attempts:
+                                logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
                         elif last_error_was_nonce:
                             # Linear scaling for nonce errors: (attempt-1) * 30s = 30s, 60s, 90s, 120s for attempts 2,3,4,5
                             # Nonce errors need time for Kraken to "forget" the burned nonce window
                             delay = nonce_base_delay * (attempt - 1)
-                            # Only log retry BEFORE final attempt to reduce log spam
-                            # Don't log on final attempt since we're not retrying after that
-                            if attempt < max_attempts and logger.isEnabledFor(logging.DEBUG):
-                                logger.debug(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, nonce)")
+                            # Log at INFO level so users see progress
+                            if attempt < max_attempts:
+                                logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, nonce)")
                         else:
                             # Exponential backoff for normal errors: 5s, 10s, 20s, 40s for attempts 2,3,4,5
                             delay = base_delay * (2 ** (attempt - 2))
-                            # Only log retry BEFORE final attempt to reduce log spam
-                            # Don't log on final attempt since we're not retrying after that
-                            if attempt < max_attempts and logger.isEnabledFor(logging.DEBUG):
-                                logger.debug(f"🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
+                            # Log at INFO level so users see progress
+                            if attempt < max_attempts:
+                                logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
                         time.sleep(delay)
                         
                         # Jump nonce forward on retry to skip any potentially "burned" nonces
@@ -3895,6 +3934,38 @@ class KrakenBroker(BaseBroker):
                 except Exception as e:
                     error_msg = str(e)
                     
+                    # Check if this is a timeout or connection error from requests library
+                    # These errors should be logged clearly and are always retryable
+                    # Use the module-level flag to avoid repeated import attempts
+                    # NOTE: The imported exception classes (Timeout, etc.) are only defined when
+                    # REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE is True, so they're only used inside that branch
+                    if REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE:
+                        # Include both timeout and connection errors (network issues)
+                        # Note: Using RequestsConnectionError alias to avoid shadowing built-in ConnectionError
+                        is_timeout_error = isinstance(e, (Timeout, ReadTimeout, ConnectTimeout, RequestsConnectionError))
+                    else:
+                        # Fallback to string matching if requests isn't available
+                        is_timeout_error = (
+                            'timeout' in error_msg.lower() or
+                            'timed out' in error_msg.lower() or
+                            'connection' in error_msg.lower()
+                        )
+                    
+                    if is_timeout_error:
+                        # Timeout/connection errors are common and expected - log at INFO level, not ERROR
+                        # After logging, we 'continue' to the next iteration which applies exponential
+                        # backoff via the retry delay logic at the top of the loop
+                        if attempt < max_attempts:
+                            logger.info(f"   ⏱️  Connection timeout/network error ({cred_label}) - attempt {attempt}/{max_attempts}")
+                            logger.info(f"   Will retry with exponential backoff...")
+                            continue  # Jump to next iteration, which adds delay before retry
+                        else:
+                            self.last_connection_error = "Connection timeout or network error (API unresponsive)"
+                            logger.warning(f"⚠️  Kraken connection failed after {max_attempts} timeout attempts")
+                            logger.warning(f"   The Kraken API may be experiencing issues or network connectivity problems")
+                            logger.warning(f"   Will try again on next connection cycle")
+                            return False
+                    
                     # CRITICAL FIX: Check if this is a permission error in the exception path
                     # Permission errors can also be raised as exceptions by krakenex/pykrakenapi
                     is_permission_error = any(keyword in error_msg.lower() for keyword in [
@@ -3983,22 +4054,21 @@ class KrakenBroker(BaseBroker):
                         if is_nonce_error:
                             self._immediate_nonce_jump()
                         
-                        # Reduce log spam for transient errors
-                        # - Nonce errors: Only log at DEBUG level (transient, will auto-retry)
-                        # - Other retryable errors: Log as WARNING only on first attempt
-                        # - All errors: Log at DEBUG level for diagnostics
+                        # Log retryable errors appropriately:
+                        # - Timeout errors: Already logged above (special case)
+                        # - Nonce errors: Log at INFO level (transient, will auto-retry)
+                        # - Lockout/other errors: Log at WARNING on first attempt, INFO on retries
                         error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
                         
-                        # For nonce errors, only log at DEBUG level to reduce spam
-                        # These are transient and automatically retried with nonce jumps
+                        # For nonce errors, log at INFO level so users see progress
                         if is_nonce_error:
-                            logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msg}")
-                        # For lockout/other errors, log at WARNING on first attempt only
+                            logger.info(f"   🔄 Kraken ({cred_label}) nonce error - auto-retry (attempt {attempt}/{max_attempts})")
+                        # For lockout/other errors, log at WARNING on first attempt, INFO on retries
                         elif attempt == 1:
                             logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msg}")
-                        # All retries after first attempt: DEBUG level only
+                        # All retries after first attempt: INFO level for visibility
                         else:
-                            logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msg}")
+                            logger.info(f"   🔄 Kraken ({cred_label}) retry {attempt}/{max_attempts} ({error_type})")
                         continue
                     else:
                         # Handle errors gracefully for non-retryable or final attempt
