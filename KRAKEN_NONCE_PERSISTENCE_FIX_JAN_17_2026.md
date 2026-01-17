@@ -12,12 +12,14 @@ The Kraken API requires strictly monotonic nonces (always increasing) for all pr
 
 ## ✅ Solution Implemented
 
-Added file-based nonce persistence (`kraken_nonce.txt`) with the following features:
+Added file-based nonce persistence (`data/kraken_nonce.txt`) with the following features:
+
+**Update (Jan 17, 2026)**: Moved nonce file from `bot/kraken_nonce.txt` to `data/kraken_nonce.txt` for consistent persistence with other state files (progressive_targets.json, capital_allocation.json, open_positions.json).
 
 ### 1. Persistent Nonce Storage
 
 Created `get_kraken_nonce()` helper function that:
-- **Loads** last nonce from `kraken_nonce.txt` (if exists)
+- **Loads** last nonce from `data/kraken_nonce.txt` (if exists)
 - **Generates** new nonce using `max(current_time_us, last_nonce + 1)`
 - **Persists** new nonce to file for next restart
 - **Thread-safe** using `threading.Lock`
@@ -183,6 +185,7 @@ CodeQL security scan:
 2. **`.gitignore`**
    - Added `kraken_nonce.txt`
    - Added `bot/kraken_nonce.txt`
+   - Added `data/kraken_nonce.txt` (Jan 17, 2026)
 
 3. **`test_nonce_persistence.py`** (new)
    - Comprehensive test suite
@@ -226,7 +229,7 @@ python3 main.py
 
 ### Monitoring
 
-The nonce file (`bot/kraken_nonce.txt`) contains a single integer:
+The nonce file (`data/kraken_nonce.txt`) contains a single integer:
 - Current value: `1768670854079120` (example)
 - Format: Microseconds since Unix epoch
 - Updates: On every Kraken API call
@@ -267,7 +270,7 @@ Current file-based approach works for:
 
 ### File Persistence
 
-The `kraken_nonce.txt` file must persist across restarts:
+The `data/kraken_nonce.txt` file must persist across restarts:
 - Railway/Render: ✅ Works (file persists in container)
 - Docker: ✅ Use volume mount
 - Kubernetes: ✅ Use persistent volume
@@ -282,7 +285,7 @@ For horizontal scaling, upgrade to Redis/database-based nonce.
 
 ### Cleanup
 
-Do NOT delete `kraken_nonce.txt` unless:
+Do NOT delete `data/kraken_nonce.txt` unless:
 - Bot is stopped
 - Starting completely fresh
 - Debugging nonce issues

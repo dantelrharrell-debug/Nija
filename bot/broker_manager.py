@@ -3445,14 +3445,19 @@ class BinanceBroker(BaseBroker):
 # ============================================================================
 
 _nonce_lock = threading.Lock()
-NONCE_FILE = os.path.join(os.path.dirname(__file__), "kraken_nonce.txt")
+# CRITICAL FIX (Jan 17, 2026): Move nonce file to data directory for consistent persistence
+# Other persistent state (progressive_targets.json, capital_allocation.json, open_positions.json)
+# is stored in /data directory. Nonce file should follow the same pattern.
+# This ensures proper persistence in containerized deployments (Railway, Docker, etc.)
+_data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+NONCE_FILE = os.path.join(_data_dir, "kraken_nonce.txt")
 
 def get_kraken_nonce():
     """
     Generate Kraken nonce with persistence across restarts.
     
     This function:
-    1. Loads last nonce from kraken_nonce.txt (if exists)
+    1. Loads last nonce from data/kraken_nonce.txt (if exists)
     2. Generates new nonce = max(current_time_us, last_nonce + 1)
     3. Persists new nonce to file
     4. Returns new nonce
@@ -3464,6 +3469,9 @@ def get_kraken_nonce():
         int: New nonce (microseconds since epoch)
     """
     with _nonce_lock:
+        # Ensure data directory exists (lazy initialization)
+        os.makedirs(_data_dir, exist_ok=True)
+        
         last_nonce = 0
         if os.path.exists(NONCE_FILE):
             try:
