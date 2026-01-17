@@ -1140,7 +1140,7 @@ class TradingStrategy:
                     if not entry_price_available:
                         logger.warning(f"   ⚠️ No entry price tracked for {symbol} - attempting auto-import")
                         
-                        # CRITICAL FIX (Jan 17, 2026): Auto-import orphaned positions instead of aggressive exit
+                        # CRITICAL FIX: Auto-import orphaned positions instead of aggressive exit
                         # This prevents selling potentially profitable positions
                         # Import uses current price as estimated entry (P&L starts from zero)
                         auto_import_success = False
@@ -1161,13 +1161,33 @@ class TradingStrategy:
                                 
                                 if auto_import_success:
                                     logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0)")
-                                    logger.info(f"      Position now tracked - will use profit targets instead of aggressive exit")
-                                    # Mark that entry price is now available
-                                    entry_price_available = True
-                                    # Update entry time as now
-                                    entry_time_available = True
-                                    position_age_hours = 0
-                                    # Continue to normal position management (profit targets, stop loss, etc.)
+                                    logger.info(f"      Position now tracked - will use profit targets in next cycle")
+                                    
+                                    # Re-fetch position data to get accurate tracking info
+                                    # This ensures control flow variables reflect actual state
+                                    try:
+                                        tracked_position = active_broker.position_tracker.get_position(symbol)
+                                        if tracked_position:
+                                            entry_price_available = True
+                                            
+                                            # Get entry time from newly tracked position
+                                            entry_time = tracked_position.get('first_entry_time')
+                                            if entry_time:
+                                                try:
+                                                    entry_dt = datetime.fromisoformat(entry_time)
+                                                    now = datetime.now()
+                                                    position_age_hours = (now - entry_dt).total_seconds() / 3600
+                                                    entry_time_available = True
+                                                except Exception:
+                                                    # Just imported, so age should be ~0
+                                                    entry_time_available = True
+                                                    position_age_hours = 0
+                                            
+                                            logger.info(f"      Position verified in tracker - aggressive exits disabled")
+                                    except Exception as verify_err:
+                                        logger.warning(f"      Could not verify imported position: {verify_err}")
+                                        # Still mark as available since track_entry succeeded
+                                        entry_price_available = True
                                 else:
                                     logger.error(f"   ❌ Auto-import failed for {symbol} - will use fallback exit logic")
                             except Exception as import_err:

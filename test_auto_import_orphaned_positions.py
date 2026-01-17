@@ -353,7 +353,8 @@ def test_fallback_logic():
     print("  🚨 ORPHANED POSITION EXIT: {symbol} (RSI=XX < 52, no entry price)")
     print()
     
-    print("✅ Fallback logic is implemented in trading_strategy.py lines 1173-1202")
+    print("✅ Fallback logic is implemented in trading_strategy.py")
+    print("   (search for 'ORPHANED POSITION' to find the relevant code)")
     print()
     
     return 0
