@@ -538,7 +538,7 @@ def main():
                             logger.error("         • SOLUTION_KRAKEN_LIBRARY_NOT_INSTALLED.md")
                             logger.error("         • KRAKEN_PERMISSION_ERROR_FIX.md")
                             logger.error("         • KRAKEN_NOT_CONNECTING_DIAGNOSIS.md")
-                            logger.error("      ═══════════════════════════════════════════════════════════")
+                            logger.error(f"      {ERROR_SEPARATOR}")
                             logger.error("")
             
             # Show warning if Kraken Master credentials are not configured
