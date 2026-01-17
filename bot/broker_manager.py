@@ -2298,9 +2298,8 @@ class CoinbaseBroker(BaseBroker):
             # COPY TRADING: Emit trade signal for master account trades
             # This allows user accounts to replicate master trades automatically
             try:
-                # Only emit signals for MASTER accounts
-                account_type = getattr(self, 'account_type', None)
-                if account_type is None or account_type == AccountType.MASTER:
+                # Only emit signals for MASTER accounts (not USER accounts)
+                if self.account_type == AccountType.MASTER:
                     from trade_signal_emitter import emit_trade_signal
                     
                     # Get current balance for position sizing

@@ -23,13 +23,14 @@ logger = logging.getLogger('nija.position_sizer')
 # These prevent creating dust positions that can't be sold
 MIN_POSITION_USD = 1.0  # Minimum $1 USD value for any position
 MIN_BASE_SIZES = {
-    # Coinbase minimums (approximate)
-    'BTC': 0.00001,  # ~$0.45 at $45k
-    'ETH': 0.0001,   # ~$0.30 at $3k
-    'SOL': 0.01,     # ~$1.00 at $100
-    'XRP': 1.0,      # ~$0.50 at $0.50
-    'ADA': 1.0,      # ~$0.50 at $0.50
-    'DOGE': 1.0,     # ~$0.10 at $0.10
+    # Coinbase minimums (approximate - updated Jan 2026)
+    # NOTE: USD values in comments are examples at Jan 2026 prices and will change
+    'BTC': 0.00001,  # Example: ~$0.45 at $45k BTC
+    'ETH': 0.0001,   # Example: ~$0.30 at $3k ETH
+    'SOL': 0.01,     # Example: ~$1.00 at $100 SOL
+    'XRP': 1.0,      # Example: ~$0.50 at $0.50 XRP
+    'ADA': 1.0,      # Example: ~$0.50 at $0.50 ADA
+    'DOGE': 1.0,     # Example: ~$0.10 at $0.10 DOGE
 }
 
 
