@@ -23,6 +23,8 @@ except ImportError:
     from broker_manager import BrokerType
 
 # Constants for error formatting
+# Separator length of 63 matches the width of the error message
+# "🚨 KRAKEN MASTER CREDENTIALS ARE SET BUT CONNECTION FAILED" (61 chars + 2 spaces padding)
 ERROR_SEPARATOR = "═" * 63
 
 # EMERGENCY STOP CHECK
