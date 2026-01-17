@@ -3659,8 +3659,7 @@ class KrakenBroker(BaseBroker):
         if account_type == AccountType.MASTER:
             assert "master" in self._nonce_file.lower(), f"MASTER nonce file must contain 'master': {self._nonce_file}"
         else:
-            # USER accounts: user_id is guaranteed to exist (validated above)
-            assert user_id is not None, "USER account must have user_id"
+            # USER accounts: user_id is guaranteed to be non-None (validated above at line 3607-3608)
             assert user_id.lower() in self._nonce_file.lower(), f"USER nonce file must contain user_id '{user_id}': {self._nonce_file}"
         
         logger.debug(f"   Nonce file for {self.account_identifier}: {self._nonce_file}")

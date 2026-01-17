@@ -62,10 +62,7 @@ from typing import Dict, List, Optional, Set
 from datetime import datetime
 
 # Import BrokerType for connection order enforcement
-try:
-    from bot.broker_manager import BrokerType
-except ImportError:
-    from broker_manager import BrokerType
+from broker_manager import BrokerType
 
 logger = logging.getLogger("nija.independent_trader")
 
