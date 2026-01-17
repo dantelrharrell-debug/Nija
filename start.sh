@@ -37,7 +37,7 @@ if [ -n "${KRAKEN_MASTER_API_KEY}" ] && [ -n "${KRAKEN_MASTER_API_SECRET}" ]; th
         echo "The Kraken SDK (krakenex + pykrakenapi) is required when Kraken credentials are configured."
         echo ""
         echo "🔧 SOLUTION:"
-        echo "   1. Verify railway.json uses 'builder': 'DOCKERFILE' (not RAILPACK)"
+        echo "   1. Verify railway.json uses 'builder': 'DOCKERFILE' (not NIXPACKS)"
         echo "   2. Trigger a fresh deployment (not just restart):"
         echo "      Railway: Settings → 'Redeploy'"
         echo "      Render: Manual Deploy → 'Clear build cache & deploy'"
