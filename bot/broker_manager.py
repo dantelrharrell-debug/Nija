@@ -20,10 +20,16 @@ import threading
 # Import requests exceptions for proper timeout error handling
 # These are used in KrakenBroker.connect() to detect network timeouts
 try:
-    from requests.exceptions import Timeout, ReadTimeout, ConnectTimeout, ConnectionError
+    from requests.exceptions import (
+        Timeout, 
+        ReadTimeout, 
+        ConnectTimeout, 
+        ConnectionError as RequestsConnectionError  # Avoid shadowing built-in ConnectionError
+    )
     REQUESTS_EXCEPTIONS_AVAILABLE = True
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     # If requests isn't available, we'll fallback to string matching
+    # ModuleNotFoundError is more specific but we catch both for compatibility
     REQUESTS_EXCEPTIONS_AVAILABLE = False
 
 # Try to load dotenv if available, but don't fail if not
@@ -3640,6 +3646,9 @@ class KrakenBroker(BaseBroker):
             #   * We're adding a default timeout kwarg, not changing the method signature
             #   * The timeout can still be overridden per-call if needed
             #   * Used widely in the Python/requests community for exactly this purpose
+            #   * Each KrakenBroker instance has its own API object with its own session
+            #     so modifications are isolated to this specific broker instance
+            #   * No global state is modified - only this instance's session
             # - The try-except ensures backward compatibility if krakenex changes internals
             # - If krakenex removes the session attribute, the bot will log a warning and
             #   continue (degrading gracefully to potentially longer connection attempts)
@@ -3941,7 +3950,8 @@ class KrakenBroker(BaseBroker):
                     # Use the module-level flag to avoid repeated import attempts
                     if REQUESTS_EXCEPTIONS_AVAILABLE:
                         # Include both timeout and connection errors (network issues)
-                        is_timeout_error = isinstance(e, (Timeout, ReadTimeout, ConnectTimeout, ConnectionError))
+                        # Note: Using RequestsConnectionError alias to avoid shadowing built-in ConnectionError
+                        is_timeout_error = isinstance(e, (Timeout, ReadTimeout, ConnectTimeout, RequestsConnectionError))
                     else:
                         # Fallback to string matching if requests isn't available
                         is_timeout_error = (
@@ -3952,10 +3962,12 @@ class KrakenBroker(BaseBroker):
                     
                     if is_timeout_error:
                         # Timeout/connection errors are common and expected - log at INFO level, not ERROR
+                        # After logging, we 'continue' to the next iteration which applies exponential
+                        # backoff via the retry logic at the top of the loop (lines 3708-3732)
                         if attempt < max_attempts:
                             logger.info(f"   ⏱️  Connection timeout/network error ({cred_label}) - attempt {attempt}/{max_attempts}")
                             logger.info(f"   Will retry with exponential backoff...")
-                            continue
+                            continue  # Jump to next iteration, which adds delay before retry
                         else:
                             self.last_connection_error = "Connection timeout or network error (API unresponsive)"
                             logger.warning(f"⚠️  Kraken connection failed after {max_attempts} timeout attempts")
