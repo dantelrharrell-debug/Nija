@@ -25,11 +25,11 @@ Changed Railway configuration to use Dockerfile:
 ```json
 {
   "build": {
-    "builder": "DOCKERFILE",    ← Was "RAILPACK"
-    "dockerfilePath": "Dockerfile"
+    "builder": "DOCKERFILE"
   }
 }
 ```
+(Changed from `"builder": "NIXPACKS"`)
 
 **Why this matters:**
 - Dockerfile **explicitly** installs Kraken SDK with proper dependencies

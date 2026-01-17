@@ -54,13 +54,12 @@ The latest `railway.json` now contains:
 ```json
 {
   "build": {
-    "builder": "DOCKERFILE",
-    "dockerfilePath": "Dockerfile"
+    "builder": "DOCKERFILE"
   }
 }
 ```
 
-This forces Railway to use the Dockerfile instead of Nixpacks.
+This forces Railway to use the Dockerfile instead of NIXPACKS.
 
 #### Step 2: Redeploy with Fresh Build
 1. Go to your Railway dashboard

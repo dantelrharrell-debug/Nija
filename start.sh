@@ -43,7 +43,7 @@ if [ -n "${KRAKEN_MASTER_API_KEY}" ] && [ -n "${KRAKEN_MASTER_API_SECRET}" ]; th
         echo "      Render: Manual Deploy → 'Clear build cache & deploy'"
         echo ""
         echo "   The Dockerfile includes explicit installation of krakenex and pykrakenapi."
-        echo "   If using Nixpacks/Railway buildpack instead of Docker, the installation may fail silently."
+        echo "   If using NIXPACKS/Railway buildpack instead of Docker, the installation may fail silently."
         echo ""
         echo "📖 See SOLUTION_KRAKEN_LIBRARY_NOT_INSTALLED.md for detailed troubleshooting"
         echo ""
