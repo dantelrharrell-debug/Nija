@@ -182,8 +182,10 @@ class AccountType(Enum):
 class BaseBroker(ABC):
     """Base class for all broker integrations"""
     
-    def __init__(self, broker_type: BrokerType):
+    def __init__(self, broker_type: BrokerType, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         self.broker_type = broker_type
+        self.account_type = account_type  # MASTER or USER account
+        self.user_id = user_id  # User identifier for USER accounts (None for MASTER)
         self.connected = False
         self.credentials_configured = False  # Track if credentials were provided
         self.last_connection_error = None  # Track last connection error for troubleshooting
@@ -299,9 +301,9 @@ class _CoinbaseInvalidProductFilter(logging.Filter):
 class CoinbaseBroker(BaseBroker):
     """Coinbase Advanced Trade broker implementation"""
     
-    def __init__(self):
+    def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         """Initialize Coinbase broker"""
-        super().__init__(BrokerType.COINBASE)
+        super().__init__(BrokerType.COINBASE, account_type=account_type, user_id=user_id)
         self.client = None
         self.portfolio_uuid = None
         self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
@@ -2293,6 +2295,39 @@ class CoinbaseBroker(BaseBroker):
                 except Exception as track_err:
                     logger.warning(f"   ⚠️ Position tracking failed: {track_err}")
             
+            # COPY TRADING: Emit trade signal for master account trades
+            # This allows user accounts to replicate master trades automatically
+            try:
+                # Only emit signals for MASTER accounts
+                account_type = getattr(self, 'account_type', None)
+                if account_type is None or account_type == AccountType.MASTER:
+                    from trade_signal_emitter import emit_trade_signal
+                    
+                    # Get current balance for position sizing
+                    balance_data = self._get_account_balance_detailed()
+                    master_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
+                    
+                    # Get execution price
+                    exec_price = fill_price if (fill_price and fill_price > 0) else self.get_current_price(symbol)
+                    
+                    # Determine broker name
+                    broker_name = self.broker_type.value.lower() if hasattr(self, 'broker_type') else 'coinbase'
+                    
+                    # Emit signal
+                    emit_trade_signal(
+                        broker=broker_name,
+                        symbol=symbol,
+                        side=side,
+                        price=exec_price if exec_price else 0.0,
+                        size=quantity,
+                        size_type=size_type,
+                        order_id=order_dict.get('order_id', client_order_id),
+                        master_balance=master_balance
+                    )
+            except Exception as signal_err:
+                # Don't fail the trade if signal emission fails
+                logger.warning(f"   ⚠️ Trade signal emission failed: {signal_err}")
+            
             return {
                 "status": "filled", 
                 "order": order_dict,
@@ -2674,15 +2709,13 @@ class AlpacaBroker(BaseBroker):
         Raises:
             ValueError: If account_type is USER but user_id is not provided
         """
-        super().__init__(BrokerType.ALPACA)
+        super().__init__(BrokerType.ALPACA, account_type=account_type, user_id=user_id)
         
         # Validate that USER account_type has user_id
         if account_type == AccountType.USER and not user_id:
             raise ValueError("USER account_type requires user_id parameter")
         
         self.api = None
-        self.account_type = account_type
-        self.user_id = user_id
         
         # Set identifier for logging
         if account_type == AccountType.MASTER:
@@ -3038,8 +3071,8 @@ class BinanceBroker(BaseBroker):
     Documentation: https://python-binance.readthedocs.io/
     """
     
-    def __init__(self):
-        super().__init__(BrokerType.BINANCE)
+    def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
+        super().__init__(BrokerType.BINANCE, account_type=account_type, user_id=user_id)
         self.client = None
     
     def connect(self) -> bool:
@@ -3498,7 +3531,7 @@ class KrakenBroker(BaseBroker):
         Raises:
             ValueError: If account_type is USER but user_id is not provided
         """
-        super().__init__(BrokerType.KRAKEN)
+        super().__init__(BrokerType.KRAKEN, account_type=account_type, user_id=user_id)
         
         # Validate that USER account_type has user_id
         if account_type == AccountType.USER and not user_id:
@@ -3506,8 +3539,6 @@ class KrakenBroker(BaseBroker):
         
         self.api = None
         self.kraken_api = None
-        self.account_type = account_type
-        self.user_id = user_id
         
         # CRITICAL FIX (Jan 17, 2026): Monotonic nonce with API call serialization
         # 
@@ -4598,8 +4629,8 @@ class OKXBroker(BaseBroker):
     Python SDK: https://github.com/okx/okx-python-sdk
     """
     
-    def __init__(self):
-        super().__init__(BrokerType.OKX)
+    def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
+        super().__init__(BrokerType.OKX, account_type=account_type, user_id=user_id)
         self.client = None
         self.account_api = None
         self.market_api = None

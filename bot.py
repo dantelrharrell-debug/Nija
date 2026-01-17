@@ -424,6 +424,18 @@ def main():
         logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
         _start_health_server()
         strategy = TradingStrategy()
+        
+        # Start copy trade engine for replicating master trades to users
+        logger.info("🔄 Starting copy trade engine...")
+        try:
+            from bot.copy_trade_engine import start_copy_engine
+            start_copy_engine()
+            logger.info("   ✅ Copy trade engine started - user trades will be replicated")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to start copy trade engine: {e}")
+            logger.error("   ⚠️  User accounts will NOT receive copy trades!")
+            import traceback
+            logger.error(traceback.format_exc())
 
         # Log clear trading readiness status
         logger.info("=" * 70)
