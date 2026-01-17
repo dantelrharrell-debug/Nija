@@ -1359,6 +1359,16 @@ class TradingStrategy:
                         })
                         continue
                     
+                    # CRITICAL: Skip ALL exits for positions that were just auto-imported this cycle
+                    # These positions have entry_price = current_price (P&L = $0), so evaluating them
+                    # for ANY exit signals would defeat the purpose of auto-import
+                    # Let them develop P&L for at least one full cycle before applying ANY exit rules
+                    # This guard is placed early to protect against both orphaned and momentum-based exits
+                    if just_auto_imported:
+                        logger.info(f"   ⏭️  SKIPPING EXITS: {symbol} was just auto-imported this cycle")
+                        logger.info(f"      Will evaluate exit signals in next cycle after P&L develops")
+                        continue
+                    
                     # MOMENTUM-BASED PROFIT TAKING (for positions without entry price)
                     # When we don't have entry price, use price momentum and trend reversal signals
                     # This helps lock in gains on strong moves and cut losses on weak positions
@@ -1401,15 +1411,6 @@ class TradingStrategy:
                         # If orphaned position made it here, it's showing strength - still monitor closely
                         logger.info(f"   ✅ ORPHANED POSITION SHOWING STRENGTH: {symbol} (RSI={rsi:.1f}, price above EMA9)")
                         logger.info(f"      Will continue monitoring with strict exit criteria")
-                    
-                    # CRITICAL: Skip momentum-based exits for positions that were just auto-imported this cycle
-                    # These positions have entry_price = current_price (P&L = $0), so evaluating them
-                    # for exits based on RSI/EMA signals would defeat the purpose of auto-import
-                    # Let them develop P&L for at least one full cycle before applying exit rules
-                    if just_auto_imported:
-                        logger.info(f"   ⏭️  SKIPPING EXITS: {symbol} was just auto-imported this cycle")
-                        logger.info(f"      Will evaluate exit signals in next cycle after P&L develops")
-                        continue
                     
                     # ULTRA AGGRESSIVE: Exit on multiple signals to lock gains faster
                     # Jan 13, 2026: AGGRESSIVE thresholds to sell positions before reversals eat profits
