@@ -277,6 +277,27 @@ class TradingStrategy:
                     connected_brokers.append("Kraken")
                     logger.info("   ✅ Kraken MASTER connected")
                     logger.info("   ✅ Kraken registered as MASTER broker in multi-account manager")
+                    
+                    # COPY TRADING INTEGRATION: Initialize and wrap Kraken broker
+                    try:
+                        from bot.kraken_copy_trading import (
+                            initialize_copy_trading_system,
+                            wrap_kraken_broker_for_copy_trading
+                        )
+                        
+                        # Initialize copy trading system (master + users)
+                        if initialize_copy_trading_system():
+                            # Wrap the broker to enable automatic copy trading
+                            wrap_kraken_broker_for_copy_trading(kraken)
+                            logger.info("   ✅ Kraken copy trading system activated")
+                        else:
+                            logger.warning("   ⚠️  Kraken copy trading initialization failed - trades will execute on MASTER only")
+                    except ImportError as import_err:
+                        logger.warning(f"   ⚠️  Kraken copy trading module not available: {import_err}")
+                    except Exception as copy_err:
+                        logger.error(f"   ❌ Kraken copy trading setup error: {copy_err}")
+                        import traceback
+                        logger.error(traceback.format_exc())
                 else:
                     # Connection test failed, but still register broker for background retry
                     # The trading loop will handle the disconnected state and retry automatically
