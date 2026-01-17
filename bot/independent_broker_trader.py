@@ -200,11 +200,8 @@ class IndependentBrokerTrader:
         for broker_type, broker in broker_source.items():
             if not broker.connected:
                 logger.info(f"   ⚪ {broker_type.value}: Not connected initially")
-                # CRITICAL FIX (Jan 17, 2026): Give disconnected brokers a chance to reconnect
-                # Previously, if a broker failed initial connection test, it was permanently excluded
-                # Now we attempt to check balance even for disconnected brokers - if it succeeds,
-                # the broker will be marked as funded and get a trading thread for self-healing
-                # This is especially important for Kraken which may have transient startup issues
+                # Give disconnected brokers a chance to reconnect by attempting balance check
+                # If successful, broker becomes funded and gets a trading thread (self-healing)
                 logger.info(f"   🔄 Attempting balance check for {broker_type.value} (may reconnect)...")
                 # Don't 'continue' here - fall through to try balance fetch
             
@@ -261,8 +258,7 @@ class IndependentBrokerTrader:
                 
                 if not broker.connected:
                     logger.info(f"   ⚪ User: {user_id} | {broker_type.value}: Not connected initially")
-                    # CRITICAL FIX (Jan 17, 2026): Give disconnected brokers a chance to reconnect
-                    # Try to check balance even for disconnected brokers - allows self-healing
+                    # Give disconnected brokers a chance to reconnect by attempting balance check (self-healing)
                     logger.info(f"   🔄 Attempting balance check for User: {user_id} | {broker_type.value} (may reconnect)...")
                     # Don't 'continue' here - fall through to try balance fetch
                 

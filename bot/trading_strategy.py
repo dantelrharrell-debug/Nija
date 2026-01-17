@@ -616,16 +616,11 @@ class TradingStrategy:
             self.apex = None
             self.independent_trader = None
     
-    def _register_kraken_for_retry(self, kraken_broker, broker_type=BrokerType.KRAKEN):
+    def _register_kraken_for_retry(self, kraken_broker):
         """
         Register a Kraken broker for background retry attempts.
         
         This helper method extracts the dual registration logic to avoid code duplication.
-        
-        Args:
-            kraken_broker: KrakenBroker instance to register
-            broker_type: BrokerType enum (defaults to KRAKEN)
-        
         The broker is registered in multiple places for different purposes:
         - failed_brokers: Tracks error messages for diagnostics/debugging
         - broker_manager: Enables trading loop to monitor and retry
@@ -633,10 +628,13 @@ class TradingStrategy:
         
         This dual registration is intentional - the broker is "failed" for
         diagnostics but "active" for retry attempts, enabling self-healing.
+        
+        Args:
+            kraken_broker: KrakenBroker instance to register
         """
-        self.failed_brokers[broker_type] = kraken_broker
+        self.failed_brokers[BrokerType.KRAKEN] = kraken_broker
         self.broker_manager.add_broker(kraken_broker)
-        self.multi_account_manager.master_brokers[broker_type] = kraken_broker
+        self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken_broker
         logger.info("   ✅ Kraken registered for background connection retry")
     
     def _init_advanced_features(self):
