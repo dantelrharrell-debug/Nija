@@ -68,6 +68,13 @@ MINIMUM_BALANCE_PROTECTION = 0.50  # Lowered from 1.00 to allow trading with ver
 MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading (warning only, not enforced)
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
+# Kraken startup delay (Jan 17, 2026) - Critical fix for nonce collisions
+# This delay is applied before the first Kraken API call to ensure:
+# - Nonce file exists and is initialized properly
+# - No collision with other user accounts starting simultaneously
+# - No parallel nonce generation during bootstrap
+KRAKEN_STARTUP_DELAY_SECONDS = 5.0  # Similar to Coinbase's 40s delay but shorter due to better nonce handling
+
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
     'your_passphrase', 'YOUR_PASSPHRASE', 
@@ -3782,6 +3789,16 @@ class KrakenBroker(BaseBroker):
                 return False
             
             self.kraken_api = KrakenAPI(self.api)
+            
+            # CRITICAL FIX (Jan 17, 2026): Add startup delay before first Kraken API call
+            # This ensures:
+            # - Nonce file exists and is initialized properly
+            # - No collision with other user accounts starting simultaneously
+            # - No parallel nonce generation during bootstrap
+            # Similar to Coinbase's 40s delay, but shorter (5s) since we have better nonce handling
+            logger.info(f"   ⏳ Waiting {KRAKEN_STARTUP_DELAY_SECONDS:.1f}s before Kraken connection test (prevents nonce collisions)...")
+            time.sleep(KRAKEN_STARTUP_DELAY_SECONDS)
+            logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
             
             # Test connection by fetching account balance with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
