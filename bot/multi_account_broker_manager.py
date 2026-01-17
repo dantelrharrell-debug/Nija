@@ -581,6 +581,34 @@ class MultiAccountBrokerManager:
             logger.warning(f"   ⚠️  User accounts trading WITHOUT Master account on: {', '.join(users_without_master)}")
             logger.warning(f"   🔧 RECOMMENDATION: Configure Master credentials for {', '.join(users_without_master)}")
             logger.warning(f"      Master should always be PRIMARY, users should be SECONDARY")
+            logger.warning("")
+            logger.warning("   📋 HOW TO FIX:")
+            for broker in users_without_master:
+                logger.warning(f"")
+                logger.warning(f"   For {broker} Master account:")
+                logger.warning(f"   1. Get API credentials from the {broker} website")
+                if broker == "KRAKEN":
+                    logger.warning(f"      URL: https://www.kraken.com/u/security/api")
+                    logger.warning(f"   2. Set these environment variables:")
+                    logger.warning(f"      KRAKEN_MASTER_API_KEY=<your-api-key>")
+                    logger.warning(f"      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+                elif broker == "ALPACA":
+                    logger.warning(f"      URL: https://alpaca.markets/")
+                    logger.warning(f"   2. Set these environment variables:")
+                    logger.warning(f"      ALPACA_API_KEY=<your-api-key>")
+                    logger.warning(f"      ALPACA_API_SECRET=<your-api-secret>")
+                    logger.warning(f"      ALPACA_PAPER=true  # Use false for live trading")
+                elif broker == "COINBASE":
+                    logger.warning(f"      URL: https://portal.cdp.coinbase.com/")
+                    logger.warning(f"   2. Set these environment variables:")
+                    logger.warning(f"      COINBASE_API_KEY=<your-api-key>")
+                    logger.warning(f"      COINBASE_API_SECRET=<your-api-secret>")
+                else:
+                    logger.warning(f"   2. Set {broker}_MASTER_API_KEY and {broker}_MASTER_API_SECRET")
+                logger.warning(f"   3. Restart the bot")
+            logger.warning("")
+            logger.warning("   💡 TIP: Once Master accounts are connected, the warning will disappear")
+            logger.warning("=" * 70)
         else:
             logger.info("   ✅ All user accounts have corresponding Master accounts (correct hierarchy)")
         
