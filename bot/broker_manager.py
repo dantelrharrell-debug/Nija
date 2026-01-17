@@ -16,6 +16,7 @@ import time
 import traceback
 import uuid
 import threading
+import queue
 
 # Import requests exceptions for proper timeout error handling
 # These are used in KrakenBroker.connect() to detect network timeouts
@@ -3445,10 +3446,10 @@ class KrakenBroker(BaseBroker):
         self.account_type = account_type
         self.user_id = user_id
         
+        # CRITICAL FIX (Jan 17, 2026): Monotonic nonce with API call serialization
+        # 
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
-        # 
-        # CRITICAL FIX (Jan 17, 2026): Use 0-5 second forward offset
         # 
         # Research findings from Kraken API documentation and testing:
         # - Kraken REMEMBERS the last nonce it saw for each API key (persists 60+ seconds)
@@ -3487,9 +3488,23 @@ class KrakenBroker(BaseBroker):
         random_jitter = random.randint(0, 5000000)  # 0-5 seconds
         total_offset = base_offset + random_jitter
         self._last_nonce = int(time.time() * 1000000) + total_offset
+        
         # Thread lock to ensure nonce generation is thread-safe
         # Prevents race conditions when multiple threads call API simultaneously
         self._nonce_lock = threading.Lock()
+        
+        # CRITICAL FIX: API call serialization to prevent simultaneous Kraken calls
+        # Problem: Multiple threads can call Kraken API simultaneously, causing nonce collisions
+        # Solution: Serialize all private API calls through a lock
+        # - This ensures only ONE Kraken private API call happens at a time per account
+        # - Public API calls don't need nonces and are not serialized
+        # - Lock is per-instance, so MASTER and USER accounts can still call in parallel
+        self._api_call_lock = threading.Lock()
+        
+        # Timestamp of last API call for rate limiting
+        # Ensures minimum delay between consecutive Kraken API calls
+        self._last_api_call_time = 0.0
+        self._min_call_interval = 0.2  # 200ms minimum between calls (safety margin)
         
         # Set identifier for logging
         if account_type == AccountType.MASTER:
@@ -3513,6 +3528,57 @@ class KrakenBroker(BaseBroker):
             increment_based = self._last_nonce + immediate_jump
             self._last_nonce = max(time_based, increment_based)
             logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000000:.0f}s to clear burned nonce window")
+    
+    def _kraken_private_call(self, method: str, params: Optional[Dict] = None):
+        """
+        CRITICAL: Serialized wrapper for Kraken private API calls.
+        
+        This method ensures:
+        1. Only ONE private API call happens at a time (prevents nonce collisions)
+        2. Minimum delay between calls (200ms safety margin)
+        3. Thread-safe execution using locks
+        
+        Problem solved:
+        - Multiple threads calling Kraken API simultaneously with same nonce
+        - Rapid consecutive calls generating duplicate nonces
+        - Race conditions in nonce generation
+        
+        Args:
+            method: Kraken API method name (e.g., 'Balance', 'AddOrder')
+            params: Optional parameters dict for the API call
+            
+        Returns:
+            API response dict
+            
+        Raises:
+            Exception: If API call fails or self.api is not initialized
+        """
+        if not self.api:
+            raise Exception("Kraken API not initialized - call connect() first")
+        
+        # Serialize API calls - only one call at a time per account
+        with self._api_call_lock:
+            # Enforce minimum delay between calls
+            current_time = time.time()
+            time_since_last_call = current_time - self._last_api_call_time
+            
+            if time_since_last_call < self._min_call_interval:
+                # Sleep to maintain minimum interval
+                sleep_time = self._min_call_interval - time_since_last_call
+                logger.debug(f"   🛡️  Rate limiting: sleeping {sleep_time*1000:.0f}ms between Kraken calls")
+                time.sleep(sleep_time)
+            
+            # Make the API call
+            # The _nonce_monotonic function (installed in connect()) handles nonce generation
+            if params is None:
+                result = self.api.query_private(method)
+            else:
+                result = self.api.query_private(method, params)
+            
+            # Update last call time
+            self._last_api_call_time = time.time()
+            
+            return result
     
     def connect(self) -> bool:
         """
@@ -3789,7 +3855,8 @@ class KrakenBroker(BaseBroker):
                     # The _nonce_monotonic() function automatically handles nonce generation
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
                     # It will be called automatically by krakenex when query_private() is invoked.
-                    balance = self.api.query_private('Balance')
+                    # CRITICAL: Use _kraken_private_call() wrapper to serialize API calls
+                    balance = self._kraken_private_call('Balance')
                     
                     if balance and 'error' in balance:
                         if balance['error']:
@@ -4157,8 +4224,8 @@ class KrakenBroker(BaseBroker):
             if not self.api:
                 return 0.0
             
-            # Get account balance
-            balance = self.api.query_private('Balance')
+            # Get account balance using serialized API call
+            balance = self._kraken_private_call('Balance')
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
@@ -4210,7 +4277,7 @@ class KrakenBroker(BaseBroker):
             # Determine order type
             order_type = side.lower()  # 'buy' or 'sell'
             
-            # Place market order
+            # Place market order using serialized API call
             # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
             order_params = {
                 'pair': kraken_symbol,
@@ -4219,7 +4286,7 @@ class KrakenBroker(BaseBroker):
                 'volume': str(quantity)
             }
             
-            result = self.api.query_private('AddOrder', order_params)
+            result = self._kraken_private_call('AddOrder', order_params)
             
             if result and 'error' in result and result['error']:
                 error_msgs = ', '.join(result['error'])
@@ -4260,8 +4327,8 @@ class KrakenBroker(BaseBroker):
             if not self.api:
                 return []
             
-            # Get account balance
-            balance = self.api.query_private('Balance')
+            # Get account balance using serialized API call
+            balance = self._kraken_private_call('Balance')
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
