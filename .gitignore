@@ -36,8 +36,10 @@ scanner.out
 nija.log.*
 
 # Kraken nonce persistence (contains state, should not be committed)
+# Updated Jan 17, 2026: Moved to /data directory for consistent persistence
 kraken_nonce.txt
 bot/kraken_nonce.txt
+data/kraken_nonce.txt
 
 # Temporary test files
 test_broker_get_all_products.py

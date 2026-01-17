@@ -3445,7 +3445,13 @@ class BinanceBroker(BaseBroker):
 # ============================================================================
 
 _nonce_lock = threading.Lock()
-NONCE_FILE = os.path.join(os.path.dirname(__file__), "kraken_nonce.txt")
+# CRITICAL FIX (Jan 17, 2026): Move nonce file to data directory for consistent persistence
+# Other persistent state (progressive_targets.json, capital_allocation.json, open_positions.json)
+# is stored in /data directory. Nonce file should follow the same pattern.
+# This ensures proper persistence in containerized deployments (Railway, Docker, etc.)
+_data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+os.makedirs(_data_dir, exist_ok=True)  # Ensure data directory exists
+NONCE_FILE = os.path.join(_data_dir, "kraken_nonce.txt")
 
 def get_kraken_nonce():
     """
