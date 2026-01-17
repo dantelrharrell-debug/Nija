@@ -264,7 +264,13 @@ class TradingStrategy:
             kraken = None  # Initialize to ensure variable exists for exception handler
             try:
                 kraken = KrakenBroker(account_type=AccountType.MASTER)
-                if kraken.connect():
+                connection_successful = kraken.connect()
+                
+                # CRITICAL FIX (Jan 17, 2026): Allow Kraken to start even if connection test fails
+                # This prevents a single connection failure from permanently disabling Kraken trading
+                # The trading loop will retry connections in the background and self-heal
+                # This is similar to how other brokers handle transient connection issues
+                if connection_successful:
                     self.broker_manager.add_broker(kraken)
                     # Manually register in multi_account_manager (reuse same instance)
                     self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken
@@ -272,14 +278,25 @@ class TradingStrategy:
                     logger.info("   ✅ Kraken MASTER connected")
                     logger.info("   ✅ Kraken registered as MASTER broker in multi-account manager")
                 else:
-                    # Store failed broker instance to access error message later
+                    # Connection test failed, but still register broker for background retry
+                    # The trading loop will handle the disconnected state and retry automatically
+                    logger.warning("   ⚠️  Kraken MASTER connection test failed, will retry in background")
+                    logger.warning("   📌 Kraken broker initialized - trading loop will attempt reconnection")
+                    
+                    # Register broker anyway to allow background retries
+                    # Mark it in failed_brokers for reference, but also add to managers
                     self.failed_brokers[BrokerType.KRAKEN] = kraken
-                    logger.warning("   ⚠️  Kraken MASTER connection failed")
+                    # Still add to managers so it can be monitored and retried
+                    self.broker_manager.add_broker(kraken)
+                    self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken
+                    logger.info("   ✅ Kraken registered for background connection retry")
+                    
             except Exception as e:
                 # Store failed broker instance even for exceptions (if it was created)
                 if kraken is not None:
                     self.failed_brokers[BrokerType.KRAKEN] = kraken
                 logger.warning(f"   ⚠️  Kraken MASTER error: {e}")
+                logger.warning("   ⚠️  Kraken will not be available for trading")
             
             # Add delay between broker connections
             time.sleep(0.5)

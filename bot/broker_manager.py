@@ -3783,6 +3783,17 @@ class KrakenBroker(BaseBroker):
             
             self.kraken_api = KrakenAPI(self.api)
             
+            # CRITICAL FIX (Jan 17, 2026): Add startup delay before first Kraken API call
+            # This ensures:
+            # - Nonce file exists and is initialized properly
+            # - No collision with other user accounts starting simultaneously
+            # - No parallel nonce generation during bootstrap
+            # Similar to Coinbase's 40s delay, but shorter (5s) since we have better nonce handling
+            startup_delay = 5.0
+            logger.info(f"   ⏳ Waiting {startup_delay:.1f}s before Kraken connection test (prevents nonce collisions)...")
+            time.sleep(startup_delay)
+            logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
+            
             # Test connection by fetching account balance with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked

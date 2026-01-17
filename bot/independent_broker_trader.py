@@ -199,8 +199,14 @@ class IndependentBrokerTrader:
         
         for broker_type, broker in broker_source.items():
             if not broker.connected:
-                logger.info(f"   ⚪ {broker_type.value}: Not connected")
-                continue
+                logger.info(f"   ⚪ {broker_type.value}: Not connected initially")
+                # CRITICAL FIX (Jan 17, 2026): Give disconnected brokers a chance to reconnect
+                # Previously, if a broker failed initial connection test, it was permanently excluded
+                # Now we attempt to check balance even for disconnected brokers - if it succeeds,
+                # the broker will be marked as funded and get a trading thread for self-healing
+                # This is especially important for Kraken which may have transient startup issues
+                logger.info(f"   🔄 Attempting balance check for {broker_type.value} (may reconnect)...")
+                # Don't 'continue' here - fall through to try balance fetch
             
             try:
                 # Fetch balance, with retry logic for Coinbase if needed
@@ -254,8 +260,11 @@ class IndependentBrokerTrader:
                 broker_name = f"{user_id}_{broker_type.value}"
                 
                 if not broker.connected:
-                    logger.info(f"   ⚪ User: {user_id} | {broker_type.value}: Not connected")
-                    continue
+                    logger.info(f"   ⚪ User: {user_id} | {broker_type.value}: Not connected initially")
+                    # CRITICAL FIX (Jan 17, 2026): Give disconnected brokers a chance to reconnect
+                    # Try to check balance even for disconnected brokers - allows self-healing
+                    logger.info(f"   🔄 Attempting balance check for User: {user_id} | {broker_type.value} (may reconnect)...")
+                    # Don't 'continue' here - fall through to try balance fetch
                 
                 try:
                     # Fetch balance, with retry logic for Coinbase if needed
