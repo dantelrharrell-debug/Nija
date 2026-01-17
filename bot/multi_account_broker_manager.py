@@ -594,17 +594,31 @@ class MultiAccountBrokerManager:
                     logger.warning(f"      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
                 elif broker == "ALPACA":
                     logger.warning(f"      URL: https://alpaca.markets/")
-                    logger.warning(f"   2. Set these environment variables:")
+                    logger.warning(f"   2. Set these environment variables (Master account):")
                     logger.warning(f"      ALPACA_API_KEY=<your-api-key>")
                     logger.warning(f"      ALPACA_API_SECRET=<your-api-secret>")
-                    logger.warning(f"      ALPACA_PAPER=true  # Use false for live trading")
+                    logger.warning(f"      ALPACA_PAPER=true  # Set to false for live trading")
                 elif broker == "COINBASE":
                     logger.warning(f"      URL: https://portal.cdp.coinbase.com/")
-                    logger.warning(f"   2. Set these environment variables:")
+                    logger.warning(f"   2. Set these environment variables (Master account):")
                     logger.warning(f"      COINBASE_API_KEY=<your-api-key>")
                     logger.warning(f"      COINBASE_API_SECRET=<your-api-secret>")
+                elif broker == "OKX":
+                    logger.warning(f"      URL: https://www.okx.com/account/my-api")
+                    logger.warning(f"   2. Set these environment variables (Master account):")
+                    logger.warning(f"      OKX_API_KEY=<your-api-key>")
+                    logger.warning(f"      OKX_API_SECRET=<your-api-secret>")
+                    logger.warning(f"      OKX_PASSPHRASE=<your-passphrase>")
+                elif broker == "BINANCE":
+                    logger.warning(f"      URL: https://www.binance.com/en/my/settings/api-management")
+                    logger.warning(f"   2. Set these environment variables (Master account):")
+                    logger.warning(f"      BINANCE_API_KEY=<your-api-key>")
+                    logger.warning(f"      BINANCE_API_SECRET=<your-api-secret>")
                 else:
-                    logger.warning(f"   2. Set {broker}_MASTER_API_KEY and {broker}_MASTER_API_SECRET")
+                    # Fallback for unknown brokers - use MASTER prefix pattern
+                    logger.warning(f"   2. Set environment variables:")
+                    logger.warning(f"      {broker}_MASTER_API_KEY=<your-api-key>")
+                    logger.warning(f"      {broker}_MASTER_API_SECRET=<your-api-secret>")
                 logger.warning(f"   3. Restart the bot")
             logger.warning("")
             logger.warning("   💡 TIP: Once Master accounts are connected, the warning will disappear")
