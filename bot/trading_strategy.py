@@ -283,17 +283,8 @@ class TradingStrategy:
                     logger.warning("   ⚠️  Kraken MASTER connection test failed, will retry in background")
                     logger.warning("   📌 Kraken broker initialized - trading loop will attempt reconnection")
                     
-                    # Register broker in multiple places for different purposes:
-                    # - failed_brokers: Tracks error messages for diagnostics/debugging
-                    # - broker_manager: Enables trading loop to monitor and retry
-                    # - multi_account_manager: Consistent account management
-                    # This dual registration is intentional - the broker is "failed" for
-                    # diagnostics but "active" for retry attempts
-                    self.failed_brokers[BrokerType.KRAKEN] = kraken
-                    # Still add to managers so it can be monitored and retried
-                    self.broker_manager.add_broker(kraken)
-                    self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken
-                    logger.info("   ✅ Kraken registered for background connection retry")
+                    # Use helper method to register for retry
+                    self._register_kraken_for_retry(kraken)
                     
             except Exception as e:
                 # CRITICAL FIX (Jan 17, 2026): Handle exceptions consistently with connection failures
@@ -303,11 +294,8 @@ class TradingStrategy:
                     logger.warning(f"   ⚠️  Kraken MASTER initialization error: {e}")
                     logger.warning("   📌 Kraken broker will be registered for background retry")
                     
-                    # Register broker for retry attempts (same as connection failure case)
-                    self.failed_brokers[BrokerType.KRAKEN] = kraken
-                    self.broker_manager.add_broker(kraken)
-                    self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken
-                    logger.info("   ✅ Kraken registered for background connection retry (post-exception)")
+                    # Use helper method to register for retry
+                    self._register_kraken_for_retry(kraken)
                 else:
                     # Broker object was never created - can't retry
                     logger.error(f"   ❌ Kraken MASTER initialization failed: {e}")
@@ -627,6 +615,29 @@ class TradingStrategy:
             self.enforcer = None
             self.apex = None
             self.independent_trader = None
+    
+    def _register_kraken_for_retry(self, kraken_broker, broker_type=BrokerType.KRAKEN):
+        """
+        Register a Kraken broker for background retry attempts.
+        
+        This helper method extracts the dual registration logic to avoid code duplication.
+        
+        Args:
+            kraken_broker: KrakenBroker instance to register
+            broker_type: BrokerType enum (defaults to KRAKEN)
+        
+        The broker is registered in multiple places for different purposes:
+        - failed_brokers: Tracks error messages for diagnostics/debugging
+        - broker_manager: Enables trading loop to monitor and retry
+        - multi_account_manager: Consistent account management
+        
+        This dual registration is intentional - the broker is "failed" for
+        diagnostics but "active" for retry attempts, enabling self-healing.
+        """
+        self.failed_brokers[broker_type] = kraken_broker
+        self.broker_manager.add_broker(kraken_broker)
+        self.multi_account_manager.master_brokers[broker_type] = kraken_broker
+        logger.info("   ✅ Kraken registered for background connection retry")
     
     def _init_advanced_features(self):
         """Initialize progressive targets, exchange risk profiles, and capital allocation.
