@@ -691,7 +691,38 @@ class TradingStrategy:
         """Initialize progressive targets, exchange risk profiles, and capital allocation.
         
         This is optional and will gracefully degrade if modules are not available.
+        
+        Also initializes PRO MODE rotation manager if enabled.
         """
+        # Initialize PRO MODE rotation manager
+        pro_mode_enabled = os.getenv('PRO_MODE', 'false').lower() in ('true', '1', 'yes')
+        min_free_reserve_pct = float(os.getenv('PRO_MODE_MIN_RESERVE_PCT', '0.15'))
+        
+        if pro_mode_enabled:
+            try:
+                from rotation_manager import RotationManager
+                self.rotation_manager = RotationManager(
+                    min_free_balance_pct=min_free_reserve_pct,
+                    rotation_enabled=True,
+                    min_opportunity_improvement=0.20  # 20% improvement required for rotation
+                )
+                logger.info("=" * 70)
+                logger.info("🔄 PRO MODE ACTIVATED - Position Rotation Enabled")
+                logger.info(f"   Min free balance reserve: {min_free_reserve_pct*100:.0f}%")
+                logger.info(f"   Position values count as capital")
+                logger.info(f"   Can rotate positions for better opportunities")
+                logger.info("=" * 70)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize PRO MODE: {e}")
+                logger.info("   Falling back to standard mode")
+                self.rotation_manager = None
+                pro_mode_enabled = False
+        else:
+            logger.info("ℹ️ PRO MODE disabled (set PRO_MODE=true to enable)")
+            self.rotation_manager = None
+        
+        self.pro_mode_enabled = pro_mode_enabled
+        
         try:
             # Import advanced trading modules
             from advanced_trading_integration import AdvancedTradingManager, ExchangeType
@@ -1037,12 +1068,33 @@ class TradingStrategy:
                 return
             
             # Get detailed balance including crypto holdings
+            # PRO MODE: Also calculate total capital (free balance + position values)
             if hasattr(active_broker, 'get_account_balance_detailed'):
                 balance_data = active_broker.get_account_balance_detailed()
             else:
                 balance_data = {'trading_balance': active_broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
-            logger.info(f"💰 Trading balance: ${account_balance:.2f}")
+            
+            # PRO MODE: Get total capital including position values
+            if self.pro_mode_enabled and hasattr(active_broker, 'get_total_capital'):
+                try:
+                    capital_data = active_broker.get_total_capital(include_positions=True)
+                    total_capital = capital_data.get('total_capital', account_balance)
+                    position_value = capital_data.get('position_value', 0.0)
+                    
+                    logger.info(f"💰 PRO MODE Capital:")
+                    logger.info(f"   Free balance: ${account_balance:.2f}")
+                    logger.info(f"   Position value: ${position_value:.2f}")
+                    logger.info(f"   Total capital: ${total_capital:.2f}")
+                    logger.info(f"   Positions: {capital_data.get('position_count', 0)}")
+                except Exception as e:
+                    logger.warning(f"⚠️ PRO MODE capital calculation failed: {e}")
+                    total_capital = account_balance
+                    position_value = 0.0
+            else:
+                logger.info(f"💰 Trading balance: ${account_balance:.2f}")
+                total_capital = account_balance
+                position_value = 0.0
             
             # Small delay after balance check to avoid rapid-fire API calls
             time.sleep(0.5)
@@ -1758,7 +1810,9 @@ class TradingStrategy:
                                     df[col] = pd.to_numeric(df[col], errors='coerce')
                             
                             # Analyze for entry
-                            analysis = self.apex.analyze_market(df, symbol, account_balance)
+                            # PRO MODE: Use total capital instead of just free balance
+                            sizing_balance = total_capital if self.pro_mode_enabled else account_balance
+                            analysis = self.apex.analyze_market(df, symbol, sizing_balance)
                             action = analysis.get('action', 'hold')
                             reason = analysis.get('reason', '')
                             
@@ -1808,6 +1862,137 @@ class TradingStrategy:
                                 if len(current_positions) >= MAX_POSITIONS_ALLOWED:
                                     logger.warning(f"   ⚠️  Position cap ({MAX_POSITIONS_ALLOWED}) reached - STOP NEW ENTRIES")
                                     break
+                                
+                                # PRO MODE: Check if rotation is needed
+                                needs_rotation = False
+                                if self.pro_mode_enabled and self.rotation_manager and position_size > account_balance:
+                                    logger.info(f"   🔄 PRO MODE: Position size ${position_size:.2f} exceeds free balance ${account_balance:.2f}")
+                                    logger.info(f"   → Rotation needed: ${position_size - account_balance:.2f}")
+                                    
+                                    # Check if we can rotate
+                                    can_rotate, rotate_reason = self.rotation_manager.can_rotate(
+                                        total_capital=total_capital,
+                                        free_balance=account_balance,
+                                        current_positions=len(current_positions)
+                                    )
+                                    
+                                    if can_rotate:
+                                        logger.info(f"   ✅ Rotation allowed: {rotate_reason}")
+                                        
+                                        # Build position metrics for rotation scoring
+                                        position_metrics = {}
+                                        for pos in current_positions:
+                                            pos_symbol = pos.get('symbol')
+                                            pos_qty = pos.get('quantity', 0)
+                                            
+                                            try:
+                                                pos_price = active_broker.get_current_price(pos_symbol)
+                                                pos_value = pos_qty * pos_price if pos_price > 0 else 0
+                                                
+                                                # Get position age if available
+                                                pos_age_hours = 0
+                                                if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                    tracked = active_broker.position_tracker.get_position(pos_symbol)
+                                                    if tracked and tracked.get('first_entry_time'):
+                                                        entry_dt = datetime.fromisoformat(tracked['first_entry_time'])
+                                                        pos_age_hours = (datetime.now() - entry_dt).total_seconds() / 3600
+                                                
+                                                # Calculate P&L if entry price available
+                                                pos_pnl_pct = 0.0
+                                                if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                    tracked = active_broker.position_tracker.get_position(pos_symbol)
+                                                    if tracked and tracked.get('average_entry_price'):
+                                                        entry_price = float(tracked['average_entry_price'])
+                                                        if entry_price > 0:
+                                                            pos_pnl_pct = ((pos_price - entry_price) / entry_price) * 100
+                                                
+                                                # Get RSI if available (from recent market data)
+                                                pos_rsi = 50  # Neutral default
+                                                try:
+                                                    # Attempt to get recent RSI from market data
+                                                    if hasattr(self, 'apex') and self.apex:
+                                                        # Try to get recent candles and calculate RSI
+                                                        recent_candles = active_broker.get_candles(pos_symbol, '5m', 50)
+                                                        if recent_candles and len(recent_candles) >= 14:
+                                                            df_temp = pd.DataFrame(recent_candles)
+                                                            for col in ['close']:
+                                                                if col in df_temp.columns:
+                                                                    df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce')
+                                                            indicators = self.apex.calculate_indicators(df_temp)
+                                                            if 'rsi' in indicators:
+                                                                pos_rsi = indicators['rsi']
+                                                except Exception:
+                                                    # Keep default RSI if calculation fails
+                                                    pass
+                                                
+                                                position_metrics[pos_symbol] = {
+                                                    'value': pos_value,
+                                                    'age_hours': pos_age_hours,
+                                                    'pnl_pct': pos_pnl_pct,
+                                                    'rsi': pos_rsi
+                                                }
+                                            except Exception:
+                                                continue
+                                        
+                                        # Select positions to close for rotation
+                                        needed_capital = position_size - account_balance
+                                        positions_to_close = self.rotation_manager.select_positions_for_rotation(
+                                            positions=current_positions,
+                                            position_metrics=position_metrics,
+                                            needed_capital=needed_capital,
+                                            total_capital=total_capital
+                                        )
+                                        
+                                        if positions_to_close:
+                                            logger.info(f"   🔄 Closing {len(positions_to_close)} position(s) for rotation:")
+                                            
+                                            # Close selected positions
+                                            closed_count = 0
+                                            for pos_to_close in positions_to_close:
+                                                close_symbol = pos_to_close.get('symbol')
+                                                close_qty = pos_to_close.get('quantity')
+                                                
+                                                try:
+                                                    logger.info(f"      Closing {close_symbol}: {close_qty:.8f}")
+                                                    result = active_broker.place_market_order(
+                                                        close_symbol,
+                                                        'sell',
+                                                        close_qty,
+                                                        size_type='base'
+                                                    )
+                                                    
+                                                    if result and result.get('status') not in ['error', 'unfilled']:
+                                                        closed_count += 1
+                                                        logger.info(f"      ✅ Closed {close_symbol} successfully")
+                                                    else:
+                                                        logger.warning(f"      ⚠️ Failed to close {close_symbol}")
+                                                    
+                                                    time.sleep(0.5)  # Small delay between closes
+                                                    
+                                                except Exception as close_err:
+                                                    logger.error(f"      ❌ Error closing {close_symbol}: {close_err}")
+                                            
+                                            if closed_count > 0:
+                                                logger.info(f"   ✅ Rotation complete: Closed {closed_count} positions")
+                                                self.rotation_manager.record_rotation(success=True)
+                                                
+                                                # Update free balance after rotation
+                                                try:
+                                                    time.sleep(1.0)  # Wait for balances to update
+                                                    account_balance = active_broker.get_account_balance()
+                                                    logger.info(f"   💰 Updated free balance: ${account_balance:.2f}")
+                                                except Exception:
+                                                    pass
+                                            else:
+                                                logger.warning(f"   ⚠️ Rotation failed - no positions closed")
+                                                self.rotation_manager.record_rotation(success=False)
+                                                continue  # Skip this trade
+                                        else:
+                                            logger.warning(f"   ⚠️ No suitable positions for rotation")
+                                            continue  # Skip this trade
+                                    else:
+                                        logger.warning(f"   ⚠️ Cannot rotate: {rotate_reason}")
+                                        continue  # Skip this trade if rotation not allowed
                                 
                                 logger.info(f"   🎯 BUY SIGNAL: {symbol} - size=${position_size:.2f} - {analysis.get('reason', '')}")
                                 success = self.apex.execute_action(analysis, symbol)
