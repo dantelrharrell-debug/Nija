@@ -15,7 +15,18 @@ import os
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
-from rotation_manager import RotationManager
+# Verify rotation_manager can be imported
+try:
+    from rotation_manager import RotationManager
+except ImportError as e:
+    print("=" * 70)
+    print("❌ ERROR: Cannot import rotation_manager")
+    print("=" * 70)
+    print(f"\nImport Error: {e}")
+    print("\nMake sure bot/rotation_manager.py exists and is accessible.")
+    print("Current working directory:", os.getcwd())
+    print("Python path:", sys.path)
+    sys.exit(1)
 
 
 def test_rotation_manager():

@@ -1880,15 +1880,42 @@ class TradingStrategy:
                                                 if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                     tracked = active_broker.position_tracker.get_position(pos_symbol)
                                                     if tracked and tracked.get('first_entry_time'):
-                                                        from datetime import datetime
                                                         entry_dt = datetime.fromisoformat(tracked['first_entry_time'])
                                                         pos_age_hours = (datetime.now() - entry_dt).total_seconds() / 3600
+                                                
+                                                # Calculate P&L if entry price available
+                                                pos_pnl_pct = 0.0
+                                                if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                    tracked = active_broker.position_tracker.get_position(pos_symbol)
+                                                    if tracked and tracked.get('average_entry_price'):
+                                                        entry_price = float(tracked['average_entry_price'])
+                                                        if entry_price > 0:
+                                                            pos_pnl_pct = ((pos_price - entry_price) / entry_price) * 100
+                                                
+                                                # Get RSI if available (from recent market data)
+                                                pos_rsi = 50  # Neutral default
+                                                try:
+                                                    # Attempt to get recent RSI from market data
+                                                    if hasattr(self, 'apex') and self.apex:
+                                                        # Try to get recent candles and calculate RSI
+                                                        recent_candles = active_broker.get_candles(pos_symbol, '5m', 50)
+                                                        if recent_candles and len(recent_candles) >= 14:
+                                                            df_temp = pd.DataFrame(recent_candles)
+                                                            for col in ['close']:
+                                                                if col in df_temp.columns:
+                                                                    df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce')
+                                                            indicators = self.apex.calculate_indicators(df_temp)
+                                                            if 'rsi' in indicators:
+                                                                pos_rsi = indicators['rsi']
+                                                except Exception:
+                                                    # Keep default RSI if calculation fails
+                                                    pass
                                                 
                                                 position_metrics[pos_symbol] = {
                                                     'value': pos_value,
                                                     'age_hours': pos_age_hours,
-                                                    'pnl_pct': 0.0,  # TODO: Calculate actual P&L if available
-                                                    'rsi': 50  # TODO: Get actual RSI if available
+                                                    'pnl_pct': pos_pnl_pct,
+                                                    'rsi': pos_rsi
                                                 }
                                             except Exception:
                                                 continue

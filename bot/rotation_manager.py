@@ -224,9 +224,10 @@ class RotationManager:
             Tuple of (should_rotate: bool, reason: str)
         """
         if opportunity_quality <= 0 or current_position_quality <= 0:
-            return False, "Invalid quality scores"
+            return False, "Invalid quality scores (must be > 0)"
         
         # Calculate improvement percentage
+        # Safe: current_position_quality is guaranteed > 0 from check above
         improvement = (opportunity_quality - current_position_quality) / current_position_quality
         
         if improvement >= self.min_opportunity_improvement:
