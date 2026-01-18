@@ -79,8 +79,10 @@ def check_exchange_credentials(exchange_name: str, account_type: str,
         legacy_key_var = f"{exchange_name}_API_KEY"
         legacy_secret_var = f"{exchange_name}_API_SECRET"
     else:  # USER
-        key_var = f"{exchange_name}_USER_{user_id.upper()}_API_KEY"
-        secret_var = f"{exchange_name}_USER_{user_id.upper()}_API_SECRET"
+        # Normalize user_id: replace spaces/dashes with underscores, uppercase
+        normalized_user_id = user_id.replace(' ', '_').replace('-', '_').upper()
+        key_var = f"{exchange_name}_USER_{normalized_user_id}_API_KEY"
+        secret_var = f"{exchange_name}_USER_{normalized_user_id}_API_SECRET"
         legacy_key_var = None
         legacy_secret_var = None
     
@@ -168,7 +170,7 @@ def test_exchange_connection(exchange_name: str, account_type: str,
         # Test connection by getting account balance
         balance = broker.get_account_balance()
         
-        if balance and balance.get('total_balance') is not None:
+        if balance is not None and 'total_balance' in balance:
             result['connected'] = True
             result['account_info'] = {
                 'balance': balance.get('total_balance', 0.0),
