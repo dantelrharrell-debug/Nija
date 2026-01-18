@@ -1,5 +1,17 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
+---
+
+## 🚨 URGENT: Having Issues? (January 17, 2026)
+
+**Coinbase losing money?** → [QUICK_FIX_COINBASE_AND_KRAKEN.md](QUICK_FIX_COINBASE_AND_KRAKEN.md) - **30-min exit fix ready**  
+**Kraken not trading?** → [QUICK_FIX_COINBASE_AND_KRAKEN.md](QUICK_FIX_COINBASE_AND_KRAKEN.md) - **Just needs API keys**  
+**Full Details** → [ANSWER_COINBASE_KRAKEN_STATUS_JAN_17_2026.md](ANSWER_COINBASE_KRAKEN_STATUS_JAN_17_2026.md)
+
+**TL;DR**: Coinbase fix coded (needs deployment) | Kraken ready (needs credentials) | 40 minutes to resolve both
+
+---
+
 ## ⚡ **QUICK START: Start Trading in 60 Seconds**
 
 **No credentials? No problem!** Get NIJA trading immediately:
