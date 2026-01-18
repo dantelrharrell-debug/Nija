@@ -47,7 +47,6 @@ def test_import_integration():
         # Check exports
         expected_exports = [
             'KrakenClient',
-            'NonceStore',
             'initialize_copy_trading_system',
             'wrap_kraken_broker_for_copy_trading',
             'execute_master_trade',

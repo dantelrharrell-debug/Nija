@@ -67,89 +67,9 @@ logger = logging.getLogger('nija.kraken_copy')
 MAX_USER_RISK = 0.10  # 10% max per trade per user
 SYSTEM_DISABLED = False  # Global kill switch
 
-# Nonce Store Implementation (DEPRECATED - use GlobalKrakenNonceManager instead)
-class NonceStore:
-    """
-    DEPRECATED: This class is kept for backward compatibility only.
-    
-    Use GlobalKrakenNonceManager instead (bot/global_kraken_nonce.py).
-    
-    Thread-safe nonce storage with file persistence.
-    Each account (master + each user) has its own nonce file.
-    
-    NOTE: This implementation can cause nonce collisions when multiple
-    users start simultaneously. Use the global nonce manager instead.
-    """
-    
-    def __init__(self, account_identifier: str):
-        """
-        Initialize nonce store for a specific account.
-        
-        DEPRECATED: Use get_global_kraken_nonce() instead.
-        
-        Args:
-            account_identifier: Unique identifier (e.g., 'master', 'user_daivon')
-        """
-        logger.warning(f"⚠️ NonceStore is DEPRECATED for {account_identifier}. Use GlobalKrakenNonceManager instead.")
-        self.account_identifier = account_identifier
-        self.lock = threading.RLock()
-        
-        # Create nonce file path in bot directory
-        bot_dir = Path(__file__).parent
-        self.nonce_file = bot_dir / f"kraken_nonce_{account_identifier}.txt"
-        
-        # Initialize with current time if file doesn't exist
-        if not self.nonce_file.exists():
-            initial_nonce = int(time.time() * 1000000)
-            self.set(initial_nonce)
-    
-    def get(self) -> int:
-        """
-        Get the last nonce from file.
-        
-        Returns:
-            Last nonce value (microseconds since epoch)
-        """
-        with self.lock:
-            try:
-                if self.nonce_file.exists():
-                    with open(self.nonce_file, 'r') as f:
-                        content = f.read().strip()
-                        if content:
-                            return int(content)
-            except (ValueError, IOError) as e:
-                logger.debug(f"Could not read nonce for {self.account_identifier}: {e}")
-            
-            # Return 0 if file doesn't exist or is invalid
-            return 0
-    
-    def set(self, nonce: int):
-        """
-        Set the nonce value to file.
-        
-        Args:
-            nonce: New nonce value to persist
-        """
-        with self.lock:
-            try:
-                with open(self.nonce_file, 'w') as f:
-                    f.write(str(nonce))
-            except IOError as e:
-                logger.debug(f"Could not write nonce for {self.account_identifier}: {e}")
-    
-    def increment_and_get(self) -> int:
-        """
-        Atomically increment and return the next nonce.
-        
-        Returns:
-            Next nonce value (guaranteed to be monotonically increasing)
-        """
-        with self.lock:
-            last_nonce = self.get()
-            now = int(time.time() * 1000000)
-            next_nonce = max(now, last_nonce + 1)
-            self.set(next_nonce)
-            return next_nonce
+# NonceStore has been REMOVED as per FIX #1 - Use GlobalKrakenNonceManager instead
+# All nonce generation now uses get_global_kraken_nonce() from bot/global_kraken_nonce.py
+# This ensures thread-safe, monotonic nonces shared across all accounts
 
 
 # Kraken Client Wrapper
@@ -161,25 +81,19 @@ class KrakenClient:
     No per-account nonce stores needed.
     """
     
-    def __init__(self, api_key: str, api_secret: str, nonce_store: NonceStore = None, 
-                 account_identifier: str = "unknown"):
+    def __init__(self, api_key: str, api_secret: str, account_identifier: str = "unknown"):
         """
         Initialize Kraken client with global nonce manager.
         
         Args:
             api_key: Kraken API key
             api_secret: Kraken API secret
-            nonce_store: DEPRECATED - kept for backward compatibility, not used
             account_identifier: Human-readable identifier for logging
         """
         self.api_key = api_key
         self.api_secret = api_secret
         self.account_identifier = account_identifier
         self.lock = threading.RLock()
-        
-        # DEPRECATED: nonce_store is no longer used (global manager is used instead)
-        if nonce_store is not None:
-            logger.debug(f"   Note: nonce_store parameter is deprecated for {account_identifier}")
         
         # Initialize Kraken broker instance
         self.broker = None
@@ -334,14 +248,10 @@ def initialize_kraken_master() -> bool:
             logger.warning("⚠️  Kraken master credentials not configured")
             return False
         
-        # Create nonce store for master
-        master_nonce_store = NonceStore("master")
-        
-        # Create Kraken client
+        # Create Kraken client (no nonce_store parameter - uses GlobalKrakenNonceManager)
         KRAKEN_MASTER = KrakenClient(
             api_key=api_key,
             api_secret=api_secret,
-            nonce_store=master_nonce_store,
             account_identifier="MASTER"
         )
         
@@ -408,14 +318,10 @@ def initialize_kraken_users() -> int:
                 logger.warning(f"⚠️  Credentials not configured for {name}: {key_var}, {secret_var}")
                 continue
             
-            # Create nonce store for user
-            user_nonce_store = NonceStore(f"user_{user_id}")
-            
-            # Create Kraken client
+            # Create Kraken client (no nonce_store parameter - uses GlobalKrakenNonceManager)
             client = KrakenClient(
                 api_key=api_key,
                 api_secret=api_secret,
-                nonce_store=user_nonce_store,
                 account_identifier=f"USER:{user_id}"
             )
             
@@ -824,7 +730,6 @@ def wrap_kraken_broker_for_copy_trading(kraken_broker):
 # Export public API
 __all__ = [
     'KrakenClient',
-    'NonceStore',
     'initialize_copy_trading_system',
     'wrap_kraken_broker_for_copy_trading',
     'execute_master_trade',
