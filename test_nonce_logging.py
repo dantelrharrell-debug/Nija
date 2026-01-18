@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test script to verify that nonce errors are logged at DEBUG level,
-not WARNING level, to reduce log spam.
+Test script to verify that nonce errors are logged at INFO level on first attempt,
+and DEBUG level on retries, to provide visibility while reducing log spam.
 
 This validates the fix for the Kraken connection logging issue.
 """
@@ -18,10 +18,14 @@ def log_kraken_error(logger, is_nonce_error, attempt, max_attempts, cred_label, 
     """
     error_type = "nonce" if is_nonce_error else "retryable"
     
-    # For nonce errors, only log at DEBUG level to reduce spam
+    # For nonce errors, log at INFO level on first attempt so users know what failed
+    # Log at DEBUG level on retries to reduce spam
     # These are transient and automatically retried with nonce jumps
     if is_nonce_error:
-        logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
+        if attempt == 1:
+            logger.info(f"   ⚠️  Kraken ({cred_label}) nonce error on attempt {attempt}/{max_attempts} (auto-retry): {error_msgs}")
+        else:
+            logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
     # For lockout/other errors, log at WARNING on first attempt only
     elif attempt == 1:
         logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
@@ -54,7 +58,7 @@ def test_nonce_error_logging_logic():
     max_attempts = 5
     cred_label = "MASTER"
     
-    # Test case 1: Nonce error on first attempt
+    # Test case 1: Nonce error on first attempt (should be INFO)
     error_msgs = "EAPI:Invalid nonce"
     is_nonce_error = True
     
@@ -66,17 +70,36 @@ def test_nonce_error_logging_logic():
     print("Log output for nonce error (attempt 1):")
     print(f"  {log_output.strip()}")
     
-    # Verify it's at DEBUG level, not WARNING
-    assert "DEBUG" in log_output, "Nonce error should be logged at DEBUG level"
+    # Verify it's at INFO level (NEW BEHAVIOR)
+    assert "INFO" in log_output, "Nonce error on first attempt should be logged at INFO level"
     assert "WARNING" not in log_output, "Nonce error should NOT be logged at WARNING level"
-    assert "nonce error (auto-retry)" in log_output, "Should mention auto-retry"
-    print("✅ PASS: Nonce error logged at DEBUG level")
+    assert "nonce error" in log_output, "Should mention nonce error"
+    print("✅ PASS: Nonce error logged at INFO level on first attempt")
     print()
     
-    # Test case 2: Non-nonce error on first attempt (should be WARNING)
+    # Test case 2: Nonce error on retry attempt (should be DEBUG)
     log_stream.truncate(0)
     log_stream.seek(0)
     
+    attempt = 2
+    
+    log_kraken_error(test_logger, is_nonce_error, attempt, max_attempts, cred_label, error_msgs)
+    
+    log_output = log_stream.getvalue()
+    print("Log output for nonce error (attempt 2):")
+    print(f"  {log_output.strip()}")
+    
+    # Verify it's at DEBUG level
+    assert "DEBUG" in log_output, "Nonce error on retry should be logged at DEBUG level"
+    assert "INFO" not in log_output, "Nonce error on retry should NOT be logged at INFO level"
+    print("✅ PASS: Nonce error on retry logged at DEBUG level")
+    print()
+    
+    # Test case 3: Non-nonce error on first attempt (should be WARNING)
+    log_stream.truncate(0)
+    log_stream.seek(0)
+    
+    attempt = 1
     is_nonce_error = False
     error_msgs = "503 Service Unavailable"
     
@@ -91,7 +114,7 @@ def test_nonce_error_logging_logic():
     print("✅ PASS: Non-nonce error logged at WARNING level on first attempt")
     print()
     
-    # Test case 3: Non-nonce error on retry attempt (should be DEBUG)
+    # Test case 4: Non-nonce error on retry attempt (should be DEBUG)
     log_stream.truncate(0)
     log_stream.seek(0)
     
@@ -114,7 +137,8 @@ def test_nonce_error_logging_logic():
     print("=" * 70)
     print()
     print("Summary:")
-    print("  - Nonce errors: Logged at DEBUG level (reduces spam)")
+    print("  - Nonce errors (first attempt): Logged at INFO level (provides visibility)")
+    print("  - Nonce errors (retries): Logged at DEBUG level (reduces spam)")
     print("  - First attempt non-nonce errors: Logged at WARNING level")
     print("  - Retry attempts: Logged at DEBUG level (reduces spam)")
     print()
