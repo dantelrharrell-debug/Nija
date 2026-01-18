@@ -29,11 +29,13 @@ You need to add environment variables to your deployment platform:
 4. Add these 4 variables:
 
 ```
-KRAKEN_USER_DAIVON_API_KEY=HSo/f1zjeQALCM/rri9bjTB5JisQ/SPgurCRTx8W7kLD7psjcv2PXEf+
-KRAKEN_USER_DAIVON_API_SECRET=6WOxnBLq+r4ln2Zz7nT0Nvv8CMkaolHtjYdOgTm7NWIq/mJqV8KbDA2XaThP65bHK9QvpEabRr1u38FrBJntaQ==
-KRAKEN_USER_TANIA_API_KEY=XEB37FsbsQ2Wj/bknOy6HPZTFqs25nyU10M2oxF/ja//Yh/r2kSRCAp/
-KRAKEN_USER_TANIA_API_SECRET=iINPAKFyVe9rTfYCKnauFCpOfqdsm9+lBFxzx2KLFkArjStbjAQ9Rr+FuA5lZgnzpZ85wMwnzKpkO07iHmMLmw==
+KRAKEN_USER_DAIVON_API_KEY=<your-daivon-api-key>
+KRAKEN_USER_DAIVON_API_SECRET=<your-daivon-api-secret>
+KRAKEN_USER_TANIA_API_KEY=<your-tania-api-key>
+KRAKEN_USER_TANIA_API_SECRET=<your-tania-api-secret>
 ```
+
+**Note**: Replace the placeholder values with your actual API credentials from `.env.kraken_users` file.
 
 5. Railway will automatically redeploy
 

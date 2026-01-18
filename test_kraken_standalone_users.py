@@ -2,14 +2,18 @@
 """
 Test script to verify Kraken user connections work in standalone mode.
 This tests the fix that allows users to connect without master.
+
+Run from repository root: python3 test_kraken_standalone_users.py
 """
 
 import os
 import sys
 
-# Add both root and bot directories to path
+# Ensure we're running from the repository root
 repo_root = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, repo_root)
+os.chdir(repo_root)
+
+# Add bot directory to Python path for imports
 sys.path.insert(0, os.path.join(repo_root, 'bot'))
 
 from dotenv import load_dotenv
