@@ -3,14 +3,14 @@
 Test script for Kraken nonce retry fix (January 18, 2026)
 
 This script validates the improved nonce retry logic:
-1. Immediate nonce jump increased from 60s to 120s
-2. Retry delay base increased from 30s to 60s
-3. Nonce multiplier increased from 10x to 20x
+1. Immediate nonce jump: 120s (clears burned nonce window)
+2. Retry delay base: REDUCED from 60s to 3s (immediate jump handles nonce clearing)
+3. Nonce multiplier: 20x (increased from 10x)
 4. All retry attempts are logged (including attempt 5)
 
 Expected behavior:
-- Immediate jump: 120,000ms (120 seconds)
-- Retry delays: 60s, 120s, 180s, 240s (for attempts 2,3,4,5)
+- Immediate jump: 120,000ms (120 seconds) - This clears the nonce window
+- Retry delays: 3s, 6s, 9s, 12s (for attempts 2,3,4,5) - Brief pauses to avoid API hammering
 - Nonce jumps: 40s, 80s, 120s, 160s (20x multiplier: 20*2, 20*3, 20*4, 20*5 seconds)
 """
 
@@ -56,11 +56,11 @@ def test_immediate_jump():
 def test_retry_delays():
     """Test retry delay calculations"""
     print("\n" + "=" * 70)
-    print("TEST 2: Retry Delay Calculations (60s base)")
+    print("TEST 2: Retry Delay Calculations (3s base)")
     print("=" * 70)
     
-    nonce_base_delay = 60.0  # New base delay
-    expected_delays = [60, 120, 180, 240]  # For attempts 2,3,4,5
+    nonce_base_delay = 3.0  # New base delay (REDUCED from 60s)
+    expected_delays = [3, 6, 9, 12]  # For attempts 2,3,4,5
     
     all_passed = True
     for attempt in range(2, 6):  # Attempts 2,3,4,5
@@ -159,9 +159,9 @@ def main():
     print("=" * 70)
     print()
     print("Testing improvements:")
-    print("  - Immediate jump: 60s → 120s")
-    print("  - Retry delay base: 30s → 60s")
-    print("  - Nonce multiplier: 10x → 20x")
+    print("  - Immediate jump: 120s (clears nonce window)")
+    print("  - Retry delay base: 3s (brief pause, not nonce window wait)")
+    print("  - Nonce multiplier: 20x → 20x")
     print("  - Log all retry attempts (including #5)")
     print()
     
@@ -184,16 +184,16 @@ def main():
         print()
         print("Expected connection behavior with new settings:")
         print("  Attempt 1: Initial connection (after 5s startup delay)")
-        print("  Attempt 2: Retry after 60s delay + 40s nonce jump")
+        print("  Attempt 2: Retry after 3s delay + 40s nonce jump")
         print("             (120s immediate jump applied on first nonce error)")
-        print("  Attempt 3: Retry after 120s delay + 60s nonce jump")
-        print("  Attempt 4: Retry after 180s delay + 80s nonce jump")
-        print("  Attempt 5: Retry after 240s delay + 100s nonce jump")
+        print("  Attempt 3: Retry after 6s delay + 60s nonce jump")
+        print("  Attempt 4: Retry after 9s delay + 80s nonce jump")
+        print("  Attempt 5: Retry after 12s delay + 100s nonce jump")
         print()
-        print("Total retry time: ~10 minutes (600s)")
+        print("Total retry time: ~30 seconds (much faster startup!)")
         print("The 120s immediate jump happens once when nonce error is detected,")
-        print("then each retry uses progressively larger delays and nonce jumps.")
-        print("This provides much more aggressive nonce spacing to handle")
+        print("then each retry uses brief delays just to avoid API hammering.")
+        print("The nonce jumps provide additional spacing to handle")
         print("persistent 'EAPI:Invalid nonce' errors from Kraken.")
         return 0
     else:

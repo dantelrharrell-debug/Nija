@@ -4323,11 +4323,13 @@ class KrakenBroker(BaseBroker):
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
             # Special handling for "Temporary lockout" errors which require much longer delays (2-5 minutes)
-            # Special handling for "Invalid nonce" errors which require longer delays and aggressive nonce jumps
-            # CRITICAL FIX (Jan 18, 2026): Increased nonce_base_delay from 30s to 60s for more aggressive spacing
+            # Special handling for "Invalid nonce" errors which require shorter delays
+            # CRITICAL FIX (Jan 18, 2026): Reduced nonce_base_delay from 60s to 3s
+            # The _immediate_nonce_jump() already jumps nonce forward by 120s, so we don't need
+            # to wait out the nonce window - just need a brief pause to avoid hammering the API
             max_attempts = 5
             base_delay = 5.0  # Base delay for normal retryable errors
-            nonce_base_delay = 60.0  # 60 seconds base delay for "Invalid nonce" errors (INCREASED from 30s)
+            nonce_base_delay = 3.0  # 3 seconds base delay for "Invalid nonce" errors (REDUCED from 60s)
             lockout_base_delay = 120.0  # 2 minutes base delay for "Temporary lockout" errors
             last_error_was_lockout = False  # Track if previous attempt was a lockout error
             last_error_was_nonce = False  # Track if previous attempt was a nonce error
@@ -4350,9 +4352,9 @@ class KrakenBroker(BaseBroker):
                             # CRITICAL FIX (Jan 18, 2026): Removed attempt < max_attempts check to log ALL retries
                             logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
                         elif last_error_was_nonce:
-                            # Linear scaling for nonce errors: (attempt-1) * 60s = 60s, 120s, 180s, 240s for attempts 2,3,4,5
-                            # Nonce errors need time for Kraken to "forget" the burned nonce window
-                            # INCREASED from 30s increments for more aggressive spacing
+                            # Linear scaling for nonce errors: (attempt-1) * 3s = 3s, 6s, 9s, 12s for attempts 2,3,4,5
+                            # Short delays are sufficient since _immediate_nonce_jump() already jumped nonce by 120s
+                            # REDUCED from 60s increments to avoid long startup delays
                             delay = nonce_base_delay * (attempt - 1)
                             # Log at INFO level so users see progress
                             # CRITICAL FIX (Jan 18, 2026): Removed attempt < max_attempts check to log ALL retries
