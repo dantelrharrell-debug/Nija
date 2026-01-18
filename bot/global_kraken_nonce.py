@@ -6,7 +6,7 @@ ONE global monotonic nonce source shared across MASTER + ALL USERS.
 
 This is the FINAL fix for Kraken nonce collisions:
 - Single process-wide nonce generator
-- Uses time.time_ns() (nanoseconds) for maximum precision
+- Uses SIMPLE INCREMENT (+1) - NOT time-based, NOT auto-generated
 - Thread-safe with proper locking
 - Guarantees strict monotonic increase across all users
 - No per-user nonce files needed
@@ -22,6 +22,7 @@ Architecture:
     - ALL Kraken API calls (master + users) share this single nonce source
     - No nonce collisions possible (single source of truth)
     - Simple, reliable, production-safe
+    - Monotonic increment (not time-based) per Kraken requirements
 """
 
 import time
@@ -39,11 +40,13 @@ class GlobalKrakenNonceManager:
     
     Features:
     - Thread-safe (uses RLock for reentrant locking)
-    - Monotonic (strictly increasing nonces)
-    - Nanosecond precision (time.time_ns())
+    - Monotonic (strictly increasing nonces via simple +1 increment)
+    - NOT time-based (uses increment, not time.time_ns() on every call)
+    - Nanosecond-based initialization (time.time_ns() ONLY for initial value)
     - Process-wide singleton
     - No file persistence needed (nanosecond timestamps always increase)
     - OPTIONAL: Process-level API call serialization (Option B)
+    - No file persistence needed (monotonic increment guarantees increase)
     
     Thread Safety:
     - Uses threading.RLock for reentrant locking
@@ -60,6 +63,7 @@ class GlobalKrakenNonceManager:
     - Ensures only ONE API call happens at a time across ALL users
     - Prevents any possible nonce collision or race condition
     - Can be enabled via enable_api_serialization()
+    - Guaranteed unique via monotonic increment (not time-based)
     """
     
     def __init__(self):
@@ -68,6 +72,9 @@ class GlobalKrakenNonceManager:
         
         IMPORTANT: This should only be called once via get_global_nonce_manager().
         Do not instantiate directly.
+        
+        The initial nonce is set using time.time_ns() ONCE.
+        All subsequent nonces use simple +1 increment (NOT time-based).
         """
         # Use RLock (reentrant lock) for thread-safety
         # RLock allows the same thread to acquire the lock multiple times
@@ -147,23 +154,17 @@ class GlobalKrakenNonceManager:
         
         Thread-safe: Uses lock to prevent race conditions.
         Monotonic: Each nonce is strictly greater than the previous.
+        NOT time-based: Uses simple increment (not time.time_ns() on every call).
         
         Returns:
             int: Nonce in nanoseconds since epoch (19 digits)
         """
         with self._lock:
-            # Get current time in nanoseconds
-            current_ns = time.time_ns()
-            
-            # Ensure strictly monotonic increase
-            # If time hasn't advanced, increment by 1 nanosecond
-            if current_ns <= self._last_nonce:
-                nonce = self._last_nonce + 1
-            else:
-                nonce = current_ns
-            
-            # Update last nonce
-            self._last_nonce = nonce
+            # MONOTONIC INCREMENT - NOT TIME-BASED
+            # Simply increment by 1 on each call
+            # This is the CORRECT implementation per Kraken requirements
+            self._last_nonce += 1
+            nonce = self._last_nonce
             
             # Update statistics
             self._total_nonces_issued += 1
@@ -233,8 +234,11 @@ def get_global_kraken_nonce() -> int:
     This is the main function that all Kraken API calls should use.
     It's thread-safe and guarantees monotonic nonces across all users.
     
+    Implementation: Uses simple +1 increment (NOT time-based, NOT auto-generated).
+    This meets Kraken's requirement for strictly monotonic nonces.
+    
     Returns:
-        int: Nonce in nanoseconds since epoch
+        int: Nonce in nanoseconds since epoch (monotonic increment)
     """
     manager = get_global_nonce_manager()
     return manager.get_nonce()
