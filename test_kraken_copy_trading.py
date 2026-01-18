@@ -37,42 +37,39 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def test_nonce_store():
-    """Test NonceStore functionality."""
+def test_global_nonce_manager():
+    """Test GlobalKrakenNonceManager functionality."""
     print("\n" + "=" * 70)
-    print("TEST 1: NonceStore Functionality")
+    print("TEST 1: GlobalKrakenNonceManager Functionality")
     print("=" * 70)
     
     try:
-        from bot.kraken_copy_trading import NonceStore
+        from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock
         
-        # Create test nonce store
-        store = NonceStore("test_account")
+        # Test nonce generation
+        nonce1 = get_global_kraken_nonce()
+        print(f"✅ First nonce: {nonce1}")
         
-        # Test get/set
-        initial_nonce = store.get()
-        print(f"✅ Initial nonce: {initial_nonce}")
-        
-        # Test increment
-        next_nonce = store.increment_and_get()
-        print(f"✅ Next nonce: {next_nonce}")
+        # Test monotonic increase
+        nonce2 = get_global_kraken_nonce()
+        print(f"✅ Second nonce: {nonce2}")
         
         # Verify monotonic increase
-        assert next_nonce > initial_nonce, "Nonce must increase monotonically"
-        print(f"✅ Nonce is monotonically increasing")
+        assert nonce2 > nonce1, "Nonce must increase monotonically"
+        print(f"✅ Nonce is monotonically increasing (diff: {nonce2 - nonce1})")
         
-        # Test persistence
-        new_store = NonceStore("test_account")
-        persisted_nonce = new_store.get()
-        assert persisted_nonce == next_nonce, "Nonce must persist across instances"
-        print(f"✅ Nonce persists correctly: {persisted_nonce}")
+        # Test API lock
+        api_lock = get_kraken_api_lock()
+        assert api_lock is not None, "API lock must be available"
+        print(f"✅ API lock is available")
         
-        # Clean up test file
-        if store.nonce_file.exists():
-            store.nonce_file.unlink()
-            print(f"✅ Test file cleaned up")
+        # Test lock is reentrant
+        with api_lock:
+            with api_lock:
+                nonce3 = get_global_kraken_nonce()
+                print(f"✅ Reentrant lock works, nonce: {nonce3}")
         
-        print("✅ TEST 1 PASSED: NonceStore works correctly")
+        print("✅ TEST 1 PASSED: GlobalKrakenNonceManager works correctly")
         return True
         
     except Exception as e:
@@ -89,7 +86,7 @@ def test_kraken_client():
     print("=" * 70)
     
     try:
-        from bot.kraken_copy_trading import KrakenClient, NonceStore
+        from bot.kraken_copy_trading import KrakenClient
         
         # Check if credentials are available
         api_key = os.getenv("KRAKEN_MASTER_API_KEY") or os.getenv("KRAKEN_API_KEY")
@@ -99,12 +96,10 @@ def test_kraken_client():
             print("⚠️  Kraken credentials not configured - skipping client test")
             return True  # Not a failure, just skipped
         
-        # Create test client
-        nonce_store = NonceStore("test_client")
+        # Create test client (no nonce_store parameter - uses GlobalKrakenNonceManager)
         client = KrakenClient(
             api_key=api_key,
             api_secret=api_secret,
-            nonce_store=nonce_store,
             account_identifier="TEST"
         )
         
@@ -263,7 +258,7 @@ def main():
     print("=" * 70)
     
     tests = [
-        ("NonceStore", test_nonce_store),
+        ("GlobalNonceManager", test_global_nonce_manager),
         ("KrakenClient", test_kraken_client),
         ("MASTER Init", test_master_initialization),
         ("USERS Init", test_users_initialization),
