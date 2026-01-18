@@ -161,7 +161,7 @@ def main():
     print("Testing improvements:")
     print("  - Immediate jump: 120s (clears nonce window)")
     print("  - Retry delay base: 3s (brief pause, not nonce window wait)")
-    print("  - Nonce multiplier: 20x → 20x")
+    print("  - Nonce multiplier: 20x (unchanged)")
     print("  - Log all retry attempts (including #5)")
     print()
     

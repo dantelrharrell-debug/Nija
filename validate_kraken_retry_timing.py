@@ -39,7 +39,7 @@ def simulate_retry_delays():
         delay = nonce_base_delay * (attempt - 1)
         total_time += delay
         
-        # Calculate nonce jump (same formula as broker_manager.py line 4382)
+        # Calculate nonce jump (same formula as broker_manager.py line 4384)
         nonce_multiplier = 20
         nonce_jump_ms = nonce_multiplier * 1000 * attempt
         nonce_jump_s = nonce_jump_ms / 1000
