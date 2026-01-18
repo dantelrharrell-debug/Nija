@@ -52,6 +52,16 @@ except ImportError:
         # Fallback if rate_limiter not available
         RateLimiter = None
 
+# Import KrakenNonce for per-user nonce generation (OPTION A - Best Practice)
+try:
+    from bot.kraken_nonce import KrakenNonce
+except ImportError:
+    try:
+        from kraken_nonce import KrakenNonce
+    except ImportError:
+        # Fallback: KrakenNonce not available
+        KrakenNonce = None
+
 # Configure logger for broker operations
 logger = logging.getLogger('nija.broker')
 
@@ -3806,20 +3816,54 @@ class KrakenBroker(BaseBroker):
         
         logger.debug(f"   Nonce file for {self.account_identifier}: {self._nonce_file}")
         
-        # CRITICAL FIX (Jan 17, 2026): Load persisted nonce from file
-        # - This prevents "Invalid nonce" errors on restart
-        # - Kraken remembers last nonce for 60+ seconds
-        # - File persistence ensures we always use a higher nonce than previous session
-        # - Random jitter prevents multi-instance collisions
-        # - Each account has isolated nonce tracking
-        base_offset = 0  # Use current time (Kraken's recommended practice)
-        random_jitter = random.randint(0, 5000000)  # 0-5 seconds
-        total_offset = base_offset + random_jitter
-        
-        # Load persisted nonce for THIS account and ensure we're ahead of it
-        persisted_nonce = get_kraken_nonce(self.account_identifier)
-        time_based_nonce = int(time.time() * 1000000) + total_offset
-        self._last_nonce = max(persisted_nonce, time_based_nonce)
+        # OPTION A - Best Practice: Per-user nonce generator
+        # Each Kraken user MUST have its own KrakenNonce instance.
+        # This ensures nonces are isolated and monotonically increasing per user.
+        # 
+        # CRITICAL: Do NOT share KrakenNonce instances between users!
+        # Each user needs their own instance to prevent nonce collisions.
+        if KrakenNonce is not None:
+            # Load persisted nonce from file and initialize KrakenNonce with it
+            persisted_nonce = get_kraken_nonce(self.account_identifier)
+            self._kraken_nonce = KrakenNonce()
+            
+            # Set the initial nonce from persisted value (if higher than current time)
+            # This ensures we don't go backwards on restart
+            current_time_ms = int(time.time() * 1000)
+            if persisted_nonce > current_time_ms:
+                # Convert persisted nonce from microseconds to milliseconds if needed
+                # Old format: microseconds (> year 3000 in ms), new format: milliseconds
+                # Threshold: 100000000000000 (year 5138 in milliseconds, year 1973 in microseconds)
+                MICROSECOND_THRESHOLD = 100000000000000
+                if persisted_nonce > MICROSECOND_THRESHOLD:
+                    # This is in microseconds, convert to milliseconds
+                    persisted_nonce_ms = int(persisted_nonce / 1000)
+                else:
+                    persisted_nonce_ms = persisted_nonce
+                
+                # Set the nonce generator's initial value using public method
+                self._kraken_nonce.set_initial_value(max(persisted_nonce_ms, current_time_ms))
+            
+            logger.debug(f"   ✅ KrakenNonce instance created for {self.account_identifier} (OPTION A)")
+        else:
+            # Fallback to old implementation if KrakenNonce not available
+            logger.warning(f"   ⚠️  KrakenNonce not available, using fallback nonce generation")
+            self._kraken_nonce = None
+            
+            # CRITICAL FIX (Jan 17, 2026): Load persisted nonce from file
+            # - This prevents "Invalid nonce" errors on restart
+            # - Kraken remembers last nonce for 60+ seconds
+            # - File persistence ensures we always use a higher nonce than previous session
+            # - Random jitter prevents multi-instance collisions
+            # - Each account has isolated nonce tracking
+            base_offset = 0  # Use current time (Kraken's recommended practice)
+            random_jitter = random.randint(0, 5000000)  # 0-5 seconds
+            total_offset = base_offset + random_jitter
+            
+            # Load persisted nonce for THIS account and ensure we're ahead of it
+            persisted_nonce = get_kraken_nonce(self.account_identifier)
+            time_based_nonce = int(time.time() * 1000000) + total_offset
+            self._last_nonce = max(persisted_nonce, time_based_nonce)
         
         # Thread lock to ensure nonce generation is thread-safe
         # Prevents race conditions when multiple threads call API simultaneously
@@ -3846,24 +3890,40 @@ class KrakenBroker(BaseBroker):
         faster recovery from nonce errors. The jump is applied immediately upon
         error detection, rather than waiting for the retry delay to complete.
         
-        Thread-safe: Uses the nonce lock to prevent race conditions.
+        Thread-safe: Uses the nonce generator's internal lock.
         
         CRITICAL FIX (Jan 17, 2026): Persists nonce after jump to account-specific file.
+        Updated to support both KrakenNonce (OPTION A) and fallback implementation.
         """
-        with self._nonce_lock:
-            immediate_jump = 60000000  # 60 seconds in microseconds
-            time_based = int(time.time() * 1000000) + immediate_jump
-            increment_based = self._last_nonce + immediate_jump
-            self._last_nonce = max(time_based, increment_based)
+        if self._kraken_nonce is not None:
+            # Use KrakenNonce instance (OPTION A) with public method
+            immediate_jump_ms = 60 * 1000  # 60 seconds in milliseconds
+            new_nonce = self._kraken_nonce.jump_forward(immediate_jump_ms)
             
             # Persist the jumped nonce to account-specific file
             try:
                 with open(self._nonce_file, "w") as f:
-                    f.write(str(self._last_nonce))
+                    f.write(str(new_nonce))
             except IOError as e:
                 logging.debug(f"Could not persist jumped nonce: {e}")
             
-            logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000000:.0f}s to clear burned nonce window")
+            logger.debug(f"   ⚡ Immediately jumped nonce forward by 60s to clear burned nonce window")
+        else:
+            # Fallback implementation
+            with self._nonce_lock:
+                immediate_jump = 60000000  # 60 seconds in microseconds
+                time_based = int(time.time() * 1000000) + immediate_jump
+                increment_based = self._last_nonce + immediate_jump
+                self._last_nonce = max(time_based, increment_based)
+                
+                # Persist the jumped nonce to account-specific file
+                try:
+                    with open(self._nonce_file, "w") as f:
+                        f.write(str(self._last_nonce))
+                except IOError as e:
+                    logging.debug(f"Could not persist jumped nonce: {e}")
+                
+                logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000000:.0f}s to clear burned nonce window")
     
     def _kraken_private_call(self, method: str, params: Optional[Dict] = None):
         """
@@ -4065,47 +4125,80 @@ class KrakenBroker(BaseBroker):
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
             
-            # Override _nonce to use tracked microseconds for guaranteed uniqueness
+            # Override _nonce to use KrakenNonce instance (OPTION A - Best Practice)
             # This prevents "EAPI:Invalid nonce" errors caused by:
-            # 1. Duplicate nonces from rapid consecutive requests (even sub-microsecond)
+            # 1. Duplicate nonces from rapid consecutive requests
             # 2. Clock drift/NTP adjustments causing nonces to go backward
             # 3. Insufficient precision in default time.time() based nonces
             # 4. Race conditions in multi-threaded scenarios
-            def _nonce_monotonic():
-                """
-                Generate nonce with guaranteed strict monotonic increase (thread-safe).
-                
-                Uses microseconds since epoch with tracking to ensure each nonce
-                is strictly greater than the previous one, preventing Kraken's
-                "Invalid nonce" error.
-                
-                Thread-safe: Uses a lock to prevent race conditions when multiple
-                threads call the API simultaneously.
-                
-                CRITICAL FIX (Jan 17, 2026): Persists nonce to account-specific file
-                after generation to ensure restart-safety and prevent collisions
-                between MASTER and USER accounts.
-                """
-                with self._nonce_lock:
-                    # Get current time in microseconds
-                    current_nonce = int(time.time() * 1000000)
+            # 
+            # OPTION A: Each user has their own KrakenNonce instance (not shared)
+            # This is the recommended best practice approach.
+            
+            if self._kraken_nonce is not None:
+                # Use KrakenNonce instance (OPTION A - Best Practice)
+                def _nonce_monotonic():
+                    """
+                    Generate nonce using KrakenNonce instance.
                     
-                    # Ensure strictly increasing - if current time equals or is less than
-                    # last nonce (due to rapid requests or clock drift), increment by 1
-                    if current_nonce <= self._last_nonce:
-                        current_nonce = self._last_nonce + 1
+                    OPTION A - Best Practice: Per-user nonce generator.
+                    Each user has their own KrakenNonce instance (not shared).
                     
-                    # Update tracking
-                    self._last_nonce = current_nonce
+                    Thread-safe: KrakenNonce uses internal lock.
+                    Monotonic: Each nonce is strictly greater than previous.
+                    Persistent: Nonces are saved to account-specific file.
+                    """
+                    nonce = self._kraken_nonce.next()
                     
                     # Persist to account-specific file for restart-safety
                     try:
                         with open(self._nonce_file, "w") as f:
-                            f.write(str(current_nonce))
+                            f.write(str(nonce))
                     except IOError as e:
                         logging.debug(f"Could not persist nonce: {e}")
                     
-                    return str(current_nonce)
+                    return str(nonce)
+                
+                logger.debug(f"✅ KrakenNonce generator installed for {cred_label} (OPTION A)")
+            else:
+                # Fallback to old implementation if KrakenNonce not available
+                def _nonce_monotonic():
+                    """
+                    Generate nonce with guaranteed strict monotonic increase (thread-safe).
+                    
+                    Uses microseconds since epoch with tracking to ensure each nonce
+                    is strictly greater than the previous one, preventing Kraken's
+                    "Invalid nonce" error.
+                    
+                    Thread-safe: Uses a lock to prevent race conditions when multiple
+                    threads call the API simultaneously.
+                    
+                    CRITICAL FIX (Jan 17, 2026): Persists nonce to account-specific file
+                    after generation to ensure restart-safety and prevent collisions
+                    between MASTER and USER accounts.
+                    """
+                    with self._nonce_lock:
+                        # Get current time in microseconds
+                        current_nonce = int(time.time() * 1000000)
+                        
+                        # Ensure strictly increasing - if current time equals or is less than
+                        # last nonce (due to rapid requests or clock drift), increment by 1
+                        if current_nonce <= self._last_nonce:
+                            current_nonce = self._last_nonce + 1
+                        
+                        # Update tracking
+                        self._last_nonce = current_nonce
+                        
+                        # Persist to account-specific file for restart-safety
+                        try:
+                            with open(self._nonce_file, "w") as f:
+                                f.write(str(current_nonce))
+                        except IOError as e:
+                            logging.debug(f"Could not persist nonce: {e}")
+                        
+                        return str(current_nonce)
+                
+                logger.debug(f"✅ Custom nonce generator installed for {cred_label} (fallback)")
             
             # Replace the nonce generator
             # NOTE: This directly overrides the internal _nonce method of krakenex.API
@@ -4115,13 +4208,19 @@ class KrakenBroker(BaseBroker):
             # but that would require more extensive changes to KrakenAPI wrapper.
             try:
                 self.api._nonce = _nonce_monotonic
-                logger.debug(f"✅ Custom nonce generator installed for {cred_label}")
                 # Log initial nonce value for debugging nonce-related issues (only if debug enabled)
                 # This helps diagnose if the initial nonce is too high or too low
                 if logger.isEnabledFor(logging.DEBUG):
-                    current_time_us = int(time.time() * 1000000)
-                    offset_seconds = (self._last_nonce - current_time_us) / 1000000.0
-                    logger.debug(f"   Initial nonce: {self._last_nonce} (current time + {offset_seconds:.2f}s)")
+                    if self._kraken_nonce is not None:
+                        # KrakenNonce uses milliseconds
+                        current_time_ms = int(time.time() * 1000)
+                        offset_seconds = (self._kraken_nonce.last - current_time_ms) / 1000.0
+                        logger.debug(f"   Initial nonce (OPTION A): {self._kraken_nonce.last}ms (current time + {offset_seconds:.2f}s)")
+                    else:
+                        # Fallback uses microseconds
+                        current_time_us = int(time.time() * 1000000)
+                        offset_seconds = (self._last_nonce - current_time_us) / 1000000.0
+                        logger.debug(f"   Initial nonce (fallback): {self._last_nonce}µs (current time + {offset_seconds:.2f}s)")
             except AttributeError as e:
                 self.last_connection_error = f"Nonce generator override failed: {str(e)}"
                 logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
@@ -4193,29 +4292,53 @@ class KrakenBroker(BaseBroker):
                         #   - Nonce errors: attempt * 10M microseconds (20M, 30M, 40M, 50M) - 10x larger jumps
                         # Larger jumps for nonce errors ensure we skip well beyond the burned nonce window
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
-                        with self._nonce_lock:
+                        
+                        if self._kraken_nonce is not None:
+                            # Use KrakenNonce instance (OPTION A) with public method
                             # Use 10x larger nonce jump for nonce-specific errors
                             nonce_multiplier = 10 if last_error_was_nonce else 1
-                            nonce_jump = nonce_multiplier * 1000000 * attempt  # Formula: multiplier * attempt * 1M
-                            # Calculate two candidate nonces and use the larger one:
-                            # - time_based: current time + jump (ensures we're ahead of wall clock time)
-                            # - increment_based: previous nonce + jump (ensures strict monotonic increase)
-                            # Both are needed because time can drift or move backwards (NTP, clock skew)
-                            time_based = int(time.time() * 1000000) + nonce_jump
-                            increment_based = self._last_nonce + nonce_jump
-                            self._last_nonce = max(time_based, increment_based)
+                            # Convert from microseconds to milliseconds for KrakenNonce
+                            nonce_jump_ms = nonce_multiplier * 1000 * attempt  # Formula: multiplier * attempt * 1000ms
+                            
+                            # Jump forward and get new nonce value
+                            new_nonce = self._kraken_nonce.jump_forward(nonce_jump_ms)
                             
                             # Persist the jumped nonce to account-specific file
                             try:
                                 with open(self._nonce_file, "w") as f:
-                                    f.write(str(self._last_nonce))
+                                    f.write(str(new_nonce))
                             except IOError as e:
                                 logging.debug(f"Could not persist jumped nonce: {e}")
                             
                             if last_error_was_nonce:
-                                logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds (10x jump for nonce error)")
+                                logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms (10x jump for nonce error)")
                             else:
-                                logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds for retry {attempt}")
+                                logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms for retry {attempt}")
+                        else:
+                            # Fallback implementation
+                            with self._nonce_lock:
+                                # Use 10x larger nonce jump for nonce-specific errors
+                                nonce_multiplier = 10 if last_error_was_nonce else 1
+                                nonce_jump = nonce_multiplier * 1000000 * attempt  # Formula: multiplier * attempt * 1M
+                                # Calculate two candidate nonces and use the larger one:
+                                # - time_based: current time + jump (ensures we're ahead of wall clock time)
+                                # - increment_based: previous nonce + jump (ensures strict monotonic increase)
+                                # Both are needed because time can drift or move backwards (NTP, clock skew)
+                                time_based = int(time.time() * 1000000) + nonce_jump
+                                increment_based = self._last_nonce + nonce_jump
+                                self._last_nonce = max(time_based, increment_based)
+                                
+                                # Persist the jumped nonce to account-specific file
+                                try:
+                                    with open(self._nonce_file, "w") as f:
+                                        f.write(str(self._last_nonce))
+                                except IOError as e:
+                                    logging.debug(f"Could not persist jumped nonce: {e}")
+                                
+                                if last_error_was_nonce:
+                                    logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds (10x jump for nonce error)")
+                                else:
+                                    logger.debug(f"   Jumped nonce forward by {nonce_jump} microseconds for retry {attempt}")
                     
                     # The _nonce_monotonic() function automatically handles nonce generation
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
