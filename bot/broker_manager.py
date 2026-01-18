@@ -3949,8 +3949,11 @@ class KrakenBroker(BaseBroker):
         
         # Timestamp of last API call for rate limiting
         # Ensures minimum delay between consecutive Kraken API calls
+        # CRITICAL FIX (Jan 18, 2026): Increased from 200ms to 1000ms to prevent nonce errors
+        # The short 200ms interval was causing "Invalid nonce" errors when balance was checked
+        # immediately after connection test. Kraken's API needs more time between requests.
         self._last_api_call_time = 0.0
-        self._min_call_interval = 0.2  # 200ms minimum between calls (safety margin)
+        self._min_call_interval = 1.0  # 1000ms (1 second) minimum between calls
     
     def _immediate_nonce_jump(self):
         """
@@ -4567,6 +4570,16 @@ class KrakenBroker(BaseBroker):
                         logger.info(f"   USDT Balance: ${usdt_balance:.2f}")
                         logger.info(f"   Total: ${total:.2f}")
                         logger.info("=" * 70)
+                        
+                        # CRITICAL FIX (Jan 18, 2026): Add post-connection delay
+                        # After successful connection test, wait before allowing next API call
+                        # This prevents "Invalid nonce" when balance is checked immediately after
+                        # The connection test already called Balance API, and rapid consecutive
+                        # calls (even with 1s interval) can trigger nonce errors
+                        post_connection_delay = 2.0  # 2 seconds post-connection cooldown
+                        logger.info(f"   ⏳ Post-connection cooldown: {post_connection_delay:.1f}s (prevents nonce errors)...")
+                        time.sleep(post_connection_delay)
+                        logger.debug(f"   ✅ Cooldown complete - ready for balance checks")
                         
                         return True
                     else:
