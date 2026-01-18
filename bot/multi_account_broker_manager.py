@@ -582,7 +582,8 @@ class MultiAccountBrokerManager:
         
         # Log warnings for problematic setups
         logger.info("")
-        logger.info("⚠️  ACCOUNT PRIORITY WARNINGS:")
+        
+        # Determine if there are any warnings to display
         users_without_master = []
         for brokerage, user_ids in connected_users.items():
             try:
@@ -594,10 +595,12 @@ class MultiAccountBrokerManager:
                     users_without_master.append(brokerage.upper())
             except KeyError:
                 # Invalid broker type - this shouldn't happen, but handle gracefully
-                logger.warning(f"   ⚠️  Unknown broker type in connected users: {brokerage}")
+                logger.warning(f"⚠️  Unknown broker type in connected users: {brokerage}")
                 continue
         
         if users_without_master:
+            # Display warning header only when there are actual warnings
+            logger.info("⚠️  ACCOUNT PRIORITY WARNINGS:")
             logger.warning(f"   ⚠️  User accounts trading WITHOUT Master account on: {', '.join(users_without_master)}")
             logger.warning(f"   🔧 RECOMMENDATION: Configure Master credentials for {', '.join(users_without_master)}")
             logger.warning(f"      Master should always be PRIMARY, users should be SECONDARY")
@@ -644,6 +647,8 @@ class MultiAccountBrokerManager:
             logger.warning("   💡 TIP: Once Master accounts are connected, the warning will disappear")
             logger.warning("=" * 70)
         else:
+            # Display positive status when there are no warnings
+            logger.info("✅ ACCOUNT HIERARCHY STATUS:")
             logger.info("   ✅ All user accounts have corresponding Master accounts (correct hierarchy)")
         
         logger.info("=" * 70)
