@@ -4173,8 +4173,8 @@ class KrakenBroker(BaseBroker):
             # The default krakenex nonce uses time.time() which has seconds precision and can
             # produce duplicate nonces if multiple requests happen in the same second.
             # 
-            # SOLUTION: Use microseconds + tracking to ensure each nonce is strictly greater
-            # than the previous one, even if requests happen in the same microsecond.
+            # SOLUTION: Use milliseconds + tracking to ensure each nonce is strictly greater
+            # than the previous one, even if requests happen in the same millisecond.
             self.api = krakenex.API(key=api_key, secret=api_secret)
             
             # CRITICAL FIX (Jan 17, 2026): Set timeout on HTTP requests to prevent hanging
@@ -4290,10 +4290,10 @@ class KrakenBroker(BaseBroker):
                         offset_seconds = (self._kraken_nonce.last - current_time_ms) / 1000.0
                         logger.debug(f"   Initial nonce (OPTION A): {self._kraken_nonce.last}ms (current time + {offset_seconds:.2f}s)")
                     else:
-                        # Fallback uses microseconds
-                        current_time_us = int(time.time() * 1000000)
-                        offset_seconds = (self._last_nonce - current_time_us) / 1000000.0
-                        logger.debug(f"   Initial nonce (fallback): {self._last_nonce}µs (current time + {offset_seconds:.2f}s)")
+                        # Fallback also uses milliseconds (Jan 18, 2026 fix)
+                        current_time_ms = int(time.time() * 1000)
+                        offset_seconds = (self._last_nonce - current_time_ms) / 1000.0
+                        logger.debug(f"   Initial nonce (fallback): {self._last_nonce}ms (current time + {offset_seconds:.2f}s)")
             except AttributeError as e:
                 self.last_connection_error = f"Nonce generator override failed: {str(e)}"
                 logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
@@ -4361,8 +4361,8 @@ class KrakenBroker(BaseBroker):
                         # from the failed request. Kraken may have validated but not processed
                         # the nonce, making it unusable for future requests.
                         # Jump scales with attempt number and error type:
-                        #   - Normal errors: attempt * 1M microseconds (2M, 3M, 4M, 5M for attempts 2,3,4,5)
-                        #   - Nonce errors: attempt * 10M microseconds (20M, 30M, 40M, 50M) - 10x larger jumps
+                        #   - Normal errors: attempt * 1000ms (1s, 2s, 3s, 4s, 5s for attempts 2,3,4,5)
+                        #   - Nonce errors: attempt * 10000ms (10s, 20s, 30s, 40s, 50s) - 10x larger jumps
                         # Larger jumps for nonce errors ensure we skip well beyond the burned nonce window
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
                         
