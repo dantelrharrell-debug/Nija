@@ -65,6 +65,40 @@ class KrakenNonce:
         with self._lock:
             self.last += 1
             return self.last
+    
+    def set_initial_value(self, value):
+        """
+        Set the initial nonce value.
+        
+        Thread-safe: Uses lock to prevent race conditions.
+        Useful for restoring from persisted state.
+        
+        Args:
+            value: Initial nonce value (will be set if greater than current)
+        """
+        with self._lock:
+            if value > self.last:
+                self.last = value
+    
+    def jump_forward(self, milliseconds):
+        """
+        Jump the nonce forward by specified milliseconds.
+        
+        Thread-safe: Uses lock to prevent race conditions.
+        Useful for error recovery when nonce window needs to be cleared.
+        
+        Args:
+            milliseconds: Number of milliseconds to jump forward
+            
+        Returns:
+            int: New nonce value after jump
+        """
+        with self._lock:
+            # Calculate two candidate nonces and use the larger one
+            time_based = int(time.time() * 1000) + milliseconds
+            increment_based = self.last + milliseconds
+            self.last = max(time_based, increment_based)
+            return self.last
 
 
 __all__ = ['KrakenNonce']

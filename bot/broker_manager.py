@@ -3832,16 +3832,17 @@ class KrakenBroker(BaseBroker):
             current_time_ms = int(time.time() * 1000)
             if persisted_nonce > current_time_ms:
                 # Convert persisted nonce from microseconds to milliseconds if needed
-                # Old format: microseconds, new format: milliseconds
-                if persisted_nonce > current_time_ms * 1000:
+                # Old format: microseconds (> year 3000 in ms), new format: milliseconds
+                # Threshold: 100000000000000 (year 5138 in milliseconds, year 1973 in microseconds)
+                MICROSECOND_THRESHOLD = 100000000000000
+                if persisted_nonce > MICROSECOND_THRESHOLD:
                     # This is in microseconds, convert to milliseconds
                     persisted_nonce_ms = int(persisted_nonce / 1000)
                 else:
                     persisted_nonce_ms = persisted_nonce
                 
-                # Set the nonce generator's last value
-                with self._kraken_nonce._lock:
-                    self._kraken_nonce.last = max(persisted_nonce_ms, current_time_ms)
+                # Set the nonce generator's initial value using public method
+                self._kraken_nonce.set_initial_value(max(persisted_nonce_ms, current_time_ms))
             
             logger.debug(f"   ✅ KrakenNonce instance created for {self.account_identifier} (OPTION A)")
         else:
@@ -3889,27 +3890,24 @@ class KrakenBroker(BaseBroker):
         faster recovery from nonce errors. The jump is applied immediately upon
         error detection, rather than waiting for the retry delay to complete.
         
-        Thread-safe: Uses the nonce lock to prevent race conditions.
+        Thread-safe: Uses the nonce generator's internal lock.
         
         CRITICAL FIX (Jan 17, 2026): Persists nonce after jump to account-specific file.
         Updated to support both KrakenNonce (OPTION A) and fallback implementation.
         """
         if self._kraken_nonce is not None:
-            # Use KrakenNonce instance (OPTION A)
-            with self._kraken_nonce._lock:
-                immediate_jump_ms = 60 * 1000  # 60 seconds in milliseconds
-                time_based_ms = int(time.time() * 1000) + immediate_jump_ms
-                increment_based_ms = self._kraken_nonce.last + immediate_jump_ms
-                self._kraken_nonce.last = max(time_based_ms, increment_based_ms)
-                
-                # Persist the jumped nonce to account-specific file
-                try:
-                    with open(self._nonce_file, "w") as f:
-                        f.write(str(self._kraken_nonce.last))
-                except IOError as e:
-                    logging.debug(f"Could not persist jumped nonce: {e}")
-                
-                logger.debug(f"   ⚡ Immediately jumped nonce forward by 60s to clear burned nonce window")
+            # Use KrakenNonce instance (OPTION A) with public method
+            immediate_jump_ms = 60 * 1000  # 60 seconds in milliseconds
+            new_nonce = self._kraken_nonce.jump_forward(immediate_jump_ms)
+            
+            # Persist the jumped nonce to account-specific file
+            try:
+                with open(self._nonce_file, "w") as f:
+                    f.write(str(new_nonce))
+            except IOError as e:
+                logging.debug(f"Could not persist jumped nonce: {e}")
+            
+            logger.debug(f"   ⚡ Immediately jumped nonce forward by 60s to clear burned nonce window")
         else:
             # Fallback implementation
             with self._nonce_lock:
@@ -4217,12 +4215,12 @@ class KrakenBroker(BaseBroker):
                         # KrakenNonce uses milliseconds
                         current_time_ms = int(time.time() * 1000)
                         offset_seconds = (self._kraken_nonce.last - current_time_ms) / 1000.0
-                        logger.debug(f"   Initial nonce: {self._kraken_nonce.last}ms (current time + {offset_seconds:.2f}s)")
+                        logger.debug(f"   Initial nonce (OPTION A): {self._kraken_nonce.last}ms (current time + {offset_seconds:.2f}s)")
                     else:
                         # Fallback uses microseconds
                         current_time_us = int(time.time() * 1000000)
                         offset_seconds = (self._last_nonce - current_time_us) / 1000000.0
-                        logger.debug(f"   Initial nonce: {self._last_nonce}µs (current time + {offset_seconds:.2f}s)")
+                        logger.debug(f"   Initial nonce (fallback): {self._last_nonce}µs (current time + {offset_seconds:.2f}s)")
             except AttributeError as e:
                 self.last_connection_error = f"Nonce generator override failed: {str(e)}"
                 logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
@@ -4296,29 +4294,26 @@ class KrakenBroker(BaseBroker):
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
                         
                         if self._kraken_nonce is not None:
-                            # Use KrakenNonce instance (OPTION A)
-                            with self._kraken_nonce._lock:
-                                # Use 10x larger nonce jump for nonce-specific errors
-                                nonce_multiplier = 10 if last_error_was_nonce else 1
-                                # Convert from microseconds to milliseconds for KrakenNonce
-                                nonce_jump_ms = nonce_multiplier * 1000 * attempt  # Formula: multiplier * attempt * 1000ms
-                                
-                                # Calculate two candidate nonces and use the larger one
-                                time_based_ms = int(time.time() * 1000) + nonce_jump_ms
-                                increment_based_ms = self._kraken_nonce.last + nonce_jump_ms
-                                self._kraken_nonce.last = max(time_based_ms, increment_based_ms)
-                                
-                                # Persist the jumped nonce to account-specific file
-                                try:
-                                    with open(self._nonce_file, "w") as f:
-                                        f.write(str(self._kraken_nonce.last))
-                                except IOError as e:
-                                    logging.debug(f"Could not persist jumped nonce: {e}")
-                                
-                                if last_error_was_nonce:
-                                    logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms (10x jump for nonce error)")
-                                else:
-                                    logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms for retry {attempt}")
+                            # Use KrakenNonce instance (OPTION A) with public method
+                            # Use 10x larger nonce jump for nonce-specific errors
+                            nonce_multiplier = 10 if last_error_was_nonce else 1
+                            # Convert from microseconds to milliseconds for KrakenNonce
+                            nonce_jump_ms = nonce_multiplier * 1000 * attempt  # Formula: multiplier * attempt * 1000ms
+                            
+                            # Jump forward and get new nonce value
+                            new_nonce = self._kraken_nonce.jump_forward(nonce_jump_ms)
+                            
+                            # Persist the jumped nonce to account-specific file
+                            try:
+                                with open(self._nonce_file, "w") as f:
+                                    f.write(str(new_nonce))
+                            except IOError as e:
+                                logging.debug(f"Could not persist jumped nonce: {e}")
+                            
+                            if last_error_was_nonce:
+                                logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms (10x jump for nonce error)")
+                            else:
+                                logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms for retry {attempt}")
                         else:
                             # Fallback implementation
                             with self._nonce_lock:
