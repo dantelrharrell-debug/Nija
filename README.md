@@ -99,13 +99,22 @@ python3 check_trading_status.py
 
 ### 🔍 Verification & Diagnostics
 
-- **[validate_kraken_master_setup.py](validate_kraken_master_setup.py)** - 🆕 **Complete validation** (recommended)
+**🆕 Comprehensive Testing (January 18, 2026):**
+- **[test_master_and_user_connections.py](test_master_and_user_connections.py)** - Test ALL account connections (master + users)
+- **[verify_kraken_execution_ready.py](verify_kraken_execution_ready.py)** - Verify Kraken execution readiness
+- **[verify_coinbase_trade_history.py](verify_coinbase_trade_history.py)** - Verify trade history preservation
+- **[ACCOUNT_CONNECTION_TESTING_GUIDE.md](ACCOUNT_CONNECTION_TESTING_GUIDE.md)** - Complete testing documentation
+
+**Exchange-Specific:**
+- **[validate_kraken_master_setup.py](validate_kraken_master_setup.py)** - Complete Kraken validation (recommended)
 - **[diagnose_master_kraken_issue.py](diagnose_master_kraken_issue.py)** - Diagnose master account issues
+- **[test_kraken_connection_live.py](test_kraken_connection_live.py)** - Live API connection test
+
+**General Status:**
 - **[display_broker_status.py](display_broker_status.py)** - Display configuration status for all brokers
 - **[check_trading_status.py](check_trading_status.py)** - Check overall trading status
 - **[audit_coinbase_positions.py](audit_coinbase_positions.py)** - Verify no stuck losing positions
 - **[setup_kraken_master.py](setup_kraken_master.py)** - Interactive setup wizard for Kraken master
-- **[test_kraken_connection_live.py](test_kraken_connection_live.py)** - Live API connection test
 
 **Library**: NIJA uses official Kraken SDKs: [`krakenex`](https://github.com/veox/python3-krakenex) + [`pykrakenapi`](https://github.com/dominiktraxl/pykrakenapi)
 
