@@ -1,5 +1,28 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
+## 🔥 **NEW: PRO MODE - Position Rotation Trading**
+
+Transform NIJA into a hedge-fund style system with intelligent position rotation:
+
+- ✅ **Counts position values as capital** - Never locks all funds
+- ✅ **Auto-rotates weak positions** - Closes losers for better opportunities  
+- ✅ **Maintains free reserve** - Always keeps 15% liquid
+- ✅ **Maximizes efficiency** - Uses 100% of capital intelligently
+
+**Quick Enable:**
+```bash
+# Add to .env
+PRO_MODE=true
+PRO_MODE_MIN_RESERVE_PCT=0.15
+```
+
+**Learn More:**
+- 📖 [PRO_MODE_QUICKSTART.md](PRO_MODE_QUICKSTART.md) - Enable in 5 minutes
+- 📚 [PRO_MODE_README.md](PRO_MODE_README.md) - Complete guide
+- 🧪 Run `python3 test_pro_mode.py` to verify
+
+---
+
 ## ⚡ **QUICK START: Start Trading in 60 Seconds**
 
 **No credentials? No problem!** Get NIJA trading immediately:
