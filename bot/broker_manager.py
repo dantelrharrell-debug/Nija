@@ -3835,7 +3835,7 @@ class KrakenBroker(BaseBroker):
                 # Old format: microseconds, new format: milliseconds
                 if persisted_nonce > current_time_ms * 1000:
                     # This is in microseconds, convert to milliseconds
-                    persisted_nonce_ms = persisted_nonce // 1000
+                    persisted_nonce_ms = int(persisted_nonce / 1000)
                 else:
                     persisted_nonce_ms = persisted_nonce
                 
@@ -3905,8 +3905,7 @@ class KrakenBroker(BaseBroker):
                 # Persist the jumped nonce to account-specific file
                 try:
                     with open(self._nonce_file, "w") as f:
-                        # Store as microseconds for compatibility
-                        f.write(str(self._kraken_nonce.last * 1000))
+                        f.write(str(self._kraken_nonce.last))
                 except IOError as e:
                     logging.debug(f"Could not persist jumped nonce: {e}")
                 
@@ -4154,11 +4153,9 @@ class KrakenBroker(BaseBroker):
                     nonce = self._kraken_nonce.next()
                     
                     # Persist to account-specific file for restart-safety
-                    # Note: KrakenNonce uses milliseconds, but file expects microseconds for compatibility
-                    # Convert milliseconds to microseconds for file storage
                     try:
                         with open(self._nonce_file, "w") as f:
-                            f.write(str(nonce * 1000))  # Store as microseconds
+                            f.write(str(nonce))
                     except IOError as e:
                         logging.debug(f"Could not persist nonce: {e}")
                     
@@ -4314,8 +4311,7 @@ class KrakenBroker(BaseBroker):
                                 # Persist the jumped nonce to account-specific file
                                 try:
                                     with open(self._nonce_file, "w") as f:
-                                        # Store as microseconds for compatibility
-                                        f.write(str(self._kraken_nonce.last * 1000))
+                                        f.write(str(self._kraken_nonce.last))
                                 except IOError as e:
                                     logging.debug(f"Could not persist jumped nonce: {e}")
                                 
