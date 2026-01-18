@@ -11,6 +11,16 @@ from datetime import datetime
 from dotenv import load_dotenv
 import pandas as pd
 
+# Import market filters at module level to avoid repeated imports in loops
+try:
+    from market_filters import check_pair_quality
+except ImportError:
+    try:
+        from bot.market_filters import check_pair_quality
+    except ImportError:
+        # Graceful fallback if market_filters not available
+        check_pair_quality = None
+
 load_dotenv()
 
 logger = logging.getLogger("nija")
@@ -1865,45 +1875,48 @@ class TradingStrategy:
                                     df[col] = pd.to_numeric(df[col], errors='coerce')
                             
                             # FIX #4: PAIR QUALITY FILTER - Check spread, volume, and ATR before analyzing
-                            try:
-                                from market_filters import check_pair_quality
-                                
-                                # Get current bid/ask for spread check
-                                current_price = df['close'].iloc[-1]
-                                # Estimate bid/ask from price (most exchanges have ~0.1% spread for good pairs)
-                                # For real implementation, would fetch actual bid/ask from broker
-                                estimated_spread_pct = 0.001  # Assume 0.1% spread for estimation
-                                bid_price = current_price * (1 - estimated_spread_pct / 2)
-                                ask_price = current_price * (1 + estimated_spread_pct / 2)
-                                
-                                # Calculate ATR percentage if available
-                                atr_pct = None
-                                if 'atr' in df.columns and len(df) > 0:
-                                    atr_value = df['atr'].iloc[-1]
-                                    if pd.notna(atr_value) and current_price > 0:
-                                        atr_pct = atr_value / current_price
-                                
-                                # Check pair quality
-                                quality_check = check_pair_quality(
-                                    symbol=symbol,
-                                    bid_price=bid_price,
-                                    ask_price=ask_price,
-                                    atr_pct=atr_pct,
-                                    max_spread_pct=0.0015,  # 0.15% max spread
-                                    min_atr_pct=0.005,  # 0.5% minimum ATR
-                                    disabled_pairs=DISABLED_PAIRS
-                                )
-                                
-                                if not quality_check['quality_acceptable']:
-                                    reasons = ', '.join(quality_check['reasons_failed'])
-                                    logger.debug(f"   ⛔ QUALITY FILTER: {symbol} failed - {reasons}")
-                                    filter_stats['market_filter'] += 1
-                                    continue
-                                else:
-                                    logger.debug(f"   ✅ Quality check passed: {symbol}")
-                            except Exception as quality_err:
-                                # If quality check fails, log warning but don't block trading
-                                logger.debug(f"   ⚠️ Quality check error for {symbol}: {quality_err}")
+                            # Only run if check_pair_quality is available (imported at module level)
+                            if check_pair_quality is not None:
+                                try:
+                                    # Get current bid/ask for spread check
+                                    current_price = df['close'].iloc[-1]
+                                    
+                                    # PLACEHOLDER: Estimate bid/ask from price
+                                    # TODO: Replace with actual bid/ask from broker API for more accurate spread check
+                                    # Most major pairs (BTC, ETH, SOL) have ~0.01-0.05% spread
+                                    # This conservative estimate (0.1%) ensures we don't miss quality pairs
+                                    estimated_spread_pct = 0.001  # Assume 0.1% spread for estimation
+                                    bid_price = current_price * (1 - estimated_spread_pct / 2)
+                                    ask_price = current_price * (1 + estimated_spread_pct / 2)
+                                    
+                                    # Calculate ATR percentage if available
+                                    atr_pct = None
+                                    if 'atr' in df.columns and len(df) > 0:
+                                        atr_value = df['atr'].iloc[-1]
+                                        if pd.notna(atr_value) and current_price > 0:
+                                            atr_pct = atr_value / current_price
+                                    
+                                    # Check pair quality
+                                    quality_check = check_pair_quality(
+                                        symbol=symbol,
+                                        bid_price=bid_price,
+                                        ask_price=ask_price,
+                                        atr_pct=atr_pct,
+                                        max_spread_pct=0.0015,  # 0.15% max spread
+                                        min_atr_pct=0.005,  # 0.5% minimum ATR
+                                        disabled_pairs=DISABLED_PAIRS
+                                    )
+                                    
+                                    if not quality_check['quality_acceptable']:
+                                        reasons = ', '.join(quality_check['reasons_failed'])
+                                        logger.debug(f"   ⛔ QUALITY FILTER: {symbol} failed - {reasons}")
+                                        filter_stats['market_filter'] += 1
+                                        continue
+                                    else:
+                                        logger.debug(f"   ✅ Quality check passed: {symbol}")
+                                except Exception as quality_err:
+                                    # If quality check fails, log warning but don't block trading
+                                    logger.debug(f"   ⚠️ Quality check error for {symbol}: {quality_err}")
                             
                             # Analyze for entry
                             # PRO MODE: Use total capital instead of just free balance

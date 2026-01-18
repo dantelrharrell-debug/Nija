@@ -32,7 +32,11 @@ def test_fix_2_no_red_exit():
     print("=== Testing FIX #2: No Red Exit Rule ===")
     
     # Read trading_strategy.py and check for the implementation
-    with open('bot/trading_strategy.py', 'r') as f:
+    # Use relative path from test file location
+    test_dir = os.path.dirname(os.path.abspath(__file__))
+    strategy_file = os.path.join(test_dir, 'bot', 'trading_strategy.py')
+    
+    with open(strategy_file, 'r') as f:
         content = f.read()
     
     # Check for key elements of the No Red Exit rule
@@ -73,7 +77,11 @@ def test_fix_3_min_profit_threshold():
     print(f"✅ PASS: MIN_PROFIT_THRESHOLD = {MIN_PROFIT_THRESHOLD*100}%")
     
     # Check that the threshold is used in code
-    with open('bot/trading_strategy.py', 'r') as f:
+    # Use relative path from test file location
+    test_dir = os.path.dirname(os.path.abspath(__file__))
+    strategy_file = os.path.join(test_dir, 'bot', 'trading_strategy.py')
+    
+    with open(strategy_file, 'r') as f:
         content = f.read()
     
     assert 'MIN_PROFIT_THRESHOLD' in content, "MIN_PROFIT_THRESHOLD should be used in code"
@@ -149,7 +157,11 @@ def test_fix_4_pair_quality_filter():
     print(f"   Reasons failed: {result['reasons_failed']}")
     
     # Check integration in trading_strategy.py
-    with open('bot/trading_strategy.py', 'r') as f:
+    # Use relative path from test file location
+    test_dir = os.path.dirname(os.path.abspath(__file__))
+    strategy_file = os.path.join(test_dir, 'bot', 'trading_strategy.py')
+    
+    with open(strategy_file, 'r') as f:
         content = f.read()
     
     assert 'check_pair_quality' in content, "check_pair_quality should be imported/used"
