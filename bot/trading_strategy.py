@@ -332,6 +332,10 @@ class TradingStrategy:
                     # The trading loop will handle the disconnected state and retry automatically
                     logger.warning("   ⚠️  Kraken MASTER connection test failed, will retry in background")
                     logger.warning("   📌 Kraken broker initialized - trading loop will attempt reconnection")
+                    logger.info("")
+                    logger.info("   ✅ OTHER BROKERS CONTINUE TRADING INDEPENDENTLY")
+                    logger.info("   ℹ️  Kraken offline does NOT block Coinbase or other exchanges")
+                    logger.info("")
                     
                     # Use helper method to register for retry
                     self._register_kraken_for_retry(kraken)
@@ -343,6 +347,10 @@ class TradingStrategy:
                 if kraken is not None:
                     logger.warning(f"   ⚠️  Kraken MASTER initialization error: {e}")
                     logger.warning("   📌 Kraken broker will be registered for background retry")
+                    logger.info("")
+                    logger.info("   ✅ OTHER BROKERS CONTINUE TRADING INDEPENDENTLY")
+                    logger.info("   ℹ️  Kraken offline does NOT block Coinbase or other exchanges")
+                    logger.info("")
                     
                     # Use helper method to register for retry
                     self._register_kraken_for_retry(kraken)
@@ -350,6 +358,10 @@ class TradingStrategy:
                     # Broker object was never created - can't retry
                     logger.error(f"   ❌ Kraken MASTER initialization failed: {e}")
                     logger.error("   ❌ Kraken will not be available for trading")
+                    logger.info("")
+                    logger.info("   ✅ OTHER BROKERS CONTINUE TRADING INDEPENDENTLY")
+                    logger.info("   ℹ️  Kraken failure does NOT block Coinbase or other exchanges")
+                    logger.info("")
             
             # Add delay between broker connections
             time.sleep(0.5)

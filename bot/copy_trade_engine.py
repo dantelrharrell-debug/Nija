@@ -178,6 +178,14 @@ class CopyTradeEngine:
             logger.error(f"❌ Unknown broker type: {signal.broker}")
             return results
         
+        # CRITICAL CHECK: Verify master account is still connected before copying
+        # This prevents copy trading when master broker has gone offline
+        master_connected = self.multi_account_manager.is_master_connected(broker_type)
+        if not master_connected:
+            logger.warning(f"⚠️  {signal.broker.upper()} MASTER offline - skipping copy trading")
+            logger.info(f"   ℹ️  Copy trading disabled until MASTER reconnects")
+            return results
+        
         # Get all user accounts for this broker
         user_brokers = self.multi_account_manager.user_brokers
         

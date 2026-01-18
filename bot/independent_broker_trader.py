@@ -673,6 +673,11 @@ class IndependentBrokerTrader:
                             logger.info(f"   ℹ️  {user_id} will execute trades copied from Kraken MASTER")
                             logger.info(f"   ℹ️  Independent strategy loop disabled for copy trading mode")
                             continue
+                        else:
+                            logger.info(f"⏭️  Skipping {broker_name} - Kraken MASTER offline")
+                            logger.info(f"   ℹ️  Kraken copy trading disabled until MASTER reconnects")
+                            logger.info(f"   ✅ OTHER BROKERS (Coinbase, etc.) continue trading independently")
+                            continue
                     
                     # Only start threads for funded user brokers
                     if user_id not in funded_users or broker_type.value not in funded_users[user_id]:
