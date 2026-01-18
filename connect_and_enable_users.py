@@ -120,34 +120,29 @@ def connect_user_broker(user_id: str, name: str, broker: str) -> Dict:
     }
     
     try:
-        # Import broker manager
-        from broker_manager import BrokerType, AccountType, MultiBrokerManager
+        # Import broker classes
+        from broker_manager import BrokerType, AccountType, KrakenBroker, CoinbaseBroker
         
-        # Map broker name to BrokerType
-        broker_type_map = {
-            'kraken': BrokerType.KRAKEN,
-            'coinbase': BrokerType.COINBASE,
-            'alpaca': BrokerType.ALPACA,
-        }
+        # Create broker instance based on type
+        logger.info(f"Connecting {name} to {broker.upper()}...")
         
-        broker_type = broker_type_map.get(broker.lower())
-        if not broker_type:
+        if broker.lower() == 'kraken':
+            broker_instance = KrakenBroker(
+                account_type=AccountType.USER,
+                user_id=user_id
+            )
+        elif broker.lower() == 'coinbase':
+            broker_instance = CoinbaseBroker(
+                account_type=AccountType.USER,
+                user_id=user_id
+            )
+        else:
             result['error'] = f"Unknown broker: {broker}"
             return result
         
-        # Initialize broker manager
-        manager = MultiBrokerManager()
-        
-        # Add user broker
-        logger.info(f"Connecting {name} to {broker.upper()}...")
-        broker_instance = manager.add_broker(
-            broker_type=broker_type,
-            account_type=AccountType.USER,
-            user_id=user_id
-        )
-        
-        if not broker_instance:
-            result['error'] = "Failed to initialize broker"
+        # Connect to broker
+        if not broker_instance.connect():
+            result['error'] = "Failed to connect to broker"
             return result
         
         # Test connection by getting account balance
