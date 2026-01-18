@@ -352,6 +352,8 @@ def test_user_nonce_manager_self_healing():
     print(f"Nonce after healing: {n3}")
     
     # Verify significant jump (60 seconds = 60,000,000 microseconds)
+    # Note: UserNonceManager uses microseconds, while KrakenNonce uses milliseconds
+    # This test uses UserNonceManager, hence microseconds
     jump = n3 - n2
     print(f"Jump amount: {jump / 1000000:.2f} seconds")
     assert jump >= 60000000, "Healing should jump forward by at least 60 seconds"

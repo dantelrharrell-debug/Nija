@@ -49,7 +49,8 @@ def simulate_kraken_broker_init(account_id, nonce_file):
     current_time_ms = int(time.time() * 1000)
     if persisted_nonce > current_time_ms:
         # Convert from microseconds to milliseconds if needed
-        MICROSECOND_THRESHOLD = 100000000000000
+        # Threshold: 100 trillion = ~3170 years in ms, ~1973 in μs - distinguishes timestamp formats
+        MICROSECOND_THRESHOLD = 100_000_000_000_000  # 100 trillion
         if persisted_nonce > MICROSECOND_THRESHOLD:
             persisted_nonce_ms = int(persisted_nonce / 1000)
         else:

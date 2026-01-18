@@ -118,7 +118,10 @@ with open(nonce_file, "w") as f:
 ```python
 # Jump forward 60 seconds on nonce errors
 def jump_forward(self, milliseconds):
-    self.last = max(time_based, increment_based) + milliseconds
+    time_based = int(time.time() * 1000) + milliseconds
+    increment_based = self.last + milliseconds
+    self.last = max(time_based, increment_based)
+    return self.last
 ```
 
 **Benefit:** Self-healing from nonce errors without manual intervention
