@@ -32,7 +32,10 @@ class ExecutionEngine:
     # CRITICAL: Maximum acceptable immediate loss on entry (as percentage)
     # If position shows loss greater than this immediately after fill, reject it
     # This prevents accepting trades with excessive spread/slippage
-    # Set to 0.5% = losses beyond normal 0.6% maker fee indicate bad execution
+    # Threshold: 0.5% - This is set conservatively to catch truly bad fills
+    # while still allowing for normal market microstructure (typical spread ~0.1-0.3%)
+    # Coinbase taker fee is 0.6%, but we want to catch ADDITIONAL unfavorable slippage
+    # beyond what's expected from the quote price. So 0.5% extra slippage = very bad fill
     MAX_IMMEDIATE_LOSS_PCT = 0.005  # 0.5%
     
     def __init__(self, broker_client=None):
@@ -456,8 +459,16 @@ class ExecutionEngine:
                 # Negative slippage means we sold for less (BAD)
                 slippage_pct = (actual_price - expected_price) / expected_price
             
-            # Calculate dollar amount
-            slippage_usd = abs(slippage_pct) * position_size
+            # Calculate dollar amount of slippage
+            # For position_size in USD, calculate actual dollar loss from slippage
+            if side == 'long':
+                # For long: quantity = position_size / expected_price
+                # Dollar loss = quantity * (actual_price - expected_price)
+                # Simplified: position_size * (actual_price - expected_price) / expected_price
+                slippage_usd = abs(position_size * slippage_pct)
+            else:
+                # For short: same calculation
+                slippage_usd = abs(position_size * slippage_pct)
             
             logger.info(f"   📊 Entry validation: {symbol} {side}")
             logger.info(f"      Expected: ${expected_price:.4f}")
@@ -465,7 +476,11 @@ class ExecutionEngine:
             logger.info(f"      Slippage: {slippage_pct*100:+.3f}% (${slippage_usd:.2f})")
             
             # Check if slippage is negative (unfavorable) and exceeds threshold
-            if slippage_pct < 0 and abs(slippage_pct) > self.MAX_IMMEDIATE_LOSS_PCT:
+            # Use >= with small epsilon to handle floating point precision
+            # (e.g., 0.004999999... should be treated as 0.005)
+            EPSILON = 1e-10  # Tolerance for floating point comparison
+            if slippage_pct < 0 and (abs(slippage_pct) > self.MAX_IMMEDIATE_LOSS_PCT or 
+                                    abs(abs(slippage_pct) - self.MAX_IMMEDIATE_LOSS_PCT) < EPSILON):
                 # REJECT: Unfavorable slippage exceeds threshold
                 logger.error("=" * 70)
                 logger.error(f"🚫 TRADE REJECTED - IMMEDIATE LOSS EXCEEDS THRESHOLD")

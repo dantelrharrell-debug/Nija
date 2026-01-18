@@ -151,11 +151,13 @@ def test_scenario_4_xrp_real_case():
     print("\n" + "=" * 70)
     print("TEST 4: Real XRP Case - $0.23 Immediate Loss")
     print("=" * 70)
-    print("Problem: Master losing money on XRP with -$0.23 immediate loss")
+    print("Problem: Master losing money on XRP with immediate loss")
+    print("Scenario: XRP at $2.00, filled at $2.012")
+    print("          Slippage: 0.6%, Position: $10")
     
-    # Real scenario: If XRP at $2.00, $0.23 loss = 11.5% loss (MASSIVE)
-    # More realistic: XRP at $2.00, filled at $2.012 = $0.12 loss on $10 position
-    # That's 0.6% slippage - should be rejected as it exceeds 0.5%
+    # Real scenario: XRP expected $2.00, filled at $2.012
+    # Slippage = (2.00 - 2.012) / 2.00 = -0.6% (unfavorable)
+    # Dollar loss on $10 position = $10 * 0.006 = $0.06
     
     broker = MockBrokerClient(fill_price=2.012)
     engine = ExecutionEngine(broker_client=broker)
@@ -169,10 +171,14 @@ def test_scenario_4_xrp_real_case():
         take_profit_levels={'tp1': 2.03, 'tp2': 2.05, 'tp3': 2.08}
     )
     
+    # Calculate expected loss
+    expected_slippage_pct = 0.006  # 0.6%
+    expected_loss_usd = 10.0 * expected_slippage_pct
+    
     if result is None:
-        print("✅ PASS: XRP trade rejected (0.6% slippage > 0.5% threshold)")
+        print(f"✅ PASS: XRP trade rejected ({expected_slippage_pct*100:.1f}% slippage >= 0.5% threshold)")
         print("   This prevents accepting the losing trade!")
-        print(f"   Immediate loss would be: ~$0.06 on $10 position")
+        print(f"   Immediate loss would be: ${expected_loss_usd:.2f} on $10 position")
         assert engine.rejected_trades_count == 1
         return True
     else:
@@ -181,12 +187,15 @@ def test_scenario_4_xrp_real_case():
 
 
 def test_scenario_5_threshold_boundary():
-    """Test: Entry exactly at threshold (should accept)"""
+    """Test: Entry exactly at threshold (should reject at boundary)"""
     print("\n" + "=" * 70)
     print("TEST 5: Boundary Test - Exactly at 0.5% threshold")
     print("=" * 70)
+    print("Expected: $2.00, Actual: $2.010 (exactly 0.5% unfavorable)")
     
-    # Setup: Expected $2.00, actual $2.010 (exactly 0.5% - should accept)
+    # Setup: Expected $2.00, actual $2.010
+    # Slippage = (2.00 - 2.010) / 2.00 = -0.005 = -0.5% (exactly at threshold)
+    # With >= comparison, this should be REJECTED
     broker = MockBrokerClient(fill_price=2.010)
     engine = ExecutionEngine(broker_client=broker)
     
@@ -199,13 +208,14 @@ def test_scenario_5_threshold_boundary():
         take_profit_levels={'tp1': 2.03, 'tp2': 2.05, 'tp3': 2.08}
     )
     
-    # At exactly threshold, should still accept (< not <=)
-    if result is not None:
-        print("✅ PASS: Entry at exact threshold accepted")
-        assert len(broker.orders) == 1
+    # At exactly threshold (0.5%), should REJECT (using >= not >)
+    if result is None:
+        print("✅ PASS: Entry at exact threshold (0.5%) rejected")
+        print("   Using >= comparison to be conservative")
+        assert engine.rejected_trades_count == 1
         return True
     else:
-        print("❌ FAIL: Entry at threshold should be accepted")
+        print("❌ FAIL: Entry at exact threshold should be rejected")
         return False
 
 
