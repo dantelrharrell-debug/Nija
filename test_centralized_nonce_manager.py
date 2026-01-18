@@ -193,10 +193,15 @@ def test_multi_user_nonce_uniqueness():
         print(f"❌ FAIL: Found {duplicates} duplicate nonces out of {total_nonces}")
         return False
     
-    # Verify nonces are monotonic
+    # Verify nonces are monotonic (when sorted)
+    # NOTE: The nonces may not be in exact order in all_nonces due to thread scheduling,
+    # but when sorted they should be strictly increasing (no duplicates, no gaps in order)
     sorted_nonces = sorted(all_nonces)
-    if sorted_nonces == sorted(all_nonces):
-        print("✅ PASS: Nonces are globally monotonic across all users")
+    is_strictly_increasing = all(sorted_nonces[i] < sorted_nonces[i+1] 
+                                  for i in range(len(sorted_nonces)-1))
+    
+    if is_strictly_increasing:
+        print("✅ PASS: Nonces are globally monotonic (strictly increasing when sorted)")
     else:
         print("❌ FAIL: Nonces are not globally monotonic")
         return False

@@ -184,6 +184,33 @@ class KrakenClient:
         # Initialize Kraken broker instance
         self.broker = None
     
+    def _ensure_api_initialized(self):
+        """
+        Helper method to ensure Kraken API is initialized with global nonce manager.
+        
+        This method is called before each API operation to ensure:
+        1. The krakenex API object is created
+        2. The api._nonce method is overridden to use global nonce manager
+        3. Reduces code duplication across multiple API methods
+        """
+        if not hasattr(self, 'api') or self.api is None:
+            import krakenex
+            self.api = krakenex.API()
+            self.api.key = self.api_key
+            self.api.secret = self.api_secret
+            
+            # CRITICAL FIX: Override the nonce method to use global nonce manager
+            # This ensures ALL Kraken API calls use the same nonce source
+            if get_global_kraken_nonce is not None:
+                def _global_nonce():
+                    """Generate nonce using global manager (nanosecond precision)."""
+                    return str(get_global_kraken_nonce())
+                
+                self.api._nonce = _global_nonce
+                logger.debug(f"✅ Global nonce manager installed for {self.account_identifier}")
+            else:
+                logger.warning(f"⚠️ Global nonce manager not available for {self.account_identifier}")
+    
     def _nonce(self) -> int:
         """
         Generate next nonce using GLOBAL Kraken Nonce Manager.
@@ -222,25 +249,8 @@ class KrakenClient:
             API response dict with 'result' or 'error'
         """
         try:
-            import krakenex
-            
-            # Initialize API connection if not already done
-            if not hasattr(self, 'api') or self.api is None:
-                self.api = krakenex.API()
-                self.api.key = self.api_key
-                self.api.secret = self.api_secret
-                
-                # CRITICAL FIX: Override the nonce method to use global nonce manager
-                # This ensures ALL Kraken API calls use the same nonce source
-                if get_global_kraken_nonce is not None:
-                    def _global_nonce():
-                        """Generate nonce using global manager (nanosecond precision)."""
-                        return str(get_global_kraken_nonce())
-                    
-                    self.api._nonce = _global_nonce
-                    logger.debug(f"✅ Global nonce manager installed for {self.account_identifier}")
-                else:
-                    logger.warning(f"⚠️ Global nonce manager not available for {self.account_identifier}")
+            # Initialize API with global nonce manager
+            self._ensure_api_initialized()
             
             # Use global API lock to serialize all Kraken calls (Option B)
             # This ensures only ONE API call happens at a time across ALL users
@@ -272,24 +282,8 @@ class KrakenClient:
             API response dict with 'result' containing balances
         """
         try:
-            # Initialize API connection if not already done
-            if not hasattr(self, 'api') or self.api is None:
-                import krakenex
-                self.api = krakenex.API()
-                self.api.key = self.api_key
-                self.api.secret = self.api_secret
-                
-                # CRITICAL FIX: Override the nonce method to use global nonce manager
-                # This ensures ALL Kraken API calls use the same nonce source
-                if get_global_kraken_nonce is not None:
-                    def _global_nonce():
-                        """Generate nonce using global manager (nanosecond precision)."""
-                        return str(get_global_kraken_nonce())
-                    
-                    self.api._nonce = _global_nonce
-                    logger.debug(f"✅ Global nonce manager installed for {self.account_identifier}")
-                else:
-                    logger.warning(f"⚠️ Global nonce manager not available for {self.account_identifier}")
+            # Initialize API with global nonce manager
+            self._ensure_api_initialized()
             
             # Use global API lock to serialize all Kraken calls (Option B)
             # This ensures only ONE API call happens at a time across ALL users

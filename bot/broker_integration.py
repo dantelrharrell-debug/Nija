@@ -419,6 +419,34 @@ class KrakenBrokerAdapter(BrokerInterface):
         self.kraken_api = None
         logger.info("Kraken broker adapter initialized")
     
+    def _kraken_api_call(self, method: str, params: dict = None):
+        """
+        Helper method to make Kraken API calls with global serialization lock.
+        
+        This method wraps all query_private calls with the global API lock
+        to ensure only ONE Kraken API call happens at a time across all accounts.
+        
+        Args:
+            method: Kraken API method name
+            params: Optional parameters dict
+            
+        Returns:
+            API response
+        """
+        if get_kraken_api_lock is not None:
+            api_lock = get_kraken_api_lock()
+            with api_lock:
+                if params:
+                    return self.api.query_private(method, params)
+                else:
+                    return self.api.query_private(method)
+        else:
+            # Fallback: direct call without global lock
+            if params:
+                return self.api.query_private(method, params)
+            else:
+                return self.api.query_private(method)
+    
     def connect(self) -> bool:
         """Connect to Kraken API."""
         try:
@@ -445,13 +473,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             
             self.kraken_api = KrakenAPI(self.api)
             
-            # Test connection - use global API lock to serialize all Kraken calls (Option B)
-            if get_kraken_api_lock is not None:
-                api_lock = get_kraken_api_lock()
-                with api_lock:
-                    balance = self.api.query_private('Balance')
-            else:
-                balance = self.api.query_private('Balance')
+            # Test connection - use helper method for serialized API call
+            balance = self._kraken_api_call('Balance')
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
@@ -528,13 +551,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'currency': 'USD'
                 }
             
-            # Use global API lock to serialize all Kraken calls (Option B)
-            if get_kraken_api_lock is not None:
-                api_lock = get_kraken_api_lock()
-                with api_lock:
-                    balance = self.api.query_private('Balance')
-            else:
-                balance = self.api.query_private('Balance')
+            # Use helper method for serialized API call
+            balance = self._kraken_api_call('Balance')
             
             if balance and 'result' in balance:
                 result = balance['result']
@@ -635,13 +653,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'volume': str(size)
             }
             
-            # Use global API lock to serialize all Kraken calls (Option B)
-            if get_kraken_api_lock is not None:
-                api_lock = get_kraken_api_lock()
-                with api_lock:
-                    result = self.api.query_private('AddOrder', order_params)
-            else:
-                result = self.api.query_private('AddOrder', order_params)
+            # Use helper method for serialized API call
+            result = self._kraken_api_call('AddOrder', order_params)
             
             if result and 'result' in result:
                 order_result = result['result']
@@ -689,13 +702,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'volume': str(size)
             }
             
-            # Use global API lock to serialize all Kraken calls (Option B)
-            if get_kraken_api_lock is not None:
-                api_lock = get_kraken_api_lock()
-                with api_lock:
-                    result = self.api.query_private('AddOrder', order_params)
-            else:
-                result = self.api.query_private('AddOrder', order_params)
+            # Use helper method for serialized API call
+            result = self._kraken_api_call('AddOrder', order_params)
             
             if result and 'result' in result:
                 order_result = result['result']
@@ -728,13 +736,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             if not self.api:
                 return False
             
-            # Use global API lock to serialize all Kraken calls (Option B)
-            if get_kraken_api_lock is not None:
-                api_lock = get_kraken_api_lock()
-                with api_lock:
-                    result = self.api.query_private('CancelOrder', {'txid': order_id})
-            else:
-                result = self.api.query_private('CancelOrder', {'txid': order_id})
+            # Use helper method for serialized API call
+            result = self._kraken_api_call('CancelOrder', {'txid': order_id})
             
             if result and 'result' in result and 'count' in result['result']:
                 count = result['result']['count']
@@ -753,13 +756,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             if not self.api:
                 return []
             
-            # Use global API lock to serialize all Kraken calls (Option B)
-            if get_kraken_api_lock is not None:
-                api_lock = get_kraken_api_lock()
-                with api_lock:
-                    balance = self.api.query_private('Balance')
-            else:
-                balance = self.api.query_private('Balance')
+            # Use helper method for serialized API call
+            balance = self._kraken_api_call('Balance')
             
             if balance and 'result' in balance:
                 result = balance['result']
@@ -802,13 +800,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             if not self.api:
                 return None
             
-            # Use global API lock to serialize all Kraken calls (Option B)
-            if get_kraken_api_lock is not None:
-                api_lock = get_kraken_api_lock()
-                with api_lock:
-                    result = self.api.query_private('QueryOrders', {'txid': order_id})
-            else:
-                result = self.api.query_private('QueryOrders', {'txid': order_id})
+            # Use helper method for serialized API call
+            result = self._kraken_api_call('QueryOrders', {'txid': order_id})
             
             if result and 'result' in result:
                 orders = result['result']
