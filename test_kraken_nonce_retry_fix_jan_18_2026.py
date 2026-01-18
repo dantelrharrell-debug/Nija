@@ -91,11 +91,11 @@ def test_nonce_jumps():
     
     nonce_multiplier = 20  # New multiplier (increased from 10x)
     # Formula: nonce_multiplier * 1000 * attempt
-    # 20 * 1000 * 2 = 40,000ms (40s)
-    # 20 * 1000 * 3 = 60,000ms (60s)
-    # 20 * 1000 * 4 = 80,000ms (80s)
-    # 20 * 1000 * 5 = 100,000ms (100s)
-    expected_jumps_ms = [40000, 60000, 80000, 100000]
+    # Attempt 2: 20 * 1000 * 2 = 40,000ms (40s)
+    # Attempt 3: 20 * 1000 * 3 = 60,000ms (60s)
+    # Attempt 4: 20 * 1000 * 4 = 80,000ms (80s)
+    # Attempt 5: 20 * 1000 * 5 = 100,000ms (100s)
+    expected_jumps_ms = [40000, 60000, 80000, 100000]  # For attempts 2,3,4,5
     
     all_passed = True
     for attempt in range(2, 6):  # Attempts 2,3,4,5
@@ -184,12 +184,15 @@ def main():
         print()
         print("Expected connection behavior with new settings:")
         print("  Attempt 1: Initial connection (after 5s startup delay)")
-        print("  Attempt 2: Retry after 60s delay + 40s nonce jump (120s immediate jump)")
+        print("  Attempt 2: Retry after 60s delay + 40s nonce jump")
+        print("             (120s immediate jump applied on first nonce error)")
         print("  Attempt 3: Retry after 120s delay + 60s nonce jump")
         print("  Attempt 4: Retry after 180s delay + 80s nonce jump")
         print("  Attempt 5: Retry after 240s delay + 100s nonce jump")
         print()
         print("Total retry time: ~10 minutes (600s)")
+        print("The 120s immediate jump happens once when nonce error is detected,")
+        print("then each retry uses progressively larger delays and nonce jumps.")
         print("This provides much more aggressive nonce spacing to handle")
         print("persistent 'EAPI:Invalid nonce' errors from Kraken.")
         return 0
