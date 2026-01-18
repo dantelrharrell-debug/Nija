@@ -4533,15 +4533,19 @@ class KrakenBroker(BaseBroker):
                                     self._immediate_nonce_jump()
                                 
                                 # Reduce log spam for transient errors
-                                # - Nonce errors: Only log at DEBUG level (transient, will auto-retry)
+                                # - Nonce errors: Log at INFO level on first attempt, DEBUG on retries (transient, will auto-retry)
                                 # - Other retryable errors: Log as WARNING only on first attempt
-                                # - All errors: Log at DEBUG level for diagnostics
+                                # - All retries after first attempt: Log at DEBUG level for diagnostics
                                 error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
                                 
-                                # For nonce errors, only log at DEBUG level to reduce spam
+                                # For nonce errors, log at INFO level on first attempt so users know what failed
+                                # Log at DEBUG level on retries to reduce spam
                                 # These are transient and automatically retried with nonce jumps
                                 if is_nonce_error:
-                                    logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
+                                    if attempt == 1:
+                                        logger.info(f"   ⚠️  Kraken ({cred_label}) nonce error on attempt {attempt}/{max_attempts} (auto-retry): {error_msgs}")
+                                    else:
+                                        logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
                                 # For lockout/other errors, log at WARNING on first attempt only
                                 elif attempt == 1:
                                     logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
