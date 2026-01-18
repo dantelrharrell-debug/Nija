@@ -781,18 +781,54 @@ class IndependentBrokerTrader:
         
         logger.info("=" * 70)
         logger.info(f"✅ {total_threads} INDEPENDENT TRADING THREADS RUNNING")
+        logger.info("=" * 70)
+        
+        # Enhanced summary showing MASTER vs USER breakdown
+        master_count = len(self.broker_threads)
+        user_count = sum(len(threads) for threads in self.user_broker_threads.values()) if any(self.user_broker_threads.values()) else 0
+        
         if self.broker_threads:
             broker_names = ", ".join(sorted(self.broker_threads.keys()))
-            logger.info(f"   🔷 Master brokers ({len(self.broker_threads)}): {broker_names}")
+            logger.info(f"🔷 MASTER BROKERS ({master_count} trading thread{'s' if master_count != 1 else ''}):")
+            for broker_name in sorted(self.broker_threads.keys()):
+                logger.info(f"   • {broker_name.upper()} MASTER → Will generate trade signals")
+        else:
+            logger.warning("⚠️  NO MASTER BROKER THREADS STARTED")
+            logger.warning("   MASTER trading will NOT occur")
+            
         if any(self.user_broker_threads.values()):
             total_user_threads = sum(len(threads) for threads in self.user_broker_threads.values())
+            logger.info(f"👤 USER BROKERS ({total_user_threads} trading thread{'s' if total_user_threads != 1 else ''}):")
             # Collect all user broker names
-            user_broker_names = []
-            for _, threads in self.user_broker_threads.items():
-                user_broker_names.extend(sorted(threads.keys()))
-            user_broker_list = ", ".join(user_broker_names)
-            logger.info(f"   👤 User brokers ({total_user_threads}): {user_broker_list}")
+            for user_id, threads in self.user_broker_threads.items():
+                for broker_name in sorted(threads.keys()):
+                    broker_type_name = broker_name.split('_', 1)[1] if '_' in broker_name else broker_name
+                    logger.info(f"   • {user_id.upper()} ({broker_type_name.upper()}) → Will receive copied trades")
+        else:
+            logger.info("   ℹ️  No USER broker threads (copy trading via CopyTradeEngine)")
+            
         logger.info("=" * 70)
+        logger.info("")
+        
+        # CRITICAL: Show explicit MASTER trading status
+        logger.info("=" * 70)
+        logger.info("🎯 MASTER TRADING STATUS")
+        logger.info("=" * 70)
+        if master_count > 0:
+            logger.info(f"✅ {master_count} MASTER broker{'s' if master_count != 1 else ''} WILL TRADE")
+            logger.info(f"   Trade signals will be generated every 2.5 minutes")
+            logger.info(f"   Users will receive copies via CopyTradeEngine")
+        else:
+            logger.error("❌ NO MASTER BROKERS WILL TRADE")
+            logger.error("   No trading signals will be generated")
+            logger.error("   User accounts will NOT receive trades (no signals to copy)")
+            logger.error("")
+            logger.error("   🔧 To fix: Ensure MASTER brokers are:")
+            logger.error("      1. Connected (credentials valid)")
+            logger.error("      2. Funded (balance >= $0.50)")
+            logger.error("      3. Not blocked by errors")
+        logger.info("=" * 70)
+        logger.info("")
         
         # Return True if at least one thread was started
         return total_threads > 0
