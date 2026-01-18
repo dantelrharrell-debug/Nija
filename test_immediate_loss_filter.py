@@ -147,17 +147,19 @@ def test_scenario_3_excessive_loss_rejected():
 
 
 def test_scenario_4_xrp_real_case():
-    """Test: Real XRP case from problem statement"""
+    """Test: XRP case - rejecting trades with excessive slippage"""
     print("\n" + "=" * 70)
-    print("TEST 4: Real XRP Case - $0.23 Immediate Loss")
+    print("TEST 4: XRP Case - Immediate Loss Prevention")
     print("=" * 70)
-    print("Problem: Master losing money on XRP with immediate loss")
+    print("Problem: Master losing money on XRP trades with immediate losses")
     print("Scenario: XRP at $2.00, filled at $2.012")
     print("          Slippage: 0.6%, Position: $10")
+    print("          This represents the type of bad fill we want to prevent")
     
-    # Real scenario: XRP expected $2.00, filled at $2.012
+    # Example scenario: XRP expected $2.00, filled at $2.012
     # Slippage = (2.00 - 2.012) / 2.00 = -0.6% (unfavorable)
     # Dollar loss on $10 position = $10 * 0.006 = $0.06
+    # This type of bad execution should be rejected
     
     broker = MockBrokerClient(fill_price=2.012)
     engine = ExecutionEngine(broker_client=broker)
@@ -177,8 +179,8 @@ def test_scenario_4_xrp_real_case():
     
     if result is None:
         print(f"✅ PASS: XRP trade rejected ({expected_slippage_pct*100:.1f}% slippage >= 0.5% threshold)")
-        print("   This prevents accepting the losing trade!")
-        print(f"   Immediate loss would be: ${expected_loss_usd:.2f} on $10 position")
+        print("   This prevents accepting trades with bad execution!")
+        print(f"   Prevented immediate loss: ${expected_loss_usd:.2f} on ${10.0:.2f} position")
         assert engine.rejected_trades_count == 1
         return True
     else:
