@@ -29,7 +29,7 @@ def test_copy_engine_master_check():
         
         # Check for master connection verification
         has_master_check = 'is_master_connected' in content and 'broker_type' in content
-        has_offline_log = 'MASTER offline' in content or 'master.*offline' in content.lower()
+        has_offline_log = 'MASTER offline' in content
         has_early_return = 'return results' in content
         
         # Find the specific check in copy_trade_to_users

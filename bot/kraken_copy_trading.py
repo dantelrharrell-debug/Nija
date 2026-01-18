@@ -244,6 +244,11 @@ class KrakenClient:
 
 
 # Global Kraken Client Instances
+# Global state for Kraken copy trading system
+# NOTE: Using global variables for connection state is a known limitation
+# Future improvement: Consider using a connection manager or dependency injection pattern
+# for better testability and maintainability. For now, this follows the existing
+# pattern in the codebase and provides the minimal change needed.
 KRAKEN_MASTER: Optional[KrakenClient] = None
 KRAKEN_USERS: List[Dict[str, Any]] = []
 
