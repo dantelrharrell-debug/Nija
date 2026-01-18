@@ -1799,9 +1799,8 @@ class TradingStrategy:
                     logger.warning("═" * 80)
                     logger.warning("")
             
-            if user_mode:
-                pass  # Already logged above
-            elif not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD:
+            # Continue with market scanning if conditions passed
+            if not user_mode and not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD:
                 logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
                 
                 # Get top market candidates (limit scan to prevent timeouts)
