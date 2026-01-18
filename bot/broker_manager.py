@@ -4576,6 +4576,9 @@ class KrakenBroker(BaseBroker):
                         # This prevents "Invalid nonce" when balance is checked immediately after
                         # The connection test already called Balance API, and rapid consecutive
                         # calls (even with 1s interval) can trigger nonce errors
+                        # NOTE: time.sleep() blocking is INTENTIONAL - we want to pause execution
+                        # to ensure proper timing between API calls. This is a synchronous operation
+                        # during bot startup, not an async/event-driven context.
                         post_connection_delay = 2.0  # 2 seconds post-connection cooldown
                         logger.info(f"   ⏳ Post-connection cooldown: {post_connection_delay:.1f}s (prevents nonce errors)...")
                         time.sleep(post_connection_delay)
