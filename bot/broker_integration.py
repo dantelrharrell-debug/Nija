@@ -15,6 +15,15 @@ from datetime import datetime
 import logging
 import threading
 
+# Import global Kraken nonce manager (FINAL FIX)
+try:
+    from bot.global_kraken_nonce import get_global_kraken_nonce
+except ImportError:
+    try:
+        from global_kraken_nonce import get_global_kraken_nonce
+    except ImportError:
+        get_global_kraken_nonce = None
+
 logger = logging.getLogger("nija.broker")
 
 
@@ -420,6 +429,19 @@ class KrakenBrokerAdapter(BrokerInterface):
                 return False
             
             self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
+            
+            # FINAL FIX: Override nonce generator to use GLOBAL Kraken Nonce Manager
+            # ONE global source for all users (master + users)
+            if get_global_kraken_nonce is not None:
+                def _global_nonce():
+                    """Generate nonce using global manager (nanosecond precision)."""
+                    return str(get_global_kraken_nonce())
+                
+                self.api._nonce = _global_nonce
+                logger.debug("✅ Global Kraken Nonce Manager installed for KrakenBrokerAdapter")
+            else:
+                logger.warning("⚠️ Global nonce manager not available, using krakenex default")
+            
             self.kraken_api = KrakenAPI(self.api)
             
             # Test connection

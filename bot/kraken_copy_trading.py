@@ -42,6 +42,15 @@ try:
 except ImportError:
     from broker_manager import KrakenBroker, AccountType, BrokerType
 
+# Import global Kraken nonce manager (FINAL FIX)
+try:
+    from bot.global_kraken_nonce import get_global_kraken_nonce
+except ImportError:
+    try:
+        from global_kraken_nonce import get_global_kraken_nonce
+    except ImportError:
+        get_global_kraken_nonce = None
+
 # Try to import Kraken API libraries
 # These may not be available in all environments (e.g., test environments)
 try:
@@ -57,24 +66,32 @@ logger = logging.getLogger('nija.kraken_copy')
 MAX_USER_RISK = 0.10  # 10% max per trade per user
 SYSTEM_DISABLED = False  # Global kill switch
 
-# Nonce Store Implementation
+# Nonce Store Implementation (DEPRECATED - use GlobalKrakenNonceManager instead)
 class NonceStore:
     """
+    DEPRECATED: This class is kept for backward compatibility only.
+    
+    Use GlobalKrakenNonceManager instead (bot/global_kraken_nonce.py).
+    
     Thread-safe nonce storage with file persistence.
     Each account (master + each user) has its own nonce file.
+    
+    NOTE: This implementation can cause nonce collisions when multiple
+    users start simultaneously. Use the global nonce manager instead.
     """
     
     def __init__(self, account_identifier: str):
         """
         Initialize nonce store for a specific account.
         
+        DEPRECATED: Use get_global_kraken_nonce() instead.
+        
         Args:
             account_identifier: Unique identifier (e.g., 'master', 'user_daivon')
-                               Should contain only alphanumeric characters and underscores
-                               to ensure safe file naming. Path separators are not allowed.
         """
+        logger.warning(f"⚠️ NonceStore is DEPRECATED for {account_identifier}. Use GlobalKrakenNonceManager instead.")
         self.account_identifier = account_identifier
-        self.lock = threading.RLock()  # Use RLock for reentrant locking
+        self.lock = threading.RLock()
         
         # Create nonce file path in bot directory
         bot_dir = Path(__file__).parent
@@ -137,44 +154,57 @@ class NonceStore:
 # Kraken Client Wrapper
 class KrakenClient:
     """
-    Thread-safe Kraken client with isolated nonce management.
-    Each account MUST have its own client instance.
+    Thread-safe Kraken client with GLOBAL nonce management.
+    
+    FINAL FIX: Uses ONE global nonce source shared across all users.
+    No per-account nonce stores needed.
     """
     
-    def __init__(self, api_key: str, api_secret: str, nonce_store: NonceStore, 
+    def __init__(self, api_key: str, api_secret: str, nonce_store: NonceStore = None, 
                  account_identifier: str = "unknown"):
         """
-        Initialize Kraken client with dedicated nonce store.
+        Initialize Kraken client with global nonce manager.
         
         Args:
             api_key: Kraken API key
             api_secret: Kraken API secret
-            nonce_store: NonceStore instance for this account
+            nonce_store: DEPRECATED - kept for backward compatibility, not used
             account_identifier: Human-readable identifier for logging
         """
         self.api_key = api_key
         self.api_secret = api_secret
-        self.nonce_store = nonce_store
         self.account_identifier = account_identifier
-        self.lock = threading.RLock()  # Use RLock for reentrant locking
+        self.lock = threading.RLock()
+        
+        # DEPRECATED: nonce_store is no longer used (global manager is used instead)
+        if nonce_store is not None:
+            logger.debug(f"   Note: nonce_store parameter is deprecated for {account_identifier}")
         
         # Initialize Kraken broker instance
-        # Note: We're wrapping the existing KrakenBroker for consistency
         self.broker = None
     
     def _nonce(self) -> int:
         """
-        Generate next nonce with thread-safe monotonic increment.
+        Generate next nonce using GLOBAL Kraken Nonce Manager.
+        
+        FINAL FIX: ONE global source for all users (master + users).
+        - Nanosecond precision (19 digits)
+        - Thread-safe
+        - No collisions possible
+        - No file persistence needed
         
         Returns:
-            Next nonce value
+            Next nonce value (nanoseconds since epoch)
         """
-        with self.lock:
-            last = self.nonce_store.get()
-            now = int(time.time() * 1000000)
-            nonce = max(now, last + 1)
-            self.nonce_store.set(nonce)
-            return nonce
+        if get_global_kraken_nonce is not None:
+            # Use global nonce manager (FINAL FIX)
+            return get_global_kraken_nonce()
+        else:
+            # Fallback to time-based nonce
+            logger.warning(f"⚠️ Global nonce manager not available for {self.account_identifier}, using fallback")
+            with self.lock:
+                # Use nanoseconds for compatibility
+                return int(time.time() * 1000000000)
     
     def place_order(self, pair: str, side: str, volume: float, 
                     ordertype: str = "market") -> Dict[str, Any]:
