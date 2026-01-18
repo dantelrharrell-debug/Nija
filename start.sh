@@ -19,18 +19,24 @@ if [ -z "$PY" ]; then
     exit 127
 fi
 
-$PY --version
+$PY --version 2>&1
+
+# Ensure Python version output is flushed
+sleep 0.05
 
 # Test Coinbase module
-$PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')" || {
+$PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')" 2>&1 || {
     echo "❌ Coinbase REST client not available - check requirements.txt installation"
     exit 1
 }
 
+# Ensure output is flushed
+sleep 0.05
+
 # Test Kraken module
 # CRITICAL: If Kraken Master credentials are set, SDK MUST be installed
 if [ -n "${KRAKEN_MASTER_API_KEY}" ] && [ -n "${KRAKEN_MASTER_API_SECRET}" ]; then
-    $PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" || {
+    $PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" 2>&1 || {
         echo ""
         echo "❌ CRITICAL: Kraken Master credentials are set but Kraken SDK is NOT installed"
         echo ""
@@ -54,6 +60,9 @@ else
     $PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" 2>/dev/null || echo "⚠️  Kraken SDK not installed (optional - no Kraken credentials configured)"
 fi
 
+# Ensure all Python test output is flushed before continuing
+sleep 0.05
+
 BRANCH_VAL=${GIT_BRANCH}
 COMMIT_VAL=${GIT_COMMIT}
 
@@ -67,6 +76,9 @@ fi
 
 echo "Branch: ${BRANCH_VAL:-unknown}"
 echo "Commit: ${COMMIT_VAL:-unknown}"
+
+# Ensure git info output is flushed
+sleep 0.05
 
 # Explicitly allow counting Consumer USD unless overridden
 export ALLOW_CONSUMER_USD="${ALLOW_CONSUMER_USD:-true}"
@@ -177,6 +189,10 @@ export PAPER_MODE=false
 echo "🔄 Starting live trading bot..."
 echo "Working directory: $(pwd)"
 echo "Bot file exists: $(test -f ./bot.py && echo 'YES' || echo 'NO')"
+
+# Sleep briefly to ensure all bash output is flushed before Python starts
+# This prevents log message interleaving between bash and Python stdout
+sleep 0.1
 
 # Startup guard: show first lines of bot.py to detect stale images
 if [ -f bot.py ]; then
