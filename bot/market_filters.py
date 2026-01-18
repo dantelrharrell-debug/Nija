@@ -372,3 +372,89 @@ def apply_all_filters(df, adx_threshold=20, min_volume_multiplier=0.5,
         'filters_failed': filters_failed,
         'details': details
     }
+
+
+def check_pair_quality(symbol, bid_price, ask_price, volume_24h=None, atr_pct=None,
+                       max_spread_pct=0.0015, min_volume_usd=100000, min_atr_pct=0.005,
+                       disabled_pairs=None):
+    """
+    FIX #4: Check if trading pair meets quality standards.
+    
+    Quality criteria:
+    - Spread < 0.15% (tight spreads reduce costs)
+    - Volume > $100k daily (adequate liquidity)
+    - ATR > 0.5% (sufficient price movement)
+    - Not in disabled pairs list
+    
+    Args:
+        symbol: Trading pair symbol (e.g., 'BTC-USD')
+        bid_price: Current bid price
+        ask_price: Current ask price
+        volume_24h: 24-hour volume in USD (optional)
+        atr_pct: ATR as percentage of price (optional)
+        max_spread_pct: Maximum acceptable spread (default: 0.15%)
+        min_volume_usd: Minimum 24h volume in USD (default: $100k)
+        min_atr_pct: Minimum ATR percentage (default: 0.5%)
+        disabled_pairs: List of disabled pair symbols (default: None)
+    
+    Returns:
+        dict: {
+            'quality_acceptable': bool,
+            'reasons_passed': list,
+            'reasons_failed': list,
+            'spread_pct': float,
+            'volume_24h': float,
+            'atr_pct': float
+        }
+    """
+    if disabled_pairs is None:
+        disabled_pairs = []
+    
+    reasons_passed = []
+    reasons_failed = []
+    
+    # Check if pair is disabled/blacklisted
+    if symbol in disabled_pairs:
+        reasons_failed.append(f'Pair {symbol} is blacklisted/disabled')
+        return {
+            'quality_acceptable': False,
+            'reasons_passed': reasons_passed,
+            'reasons_failed': reasons_failed,
+            'spread_pct': 0,
+            'volume_24h': 0,
+            'atr_pct': 0
+        }
+    
+    # Check spread quality
+    spread_result = check_spread_quality(bid_price, ask_price, max_spread_pct)
+    spread_pct = spread_result.get('spread_pct', 0)
+    
+    if spread_result['spread_acceptable']:
+        reasons_passed.append(f'Tight spread ({spread_pct*100:.3f}% < {max_spread_pct*100:.2f}%)')
+    else:
+        reasons_failed.append(f'Wide spread ({spread_pct*100:.3f}% > {max_spread_pct*100:.2f}%)')
+    
+    # Check volume if provided
+    if volume_24h is not None:
+        if volume_24h >= min_volume_usd:
+            reasons_passed.append(f'Good volume (${volume_24h:,.0f} > ${min_volume_usd:,.0f})')
+        else:
+            reasons_failed.append(f'Low volume (${volume_24h:,.0f} < ${min_volume_usd:,.0f})')
+    
+    # Check ATR if provided
+    if atr_pct is not None:
+        if atr_pct >= min_atr_pct:
+            reasons_passed.append(f'Good volatility (ATR {atr_pct*100:.2f}% > {min_atr_pct*100:.2f}%)')
+        else:
+            reasons_failed.append(f'Low volatility (ATR {atr_pct*100:.2f}% < {min_atr_pct*100:.2f}%)')
+    
+    quality_acceptable = len(reasons_failed) == 0
+    
+    return {
+        'quality_acceptable': quality_acceptable,
+        'reasons_passed': reasons_passed,
+        'reasons_failed': reasons_failed,
+        'spread_pct': spread_pct,
+        'volume_24h': volume_24h or 0,
+        'atr_pct': atr_pct or 0
+    }

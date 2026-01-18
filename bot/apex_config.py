@@ -286,6 +286,12 @@ BROKERS = {
 # TRADING PAIRS (for live trading)
 # ═══════════════════════════════════════════════════════════════════
 
+# FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
+# XRP-USD: Spread > profit edge, not suitable for current strategy
+DISABLED_PAIRS = [
+    "XRP-USD",  # High spread, low profit potential
+]
+
 TRADING_PAIRS = {
     'crypto': ['BTC-USD', 'ETH-USD', 'SOL-USD'],
     'scan_all_available': True,  # Scan all available pairs on exchange
@@ -368,6 +374,14 @@ STOP_LOSS_CONFIG = {
 # ═══════════════════════════════════════════════════════════════════
 
 TAKE_PROFIT_CONFIG = {
+    # FIX #3: Minimum Profit Threshold
+    # Calculate required profit = spread + fees + buffer
+    # Coinbase: ~0.6% taker fee + ~0.2% spread = 0.8% one way, 1.6% round-trip
+    'min_profit_spread': 0.002,  # 0.2% estimated spread cost
+    'min_profit_fees': 0.012,  # 1.2% estimated fees (0.6% per side)
+    'min_profit_buffer': 0.002,  # 0.2% safety buffer
+    'min_profit_total': 0.016,  # 1.6% minimum profit (spread + fees + buffer)
+    
     # Tiered Take-Profit Levels
     'tp1': {
         'pct': 0.008,  # +0.8% profit
@@ -400,9 +414,12 @@ FILTERS_CONFIG = {
     'candle_timing_seconds': 5,  # Avoid first 5 seconds of new candle
     'news_cooldown_minutes': 3,  # No trades for 3 min after major news
     
-    # Spread and Slippage
-    'max_spread_pct': 0.001,  # Maximum 0.1% bid-ask spread
+    # FIX #4: Pair Quality Filters - Pro Level
+    # Only trade pairs with tight spreads and good liquidity
+    'max_spread_pct': 0.0015,  # Maximum 0.15% bid-ask spread (tightened from 0.1%)
     'max_slippage_pct': 0.002,  # Maximum 0.2% acceptable slippage
+    'min_volume_usd': 100000,  # Minimum $100k daily volume
+    'min_atr_movement': 0.005,  # Minimum 0.5% ATR for adequate movement
     
     # Market Hours (for stocks/futures, not crypto)
     'trade_market_hours_only': False,  # Crypto trades 24/7

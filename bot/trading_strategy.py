@@ -43,6 +43,10 @@ except ImportError:
             MASTER = "master"
             USER = "user"
 
+# FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
+# XRP-USD: Spread > profit edge, not suitable for current strategy
+DISABLED_PAIRS = ["XRP-USD"]
+
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
@@ -120,6 +124,14 @@ PROFIT_TARGETS = [
 # Second target (1.2%) accepts small loss to prevent larger reversal: 1.2% - 1.4% = -0.2% (vs -1.0% stop)
 # Third target (1.0%) is emergency exit: 1.0% - 1.4% = -0.4% (still better than -1.0% stop loss)
 # The bot checks targets from TOP to BOTTOM, so it exits at 1.5% if available, 1.2% if not, etc.
+
+# FIX #3: Minimum Profit Threshold
+# Calculate required profit = spread + fees + buffer before allowing exit
+# Coinbase: ~0.6% taker fee + ~0.2% spread = 0.8% one way, 1.6% round-trip
+MIN_PROFIT_SPREAD = 0.002  # 0.2% estimated spread cost
+MIN_PROFIT_FEES = 0.012  # 1.2% estimated fees (0.6% per side)
+MIN_PROFIT_BUFFER = 0.002  # 0.2% safety buffer
+MIN_PROFIT_THRESHOLD = 0.016  # 1.6% minimum profit (spread + fees + buffer)
 
 # Stop loss thresholds - AGGRESSIVE to cut losses fast (V7.3 FIX)
 # Jan 13, 2026: Tightened to -1.0% to cut losses IMMEDIATELY
@@ -1259,20 +1271,44 @@ class TradingStrategy:
                                         minutes_remaining = MAX_LOSING_POSITION_HOLD_MINUTES - position_age_minutes
                                         logger.warning(f"   ⚠️ LOSING TRADE: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f}min (will auto-exit in {minutes_remaining:.1f}min)")
                                 
+                                # FIX #2: "NO RED EXIT" RULE - NEVER sell at a loss unless emergency
+                                # Only allow loss exits if:
+                                # 1. Stop-loss is hit (hard emergency)
+                                # 2. Max hold time exceeded (rare failsafe)
+                                # Otherwise, REFUSE to sell at a loss
+                                if pnl_percent < 0:
+                                    # Check if stop-loss emergency threshold hit
+                                    stop_loss_hit = pnl_percent <= STOP_LOSS_THRESHOLD
+                                    emergency_stop_hit = pnl_percent <= STOP_LOSS_EMERGENCY
+                                    max_hold_exceeded = entry_time_available and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
+                                    
+                                    # Allow exit only if emergency conditions met
+                                    if not (stop_loss_hit or emergency_stop_hit or max_hold_exceeded):
+                                        logger.info(f"   🛡️ NO RED EXIT RULE: Refusing to sell {symbol} at {pnl_percent:.2f}% loss")
+                                        logger.info(f"      Will only exit if: stop-loss hit ({STOP_LOSS_THRESHOLD}%), emergency stop ({STOP_LOSS_EMERGENCY}%), or max hold time ({MAX_LOSING_POSITION_HOLD_MINUTES}min)")
+                                        logger.info(f"      Holding position and waiting for recovery or emergency exit")
+                                        continue  # Skip to next position - DO NOT SELL
+                                
                                 # STEPPED PROFIT TAKING - Exit portions at profit targets
                                 # This locks in gains and frees capital for new opportunities
                                 # Check targets from highest to lowest
+                                # FIX #3: Only exit if profit > minimum threshold (spread + fees + buffer)
                                 for target_pct, reason in PROFIT_TARGETS:
                                     if pnl_percent >= target_pct:
-                                        logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +{target_pct}%)")
-                                        positions_to_exit.append({
-                                            'symbol': symbol,
-                                            'quantity': quantity,
-                                            'reason': f'{reason} hit (actual: +{pnl_percent:.2f}%)'
-                                        })
-                                        break  # Exit the for loop, continue to next position
+                                        # Double-check: ensure profit meets minimum threshold
+                                        if pnl_percent >= MIN_PROFIT_THRESHOLD:
+                                            logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +{target_pct}%, min threshold: +{MIN_PROFIT_THRESHOLD*100:.1f}%)")
+                                            positions_to_exit.append({
+                                                'symbol': symbol,
+                                                'quantity': quantity,
+                                                'reason': f'{reason} hit (actual: +{pnl_percent:.2f}%)'
+                                            })
+                                            break  # Exit the for loop, continue to next position
+                                        else:
+                                            logger.info(f"   ⚠️ Target {target_pct}% hit but profit {pnl_percent:.2f}% < minimum threshold {MIN_PROFIT_THRESHOLD*100:.1f}% - holding")
                                 else:
                                     # No profit target hit, check stop loss
+                                    # Note: "No Red Exit" rule already applied above - only emergency stops pass through
                                     # EMERGENCY STOP LOSS: Force exit at -5% or worse (FAILSAFE)
                                     if pnl_percent <= STOP_LOSS_EMERGENCY:
                                         logger.error(f"   🚨 EMERGENCY STOP LOSS: {symbol} at {pnl_percent:.2f}% (emergency: {STOP_LOSS_EMERGENCY}%)")
@@ -1752,6 +1788,11 @@ class TradingStrategy:
                     for i, symbol in enumerate(markets_to_scan):
                         filter_stats['total'] += 1
                         try:
+                            # FIX #1: BLACKLIST CHECK - Skip disabled pairs immediately
+                            if symbol in DISABLED_PAIRS:
+                                logger.debug(f"   ⛔ SKIPPING {symbol}: Blacklisted pair (spread > profit edge)")
+                                continue
+                            
                             # CRITICAL: Add delay BEFORE fetching candles to prevent rate limiting
                             # This is in addition to the delay after processing (line ~1201)
                             # Pre-delay ensures we never make requests too quickly in succession
