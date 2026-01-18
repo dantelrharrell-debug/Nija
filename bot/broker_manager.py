@@ -3957,7 +3957,7 @@ class KrakenBroker(BaseBroker):
     
     def _immediate_nonce_jump(self):
         """
-        Immediately jump nonce forward by 60 seconds when a nonce error is detected.
+        Immediately jump nonce forward by 120 seconds when a nonce error is detected.
         
         This clears the "burned" nonce window before retry delays, providing
         faster recovery from nonce errors. The jump is applied immediately upon
@@ -3965,12 +3965,15 @@ class KrakenBroker(BaseBroker):
         
         Thread-safe: Uses the nonce generator's internal lock.
         
+        CRITICAL FIX (Jan 18, 2026): Increased from 60s to 120s for more aggressive
+        nonce window clearing on persistent nonce errors.
+        
         CRITICAL FIX (Jan 17, 2026): Persists nonce after jump to account-specific file.
         Updated to support both KrakenNonce (OPTION A) and fallback implementation.
         """
         if self._kraken_nonce is not None:
             # Use KrakenNonce instance (OPTION A) with public method
-            immediate_jump_ms = 60 * 1000  # 60 seconds in milliseconds
+            immediate_jump_ms = 120 * 1000  # 120 seconds in milliseconds (INCREASED from 60s)
             new_nonce = self._kraken_nonce.jump_forward(immediate_jump_ms)
             
             # Persist the jumped nonce to account-specific file
@@ -3980,11 +3983,11 @@ class KrakenBroker(BaseBroker):
             except IOError as e:
                 logging.debug(f"Could not persist jumped nonce: {e}")
             
-            logger.debug(f"   ⚡ Immediately jumped nonce forward by 60s to clear burned nonce window")
+            logger.debug(f"   ⚡ Immediately jumped nonce forward by 120s to clear burned nonce window")
         else:
             # Fallback implementation
             with self._nonce_lock:
-                immediate_jump = 60000  # 60 seconds in milliseconds (CHANGED from microseconds)
+                immediate_jump = 120000  # 120 seconds in milliseconds (INCREASED from 60s)
                 time_based = int(time.time() * 1000) + immediate_jump  # Changed to milliseconds
                 increment_based = self._last_nonce + immediate_jump
                 self._last_nonce = max(time_based, increment_based)
@@ -4321,9 +4324,10 @@ class KrakenBroker(BaseBroker):
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
             # Special handling for "Temporary lockout" errors which require much longer delays (2-5 minutes)
             # Special handling for "Invalid nonce" errors which require longer delays and aggressive nonce jumps
+            # CRITICAL FIX (Jan 18, 2026): Increased nonce_base_delay from 30s to 60s for more aggressive spacing
             max_attempts = 5
             base_delay = 5.0  # Base delay for normal retryable errors
-            nonce_base_delay = 30.0  # 30 seconds base delay for "Invalid nonce" errors
+            nonce_base_delay = 60.0  # 60 seconds base delay for "Invalid nonce" errors (INCREASED from 30s)
             lockout_base_delay = 120.0  # 2 minutes base delay for "Temporary lockout" errors
             last_error_was_lockout = False  # Track if previous attempt was a lockout error
             last_error_was_nonce = False  # Track if previous attempt was a nonce error
@@ -4337,27 +4341,28 @@ class KrakenBroker(BaseBroker):
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
                         # For "Temporary lockout" errors, use much longer delays: 120s, 240s, 360s, 480s (2min, 4min, 6min, 8min)
-                        # For "Invalid nonce" errors, use moderate delays: 30s, 60s, 90s, 120s (30s increments)
+                        # For "Invalid nonce" errors, use moderate delays: 60s, 120s, 180s, 240s (60s increments - INCREASED from 30s)
                         # For other errors, use shorter delays: 5s, 10s, 20s, 40s
                         if last_error_was_lockout:
                             # Linear scaling for lockout: (attempt-1) * 120s = 120s, 240s, 360s, 480s for attempts 2,3,4,5
                             delay = lockout_base_delay * (attempt - 1)
                             # Log at INFO level for long delays so users know why it's taking time
-                            if attempt < max_attempts:
-                                logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
+                            # CRITICAL FIX (Jan 18, 2026): Removed attempt < max_attempts check to log ALL retries
+                            logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
                         elif last_error_was_nonce:
-                            # Linear scaling for nonce errors: (attempt-1) * 30s = 30s, 60s, 90s, 120s for attempts 2,3,4,5
+                            # Linear scaling for nonce errors: (attempt-1) * 60s = 60s, 120s, 180s, 240s for attempts 2,3,4,5
                             # Nonce errors need time for Kraken to "forget" the burned nonce window
+                            # INCREASED from 30s increments for more aggressive spacing
                             delay = nonce_base_delay * (attempt - 1)
                             # Log at INFO level so users see progress
-                            if attempt < max_attempts:
-                                logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, nonce)")
+                            # CRITICAL FIX (Jan 18, 2026): Removed attempt < max_attempts check to log ALL retries
+                            logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, nonce)")
                         else:
                             # Exponential backoff for normal errors: 5s, 10s, 20s, 40s for attempts 2,3,4,5
                             delay = base_delay * (2 ** (attempt - 2))
                             # Log at INFO level so users see progress
-                            if attempt < max_attempts:
-                                logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
+                            # CRITICAL FIX (Jan 18, 2026): Removed attempt < max_attempts check to log ALL retries
+                            logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
                         time.sleep(delay)
                         
                         # Jump nonce forward on retry to skip any potentially "burned" nonces
@@ -4365,14 +4370,14 @@ class KrakenBroker(BaseBroker):
                         # the nonce, making it unusable for future requests.
                         # Jump scales with attempt number and error type:
                         #   - Normal errors: attempt * 1000ms (1s, 2s, 3s, 4s, 5s for attempts 2,3,4,5)
-                        #   - Nonce errors: attempt * 10000ms (10s, 20s, 30s, 40s, 50s) - 10x larger jumps
+                        #   - Nonce errors: attempt * 20000ms (20s, 40s, 60s, 80s, 100s) - 20x larger jumps (INCREASED from 10x)
                         # Larger jumps for nonce errors ensure we skip well beyond the burned nonce window
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
                         
                         if self._kraken_nonce is not None:
                             # Use KrakenNonce instance (OPTION A) with public method
-                            # Use 10x larger nonce jump for nonce-specific errors
-                            nonce_multiplier = 10 if last_error_was_nonce else 1
+                            # Use 20x larger nonce jump for nonce-specific errors (INCREASED from 10x)
+                            nonce_multiplier = 20 if last_error_was_nonce else 1
                             # Convert from microseconds to milliseconds for KrakenNonce
                             nonce_jump_ms = nonce_multiplier * 1000 * attempt  # Formula: multiplier * attempt * 1000ms
                             
@@ -4387,14 +4392,14 @@ class KrakenBroker(BaseBroker):
                                 logging.debug(f"Could not persist jumped nonce: {e}")
                             
                             if last_error_was_nonce:
-                                logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms (10x jump for nonce error)")
+                                logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms (20x jump for nonce error)")
                             else:
                                 logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms for retry {attempt}")
                         else:
                             # Fallback implementation
                             with self._nonce_lock:
-                                # Use 10x larger nonce jump for nonce-specific errors
-                                nonce_multiplier = 10 if last_error_was_nonce else 1
+                                # Use 20x larger nonce jump for nonce-specific errors (INCREASED from 10x)
+                                nonce_multiplier = 20 if last_error_was_nonce else 1
                                 nonce_jump = nonce_multiplier * 1000 * attempt  # Formula: multiplier * attempt * 1000ms (CHANGED from microseconds)
                                 # Calculate two candidate nonces and use the larger one:
                                 # - time_based: current time + jump (ensures we're ahead of wall clock time)
@@ -4412,7 +4417,7 @@ class KrakenBroker(BaseBroker):
                                     logging.debug(f"Could not persist jumped nonce: {e}")
                                 
                                 if last_error_was_nonce:
-                                    logger.debug(f"   Jumped nonce forward by {nonce_jump}ms (10x jump for nonce error)")
+                                    logger.debug(f"   Jumped nonce forward by {nonce_jump}ms (20x jump for nonce error)")
                                 else:
                                     logger.debug(f"   Jumped nonce forward by {nonce_jump}ms for retry {attempt}")
                     
