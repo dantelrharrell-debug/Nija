@@ -29,6 +29,12 @@ class ExecutionEngine:
     Designed to be broker-agnostic and extensible
     """
     
+    # CRITICAL: Maximum acceptable immediate loss on entry (as percentage)
+    # If position shows loss greater than this immediately after fill, reject it
+    # This prevents accepting trades with excessive spread/slippage
+    # Set to 0.5% = losses beyond normal 0.6% maker fee indicate bad execution
+    MAX_IMMEDIATE_LOSS_PCT = 0.005  # 0.5%
+    
     def __init__(self, broker_client=None):
         """
         Initialize Execution Engine
@@ -39,6 +45,10 @@ class ExecutionEngine:
         self.broker_client = broker_client
         self.positions: Dict[str, Dict] = {}
         self.orders: List[Dict] = []
+        
+        # Track rejected trades for monitoring
+        self.rejected_trades_count = 0
+        self.immediate_exit_count = 0
     
     def execute_entry(self, symbol: str, side: str, position_size: float,
                      entry_price: float, stop_loss: float, 
@@ -74,11 +84,30 @@ class ExecutionEngine:
                     logger.error(f"Order failed: {result.get('error')}")
                     return None
                 
+                # CRITICAL: Validate filled price to prevent accepting immediate losers
+                # Extract actual fill price from order result
+                actual_fill_price = self._extract_fill_price(result, symbol)
+                
+                # Validate immediate P&L to reject bad fills
+                if actual_fill_price and not self._validate_entry_price(
+                    symbol=symbol,
+                    side=side,
+                    expected_price=entry_price,
+                    actual_price=actual_fill_price,
+                    position_size=position_size
+                ):
+                    # Position rejected - it was immediately closed by validation
+                    self.rejected_trades_count += 1
+                    return None
+                
+                # Use actual fill price if available, otherwise use expected
+                final_entry_price = actual_fill_price if actual_fill_price else entry_price
+                
                 # Create position record
                 position = {
                     'symbol': symbol,
                     'side': side,
-                    'entry_price': entry_price,
+                    'entry_price': final_entry_price,
                     'position_size': position_size,
                     'stop_loss': stop_loss,
                     'tp1': take_profit_levels['tp1'],
@@ -93,7 +122,7 @@ class ExecutionEngine:
                 }
                 
                 self.positions[symbol] = position
-                logger.info(f"Position opened: {symbol} {side} @ {entry_price:.2f}")
+                logger.info(f"Position opened: {symbol} {side} @ {final_entry_price:.2f}")
                 
                 return position
             else:
@@ -345,3 +374,169 @@ class ExecutionEngine:
         """Remove position from tracking"""
         if symbol in self.positions:
             del self.positions[symbol]
+    
+    def _extract_fill_price(self, order_result: Dict, symbol: str) -> Optional[float]:
+        """
+        Extract actual fill price from order result.
+        
+        Args:
+            order_result: Order result from broker
+            symbol: Trading symbol
+        
+        Returns:
+            Actual fill price or None if not available
+        """
+        try:
+            # Try to get fill price from various possible locations
+            # Different brokers may return this in different formats
+            
+            # Check for average_filled_price in success_response
+            if 'success_response' in order_result:
+                success_response = order_result['success_response']
+                if 'average_filled_price' in success_response:
+                    return float(success_response['average_filled_price'])
+            
+            # Check for filled_price in order
+            if 'order' in order_result:
+                order = order_result['order']
+                if isinstance(order, dict):
+                    if 'filled_price' in order:
+                        return float(order['filled_price'])
+                    if 'average_filled_price' in order:
+                        return float(order['average_filled_price'])
+            
+            # Check direct fields in result
+            if 'filled_price' in order_result:
+                return float(order_result['filled_price'])
+            if 'average_filled_price' in order_result:
+                return float(order_result['average_filled_price'])
+            
+            # Fallback: try to get current market price from broker
+            if self.broker_client and hasattr(self.broker_client, 'get_current_price'):
+                current_price = self.broker_client.get_current_price(symbol)
+                if current_price and current_price > 0:
+                    logger.debug(f"Using current market price as fill price estimate: ${current_price:.2f}")
+                    return current_price
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract fill price: {e}")
+            return None
+    
+    def _validate_entry_price(self, symbol: str, side: str, expected_price: float, 
+                            actual_price: float, position_size: float) -> bool:
+        """
+        Validate entry price to prevent accepting positions with immediate loss.
+        
+        CRITICAL FIX: Prevents NIJA from accepting trades that are immediately 
+        unprofitable due to excessive spread or slippage.
+        
+        Args:
+            symbol: Trading symbol
+            side: 'long' or 'short'
+            expected_price: Expected entry price (from analysis)
+            actual_price: Actual fill price (from order execution)
+            position_size: Position size in USD
+        
+        Returns:
+            True if entry is acceptable, False if rejected (position will be closed)
+        """
+        try:
+            # Calculate slippage/execution difference
+            # For LONG: Bad if we paid more than expected (actual > expected)
+            # For SHORT: Bad if we sold for less than expected (actual < expected)
+            
+            if side == 'long':
+                # For long: Negative slippage means we overpaid (BAD)
+                # Positive slippage means we got a better price (GOOD)
+                slippage_pct = (expected_price - actual_price) / expected_price
+            else:
+                # For short: Positive slippage means we got more than expected (GOOD)
+                # Negative slippage means we sold for less (BAD)
+                slippage_pct = (actual_price - expected_price) / expected_price
+            
+            # Calculate dollar amount
+            slippage_usd = abs(slippage_pct) * position_size
+            
+            logger.info(f"   📊 Entry validation: {symbol} {side}")
+            logger.info(f"      Expected: ${expected_price:.4f}")
+            logger.info(f"      Actual:   ${actual_price:.4f}")
+            logger.info(f"      Slippage: {slippage_pct*100:+.3f}% (${slippage_usd:.2f})")
+            
+            # Check if slippage is negative (unfavorable) and exceeds threshold
+            if slippage_pct < 0 and abs(slippage_pct) > self.MAX_IMMEDIATE_LOSS_PCT:
+                # REJECT: Unfavorable slippage exceeds threshold
+                logger.error("=" * 70)
+                logger.error(f"🚫 TRADE REJECTED - IMMEDIATE LOSS EXCEEDS THRESHOLD")
+                logger.error("=" * 70)
+                logger.error(f"   Symbol: {symbol}")
+                logger.error(f"   Side: {side}")
+                logger.error(f"   Expected price: ${expected_price:.4f}")
+                logger.error(f"   Actual fill price: ${actual_price:.4f}")
+                logger.error(f"   Unfavorable slippage: {abs(slippage_pct)*100:.2f}% (${slippage_usd:.2f})")
+                logger.error(f"   Threshold: {self.MAX_IMMEDIATE_LOSS_PCT*100:.2f}%")
+                logger.error(f"   Position size: ${position_size:.2f}")
+                logger.error("=" * 70)
+                logger.error("   ⚠️ This trade would be immediately unprofitable!")
+                logger.error("   ⚠️ Likely due to excessive spread or poor market conditions")
+                logger.error("   ⚠️ Automatically closing position to prevent loss")
+                logger.error("=" * 70)
+                
+                # Immediately close the position
+                self._close_bad_entry(symbol, side, actual_price, slippage_pct, position_size)
+                
+                return False
+            
+            # ACCEPT: Entry is within acceptable range
+            if slippage_pct >= 0:
+                logger.info(f"   ✅ Entry accepted: Filled at favorable price (+{slippage_pct*100:.3f}%)")
+            else:
+                logger.info(f"   ✅ Entry accepted: Slippage within threshold ({abs(slippage_pct)*100:.3f}% < {self.MAX_IMMEDIATE_LOSS_PCT*100:.2f}%)")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating entry price: {e}")
+            # On error, accept the trade to avoid blocking legitimate entries
+            return True
+    
+    def _close_bad_entry(self, symbol: str, side: str, entry_price: float, 
+                        loss_pct: float, position_size: float) -> None:
+        """
+        Immediately close a position that was accepted with excessive immediate loss.
+        
+        Args:
+            symbol: Trading symbol
+            side: 'long' or 'short'
+            entry_price: Entry price
+            loss_pct: Immediate loss percentage (negative)
+            position_size: Position size in USD
+        """
+        try:
+            logger.warning(f"🚨 Immediately closing bad entry: {symbol}")
+            
+            # Place immediate exit order
+            if self.broker_client:
+                exit_side = 'sell' if side == 'long' else 'buy'
+                
+                result = self.broker_client.place_market_order(
+                    symbol=symbol,
+                    side=exit_side,
+                    quantity=position_size
+                )
+                
+                if result.get('status') == 'error':
+                    logger.error(f"   ⚠️ Failed to close bad entry: {result.get('error')}")
+                    logger.error(f"   ⚠️ Manual intervention may be required for {symbol}")
+                else:
+                    logger.info(f"   ✅ Bad entry closed immediately: {symbol}")
+                    logger.info(f"   ✅ Prevented loss: ~{abs(loss_pct)*100:.2f}% on ${position_size:.2f}")
+                    self.immediate_exit_count += 1
+            else:
+                logger.error(f"   ⚠️ No broker client available to close bad entry")
+                
+        except Exception as e:
+            logger.error(f"Error closing bad entry: {e}")
+            logger.error(f"⚠️ Manual intervention required to close {symbol}")
+
