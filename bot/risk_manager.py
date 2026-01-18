@@ -63,7 +63,7 @@ class AdaptiveRiskManager:
         
         Args:
             min_position_pct: Minimum position size as % of account (default 2% - conservative for weak trends)
-            max_position_pct: Maximum position size as % of account (default 10% - optimal for strong trends ADX>40)
+            max_position_pct: Maximum position size as % of account (default 10% - optimal for very strong trends ADX>50)
             max_total_exposure: Maximum total exposure across all positions (default 80% - allows multiple positions)
             use_exchange_profiles: If True, uses exchange-specific risk profiles (default False)
             pro_mode: If True, enables PRO MODE with position rotation (default False)
