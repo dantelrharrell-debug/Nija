@@ -172,15 +172,16 @@ def main():
     
     # Step 1: Verify user configs
     all_users = verify_user_configs()
-    if not all_users and all_users is not False:
-        print()
-        print("✅ No user accounts configured (master-only mode)")
-        print("   Master account will trade on all configured exchanges")
-        all_users = []
-    elif all_users is False:
+    if all_users is False:
+        # Verification failed with errors
         print()
         print("❌ VERIFICATION FAILED: User configuration issues detected")
         sys.exit(1)
+    elif len(all_users) == 0:
+        # No users configured, but no errors
+        print()
+        print("✅ No user accounts configured (master-only mode)")
+        print("   Master account will trade on all configured exchanges")
     
     # Step 2: Verify hard controls
     if not verify_hard_controls(all_users):
