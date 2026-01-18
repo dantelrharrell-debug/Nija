@@ -1120,6 +1120,7 @@ class TradingStrategy:
                     entry_price_available = False
                     entry_time_available = False
                     position_age_hours = 0
+                    just_auto_imported = False  # Track if position was just imported this cycle
                     
                     if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                         try:
@@ -1263,6 +1264,9 @@ class TradingStrategy:
                                     logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0)")
                                     logger.info(f"      Position now tracked - will use profit targets in next cycle")
                                     
+                                    # Mark that this position was just imported - skip exits this cycle
+                                    just_auto_imported = True
+                                    
                                     # Re-fetch position data to get accurate tracking info
                                     # This ensures control flow variables reflect actual state
                                     try:
@@ -1353,6 +1357,16 @@ class TradingStrategy:
                             'quantity': quantity,
                             'reason': 'No indicators available'
                         })
+                        continue
+                    
+                    # CRITICAL: Skip ALL exits for positions that were just auto-imported this cycle
+                    # These positions have entry_price = current_price (P&L = $0), so evaluating them
+                    # for ANY exit signals would defeat the purpose of auto-import
+                    # Let them develop P&L for at least one full cycle before applying ANY exit rules
+                    # This guard is placed early to protect against both orphaned and momentum-based exits
+                    if just_auto_imported:
+                        logger.info(f"   ⏭️  SKIPPING EXITS: {symbol} was just auto-imported this cycle")
+                        logger.info(f"      Will evaluate exit signals in next cycle after P&L develops")
                         continue
                     
                     # MOMENTUM-BASED PROFIT TAKING (for positions without entry price)
