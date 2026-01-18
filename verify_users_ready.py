@@ -20,6 +20,7 @@ import sys
 import json
 from pathlib import Path
 from datetime import datetime
+import traceback
 
 # Add config directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'config'))
@@ -303,6 +304,5 @@ if __name__ == '__main__':
         sys.exit(1)
     except Exception as e:
         print(f"❌ Fatal error: {e}")
-        import traceback
         traceback.print_exc()
         sys.exit(1)

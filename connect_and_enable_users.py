@@ -390,5 +390,5 @@ if __name__ == '__main__':
         print("❌ Interrupted by user")
         sys.exit(1)
     except Exception as e:
-        logger.exception(f"Fatal error: {e}")
+        logger.exception("Fatal error")
         sys.exit(1)
