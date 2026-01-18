@@ -88,7 +88,13 @@ print("-" * 70)
 try:
     from multi_account_broker_manager import MultiAccountBrokerManager
     from broker_manager import BrokerType
-    
+except ImportError as e:
+    print(f"❌ Error importing broker modules: {e}")
+    print("   Make sure you're running from the repository root")
+    print("   and bot/ directory exists with required modules")
+    sys.exit(1)
+
+try:
     manager = MultiAccountBrokerManager()
     
     # Check if master is connected (should be False for standalone mode)
