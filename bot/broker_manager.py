@@ -2332,6 +2332,26 @@ class CoinbaseBroker(BaseBroker):
             
             logger.info(f"✅ Order filled successfully: {symbol}")
             
+            # Enhanced trade confirmation logging with account identification
+            account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "MASTER"
+            
+            logger.info("=" * 70)
+            logger.info(f"✅ TRADE CONFIRMATION - {account_label}")
+            logger.info("=" * 70)
+            logger.info(f"   Exchange: Coinbase")
+            logger.info(f"   Order Type: {side.upper()}")
+            logger.info(f"   Symbol: {symbol}")
+            logger.info(f"   Quantity: {quantity}")
+            logger.info(f"   Size Type: {size_type}")
+            logger.info(f"   Account: {account_label}")
+            logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+            logger.info("=" * 70)
+            
+            # Flush logs immediately to ensure confirmation is visible
+            if _root_logger.handlers:
+                for handler in _root_logger.handlers:
+                    handler.flush()
+            
             # Extract or estimate filled size
             # Coinbase API v3 doesn't return filled_size in the response,
             # so we estimate based on what we sent
@@ -3033,7 +3053,32 @@ class AlpacaBroker(BaseBroker):
             )
             
             order = self.api.submit_order(order_data)
-            return {"status": "submitted", "order": order}
+            
+            # Enhanced trade confirmation logging with account identification
+            account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "MASTER"
+            
+            logger.info("=" * 70)
+            logger.info(f"✅ TRADE CONFIRMATION - {account_label}")
+            logger.info("=" * 70)
+            logger.info(f"   Exchange: Alpaca (Stocks)")
+            logger.info(f"   Order Type: {side.upper()}")
+            logger.info(f"   Symbol: {symbol}")
+            logger.info(f"   Quantity: {quantity}")
+            logger.info(f"   Order ID: {order.id if hasattr(order, 'id') else 'N/A'}")
+            logger.info(f"   Account: {account_label}")
+            logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+            logger.info("=" * 70)
+            
+            # Flush logs immediately to ensure confirmation is visible
+            if _root_logger.handlers:
+                for handler in _root_logger.handlers:
+                    handler.flush()
+            
+            return {
+                "status": "submitted",
+                "order": order,
+                "account": account_label  # Add account identification to result
+            }
             
         except Exception as e:
             logger.error(f"Alpaca order error: {e}")
@@ -4786,15 +4831,33 @@ class KrakenBroker(BaseBroker):
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
                 
-                logging.info(f"✅ Kraken order placed: {order_type.upper()} {kraken_symbol}")
+                # Enhanced trade confirmation logging with account identification
+                account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "UNKNOWN"
+                
+                logging.info("=" * 70)
+                logging.info(f"✅ TRADE CONFIRMATION - {account_label}")
+                logging.info("=" * 70)
+                logging.info(f"   Exchange: Kraken")
+                logging.info(f"   Order Type: {order_type.upper()}")
+                logging.info(f"   Symbol: {kraken_symbol}")
+                logging.info(f"   Quantity: {quantity}")
                 logging.info(f"   Order ID: {order_id}")
+                logging.info(f"   Account: {account_label}")
+                logging.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+                logging.info("=" * 70)
+                
+                # Flush logs immediately to ensure confirmation is visible
+                if _root_logger.handlers:
+                    for handler in _root_logger.handlers:
+                        handler.flush()
                 
                 return {
                     "status": "filled",
                     "order_id": order_id,
                     "symbol": kraken_symbol,
                     "side": order_type,
-                    "quantity": quantity
+                    "quantity": quantity,
+                    "account": account_label  # Add account identification to result
                 }
             
             logger.error("❌ Kraken order failed: No result data")
@@ -4920,15 +4983,30 @@ class KrakenBroker(BaseBroker):
             return []
     
     def supports_asset_class(self, asset_class: str) -> bool:
-        """Kraken supports crypto spot trading"""
-        return asset_class.lower() in ["crypto", "cryptocurrency"]
+        """
+        Kraken supports multiple asset classes.
+        
+        - Crypto: Spot trading via Kraken API (fully supported)
+        - Futures: Via Kraken Futures API (enabled)
+        - Stocks: Via AlpacaBroker integration (use AlpacaBroker for stocks)
+        - Options: In development by Kraken (not yet available)
+        
+        Returns:
+            bool: True if asset class is supported
+        """
+        supported = asset_class.lower() in ["crypto", "cryptocurrency", "futures"]
+        return supported
     
     def get_all_products(self) -> list:
         """
-        Get list of all tradeable cryptocurrency pairs from Kraken.
+        Get list of all tradeable cryptocurrency and futures pairs from Kraken.
+        
+        Includes:
+        - Crypto spot pairs (BTC-USD, ETH-USD, etc.)
+        - Futures pairs (if enable_futures is True in config)
         
         Returns:
-            List of trading pairs in standard format (e.g., ['BTC-USD', 'ETH-USD', ...])
+            List of trading pairs in standard format (e.g., ['BTC-USD', 'ETH-USD', 'BTC-PERP', ...])
         """
         try:
             if not self.kraken_api:
@@ -4940,6 +5018,9 @@ class KrakenBroker(BaseBroker):
             
             # Extract pairs that trade against USD or USDT
             symbols = []
+            futures_count = 0
+            spot_count = 0
+            
             # Iterate over DataFrame rows using iterrows()
             # pykrakenapi returns DataFrame with pair info including 'wsname' column
             for pair_name, pair_info in asset_pairs.iterrows():
@@ -4951,9 +5032,22 @@ class KrakenBroker(BaseBroker):
                     # Convert from Kraken format to standard format
                     # e.g., BTC/USD -> BTC-USD
                     symbol = wsname.replace('/', '-')
-                    symbols.append(symbol)
+                    
+                    # Detect futures pairs (contain 'PERP', 'F0', or quarter codes like 'Z24', 'H25')
+                    # Kraken futures typically have symbols like BTC-PERP, ETH-F0, BTC-Z24
+                    is_futures = any(x in symbol for x in ['PERP', 'F0', 'F1', 'F2', 'F3', 'F4'])
+                    
+                    if is_futures:
+                        futures_count += 1
+                        # Only add futures if enabled in config
+                        from bot.broker_configs.kraken_config import KRAKEN_CONFIG
+                        if KRAKEN_CONFIG.enable_futures:
+                            symbols.append(symbol)
+                    else:
+                        spot_count += 1
+                        symbols.append(symbol)
             
-            logging.info(f"📊 Kraken: Found {len(symbols)} tradable USD/USDT pairs")
+            logging.info(f"📊 Kraken: Found {spot_count} spot pairs + {futures_count} futures pairs = {len(symbols)} total tradable USD/USDT pairs")
             return symbols
             
         except Exception as e:

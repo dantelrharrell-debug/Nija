@@ -34,10 +34,13 @@ class KrakenConfig:
     round_trip_cost: float = 0.0036  # 0.36% total (vs 1.4% Coinbase - 4x cheaper!)
     
     # Asset types supported
-    supports_crypto: bool = True
-    supports_stocks: bool = True  # Kraken Stocks (coming/available in some regions)
-    supports_futures: bool = True  # Kraken Futures
-    supports_options: bool = True  # Kraken Options
+    # NOTE: These flags indicate what the broker API supports, not whether features are enabled
+    # - supports_*: What the broker API is capable of
+    # - enable_*: Whether we actively use that feature (deployment setting)
+    supports_crypto: bool = True  # Kraken API supports crypto
+    supports_stocks: bool = True  # Kraken Stocks (via Alpaca partnership, not direct API)
+    supports_futures: bool = True  # Kraken Futures API (separate from spot API)
+    supports_options: bool = True  # Kraken Options (in development by Kraken)
     
     # Trading direction profitability
     # On Kraken, BOTH directions are profitable due to low fees
@@ -103,9 +106,18 @@ class KrakenConfig:
     max_trades_per_day: int = 60  # 60 trades/day (vs 30 Coinbase)
     
     # Futures and options support
-    enable_futures: bool = False  # Can be enabled per deployment
-    enable_options: bool = False  # Can be enabled per deployment
-    futures_leverage_max: float = 3.0  # Max 3x leverage if enabled
+    # NOTE: These flags control whether we actively trade these instruments
+    # - This is different from supports_* flags which indicate API capability
+    # - enable_futures: Whether to discover and trade futures pairs
+    # - enable_options: Whether to discover and trade options contracts
+    # 
+    # ENABLED (Jan 2026): Multi-asset trading for stocks, options, and futures
+    # - Stocks: Available via Alpaca integration (AlpacaBroker handles US equities)
+    # - Futures: Enabled via Kraken Futures API
+    # - Options: Planned for future (Kraken developing options support)
+    enable_futures: bool = True  # ENABLED for all accounts
+    enable_options: bool = False  # Disabled (in development by Kraken)
+    futures_leverage_max: float = 3.0  # Max 3x leverage for futures
     
     def get_profit_target_price(self, entry_price: float, target_index: int = 0, side: str = 'buy') -> float:
         """
@@ -237,8 +249,8 @@ class KrakenConfig:
     
     def get_config_summary(self) -> str:
         """Get configuration summary for logging"""
-        futures_status = "Enabled" if self.enable_futures else "Disabled"
-        options_status = "Enabled" if self.enable_options else "Disabled"
+        futures_status = "✅ ENABLED" if self.enable_futures else "Disabled"
+        options_status = "✅ ENABLED" if self.enable_options else "Disabled (in development)"
         fee_advantage = 1.4 / 0.36  # Calculate dynamically: Coinbase 1.4% / Kraken 0.36%
         
         return f"""
@@ -250,8 +262,13 @@ Kraken Trading Configuration:
   Stop Loss: {self.stop_loss*100:.1f}%
   Max Hold: {self.max_hold_hours} hours (3x longer than Coinbase)
   Min Position: ${self.min_position_usd} (2x smaller than Coinbase)
-  Asset Types: Crypto, Stocks, Futures ({futures_status}), Options ({options_status})
+  Asset Types:
+    - Crypto Spot: ✅ ENABLED (primary market)
+    - Futures: {futures_status}
+    - Stocks: ✅ Available via AlpacaBroker integration
+    - Options: {options_status}
   Short Selling: PROFITABLE (vs unprofitable on Coinbase)
+  Multi-Asset: ENABLED for master and all users
 """
 
 
