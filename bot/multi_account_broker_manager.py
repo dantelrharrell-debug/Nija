@@ -78,6 +78,11 @@ class MultiAccountBrokerManager:
         # Structure: {(user_id, broker_type): BaseBroker}
         self._all_user_brokers: Dict[Tuple[str, BrokerType], BaseBroker] = {}
         
+        # CRITICAL FIX (Jan 18, 2026): Track if Kraken copy trading system is active
+        # When True, skip Kraken user initialization in connect_users_from_config()
+        # to prevent duplicate user creation (copy trading creates its own clients)
+        self.kraken_copy_trading_active = False
+        
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
@@ -418,6 +423,19 @@ class MultiAccountBrokerManager:
                     continue
             except Exception as e:
                 logger.warning(f"⚠️  Error mapping broker type for {user.name}: {e}")
+                continue
+            
+            # CRITICAL FIX (Jan 18, 2026): Skip Kraken users if copy trading system is active
+            # The copy trading system creates its own KrakenClient instances for users
+            # Attempting to create KrakenBroker instances here would duplicate connections
+            # and cause nonce conflicts / connection errors
+            if broker_type == BrokerType.KRAKEN and self.kraken_copy_trading_active:
+                logger.info("=" * 70)
+                logger.info(f"✅ KRAKEN USER ALREADY INITIALIZED: {user.name} ({user.user_id})")
+                logger.info("   Kraken copy trading system is active")
+                logger.info("   This user is already connected via the copy trading system")
+                logger.info("   Skipping duplicate initialization")
+                logger.info("=" * 70)
                 continue
             
             # Check if Master account is connected for this broker type

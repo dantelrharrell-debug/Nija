@@ -330,6 +330,8 @@ class TradingStrategy:
                     logger.info("   ✅ Kraken registered as MASTER broker in multi-account manager")
                     
                     # COPY TRADING INTEGRATION: Initialize and wrap Kraken broker
+                    # CRITICAL FIX (Jan 18, 2026): Track if copy trading initialized users
+                    # to prevent duplicate initialization in connect_users_from_config()
                     try:
                         from bot.kraken_copy_trading import (
                             initialize_copy_trading_system,
@@ -341,6 +343,8 @@ class TradingStrategy:
                             # Wrap the broker to enable automatic copy trading
                             wrap_kraken_broker_for_copy_trading(kraken)
                             logger.info("   ✅ Kraken copy trading system activated")
+                            # Notify multi_account_manager that Kraken users are handled by copy trading
+                            self.multi_account_manager.kraken_copy_trading_active = True
                         else:
                             logger.warning("   ⚠️  Kraken copy trading initialization failed - trades will execute on MASTER only")
                     except ImportError as import_err:
