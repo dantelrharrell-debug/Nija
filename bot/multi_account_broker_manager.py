@@ -447,22 +447,25 @@ class MultiAccountBrokerManager:
                 # CRITICAL FIX (Jan 17, 2026): ENFORCE connection order for Kraken copy trading
                 # For Kraken, user accounts MUST NOT connect without master (prevents nonce conflicts & broken copy trading)
                 # For other brokers, allow connection with warning (user may want standalone trading)
+                # 
+                # FIX (Jan 18, 2026): Allow Kraken users to connect independently if master is not available
+                # This enables standalone user trading while still preferring copy trading when master is connected
+                # Copy trading will still work when master connects later
                 if broker_type == BrokerType.KRAKEN:
-                    logger.error("=" * 70)
-                    logger.error(f"❌ KRAKEN USER CONNECTION BLOCKED: Master NOT connected")
-                    logger.error(f"   User: {user.name} ({user.user_id})")
-                    logger.error(f"   Master Kraken account is NOT connected")
-                    logger.error("")
-                    logger.error("   🔧 REQUIRED STEPS:")
-                    logger.error("      1. Connect Kraken MASTER account first")
-                    logger.error("      2. Confirm MASTER is registered and connected")
-                    logger.error("      3. Initialize copy trading engine")
-                    logger.error("      4. Then connect USER accounts")
-                    logger.error("")
-                    logger.error("   📖 This ensures proper copy trading and prevents nonce conflicts")
-                    logger.error("=" * 70)
-                    # Skip this user - do not attempt connection
-                    continue
+                    logger.warning("=" * 70)
+                    logger.warning(f"⚠️  WARNING: Kraken user connecting WITHOUT Master account")
+                    logger.warning(f"   User: {user.name} ({user.user_id})")
+                    logger.warning(f"   Master Kraken account is NOT connected")
+                    logger.warning("")
+                    logger.warning("   📌 STANDALONE MODE: This user will trade independently")
+                    logger.warning("   📌 Copy trading is DISABLED (master not available)")
+                    logger.warning("")
+                    logger.warning("   💡 RECOMMENDATION for copy trading:")
+                    logger.warning("      1. Set KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET")
+                    logger.warning("      2. Restart the bot to enable copy trading")
+                    logger.warning("      3. Master trades will then copy to user accounts")
+                    logger.warning("=" * 70)
+                    # Allow connection to proceed - user can trade independently
                 else:
                     logger.warning("=" * 70)
                     logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Master account!")
