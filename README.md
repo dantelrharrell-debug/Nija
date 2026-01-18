@@ -20,6 +20,15 @@ PRO_MODE_MIN_RESERVE_PCT=0.15
 - 📖 [PRO_MODE_QUICKSTART.md](PRO_MODE_QUICKSTART.md) - Enable in 5 minutes
 - 📚 [PRO_MODE_README.md](PRO_MODE_README.md) - Complete guide
 - 🧪 Run `python3 test_pro_mode.py` to verify
+---
+
+## 🚨 URGENT: Having Issues? (January 17, 2026)
+
+**Coinbase losing money?** → [QUICK_FIX_COINBASE_AND_KRAKEN.md](QUICK_FIX_COINBASE_AND_KRAKEN.md) - **30-min exit fix ready**  
+**Kraken not trading?** → [QUICK_FIX_COINBASE_AND_KRAKEN.md](QUICK_FIX_COINBASE_AND_KRAKEN.md) - **Just needs API keys**  
+**Full Details** → [ANSWER_COINBASE_KRAKEN_STATUS_JAN_17_2026.md](ANSWER_COINBASE_KRAKEN_STATUS_JAN_17_2026.md)
+
+**TL;DR**: Coinbase fix coded (needs deployment) | Kraken ready (needs credentials) | 40 minutes to resolve both
 
 ---
 
