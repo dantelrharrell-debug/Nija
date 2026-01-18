@@ -193,50 +193,72 @@ class IndependentBrokerTrader:
         """
         funded = {}
         
-        logger.info("🔍 Detecting funded brokers...")
+        logger.info("=" * 70)
+        logger.info("🔍 DETECTING FUNDED MASTER BROKERS")
+        logger.info("=" * 70)
         
         # CRITICAL FIX (Jan 16, 2026): Use multi_account_manager.master_brokers instead of broker_manager.brokers
         # The old broker_manager is kept for backward compatibility, but master brokers are now
         # managed through multi_account_manager for consistency with user broker management
         broker_source = self._get_master_broker_source()
         
+        logger.info(f"📋 Total MASTER brokers configured: {len(broker_source)}")
         for broker_type, broker in broker_source.items():
+            logger.info(f"   • {broker_type.value.upper()}: {'connected' if broker.connected else 'not connected'}")
+        logger.info("")
+        
+        for broker_type, broker in broker_source.items():
+            broker_name_upper = broker_type.value.upper()
+            
+            logger.info(f"🔍 Checking {broker_name_upper} MASTER...")
+            
             if not broker.connected:
-                logger.info(f"   ⚪ {broker_type.value}: Not connected initially")
-                # Give disconnected brokers a chance to reconnect by attempting balance check
-                # If successful, broker becomes funded and gets a trading thread (self-healing)
-                logger.info(f"   🔄 Attempting balance check for {broker_type.value} (may reconnect)...")
+                logger.warning(f"   ⚪ {broker_name_upper}: Not connected during initialization")
+                logger.info(f"   🔄 Attempting balance check (may reconnect)...")
                 # Don't 'continue' here - fall through to try balance fetch
             
             try:
                 # Fetch balance, with retry logic for Coinbase if needed
                 if broker_type.value == 'coinbase':
-                    balance = self._retry_coinbase_balance_if_zero(broker, broker_type.value)
+                    balance = self._retry_coinbase_balance_if_zero(broker, broker_name_upper)
                 else:
                     balance = broker.get_account_balance()
                 
-                logger.info(f"   💰 {broker_type.value}: ${balance:,.2f}")
+                logger.info(f"   💰 {broker_name_upper} Balance: ${balance:,.2f}")
                 
+                # Check if broker has minimum funding
                 if balance >= MINIMUM_FUNDED_BALANCE:
                     funded[broker_type.value] = balance
                     self.funded_brokers.add(broker_type.value)
-                    logger.info(f"      ✅ FUNDED - Ready to trade")
+                    logger.info(f"   ✅ {broker_name_upper} FUNDED - Ready to trade")
+                    logger.info(f"   📊 {broker_name_upper} will start independent trading thread")
                 else:
-                    logger.info(f"      ⚠️  Underfunded (minimum: ${MINIMUM_FUNDED_BALANCE:.2f})")
+                    logger.warning(f"   ⚠️  {broker_name_upper} UNDERFUNDED")
+                    logger.warning(f"      Current: ${balance:,.2f}")
+                    logger.warning(f"      Minimum: ${MINIMUM_FUNDED_BALANCE:.2f}")
+                    logger.warning(f"   ❌ {broker_name_upper} will NOT trade (add funds to enable)")
             
             except Exception as e:
-                logger.warning(f"   ❌ {broker_type.value}: Error checking balance: {e}")
+                logger.error(f"   ❌ {broker_name_upper} ERROR checking balance: {e}")
+                logger.warning(f"   ⚠️  {broker_name_upper} will NOT trade (balance check failed)")
+            
+            logger.info("")  # Blank line between brokers
         
         logger.info("=" * 70)
         if funded:
-            logger.info(f"✅ FUNDED BROKERS: {len(funded)}")
+            logger.info(f"✅ FUNDED MASTER BROKERS: {len(funded)}")
             total_capital = sum(funded.values())
-            logger.info(f"💰 TOTAL TRADING CAPITAL: ${total_capital:,.2f}")
+            logger.info(f"💰 TOTAL MASTER TRADING CAPITAL: ${total_capital:,.2f}")
+            logger.info("")
+            logger.info("📊 Breakdown:")
             for broker_name, balance in funded.items():
-                logger.info(f"   • {broker_name}: ${balance:,.2f}")
+                logger.info(f"   • {broker_name.upper()}: ${balance:,.2f}")
         else:
-            logger.warning("⚠️  NO FUNDED BROKERS DETECTED")
+            logger.error("❌ NO FUNDED MASTER BROKERS DETECTED")
+            logger.error("   No MASTER brokers have sufficient balance to trade")
+            logger.error("   MASTER trading loops will NOT start")
         logger.info("=" * 70)
+        logger.info("")
         
         return funded
     
@@ -426,13 +448,24 @@ class IndependentBrokerTrader:
                     # when multiple threads tried to set this shared variable simultaneously.
                     # Now we pass the broker as a parameter, making each thread truly independent.
                     
+                    # ENHANCED LOGGING (Jan 18, 2026): Show exactly what's about to happen
+                    logger.info(f"   ═══════════════════════════════════════════════════════════")
+                    logger.info(f"   🎯 {broker_name.upper()} MASTER TRADING CYCLE #{cycle_count}")
+                    logger.info(f"   ═══════════════════════════════════════════════════════════")
+                    logger.info(f"   💰 Current balance: ${balance:.2f}")
+                    logger.info(f"   📊 Mode: MASTER (full strategy execution)")
+                    logger.info(f"   🔍 Will scan markets for opportunities")
+                    logger.info(f"   ⚡ Will execute trades if signals trigger")
+                    logger.info(f"   🔄 Will manage existing positions")
+                    logger.info(f"   ═══════════════════════════════════════════════════════════")
+                    
                     # Execute trading cycle for THIS broker only (thread-safe)
-                    logger.info(f"   {broker_name}: Running trading cycle...")
                     self.trading_strategy.run_cycle(broker=broker)
                     
                     # Mark as healthy
                     self.update_broker_health(broker_name, 'healthy', is_trading=True)
-                    logger.info(f"   ✅ {broker_name} cycle completed successfully")
+                    logger.info(f"   ✅ {broker_name.upper()} cycle completed successfully")
+                    logger.info("")
                 
                 except Exception as trading_err:
                     logger.error(f"❌ {broker_name} trading cycle failed: {trading_err}")
@@ -604,9 +637,12 @@ class IndependentBrokerTrader:
         
         # Start threads for MASTER brokers
         if funded:
+            logger.info("")
             logger.info("=" * 70)
-            logger.info("🔷 STARTING MASTER BROKER THREADS")
+            logger.info("🔷 STARTING MASTER BROKER TRADING THREADS")
             logger.info("=" * 70)
+            logger.info(f"📊 {len(funded)} MASTER broker(s) ready to trade")
+            logger.info("")
             
             # CRITICAL FIX (Jan 16, 2026): Use multi_account_manager.master_brokers instead of broker_manager.brokers
             # This ensures we iterate over the same broker instances that were checked in detect_funded_brokers()
@@ -615,21 +651,30 @@ class IndependentBrokerTrader:
             broker_start_count = 0
             for broker_type, broker in broker_source.items():
                 broker_name = broker_type.value
+                broker_name_upper = broker_name.upper()
+                
+                logger.info(f"🔍 Processing {broker_name_upper} MASTER...")
                 
                 # Only start threads for funded brokers
                 if broker_name not in funded:
-                    logger.info(f"⏭️  Skipping {broker_name} (not funded)")
+                    logger.info(f"   ⏭️  SKIPPING - Not funded (balance < ${MINIMUM_FUNDED_BALANCE:.2f})")
+                    logger.info("")
                     continue
                 
                 if not broker.connected:
-                    logger.warning(f"⏭️  Skipping {broker_name} (not connected)")
+                    logger.warning(f"   ⚠️  SKIPPING - Not connected")
+                    logger.warning(f"   📋 Reason: Connection failed during initialization")
+                    logger.info("")
                     continue
+                
+                logger.info(f"   ✅ {broker_name_upper} is funded and connected")
+                logger.info(f"   💰 Balance: ${funded[broker_name]:,.2f}")
                 
                 # CRITICAL FIX (Jan 10, 2026): Stagger broker thread starts to prevent concurrent API bursts
                 # If we start all brokers simultaneously, they all hit the API at once causing rate limits
                 # Add a delay between each broker start (except the first one)
                 if broker_start_count > 0:
-                    logger.info(f"   ⏳ Staggering start: waiting {BROKER_STAGGER_DELAY:.0f}s before starting {broker_name}...")
+                    logger.info(f"   ⏳ Staggering start: waiting {BROKER_STAGGER_DELAY:.0f}s before starting thread...")
                     time.sleep(BROKER_STAGGER_DELAY)
                 
                 # Create stop flag for this broker
@@ -649,7 +694,21 @@ class IndependentBrokerTrader:
                 broker_start_count += 1
                 total_threads += 1
                 
-                logger.info(f"✅ Started independent trading thread for {broker_name} (MASTER)")
+                logger.info(f"   🚀 TRADING THREAD STARTED for {broker_name_upper} (MASTER)")
+                logger.info(f"   📊 Thread name: Trader-{broker_name}")
+                logger.info(f"   🔄 This thread will:")
+                logger.info(f"      • Scan markets every 2.5 minutes")
+                logger.info(f"      • Execute MASTER trades when signals trigger")
+                logger.info(f"      • Manage existing positions")
+                logger.info("")
+        else:
+            logger.warning("=" * 70)
+            logger.warning("⚠️  NO MASTER BROKER THREADS TO START")
+            logger.warning("=" * 70)
+            logger.warning("Reason: No funded MASTER brokers detected")
+            logger.warning("MASTER trading will NOT occur until brokers are funded")
+            logger.warning("=" * 70)
+            logger.warning("")
         
         # Start threads for USER brokers
         if funded_users:
@@ -722,18 +781,54 @@ class IndependentBrokerTrader:
         
         logger.info("=" * 70)
         logger.info(f"✅ {total_threads} INDEPENDENT TRADING THREADS RUNNING")
+        logger.info("=" * 70)
+        
+        # Enhanced summary showing MASTER vs USER breakdown
+        master_count = len(self.broker_threads)
+        user_count = sum(len(threads) for threads in self.user_broker_threads.values()) if any(self.user_broker_threads.values()) else 0
+        
         if self.broker_threads:
             broker_names = ", ".join(sorted(self.broker_threads.keys()))
-            logger.info(f"   🔷 Master brokers ({len(self.broker_threads)}): {broker_names}")
+            logger.info(f"🔷 MASTER BROKERS ({master_count} trading thread{'s' if master_count != 1 else ''}):")
+            for broker_name in sorted(self.broker_threads.keys()):
+                logger.info(f"   • {broker_name.upper()} MASTER → Will generate trade signals")
+        else:
+            logger.warning("⚠️  NO MASTER BROKER THREADS STARTED")
+            logger.warning("   MASTER trading will NOT occur")
+            
         if any(self.user_broker_threads.values()):
             total_user_threads = sum(len(threads) for threads in self.user_broker_threads.values())
+            logger.info(f"👤 USER BROKERS ({total_user_threads} trading thread{'s' if total_user_threads != 1 else ''}):")
             # Collect all user broker names
-            user_broker_names = []
-            for _, threads in self.user_broker_threads.items():
-                user_broker_names.extend(sorted(threads.keys()))
-            user_broker_list = ", ".join(user_broker_names)
-            logger.info(f"   👤 User brokers ({total_user_threads}): {user_broker_list}")
+            for user_id, threads in self.user_broker_threads.items():
+                for broker_name in sorted(threads.keys()):
+                    broker_type_name = broker_name.split('_', 1)[1] if '_' in broker_name else broker_name
+                    logger.info(f"   • {user_id.upper()} ({broker_type_name.upper()}) → Will receive copied trades")
+        else:
+            logger.info("   ℹ️  No USER broker threads (copy trading via CopyTradeEngine)")
+            
         logger.info("=" * 70)
+        logger.info("")
+        
+        # CRITICAL: Show explicit MASTER trading status
+        logger.info("=" * 70)
+        logger.info("🎯 MASTER TRADING STATUS")
+        logger.info("=" * 70)
+        if master_count > 0:
+            logger.info(f"✅ {master_count} MASTER broker{'s' if master_count != 1 else ''} WILL TRADE")
+            logger.info(f"   Trade signals will be generated every 2.5 minutes")
+            logger.info(f"   Users will receive copies via CopyTradeEngine")
+        else:
+            logger.error("❌ NO MASTER BROKERS WILL TRADE")
+            logger.error("   No trading signals will be generated")
+            logger.error("   User accounts will NOT receive trades (no signals to copy)")
+            logger.error("")
+            logger.error("   🔧 To fix: Ensure MASTER brokers are:")
+            logger.error("      1. Connected (credentials valid)")
+            logger.error("      2. Funded (balance >= $0.50)")
+            logger.error("      3. Not blocked by errors")
+        logger.info("=" * 70)
+        logger.info("")
         
         # Return True if at least one thread was started
         return total_threads > 0

@@ -1739,10 +1739,68 @@ class TradingStrategy:
             # Only MASTER accounts scan markets and generate buy signals
             # PROFITABILITY FIX: Use module-level constants for consistency
             
+            # ENHANCED LOGGING (Jan 18, 2026): Show condition checklist for trade execution
+            logger.info("")
+            logger.info("═" * 80)
+            logger.info("🎯 TRADE EXECUTION CONDITION CHECKLIST")
+            logger.info("═" * 80)
+            
             if user_mode:
                 # USER MODE: Skip market scanning and entry signal generation entirely
-                logger.info("📊 USER MODE: Skipping market scan (signals come from copy trade engine)")
-            elif not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD:
+                logger.info("   ✅ Mode: USER (copy trading only)")
+                logger.info("   ⏭️  RESULT: Skipping market scan (signals from copy trade engine)")
+                logger.info("   ℹ️  USER accounts NEVER generate independent entry signals")
+                logger.info("   ℹ️  USER accounts ONLY execute copied trades from MASTER")
+                logger.info("═" * 80)
+                logger.info("")
+            else:
+                logger.info("   ✅ Mode: MASTER (full strategy execution)")
+                logger.info(f"   📊 Current positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}")
+                logger.info(f"   💰 Account balance: ${account_balance:.2f}")
+                logger.info(f"   💵 Minimum to trade: ${MIN_BALANCE_TO_TRADE_USD:.2f}")
+                logger.info(f"   🚫 Entries blocked: {entries_blocked}")
+                logger.info("")
+                
+                # Check each condition individually
+                can_enter = True
+                skip_reasons = []
+                
+                if entries_blocked:
+                    can_enter = False
+                    skip_reasons.append("STOP_ALL_ENTRIES.conf is active")
+                    logger.warning("   ❌ CONDITION FAILED: Entry blocking is active")
+                else:
+                    logger.info("   ✅ CONDITION PASSED: Entry blocking is OFF")
+                
+                if len(current_positions) >= MAX_POSITIONS_ALLOWED:
+                    can_enter = False
+                    skip_reasons.append(f"Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
+                    logger.warning(f"   ❌ CONDITION FAILED: Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
+                else:
+                    logger.info(f"   ✅ CONDITION PASSED: Under position cap ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
+                
+                if account_balance < MIN_BALANCE_TO_TRADE_USD:
+                    can_enter = False
+                    skip_reasons.append(f"Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
+                    logger.warning(f"   ❌ CONDITION FAILED: Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
+                else:
+                    logger.info(f"   ✅ CONDITION PASSED: Sufficient balance (${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f})")
+                
+                logger.info("")
+                logger.info("═" * 80)
+                
+                if can_enter:
+                    logger.info("🟢 RESULT: ALL CONDITIONS PASSED - WILL SCAN MARKETS FOR TRADES")
+                    logger.info("═" * 80)
+                    logger.info("")
+                else:
+                    logger.warning("🔴 RESULT: CONDITIONS NOT MET - SKIPPING MARKET SCAN")
+                    logger.warning(f"   Reasons: {', '.join(skip_reasons)}")
+                    logger.warning("═" * 80)
+                    logger.warning("")
+            
+            # Continue with market scanning if conditions passed
+            if not user_mode and not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD:
                 logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
                 
                 # Get top market candidates (limit scan to prevent timeouts)
