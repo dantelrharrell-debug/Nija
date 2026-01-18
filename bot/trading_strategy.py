@@ -332,6 +332,7 @@ class TradingStrategy:
                     # The trading loop will handle the disconnected state and retry automatically
                     logger.warning("   ⚠️  Kraken MASTER connection test failed, will retry in background")
                     logger.warning("   📌 Kraken broker initialized - trading loop will attempt reconnection")
+                    self._log_broker_independence_message()
                     
                     # Use helper method to register for retry
                     self._register_kraken_for_retry(kraken)
@@ -343,6 +344,7 @@ class TradingStrategy:
                 if kraken is not None:
                     logger.warning(f"   ⚠️  Kraken MASTER initialization error: {e}")
                     logger.warning("   📌 Kraken broker will be registered for background retry")
+                    self._log_broker_independence_message()
                     
                     # Use helper method to register for retry
                     self._register_kraken_for_retry(kraken)
@@ -350,6 +352,7 @@ class TradingStrategy:
                     # Broker object was never created - can't retry
                     logger.error(f"   ❌ Kraken MASTER initialization failed: {e}")
                     logger.error("   ❌ Kraken will not be available for trading")
+                    self._log_broker_independence_message()
             
             # Add delay between broker connections
             time.sleep(0.5)
@@ -665,6 +668,17 @@ class TradingStrategy:
             self.enforcer = None
             self.apex = None
             self.independent_trader = None
+    
+    def _log_broker_independence_message(self):
+        """
+        Helper to log that other brokers continue trading independently.
+        This is used when a broker fails to initialize to reassure users
+        that the failure is isolated and doesn't affect other exchanges.
+        """
+        logger.info("")
+        logger.info("   ✅ OTHER BROKERS CONTINUE TRADING INDEPENDENTLY")
+        logger.info("   ℹ️  Kraken offline does NOT block Coinbase or other exchanges")
+        logger.info("")
     
     def _register_kraken_for_retry(self, kraken_broker):
         """

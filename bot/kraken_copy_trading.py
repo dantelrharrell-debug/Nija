@@ -244,6 +244,11 @@ class KrakenClient:
 
 
 # Global Kraken Client Instances
+# Global state for Kraken copy trading system
+# NOTE: Using global variables for connection state is a known limitation
+# Future improvement: Consider using a connection manager or dependency injection pattern
+# for better testability and maintainability. For now, this follows the existing
+# pattern in the codebase and provides the minimal change needed.
 KRAKEN_MASTER: Optional[KrakenClient] = None
 KRAKEN_USERS: List[Dict[str, Any]] = []
 
@@ -544,7 +549,14 @@ def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
     Args:
         master_trade: Dict containing trade details from master execution
     """
-    global KRAKEN_USERS
+    global KRAKEN_MASTER, KRAKEN_USERS
+    
+    # CRITICAL CHECK: Verify MASTER is still initialized and connected
+    # This prevents copy trading if master has gone offline
+    if not KRAKEN_MASTER:
+        logger.warning("⚠️  KRAKEN MASTER offline - skipping copy trading")
+        logger.info("   ℹ️  Copy trading disabled until MASTER reconnects")
+        return
     
     if not KRAKEN_USERS:
         logger.info("ℹ️  No Kraken users configured for copy trading")
