@@ -427,6 +427,32 @@ class ExecutionEngine:
             logger.warning(f"Failed to extract fill price: {e}")
             return None
     
+    def _exceeds_threshold(self, slippage_pct: float) -> bool:
+        """
+        Check if slippage exceeds the acceptable threshold.
+        
+        Handles floating point precision issues by using epsilon tolerance.
+        Returns True if slippage is negative (unfavorable) and >= threshold.
+        
+        Args:
+            slippage_pct: Slippage percentage (negative = unfavorable)
+        
+        Returns:
+            True if exceeds threshold, False otherwise
+        """
+        # Only check if slippage is negative (unfavorable)
+        if slippage_pct >= 0:
+            return False
+        
+        # Use epsilon to handle floating point precision
+        # (e.g., 0.004999999... should be treated as 0.005)
+        EPSILON = 1e-10
+        abs_slippage = abs(slippage_pct)
+        
+        # Check if exceeds threshold (with epsilon tolerance for exact match)
+        return (abs_slippage > self.MAX_IMMEDIATE_LOSS_PCT or 
+                abs(abs_slippage - self.MAX_IMMEDIATE_LOSS_PCT) < EPSILON)
+    
     def _validate_entry_price(self, symbol: str, side: str, expected_price: float, 
                             actual_price: float, position_size: float) -> bool:
         """
@@ -461,26 +487,16 @@ class ExecutionEngine:
             
             # Calculate dollar amount of slippage
             # For position_size in USD, calculate actual dollar loss from slippage
-            if side == 'long':
-                # For long: quantity = position_size / expected_price
-                # Dollar loss = quantity * (actual_price - expected_price)
-                # Simplified: position_size * (actual_price - expected_price) / expected_price
-                slippage_usd = abs(position_size * slippage_pct)
-            else:
-                # For short: same calculation
-                slippage_usd = abs(position_size * slippage_pct)
+            # position_size * abs(slippage_pct) gives the dollar amount
+            slippage_usd = abs(position_size * slippage_pct)
             
             logger.info(f"   📊 Entry validation: {symbol} {side}")
             logger.info(f"      Expected: ${expected_price:.4f}")
             logger.info(f"      Actual:   ${actual_price:.4f}")
             logger.info(f"      Slippage: {slippage_pct*100:+.3f}% (${slippage_usd:.2f})")
             
-            # Check if slippage is negative (unfavorable) and exceeds threshold
-            # Use >= with small epsilon to handle floating point precision
-            # (e.g., 0.004999999... should be treated as 0.005)
-            EPSILON = 1e-10  # Tolerance for floating point comparison
-            if slippage_pct < 0 and (abs(slippage_pct) > self.MAX_IMMEDIATE_LOSS_PCT or 
-                                    abs(abs(slippage_pct) - self.MAX_IMMEDIATE_LOSS_PCT) < EPSILON):
+            # Check if slippage exceeds threshold
+            if self._exceeds_threshold(slippage_pct):
                 # REJECT: Unfavorable slippage exceeds threshold
                 logger.error("=" * 70)
                 logger.error(f"🚫 TRADE REJECTED - IMMEDIATE LOSS EXCEEDS THRESHOLD")
