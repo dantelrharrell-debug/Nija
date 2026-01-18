@@ -56,7 +56,8 @@ class AdaptiveRiskManager:
     """
     
     def __init__(self, min_position_pct=0.02, max_position_pct=0.05,
-                 max_total_exposure=0.80, use_exchange_profiles=False):
+                 max_total_exposure=0.80, use_exchange_profiles=False,
+                 pro_mode=False, min_free_reserve_pct=0.15):
         """
         Initialize Adaptive Risk Manager - PROFITABILITY MODE v7.2
         
@@ -65,10 +66,14 @@ class AdaptiveRiskManager:
             max_position_pct: Maximum position size as % of account (default 5% - upgraded from 25%)
             max_total_exposure: Maximum total exposure across all positions (default 80% - upgraded from 50%)
             use_exchange_profiles: If True, uses exchange-specific risk profiles (default False)
+            pro_mode: If True, enables PRO MODE with position rotation (default False)
+            min_free_reserve_pct: Minimum free balance % to maintain in PRO MODE (default 15%)
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct
         self.max_total_exposure = max_total_exposure
+        self.pro_mode = pro_mode
+        self.min_free_reserve_pct = min_free_reserve_pct
         
         # Track recent trades for streak analysis
         self.recent_trades: List[Dict] = []
@@ -98,7 +103,11 @@ class AdaptiveRiskManager:
                 logger.warning("⚠️ Exchange risk profiles not available, using standard mode")
                 self.use_exchange_profiles = False
         
-        if self.fee_aware_mode:
+        if self.pro_mode:
+            logger.info(f"✅ Adaptive Risk Manager initialized - PRO MODE ACTIVE")
+            logger.info(f"   Position rotation enabled")
+            logger.info(f"   Minimum free reserve: {min_free_reserve_pct*100:.0f}%")
+        elif self.fee_aware_mode:
             logger.info(f"✅ Adaptive Risk Manager initialized - FEE-AWARE PROFITABILITY MODE")
             logger.info(f"   Minimum balance: ${MIN_BALANCE_TO_TRADE}")
             logger.info(f"   Max trades/day: {MAX_TRADES_PER_DAY}")
@@ -186,9 +195,13 @@ class AdaptiveRiskManager:
     
     def calculate_position_size(self, account_balance: float, adx: float, 
                                signal_strength: int = 3, ai_confidence: float = 0.5,
-                               volatility_pct: float = 0.01) -> Tuple[float, Dict]:
+                               volatility_pct: float = 0.01, 
+                               use_total_capital: bool = False,
+                               position_value: float = 0.0) -> Tuple[float, Dict]:
         """
         Calculate adaptive position size based on multiple factors.
+        
+        PRO MODE: Can use total capital (free balance + position values) instead of just free balance.
         
         Factors:
         1. ADX (trend strength) - base sizing
@@ -206,11 +219,13 @@ class AdaptiveRiskManager:
         - ADX > 50: 10% (extremely strong trending)
         
         Args:
-            account_balance: Current account balance in USD
+            account_balance: Current free balance in USD
             adx: Current ADX value
             signal_strength: Entry signal strength (1-5, default 3)
             ai_confidence: AI model confidence (0-1, default 0.5)
             volatility_pct: Current market volatility as % (default 0.01)
+            use_total_capital: If True, uses account_balance + position_value as base (PRO MODE)
+            position_value: Total value of open positions (only used if use_total_capital=True)
         
         Returns:
             Tuple of (position_size, breakdown_dict)
@@ -218,6 +233,28 @@ class AdaptiveRiskManager:
             - breakdown_dict: Details of sizing calculations
         """
         breakdown = {}
+        
+        # Calculate base capital for position sizing
+        if use_total_capital and self.pro_mode:
+            total_capital = account_balance + position_value
+            breakdown['pro_mode'] = True
+            breakdown['free_balance'] = account_balance
+            breakdown['position_value'] = position_value
+            breakdown['total_capital'] = total_capital
+            
+            # In PRO MODE, ensure we maintain minimum free balance reserve
+            min_free_reserve = total_capital * self.min_free_reserve_pct
+            if account_balance < min_free_reserve:
+                logger.warning(f"⚠️ PRO MODE: Below minimum free reserve (${account_balance:.2f} < ${min_free_reserve:.2f})")
+                logger.warning(f"   Need to rotate positions or skip trade")
+                breakdown['below_free_reserve'] = True
+                # Still allow calculation but flag it
+            
+            # Use total capital as base for sizing
+            sizing_base = total_capital
+        else:
+            sizing_base = account_balance
+            breakdown['pro_mode'] = False
         
         # No trade if ADX < 20
         if adx < 20:
@@ -368,7 +405,18 @@ class AdaptiveRiskManager:
         breakdown['final_pct'] = final_pct
         breakdown['current_exposure'] = self.current_exposure
         
-        position_size = account_balance * final_pct
+        # Calculate position size based on sizing_base (total capital in PRO MODE, free balance otherwise)
+        position_size = sizing_base * final_pct
+        
+        # PRO MODE: Additional check for free balance
+        if use_total_capital and self.pro_mode:
+            # Ensure we don't exceed available free balance
+            # In PRO MODE, we may need to rotate positions first
+            if position_size > account_balance:
+                breakdown['needs_rotation'] = True
+                breakdown['rotation_needed'] = position_size - account_balance
+                logger.info(f"   PRO MODE: Need ${position_size:.2f}, have ${account_balance:.2f} free")
+                logger.info(f"   → Rotation needed: ${breakdown['rotation_needed']:.2f}")
         
         # MICRO TRADE PREVENTION: Enforce absolute $1 minimum (lowered from $10 to allow very small accounts)
         # ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to ~1.4% round-trip fees
@@ -380,9 +428,14 @@ class AdaptiveRiskManager:
             logger.warning(f"   💡 Reason: Extremely small positions face severe fee impact")
             return 0.0, {'reason': 'Position too small (micro trade prevention)', 'calculated_size': position_size, 'minimum': MIN_ABSOLUTE_POSITION_SIZE}
         
-        logger.info(f"Position size: ${position_size:.2f} ({final_pct*100:.2f}%) - "
-                   f"ADX:{adx:.1f}, Confidence:{ai_confidence:.2f}, "
-                   f"Streak:{streak_type}({streak_length})")
+        if use_total_capital and self.pro_mode:
+            logger.info(f"Position size (PRO MODE): ${position_size:.2f} ({final_pct*100:.2f}% of ${sizing_base:.2f} total capital) - "
+                       f"ADX:{adx:.1f}, Confidence:{ai_confidence:.2f}, "
+                       f"Streak:{streak_type}({streak_length})")
+        else:
+            logger.info(f"Position size: ${position_size:.2f} ({final_pct*100:.2f}%) - "
+                       f"ADX:{adx:.1f}, Confidence:{ai_confidence:.2f}, "
+                       f"Streak:{streak_type}({streak_length})")
         
         return position_size, breakdown
     

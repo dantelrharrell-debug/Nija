@@ -228,6 +228,74 @@ class BaseBroker(ABC):
         """Get current price. Optional method, brokers can override."""
         return 0.0
     
+    def get_total_capital(self, include_positions: bool = True) -> Dict:
+        """
+        Get total capital including both free balance and open position values.
+        
+        PRO MODE Feature: Default implementation for brokers that don't override.
+        
+        Args:
+            include_positions: If True, includes position values in total capital (default True)
+        
+        Returns:
+            dict: Capital breakdown with keys:
+                - free_balance: Available USD/USDC for new trades
+                - position_value: Total USD value of all open positions
+                - total_capital: free_balance + position_value
+                - positions: List of positions with values
+                - position_count: Number of open positions
+        """
+        try:
+            # Get free balance
+            free_balance = self.get_account_balance()
+            
+            # Get positions and calculate their values
+            positions = self.get_positions()
+            position_value_total = 0.0
+            position_details = []
+            
+            if include_positions:
+                for pos in positions:
+                    symbol = pos.get('symbol')
+                    quantity = pos.get('quantity', 0)
+                    
+                    if not symbol or quantity <= 0:
+                        continue
+                    
+                    # Get current price for position
+                    try:
+                        price = self.get_current_price(symbol)
+                        if price > 0:
+                            value = quantity * price
+                            position_value_total += value
+                            position_details.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'price': price,
+                                'value': value
+                            })
+                    except Exception:
+                        continue
+            
+            total_capital = free_balance + position_value_total
+            
+            return {
+                'free_balance': free_balance,
+                'position_value': position_value_total,
+                'total_capital': total_capital,
+                'positions': position_details,
+                'position_count': len(position_details)
+            }
+            
+        except Exception:
+            return {
+                'free_balance': 0.0,
+                'position_value': 0.0,
+                'total_capital': 0.0,
+                'positions': [],
+                'position_count': 0
+            }
+    
     def get_market_data(self, symbol: str, timeframe: str = '5m', limit: int = 100) -> Dict:
         """Get market data. Optional method, brokers can override."""
         candles = self.get_candles(symbol, timeframe, limit)
@@ -1216,6 +1284,80 @@ class CoinbaseBroker(BaseBroker):
             dict: Detailed balance info with keys: usdc, usd, trading_balance, crypto, consumer_usd, consumer_usdc
         """
         return self._get_account_balance_detailed()
+    
+    def get_total_capital(self, include_positions: bool = True) -> Dict:
+        """
+        Get total capital including both free balance and open position values.
+        
+        PRO MODE Feature: Counts open positions as available capital for rotation trading.
+        
+        Args:
+            include_positions: If True, includes position values in total capital (default True)
+        
+        Returns:
+            dict: Capital breakdown with keys:
+                - free_balance: Available USD/USDC for new trades
+                - position_value: Total USD value of all open positions
+                - total_capital: free_balance + position_value
+                - positions: List of positions with values
+                - position_count: Number of open positions
+        """
+        try:
+            # Get free balance
+            free_balance = self.get_account_balance()
+            
+            # Get positions and calculate their values
+            positions = self.get_positions()
+            position_value_total = 0.0
+            position_details = []
+            
+            if include_positions:
+                for pos in positions:
+                    symbol = pos.get('symbol')
+                    quantity = pos.get('quantity', 0)
+                    
+                    if not symbol or quantity <= 0:
+                        continue
+                    
+                    # Get current price for position
+                    try:
+                        price = self.get_current_price(symbol)
+                        if price > 0:
+                            value = quantity * price
+                            position_value_total += value
+                            position_details.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'price': price,
+                                'value': value
+                            })
+                    except Exception as price_err:
+                        logger.warning(f"⚠️ Could not get price for {symbol}: {price_err}")
+                        continue
+            
+            total_capital = free_balance + position_value_total
+            
+            result = {
+                'free_balance': free_balance,
+                'position_value': position_value_total,
+                'total_capital': total_capital,
+                'positions': position_details,
+                'position_count': len(position_details)
+            }
+            
+            logger.debug(f"💰 Total capital: ${total_capital:.2f} (free: ${free_balance:.2f}, positions: ${position_value_total:.2f})")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error calculating total capital: {e}")
+            return {
+                'free_balance': 0.0,
+                'position_value': 0.0,
+                'total_capital': 0.0,
+                'positions': [],
+                'position_count': 0
+            }
     
     def get_account_balance_OLD_BROKEN_METHOD(self):
         """
