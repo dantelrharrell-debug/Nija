@@ -128,7 +128,9 @@ ZOMBIE_PNL_THRESHOLD = 0.01  # Consider position "stuck" if abs(P&L) < this % (0
 # Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE V7.3
 # Updated Jan 12, 2026 - PROFITABILITY FIX: Aggressive profit-taking to lock gains
 # CRITICAL: With small positions, we need FASTER exits to lock gains
+# Default targets are for Coinbase (1.4% fees)
 # Coinbase fees are ~1.4%, so minimum 1.5% needed for net profit
+# Kraken fees are ~0.36%, so lower targets are profitable
 # Strategy: Exit FULL position at FIRST target hit, checking from HIGHEST to LOWEST
 # This prioritizes larger gains while providing emergency exit near breakeven
 PROFIT_TARGETS = [
@@ -136,6 +138,22 @@ PROFIT_TARGETS = [
     (1.2, "Profit target +1.2% (Net ~-0.2% after fees) - ACCEPTABLE"),   # Check second - accept small loss vs reversal
     (1.0, "Profit target +1.0% (Net ~-0.4% after fees) - EMERGENCY"),    # Emergency exit to prevent larger loss
 ]
+
+# BROKER-SPECIFIC PROFIT TARGETS (Jan 19, 2026)
+# Different brokers have different fee structures, requiring different profit targets
+# These ensure NET profitability after fees for each broker
+PROFIT_TARGETS_KRAKEN = [
+    (1.0, "Profit target +1.0% (Net +0.64% after 0.36% fees) - EXCELLENT"),  # Kraken: Net positive
+    (0.7, "Profit target +0.7% (Net +0.34% after fees) - GOOD"),             # Still profitable
+    (0.5, "Profit target +0.5% (Net +0.14% after fees) - MINIMAL"),          # Tight margin
+]
+
+PROFIT_TARGETS_COINBASE = [
+    (1.5, "Profit target +1.5% (Net +0.1% after 1.4% fees) - GOOD"),         # Coinbase: Barely profitable
+    (1.2, "Profit target +1.2% (Net -0.2% after fees) - ACCEPTABLE"),        # Accept small loss vs reversal
+    (1.0, "Profit target +1.0% (Net -0.4% after fees) - EMERGENCY"),         # Better than -1% stop
+]
+
 # CRITICAL FIX (Jan 13, 2026): Tightened profit targets to lock gains faster
 # NIJA is for PROFIT - take gains quickly before reversals
 # Fee structure: See fee_aware_config.py - MARKET_ORDER_ROUND_TRIP = 1.4% (default)
@@ -1225,6 +1243,21 @@ class TradingStrategy:
                 balance_data = {'trading_balance': active_broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
             
+            # ENHANCED FUND VISIBILITY (Jan 19, 2026)
+            # Always track held funds and total capital - not just in PRO_MODE
+            # This prevents "bleeding" confusion where funds in trades appear missing
+            held_funds = balance_data.get('total_held', 0.0)
+            total_funds = balance_data.get('total_funds', account_balance)
+            
+            # Log comprehensive balance breakdown
+            if held_funds > 0:
+                logger.info(f"💰 Account Balance Breakdown:")
+                logger.info(f"   ✅ Available (free to trade): ${account_balance:.2f}")
+                logger.info(f"   🔒 Held (in open orders): ${held_funds:.2f}")
+                logger.info(f"   💎 TOTAL FUNDS: ${total_funds:.2f}")
+            else:
+                logger.info(f"💰 Available Balance: ${account_balance:.2f}")
+            
             # PRO MODE: Get total capital including position values
             if self.pro_mode_enabled and hasattr(active_broker, 'get_total_capital'):
                 try:
@@ -1232,7 +1265,7 @@ class TradingStrategy:
                     total_capital = capital_data.get('total_capital', account_balance)
                     position_value = capital_data.get('position_value', 0.0)
                     
-                    logger.info(f"💰 PRO MODE Capital:")
+                    logger.info(f"💎 PRO MODE Capital:")
                     logger.info(f"   Free balance: ${account_balance:.2f}")
                     logger.info(f"   Position value: ${position_value:.2f}")
                     logger.info(f"   Total capital: ${total_capital:.2f}")
@@ -1242,7 +1275,6 @@ class TradingStrategy:
                     total_capital = account_balance
                     position_value = 0.0
             else:
-                logger.info(f"💰 Trading balance: ${account_balance:.2f}")
                 total_capital = account_balance
                 position_value = 0.0
             
@@ -1535,11 +1567,30 @@ class TradingStrategy:
                                 # This locks in gains and frees capital for new opportunities
                                 # Check targets from highest to lowest
                                 # FIX #3: Only exit if profit > minimum threshold (spread + fees + buffer)
-                                for target_pct, reason in PROFIT_TARGETS:
+                                # ENHANCEMENT (Jan 19, 2026): Use broker-specific profit targets
+                                # Different brokers have different fee structures
+                                # Safely get broker_type, defaulting to generic targets if not available
+                                try:
+                                    broker_type = getattr(active_broker, 'broker_type', None)
+                                except AttributeError:
+                                    broker_type = None
+                                
+                                if broker_type == BrokerType.KRAKEN:
+                                    profit_targets = PROFIT_TARGETS_KRAKEN
+                                    min_threshold = 0.005  # 0.5% minimum for Kraken (0.36% fees)
+                                elif broker_type == BrokerType.COINBASE:
+                                    profit_targets = PROFIT_TARGETS_COINBASE
+                                    min_threshold = MIN_PROFIT_THRESHOLD  # 1.6% minimum for Coinbase (1.4% fees)
+                                else:
+                                    # Default to Coinbase targets for unknown brokers (conservative)
+                                    profit_targets = PROFIT_TARGETS
+                                    min_threshold = MIN_PROFIT_THRESHOLD
+                                
+                                for target_pct, reason in profit_targets:
                                     if pnl_percent >= target_pct:
                                         # Double-check: ensure profit meets minimum threshold
-                                        if pnl_percent >= MIN_PROFIT_THRESHOLD:
-                                            logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +{target_pct}%, min threshold: +{MIN_PROFIT_THRESHOLD*100:.1f}%)")
+                                        if pnl_percent >= min_threshold:
+                                            logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +{target_pct}%, min threshold: +{min_threshold*100:.1f}%)")
                                             positions_to_exit.append({
                                                 'symbol': symbol,
                                                 'quantity': quantity,
@@ -1547,7 +1598,7 @@ class TradingStrategy:
                                             })
                                             break  # Exit the for loop, continue to next position
                                         else:
-                                            logger.info(f"   ⚠️ Target {target_pct}% hit but profit {pnl_percent:.2f}% < minimum threshold {MIN_PROFIT_THRESHOLD*100:.1f}% - holding")
+                                            logger.info(f"   ⚠️ Target {target_pct}% hit but profit {pnl_percent:.2f}% < minimum threshold {min_threshold*100:.1f}% - holding")
                                 else:
                                     # No profit target hit, check stop loss
                                     # CRITICAL FIX (Jan 19, 2026): Stop-loss checks happen BEFORE time-based exits
