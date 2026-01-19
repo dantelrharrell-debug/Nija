@@ -53,14 +53,19 @@ class CopyTradeEngine:
     Engine that copies master trades to user accounts.
     
     Runs in a background thread, consuming trade signals and replicating them to users.
+    
+    Supports two modes:
+    - Normal mode: Executes trades on user accounts
+    - Observe mode: Tracks balances, positions, P&L but does NOT execute trades
     """
     
-    def __init__(self, multi_account_manager=None):
+    def __init__(self, multi_account_manager=None, observe_only=False):
         """
         Initialize the copy trade engine.
         
         Args:
             multi_account_manager: MultiAccountBrokerManager instance (uses global if None)
+            observe_only: If True, track signals but don't execute trades (observe mode)
         """
         self.multi_account_manager = multi_account_manager or multi_account_broker_manager
         self.signal_emitter = get_signal_emitter()
@@ -68,10 +73,16 @@ class CopyTradeEngine:
         self._thread: Optional[threading.Thread] = None
         self._total_trades_copied = 0
         self._total_copy_failures = 0
+        self._total_signals_observed = 0  # Track signals in observe mode
         self._lock = threading.Lock()
+        self.observe_only = observe_only
         
         logger.info("=" * 70)
-        logger.info("🔄 COPY TRADE ENGINE INITIALIZED")
+        if observe_only:
+            logger.info("🔄 COPY TRADE ENGINE INITIALIZED - OBSERVE MODE")
+            logger.info("   ⚠️  OBSERVE ONLY: Will track signals but NOT execute trades")
+        else:
+            logger.info("🔄 COPY TRADE ENGINE INITIALIZED")
         logger.info("=" * 70)
     
     @property
@@ -95,7 +106,11 @@ class CopyTradeEngine:
         self._thread.start()
         
         logger.info("=" * 70)
-        logger.info("✅ COPY TRADE ENGINE STARTED")
+        if self.observe_only:
+            logger.info("✅ COPY TRADE ENGINE STARTED - OBSERVE MODE")
+            logger.info("   👁️  Observing signals (NO trades will execute)")
+        else:
+            logger.info("✅ COPY TRADE ENGINE STARTED")
         logger.info("=" * 70)
         logger.info("   Listening for master trade signals...")
         logger.info("=" * 70)
@@ -112,13 +127,17 @@ class CopyTradeEngine:
         logger.info("=" * 70)
         logger.info("🛑 COPY TRADE ENGINE STOPPED")
         logger.info("=" * 70)
-        logger.info(f"   Total Trades Copied: {self._total_trades_copied}")
-        logger.info(f"   Total Failures: {self._total_copy_failures}")
+        if self.observe_only:
+            logger.info(f"   Total Signals Observed: {self._total_signals_observed}")
+        else:
+            logger.info(f"   Total Trades Copied: {self._total_trades_copied}")
+            logger.info(f"   Total Failures: {self._total_copy_failures}")
         logger.info("=" * 70)
     
     def _run_loop(self):
         """Main loop that processes trade signals."""
-        logger.info("📡 Copy engine thread started, waiting for signals...")
+        mode_str = "observe-only" if self.observe_only else "copy-trading"
+        logger.info(f"📡 Copy engine thread started in {mode_str} mode, waiting for signals...")
         
         while self._running:
             try:
@@ -139,20 +158,32 @@ class CopyTradeEngine:
                 logger.info(f"   Broker: {signal.broker}")
                 logger.info("=" * 70)
                 
-                # Copy trade to all users
-                results = self.copy_trade_to_users(signal)
-                
-                # Log results
-                successful = sum(1 for r in results if r.success)
-                failed = len(results) - successful
-                
-                logger.info("=" * 70)
-                logger.info("📊 COPY TRADE RESULTS")
-                logger.info("=" * 70)
-                logger.info(f"   Total Users: {len(results)}")
-                logger.info(f"   Successful: {successful}")
-                logger.info(f"   Failed: {failed}")
-                logger.info("=" * 70)
+                if self.observe_only:
+                    # OBSERVE MODE: Log signal but don't execute
+                    with self._lock:
+                        self._total_signals_observed += 1
+                    
+                    logger.info("=" * 70)
+                    logger.info("👁️  OBSERVE MODE - Signal Logged (NO TRADE EXECUTED)")
+                    logger.info("=" * 70)
+                    logger.info(f"   Total Signals Observed: {self._total_signals_observed}")
+                    logger.info("   ⚠️  Trading is DISABLED in observe mode")
+                    logger.info("=" * 70)
+                else:
+                    # NORMAL MODE: Copy trade to all users
+                    results = self.copy_trade_to_users(signal)
+                    
+                    # Log results
+                    successful = sum(1 for r in results if r.success)
+                    failed = len(results) - successful
+                    
+                    logger.info("=" * 70)
+                    logger.info("📊 COPY TRADE RESULTS")
+                    logger.info("=" * 70)
+                    logger.info(f"   Total Users: {len(results)}")
+                    logger.info(f"   Successful: {successful}")
+                    logger.info(f"   Failed: {failed}")
+                    logger.info("=" * 70)
                 
             except Exception as e:
                 logger.error(f"❌ Error in copy engine loop: {e}")
@@ -388,34 +419,49 @@ class CopyTradeEngine:
     def get_stats(self) -> Dict:
         """Get statistics about copy trading."""
         with self._lock:
-            return {
+            stats = {
                 'running': self._running,
-                'total_trades_copied': self._total_trades_copied,
-                'total_failures': self._total_copy_failures,
+                'observe_only': self.observe_only,
                 'signal_queue_stats': self.signal_emitter.get_stats()
             }
+            
+            if self.observe_only:
+                stats['total_signals_observed'] = self._total_signals_observed
+            else:
+                stats['total_trades_copied'] = self._total_trades_copied
+                stats['total_failures'] = self._total_copy_failures
+            
+            return stats
 
 
 # Global singleton instance
 _copy_engine: Optional[CopyTradeEngine] = None
 
 
-def get_copy_engine() -> CopyTradeEngine:
+def get_copy_engine(observe_only: bool = False) -> CopyTradeEngine:
     """
     Get the global copy trade engine instance (singleton pattern).
+    
+    Args:
+        observe_only: If True, engine runs in observe mode (no trades executed)
     
     Returns:
         Global CopyTradeEngine instance
     """
     global _copy_engine
     if _copy_engine is None:
-        _copy_engine = CopyTradeEngine()
+        _copy_engine = CopyTradeEngine(observe_only=observe_only)
     return _copy_engine
 
 
-def start_copy_engine():
-    """Start the global copy trade engine."""
-    engine = get_copy_engine()
+def start_copy_engine(observe_only: bool = False):
+    """
+    Start the global copy trade engine.
+    
+    Args:
+        observe_only: If True, engine runs in observe mode (no trades executed)
+    """
+    engine = get_copy_engine(observe_only=observe_only)
     engine.start()
 
 

@@ -674,6 +674,58 @@ class MultiAccountBrokerManager:
         logger.info("=" * 70)
         
         return connected_users
+    
+    def audit_user_accounts(self):
+        """
+        Audit and log all user account balances.
+        
+        This function displays user balances regardless of trading status.
+        It does NOT place trades - only reports current balances for visibility.
+        
+        Called at startup to ensure all users are visible even if not actively trading.
+        """
+        logger.info("=" * 70)
+        logger.info("👥 USER ACCOUNT BALANCES AUDIT")
+        logger.info("=" * 70)
+        
+        if not self.user_brokers:
+            logger.info("   ⚪ No user accounts connected")
+            logger.info("=" * 70)
+            return
+        
+        total_users = 0
+        total_balance = 0.0
+        
+        for user_id, user_broker_dict in self.user_brokers.items():
+            total_users += 1
+            logger.info(f"\n👤 User: {user_id}")
+            
+            user_total = 0.0
+            for broker_type, broker in user_broker_dict.items():
+                try:
+                    if broker.connected:
+                        balance_data = broker.get_account_balance()
+                        if isinstance(balance_data, dict):
+                            balance = balance_data.get('trading_balance', 0.0)
+                        else:
+                            balance = float(balance_data) if balance_data else 0.0
+                        
+                        logger.info(f"   {broker_type.value.upper()}: ${balance:.2f}")
+                        user_total += balance
+                    else:
+                        logger.info(f"   {broker_type.value.upper()}: Not connected")
+                except Exception as e:
+                    logger.warning(f"   {broker_type.value.upper()}: Error reading balance - {e}")
+            
+            logger.info(f"   💰 User Total: ${user_total:.2f}")
+            total_balance += user_total
+        
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info(f"📊 AUDIT SUMMARY")
+        logger.info(f"   Total Users: {total_users}")
+        logger.info(f"   Total User Balance: ${total_balance:.2f}")
+        logger.info("=" * 70)
 
 
 # Global instance
