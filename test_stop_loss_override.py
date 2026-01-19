@@ -33,8 +33,14 @@ def test_stop_loss_threshold():
     if 'STOP_LOSS_THRESHOLD = -0.01' in code:
         logger.info(f"Expected threshold: {expected_threshold}%")
         logger.info(f"Actual threshold: -0.01%")
-        logger.info("✅ PASS: Stop-loss threshold set to -0.01% (any loss)")
-        return True
+        
+        # Also verify it's being used in the hard stop-loss check
+        if 'if pnl_percent <= STOP_LOSS_THRESHOLD:' in code:
+            logger.info("✅ PASS: Stop-loss threshold constant defined and used correctly")
+            return True
+        else:
+            logger.warning("⚠️ Constant defined but not used in hard stop-loss check")
+            return False
     else:
         logger.error(f"❌ FAIL: Expected {expected_threshold}%, threshold not found or incorrect")
         return False
@@ -52,16 +58,16 @@ def test_code_implementation():
     
     tests = []
     
-    # Test 1: Hard stop-loss override exists and is at the top
-    if 'if pnl_percent <= -0.01:' in code:
-        logger.info("✅ PASS: Hard stop-loss check for -0.01% exists")
+    # Test 1: Hard stop-loss override exists and uses STOP_LOSS_THRESHOLD constant
+    if 'if pnl_percent <= STOP_LOSS_THRESHOLD:' in code:
+        logger.info("✅ PASS: Hard stop-loss check uses STOP_LOSS_THRESHOLD constant")
         tests.append(True)
     else:
-        logger.error("❌ FAIL: Hard stop-loss check for -0.01% not found")
+        logger.error("❌ FAIL: Hard stop-loss check doesn't use STOP_LOSS_THRESHOLD constant")
         tests.append(False)
     
     # Test 2: Hard stop-loss uses continue to skip remaining logic
-    hard_stop_section = code.find('if pnl_percent <= -0.01:')
+    hard_stop_section = code.find('if pnl_percent <= STOP_LOSS_THRESHOLD:')
     if hard_stop_section != -1:
         section = code[hard_stop_section:hard_stop_section + 2000]
         if 'Skip ALL remaining logic' in section and 'continue' in section:
@@ -75,11 +81,16 @@ def test_code_implementation():
         tests.append(False)
     
     # Test 3: 3-minute max hold time for losers
-    if 'max_hold_minutes = 3' in code:
-        logger.info("✅ PASS: Losing trades limited to 3 minutes max")
-        tests.append(True)
+    if 'MAX_LOSING_POSITION_HOLD_MINUTES = 3' in code:
+        # Also verify it's being used
+        if 'if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:' in code:
+            logger.info("✅ PASS: Losing trades limited to 3 minutes max (constant defined and used)")
+            tests.append(True)
+        else:
+            logger.warning("⚠️ Constant defined but not used properly")
+            tests.append(False)
     else:
-        logger.error("❌ FAIL: 3-minute limit for losing trades not found")
+        logger.error("❌ FAIL: 3-minute limit constant not found")
         tests.append(False)
     
     # Test 4: Removed 30-minute auto-exit warning
@@ -119,13 +130,17 @@ def test_logic_order():
         code = f.read()
     
     # Find positions of key checks
-    hard_stop_pos = code.find('if pnl_percent <= -0.01:')
+    hard_stop_pos = code.find('if pnl_percent <= STOP_LOSS_THRESHOLD:')
     emergency_stop_pos = code.find('if pnl_percent <= -0.75:')
     profit_target_pos = code.find('for target_pct, reason in PROFIT_TARGETS:')
     
     logger.info(f"Hard stop-loss position: {hard_stop_pos}")
     logger.info(f"Emergency stop-loss position: {emergency_stop_pos}")
     logger.info(f"Profit targets position: {profit_target_pos}")
+    
+    if hard_stop_pos == -1:
+        logger.error("❌ FAIL: Hard stop-loss check not found")
+        return False
     
     if hard_stop_pos < emergency_stop_pos and hard_stop_pos < profit_target_pos:
         logger.info("✅ PASS: Hard stop-loss check comes BEFORE all other P&L logic")

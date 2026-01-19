@@ -60,15 +60,10 @@ DISABLED_PAIRS = ["XRP-USD"]
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
-# OPTION A: 30-MINUTE EXIT FOR LOSING TRADES
-# Enforce "exit losing trades within 30 minutes" for tracked positions
-# This limits whipsaws while still giving positions time to recover
-MAX_LOSING_POSITION_HOLD_MINUTES = 30  # Exit losing trades after 30 minutes MAX
-LOSING_POSITION_WARNING_MINUTES = 5    # Warn after 5 minutes of being in a losing trade
-
-# Validate that warning comes before exit (catch configuration errors early)
-assert LOSING_POSITION_WARNING_MINUTES < MAX_LOSING_POSITION_HOLD_MINUTES, \
-    f"LOSING_POSITION_WARNING_MINUTES ({LOSING_POSITION_WARNING_MINUTES}) must be less than MAX_LOSING_POSITION_HOLD_MINUTES ({MAX_LOSING_POSITION_HOLD_MINUTES})"
+# ULTRA-AGGRESSIVE EXIT FOR LOSING TRADES (Jan 19, 2026)
+# Exit losing trades within 3 MINUTES MAX to prevent capital bleed
+# NIJA is for PROFIT, not losses - losers get minimal patience
+MAX_LOSING_POSITION_HOLD_MINUTES = 3  # Exit losing trades after 3 minutes MAX (changed from 30 min)
 
 # Configuration constants
 # CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
@@ -1316,7 +1311,7 @@ class TradingStrategy:
                                 # 🚫 No time hold checks
                                 # 🚫 No aggressive flag checks
                                 # Loss = EXIT. Period.
-                                if pnl_percent <= -0.01:
+                                if pnl_percent <= STOP_LOSS_THRESHOLD:
                                     logger.warning(f"   🛑 HARD STOP LOSS SELL: {symbol}")
                                     try:
                                         result = active_broker.place_market_order(
@@ -1345,12 +1340,9 @@ class TradingStrategy:
                                     # Convert position age from hours to minutes
                                     position_age_minutes = position_age_hours * MINUTES_PER_HOUR
                                     
-                                    # LOSERS GET 3 MINUTES MAX
-                                    max_hold_minutes = 3
-                                    
-                                    # Check if position has been losing for more than 3 minutes
-                                    if position_age_minutes >= max_hold_minutes:
-                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {max_hold_minutes} min)")
+                                    # Check if position has been losing for more than the max allowed time
+                                    if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
+                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
                                         logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
                                         positions_to_exit.append({
                                             'symbol': symbol,
