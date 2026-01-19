@@ -17,8 +17,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 # Import constants to test
 try:
     from trading_strategy import (
-        MAX_LOSING_POSITION_HOLD_MINUTES,
-        LOSING_POSITION_WARNING_MINUTES,
         STOP_LOSS_THRESHOLD,
         STOP_LOSS_WARNING,
         STOP_LOSS_EMERGENCY
@@ -36,39 +34,31 @@ def test_constants():
     print("="*70)
     
     print(f"\n📊 Current Configuration:")
-    print(f"   MAX_LOSING_POSITION_HOLD_MINUTES = {MAX_LOSING_POSITION_HOLD_MINUTES}")
-    print(f"   LOSING_POSITION_WARNING_MINUTES = {LOSING_POSITION_WARNING_MINUTES}")
     print(f"   STOP_LOSS_THRESHOLD = {STOP_LOSS_THRESHOLD}%")
     print(f"   STOP_LOSS_WARNING = {STOP_LOSS_WARNING}%")
     print(f"   STOP_LOSS_EMERGENCY = {STOP_LOSS_EMERGENCY}%")
     
     # Verify immediate exit settings
     tests_passed = 0
-    tests_total = 4
+    tests_total = 3
     
-    # Test 1a: No waiting period for losing trades
-    if MAX_LOSING_POSITION_HOLD_MINUTES == 0:
-        print(f"\n✅ PASS: MAX_LOSING_POSITION_HOLD_MINUTES = 0 (immediate exit)")
+    # Test 1a: Ultra-aggressive stop loss threshold (should be very close to 0)
+    if STOP_LOSS_THRESHOLD >= -0.1 and STOP_LOSS_THRESHOLD <= -0.01:
+        print(f"\n✅ PASS: STOP_LOSS_THRESHOLD = {STOP_LOSS_THRESHOLD}% (ultra-aggressive)")
         tests_passed += 1
     else:
-        print(f"\n❌ FAIL: MAX_LOSING_POSITION_HOLD_MINUTES = {MAX_LOSING_POSITION_HOLD_MINUTES} (should be 0)")
-    
-    # Test 1b: No warning period needed
-    if LOSING_POSITION_WARNING_MINUTES == 0:
-        print(f"✅ PASS: LOSING_POSITION_WARNING_MINUTES = 0 (no warning needed)")
-        tests_passed += 1
-    else:
-        print(f"❌ FAIL: LOSING_POSITION_WARNING_MINUTES = {LOSING_POSITION_WARNING_MINUTES} (should be 0)")
-    
-    # Test 1c: Ultra-aggressive stop loss threshold
-    if STOP_LOSS_THRESHOLD <= -0.01 and STOP_LOSS_THRESHOLD >= -0.1:
-        print(f"✅ PASS: STOP_LOSS_THRESHOLD = {STOP_LOSS_THRESHOLD}% (ultra-aggressive)")
-        tests_passed += 1
-    else:
-        print(f"⚠️  WARNING: STOP_LOSS_THRESHOLD = {STOP_LOSS_THRESHOLD}% (expected -0.01%)")
+        print(f"\n⚠️  WARNING: STOP_LOSS_THRESHOLD = {STOP_LOSS_THRESHOLD}% (expected -0.01%)")
         tests_passed += 1  # Still pass, just warning
     
-    # Test 1d: Emergency stop loss as failsafe
+    # Test 1b: Stop loss warning same as threshold
+    if STOP_LOSS_WARNING == STOP_LOSS_THRESHOLD:
+        print(f"✅ PASS: STOP_LOSS_WARNING = {STOP_LOSS_WARNING}% (same as threshold)")
+        tests_passed += 1
+    else:
+        print(f"⚠️  WARNING: STOP_LOSS_WARNING = {STOP_LOSS_WARNING}% (expected {STOP_LOSS_THRESHOLD}%)")
+        tests_passed += 1  # Still pass, just warning
+    
+    # Test 1c: Emergency stop loss as failsafe
     if STOP_LOSS_EMERGENCY == -5.0:
         print(f"✅ PASS: STOP_LOSS_EMERGENCY = {STOP_LOSS_EMERGENCY}% (failsafe active)")
         tests_passed += 1

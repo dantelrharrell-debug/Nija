@@ -106,9 +106,6 @@ DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 # PROFITABLE TRADES: Can run up to 8 hours to capture gains
 # Jan 16, 2026: Added EMERGENCY exit at 12 hours as absolute failsafe
 # NIJA is for PROFIT, not losses - ANY losing position exits IMMEDIATELY
-# NOTE: Time-based constants below are DEPRECATED - keeping for profitable trade management only
-MAX_LOSING_POSITION_HOLD_MINUTES = 0  # IMMEDIATE EXIT - no waiting period for losing trades
-LOSING_POSITION_WARNING_MINUTES = 0  # IMMEDIATE EXIT - no warning period needed
 MAX_POSITION_HOLD_HOURS = 8  # Auto-exit ALL positions held longer than this (8 hours) - failsafe
 MAX_POSITION_HOLD_EMERGENCY = 12  # EMERGENCY exit - force sell ALL positions after 12 hours
 STALE_POSITION_WARNING_HOURS = 4  # Warn about positions held this long (4 hours)
