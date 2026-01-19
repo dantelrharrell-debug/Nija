@@ -73,6 +73,10 @@ class MultiAccountBrokerManager:
         # User account brokers - structure: {user_id: {BrokerType: BaseBroker}}
         self.user_brokers: Dict[str, Dict[BrokerType, BaseBroker]] = {}
         
+        # FIX #3: User portfolio states for total equity tracking
+        # Structure: {(user_id, broker_type): UserPortfolioState}
+        self.user_portfolios: Dict[Tuple[str, str], any] = {}
+        
         # Track users with failed connections to avoid repeated attempts in same session
         # Structure: {(user_id, broker_type): error_reason}
         self._failed_user_connections: Dict[Tuple[str, BrokerType], str] = {}
@@ -96,6 +100,15 @@ class MultiAccountBrokerManager:
         self._balance_cache: Dict[Tuple[str, str, BrokerType], Tuple[float, float]] = {}
         # Track last Kraken balance API call time for rate limiting
         self._last_kraken_balance_call: float = 0.0
+        
+        # FIX #3: Initialize portfolio manager for user portfolio states
+        try:
+            from portfolio_state import get_portfolio_manager
+            self.portfolio_manager = get_portfolio_manager()
+            logger.info("✅ Portfolio manager initialized for user accounts")
+        except ImportError:
+            logger.warning("⚠️ Portfolio state module not available")
+            self.portfolio_manager = None
         
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
@@ -381,6 +394,77 @@ class MultiAccountBrokerManager:
                 else:
                     total += broker.get_account_balance()
         return total
+    
+    def update_user_portfolio(self, user_id: str, broker_type: BrokerType) -> Optional[any]:
+        """
+        Update portfolio state for a user account.
+        
+        FIX #3: Maintains user-specific portfolio state with total equity tracking.
+        
+        Args:
+            user_id: User identifier
+            broker_type: Broker type
+            
+        Returns:
+            UserPortfolioState or None if not available
+        """
+        if not self.portfolio_manager:
+            return None
+        
+        # Get user's broker
+        broker = self.get_user_broker(user_id, broker_type)
+        if not broker or not broker.connected:
+            return None
+        
+        try:
+            # Get current balance and positions
+            balance = broker.get_account_balance()
+            positions = broker.get_positions() if hasattr(broker, 'get_positions') else []
+            
+            # Get or create user portfolio state
+            portfolio_key = (user_id, broker_type.value)
+            if portfolio_key not in self.user_portfolios:
+                # Initialize new user portfolio
+                user_portfolio = self.portfolio_manager.initialize_user_portfolio(
+                    user_id=user_id,
+                    broker_type=broker_type.value,
+                    available_cash=balance
+                )
+                self.user_portfolios[portfolio_key] = user_portfolio
+            else:
+                user_portfolio = self.user_portfolios[portfolio_key]
+            
+            # Update portfolio from broker data
+            self.portfolio_manager.update_portfolio_from_broker(
+                portfolio=user_portfolio,
+                available_cash=balance,
+                positions=positions
+            )
+            
+            logger.debug(
+                f"Updated portfolio for {user_id} ({broker_type.value}): "
+                f"equity=${user_portfolio.total_equity:.2f}, positions={user_portfolio.position_count}"
+            )
+            
+            return user_portfolio
+            
+        except Exception as e:
+            logger.warning(f"Failed to update portfolio for {user_id} ({broker_type.value}): {e}")
+            return None
+    
+    def get_user_portfolio(self, user_id: str, broker_type: BrokerType) -> Optional[any]:
+        """
+        Get portfolio state for a user.
+        
+        Args:
+            user_id: User identifier
+            broker_type: Broker type
+            
+        Returns:
+            UserPortfolioState or None if not found
+        """
+        portfolio_key = (user_id, broker_type.value)
+        return self.user_portfolios.get(portfolio_key)
     
     def get_all_balances(self) -> Dict:
         """
