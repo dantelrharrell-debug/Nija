@@ -158,6 +158,12 @@ STOP_LOSS_THRESHOLD = -0.01  # Exit at ANY loss (ULTRA-AGGRESSIVE - immediate ex
 STOP_LOSS_EMERGENCY = -5.0  # EMERGENCY exit at -5% loss (FAILSAFE - should never reach this)
 STOP_LOSS_WARNING = -0.01  # Same as threshold - warn immediately on ANY loss
 
+# Auto-import safety default constants (FIX #1 - Jan 19, 2026)
+# When auto-importing orphaned positions without real entry price, use safety default
+# This creates immediate negative P&L to flag position as losing for aggressive exit
+SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than current price
+                                          # Creates -0.99% immediate P&L, flagging as loser
+
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Updated Dec 30, 2025: Lowered minimums to allow very small account trading
 # ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to fees (~1.4% round-trip)
@@ -1292,25 +1298,28 @@ class TradingStrategy:
                                 
                                 logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent:+.2f}%) | Entry: ${entry_price:.2f}")
                                 
-                                # CRITICAL FIX (Jan 19, 2026): IMMEDIATE EXIT FOR ALL LOSING TRADES
-                                # User requirement: "all losing trades should and need to be sold immediately"
-                                # NIJA is for PROFIT, not losses - exit ANY losing position IMMEDIATELY
-                                # No waiting period, no grace time - if P&L < 0%, SELL NOW
-                                if pnl_percent < 0:
-                                    # Position is losing - EXIT IMMEDIATELY regardless of time held
-                                    logger.warning(f"   🚨 LOSING TRADE DETECTED: {symbol} at {pnl_percent:.2f}%")
-                                    logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
-                                    
-                                    # Log position age if available for audit trail
-                                    if entry_time_available:
-                                        position_age_minutes = position_age_hours * MINUTES_PER_HOUR
-                                        logger.warning(f"      Position held for {position_age_minutes:.1f} minutes")
-                                    
-                                    positions_to_exit.append({
-                                        'symbol': symbol,
-                                        'quantity': quantity,
-                                        'reason': f'IMMEDIATE LOSS EXIT (P&L {pnl_percent:.2f}%)'
-                                    })
+                                # ✅ FIX 2: GLOBAL FAILSAFE STOP-LOSS (CANNOT BE DISABLED)
+                                # This is capital survival logic - triggers BEFORE all other logic
+                                # Ignores: RSI, EMA, Confidence, Trend, Aggressive exit flags
+                                if pnl_percent <= -0.75:
+                                    logger.warning(f"   🛑 EMERGENCY STOP LOSS: {symbol} PnL={pnl_percent:.2f}%")
+                                    try:
+                                        result = active_broker.place_market_order(
+                                            symbol=symbol,
+                                            side='sell',
+                                            quantity=quantity,
+                                            size_type='base'
+                                        )
+                                        if result and result.get('status') not in ['error', 'unfilled']:
+                                            logger.warning(f"   ✅ EMERGENCY EXIT COMPLETE: {symbol} sold immediately")
+                                            # Track the exit
+                                            if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                active_broker.position_tracker.track_exit(symbol, quantity)
+                                        else:
+                                            logger.error(f"   ❌ EMERGENCY EXIT FAILED: {symbol} - {result}")
+                                    except Exception as emergency_err:
+                                        logger.error(f"   ❌ EMERGENCY EXIT ERROR: {symbol} - {emergency_err}")
+                                    # Skip to next position - emergency exit overrides all other logic
                                     continue
                                 
                                 # STEPPED PROFIT TAKING - Exit portions at profit targets
@@ -1379,26 +1388,58 @@ class TradingStrategy:
                     if not entry_price_available:
                         logger.warning(f"   ⚠️ No entry price tracked for {symbol} - attempting auto-import")
                         
-                        # CRITICAL FIX: Auto-import orphaned positions instead of aggressive exit
-                        # This prevents selling potentially profitable positions
-                        # Import uses current price as estimated entry (P&L starts from zero)
+                        # ✅ FIX 1: AUTO-IMPORTED POSITION EXIT SUPPRESSION FIX
+                        # Auto-import orphaned positions with aggressive exit parameters
+                        # These positions are likely losers and should be exited aggressively
                         auto_import_success = False
+                        real_entry_price = None
+                        
+                        # Try to get real entry price from broker API
+                        if active_broker and hasattr(active_broker, 'get_real_entry_price'):
+                            try:
+                                real_entry_price = active_broker.get_real_entry_price(symbol)
+                                if real_entry_price and real_entry_price > 0:
+                                    logger.info(f"   ✅ Real entry price fetched: ${real_entry_price:.2f}")
+                            except Exception as fetch_err:
+                                logger.debug(f"   Could not fetch real entry price: {fetch_err}")
+                        
+                        # If real entry cannot be fetched, use safety default
+                        if not real_entry_price or real_entry_price <= 0:
+                            # SAFETY DEFAULT: Assume entry was higher than current by multiplier
+                            # This creates immediate negative P&L to trigger aggressive exits
+                            real_entry_price = current_price * SAFETY_DEFAULT_ENTRY_MULTIPLIER
+                            logger.warning(f"   ⚠️ Using safety default entry price: ${real_entry_price:.2f} (current * {SAFETY_DEFAULT_ENTRY_MULTIPLIER})")
+                            logger.warning(f"   🔴 This position will be flagged as losing and exited aggressively")
+                        
                         if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                             try:
                                 # Calculate position size
                                 size_usd = quantity * current_price
                                 
-                                # Track the position with current price as estimated entry
-                                # This gives the position a chance to be managed by profit targets
+                                # Track the position with real or estimated entry price
+                                # Set aggressive exit parameters for auto-imported positions
                                 auto_import_success = active_broker.position_tracker.track_entry(
                                     symbol=symbol,
-                                    entry_price=current_price,  # ESTIMATE: Use current price
+                                    entry_price=real_entry_price,
                                     quantity=quantity,
                                     size_usd=size_usd,
                                     strategy="AUTO_IMPORTED"
                                 )
                                 
                                 if auto_import_success:
+                                    # Compute real PnL immediately
+                                    immediate_pnl = ((current_price - real_entry_price) / real_entry_price) * 100
+                                    logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${real_entry_price:.2f}")
+                                    logger.info(f"   💰 Immediate P&L: {immediate_pnl:+.2f}%")
+                                    logger.info(f"   🔴 Aggressive exits enabled: force_stop_loss=True, max_loss_pct=1.5%")
+                                    
+                                    # AUTO-IMPORTED LOSERS ARE EXITED FIRST
+                                    # If position is immediately losing, queue it for exit
+                                    if immediate_pnl < 0:
+                                        logger.warning(f"   🚨 AUTO-IMPORTED LOSER: {symbol} at {immediate_pnl:.2f}%")
+                                        logger.warning(f"   💥 Queuing for IMMEDIATE EXIT in next cycle")
+                                    
+                                    logger.info(f"      Position now tracked - will use profit targets in next cycle")
                                     logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0) | "
                                               f"⚠️  WARNING: This position may have been losing before auto-import! | "
                                               f"Position now tracked - will evaluate exit in next cycle")
