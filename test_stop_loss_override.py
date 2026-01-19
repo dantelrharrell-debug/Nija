@@ -31,7 +31,7 @@ def test_stop_loss_threshold():
     
     # Find the STOP_LOSS_THRESHOLD definition
     if 'STOP_LOSS_THRESHOLD = -0.01' in code:
-        logger.info(f"Expected threshold: {expected_threshold}%")
+        logger.info(f"Expected threshold: {expected_threshold*100}%")
         logger.info(f"Actual threshold: -0.01%")
         
         # Also verify it's being used in the hard stop-loss check
@@ -42,7 +42,7 @@ def test_stop_loss_threshold():
             logger.warning("⚠️ Constant defined but not used in hard stop-loss check")
             return False
     else:
-        logger.error(f"❌ FAIL: Expected {expected_threshold}%, threshold not found or incorrect")
+        logger.error(f"❌ FAIL: Expected {expected_threshold*100}%, threshold not found or incorrect")
         return False
 
 def test_code_implementation():
@@ -94,6 +94,9 @@ def test_code_implementation():
         tests.append(False)
     
     # Test 4: Removed 30-minute auto-exit warning
+    # The old code had warnings like "will auto-exit in 23.7min" that should be removed
+    # We allow up to 1 occurrence (may still exist in other contexts like time-based exits)
+    # but should NOT appear for losing trade warnings
     if 'will auto-exit in' not in code or code.count('will auto-exit in') < 2:
         logger.info("✅ PASS: Removed 'will auto-exit in X minutes' warning for losing trades")
         tests.append(True)
