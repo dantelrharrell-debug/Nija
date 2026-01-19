@@ -1261,7 +1261,7 @@ class TradingStrategy:
                             if tracked_position:
                                 entry_price_available = True
                                 
-                                # Check position age for time-based exits
+                                # Calculate position age (needed for both stop-loss and time-based logic)
                                 entry_time = tracked_position.get('first_entry_time')
                                 if entry_time:
                                     try:
@@ -1269,31 +1269,12 @@ class TradingStrategy:
                                         now = datetime.now()
                                         position_age_hours = (now - entry_dt).total_seconds() / 3600
                                         entry_time_available = True
-                                        
-                                        # EMERGENCY TIME-BASED EXIT: Force exit ALL positions after 12 hours (FAILSAFE)
-                                        if position_age_hours >= MAX_POSITION_HOLD_EMERGENCY:
-                                            logger.error(f"   🚨 EMERGENCY TIME EXIT: {symbol} held for {position_age_hours:.1f} hours (emergency max: {MAX_POSITION_HOLD_EMERGENCY})")
-                                            logger.error(f"   💥 FORCE SELLING to prevent indefinite holding!")
-                                            positions_to_exit.append({
-                                                'symbol': symbol,
-                                                'quantity': quantity,
-                                                'reason': f'EMERGENCY time exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_EMERGENCY}h)'
-                                            })
-                                            continue
-                                        # TIME-BASED EXIT: Auto-exit stale positions
-                                        elif position_age_hours >= MAX_POSITION_HOLD_HOURS:
-                                            logger.warning(f"   ⏰ STALE POSITION EXIT: {symbol} held for {position_age_hours:.1f} hours (max: {MAX_POSITION_HOLD_HOURS})")
-                                            positions_to_exit.append({
-                                                'symbol': symbol,
-                                                'quantity': quantity,
-                                                'reason': f'Time-based exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_HOURS}h)'
-                                            })
-                                            continue
-                                        elif position_age_hours >= STALE_POSITION_WARNING_HOURS:
-                                            logger.info(f"   ⚠️ Position aging: {symbol} held for {position_age_hours:.1f} hours")
                                     except Exception as time_err:
                                         logger.debug(f"   Could not parse entry time for {symbol}: {time_err}")
                             
+                            # CRITICAL FIX (Jan 19, 2026): Calculate P&L FIRST, check stop-loss BEFORE time-based exits
+                            # Railway Golden Rule #5: Stop-loss > time exit (always)
+                            # The old logic had time-based exits BEFORE stop-loss checks, which is backwards!
                             pnl_data = active_broker.position_tracker.calculate_pnl(symbol, current_price)
                             if pnl_data:
                                 entry_price_available = True
@@ -1394,8 +1375,8 @@ class TradingStrategy:
                                             logger.info(f"   ⚠️ Target {target_pct}% hit but profit {pnl_percent:.2f}% < minimum threshold {MIN_PROFIT_THRESHOLD*100:.1f}% - holding")
                                 else:
                                     # No profit target hit, check stop loss
-                                    # Note: Losing positions already handled above via 30-minute rule or orphaned exit
-                                    # These checks are failsafes for severe losses
+                                    # CRITICAL FIX (Jan 19, 2026): Stop-loss checks happen BEFORE time-based exits
+                                    # This ensures losing trades get stopped out immediately, not held for hours
                                     # EMERGENCY STOP LOSS: Force exit at -5% or worse (FAILSAFE)
                                     if pnl_percent <= STOP_LOSS_EMERGENCY:
                                         logger.error(f"   🚨 EMERGENCY STOP LOSS: {symbol} at {pnl_percent:.2f}% (emergency: {STOP_LOSS_EMERGENCY}%)")
@@ -1428,7 +1409,35 @@ class TradingStrategy:
                                         })
                                     else:
                                         # Position has entry price but not at any exit threshold
-                                        logger.info(f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)")
+                                        # CRITICAL FIX (Jan 19, 2026): Add time-based exits AFTER stop-loss checks
+                                        # Railway Golden Rule #5: Stop-loss > time exit (always)
+                                        # Only check time-based exits if stop-loss didn't trigger
+                                        if entry_time_available:
+                                            # EMERGENCY TIME-BASED EXIT: Force exit ALL positions after 12 hours (FAILSAFE)
+                                            # This is a last-resort failsafe for profitable positions that aren't hitting targets
+                                            if position_age_hours >= MAX_POSITION_HOLD_EMERGENCY:
+                                                logger.error(f"   🚨 EMERGENCY TIME EXIT: {symbol} held for {position_age_hours:.1f} hours (emergency max: {MAX_POSITION_HOLD_EMERGENCY})")
+                                                logger.error(f"   💥 FORCE SELLING to prevent indefinite holding!")
+                                                positions_to_exit.append({
+                                                    'symbol': symbol,
+                                                    'quantity': quantity,
+                                                    'reason': f'EMERGENCY time exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_EMERGENCY}h)'
+                                                })
+                                            # TIME-BASED EXIT: Auto-exit stale positions
+                                            elif position_age_hours >= MAX_POSITION_HOLD_HOURS:
+                                                logger.warning(f"   ⏰ STALE POSITION EXIT: {symbol} held for {position_age_hours:.1f} hours (max: {MAX_POSITION_HOLD_HOURS})")
+                                                positions_to_exit.append({
+                                                    'symbol': symbol,
+                                                    'quantity': quantity,
+                                                    'reason': f'Time-based exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_HOURS}h)'
+                                                })
+                                            elif position_age_hours >= STALE_POSITION_WARNING_HOURS:
+                                                logger.info(f"   ⚠️ Position aging: {symbol} held for {position_age_hours:.1f} hours")
+                                                logger.info(f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)")
+                                            else:
+                                                logger.info(f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)")
+                                        else:
+                                            logger.info(f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)")
                                     continue  # Continue to next position check
                                 
                                 # If we got here via break, skip remaining checks

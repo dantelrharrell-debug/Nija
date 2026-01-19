@@ -58,6 +58,13 @@ class MultiAccountBrokerManager:
     # Prevents excessive memory usage from very long error strings
     MAX_ERROR_MESSAGE_LENGTH = 50
     
+    # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
+    # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
+    # Problem: Sequential balance calls cause 1-1.2s delay per user
+    # Solution: Cache balances per trading cycle to prevent repeated API calls
+    BALANCE_CACHE_TTL = 120.0  # Cache balance for 2 minutes (one trading cycle)
+    KRAKEN_BALANCE_CALL_DELAY = 1.1  # 1.1s delay between Kraken balance API calls
+    
     def __init__(self):
         """Initialize multi-account broker manager."""
         # Master account brokers
@@ -82,6 +89,13 @@ class MultiAccountBrokerManager:
         # When True, skip Kraken user initialization in connect_users_from_config()
         # to prevent duplicate user creation (copy trading creates its own clients)
         self.kraken_copy_trading_active = False
+        
+        # CRITICAL FIX (Jan 19, 2026): Balance cache to prevent repeated Kraken API calls
+        # Structure: {(account_type, account_id, broker_type): (balance, timestamp)}
+        # This prevents calling get_account_balance() multiple times per cycle for same user
+        self._balance_cache: Dict[Tuple[str, str, BrokerType], Tuple[float, float]] = {}
+        # Track last Kraken balance API call time for rate limiting
+        self._last_kraken_balance_call: float = 0.0
         
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
@@ -241,6 +255,65 @@ class MultiAccountBrokerManager:
         # This is the safe default: if we don't know, assume no credentials
         return False
     
+    def _get_cached_balance(self, account_type: str, account_id: str, broker_type: BrokerType, broker: BaseBroker) -> float:
+        """
+        Get balance with caching for Kraken to prevent repeated API calls.
+        
+        CRITICAL FIX (Jan 19, 2026): Railway Golden Rule #3 - Kraken sequential API calls
+        Problem: Users not appearing funded because balance calls are sequential (1-1.2s delay each)
+        Solution: Cache balances per trading cycle, add 1-1.2s delay between calls
+        
+        Args:
+            account_type: 'master' or 'user'
+            account_id: Account identifier (e.g., 'master', 'tania_gilbert')
+            broker_type: Type of broker
+            broker: Broker instance
+            
+        Returns:
+            Balance in USD
+        """
+        cache_key = (account_type, account_id, broker_type)
+        current_time = time.time()
+        
+        # Check if we have a valid cached balance
+        if cache_key in self._balance_cache:
+            cached_balance, cache_time = self._balance_cache[cache_key]
+            age = current_time - cache_time
+            
+            if age < self.BALANCE_CACHE_TTL:
+                logger.debug(f"Using cached balance for {account_type} {account_id} on {broker_type.value}: ${cached_balance:.2f} (age: {age:.1f}s)")
+                return cached_balance
+        
+        # Need to fetch fresh balance from API
+        # For Kraken, add delay between sequential calls to prevent rate limiting
+        if broker_type == BrokerType.KRAKEN:
+            time_since_last_call = current_time - self._last_kraken_balance_call
+            if time_since_last_call < self.KRAKEN_BALANCE_CALL_DELAY:
+                delay = self.KRAKEN_BALANCE_CALL_DELAY - time_since_last_call
+                logger.debug(f"Kraken rate limit: waiting {delay:.2f}s before balance call")
+                time.sleep(delay)
+            
+            self._last_kraken_balance_call = time.time()
+        
+        # Fetch balance from broker API
+        balance = broker.get_account_balance()
+        
+        # Cache the result
+        self._balance_cache[cache_key] = (balance, time.time())
+        logger.debug(f"Cached fresh balance for {account_type} {account_id} on {broker_type.value}: ${balance:.2f}")
+        
+        return balance
+    
+    def clear_balance_cache(self):
+        """
+        Clear the balance cache.
+        
+        Call this at the start of each trading cycle to force fresh balance fetches.
+        This ensures balances are updated once per cycle but not more frequently.
+        """
+        self._balance_cache.clear()
+        logger.debug("Balance cache cleared for new trading cycle")
+    
     def get_master_balance(self, broker_type: Optional[BrokerType] = None) -> float:
         """
         Get master account balance.
@@ -253,13 +326,23 @@ class MultiAccountBrokerManager:
         """
         if broker_type:
             broker = self.master_brokers.get(broker_type)
-            return broker.get_account_balance() if broker else 0.0
+            if not broker:
+                return 0.0
+            
+            # CRITICAL FIX (Jan 19, 2026): Use cached balance for Kraken to prevent repeated API calls
+            if broker_type == BrokerType.KRAKEN:
+                return self._get_cached_balance('master', 'master', broker_type, broker)
+            
+            return broker.get_account_balance()
         
         # Total across all master brokers
         total = 0.0
-        for broker in self.master_brokers.values():
+        for broker_type, broker in self.master_brokers.items():
             if broker.connected:
-                total += broker.get_account_balance()
+                if broker_type == BrokerType.KRAKEN:
+                    total += self._get_cached_balance('master', 'master', broker_type, broker)
+                else:
+                    total += broker.get_account_balance()
         return total
     
     def get_user_balance(self, user_id: str, broker_type: Optional[BrokerType] = None) -> float:
@@ -277,13 +360,23 @@ class MultiAccountBrokerManager:
         
         if broker_type:
             broker = user_brokers.get(broker_type)
-            return broker.get_account_balance() if broker else 0.0
+            if not broker:
+                return 0.0
+            
+            # CRITICAL FIX (Jan 19, 2026): Use cached balance for Kraken to prevent repeated API calls
+            if broker_type == BrokerType.KRAKEN:
+                return self._get_cached_balance('user', user_id, broker_type, broker)
+            
+            return broker.get_account_balance()
         
         # Total across all user brokers
         total = 0.0
-        for broker in user_brokers.values():
+        for broker_type, broker in user_brokers.items():
             if broker.connected:
-                total += broker.get_account_balance()
+                if broker_type == BrokerType.KRAKEN:
+                    total += self._get_cached_balance('user', user_id, broker_type, broker)
+                else:
+                    total += broker.get_account_balance()
         return total
     
     def get_all_balances(self) -> Dict:
