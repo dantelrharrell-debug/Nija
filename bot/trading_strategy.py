@@ -60,15 +60,10 @@ DISABLED_PAIRS = ["XRP-USD"]
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
-# OPTION A: 30-MINUTE EXIT FOR LOSING TRADES
-# Enforce "exit losing trades within 30 minutes" for tracked positions
-# This limits whipsaws while still giving positions time to recover
-MAX_LOSING_POSITION_HOLD_MINUTES = 30  # Exit losing trades after 30 minutes MAX
-LOSING_POSITION_WARNING_MINUTES = 5    # Warn after 5 minutes of being in a losing trade
-
-# Validate that warning comes before exit (catch configuration errors early)
-assert LOSING_POSITION_WARNING_MINUTES < MAX_LOSING_POSITION_HOLD_MINUTES, \
-    f"LOSING_POSITION_WARNING_MINUTES ({LOSING_POSITION_WARNING_MINUTES}) must be less than MAX_LOSING_POSITION_HOLD_MINUTES ({MAX_LOSING_POSITION_HOLD_MINUTES})"
+# ULTRA-AGGRESSIVE EXIT FOR LOSING TRADES (Jan 19, 2026)
+# Exit losing trades within 3 MINUTES MAX to prevent capital bleed
+# NIJA is for PROFIT, not losses - losers get minimal patience
+MAX_LOSING_POSITION_HOLD_MINUTES = 3  # Exit losing trades after 3 minutes MAX (changed from 30 min)
 
 # Configuration constants
 # CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
@@ -1308,14 +1303,44 @@ class TradingStrategy:
                                 
                                 logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent:+.2f}%) | Entry: ${entry_price:.2f}")
                                 
-                                # ✅ OPTION A: 30-MINUTE EXIT FOR LOSING TRADES
-                                # For tracked positions with P&L < 0%, enforce max hold time of 30 minutes
-                                # This limits whipsaws while still giving positions a chance to recover
+                                # 🔥 FIX #1: HARD STOP-LOSS OVERRIDE - ABSOLUTE TOP PRIORITY
+                                # This MUST be the FIRST check - it overrides EVERYTHING:
+                                # 🚫 No RSI checks
+                                # 🚫 No EMA checks  
+                                # 🚫 No confidence checks
+                                # 🚫 No time hold checks
+                                # 🚫 No aggressive flag checks
+                                # Loss = EXIT. Period.
+                                if pnl_percent <= STOP_LOSS_THRESHOLD:
+                                    logger.warning(f"   🛑 HARD STOP LOSS SELL: {symbol}")
+                                    try:
+                                        result = active_broker.place_market_order(
+                                            symbol=symbol,
+                                            side='sell',
+                                            quantity=quantity,
+                                            size_type='base'
+                                        )
+                                        if result and result.get('status') not in ['error', 'unfilled']:
+                                            logger.info(f"   ✅ SOLD {symbol} @ market due to stop loss")
+                                            # Track the exit
+                                            if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                active_broker.position_tracker.track_exit(symbol, quantity)
+                                        else:
+                                            error_msg = result.get('error', result.get('message', 'Unknown')) if result else 'No response'
+                                            logger.error(f"   ❌ {symbol} sell failed: {error_msg}")
+                                    except Exception as sell_err:
+                                        logger.error(f"   ❌ {symbol} exception during sell: {sell_err}")
+                                    # Skip ALL remaining logic for this position
+                                    continue
+                                
+                                # ✅ FIX #2: LOSING TRADES GET 3 MINUTES MAX (NOT 30)
+                                # For tracked positions with P&L < 0%, enforce STRICT 3-minute max hold time
+                                # This prevents "will auto-exit in 23.7min" nonsense that bleeds capital
                                 if pnl_percent < 0 and entry_time_available:
                                     # Convert position age from hours to minutes
                                     position_age_minutes = position_age_hours * MINUTES_PER_HOUR
                                     
-                                    # Check if position has been losing for more than 30 minutes
+                                    # Check if position has been losing for more than the max allowed time
                                     if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
                                         logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
                                         logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
@@ -1325,10 +1350,6 @@ class TradingStrategy:
                                             'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent:.2f}%)'
                                         })
                                         continue
-                                    # Warning at 5 minutes for visibility
-                                    elif position_age_minutes >= LOSING_POSITION_WARNING_MINUTES:
-                                        minutes_remaining = MAX_LOSING_POSITION_HOLD_MINUTES - position_age_minutes
-                                        logger.warning(f"   ⚠️ LOSING TRADE: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f}min (will auto-exit in {minutes_remaining:.1f}min)")
                                 
                                 # ✅ FIX 2: GLOBAL FAILSAFE STOP-LOSS (CANNOT BE DISABLED)
                                 # This is capital survival logic - triggers BEFORE all other logic
@@ -1787,6 +1808,13 @@ class TradingStrategy:
                         )
                         if result and result.get('status') not in ['error', 'unfilled']:
                             logger.info(f"  ✅ {symbol} SOLD successfully!")
+                            # ✅ FIX #3: EXPLICIT SELL CONFIRMATION LOG
+                            # If this was a stop-loss exit, log it clearly
+                            if 'stop loss' in reason.lower():
+                                logger.info(f"  ✅ SOLD {symbol} @ market due to stop loss")
+                            # Track the exit in position tracker
+                            if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                active_broker.position_tracker.track_exit(symbol, quantity)
                             # Remove from unsellable dict if it was there (position grew and became sellable)
                             if symbol in self.unsellable_positions:
                                 del self.unsellable_positions[symbol]
