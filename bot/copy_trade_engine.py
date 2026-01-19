@@ -74,6 +74,16 @@ class CopyTradeEngine:
         logger.info("🔄 COPY TRADE ENGINE INITIALIZED")
         logger.info("=" * 70)
     
+    @property
+    def active(self) -> bool:
+        """
+        Check if the copy trade engine is currently active/running.
+        
+        Returns:
+            bool: True if engine is running, False otherwise
+        """
+        return self._running
+    
     def start(self):
         """Start the copy trade engine in a background thread."""
         if self._running:
