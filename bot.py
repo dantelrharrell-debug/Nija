@@ -425,13 +425,29 @@ def main():
         _start_health_server()
         strategy = TradingStrategy()
         
-        # Start copy trade engine for replicating master trades to users
-        logger.info("🔄 Starting copy trade engine...")
+        # AUDIT USER BALANCES - Show all user balances regardless of trading status
+        # This runs BEFORE trading starts to ensure visibility even if users aren't actively trading
+        logger.info("=" * 70)
+        logger.info("🔍 AUDITING USER ACCOUNT BALANCES")
+        logger.info("=" * 70)
+        if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
+            strategy.multi_account_manager.audit_user_accounts()
+        else:
+            logger.warning("   ⚠️  Multi-account manager not available - skipping balance audit")
+        
+        # Start copy trade engine in OBSERVE MODE for user accounts
+        # OBSERVE MODE means:
+        # - Track balances and positions
+        # - Log all P&L
+        # - See what signals would be copied
+        # - BUT DO NOT EXECUTE TRADES until explicitly enabled
+        logger.info("🔄 Starting copy trade engine in OBSERVE MODE...")
         try:
             from bot.copy_trade_engine import start_copy_engine
-            start_copy_engine()
-            logger.info("   ✅ Copy trade engine started - user trades will be replicated")
-            logger.info("   👥 USER ACCOUNTS MODE: COPY TRADING (no independent threads)")
+            start_copy_engine(observe_only=True)  # CRITICAL: observe_only=True prevents auto-trading
+            logger.info("   ✅ Copy trade engine started in OBSERVE MODE")
+            logger.info("   👁️  Users will see balances and signals but NO trades will execute")
+            logger.info("   ⚠️  To enable actual copy trading, set observe_only=False")
         except Exception as e:
             logger.error(f"   ❌ Failed to start copy trade engine: {e}")
             logger.error("   ⚠️  User accounts will NOT receive copy trades!")
