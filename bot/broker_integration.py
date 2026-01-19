@@ -695,7 +695,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Use helper method for serialized API call
             result = self._kraken_api_call('AddOrder', order_params)
             
-            # ✅ FIX 4: FORCE LOG ALL ORDER FAILURES
+            # ✅ FIX 4: ENHANCED ORDER LOGGING WITH FILL DETAILS
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
@@ -703,12 +703,53 @@ class KrakenBrokerAdapter(BrokerInterface):
                 
                 logger.info(f"Kraken market {side} order placed: {kraken_symbol} (ID: {order_id})")
                 
+                # ✅ REQUIREMENT #2: Attempt to fetch order fill details
+                # Query the order to get filled price and volume
+                filled_price = 0.0
+                filled_volume = size
+                
+                if order_id:
+                    try:
+                        # Give the order a moment to fill
+                        # Configurable delay to balance confirmation accuracy vs execution speed
+                        import time
+                        order_query_delay = 0.5  # seconds - can be adjusted based on broker response time
+                        time.sleep(order_query_delay)
+                        
+                        # Query order details to get filled price
+                        order_query = self._kraken_api_call('QueryOrders', {'txid': order_id})
+                        
+                        if order_query and 'result' in order_query:
+                            order_details = order_query['result'].get(order_id, {})
+                            filled_price = float(order_details.get('price', 0.0))
+                            filled_volume = float(order_details.get('vol_exec', size))
+                            order_status = order_details.get('status', 'unknown')
+                            
+                            # ✅ ORDER CONFIRMATION LOGGING (REQUIREMENT #2)
+                            logger.info(f"   ✅ ORDER CONFIRMED:")
+                            logger.info(f"      • Order ID: {order_id}")
+                            logger.info(f"      • Filled Volume: {filled_volume:.8f} {kraken_symbol[:3]}")
+                            logger.info(f"      • Filled Price: ${filled_price:.2f}")
+                            logger.info(f"      • Status: {order_status}")
+                            
+                            # Note: Balance delta requires fetching balance before/after
+                            # We can calculate approximate delta from filled volume * price
+                            if side.lower() == 'sell':
+                                balance_delta = filled_volume * filled_price
+                                logger.info(f"      • Balance Delta (approx): +${balance_delta:.2f}")
+                            else:
+                                balance_delta = -(filled_volume * filled_price)
+                                logger.info(f"      • Balance Delta (approx): ${balance_delta:.2f}")
+                    except Exception as query_err:
+                        logger.warning(f"   ⚠️  Could not query order details: {query_err}")
+                
                 return {
                     'order_id': order_id,
                     'symbol': kraken_symbol,
                     'side': side,
                     'size': size,
-                    'filled_price': 0.0,
+                    'filled_price': filled_price,
+                    'filled_volume': filled_volume,
                     'status': 'filled',
                     'timestamp': datetime.now()
                 }

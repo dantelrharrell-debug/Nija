@@ -157,11 +157,28 @@ MIN_PROFIT_THRESHOLD = 0.016  # 1.6% minimum profit (spread + fees + buffer)
 # These thresholds are FAILSAFES only - primary exit is immediate on any loss
 # Jan 19, 2026: Changed to immediate exit on ANY loss per user requirement
 # Jan 13, 2026: Tightened to -1.0% to cut losses IMMEDIATELY
-# Jan 16, 2026: Added EMERGENCY stop loss at -5% as failsafe
-# NIJA is for PROFIT, not losses - exit losing trades IMMEDIATELY to preserve capital
-STOP_LOSS_THRESHOLD = -0.01  # Exit at ANY loss (ULTRA-AGGRESSIVE - immediate exit on any negative P&L)
-STOP_LOSS_EMERGENCY = -5.0  # EMERGENCY exit at -5% loss (FAILSAFE - should never reach this)
-STOP_LOSS_WARNING = -0.01  # Same as threshold - warn immediately on ANY loss
+# Jan 19, 2026: 3-TIER STOP-LOSS SYSTEM for Kraken small balances
+# Tier 1: Primary trading stop (-0.6% to -0.8%) - Real stop-loss for risk management
+# Tier 2: Emergency micro-stop (-0.01%) - Logic failure prevention (not a trading stop)
+# Tier 3: Catastrophic failsafe (-5.0%) - Last resort protection
+
+# TIER 1: PRIMARY TRADING STOP-LOSS (Kraken small balances)
+# For small Kraken accounts, use -0.6% to -0.8% as the PRIMARY stop-loss
+# This accounts for Kraken's lower fees (0.36% round-trip) vs Coinbase (1.4%)
+STOP_LOSS_PRIMARY_KRAKEN = -0.008  # -0.8% for Kraken small balances (spread + fees + buffer)
+STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.006  # -0.6% minimum (tightest acceptable)
+STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.008  # -0.8% maximum (conservative)
+
+# TIER 2: EMERGENCY MICRO-STOP (Logic failure prevention)
+# This is NOT a trading stop - it's a failsafe to prevent logic failures
+# Examples: imported positions without entry price, calculation errors, data corruption
+# Terminology: "Emergency micro-stop to prevent logic failures (not a trading stop)"
+STOP_LOSS_MICRO = -0.01  # -1% emergency micro-stop for logic failure prevention
+STOP_LOSS_WARNING = -0.01  # Same as micro-stop - warn immediately
+
+# TIER 3: CATASTROPHIC FAILSAFE
+# Last resort protection - should NEVER be reached in normal operation
+STOP_LOSS_EMERGENCY = -5.0  # EMERGENCY exit at -5% loss (FAILSAFE - absolute last resort)
 
 # Auto-import safety default constants (FIX #1 - Jan 19, 2026)
 # When auto-importing orphaned positions without real entry price, use safety default
@@ -1007,6 +1024,58 @@ class TradingStrategy:
         
         return batch
 
+    def _get_stop_loss_tier(self, broker, account_balance: float) -> tuple:
+        """
+        Determine the appropriate stop-loss tier based on broker type and account balance.
+        
+        Returns 3-tier stop-loss system:
+        - Tier 1: Primary trading stop (for risk management)
+        - Tier 2: Emergency micro-stop (for logic failure prevention)
+        - Tier 3: Catastrophic failsafe (last resort)
+        
+        Args:
+            broker: Broker instance (to determine broker type)
+            account_balance: Current account balance in USD
+            
+        Returns:
+            tuple: (primary_stop, micro_stop, catastrophic_stop, description)
+        """
+        # Determine broker type with multiple fallback approaches
+        # This flexibility handles various broker implementations without requiring
+        # strict interface contracts. While not ideal, it provides robustness across
+        # different broker adapter patterns (BrokerInterface, direct API wrappers, etc.)
+        broker_name = 'coinbase'  # default
+        if hasattr(broker, 'broker_type'):
+            broker_name = broker.broker_type.value.lower() if hasattr(broker.broker_type, 'value') else str(broker.broker_type).lower()
+        elif hasattr(broker, '__class__'):
+            broker_name = broker.__class__.__name__.lower()
+        
+        # Kraken with small balance: Use -0.6% to -0.8% primary stop
+        if 'kraken' in broker_name and account_balance < 100:
+            # For small Kraken balances, use conservative -0.8% primary stop
+            # This accounts for spread (0.1%) + fees (0.36%) + slippage (0.1%) + buffer (0.24%)
+            primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -0.8%
+            description = f"Kraken small balance (${account_balance:.2f}): Primary -0.8%, Micro -1.0%, Failsafe -5.0%"
+        
+        # Kraken with larger balance: Can use tighter stop
+        elif 'kraken' in broker_name:
+            # For larger Kraken balances, use -0.6% minimum (tighter)
+            primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -0.6%
+            description = f"Kraken (${account_balance:.2f}): Primary -0.6%, Micro -1.0%, Failsafe -5.0%"
+        
+        # Coinbase or other exchanges: Use -1.0% primary stop (higher fees)
+        else:
+            # Higher fees require wider stop-loss
+            primary_stop = -0.010  # -1.0% for Coinbase/other
+            description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -1.0%, Micro -1.0%, Failsafe -5.0%"
+        
+        return (
+            primary_stop,           # Tier 1: Primary trading stop
+            STOP_LOSS_MICRO,        # Tier 2: Emergency micro-stop (-1.0%)
+            STOP_LOSS_EMERGENCY,    # Tier 3: Catastrophic failsafe (-5.0%)
+            description
+        )
+
     def run_cycle(self, broker=None, user_mode=False):
         """Execute a complete trading cycle with position cap enforcement.
         
@@ -1183,6 +1252,10 @@ class TradingStrategy:
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
             
+            # Get 3-tier stop-loss configuration for this broker and balance
+            primary_stop, micro_stop, catastrophic_stop, stop_description = self._get_stop_loss_tier(active_broker, account_balance)
+            logger.info(f"🛡️  Stop-loss tiers: {stop_description}")
+            
             # CRITICAL: If over position cap, prioritize selling weakest positions immediately
             # This ensures we get back under cap quickly to avoid further bleeding
             # Position cap set to 8 maximum concurrent positions
@@ -1284,16 +1357,21 @@ class TradingStrategy:
                                 
                                 logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent:+.2f}%) | Entry: ${entry_price:.2f}")
                                 
-                                # 🔥 FIX #1: HARD STOP-LOSS OVERRIDE - ABSOLUTE TOP PRIORITY
-                                # This MUST be the FIRST check - it overrides EVERYTHING:
-                                # 🚫 No RSI checks
-                                # 🚫 No EMA checks  
-                                # 🚫 No confidence checks
-                                # 🚫 No time hold checks
-                                # 🚫 No aggressive flag checks
-                                # Loss = EXIT. Period.
-                                if pnl_percent <= STOP_LOSS_THRESHOLD:
-                                    logger.warning(f"   🛑 HARD STOP LOSS SELL: {symbol}")
+                                # 🔥 3-TIER STOP-LOSS SYSTEM (JAN 19, 2026)
+                                # Tier 1: Primary trading stop (varies by broker and balance)
+                                # Tier 2: Emergency micro-stop to prevent logic failures
+                                # Tier 3: Catastrophic failsafe (last resort)
+                                
+                                # TIER 1: PRIMARY TRADING STOP-LOSS
+                                # This is the REAL stop-loss for risk management
+                                # For Kraken small balances: -0.6% to -0.8%
+                                # For Coinbase/other: -1.0%
+                                if pnl_percent <= primary_stop:
+                                    logger.warning(f"   🛑 PRIMARY STOP-LOSS HIT: {symbol} at {pnl_percent:.2f}% (threshold: {primary_stop*100:.2f}%)")
+                                    logger.warning(f"   💥 TIER 1: Trading stop-loss triggered - exiting position to prevent further loss")
+                                    
+                                    # Execute immediate market sell
+                                    exit_success = False
                                     try:
                                         result = active_broker.place_market_order(
                                             symbol=symbol,
@@ -1301,17 +1379,75 @@ class TradingStrategy:
                                             quantity=quantity,
                                             size_type='base'
                                         )
+                                        
+                                        # Enhanced order confirmation logging (REQUIREMENT #2)
                                         if result and result.get('status') not in ['error', 'unfilled']:
-                                            logger.info(f"   ✅ SOLD {symbol} @ market due to stop loss")
+                                            order_id = result.get('order_id', 'N/A')
+                                            filled_price = result.get('filled_price', current_price)
+                                            filled_volume = quantity
+                                            
+                                            # Calculate balance delta
+                                            balance_before = account_balance
+                                            balance_delta = filled_volume * filled_price
+                                            balance_after = balance_before + balance_delta
+                                            
+                                            # ✅ REQUIREMENT #2: Order accepted confirmation
+                                            logger.info(f"   ✅ ORDER ACCEPTED AND FILLED:")
+                                            logger.info(f"      • Order ID: {order_id}")
+                                            logger.info(f"      • Filled Volume: {filled_volume:.8f} {symbol.split('-')[0]}")
+                                            logger.info(f"      • Filled Price: ${filled_price:.2f}")
+                                            logger.info(f"      • Balance Delta: ${balance_delta:.2f}")
+                                            logger.info(f"      • Balance: ${balance_before:.2f} → ${balance_after:.2f}")
+                                            
+                                            exit_success = True
                                             # Track the exit
                                             if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                 active_broker.position_tracker.track_exit(symbol, quantity)
                                         else:
-                                            error_msg = result.get('error', result.get('message', 'Unknown')) if result else 'No response'
-                                            logger.error(f"   ❌ {symbol} sell failed: {error_msg}")
+                                            error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                            logger.error(f"   ❌ ORDER REJECTED: {error_msg}")
+                                            logger.error(f"      • Symbol: {symbol}")
+                                            logger.error(f"      • Side: sell")
+                                            logger.error(f"      • Quantity: {quantity:.8f}")
+                                            logger.error(f"      • Reason: Primary stop-loss")
                                     except Exception as sell_err:
-                                        logger.error(f"   ❌ {symbol} exception during sell: {sell_err}")
+                                        logger.error(f"   ❌ ORDER EXCEPTION: {sell_err}")
+                                        logger.error(f"      • Exception type: {type(sell_err).__name__}")
+                                    
                                     # Skip ALL remaining logic for this position
+                                    continue
+                                
+                                # TIER 2: EMERGENCY MICRO-STOP (Logic failure prevention)
+                                # This is NOT a trading stop - it's a failsafe to prevent logic failures
+                                # Examples: imported positions, calculation errors, data corruption
+                                # Note: This should RARELY trigger - Tier 1 should catch most losses
+                                # Only triggers for losses that somehow bypassed Tier 1
+                                # (e.g., imported positions without proper entry price tracking)
+                                if pnl_percent <= micro_stop:
+                                    logger.warning(f"   ⚠️ EMERGENCY MICRO-STOP: {symbol} at {pnl_percent:.2f}% (threshold: {micro_stop*100:.2f}%)")
+                                    logger.warning(f"   💥 TIER 2: Emergency micro-stop to prevent logic failures (not a trading stop)")
+                                    logger.warning(f"   ⚠️  NOTE: Tier 1 was bypassed - possible imported position or logic error")
+                                    
+                                    try:
+                                        result = active_broker.place_market_order(
+                                            symbol=symbol,
+                                            side='sell',
+                                            quantity=quantity,
+                                            size_type='base'
+                                        )
+                                        
+                                        # Enhanced logging
+                                        if result and result.get('status') not in ['error', 'unfilled']:
+                                            order_id = result.get('order_id', 'N/A')
+                                            logger.info(f"   ✅ MICRO-STOP EXECUTED: Order ID {order_id}")
+                                            if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                active_broker.position_tracker.track_exit(symbol, quantity)
+                                        else:
+                                            error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                            logger.error(f"   ❌ MICRO-STOP FAILED: {error_msg}")
+                                    except Exception as sell_err:
+                                        logger.error(f"   ❌ MICRO-STOP EXCEPTION: {sell_err}")
+                                    
                                     continue
                                 
                                 # ✅ FIX #2: LOSING TRADES GET 3 MINUTES MAX (NOT 30)
@@ -1332,19 +1468,15 @@ class TradingStrategy:
                                         })
                                         continue
                                 
-                                # ✅ FIX 2 (UPDATED): GLOBAL FAILSAFE STOP-LOSS (CANNOT BE DISABLED)
-                                # This is capital survival logic - triggers BEFORE all other logic
-                                # Ignores: RSI, EMA, Confidence, Trend, Aggressive exit flags
-                                # UPDATED JAN 19, 2026: Changed from -0.75% to -1.25% for crypto volatility
-                                # Rationale: -0.75% was too tight for Kraken (spread + fees + slippage)
-                                # -1.25% allows for normal market movement while still protecting capital
-                                if pnl_percent <= -1.25:
-                                    logger.warning(f"   🛑 EMERGENCY STOP LOSS HIT: {symbol} at {pnl_percent:.2f}% (threshold: -1.25%)")
-                                    logger.warning(f"   💥 FORCED EXIT MODE - Bypassing all filters and safeguards")
+                                # TIER 3: CATASTROPHIC FAILSAFE (Last resort protection)
+                                # This should NEVER be reached in normal operation
+                                # Only triggers at -5.0% to catch extreme edge cases
+                                if pnl_percent <= catastrophic_stop:
+                                    logger.error(f"   🚨 CATASTROPHIC FAILSAFE TRIGGERED: {symbol} at {pnl_percent:.2f}% (threshold: {catastrophic_stop*100:.1f}%)")
+                                    logger.error(f"   💥 TIER 3: Last resort protection - something went very wrong!")
+                                    logger.error(f"   💥 FORCED EXIT MODE - Bypassing all filters and safeguards")
                                     
-                                    # FIX 5: Use forced exit path - bypasses ALL filters
-                                    # This ensures the position WILL be exited, regardless of:
-                                    # - Rotation mode, position caps, min trade size, fee optimizer, etc.
+                                    # Use forced exit path with retry - bypasses ALL filters
                                     exit_success = False
                                     try:
                                         # Attempt 1: Direct market sell
@@ -1354,18 +1486,20 @@ class TradingStrategy:
                                             quantity=quantity,
                                             size_type='base'
                                         )
+                                        
+                                        # Enhanced logging for catastrophic events
                                         if result and result.get('status') not in ['error', 'unfilled']:
-                                            logger.warning(f"   ✅ FORCED EXIT COMPLETE: {symbol} sold at market")
+                                            order_id = result.get('order_id', 'N/A')
+                                            logger.error(f"   ✅ CATASTROPHIC EXIT COMPLETE: Order ID {order_id}")
                                             exit_success = True
-                                            # Track the exit
                                             if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                 active_broker.position_tracker.track_exit(symbol, quantity)
                                         else:
                                             error_msg = result.get('error', 'Unknown error') if result else 'No response'
-                                            logger.error(f"   ❌ FORCED EXIT ATTEMPT 1 FAILED: {error_msg}")
+                                            logger.error(f"   ❌ CATASTROPHIC EXIT ATTEMPT 1 FAILED: {error_msg}")
                                             
-                                            # Retry once for critical exits
-                                            logger.warning(f"   🔄 Retrying forced exit (attempt 2/2)...")
+                                            # Retry once for catastrophic exits
+                                            logger.error(f"   🔄 Retrying catastrophic exit (attempt 2/2)...")
                                             import time
                                             time.sleep(1)  # Brief pause
                                             
@@ -1376,24 +1510,25 @@ class TradingStrategy:
                                                 size_type='base'
                                             )
                                             if result and result.get('status') not in ['error', 'unfilled']:
-                                                logger.warning(f"   ✅ FORCED EXIT COMPLETE (retry): {symbol} sold at market")
+                                                order_id = result.get('order_id', 'N/A')
+                                                logger.error(f"   ✅ CATASTROPHIC EXIT COMPLETE (retry): Order ID {order_id}")
                                                 exit_success = True
                                                 if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                     active_broker.position_tracker.track_exit(symbol, quantity)
                                             else:
                                                 error_msg = result.get('error', 'Unknown error') if result else 'No response'
-                                                logger.error(f"   ❌ FORCED EXIT RETRY FAILED: {error_msg}")
+                                                logger.error(f"   ❌ CATASTROPHIC EXIT RETRY FAILED: {error_msg}")
                                     except Exception as emergency_err:
-                                        logger.error(f"   ❌ FORCED EXIT EXCEPTION: {symbol} - {emergency_err}")
+                                        logger.error(f"   ❌ CATASTROPHIC EXIT EXCEPTION: {symbol} - {emergency_err}")
                                         logger.error(f"   Exception type: {type(emergency_err).__name__}")
                                     
                                     # Log final status
                                     if not exit_success:
-                                        logger.error(f"   🛑 FORCED EXIT FAILED AFTER 2 ATTEMPTS")
+                                        logger.error(f"   🛑 CATASTROPHIC EXIT FAILED AFTER 2 ATTEMPTS")
                                         logger.error(f"   🛑 MANUAL INTERVENTION REQUIRED FOR {symbol}")
                                         logger.error(f"   🛑 Position may still be open - check broker manually")
                                     
-                                    # Skip to next position - emergency exit overrides all other logic
+                                    # Skip to next position - catastrophic exit overrides all other logic
                                     continue
                                 
                                 # STEPPED PROFIT TAKING - Exit portions at profit targets
