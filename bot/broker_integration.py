@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import logging
 import threading
+import traceback
 
 # Import global Kraken nonce manager (FINAL FIX)
 try:
@@ -26,6 +27,7 @@ except ImportError:
         get_kraken_api_lock = None
 
 logger = logging.getLogger("nija.broker")
+
 
 
 class BrokerInterface(ABC):
@@ -733,7 +735,6 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.error(f"❌ ORDER FAILED [kraken] {symbol}: {e}")
             logger.error(f"   Exception type: {type(e).__name__}")
             logger.error(f"   Side: {side}, Size: {size}")
-            import traceback
             logger.error(f"   Traceback: {traceback.format_exc()}")
             
             return {

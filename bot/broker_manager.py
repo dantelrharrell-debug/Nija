@@ -2749,7 +2749,6 @@ class CoinbaseBroker(BaseBroker):
                 # Don't fail the trade if signal emission fails
                 logger.warning(f"   ⚠️ Trade signal emission failed: {signal_err}")
                 logger.warning(f"   ⚠️ User accounts will NOT copy this trade!")
-                import traceback
                 logger.warning(f"   Traceback: {traceback.format_exc()}")
             
             return {

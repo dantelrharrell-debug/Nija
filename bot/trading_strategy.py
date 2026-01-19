@@ -152,6 +152,12 @@ STOP_LOSS_THRESHOLD = -0.01  # Exit at ANY loss (ULTRA-AGGRESSIVE - immediate ex
 STOP_LOSS_EMERGENCY = -5.0  # EMERGENCY exit at -5% loss (FAILSAFE - should never reach this)
 STOP_LOSS_WARNING = -0.01  # Same as threshold - warn immediately on ANY loss
 
+# Auto-import safety default constants (FIX #1 - Jan 19, 2026)
+# When auto-importing orphaned positions without real entry price, use safety default
+# This creates immediate negative P&L to flag position as losing for aggressive exit
+SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than current price
+                                          # Creates -0.99% immediate P&L, flagging as loser
+
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Updated Dec 30, 2025: Lowered minimums to allow very small account trading
 # ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to fees (~1.4% round-trip)
@@ -1285,27 +1291,6 @@ class TradingStrategy:
                                     # Skip to next position - emergency exit overrides all other logic
                                     continue
                                 
-                                # CRITICAL FIX (Jan 19, 2026): IMMEDIATE EXIT FOR ALL LOSING TRADES
-                                # User requirement: "all losing trades should and need to be sold immediately"
-                                # NIJA is for PROFIT, not losses - exit ANY losing position IMMEDIATELY
-                                # No waiting period, no grace time - if P&L < 0%, SELL NOW
-                                if pnl_percent < 0:
-                                    # Position is losing - EXIT IMMEDIATELY regardless of time held
-                                    logger.warning(f"   🚨 LOSING TRADE DETECTED: {symbol} at {pnl_percent:.2f}%")
-                                    logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
-                                    
-                                    # Log position age if available for audit trail
-                                    if entry_time_available:
-                                        position_age_minutes = position_age_hours * MINUTES_PER_HOUR
-                                        logger.warning(f"      Position held for {position_age_minutes:.1f} minutes")
-                                    
-                                    positions_to_exit.append({
-                                        'symbol': symbol,
-                                        'quantity': quantity,
-                                        'reason': f'IMMEDIATE LOSS EXIT (P&L {pnl_percent:.2f}%)'
-                                    })
-                                    continue
-                                
                                 # STEPPED PROFIT TAKING - Exit portions at profit targets
                                 # This locks in gains and frees capital for new opportunities
                                 # Check targets from highest to lowest
@@ -1378,10 +1363,10 @@ class TradingStrategy:
                         
                         # If real entry cannot be fetched, use safety default
                         if not real_entry_price or real_entry_price <= 0:
-                            # SAFETY DEFAULT: Assume entry was 1% higher than current
+                            # SAFETY DEFAULT: Assume entry was higher than current by multiplier
                             # This creates immediate negative P&L to trigger aggressive exits
-                            real_entry_price = current_price * 1.01
-                            logger.warning(f"   ⚠️ Using safety default entry price: ${real_entry_price:.2f} (current + 1%)")
+                            real_entry_price = current_price * SAFETY_DEFAULT_ENTRY_MULTIPLIER
+                            logger.warning(f"   ⚠️ Using safety default entry price: ${real_entry_price:.2f} (current * {SAFETY_DEFAULT_ENTRY_MULTIPLIER})")
                             logger.warning(f"   🔴 This position will be flagged as losing and exited aggressively")
                         
                         if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
