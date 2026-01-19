@@ -286,12 +286,15 @@ class MultiAccountBrokerManager:
         
         # Need to fetch fresh balance from API
         # For Kraken, add delay between sequential calls to prevent rate limiting
+        # NOTE: time.sleep() is intentional (Railway Golden Rule #3)
+        # Kraken requires sequential API calls with delay to prevent nonce conflicts
+        # This blocking operation is necessary for Railway deployment stability
         if broker_type == BrokerType.KRAKEN:
             time_since_last_call = current_time - self._last_kraken_balance_call
             if time_since_last_call < self.KRAKEN_BALANCE_CALL_DELAY:
                 delay = self.KRAKEN_BALANCE_CALL_DELAY - time_since_last_call
                 logger.debug(f"Kraken rate limit: waiting {delay:.2f}s before balance call")
-                time.sleep(delay)
+                time.sleep(delay)  # Intentional blocking for Kraken rate limiting
             
             self._last_kraken_balance_call = time.time()
         

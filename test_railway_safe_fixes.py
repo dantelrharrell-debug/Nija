@@ -10,8 +10,18 @@ Tests the three critical fixes:
 """
 
 import sys
+import os
 import time
+import subprocess
 from unittest.mock import Mock, MagicMock
+
+# Get repository root directory dynamically
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = SCRIPT_DIR
+BOT_DIR = os.path.join(REPO_ROOT, 'bot')
+TRADING_STRATEGY_PATH = os.path.join(BOT_DIR, 'trading_strategy.py')
+KRAKEN_COPY_TRADING_PATH = os.path.join(BOT_DIR, 'kraken_copy_trading.py')
+PROCFILE_PATH = os.path.join(REPO_ROOT, 'Procfile')
 
 # Test 1: Balance caching
 def test_balance_caching():
@@ -111,7 +121,7 @@ def test_stop_loss_priority():
     
     try:
         # Read the trading_strategy.py file
-        with open('/home/runner/work/Nija/Nija/bot/trading_strategy.py', 'r') as f:
+        with open(TRADING_STRATEGY_PATH, 'r') as f:
             content = f.read()
         
         # Find the position management section
@@ -156,12 +166,9 @@ def test_railway_safe_practices():
     print("="*70)
     
     try:
-        import os
-        import subprocess
-        
         # Check 1: No Docker usage inside app
         result = subprocess.run(
-            ['grep', '-r', 'docker', '/home/runner/work/Nija/Nija/bot', '--include=*.py'],
+            ['grep', '-r', 'docker', BOT_DIR, '--include=*.py'],
             capture_output=True,
             text=True
         )
@@ -170,20 +177,20 @@ def test_railway_safe_practices():
         print("✅ No Docker usage inside app")
         
         # Check 2: Single process (Procfile)
-        with open('/home/runner/work/Nija/Nija/Procfile', 'r') as f:
+        with open(PROCFILE_PATH, 'r') as f:
             procfile = f.read()
         assert 'bash start.sh' in procfile, "Procfile doesn't use start.sh"
         assert procfile.count('web:') == 1, "Multiple web processes defined"
         print("✅ Single process configuration")
         
         # Check 3: Position re-sync on startup
-        with open('/home/runner/work/Nija/Nija/bot/trading_strategy.py', 'r') as f:
+        with open(TRADING_STRATEGY_PATH, 'r') as f:
             strategy_content = f.read()
         assert 'sync_with_broker' in strategy_content, "Missing position sync"
         print("✅ Position re-sync on startup present")
         
         # Check 4: Copy trading is in-memory
-        with open('/home/runner/work/Nija/Nija/bot/kraken_copy_trading.py', 'r') as f:
+        with open(KRAKEN_COPY_TRADING_PATH, 'r') as f:
             copy_content = f.read()
         assert 'container' not in copy_content.lower(), "Copy trading uses containers"
         print("✅ Copy trading uses in-memory mirror")

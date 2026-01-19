@@ -1412,6 +1412,10 @@ class TradingStrategy:
                                         # CRITICAL FIX (Jan 19, 2026): Add time-based exits AFTER stop-loss checks
                                         # Railway Golden Rule #5: Stop-loss > time exit (always)
                                         # Only check time-based exits if stop-loss didn't trigger
+                                        
+                                        # Common holding message (avoid duplication)
+                                        holding_msg = f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)"
+                                        
                                         if entry_time_available:
                                             # EMERGENCY TIME-BASED EXIT: Force exit ALL positions after 12 hours (FAILSAFE)
                                             # This is a last-resort failsafe for profitable positions that aren't hitting targets
@@ -1433,11 +1437,11 @@ class TradingStrategy:
                                                 })
                                             elif position_age_hours >= STALE_POSITION_WARNING_HOURS:
                                                 logger.info(f"   ⚠️ Position aging: {symbol} held for {position_age_hours:.1f} hours")
-                                                logger.info(f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)")
+                                                logger.info(holding_msg)
                                             else:
-                                                logger.info(f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)")
+                                                logger.info(holding_msg)
                                         else:
-                                            logger.info(f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)")
+                                            logger.info(holding_msg)
                                     continue  # Continue to next position check
                                 
                                 # If we got here via break, skip remaining checks
