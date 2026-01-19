@@ -169,12 +169,31 @@ def test_edge_cases():
     
     for position_age_minutes, pnl_percent, description in test_cases:
         is_losing = pnl_percent < 0
-        should_warn = is_losing and position_age_minutes >= LOSING_POSITION_WARNING_MINUTES
-        should_exit = is_losing and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
+        actual_warn = is_losing and position_age_minutes >= LOSING_POSITION_WARNING_MINUTES
+        actual_exit = is_losing and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
         
-        print(f"✅ {description}")
-        print(f"   Age: {position_age_minutes:.1f}min, P&L: {pnl_percent:+.2f}%")
-        print(f"   Warn: {should_warn}, Exit: {should_exit}")
+        # Validate expected behavior for edge cases
+        if position_age_minutes < LOSING_POSITION_WARNING_MINUTES:
+            expected_warn = False
+            expected_exit = False
+        elif position_age_minutes < MAX_LOSING_POSITION_HOLD_MINUTES:
+            expected_warn = True
+            expected_exit = False
+        else:
+            expected_warn = True
+            expected_exit = True
+        
+        # Check if actual matches expected
+        if actual_warn == expected_warn and actual_exit == expected_exit:
+            print(f"✅ {description}")
+            print(f"   Age: {position_age_minutes:.1f}min, P&L: {pnl_percent:+.2f}%")
+            print(f"   Warn: {actual_warn}, Exit: {actual_exit}")
+        else:
+            print(f"❌ {description}")
+            print(f"   Age: {position_age_minutes:.1f}min, P&L: {pnl_percent:+.2f}%")
+            print(f"   Expected - Warn: {expected_warn}, Exit: {expected_exit}")
+            print(f"   Actual   - Warn: {actual_warn}, Exit: {actual_exit}")
+            all_passed = False
         print()
     
     return all_passed

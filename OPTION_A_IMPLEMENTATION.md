@@ -42,7 +42,7 @@ Time 30m →  🚨 FORCE EXIT: "LOSING TRADE TIME EXIT - selling immediately!"
 ### Benefits
 
 - **Limits Capital Lockup**: Capital is freed within 30 minutes vs 8 hours
-- **Smaller Losses**: Average loss reduced from -1.5% to -0.3% to -0.5%
+- **Smaller Losses**: Average loss reduced from -1.5% to between -0.3% and -0.5% (depending on market movement during the 30-minute window)
 - **More Opportunities**: 5x more trading opportunities per day
 - **Profitable Trades Unaffected**: Positions with P&L >= 0% can run up to 8 hours
 

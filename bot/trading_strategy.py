@@ -66,6 +66,10 @@ MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 MAX_LOSING_POSITION_HOLD_MINUTES = 30  # Exit losing trades after 30 minutes MAX
 LOSING_POSITION_WARNING_MINUTES = 5    # Warn after 5 minutes of being in a losing trade
 
+# Validate that warning comes before exit (catch configuration errors early)
+assert LOSING_POSITION_WARNING_MINUTES < MAX_LOSING_POSITION_HOLD_MINUTES, \
+    f"LOSING_POSITION_WARNING_MINUTES ({LOSING_POSITION_WARNING_MINUTES}) must be less than MAX_LOSING_POSITION_HOLD_MINUTES ({MAX_LOSING_POSITION_HOLD_MINUTES})"
+
 # Configuration constants
 # CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
 # Coinbase has strict rate limits (~10 req/s burst, lower sustained)
