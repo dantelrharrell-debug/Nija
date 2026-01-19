@@ -365,6 +365,8 @@ def initialize_kraken_users() -> int:
         return initialized_count
         
     except Exception as e:
+        # Reset flag on failure to allow retry
+        _USERS_INITIALIZED = False
         logger.error(f"❌ Failed to initialize Kraken users: {e}")
         return 0
 
