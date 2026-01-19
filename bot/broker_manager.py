@@ -2724,8 +2724,11 @@ class CoinbaseBroker(BaseBroker):
                     # Determine broker name
                     broker_name = self.broker_type.value.lower() if hasattr(self, 'broker_type') else 'coinbase'
                     
+                    # ✅ FIX 5: VERIFY COPY ENGINE SIGNAL EMISSION
+                    logger.info("📡 Emitting trade signal to copy engine")
+                    
                     # Emit signal
-                    emit_trade_signal(
+                    signal_emitted = emit_trade_signal(
                         broker=broker_name,
                         symbol=symbol,
                         side=side,
@@ -2735,9 +2738,19 @@ class CoinbaseBroker(BaseBroker):
                         order_id=order_dict.get('order_id', client_order_id),
                         master_balance=master_balance
                     )
+                    
+                    # ✅ FIX 5: CONFIRM SIGNAL EMISSION STATUS
+                    if signal_emitted:
+                        logger.info(f"✅ Trade signal emitted successfully for {symbol} {side}")
+                    else:
+                        logger.error(f"❌ Trade signal emission FAILED for {symbol} {side}")
+                        logger.error("   ⚠️ User accounts will NOT copy this trade!")
             except Exception as signal_err:
                 # Don't fail the trade if signal emission fails
                 logger.warning(f"   ⚠️ Trade signal emission failed: {signal_err}")
+                logger.warning(f"   ⚠️ User accounts will NOT copy this trade!")
+                import traceback
+                logger.warning(f"   Traceback: {traceback.format_exc()}")
             
             return {
                 "status": "filled", 

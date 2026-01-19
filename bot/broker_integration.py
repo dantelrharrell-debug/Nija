@@ -162,6 +162,24 @@ class BrokerInterface(ABC):
             dict: Order status details
         """
         pass
+    
+    def get_real_entry_price(self, symbol: str) -> Optional[float]:
+        """
+        ✅ FIX 1: Attempt to get real entry price from broker order history.
+        
+        This is an optional method that brokers can implement to provide
+        real entry prices from their order history. If not available,
+        returns None (caller should use fallback logic).
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            Real entry price if available, None otherwise
+        """
+        # Default implementation - brokers can override
+        return None
+
 
 
 class CoinbaseBrokerAdapter(BrokerInterface):
@@ -640,6 +658,25 @@ class KrakenBrokerAdapter(BrokerInterface):
             if not self.api:
                 return None
             
+            # ✅ FIX 3: HARD SYMBOL ALLOWLIST FOR KRAKEN
+            # Kraken only supports */USD and */USDT pairs
+            # Skip unsupported symbols (BUSD, etc.) to prevent silent order rejection
+            if not (symbol.endswith('/USD') or symbol.endswith('/USDT') or 
+                    symbol.endswith('-USD') or symbol.endswith('-USDT')):
+                logger.info(f"⏭️ Kraken skip unsupported symbol {symbol}")
+                logger.info(f"   💡 Kraken only supports */USD and */USDT pairs")
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': 0.0,
+                    'status': 'error',
+                    'error': 'UNSUPPORTED_SYMBOL',
+                    'message': 'Kraken only supports */USD and */USDT pairs',
+                    'timestamp': datetime.now()
+                }
+            
             # Convert symbol format
             kraken_symbol = symbol.replace('-', '').upper()
             if kraken_symbol.startswith('BTC'):
@@ -656,6 +693,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Use helper method for serialized API call
             result = self._kraken_api_call('AddOrder', order_params)
             
+            # ✅ FIX 4: FORCE LOG ALL ORDER FAILURES
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
@@ -673,13 +711,41 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'timestamp': datetime.now()
                 }
             
+            # Order failed - log comprehensive error details
             error_msg = result.get('error', ['Unknown error'])[0] if result else 'No response'
-            logger.error(f"Kraken order failed: {error_msg}")
-            return None
+            logger.error(f"❌ ORDER FAILED [kraken] {symbol}: {error_msg}")
+            logger.error(f"   Side: {side}, Size: {size}, Type: {size_type}")
+            logger.error(f"   Full result: {result}")
+            
+            return {
+                'order_id': None,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'filled_price': 0.0,
+                'status': 'error',
+                'error': error_msg,
+                'timestamp': datetime.now()
+            }
             
         except Exception as e:
-            logger.error(f"Kraken order error: {e}")
-            return None
+            # ✅ FIX 4: LOG ALL ORDER EXCEPTIONS
+            logger.error(f"❌ ORDER FAILED [kraken] {symbol}: {e}")
+            logger.error(f"   Exception type: {type(e).__name__}")
+            logger.error(f"   Side: {side}, Size: {size}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+            
+            return {
+                'order_id': None,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'filled_price': 0.0,
+                'status': 'error',
+                'error': str(e),
+                'timestamp': datetime.now()
+            }
     
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote') -> Optional[Dict]:
@@ -814,6 +880,57 @@ class KrakenBrokerAdapter(BrokerInterface):
             
         except Exception as e:
             logger.error(f"Kraken get order status error: {e}")
+            return None
+    
+    def get_real_entry_price(self, symbol: str) -> Optional[float]:
+        """
+        ✅ FIX 1: Try to get real entry price from Kraken order history.
+        
+        This method attempts to fetch the actual entry price from the broker's
+        order history. If not available, returns None (caller should use fallback).
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            Real entry price if available, None otherwise
+        """
+        try:
+            if not self.api:
+                return None
+            
+            # Convert symbol format to Kraken format
+            kraken_symbol = symbol.replace('-', '').upper()
+            if kraken_symbol.startswith('BTC'):
+                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            
+            # Query closed orders (last 50)
+            # Use helper method for serialized API call
+            result = self._kraken_api_call('ClosedOrders', {'trades': True})
+            
+            if result and 'result' in result and 'closed' in result['result']:
+                closed_orders = result['result']['closed']
+                
+                # Find most recent buy order for this symbol
+                for order_id, order_data in sorted(
+                    closed_orders.items(),
+                    key=lambda x: x[1].get('opentm', 0),
+                    reverse=True  # Most recent first
+                ):
+                    if order_data.get('descr', {}).get('pair') == kraken_symbol:
+                        if order_data.get('descr', {}).get('type') == 'buy':
+                            # Found a buy order - extract average price
+                            avg_price = float(order_data.get('price', 0))
+                            if avg_price > 0:
+                                logger.debug(f"Found real entry price for {symbol}: ${avg_price:.2f}")
+                                return avg_price
+            
+            # No entry price found in recent orders
+            logger.debug(f"No real entry price found for {symbol} in Kraken order history")
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Error fetching real entry price for {symbol}: {e}")
             return None
 
 
