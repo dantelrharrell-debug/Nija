@@ -1992,11 +1992,13 @@ class TradingStrategy:
                                 # MICRO TRADE PREVENTION: Block positions under $1 minimum
                                 if position_size < MIN_POSITION_SIZE_USD:
                                     filter_stats['position_too_small'] += 1
-                                    logger.warning(f"   🚫 MICRO TRADE BLOCKED: {symbol} position size ${position_size:.2f} < ${MIN_POSITION_SIZE_USD} minimum")
-                                    logger.warning(f"      💡 Reason: Extremely small positions face severe fee impact (~1.4% round-trip)")
+                                    # FIX #3 (Jan 19, 2026): Explicit trade rejection logging
+                                    logger.info(f"   ❌ Entry rejected for {symbol}")
+                                    logger.info(f"      Reason: Position size ${position_size:.2f} < ${MIN_POSITION_SIZE_USD} minimum")
+                                    logger.info(f"      💡 Small positions face severe fee impact (~1.4% round-trip)")
                                     # Calculate break-even % needed: (fee_dollars / position_size) * 100
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
-                                    logger.warning(f"      📊 Need {breakeven_pct:.1f}% gain just to break even on fees")
+                                    logger.info(f"      📊 Would need {breakeven_pct:.1f}% gain just to break even on fees")
                                     continue
                                 
                                 # Warn if position is very small but allowed
