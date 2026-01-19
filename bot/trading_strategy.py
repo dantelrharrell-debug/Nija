@@ -1351,12 +1351,22 @@ class TradingStrategy:
                                         })
                                         continue
                                 
-                                # ✅ FIX 2: GLOBAL FAILSAFE STOP-LOSS (CANNOT BE DISABLED)
+                                # ✅ FIX 2 (UPDATED): GLOBAL FAILSAFE STOP-LOSS (CANNOT BE DISABLED)
                                 # This is capital survival logic - triggers BEFORE all other logic
                                 # Ignores: RSI, EMA, Confidence, Trend, Aggressive exit flags
-                                if pnl_percent <= -0.75:
-                                    logger.warning(f"   🛑 EMERGENCY STOP LOSS: {symbol} PnL={pnl_percent:.2f}%")
+                                # UPDATED JAN 19, 2026: Changed from -0.75% to -1.25% for crypto volatility
+                                # Rationale: -0.75% was too tight for Kraken (spread + fees + slippage)
+                                # -1.25% allows for normal market movement while still protecting capital
+                                if pnl_percent <= -1.25:
+                                    logger.warning(f"   🛑 EMERGENCY STOP LOSS HIT: {symbol} at {pnl_percent:.2f}% (threshold: -1.25%)")
+                                    logger.warning(f"   💥 FORCED EXIT MODE - Bypassing all filters and safeguards")
+                                    
+                                    # FIX 5: Use forced exit path - bypasses ALL filters
+                                    # This ensures the position WILL be exited, regardless of:
+                                    # - Rotation mode, position caps, min trade size, fee optimizer, etc.
+                                    exit_success = False
                                     try:
+                                        # Attempt 1: Direct market sell
                                         result = active_broker.place_market_order(
                                             symbol=symbol,
                                             side='sell',
@@ -1364,14 +1374,44 @@ class TradingStrategy:
                                             size_type='base'
                                         )
                                         if result and result.get('status') not in ['error', 'unfilled']:
-                                            logger.warning(f"   ✅ EMERGENCY EXIT COMPLETE: {symbol} sold immediately")
+                                            logger.warning(f"   ✅ FORCED EXIT COMPLETE: {symbol} sold at market")
+                                            exit_success = True
                                             # Track the exit
                                             if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                 active_broker.position_tracker.track_exit(symbol, quantity)
                                         else:
-                                            logger.error(f"   ❌ EMERGENCY EXIT FAILED: {symbol} - {result}")
+                                            error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                            logger.error(f"   ❌ FORCED EXIT ATTEMPT 1 FAILED: {error_msg}")
+                                            
+                                            # Retry once for critical exits
+                                            logger.warning(f"   🔄 Retrying forced exit (attempt 2/2)...")
+                                            import time
+                                            time.sleep(1)  # Brief pause
+                                            
+                                            result = active_broker.place_market_order(
+                                                symbol=symbol,
+                                                side='sell',
+                                                quantity=quantity,
+                                                size_type='base'
+                                            )
+                                            if result and result.get('status') not in ['error', 'unfilled']:
+                                                logger.warning(f"   ✅ FORCED EXIT COMPLETE (retry): {symbol} sold at market")
+                                                exit_success = True
+                                                if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                    active_broker.position_tracker.track_exit(symbol, quantity)
+                                            else:
+                                                error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                logger.error(f"   ❌ FORCED EXIT RETRY FAILED: {error_msg}")
                                     except Exception as emergency_err:
-                                        logger.error(f"   ❌ EMERGENCY EXIT ERROR: {symbol} - {emergency_err}")
+                                        logger.error(f"   ❌ FORCED EXIT EXCEPTION: {symbol} - {emergency_err}")
+                                        logger.error(f"   Exception type: {type(emergency_err).__name__}")
+                                    
+                                    # Log final status
+                                    if not exit_success:
+                                        logger.error(f"   🛑 FORCED EXIT FAILED AFTER 2 ATTEMPTS")
+                                        logger.error(f"   🛑 MANUAL INTERVENTION REQUIRED FOR {symbol}")
+                                        logger.error(f"   🛑 Position may still be open - check broker manually")
+                                    
                                     # Skip to next position - emergency exit overrides all other logic
                                     continue
                                 
@@ -1958,6 +1998,25 @@ class TradingStrategy:
                     
                     # Use rotation to scan different markets each cycle
                     markets_to_scan = self._get_rotated_markets(all_products)
+                    
+                    # FIX 6: BROKER SYMBOL NORMALIZATION - Filter invalid symbols BEFORE analysis
+                    # This prevents wasting CPU and API calls on symbols the broker doesn't support
+                    # Example: Kraken only supports */USD and */USDT, so skip ETH-BUSD, BTC-EUR, etc.
+                    broker_name = self._get_broker_name(active_broker)
+                    original_count = len(markets_to_scan)
+                    
+                    if broker_name == 'kraken':
+                        # Kraken only supports */USD and */USDT pairs
+                        markets_to_scan = [
+                            sym for sym in markets_to_scan 
+                            if sym.endswith('/USD') or sym.endswith('/USDT') or 
+                               sym.endswith('-USD') or sym.endswith('-USDT')
+                        ]
+                        filtered_count = original_count - len(markets_to_scan)
+                        if filtered_count > 0:
+                            logger.info(f"   🔍 Kraken symbol filter: {filtered_count} unsupported symbols removed")
+                            logger.info(f"      (Kraken only supports */USD and */USDT pairs)")
+                    
                     scan_limit = len(markets_to_scan)
                     logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
                     

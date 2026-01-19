@@ -542,6 +542,91 @@ class ExecutionEngine:
             # On error, accept the trade to avoid blocking legitimate entries
             return True
     
+    def force_exit_position(self, broker_client, symbol: str, quantity: float, 
+                           reason: str = "Emergency exit", max_retries: int = 1) -> bool:
+        """
+        FIX 5: FORCED EXIT PATH - Emergency position exit that bypasses ALL filters
+        
+        This is the nuclear option for when stop-loss is hit and position MUST be exited.
+        It ignores:
+        - Rotation mode restrictions
+        - Position caps
+        - Minimum trade size requirements  
+        - Fee optimizer delays
+        - All other safety checks and filters
+        
+        The ONLY goal is to exit the position immediately using a direct market sell.
+        
+        Args:
+            broker_client: Broker instance to use for the order
+            symbol: Trading symbol to exit
+            quantity: Quantity to sell (in base currency)
+            reason: Reason for forced exit (logged)
+            max_retries: Maximum retry attempts (default: 1, don't retry emergency exits)
+        
+        Returns:
+            True if exit successful, False otherwise
+        """
+        try:
+            logger.warning(f"🚨 FORCED EXIT TRIGGERED: {symbol}")
+            logger.warning(f"   Reason: {reason}")
+            logger.warning(f"   Quantity: {quantity}")
+            logger.warning(f"   ⚠️ BYPASSING ALL FILTERS AND SAFEGUARDS")
+            
+            # Attempt 1: Direct market sell
+            result = broker_client.place_market_order(
+                symbol=symbol,
+                side='sell',
+                quantity=quantity,
+                size_type='base'
+            )
+            
+            # Check if successful
+            if result and result.get('status') not in ['error', 'unfilled']:
+                logger.warning(f"   ✅ FORCED EXIT COMPLETE: {symbol} sold at market")
+                logger.warning(f"   Order ID: {result.get('order_id', 'N/A')}")
+                return True
+            
+            # First attempt failed
+            error_msg = result.get('error', 'Unknown error') if result else 'No response'
+            logger.error(f"   ❌ FORCED EXIT ATTEMPT 1 FAILED: {error_msg}")
+            
+            # Retry if allowed
+            if max_retries > 0:
+                logger.warning(f"   🔄 Retrying forced exit (attempt 2/{max_retries + 1})...")
+                import time
+                time.sleep(1)  # Brief pause before retry
+                
+                result = broker_client.place_market_order(
+                    symbol=symbol,
+                    side='sell',
+                    quantity=quantity,
+                    size_type='base'
+                )
+                
+                if result and result.get('status') not in ['error', 'unfilled']:
+                    logger.warning(f"   ✅ FORCED EXIT COMPLETE (retry): {symbol} sold at market")
+                    logger.warning(f"   Order ID: {result.get('order_id', 'N/A')}")
+                    return True
+                else:
+                    error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                    logger.error(f"   ❌ FORCED EXIT RETRY FAILED: {error_msg}")
+            
+            # All attempts failed
+            logger.error(f"   🛑 FORCED EXIT FAILED AFTER {max_retries + 1} ATTEMPTS")
+            logger.error(f"   🛑 MANUAL INTERVENTION REQUIRED FOR {symbol}")
+            logger.error(f"   🛑 Position may still be open - check broker manually")
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"   ❌ FORCED EXIT EXCEPTION: {symbol}")
+            logger.error(f"   Exception: {type(e).__name__}: {e}")
+            logger.error(f"   🛑 MANUAL INTERVENTION REQUIRED")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+            return False
+    
     def _close_bad_entry(self, symbol: str, side: str, entry_price: float, 
                         loss_pct: float, position_size: float) -> None:
         """
