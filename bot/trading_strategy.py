@@ -910,6 +910,31 @@ class TradingStrategy:
         """
         return broker.broker_type.value if broker and hasattr(broker, 'broker_type') else 'unknown'
     
+    def _is_zombie_position(self, pnl_percent: float, entry_time_available: bool, position_age_hours: float) -> bool:
+        """
+        Detect if a position is a "zombie" - stuck at ~0% P&L for too long.
+        
+        Zombie positions occur when auto-import masks a losing trade by setting
+        entry_price = current_price, causing P&L to reset to 0%. These positions
+        never show as losing and can hold indefinitely, tying up capital.
+        
+        Args:
+            pnl_percent: Current P&L percentage
+            entry_time_available: Whether position has entry time tracked
+            position_age_hours: Hours since position entry
+            
+        Returns:
+            bool: True if position is a zombie (should be exited)
+        """
+        # Check if P&L is stuck near zero
+        pnl_stuck_at_zero = abs(pnl_percent) < ZOMBIE_PNL_THRESHOLD
+        
+        # Check if position is old enough to be suspicious
+        old_enough = entry_time_available and position_age_hours >= ZOMBIE_POSITION_HOURS
+        
+        # Zombie if both conditions are true
+        return pnl_stuck_at_zero and old_enough
+    
     def _get_rotated_markets(self, all_markets: list) -> list:
         """
         Get next batch of markets to scan using rotation strategy.
@@ -1328,13 +1353,12 @@ class TradingStrategy:
                                     elif pnl_percent <= STOP_LOSS_WARNING:
                                         logger.warning(f"   ⚠️ Approaching stop loss: {symbol} at {pnl_percent:.2f}%")
                                         # Don't exit yet, but log it
-                                    elif abs(pnl_percent) < ZOMBIE_PNL_THRESHOLD and entry_time_available and position_age_hours >= ZOMBIE_POSITION_HOURS:
-                                        # ZOMBIE POSITION DETECTION: If P&L is near zero after 1+ hour,
-                                        # this is likely a position that was auto-imported and is masking a loss
-                                        # Real positions should move away from 0% within an hour
-                                        logger.warning(f"   🧟 ZOMBIE POSITION DETECTED: {symbol} at {pnl_percent:+.2f}% after {position_age_hours:.1f}h")
-                                        logger.warning(f"   🔍 Position stuck at ~0% P&L suggests auto-import masked a losing trade")
-                                        logger.warning(f"   💥 AGGRESSIVE EXIT to prevent indefinite holding of potential loser")
+                                    elif self._is_zombie_position(pnl_percent, entry_time_available, position_age_hours):
+                                        # ZOMBIE POSITION DETECTION: Position stuck at ~0% P&L for too long
+                                        # This catches auto-imported positions that mask actual losses
+                                        logger.warning(f"   🧟 ZOMBIE POSITION DETECTED: {symbol} at {pnl_percent:+.2f}% after {position_age_hours:.1f}h | "
+                                                      f"Position stuck at ~0% P&L suggests auto-import masked a losing trade | "
+                                                      f"AGGRESSIVE EXIT to prevent indefinite holding of potential loser")
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
@@ -1375,9 +1399,9 @@ class TradingStrategy:
                                 )
                                 
                                 if auto_import_success:
-                                    logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0)")
-                                    logger.info(f"      ⚠️  WARNING: This position may have been losing before auto-import!")
-                                    logger.info(f"      Position now tracked - will evaluate exit in next cycle")
+                                    logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0) | "
+                                              f"⚠️  WARNING: This position may have been losing before auto-import! | "
+                                              f"Position now tracked - will evaluate exit in next cycle")
                                     
                                     # Mark that this position was just imported - skip exits this cycle
                                     just_auto_imported = True
