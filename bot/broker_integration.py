@@ -562,17 +562,31 @@ class KrakenBrokerAdapter(BrokerInterface):
             return False
     
     def get_account_balance(self) -> Dict[str, float]:
-        """Get Kraken account balance."""
+        """Get Kraken account balance with proper error handling."""
         try:
             if not self.api:
                 return {
                     'total_balance': 0.0,
                     'available_balance': 0.0,
-                    'currency': 'USD'
+                    'currency': 'USD',
+                    'error': True,
+                    'error_message': 'API not connected'
                 }
             
             # Use helper method for serialized API call
             balance = self._kraken_api_call('Balance')
+            
+            # Check for API errors
+            if balance and 'error' in balance and balance['error']:
+                error_msgs = ', '.join(balance['error'])
+                logger.error(f"Kraken API error fetching balance: {error_msgs}")
+                return {
+                    'total_balance': 0.0,
+                    'available_balance': 0.0,
+                    'currency': 'USD',
+                    'error': True,
+                    'error_message': f'API error: {error_msgs}'
+                }
             
             if balance and 'result' in balance:
                 result = balance['result']
@@ -585,13 +599,17 @@ class KrakenBrokerAdapter(BrokerInterface):
                 return {
                     'total_balance': total,
                     'available_balance': total,
-                    'currency': 'USD'
+                    'currency': 'USD',
+                    'error': False
                 }
             
+            # Unexpected response format
             return {
                 'total_balance': 0.0,
                 'available_balance': 0.0,
-                'currency': 'USD'
+                'currency': 'USD',
+                'error': True,
+                'error_message': 'Unexpected API response format'
             }
             
         except Exception as e:
@@ -599,7 +617,9 @@ class KrakenBrokerAdapter(BrokerInterface):
             return {
                 'total_balance': 0.0,
                 'available_balance': 0.0,
-                'currency': 'USD'
+                'currency': 'USD',
+                'error': True,
+                'error_message': str(e)
             }
     
     def get_market_data(self, symbol: str, timeframe: str = '5m',

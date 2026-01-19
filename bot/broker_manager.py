@@ -4082,6 +4082,12 @@ class KrakenBroker(BaseBroker):
         self.api = None
         self.kraken_api = None
         
+        # Balance tracking for fail-closed behavior (Fix 3)
+        # When balance fetch fails, preserve last known balance instead of returning 0
+        self._last_known_balance = None  # Last successful balance fetch
+        self._balance_fetch_errors = 0   # Count of consecutive errors
+        self._is_available = True        # Broker availability flag
+        
         # CRITICAL FIX (Jan 17, 2026): Monotonic nonce with API call serialization
         # 
         # Nonce tracking for guaranteeing strict monotonic increase
@@ -5069,22 +5075,52 @@ class KrakenBroker(BaseBroker):
     
     def get_account_balance(self) -> float:
         """
-        Get USD/USDT balance available for trading.
+        Get USD/USDT balance available for trading with fail-closed behavior.
+        
+        CRITICAL FIX (Fix 3): Fail closed - not "balance = 0"
+        - On error: Return last known balance (if available) instead of 0
+        - Track consecutive errors to mark broker unavailable
+        - Distinguish API errors from actual zero balance
         
         Returns:
             float: Available USD + USDT balance (not including held funds)
+                   Returns last known balance on error (not 0)
         """
         try:
             if not self.api:
-                return 0.0
+                # Not connected - return last known balance if available
+                if self._last_known_balance is not None:
+                    logger.warning(f"⚠️ Kraken API not connected ({self.account_identifier}), using last known balance: ${self._last_known_balance:.2f}")
+                    self._balance_fetch_errors += 1
+                    if self._balance_fetch_errors >= 3:
+                        self._is_available = False
+                        logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                    return self._last_known_balance
+                else:
+                    logger.error(f"❌ Kraken API not connected ({self.account_identifier}) and no last known balance")
+                    self._balance_fetch_errors += 1
+                    self._is_available = False
+                    return 0.0
             
             # Get account balance using serialized API call
             balance = self._kraken_private_call('Balance')
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
-                logger.error(f"Error fetching Kraken balance ({self.account_identifier}): {error_msgs}")
-                return 0.0
+                logger.error(f"❌ Kraken API error fetching balance ({self.account_identifier}): {error_msgs}")
+                
+                # Return last known balance instead of 0
+                self._balance_fetch_errors += 1
+                if self._balance_fetch_errors >= 3:
+                    self._is_available = False
+                    logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                
+                if self._last_known_balance is not None:
+                    logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                    return self._last_known_balance
+                else:
+                    logger.error(f"   ❌ No last known balance available, returning 0")
+                    return 0.0
             
             if balance and 'result' in balance:
                 result = balance['result']
@@ -5121,17 +5157,47 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total + held_amount:.2f}")
                 logger.info("=" * 70)
                 
+                # SUCCESS: Update last known balance and reset error count
+                self._last_known_balance = total
+                self._balance_fetch_errors = 0
+                self._is_available = True
+                
                 return total
+            
+            # Unexpected response - treat as error
+            logger.error(f"❌ Unexpected Kraken API response format ({self.account_identifier})")
+            self._balance_fetch_errors += 1
+            if self._balance_fetch_errors >= 3:
+                self._is_available = False
+            
+            if self._last_known_balance is not None:
+                logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                return self._last_known_balance
             
             return 0.0
             
         except Exception as e:
-            logger.error(f"Error fetching Kraken balance ({self.account_identifier}): {e}")
+            logger.error(f"❌ Exception fetching Kraken balance ({self.account_identifier}): {e}")
+            self._balance_fetch_errors += 1
+            if self._balance_fetch_errors >= 3:
+                self._is_available = False
+                logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+            
+            # Return last known balance instead of 0
+            if self._last_known_balance is not None:
+                logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                return self._last_known_balance
+            
             return 0.0
     
     def get_account_balance_detailed(self) -> dict:
         """
-        Get detailed account balance information including crypto holdings and held funds.
+        Get detailed account balance information with fail-closed behavior.
+        
+        CRITICAL FIX (Fix 3): Fail closed - not "balance = 0"
+        - On error: Include error flag in response
+        - Return last known balance if available
+        - Don't return all zeros on error
         
         Returns detailed balance breakdown for comprehensive fund visibility.
         Matches CoinbaseBroker interface for consistency.
@@ -5146,6 +5212,8 @@ class KrakenBroker(BaseBroker):
                 - total_held: Total held (usd_held + usdt_held)
                 - total_funds: Complete balance (trading_balance + total_held)
                 - crypto: Dictionary of crypto asset balances
+                - error: Boolean indicating if fetch failed
+                - error_message: Error description (if error=True)
         """
         # Default return structure for error cases
         default_balance = {
@@ -5156,20 +5224,24 @@ class KrakenBroker(BaseBroker):
             'usdt_held': 0.0,
             'total_held': 0.0,
             'total_funds': 0.0,
-            'crypto': {}
+            'crypto': {},
+            'error': True,
+            'error_message': 'Unknown error'
         }
         
         try:
             if not self.api:
-                return default_balance.copy()
+                error_msg = 'API not connected'
+                logger.warning(f"⚠️ {error_msg} ({self.account_identifier})")
+                return {**default_balance, 'error_message': error_msg}
             
             # Get account balance using serialized API call
             balance = self._kraken_private_call('Balance')
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
-                logger.error(f"Error fetching Kraken detailed balance ({self.account_identifier}): {error_msgs}")
-                return default_balance.copy()
+                logger.error(f"❌ Kraken API error fetching detailed balance ({self.account_identifier}): {error_msgs}")
+                return {**default_balance, 'error_message': f'API error: {error_msgs}'}
             
             if balance and 'result' in balance:
                 result = balance['result']
@@ -5228,14 +5300,38 @@ class KrakenBroker(BaseBroker):
                     'usdt_held': usdt_held,
                     'total_held': total_held,
                     'total_funds': total_funds,
-                    'crypto': crypto_holdings
+                    'crypto': crypto_holdings,
+                    'error': False
                 }
             
-            return default_balance.copy()
+            # Unexpected response
+            return {**default_balance, 'error_message': 'Unexpected API response format'}
             
         except Exception as e:
-            logger.error(f"Error fetching Kraken detailed balance ({self.account_identifier}): {e}")
-            return default_balance.copy()
+            error_msg = str(e)
+            logger.error(f"❌ Exception fetching Kraken detailed balance ({self.account_identifier}): {error_msg}")
+            return {**default_balance, 'error_message': error_msg}
+    
+    def is_available(self) -> bool:
+        """
+        Check if Kraken broker is available for trading.
+        
+        Returns False if there have been 3+ consecutive balance fetch errors.
+        This prevents trading when the API is not working properly.
+        
+        Returns:
+            bool: True if broker is available, False if unavailable
+        """
+        return self._is_available
+    
+    def get_error_count(self) -> int:
+        """
+        Get the number of consecutive balance fetch errors.
+        
+        Returns:
+            int: Number of consecutive errors
+        """
+        return self._balance_fetch_errors
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """
