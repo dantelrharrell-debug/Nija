@@ -77,27 +77,33 @@ Result: ALL TESTS PASSED
 - Caused by 'NO RED EXIT' rule blocking exits
 
 **Fix Implemented:**
-- Immediate exit on ANY loss (P&L < 0%)
+- Emergency micro-stop to prevent logic failures (not a trading stop)
+- 3-tier stop-loss system for Kraken small balances (Jan 19, 2026)
 - 30-minute rule superseded (Jan 19, 2026)
 
 ---
 
 ## Implementation Details
 
-### Current Exit Logic
+### Current Exit Logic (Updated Jan 19, 2026)
 ```python
-STOP_LOSS_THRESHOLD = -0.01  # Exit at ANY loss (ultra-aggressive)
-STOP_LOSS_EMERGENCY = -5.0   # Emergency failsafe
-STOP_LOSS_WARNING = -0.01    # Warning at same threshold
+# 3-TIER STOP-LOSS SYSTEM
+# Tier 1: Primary trading stop (varies by broker and balance)
+STOP_LOSS_PRIMARY_KRAKEN = -0.008  # -0.8% for Kraken small balances
+# Tier 2: Emergency micro-stop (logic failure prevention)
+STOP_LOSS_MICRO = -0.01  # -1% emergency micro-stop
+# Tier 3: Catastrophic failsafe (last resort)
+STOP_LOSS_EMERGENCY = -5.0   # -5% catastrophic failsafe
 ```
 
-### Exit Behavior
-| Condition | Action | Time Dependency |
-|-----------|--------|-----------------|
-| P&L ≤ -0.01% | EXIT IMMEDIATELY | None |
-| P&L ≤ -5.0% | EMERGENCY EXIT | None |
-| P&L > 0% | Hold for profit target | Up to 8h |
-| Age ≥ 8h | Failsafe exit | All positions |
+### Exit Behavior (3-Tier System)
+| Condition | Action | Time Dependency | Description |
+|-----------|--------|-----------------|-------------|
+| P&L ≤ -0.8% (Kraken) | PRIMARY STOP-LOSS | None | Tier 1: Trading stop for risk management |
+| P&L ≤ -1.0% | MICRO-STOP | None | Tier 2: Logic failure prevention (not trading stop) |
+| P&L ≤ -5.0% | CATASTROPHIC FAILSAFE | None | Tier 3: Last resort protection |
+| P&L > 0% | Hold for profit target | Up to 8h | Normal profit-taking |
+| Age ≥ 8h | Failsafe exit | All positions | Time-based safety |
 | Age ≥ 12h | Emergency exit | All positions |
 
 ---
@@ -188,13 +194,15 @@ Next Cycle (5 minutes later):
 | Date | Implementation | Status |
 |------|---------------|--------|
 | Jan 17, 2026 | 30-minute max hold for losing trades | ❌ Deprecated |
-| Jan 19, 2026 | **Immediate exit on ANY loss** | ✅ **Current** |
+| Jan 19, 2026 (AM) | Emergency micro-stop to prevent logic failures | ⚠️ Replaced |
+| Jan 19, 2026 (PM) | **3-tier stop-loss system (Primary/Micro/Catastrophic)** | ✅ **Current** |
 
 **Why the change:**
 - User requirement: "all losing trades should and need to be sold immediately"
-- 30-minute wait was still too long
-- Capital preservation is higher priority
-- Immediate exit minimizes losses
+- Clarified distinction between trading stops and logic failure prevention
+- 3-tier system provides proper stop-loss for Kraken small balances (-0.6% to -0.8%)
+- Micro-stop (-1.0%) is for logic failures, not trading decisions
+- Catastrophic failsafe (-5.0%) is last resort protection
 
 ---
 
