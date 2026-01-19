@@ -278,20 +278,20 @@ class KrakenAdapter(BrokerAdapter):
         3. Order size meets minimum volume
         4. Precision is appropriate
         """
-        # Normalize symbol
-        normalized_symbol = self.normalize_symbol(intent.symbol)
-        
-        # Check for unsupported pairs
+        # Check for unsupported pairs BEFORE normalization
         for unsupported in self.UNSUPPORTED_QUOTES:
-            if unsupported in normalized_symbol:
+            if unsupported in intent.symbol.upper():
                 return ValidatedOrder(
-                    symbol=normalized_symbol,
+                    symbol=intent.symbol,
                     side=intent.intent_type.value if intent.intent_type != OrderIntent.STOP_LOSS else "sell",
                     quantity=intent.quantity,
                     size_type=intent.size_type,
                     valid=False,
                     error_message=f"Kraken does not support {unsupported} pairs"
                 )
+        
+        # Normalize symbol (this will convert BUSD to USD if needed)
+        normalized_symbol = self.normalize_symbol(intent.symbol)
         
         # If force_execute (stop-loss), bypass size checks
         if intent.force_execute:
