@@ -711,8 +711,10 @@ class KrakenBrokerAdapter(BrokerInterface):
                 if order_id:
                     try:
                         # Give the order a moment to fill
+                        # Configurable delay to balance confirmation accuracy vs execution speed
                         import time
-                        time.sleep(0.5)
+                        order_query_delay = 0.5  # seconds - can be adjusted based on broker response time
+                        time.sleep(order_query_delay)
                         
                         # Query order details to get filled price
                         order_query = self._kraken_api_call('QueryOrders', {'txid': order_id})

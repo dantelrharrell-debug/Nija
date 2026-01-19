@@ -1040,7 +1040,10 @@ class TradingStrategy:
         Returns:
             tuple: (primary_stop, micro_stop, catastrophic_stop, description)
         """
-        # Determine broker type
+        # Determine broker type with multiple fallback approaches
+        # This flexibility handles various broker implementations without requiring
+        # strict interface contracts. While not ideal, it provides robustness across
+        # different broker adapter patterns (BrokerInterface, direct API wrappers, etc.)
         broker_name = 'coinbase'  # default
         if hasattr(broker, 'broker_type'):
             broker_name = broker.broker_type.value.lower() if hasattr(broker.broker_type, 'value') else str(broker.broker_type).lower()
@@ -1417,10 +1420,13 @@ class TradingStrategy:
                                 # TIER 2: EMERGENCY MICRO-STOP (Logic failure prevention)
                                 # This is NOT a trading stop - it's a failsafe to prevent logic failures
                                 # Examples: imported positions, calculation errors, data corruption
-                                # Note: Renamed from "Immediate exit on ANY loss" to clarify purpose
-                                if pnl_percent <= micro_stop and pnl_percent > primary_stop:
+                                # Note: This should RARELY trigger - Tier 1 should catch most losses
+                                # Only triggers for losses that somehow bypassed Tier 1
+                                # (e.g., imported positions without proper entry price tracking)
+                                if pnl_percent <= micro_stop:
                                     logger.warning(f"   ⚠️ EMERGENCY MICRO-STOP: {symbol} at {pnl_percent:.2f}% (threshold: {micro_stop*100:.2f}%)")
                                     logger.warning(f"   💥 TIER 2: Emergency micro-stop to prevent logic failures (not a trading stop)")
+                                    logger.warning(f"   ⚠️  NOTE: Tier 1 was bypassed - possible imported position or logic error")
                                     
                                     try:
                                         result = active_broker.place_market_order(
