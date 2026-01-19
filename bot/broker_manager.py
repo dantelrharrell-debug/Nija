@@ -91,6 +91,11 @@ MINIMUM_BALANCE_PROTECTION = 0.50  # Lowered from 1.00 to allow trading with ver
 MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading (warning only, not enforced)
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
+# Broker health monitoring constants
+# Maximum consecutive errors before marking broker unavailable
+# This prevents trading when API is persistently failing
+BROKER_MAX_CONSECUTIVE_ERRORS = 3
+
 # Kraken startup delay (Jan 17, 2026) - Critical fix for nonce collisions
 # This delay is applied before the first Kraken API call to ensure:
 # - Nonce file exists and is initialized properly
@@ -1533,7 +1538,7 @@ class CoinbaseBroker(BaseBroker):
             if balance_data is None:
                 # API call failed - use last known balance if available
                 self._balance_fetch_errors += 1
-                if self._balance_fetch_errors >= 3:
+                if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
                     logger.error(f"❌ Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
                 
@@ -1557,7 +1562,7 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logger.error(f"❌ Exception fetching Coinbase balance: {e}")
             self._balance_fetch_errors += 1
-            if self._balance_fetch_errors >= 3:
+            if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
                 logger.error(f"❌ Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
             
@@ -5158,7 +5163,7 @@ class KrakenBroker(BaseBroker):
                 if self._last_known_balance is not None:
                     logger.warning(f"⚠️ Kraken API not connected ({self.account_identifier}), using last known balance: ${self._last_known_balance:.2f}")
                     self._balance_fetch_errors += 1
-                    if self._balance_fetch_errors >= 3:
+                    if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                         self._is_available = False
                         logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
                     return self._last_known_balance
@@ -5177,7 +5182,7 @@ class KrakenBroker(BaseBroker):
                 
                 # Return last known balance instead of 0
                 self._balance_fetch_errors += 1
-                if self._balance_fetch_errors >= 3:
+                if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
                     logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
                 
@@ -5233,7 +5238,7 @@ class KrakenBroker(BaseBroker):
             # Unexpected response - treat as error
             logger.error(f"❌ Unexpected Kraken API response format ({self.account_identifier})")
             self._balance_fetch_errors += 1
-            if self._balance_fetch_errors >= 3:
+            if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
             
             if self._last_known_balance is not None:
@@ -5245,7 +5250,7 @@ class KrakenBroker(BaseBroker):
         except Exception as e:
             logger.error(f"❌ Exception fetching Kraken balance ({self.account_identifier}): {e}")
             self._balance_fetch_errors += 1
-            if self._balance_fetch_errors >= 3:
+            if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
                 logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
             
@@ -5881,14 +5886,14 @@ class OKXBroker(BaseBroker):
             if not self.account_api:
                 # Not connected - return last known balance if available
                 if self._last_known_balance is not None:
-                    logging.warning(f"⚠️ OKX API not connected, using last known balance: ${self._last_known_balance:.2f}")
+                    logger.warning(f"⚠️ OKX API not connected, using last known balance: ${self._last_known_balance:.2f}")
                     self._balance_fetch_errors += 1
-                    if self._balance_fetch_errors >= 3:
+                    if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                         self._is_available = False
-                        logging.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                        logger.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
                     return self._last_known_balance
                 else:
-                    logging.error("❌ OKX API not connected and no last known balance")
+                    logger.error("❌ OKX API not connected and no last known balance")
                     self._balance_fetch_errors += 1
                     self._is_available = False
                     return 0.0
@@ -5905,7 +5910,7 @@ class OKXBroker(BaseBroker):
                     for detail in details:
                         if detail.get('ccy') == 'USDT':
                             available = float(detail.get('availBal', 0))
-                            logging.info(f"💰 OKX USDT Balance: ${available:.2f}")
+                            logger.info(f"💰 OKX USDT Balance: ${available:.2f}")
                             
                             # SUCCESS: Update last known balance and reset error count
                             self._last_known_balance = available
@@ -5915,7 +5920,7 @@ class OKXBroker(BaseBroker):
                             return available
                 
                 # No USDT found - treat as zero balance (not an error)
-                logging.warning("⚠️  No USDT balance found in OKX account")
+                logger.warning("⚠️  No USDT balance found in OKX account")
                 # Update last known balance to 0 (this is a successful API call, just zero balance)
                 self._last_known_balance = 0.0
                 self._balance_fetch_errors = 0
@@ -5923,31 +5928,31 @@ class OKXBroker(BaseBroker):
                 return 0.0
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-                logging.error(f"❌ OKX API error fetching balance: {error_msg}")
+                logger.error(f"❌ OKX API error fetching balance: {error_msg}")
                 
                 # Return last known balance instead of 0
                 self._balance_fetch_errors += 1
-                if self._balance_fetch_errors >= 3:
+                if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
-                    logging.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                    logger.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
                 
                 if self._last_known_balance is not None:
-                    logging.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                    logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
                     return self._last_known_balance
                 else:
-                    logging.error(f"   ❌ No last known balance available, returning 0")
+                    logger.error(f"   ❌ No last known balance available, returning 0")
                     return 0.0
                 
         except Exception as e:
-            logging.error(f"❌ Exception fetching OKX balance: {e}")
+            logger.error(f"❌ Exception fetching OKX balance: {e}")
             self._balance_fetch_errors += 1
-            if self._balance_fetch_errors >= 3:
+            if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
-                logging.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                logger.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
             
             # Return last known balance instead of 0
             if self._last_known_balance is not None:
-                logging.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
                 return self._last_known_balance
             
             return 0.0
