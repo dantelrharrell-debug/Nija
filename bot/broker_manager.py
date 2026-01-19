@@ -1019,6 +1019,8 @@ class CoinbaseBroker(BaseBroker):
         
         usd_balance = 0.0
         usdc_balance = 0.0
+        usd_held = 0.0  # Track held funds (in open orders/positions)
+        usdc_held = 0.0
         consumer_usd = 0.0
         consumer_usdc = 0.0
         crypto_holdings = {}
@@ -1070,23 +1072,41 @@ class CoinbaseBroker(BaseBroker):
                 for pos in spot_positions:
                     asset = getattr(pos, 'asset', None) if not isinstance(pos, dict) else pos.get('asset')
                     available_val = getattr(pos, 'available_to_trade_fiat', None) if not isinstance(pos, dict) else pos.get('available_to_trade_fiat')
+                    # Try to get held amount if available in the response
+                    held_val = getattr(pos, 'hold_fiat', None) if not isinstance(pos, dict) else pos.get('hold_fiat')
+                    
                     try:
                         available = float(available_val or 0)
                     except Exception:
                         available = 0.0
+                    
+                    try:
+                        held = float(held_val or 0)
+                    except Exception:
+                        held = 0.0
 
                     if asset == 'USD':
                         usd_balance += available
+                        usd_held += held
                     elif asset == 'USDC':
                         usdc_balance += available
+                        usdc_held += held
                     elif asset:
                         crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + available
 
                 trading_balance = usd_balance + usdc_balance
+                total_held = usd_held + usdc_held
+                total_funds = trading_balance + total_held
+                
                 logging.info("-" * 70)
-                logging.info(f"   💰 Tradable USD (portfolio):  ${usd_balance:.2f}")
-                logging.info(f"   💰 Tradable USDC (portfolio): ${usdc_balance:.2f}")
-                logging.info(f"   💰 Total Trading Balance: ${trading_balance:.2f}")
+                logging.info(f"   💰 Available USD (portfolio):  ${usd_balance:.2f}")
+                logging.info(f"   💰 Available USDC (portfolio): ${usdc_balance:.2f}")
+                logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
+                if total_held > 0:
+                    logging.info(f"   🔒 Held USD:  ${usd_held:.2f} (in open orders/positions)")
+                    logging.info(f"   🔒 Held USDC: ${usdc_held:.2f} (in open orders/positions)")
+                    logging.info(f"   🔒 Total Held: ${total_held:.2f}")
+                    logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
                 logging.info("   (Source: get_portfolio_breakdown)")
                 logging.info("-" * 70)
 
@@ -1094,6 +1114,10 @@ class CoinbaseBroker(BaseBroker):
                     "usdc": usdc_balance,
                     "usd": usd_balance,
                     "trading_balance": trading_balance,
+                    "usd_held": usd_held,
+                    "usdc_held": usdc_held,
+                    "total_held": total_held,
+                    "total_funds": total_funds,
                     "crypto": crypto_holdings,
                     "consumer_usd": consumer_usd,
                     "consumer_usdc": consumer_usdc,
@@ -1196,8 +1220,10 @@ class CoinbaseBroker(BaseBroker):
                     if is_tradeable:
                         if currency == "USD":
                             usd_balance += available
+                            usd_held += hold  # Track held funds
                         else:
                             usdc_balance += available
+                            usdc_held += hold  # Track held funds
                     else:
                         # IMPROVEMENT #1: Better consumer wallet diagnostics
                         if currency == "USD":
@@ -1219,11 +1245,18 @@ class CoinbaseBroker(BaseBroker):
                         )
 
             trading_balance = usd_balance + usdc_balance
+            total_held = usd_held + usdc_held
+            total_funds = trading_balance + total_held
 
             logging.info("-" * 70)
-            logging.info(f"   💰 Tradable USD:  ${usd_balance:.2f}")
-            logging.info(f"   💰 Tradable USDC: ${usdc_balance:.2f}")
-            logging.info(f"   💰 Total Trading Balance: ${trading_balance:.2f}")
+            logging.info(f"   💰 Available USD:  ${usd_balance:.2f}")
+            logging.info(f"   💰 Available USDC: ${usdc_balance:.2f}")
+            logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
+            if total_held > 0:
+                logging.info(f"   🔒 Held USD:  ${usd_held:.2f} (in open orders/positions)")
+                logging.info(f"   🔒 Held USDC: ${usdc_held:.2f} (in open orders/positions)")
+                logging.info(f"   🔒 Total Held: ${total_held:.2f}")
+                logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
             logging.info(f"   🪙 Crypto Holdings: {len(crypto_holdings)} assets")
             
             # IMPROVEMENT #1: Enhanced consumer wallet detection and diagnosis
@@ -1252,6 +1285,10 @@ class CoinbaseBroker(BaseBroker):
                 "usdc": usdc_balance,
                 "usd": usd_balance,
                 "trading_balance": trading_balance,
+                "usd_held": usd_held,
+                "usdc_held": usdc_held,
+                "total_held": total_held,
+                "total_funds": total_funds,
                 "crypto": crypto_holdings,
                 "consumer_usd": consumer_usd,
                 "consumer_usdc": consumer_usdc,
@@ -1277,6 +1314,10 @@ class CoinbaseBroker(BaseBroker):
                 "usdc": usdc_balance,
                 "usd": usd_balance,
                 "trading_balance": usd_balance + usdc_balance,
+                "usd_held": 0.0,
+                "usdc_held": 0.0,
+                "total_held": 0.0,
+                "total_funds": usd_balance + usdc_balance,
                 "crypto": crypto_holdings,
                 "consumer_usd": consumer_usd,
                 "consumer_usdc": consumer_usdc,
@@ -4824,7 +4865,7 @@ class KrakenBroker(BaseBroker):
         Get USD/USDT balance available for trading.
         
         Returns:
-            float: Available USD + USDT balance
+            float: Available USD + USDT balance (not including held funds)
         """
         try:
             if not self.api:
@@ -4846,7 +4887,26 @@ class KrakenBroker(BaseBroker):
                 usdt_balance = float(result.get('USDT', 0))
                 
                 total = usd_balance + usdt_balance
-                logger.info(f"💰 Kraken Balance ({self.account_identifier}): USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
+                
+                # Also get TradeBalance to see held funds
+                trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'})
+                held_amount = 0.0
+                
+                if trade_balance and 'result' in trade_balance:
+                    tb_result = trade_balance['result']
+                    # eb = equivalent balance (total balance including held orders)
+                    # tb = trade balance (free margin available)
+                    # held = eb - tb
+                    eb = float(tb_result.get('eb', 0))
+                    tb = float(tb_result.get('tb', 0))
+                    held_amount = eb - tb if eb > tb else 0.0
+                
+                logger.info(f"💰 Kraken Balance ({self.account_identifier}):")
+                logger.info(f"   Available: USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
+                if held_amount > 0:
+                    logger.info(f"   🔒 Held in open orders: ${held_amount:.2f}")
+                    logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total + held_amount:.2f}")
+                
                 return total
             
             return 0.0
