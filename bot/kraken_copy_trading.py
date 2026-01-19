@@ -360,12 +360,13 @@ def initialize_kraken_users() -> int:
             initialized_count += 1
         
         # FIX PART 2: Mark users as initialized to prevent duplicate initialization
+        # Set flag immediately after successful loop completion
         _USERS_INITIALIZED = True
         logger.info(f"✅ Kraken user initialization COMPLETE — {initialized_count} users ready")
         return initialized_count
         
     except Exception as e:
-        # Reset flag on failure to allow retry
+        # Reset flag on failure to allow retry (reset before logging for safety)
         _USERS_INITIALIZED = False
         logger.error(f"❌ Failed to initialize Kraken users: {e}")
         return 0
