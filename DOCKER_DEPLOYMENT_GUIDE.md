@@ -139,8 +139,7 @@ cp .env.example .env
 ### Option 2: Run with Docker
 
 ```bash
-# Build the image
-export DOCKER_BUILDKIT=0
+# Build the image (BuildKit is enabled by default for better performance)
 docker build -t nija-bot .
 
 # Run the container
