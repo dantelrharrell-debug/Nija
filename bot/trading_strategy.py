@@ -270,6 +270,25 @@ class TradingStrategy:
         """Initialize production strategy with multi-broker support."""
         logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
         
+        # FIX #1: Initialize portfolio state manager for total equity tracking
+        try:
+            from portfolio_state import get_portfolio_manager
+            self.portfolio_manager = get_portfolio_manager()
+            logger.info("✅ Portfolio state manager initialized - using total equity for sizing")
+        except ImportError:
+            logger.warning("⚠️ Portfolio state manager not available - falling back to cash-based sizing")
+            self.portfolio_manager = None
+        
+        # FIX #2: Initialize forced stop-loss executor
+        try:
+            from forced_stop_loss import create_forced_stop_loss
+            # Will be set to actual broker instance after connection
+            self.forced_stop_loss = None
+            logger.info("✅ Forced stop-loss module loaded")
+        except ImportError:
+            logger.warning("⚠️ Forced stop-loss module not available")
+            self.forced_stop_loss = None
+        
         # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
         # NEW (Jan 16, 2026): Track with timestamps to allow retry after timeout
         self.unsellable_positions = {}  # Dict of symbol -> timestamp when marked unsellable
@@ -583,8 +602,30 @@ class TradingStrategy:
                 self.broker = self.broker_manager.get_primary_broker()
                 if self.broker:
                     logger.info(f"📌 Primary master broker: {self.broker.broker_type.value}")
+                    
+                    # FIX #2: Initialize forced stop-loss with the connected broker
+                    if self.forced_stop_loss is None:
+                        try:
+                            from forced_stop_loss import create_forced_stop_loss
+                            self.forced_stop_loss = create_forced_stop_loss(self.broker)
+                            logger.info("✅ Forced stop-loss executor initialized with master broker")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not initialize forced stop-loss: {e}")
+                    
+                    # FIX #1: Initialize master portfolio state
+                    if self.portfolio_manager:
+                        try:
+                            master_cash = self.broker.get_account_balance()
+                            self.master_portfolio = self.portfolio_manager.initialize_master_portfolio(master_cash)
+                            logger.info(f"✅ Master portfolio initialized: ${master_cash:.2f} cash, equity=${self.master_portfolio.total_equity:.2f}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not initialize master portfolio: {e}")
+                            self.master_portfolio = None
+                    else:
+                        self.master_portfolio = None
                 else:
                     logger.warning("⚠️  No primary master broker available")
+                    self.master_portfolio = None
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
                 self.broker = None
@@ -1235,6 +1276,7 @@ class TradingStrategy:
                 logger.info("📡 Monitor mode (strategy not loaded; no trades)")
                 return
             
+            # FIX #1: Update portfolio state from broker data
             # Get detailed balance including crypto holdings
             # PRO MODE: Also calculate total capital (free balance + position values)
             if hasattr(active_broker, 'get_account_balance_detailed'):
@@ -1242,6 +1284,28 @@ class TradingStrategy:
             else:
                 balance_data = {'trading_balance': active_broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
+            
+            # Update portfolio state (if available)
+            if self.portfolio_manager and hasattr(self, 'master_portfolio') and self.master_portfolio:
+                try:
+                    # Update portfolio from current broker state
+                    self.portfolio_manager.update_portfolio_from_broker(
+                        portfolio=self.master_portfolio,
+                        available_cash=account_balance,
+                        positions=current_positions
+                    )
+                    
+                    # Log portfolio summary
+                    summary = self.master_portfolio.get_summary()
+                    logger.info(f"📊 Portfolio State (Total Equity Accounting):")
+                    logger.info(f"   Available Cash: ${summary['available_cash']:.2f}")
+                    logger.info(f"   Position Value: ${summary['total_position_value']:.2f}")
+                    logger.info(f"   Unrealized P&L: ${summary['unrealized_pnl']:.2f}")
+                    logger.info(f"   TOTAL EQUITY: ${summary['total_equity']:.2f}")
+                    logger.info(f"   Positions: {summary['position_count']}")
+                    logger.info(f"   Cash Utilization: {summary['cash_utilization_pct']:.1f}%")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not update portfolio state: {e}")
             
             # ENHANCED FUND VISIBILITY (Jan 19, 2026)
             # Always track held funds and total capital - not just in PRO_MODE
