@@ -5108,11 +5108,18 @@ class KrakenBroker(BaseBroker):
                     tb = float(tb_result.get('tb', 0))
                     held_amount = eb - tb if eb > tb else 0.0
                 
+                # Enhanced balance logging with clear breakdown (Jan 19, 2026)
+                logger.info("=" * 70)
                 logger.info(f"💰 Kraken Balance ({self.account_identifier}):")
-                logger.info(f"   Available: USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
+                logger.info(f"   ✅ Available USD:  ${usd_balance:.2f}")
+                logger.info(f"   ✅ Available USDT: ${usdt_balance:.2f}")
+                logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                logger.info(f"   💵 Total Available: ${total:.2f}")
                 if held_amount > 0:
                     logger.info(f"   🔒 Held in open orders: ${held_amount:.2f}")
+                    logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                     logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total + held_amount:.2f}")
+                logger.info("=" * 70)
                 
                 return total
             
@@ -5121,6 +5128,127 @@ class KrakenBroker(BaseBroker):
         except Exception as e:
             logger.error(f"Error fetching Kraken balance ({self.account_identifier}): {e}")
             return 0.0
+    
+    def get_account_balance_detailed(self) -> dict:
+        """
+        Get detailed account balance information including crypto holdings and held funds.
+        
+        Returns detailed balance breakdown for comprehensive fund visibility.
+        Matches CoinbaseBroker interface for consistency.
+        
+        Returns:
+            dict: Detailed balance info with keys:
+                - usd: Available USD balance
+                - usdt: Available USDT balance  
+                - trading_balance: Total available (USD + USDT)
+                - usd_held: USD held in open orders
+                - usdt_held: USDT held in open orders
+                - total_held: Total held (usd_held + usdt_held)
+                - total_funds: Complete balance (trading_balance + total_held)
+                - crypto: Dictionary of crypto asset balances
+        """
+        try:
+            if not self.api:
+                return {
+                    'usd': 0.0,
+                    'usdt': 0.0,
+                    'trading_balance': 0.0,
+                    'usd_held': 0.0,
+                    'usdt_held': 0.0,
+                    'total_held': 0.0,
+                    'total_funds': 0.0,
+                    'crypto': {}
+                }
+            
+            # Get account balance using serialized API call
+            balance = self._kraken_private_call('Balance')
+            
+            if balance and 'error' in balance and balance['error']:
+                error_msgs = ', '.join(balance['error'])
+                logger.error(f"Error fetching Kraken detailed balance ({self.account_identifier}): {error_msgs}")
+                return {
+                    'usd': 0.0,
+                    'usdt': 0.0,
+                    'trading_balance': 0.0,
+                    'usd_held': 0.0,
+                    'usdt_held': 0.0,
+                    'total_held': 0.0,
+                    'total_funds': 0.0,
+                    'crypto': {}
+                }
+            
+            if balance and 'result' in balance:
+                result = balance['result']
+                
+                # Kraken uses ZUSD for USD and USDT for Tether
+                usd_balance = float(result.get('ZUSD', 0))
+                usdt_balance = float(result.get('USDT', 0))
+                
+                # Get crypto holdings (exclude USD and USDT)
+                crypto_holdings = {}
+                for currency, amount in result.items():
+                    if currency not in ['ZUSD', 'USDT'] and float(amount) > 0:
+                        # Strip the 'Z' or 'X' prefix Kraken uses for some currencies
+                        clean_currency = currency.lstrip('ZX')
+                        crypto_holdings[clean_currency] = float(amount)
+                
+                trading_balance = usd_balance + usdt_balance
+                
+                # Get TradeBalance to calculate held funds
+                trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'})
+                usd_held = 0.0
+                usdt_held = 0.0
+                total_held = 0.0
+                
+                if trade_balance and 'result' in trade_balance:
+                    tb_result = trade_balance['result']
+                    # eb = equivalent balance (total balance including held orders)
+                    # tb = trade balance (free margin available)
+                    # held = eb - tb
+                    eb = float(tb_result.get('eb', 0))
+                    tb = float(tb_result.get('tb', 0))
+                    total_held = eb - tb if eb > tb else 0.0
+                    
+                    # For Kraken, we can't easily separate USD vs USDT held
+                    # So we assign all held amount to USD for simplicity
+                    usd_held = total_held
+                
+                total_funds = trading_balance + total_held
+                
+                return {
+                    'usd': usd_balance,
+                    'usdt': usdt_balance,
+                    'trading_balance': trading_balance,
+                    'usd_held': usd_held,
+                    'usdt_held': usdt_held,
+                    'total_held': total_held,
+                    'total_funds': total_funds,
+                    'crypto': crypto_holdings
+                }
+            
+            return {
+                'usd': 0.0,
+                'usdt': 0.0,
+                'trading_balance': 0.0,
+                'usd_held': 0.0,
+                'usdt_held': 0.0,
+                'total_held': 0.0,
+                'total_funds': 0.0,
+                'crypto': {}
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching Kraken detailed balance ({self.account_identifier}): {e}")
+            return {
+                'usd': 0.0,
+                'usdt': 0.0,
+                'trading_balance': 0.0,
+                'usd_held': 0.0,
+                'usdt_held': 0.0,
+                'total_held': 0.0,
+                'total_funds': 0.0,
+                'crypto': {}
+            }
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """
