@@ -206,10 +206,9 @@ def normalize_symbol_for_broker(symbol: str, broker_name: str) -> str:
         
     elif broker_name == 'coinbase':
         # Coinbase format: ETH-USD, BTC-USDT (dash separator)
-        # Prefer USD over USDC/USDT when available
-        if quote in ['USDC', 'USDT']:
-            # Try USD first for Coinbase (they prefer native USD pairs)
-            return f"{base}-USD"
+        # NOTE: Coinbase supports both USD and USDT/USDC pairs
+        # We don't auto-convert USDC/USDT to USD because some assets
+        # may only have USDT/USDC pairs available, not USD
         return f"{base}-{quote}"
         
     elif broker_name == 'binance':
