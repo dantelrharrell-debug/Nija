@@ -7,6 +7,11 @@ venv/
 node_modules/
 *.log
 
+# Docker-related files (not needed in container)
+docker-compose.yml
+docker-compose.yaml
+Dockerfile.*
+
 # Prevent local shadowing of pip package names
 coinbase
 coinbase_advanced

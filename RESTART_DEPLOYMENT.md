@@ -261,7 +261,7 @@ Use this checklist when adding new exchange credentials:
 |----------|----------------------|
 | **Railway** | Dashboard → "..." menu → "Restart Deployment" |
 | **Render** | Dashboard → "Manual Deploy" → "Deploy latest commit" |
-| **Local/Docker** | `docker-compose down && docker-compose up -d` |
+| **Local** | `bash start.sh` or restart your local instance |
 | **VPS/PM2** | `pm2 restart nija-bot` |
 
 ---

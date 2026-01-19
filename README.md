@@ -1268,13 +1268,13 @@ Nija/
 ├── .env                         # Environment variables (SECRET)
 ├── .gitignore                   # Git ignore rules
 ├── Dockerfile                   # Container definition
-├── docker-compose.yml           # Docker Compose config
 ├── requirements.txt             # Python dependencies
 ├── runtime.txt                  # Python version (3.11)
 ├── start.sh                     # Startup script
 ├── bot.py                       # Main entry (15s cycles)
 ├── main.py                      # Bot entry point (legacy)
 ├── railway.json                 # Railway deployment config
+├── render.yaml                  # Render deployment config
 └── README.md                    # This file
 ```
 

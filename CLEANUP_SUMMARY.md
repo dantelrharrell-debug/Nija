@@ -75,11 +75,10 @@ Comprehensive cleanup removing all non-essential files while preserving core fun
 **Scripts (1 file):**
 - start.sh
 
-**Configuration (6 files):**
+**Configuration (5 files):**
 - requirements.txt
 - runtime.txt
 - Dockerfile
-- docker-compose.yml
 - railway.json
 - render.yaml
 

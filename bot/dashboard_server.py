@@ -83,8 +83,9 @@ def get_alerts():
 def get_trades():
     """Get recent trades"""
     try:
-        # Try to load from trade history
-        trade_file = Path("/usr/src/app/data/trade_history.json")
+        # Try to load from trade history (uses APP_DIR env var, defaults to /app)
+        base_dir = Path(os.getenv("APP_DIR", "/app"))
+        trade_file = base_dir / "data" / "trade_history.json"
         if trade_file.exists():
             with open(trade_file, 'r') as f:
                 trades = json.load(f)
@@ -135,7 +136,8 @@ def get_trading_status():
         
         # Check 1: Is bot process running (check log file activity)
         try:
-            log_file = Path("/usr/src/app/nija.log")
+            base_dir = Path(os.getenv("APP_DIR", "/app"))
+            log_file = base_dir / "nija.log"
             alt_log_file = Path("../nija.log")
             
             for lf in [log_file, alt_log_file]:
@@ -213,8 +215,9 @@ def get_trading_status():
         
         # Check 3: Recent trading activity from trade journal
         try:
+            base_dir = Path(os.getenv("APP_DIR", "/app"))
             journal_file = Path("../trade_journal.jsonl")
-            alt_journal = Path("/usr/src/app/trade_journal.jsonl")
+            alt_journal = base_dir / "trade_journal.jsonl"
             
             for jf in [journal_file, alt_journal]:
                 if jf.exists():
