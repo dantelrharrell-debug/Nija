@@ -1466,49 +1466,42 @@ class TradingStrategy:
                                     logger.warning(f"   🛑 PRIMARY STOP-LOSS HIT: {symbol} at {pnl_percent:.2f}% (threshold: {primary_stop*100:.2f}%)")
                                     logger.warning(f"   💥 TIER 1: Trading stop-loss triggered - exiting position to prevent further loss")
                                     
-                                    # Execute immediate market sell
-                                    exit_success = False
-                                    try:
-                                        result = active_broker.place_market_order(
+                                    # FIX #2: Use forced stop-loss executor (bypasses all filters)
+                                    if self.forced_stop_loss:
+                                        success, result, error = self.forced_stop_loss.force_sell_position(
                                             symbol=symbol,
-                                            side='sell',
                                             quantity=quantity,
-                                            size_type='base'
+                                            reason=f"Primary stop-loss: {pnl_percent:.2f}% <= {primary_stop*100:.2f}%"
                                         )
                                         
-                                        # Enhanced order confirmation logging (REQUIREMENT #2)
-                                        if result and result.get('status') not in ['error', 'unfilled']:
-                                            order_id = result.get('order_id', 'N/A')
-                                            filled_price = result.get('filled_price', current_price)
-                                            filled_volume = quantity
-                                            
-                                            # Calculate balance delta
-                                            balance_before = account_balance
-                                            balance_delta = filled_volume * filled_price
-                                            balance_after = balance_before + balance_delta
-                                            
-                                            # ✅ REQUIREMENT #2: Order accepted confirmation
-                                            logger.info(f"   ✅ ORDER ACCEPTED AND FILLED:")
-                                            logger.info(f"      • Order ID: {order_id}")
-                                            logger.info(f"      • Filled Volume: {filled_volume:.8f} {symbol.split('-')[0]}")
-                                            logger.info(f"      • Filled Price: ${filled_price:.2f}")
-                                            logger.info(f"      • Balance Delta: ${balance_delta:.2f}")
-                                            logger.info(f"      • Balance: ${balance_before:.2f} → ${balance_after:.2f}")
-                                            
-                                            exit_success = True
+                                        if success:
+                                            logger.info(f"   ✅ FORCED STOP-LOSS EXECUTED: {symbol}")
                                             # Track the exit
                                             if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                 active_broker.position_tracker.track_exit(symbol, quantity)
                                         else:
-                                            error_msg = result.get('error', 'Unknown error') if result else 'No response'
-                                            logger.error(f"   ❌ ORDER REJECTED: {error_msg}")
-                                            logger.error(f"      • Symbol: {symbol}")
-                                            logger.error(f"      • Side: sell")
-                                            logger.error(f"      • Quantity: {quantity:.8f}")
-                                            logger.error(f"      • Reason: Primary stop-loss")
-                                    except Exception as sell_err:
-                                        logger.error(f"   ❌ ORDER EXCEPTION: {sell_err}")
-                                        logger.error(f"      • Exception type: {type(sell_err).__name__}")
+                                            logger.error(f"   ❌ FORCED STOP-LOSS FAILED: {error}")
+                                    else:
+                                        # Fallback to legacy stop-loss if forced executor not available
+                                        logger.warning("   ⚠️ Forced stop-loss not available, using legacy method")
+                                        try:
+                                            result = active_broker.place_market_order(
+                                                symbol=symbol,
+                                                side='sell',
+                                                quantity=quantity,
+                                                size_type='base'
+                                            )
+                                            
+                                            if result and result.get('status') not in ['error', 'unfilled']:
+                                                order_id = result.get('order_id', 'N/A')
+                                                logger.info(f"   ✅ ORDER ACCEPTED: Order ID {order_id}")
+                                                if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                    active_broker.position_tracker.track_exit(symbol, quantity)
+                                            else:
+                                                error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                logger.error(f"   ❌ ORDER REJECTED: {error_msg}")
+                                        except Exception as sell_err:
+                                            logger.error(f"   ❌ ORDER EXCEPTION: {sell_err}")
                                     
                                     # Skip ALL remaining logic for this position
                                     continue
@@ -1524,25 +1517,40 @@ class TradingStrategy:
                                     logger.warning(f"   💥 TIER 2: Emergency micro-stop to prevent logic failures (not a trading stop)")
                                     logger.warning(f"   ⚠️  NOTE: Tier 1 was bypassed - possible imported position or logic error")
                                     
-                                    try:
-                                        result = active_broker.place_market_order(
+                                    # FIX #2: Use forced stop-loss for emergency too
+                                    if self.forced_stop_loss:
+                                        success, result, error = self.forced_stop_loss.force_sell_position(
                                             symbol=symbol,
-                                            side='sell',
                                             quantity=quantity,
-                                            size_type='base'
+                                            reason=f"Emergency micro-stop: {pnl_percent:.2f}% <= {micro_stop*100:.2f}%"
                                         )
                                         
-                                        # Enhanced logging
-                                        if result and result.get('status') not in ['error', 'unfilled']:
-                                            order_id = result.get('order_id', 'N/A')
-                                            logger.info(f"   ✅ MICRO-STOP EXECUTED: Order ID {order_id}")
+                                        if success:
+                                            logger.info(f"   ✅ EMERGENCY STOP EXECUTED: {symbol}")
                                             if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                 active_broker.position_tracker.track_exit(symbol, quantity)
                                         else:
-                                            error_msg = result.get('error', 'Unknown error') if result else 'No response'
-                                            logger.error(f"   ❌ MICRO-STOP FAILED: {error_msg}")
-                                    except Exception as sell_err:
-                                        logger.error(f"   ❌ MICRO-STOP EXCEPTION: {sell_err}")
+                                            logger.error(f"   ❌ EMERGENCY STOP FAILED: {error}")
+                                    else:
+                                        # Fallback
+                                        try:
+                                            result = active_broker.place_market_order(
+                                                symbol=symbol,
+                                                side='sell',
+                                                quantity=quantity,
+                                                size_type='base'
+                                            )
+                                            
+                                            if result and result.get('status') not in ['error', 'unfilled']:
+                                                order_id = result.get('order_id', 'N/A')
+                                                logger.info(f"   ✅ MICRO-STOP EXECUTED: Order ID {order_id}")
+                                                if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                    active_broker.position_tracker.track_exit(symbol, quantity)
+                                            else:
+                                                error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                logger.error(f"   ❌ MICRO-STOP FAILED: {error_msg}")
+                                        except Exception as sell_err:
+                                            logger.error(f"   ❌ MICRO-STOP EXCEPTION: {sell_err}")
                                     
                                     continue
                                 
