@@ -113,6 +113,12 @@ STALE_POSITION_WARNING_HOURS = 4  # Warn about positions held this long (4 hours
 # After this many hours, retry selling positions that were previously marked unsellable
 # This handles cases where position grew enough to be sellable, or API errors were temporary
 UNSELLABLE_RETRY_HOURS = 24  # Retry selling "unsellable" positions after 24 hours
+# ZOMBIE POSITION DETECTION (Jan 19, 2026): Detect auto-imported positions that mask losses
+# If a position shows ~0% P&L for too long, it's likely an auto-imported position that
+# was losing before import. Auto-import sets entry = current price, resetting P&L to 0%.
+# Real positions should move away from breakeven within 1-2 hours.
+ZOMBIE_POSITION_HOURS = 1.0  # Exit positions stuck at ~0% P&L for this many hours
+ZOMBIE_PNL_THRESHOLD = 0.01  # Consider position "stuck" if abs(P&L) < this % (0.01%)
 
 # Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE V7.3
 # Updated Jan 12, 2026 - PROFITABILITY FIX: Aggressive profit-taking to lock gains
@@ -1322,6 +1328,18 @@ class TradingStrategy:
                                     elif pnl_percent <= STOP_LOSS_WARNING:
                                         logger.warning(f"   ⚠️ Approaching stop loss: {symbol} at {pnl_percent:.2f}%")
                                         # Don't exit yet, but log it
+                                    elif abs(pnl_percent) < ZOMBIE_PNL_THRESHOLD and entry_time_available and position_age_hours >= ZOMBIE_POSITION_HOURS:
+                                        # ZOMBIE POSITION DETECTION: If P&L is near zero after 1+ hour,
+                                        # this is likely a position that was auto-imported and is masking a loss
+                                        # Real positions should move away from 0% within an hour
+                                        logger.warning(f"   🧟 ZOMBIE POSITION DETECTED: {symbol} at {pnl_percent:+.2f}% after {position_age_hours:.1f}h")
+                                        logger.warning(f"   🔍 Position stuck at ~0% P&L suggests auto-import masked a losing trade")
+                                        logger.warning(f"   💥 AGGRESSIVE EXIT to prevent indefinite holding of potential loser")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Zombie position exit (stuck at {pnl_percent:+.2f}% for {position_age_hours:.1f}h - likely masked loser)'
+                                        })
                                     else:
                                         # Position has entry price but not at any exit threshold
                                         logger.info(f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)")
@@ -1358,7 +1376,8 @@ class TradingStrategy:
                                 
                                 if auto_import_success:
                                     logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0)")
-                                    logger.info(f"      Position now tracked - will use profit targets in next cycle")
+                                    logger.info(f"      ⚠️  WARNING: This position may have been losing before auto-import!")
+                                    logger.info(f"      Position now tracked - will evaluate exit in next cycle")
                                     
                                     # Mark that this position was just imported - skip exits this cycle
                                     just_auto_imported = True
@@ -1463,6 +1482,7 @@ class TradingStrategy:
                     if just_auto_imported:
                         logger.info(f"   ⏭️  SKIPPING EXITS: {symbol} was just auto-imported this cycle")
                         logger.info(f"      Will evaluate exit signals in next cycle after P&L develops")
+                        logger.info(f"      🔍 Note: If this position shows 0% P&L for multiple cycles, it may be a masked loser")
                         continue
                     
                     # MOMENTUM-BASED PROFIT TAKING (for positions without entry price)
