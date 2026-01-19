@@ -432,7 +432,7 @@ How to set environment variables depends on your platform:
 - Railway: Dashboard → Variables → Add Variable
 - Render: Dashboard → Environment → Add Environment Variable
 - Heroku: Dashboard → Settings → Config Vars → Reveal Config Vars
-- Docker: Use -e flag or environment section in docker-compose.yml
+- Docker: Use -e flag or --env-file option: docker run -e KEY=value or docker run --env-file .env
 - Kubernetes: ConfigMap or Secret
 - Systemd: Environment file in service unit
 

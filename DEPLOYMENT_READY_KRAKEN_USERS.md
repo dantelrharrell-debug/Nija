@@ -149,12 +149,14 @@ I have Daivon and Tania's Kraken API credentials and they are ready to be deploy
 4. **Restart the bot**:
 
    ```bash
-   # If using Docker
-   docker-compose down
-   docker-compose up -d
+   # If using Docker (local development)
+   docker build -t nija-bot . && docker run --env-file .env nija-bot
    
    # If running directly
-   python3 main.py
+   ./start.sh
+   
+   # If deployed on Railway/Render
+   # Trigger a new deployment via platform dashboard
    ```
 
 5. **Verify Connection** - check console output for:

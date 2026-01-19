@@ -147,8 +147,8 @@ The bot automatically loads user configurations at startup:
 # If running locally
 ./start.sh
 
-# If using Docker
-docker-compose down && docker-compose up -d
+# If using Docker (local development)
+docker build -t nija-bot . && docker run --env-file .env nija-bot
 
 # If deployed on Railway/Render
 # Trigger a new deployment or restart the service
