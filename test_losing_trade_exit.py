@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """
-Test script to verify 30-minute exit logic for losing trades.
+Test script to verify immediate exit logic for losing trades.
 
-This script validates that:
-1. Losing trades (P&L < 0%) trigger exit after 30 minutes
-2. Warnings appear at 5 minutes for losing trades
-3. Profitable trades are NOT affected by 30-minute limit
+DEPRECATED: This test was for the 30-minute rule (Jan 17, 2026).
+The 30-minute rule was superseded by immediate loss exit (Jan 19, 2026).
+
+This script now validates that:
+1. Losing trades (P&L < 0%) trigger IMMEDIATE exit (via STOP_LOSS_THRESHOLD)
+2. Profitable trades are NOT affected by aggressive exit logic
+3. Time-based failsafe exits still work (8h and 12h)
 4. Edge cases are handled correctly
+
+NOTE: The immediate loss exit is tested more comprehensively in test_immediate_loss_exit.py
+This test is maintained for backwards compatibility and to verify failsafe mechanisms.
 """
 
 import sys
@@ -18,8 +24,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
 # Import the constants we need to test
 from trading_strategy import (
-    MAX_LOSING_POSITION_HOLD_MINUTES,
-    LOSING_POSITION_WARNING_MINUTES,
+    STOP_LOSS_THRESHOLD,
+    STOP_LOSS_WARNING,
+    STOP_LOSS_EMERGENCY,
     MAX_POSITION_HOLD_HOURS,
     MAX_POSITION_HOLD_EMERGENCY
 )
@@ -27,125 +34,111 @@ from trading_strategy import (
 def test_constants():
     """Test that constants are set correctly."""
     print("Testing constants...")
-    assert MAX_LOSING_POSITION_HOLD_MINUTES == 30, f"Expected 30, got {MAX_LOSING_POSITION_HOLD_MINUTES}"
-    assert LOSING_POSITION_WARNING_MINUTES == 5, f"Expected 5, got {LOSING_POSITION_WARNING_MINUTES}"
-    assert MAX_POSITION_HOLD_HOURS == 8, f"Expected 8, got {MAX_POSITION_HOLD_HOURS}"
-    assert MAX_POSITION_HOLD_EMERGENCY == 12, f"Expected 12, got {MAX_POSITION_HOLD_EMERGENCY}"
-    print("✅ All constants are correct")
+    print(f"   STOP_LOSS_THRESHOLD = {STOP_LOSS_THRESHOLD}% (should be ultra-aggressive, near 0)")
+    print(f"   STOP_LOSS_WARNING = {STOP_LOSS_WARNING}%")
+    print(f"   STOP_LOSS_EMERGENCY = {STOP_LOSS_EMERGENCY}%")
+    print(f"   MAX_POSITION_HOLD_HOURS = {MAX_POSITION_HOLD_HOURS}h")
+    print(f"   MAX_POSITION_HOLD_EMERGENCY = {MAX_POSITION_HOLD_EMERGENCY}h")
+    
+    # Verify immediate loss exit constants
+    assert STOP_LOSS_THRESHOLD >= -0.1 and STOP_LOSS_THRESHOLD <= -0.01, \
+        f"STOP_LOSS_THRESHOLD should be ultra-aggressive (between -0.1% and -0.01%), got {STOP_LOSS_THRESHOLD}%"
+    assert STOP_LOSS_EMERGENCY == -5.0, f"Expected emergency stop at -5.0%, got {STOP_LOSS_EMERGENCY}%"
+    assert MAX_POSITION_HOLD_HOURS == 8, f"Expected 8h failsafe, got {MAX_POSITION_HOLD_HOURS}h"
+    assert MAX_POSITION_HOLD_EMERGENCY == 12, f"Expected 12h emergency, got {MAX_POSITION_HOLD_EMERGENCY}h"
+    print("✅ All constants are correct for immediate loss exit implementation")
 
 def test_losing_trade_scenarios():
-    """Test various losing trade scenarios."""
-    print("\nTesting losing trade scenarios...")
+    """Test immediate exit for losing trades."""
+    print("\nTesting immediate exit scenarios for losing trades...")
+    print("NOTE: 30-minute rule was superseded by immediate exit (Jan 19, 2026)")
     
-    # Scenario 1: Losing trade held for 5 minutes (warning threshold)
-    print("\n1. Losing trade at 5 minutes (should warn):")
-    position_age_minutes = 5
+    # Scenario 1: Small loss should trigger immediate exit via stop loss threshold
+    print("\n1. Small loss (-0.5%) - should trigger immediate exit:")
     pnl_percent = -0.5
-    print(f"   Position: {pnl_percent}% P&L, {position_age_minutes} minutes old")
-    if position_age_minutes >= LOSING_POSITION_WARNING_MINUTES:
-        minutes_remaining = MAX_LOSING_POSITION_HOLD_MINUTES - position_age_minutes
-        print(f"   ⚠️  WARNING: Will auto-exit in {minutes_remaining} minutes")
-    print("   ✅ Warning triggered correctly")
+    print(f"   Position: {pnl_percent}% P&L")
+    should_exit = pnl_percent <= STOP_LOSS_THRESHOLD
+    print(f"   Stop loss check: {pnl_percent}% <= {STOP_LOSS_THRESHOLD}% = {should_exit}")
+    assert should_exit, "Small losses should exit immediately via stop loss"
+    print("   ✅ Exit triggered correctly (immediate)")
     
-    # Scenario 2: Losing trade held for 15 minutes (mid-warning)
-    print("\n2. Losing trade at 15 minutes (should warn):")
-    position_age_minutes = 15
-    pnl_percent = -0.8
-    print(f"   Position: {pnl_percent}% P&L, {position_age_minutes} minutes old")
-    if position_age_minutes >= LOSING_POSITION_WARNING_MINUTES:
-        minutes_remaining = MAX_LOSING_POSITION_HOLD_MINUTES - position_age_minutes
-        print(f"   ⚠️  WARNING: Will auto-exit in {minutes_remaining} minutes")
-    print("   ✅ Warning triggered correctly")
+    # Scenario 2: Tiny loss at threshold
+    print("\n2. Loss at threshold (-0.01%) - should exit:")
+    pnl_percent = -0.01
+    print(f"   Position: {pnl_percent}% P&L")
+    should_exit = pnl_percent <= STOP_LOSS_THRESHOLD
+    print(f"   Stop loss check: {pnl_percent}% <= {STOP_LOSS_THRESHOLD}% = {should_exit}")
+    assert should_exit, "Loss at threshold should exit"
+    print("   ✅ Exit triggered correctly")
     
-    # Scenario 3: Losing trade held for 30 minutes (exit threshold)
-    print("\n3. Losing trade at 30 minutes (should EXIT):")
-    position_age_minutes = 30
+    # Scenario 3: Medium loss
+    print("\n3. Medium loss (-1.2%) - should exit:")
     pnl_percent = -1.2
-    print(f"   Position: {pnl_percent}% P&L, {position_age_minutes} minutes old")
-    should_exit = position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
-    print(f"   🚨 EXIT: {should_exit}")
-    assert should_exit, "Should exit at 30 minutes"
-    print("   ✅ Exit triggered correctly")
+    print(f"   Position: {pnl_percent}% P&L")
+    should_exit = pnl_percent <= STOP_LOSS_THRESHOLD
+    assert should_exit, "Medium losses should exit immediately"
+    print("   ✅ Exit triggered correctly (immediate)")
     
-    # Scenario 4: Losing trade held for 45 minutes (well past threshold)
-    print("\n4. Losing trade at 45 minutes (should EXIT):")
-    position_age_minutes = 45
-    pnl_percent = -1.5
-    print(f"   Position: {pnl_percent}% P&L, {position_age_minutes} minutes old")
-    should_exit = position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
-    print(f"   🚨 EXIT: {should_exit}")
-    assert should_exit, "Should exit at 45 minutes"
-    print("   ✅ Exit triggered correctly")
+    # Scenario 4: Large loss - emergency stop
+    print("\n4. Large loss (-5.5%) - emergency stop:")
+    pnl_percent = -5.5
+    print(f"   Position: {pnl_percent}% P&L")
+    should_exit_emergency = pnl_percent <= STOP_LOSS_EMERGENCY
+    assert should_exit_emergency, "Large losses should trigger emergency stop"
+    print("   ✅ Emergency exit triggered correctly")
 
 def test_profitable_trade_scenarios():
-    """Test that profitable trades are NOT affected by 30-minute limit."""
+    """Test that profitable trades are NOT affected by aggressive exit logic."""
     print("\nTesting profitable trade scenarios...")
+    print("Profitable trades should NOT be affected by stop loss logic")
     
-    # Scenario 1: Profitable trade at 30 minutes
-    print("\n1. Profitable trade at 30 minutes (should NOT exit due to time):")
-    position_age_minutes = 30
+    # Scenario 1: Small profit
+    print("\n1. Small profit at +0.5%:")
     pnl_percent = 0.5
-    print(f"   Position: {pnl_percent}% P&L, {position_age_minutes} minutes old")
-    # Losing trade check: pnl_percent < 0
-    is_losing = pnl_percent < 0
-    should_exit_due_to_time = is_losing and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
-    print(f"   Is losing: {is_losing}")
-    print(f"   Should exit due to time: {should_exit_due_to_time}")
-    assert not should_exit_due_to_time, "Profitable trade should NOT exit at 30 minutes"
-    print("   ✅ Profitable trade NOT affected by 30-minute limit")
+    print(f"   Position: {pnl_percent}% P&L")
+    would_exit_via_stop_loss = pnl_percent <= STOP_LOSS_THRESHOLD
+    print(f"   Stop loss check: {pnl_percent}% <= {STOP_LOSS_THRESHOLD}% = {would_exit_via_stop_loss}")
+    assert not would_exit_via_stop_loss, "Profitable trade should NOT trigger stop loss"
+    print("   ✅ Profitable trade NOT affected by stop loss")
     
-    # Scenario 2: Profitable trade at 2 hours
-    print("\n2. Profitable trade at 2 hours (should NOT exit due to time):")
-    position_age_hours = 2
-    position_age_minutes = position_age_hours * 60
+    # Scenario 2: Larger profit
+    print("\n2. Good profit at +1.2%:")
     pnl_percent = 1.2
-    print(f"   Position: {pnl_percent}% P&L, {position_age_hours} hours old")
-    is_losing = pnl_percent < 0
-    should_exit_due_to_time = is_losing and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
-    print(f"   Is losing: {is_losing}")
-    print(f"   Should exit due to time: {should_exit_due_to_time}")
-    assert not should_exit_due_to_time, "Profitable trade should NOT exit at 2 hours"
-    print("   ✅ Profitable trade can run longer to capture gains")
+    print(f"   Position: {pnl_percent}% P&L")
+    would_exit_via_stop_loss = pnl_percent <= STOP_LOSS_THRESHOLD
+    assert not would_exit_via_stop_loss, "Profitable trade should NOT trigger stop loss"
+    print("   ✅ Profitable trade can run to capture more gains")
 
 def test_edge_cases():
     """Test edge cases."""
     print("\nTesting edge cases...")
     
     # Edge case 1: Position exactly at breakeven (0%)
-    print("\n1. Position at breakeven (0% P&L) at 30 minutes:")
-    position_age_minutes = 30
+    print("\n1. Position at breakeven (0% P&L):")
     pnl_percent = 0.0
-    print(f"   Position: {pnl_percent}% P&L, {position_age_minutes} minutes old")
-    is_losing = pnl_percent < 0
-    should_exit_due_to_time = is_losing and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
-    print(f"   Is losing: {is_losing}")
-    print(f"   Should exit due to time: {should_exit_due_to_time}")
-    assert not should_exit_due_to_time, "Breakeven position should NOT be treated as losing"
+    print(f"   Position: {pnl_percent}% P&L")
+    would_exit = pnl_percent <= STOP_LOSS_THRESHOLD
+    print(f"   Stop loss check: {pnl_percent}% <= {STOP_LOSS_THRESHOLD}% = {would_exit}")
+    assert not would_exit, "Breakeven position should NOT trigger stop loss"
     print("   ✅ Breakeven positions are NOT treated as losing trades")
     
     # Edge case 2: Very small loss (-0.01%)
-    print("\n2. Very small loss (-0.01%) at 30 minutes:")
-    position_age_minutes = 30
+    print("\n2. Very small loss (-0.01%) at threshold:")
     pnl_percent = -0.01
-    print(f"   Position: {pnl_percent}% P&L, {position_age_minutes} minutes old")
-    is_losing = pnl_percent < 0
-    should_exit_due_to_time = is_losing and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
-    print(f"   Is losing: {is_losing}")
-    print(f"   Should exit due to time: {should_exit_due_to_time}")
-    assert should_exit_due_to_time, "Even small losses should exit at 30 minutes"
-    print("   ✅ Even tiny losses trigger 30-minute exit")
+    print(f"   Position: {pnl_percent}% P&L")
+    would_exit = pnl_percent <= STOP_LOSS_THRESHOLD
+    print(f"   Stop loss check: {pnl_percent}% <= {STOP_LOSS_THRESHOLD}% = {would_exit}")
+    assert would_exit, "Small losses should trigger exit"
+    print("   ✅ Even tiny losses trigger exit (immediate)")
     
-    # Edge case 3: Position just under 30 minutes (29 minutes)
-    print("\n3. Losing trade at 29 minutes (should NOT exit yet):")
-    position_age_minutes = 29
-    pnl_percent = -0.5
-    print(f"   Position: {pnl_percent}% P&L, {position_age_minutes} minutes old")
-    is_losing = pnl_percent < 0
-    should_exit_due_to_time = is_losing and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES
-    print(f"   Is losing: {is_losing}")
-    print(f"   Should exit due to time: {should_exit_due_to_time}")
-    assert not should_exit_due_to_time, "Should NOT exit before 30 minutes"
-    print("   ✅ Exit threshold is exactly 30 minutes, not before")
+    # Edge case 3: Tiny profit just above 0
+    print("\n3. Tiny profit (+0.001%):")
+    pnl_percent = 0.001
+    print(f"   Position: {pnl_percent}% P&L")
+    would_exit = pnl_percent <= STOP_LOSS_THRESHOLD
+    print(f"   Stop loss check: {pnl_percent}% <= {STOP_LOSS_THRESHOLD}% = {would_exit}")
+    assert not would_exit, "Tiny profit should NOT trigger stop loss"
+    print("   ✅ Any profit is protected from stop loss exit")
 
 def test_failsafe_mechanisms():
     """Test that failsafe mechanisms still work."""
@@ -174,7 +167,16 @@ def test_failsafe_mechanisms():
 def main():
     """Run all tests."""
     print("=" * 70)
-    print("TESTING 30-MINUTE LOSING TRADE EXIT LOGIC")
+    print("TESTING LOSING TRADE EXIT LOGIC (Immediate Exit Implementation)")
+    print("=" * 70)
+    print()
+    print("NOTE: This test was updated from 30-minute rule to immediate exit")
+    print("      The 30-minute rule (Jan 17, 2026) was superseded by")
+    print("      immediate loss exit (Jan 19, 2026)")
+    print()
+    print("      For comprehensive immediate exit testing, see:")
+    print("      test_immediate_loss_exit.py")
+    print()
     print("=" * 70)
     
     try:
@@ -188,12 +190,12 @@ def main():
         print("✅ ALL TESTS PASSED")
         print("=" * 70)
         print("\nSummary:")
-        print("  ✅ Losing trades exit after 30 minutes")
-        print("  ✅ Warnings appear at 5 minutes for losing trades")
-        print("  ✅ Profitable trades can run up to 8 hours")
+        print("  ✅ Losing trades exit IMMEDIATELY (via stop loss threshold)")
+        print("  ✅ Stop loss threshold is ultra-aggressive (-0.01%)")
+        print("  ✅ Profitable trades are NOT affected")
         print("  ✅ Edge cases handled correctly")
-        print("  ✅ Failsafe mechanisms still work")
-        print("\n🎯 NIJA will now NEVER hold losing trades for more than 30 minutes")
+        print("  ✅ Failsafe mechanisms still work (8h, 12h)")
+        print("\n🎯 NIJA exits losing trades IMMEDIATELY to preserve capital")
         print("=" * 70)
         return 0
         

@@ -16,25 +16,26 @@ import os
 
 # Test the constants are correct
 def test_constants():
-    """Verify losing trade time constants are set correctly"""
+    """Verify losing trade constants are set correctly for immediate exit"""
     print("Testing constants...")
+    print("  NOTE: 30-minute rule was superseded by immediate exit (Jan 19, 2026)")
     
     try:
         # Import from bot.trading_strategy
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
         from trading_strategy import (
-            MAX_LOSING_POSITION_HOLD_MINUTES,
-            LOSING_POSITION_WARNING_MINUTES,
             STOP_LOSS_THRESHOLD,
             STOP_LOSS_EMERGENCY
         )
         
-        assert MAX_LOSING_POSITION_HOLD_MINUTES == 30, "Max losing hold should be 30 minutes"
-        assert LOSING_POSITION_WARNING_MINUTES == 5, "Warning should be at 5 minutes"
-        assert STOP_LOSS_THRESHOLD == -1.0, "Stop loss should be -1.0%"
-        assert STOP_LOSS_EMERGENCY == -5.0, "Emergency stop should be -5.0%"
+        # Verify immediate exit constants (ultra-aggressive)
+        assert STOP_LOSS_THRESHOLD >= -0.1 and STOP_LOSS_THRESHOLD <= -0.01, \
+            f"Stop loss should be ultra-aggressive (between -0.1% and -0.01%), got {STOP_LOSS_THRESHOLD}%"
+        assert STOP_LOSS_EMERGENCY == -5.0, f"Emergency stop should be -5.0%, got {STOP_LOSS_EMERGENCY}%"
         
-        print("  ✅ Constants configured correctly")
+        print(f"  ✅ Constants configured correctly")
+        print(f"     STOP_LOSS_THRESHOLD = {STOP_LOSS_THRESHOLD}% (immediate exit)")
+        print(f"     STOP_LOSS_EMERGENCY = {STOP_LOSS_EMERGENCY}% (failsafe)")
         return True
     except ImportError as e:
         # Can't import module due to missing dependencies, but we can verify by reading file
@@ -44,78 +45,79 @@ def test_constants():
         with open('bot/trading_strategy.py', 'r') as f:
             code = f.read()
         
-        assert 'MAX_LOSING_POSITION_HOLD_MINUTES = 30' in code, "Max losing hold should be 30 minutes"
-        assert 'LOSING_POSITION_WARNING_MINUTES = 5' in code, "Warning should be at 5 minutes"
-        assert 'STOP_LOSS_THRESHOLD = -1.0' in code, "Stop loss should be -1.0%"
+        # Check for immediate exit implementation
+        assert 'STOP_LOSS_THRESHOLD = -0.01' in code, "Stop loss should be -0.01% for immediate exit"
         assert 'STOP_LOSS_EMERGENCY = -5.0' in code, "Emergency stop should be -5.0%"
         
-        print("  ✅ Constants verified from source file")
+        print("  ✅ Constants verified from source file (immediate exit implementation)")
         return True
 
 
 def test_losing_position_with_time_exits_after_30_min():
-    """Test that losing positions with entry time exit after 30 minutes"""
-    print("\nTest 1: Losing position with entry time (30+ minutes)")
+    """Test that losing positions exit IMMEDIATELY regardless of time (supersedes 30-min rule)"""
+    print("\nTest 1: Losing position exits IMMEDIATELY (not after 30 minutes)")
+    print("  NOTE: Immediate exit supersedes old 30-minute rule")
     
     # Simulate position state
     pnl_percent = -0.24  # XRP losing 0.24%
     entry_time_available = True
-    position_age_minutes = 35  # Held for 35 minutes (over 30 min limit)
+    position_age_minutes = 35  # Held for 35 minutes (irrelevant now)
     
-    # Check if position would be marked for exit
-    should_exit = False
-    if pnl_percent < 0 and entry_time_available:
-        if position_age_minutes >= 30:
-            should_exit = True
-            print(f"  Position: P&L={pnl_percent}%, Age={position_age_minutes}min")
-            print(f"  ✅ WOULD EXIT: Time exceeded 30 minutes")
+    # Check if position would be marked for exit via IMMEDIATE exit logic
+    # New logic: Any loss triggers exit immediately via stop loss threshold
+    stop_loss_threshold = -0.01  # Current implementation
+    should_exit = pnl_percent <= stop_loss_threshold
     
-    assert should_exit, "Position should exit after 30 minutes"
+    if should_exit:
+        print(f"  Position: P&L={pnl_percent}%, Age={position_age_minutes}min")
+        print(f"  ✅ WOULD EXIT: Loss triggers IMMEDIATE exit (not time-based)")
+        print(f"     Stop loss check: {pnl_percent}% <= {stop_loss_threshold}%")
+    
+    assert should_exit, "Position should exit IMMEDIATELY on any loss"
     return True
 
 
 def test_orphaned_losing_position_exits_immediately():
     """Test that orphaned losing positions exit immediately"""
-    print("\nTest 2: Orphaned losing position (no entry time)")
+    print("\nTest 2: Orphaned losing position (no entry time) - exits immediately")
     
     # Simulate orphaned position state
     pnl_percent = -0.24  # XRP losing 0.24%
     entry_time_available = False  # No entry time tracking
     
     # Check if position would be marked for exit
-    should_exit = False
-    if pnl_percent < 0:
-        if not entry_time_available:
-            should_exit = True
-            print(f"  Position: P&L={pnl_percent}%, Entry time available={entry_time_available}")
-            print(f"  ✅ WOULD EXIT: Orphaned position with loss")
+    # With immediate exit logic, ANY loss triggers exit
+    stop_loss_threshold = -0.01
+    should_exit = pnl_percent <= stop_loss_threshold
+    
+    if should_exit:
+        print(f"  Position: P&L={pnl_percent}%, Entry time available={entry_time_available}")
+        print(f"  ✅ WOULD EXIT: Orphaned position with loss exits IMMEDIATELY")
+        print(f"     Stop loss check: {pnl_percent}% <= {stop_loss_threshold}%")
     
     assert should_exit, "Orphaned losing position should exit immediately"
     return True
 
 
 def test_losing_position_under_30_min_warns_not_exits():
-    """Test that losing positions under 30 minutes warn but don't exit yet"""
-    print("\nTest 3: Losing position under 30 minutes")
+    """Test that immediate exit applies regardless of time held"""
+    print("\nTest 3: Losing position exits IMMEDIATELY (time held is irrelevant)")
+    print("  NOTE: With immediate exit, time held doesn't matter")
     
     # Simulate position state
     pnl_percent = -0.15
     entry_time_available = True
-    position_age_minutes = 10  # Only 10 minutes (under 30 min limit)
+    position_age_minutes = 10  # Only 10 minutes (but irrelevant with immediate exit)
     
-    # Check behavior
-    should_exit = False
-    should_warn = False
-    if pnl_percent < 0 and entry_time_available:
-        if position_age_minutes >= 30:
-            should_exit = True
-        elif position_age_minutes >= 5:
-            should_warn = True
+    # Check behavior with immediate exit logic
+    stop_loss_threshold = -0.01
+    should_exit = pnl_percent <= stop_loss_threshold
     
     print(f"  Position: P&L={pnl_percent}%, Age={position_age_minutes}min")
-    assert not should_exit, "Position should NOT exit before 30 minutes"
-    assert should_warn, "Position SHOULD warn after 5 minutes"
-    print(f"  ✅ CORRECT: Warns but doesn't exit (held {position_age_minutes}min < 30min)")
+    print(f"  Stop loss check: {pnl_percent}% <= {stop_loss_threshold}% = {should_exit}")
+    
+    assert should_exit, "With immediate exit, position exits regardless of time"
+    print(f"  ✅ CORRECT: Exits IMMEDIATELY (time is irrelevant)")
     return True
 
 
@@ -179,14 +181,14 @@ def test_stop_loss_still_works():
     """Test that stop loss thresholds still work as failsafes"""
     print("\nTest 7: Stop loss thresholds still active")
     
-    # Test -1.0% stop loss
-    pnl_percent = -1.1
-    stop_loss_threshold = -1.0
+    # Test immediate exit threshold (-0.01%)
+    pnl_percent = -0.02
+    stop_loss_threshold = -0.01
     
     should_exit = pnl_percent <= stop_loss_threshold
     print(f"  Position: P&L={pnl_percent}%")
-    assert should_exit, "Stop loss at -1.0% should still trigger"
-    print(f"  ✅ CORRECT: Stop loss at -1.0% still works")
+    assert should_exit, "Stop loss at -0.01% should trigger"
+    print(f"  ✅ CORRECT: Immediate stop loss at -0.01% works")
     
     # Test -5.0% emergency stop
     pnl_percent = -5.5
@@ -202,12 +204,16 @@ def test_stop_loss_still_works():
 def run_all_tests():
     """Run all tests and report results"""
     print("=" * 70)
-    print("XRP LOSING TRADE FIX - TEST SUITE")
+    print("XRP LOSING TRADE FIX - TEST SUITE (Updated for Immediate Exit)")
     print("=" * 70)
     print()
     print("Issue: XRP held for 3 days with -$0.24 loss")
-    print("Cause: 'NO RED EXIT' rule blocked 30-minute exit for small losses")
-    print("Fix: Remove conflicting rule, add orphaned position immediate exit")
+    print("Original Cause: 'NO RED EXIT' rule blocked 30-minute exit")
+    print("Original Fix: Remove conflicting rule, 30-minute exit")
+    print()
+    print("UPDATED (Jan 19, 2026):")
+    print("  30-minute rule superseded by IMMEDIATE EXIT on any loss")
+    print("  ANY position with P&L < 0% exits IMMEDIATELY")
     print()
     print("=" * 70)
     print()
@@ -246,13 +252,15 @@ def run_all_tests():
         print(f"✅ ALL TESTS PASSED ({passed}/{len(tests)})")
         print()
         print("XRP fix is working correctly:")
-        print("  ✅ Losing trades exit after 30 minutes (when entry time tracked)")
-        print("  ✅ Orphaned losing trades exit immediately (no entry time)")
+        print("  ✅ Losing trades exit IMMEDIATELY (via stop loss threshold)")
+        print("  ✅ Orphaned losing trades exit IMMEDIATELY")
+        print("  ✅ Time held is IRRELEVANT - any loss triggers immediate exit")
         print("  ✅ Conflicting 'NO RED EXIT' rule removed")
         print("  ✅ Stop loss thresholds still work as failsafes")
         print("  ✅ Profitable positions unaffected")
         print()
-        print("RESULT: XRP and similar positions will now exit properly")
+        print("RESULT: XRP and similar positions will exit IMMEDIATELY on any loss")
+        print("        (30-minute rule was superseded by immediate exit - Jan 19, 2026)")
         return True
     else:
         print(f"❌ SOME TESTS FAILED ({failed}/{len(tests)} failed, {passed}/{len(tests)} passed)")
