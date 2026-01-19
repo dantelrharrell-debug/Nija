@@ -71,6 +71,16 @@ class ExecutionEngine:
             Position dictionary or None if failed
         """
         try:
+            # FIX #3 (Jan 19, 2026): Check if broker supports this symbol before attempting trade
+            if self.broker_client and hasattr(self.broker_client, 'supports_symbol'):
+                if not self.broker_client.supports_symbol(symbol):
+                    broker_name = getattr(self.broker_client, 'broker_type', 'unknown')
+                    broker_name_str = broker_name.value if hasattr(broker_name, 'value') else str(broker_name)
+                    logger.info(f"   ❌ Entry rejected for {symbol}")
+                    logger.info(f"      Reason: {broker_name_str.title()} does not support this symbol")
+                    logger.info(f"      💡 This symbol may be specific to another exchange (e.g., BUSD is Binance-only)")
+                    return None
+            
             # Log entry attempt
             logger.info(f"Executing {side} entry: {symbol} size=${position_size:.2f}")
             

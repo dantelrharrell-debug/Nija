@@ -106,6 +106,131 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
     'password', 'PASSWORD'
 ]
 
+
+# ============================================================================
+# BROKER-AWARE SYMBOL NORMALIZATION (FIX #1 - Jan 19, 2026)
+# ============================================================================
+# Each exchange uses different symbol formats:
+# - Coinbase:  ETH-USD, ETH-USDT, ETH-USDC (dash separator)
+# - Kraken:    ETH/USD, ETH/USDT, XETHZUSD (slash or no separator)
+# - Binance:   ETHUSDT, ETHBUSD (no separator, includes BUSD)
+# - OKX:       ETH-USDT (dash separator, prefers USDT over USD)
+#
+# Common mistakes that cause failures:
+# - Using Binance symbols (ETH.BUSD) on Kraken → Kraken doesn't support BUSD
+# - Using generic symbols without broker-specific mapping → Invalid product errors
+#
+# This function ensures symbols are properly formatted for each broker.
+# ============================================================================
+
+def normalize_symbol_for_broker(symbol: str, broker_name: str) -> str:
+    """
+    Normalize a trading symbol to the format expected by a specific broker.
+    
+    This prevents cross-broker symbol compatibility issues like trying to
+    trade Binance-only pairs (BUSD) on Kraken, or using wrong separators.
+    
+    Args:
+        symbol: Input symbol in any format (ETH-USD, ETH.BUSD, ETHUSDT, etc.)
+        broker_name: Broker name ('coinbase', 'kraken', 'binance', 'okx', etc.)
+    
+    Returns:
+        Normalized symbol in broker-specific format
+        
+    Examples:
+        normalize_symbol_for_broker("ETH.BUSD", "kraken") → "ETH/USD"
+        normalize_symbol_for_broker("ETH-USD", "kraken") → "ETH/USD"
+        normalize_symbol_for_broker("ETHUSDT", "coinbase") → "ETH-USD"
+        normalize_symbol_for_broker("BTC-USD", "binance") → "BTCUSDT"
+    """
+    if not symbol or not broker_name:
+        return symbol
+    
+    broker_name = broker_name.lower()
+    symbol_upper = symbol.upper()
+    
+    # Extract base and quote currencies from various formats
+    # Handle formats: ETH-USD, ETH.BUSD, ETHUSDT, ETH/USD
+    base = None
+    quote = None
+    
+    # Split on common separators
+    if '-' in symbol_upper:
+        parts = symbol_upper.split('-')
+        base, quote = parts[0], parts[1] if len(parts) > 1 else 'USD'
+    elif '/' in symbol_upper:
+        parts = symbol_upper.split('/')
+        base, quote = parts[0], parts[1] if len(parts) > 1 else 'USD'
+    elif '.' in symbol_upper:
+        parts = symbol_upper.split('.')
+        base, quote = parts[0], parts[1] if len(parts) > 1 else 'USD'
+    else:
+        # No separator - try to detect common patterns
+        # Most common: ETHUSDT, BTCUSDT, ETHBUSD
+        if symbol_upper.endswith('USDT'):
+            base = symbol_upper[:-4]
+            quote = 'USDT'
+        elif symbol_upper.endswith('BUSD'):
+            base = symbol_upper[:-4]
+            quote = 'BUSD'
+        elif symbol_upper.endswith('USDC'):
+            base = symbol_upper[:-4]
+            quote = 'USDC'
+        elif symbol_upper.endswith('USD'):
+            base = symbol_upper[:-3]
+            quote = 'USD'
+        else:
+            # Can't parse - return as-is
+            return symbol
+    
+    # CRITICAL: Map BUSD (Binance-only) to supported stablecoins
+    # Kraken, Coinbase, OKX don't support BUSD
+    if quote == 'BUSD':
+        if broker_name == 'kraken':
+            quote = 'USD'  # Kraken prefers native USD
+        elif broker_name == 'coinbase':
+            quote = 'USD'  # Coinbase prefers native USD
+        elif broker_name == 'okx':
+            quote = 'USDT'  # OKX prefers USDT
+        elif broker_name == 'binance':
+            quote = 'BUSD'  # Keep BUSD for Binance
+        else:
+            quote = 'USD'  # Default to USD for unknown brokers
+    
+    # Broker-specific formatting
+    if broker_name == 'kraken':
+        # Kraken format: ETH/USD, BTC/USDT, XETHZUSD (slash separator)
+        # Note: Kraken internally uses X prefix for some assets (XETH, XXBT)
+        # but the slash format is more standard
+        return f"{base}/{quote}"
+        
+    elif broker_name == 'coinbase':
+        # Coinbase format: ETH-USD, BTC-USDT (dash separator)
+        # NOTE: Coinbase supports both USD and USDT/USDC pairs
+        # We don't auto-convert USDC/USDT to USD because some assets
+        # may only have USDT/USDC pairs available, not USD
+        return f"{base}-{quote}"
+        
+    elif broker_name == 'binance':
+        # Binance format: ETHUSDT, BTCBUSD (no separator)
+        return f"{base}{quote}"
+        
+    elif broker_name == 'okx':
+        # OKX format: ETH-USDT, BTC-USDT (dash separator, prefers USDT)
+        # Convert USD to USDT for OKX
+        if quote == 'USD':
+            quote = 'USDT'
+        return f"{base}-{quote}"
+        
+    elif broker_name == 'alpaca':
+        # Alpaca format: varies, but generally handles standard formats
+        # Keep dash separator
+        return f"{base}-{quote}"
+        
+    else:
+        # Unknown broker - return with dash separator (most common)
+        return f"{base}-{quote}"
+
 # Rate limiting retry constants
 # UPDATED (Jan 10, 2026): Significantly increased 403 error delays to prevent persistent API blocks
 # 403 "Forbidden Too many errors" indicates API key is temporarily banned - needs longer cooldown
@@ -326,6 +451,67 @@ class BaseBroker(ABC):
     def supports_asset_class(self, asset_class: str) -> bool:
         """Check if broker supports asset class. Optional method, brokers can override."""
         return False
+    
+    def supports_symbol(self, symbol: str) -> bool:
+        """
+        Check if broker supports a given trading symbol.
+        
+        This is a critical safety check to prevent attempting trades on unsupported pairs.
+        For example, Kraken doesn't support BUSD (Binance-only stablecoin).
+        
+        Args:
+            symbol: Trading symbol to check (any format)
+            
+        Returns:
+            bool: True if broker supports this symbol, False otherwise
+            
+        Default implementation: extracts quote currency and checks against known unsupported pairs.
+        Brokers can override for more sophisticated checks (e.g., API-based validation).
+        """
+        if not symbol:
+            return False
+        
+        symbol_upper = symbol.upper()
+        broker_name = self.broker_type.value.lower()
+        
+        # Extract quote currency (USD, USDT, BUSD, etc.)
+        quote = None
+        if '-' in symbol_upper:
+            quote = symbol_upper.split('-')[-1]
+        elif '/' in symbol_upper:
+            quote = symbol_upper.split('/')[-1]
+        elif '.' in symbol_upper:
+            quote = symbol_upper.split('.')[-1]
+        else:
+            # No separator - try to detect common patterns
+            if symbol_upper.endswith('USDT'):
+                quote = 'USDT'
+            elif symbol_upper.endswith('BUSD'):
+                quote = 'BUSD'
+            elif symbol_upper.endswith('USDC'):
+                quote = 'USDC'
+            elif symbol_upper.endswith('USD'):
+                quote = 'USD'
+        
+        if not quote:
+            # Can't determine quote currency - assume supported
+            return True
+        
+        # Broker-specific unsupported pairs
+        unsupported = {
+            'kraken': ['BUSD'],  # Kraken doesn't support Binance USD
+            'coinbase': ['BUSD'],  # Coinbase doesn't support BUSD
+            'okx': ['BUSD'],  # OKX doesn't support BUSD
+            'alpaca': ['BUSD', 'USDT', 'USDC'],  # Alpaca is stocks/traditional assets
+        }
+        
+        # Check if quote currency is unsupported for this broker
+        if broker_name in unsupported:
+            if quote in unsupported[broker_name]:
+                logger.debug(f"⏭️ {broker_name.title()} doesn't support {quote} pairs (symbol: {symbol})")
+                return False
+        
+        return True
 
 
 # CRITICAL FIX (Jan 11, 2026): Invalid ProductID error detection
@@ -2766,11 +2952,20 @@ class CoinbaseBroker(BaseBroker):
     def get_current_price(self, symbol: str) -> float:
         """Fetch latest trade/last candle price for a product."""
         try:
+            # CRITICAL FIX (Jan 19, 2026): Normalize symbol for Coinbase format
+            # This prevents cross-broker symbol issues (e.g., using Binance BUSD symbols on Coinbase)
+            normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
+            
+            # Check if broker supports this symbol (e.g., Coinbase doesn't support BUSD)
+            if not self.supports_symbol(normalized_symbol):
+                logger.info(f"⏭️ Skipping unsupported symbol {symbol} on Coinbase (normalized: {normalized_symbol})")
+                return 0.0
+            
             # Fast path: product ticker price
             try:
                 # RATE LIMIT FIX: Wrap get_product with rate limiter to prevent 429 errors
                 def _fetch_product_price():
-                    return self.client.get_product(symbol)
+                    return self.client.get_product(normalized_symbol)
                 
                 if self._rate_limiter:
                     product = self._rate_limiter.call('get_product', _fetch_product_price)
@@ -2785,7 +2980,7 @@ class CoinbaseBroker(BaseBroker):
                 pass
 
             # Fallback: last close from 1m candle
-            candles = self.get_candles(symbol, '1m', 1)
+            candles = self.get_candles(normalized_symbol, '1m', 1)
             if candles:
                 last = candles[-1]
                 close = last.get('close') if isinstance(last, dict) else getattr(last, 'close', None)
@@ -4931,10 +5126,20 @@ class KrakenBroker(BaseBroker):
             if not self.api:
                 return {"status": "error", "error": "Not connected to Kraken"}
             
-            # Convert symbol format to Kraken format
-            # Kraken uses XBTUSD, ETHUSD, etc. (no dash)
-            # BTC-USD -> XBTUSD, ETH-USD -> ETHUSD
-            kraken_symbol = symbol.replace('-', '').upper()
+            # CRITICAL FIX (Jan 19, 2026): Normalize symbol for Kraken and check support
+            # This prevents trying to trade Binance-only pairs (BUSD) on Kraken
+            if not self.supports_symbol(symbol):
+                error_msg = f"Kraken does not support symbol: {symbol}"
+                logger.info(f"⏭️ {error_msg}")
+                return {"status": "error", "error": error_msg}
+            
+            # Normalize to Kraken format (ETH/USD, BTC/USDT, etc.)
+            normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
+            
+            # Convert symbol format to Kraken internal format
+            # Kraken uses XBTUSD, ETHUSD, etc. (no slash)
+            # ETH/USD -> ETHUSD, BTC/USD -> XBTUSD
+            kraken_symbol = normalized_symbol.replace('/', '').upper()
             
             # Kraken uses X prefix for BTC
             if kraken_symbol.startswith('BTC'):
