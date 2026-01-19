@@ -101,13 +101,11 @@ RSI_OVERSOLD_THRESHOLD = 45  # Exit when RSI below this (cut losses) - RAISED fr
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
 # Time-based exit thresholds (prevent indefinite holding)
-# CRITICAL FIX (Jan 17, 2026): ULTRA-AGGRESSIVE exits for losing trades
-# LOSING TRADES: NEVER hold for more than 30 minutes
+# CRITICAL FIX (Jan 19, 2026): IMMEDIATE EXIT FOR ALL LOSING TRADES
+# LOSING TRADES: EXIT IMMEDIATELY on ANY loss (P&L < 0%) - NO WAITING PERIOD
 # PROFITABLE TRADES: Can run up to 8 hours to capture gains
 # Jan 16, 2026: Added EMERGENCY exit at 12 hours as absolute failsafe
-# NIJA is for PROFIT, not losses - losing positions MUST exit within 30 minutes
-MAX_LOSING_POSITION_HOLD_MINUTES = 30  # CRITICAL: Exit losing trades (P&L < 0%) after 30 minutes MAX
-LOSING_POSITION_WARNING_MINUTES = 5  # Warn about losing positions after just 5 minutes
+# NIJA is for PROFIT, not losses - ANY losing position exits IMMEDIATELY
 MAX_POSITION_HOLD_HOURS = 8  # Auto-exit ALL positions held longer than this (8 hours) - failsafe
 MAX_POSITION_HOLD_EMERGENCY = 12  # EMERGENCY exit - force sell ALL positions after 12 hours
 STALE_POSITION_WARNING_HOURS = 4  # Warn about positions held this long (4 hours)
@@ -143,15 +141,16 @@ MIN_PROFIT_FEES = 0.012  # 1.2% estimated fees (0.6% per side)
 MIN_PROFIT_BUFFER = 0.002  # 0.2% safety buffer
 MIN_PROFIT_THRESHOLD = 0.016  # 1.6% minimum profit (spread + fees + buffer)
 
-# Stop loss thresholds - AGGRESSIVE to cut losses fast (V7.3 FIX)
+# Stop loss thresholds - ULTRA-AGGRESSIVE (V7.4 FIX - Jan 19, 2026)
+# CRITICAL: Exit ANY losing trade IMMEDIATELY (P&L < 0%)
+# These thresholds are FAILSAFES only - primary exit is immediate on any loss
+# Jan 19, 2026: Changed to immediate exit on ANY loss per user requirement
 # Jan 13, 2026: Tightened to -1.0% to cut losses IMMEDIATELY
 # Jan 16, 2026: Added EMERGENCY stop loss at -5% as failsafe
-# NIJA is for PROFIT, not losses - exit losing trades fast to preserve capital
-# Any position at -1% is likely to continue falling - better to exit and find new opportunities
-# Combined with 8-hour max hold time and technical exits for triple protection
-STOP_LOSS_THRESHOLD = -1.0  # Exit at -1.0% loss (AGGRESSIVE - cut losses fast)
-STOP_LOSS_EMERGENCY = -5.0  # EMERGENCY exit at -5% loss (FAILSAFE - force exit on major losses)
-STOP_LOSS_WARNING = -0.7  # Warn at -0.7% loss (meaningful early warning without noise)
+# NIJA is for PROFIT, not losses - exit losing trades IMMEDIATELY to preserve capital
+STOP_LOSS_THRESHOLD = -0.01  # Exit at ANY loss (ULTRA-AGGRESSIVE - immediate exit on any negative P&L)
+STOP_LOSS_EMERGENCY = -5.0  # EMERGENCY exit at -5% loss (FAILSAFE - should never reach this)
+STOP_LOSS_WARNING = -0.01  # Same as threshold - warn immediately on ANY loss
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Updated Dec 30, 2025: Lowered minimums to allow very small account trading
@@ -1262,41 +1261,26 @@ class TradingStrategy:
                                 
                                 logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent:+.2f}%) | Entry: ${entry_price:.2f}")
                                 
-                                # CRITICAL FIX (Jan 18, 2026): ULTRA-AGGRESSIVE exit for LOSING trades
-                                # NEVER hold losing positions - exit immediately
-                                # This ensures NIJA is ALWAYS in profiting trades, not losses
+                                # CRITICAL FIX (Jan 19, 2026): IMMEDIATE EXIT FOR ALL LOSING TRADES
+                                # User requirement: "all losing trades should and need to be sold immediately"
+                                # NIJA is for PROFIT, not losses - exit ANY losing position IMMEDIATELY
+                                # No waiting period, no grace time - if P&L < 0%, SELL NOW
                                 if pnl_percent < 0:
-                                    # Position is losing - apply exit logic based on available tracking
+                                    # Position is losing - EXIT IMMEDIATELY regardless of time held
+                                    logger.warning(f"   🚨 LOSING TRADE DETECTED: {symbol} at {pnl_percent:.2f}%")
+                                    logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
                                     
+                                    # Log position age if available for audit trail
                                     if entry_time_available:
-                                        # We have position age tracking - use 30-minute rule
                                         position_age_minutes = position_age_hours * MINUTES_PER_HOUR
-                                        
-                                        # CRITICAL: Exit ANY losing position after 30 minutes
-                                        if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
-                                            logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
-                                            logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
-                                            positions_to_exit.append({
-                                                'symbol': symbol,
-                                                'quantity': quantity,
-                                                'reason': f'Losing trade held too long ({position_age_minutes:.1f}m, max {MAX_LOSING_POSITION_HOLD_MINUTES}m, P&L {pnl_percent:.2f}%)'
-                                            })
-                                            continue
-                                        # Warn early about losing positions (5 minutes)
-                                        elif position_age_minutes >= LOSING_POSITION_WARNING_MINUTES:
-                                            minutes_remaining = MAX_LOSING_POSITION_HOLD_MINUTES - position_age_minutes
-                                            logger.warning(f"   ⚠️ LOSING TRADE: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f}min (will auto-exit in {minutes_remaining:.1f}min)")
-                                    else:
-                                        # No entry time tracking - this is likely an orphaned/auto-imported position
-                                        # Exit IMMEDIATELY on any loss since we don't know how long it's been held
-                                        logger.warning(f"   🚨 ORPHANED LOSING TRADE: {symbol} at {pnl_percent:.2f}% (no entry time tracking)")
-                                        logger.warning(f"   💥 Position may have been held for days - exiting immediately!")
-                                        positions_to_exit.append({
-                                            'symbol': symbol,
-                                            'quantity': quantity,
-                                            'reason': f'Orphaned losing trade (P&L {pnl_percent:.2f}%, no entry time)'
-                                        })
-                                        continue
+                                        logger.warning(f"      Position held for {position_age_minutes:.1f} minutes")
+                                    
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'IMMEDIATE LOSS EXIT (P&L {pnl_percent:.2f}%)'
+                                    })
+                                    continue
                                 
                                 # STEPPED PROFIT TAKING - Exit portions at profit targets
                                 # This locks in gains and frees capital for new opportunities
