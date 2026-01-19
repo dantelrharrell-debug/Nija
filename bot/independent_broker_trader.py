@@ -64,6 +64,17 @@ from datetime import datetime
 # Import BrokerType for connection order enforcement
 from broker_manager import BrokerType
 
+# Import copy trade engine for checking if copy trading is active
+try:
+    from bot.copy_trade_engine import get_copy_engine
+except ImportError:
+    # Handle case where bot module path isn't available
+    try:
+        from copy_trade_engine import get_copy_engine
+    except ImportError:
+        # If we can't import, we'll handle it gracefully in the code
+        get_copy_engine = None
+
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
@@ -323,7 +334,20 @@ class IndependentBrokerTrader:
                 for broker_name, balance in brokers.items():
                     logger.info(f"      • {broker_name}: ${balance:,.2f}")
         else:
-            logger.info("⚠️  NO FUNDED USER BROKERS DETECTED")
+            # Check if copy trading engine is active
+            if get_copy_engine is not None:
+                try:
+                    copy_trading_engine = get_copy_engine()
+                    if copy_trading_engine.active:
+                        logger.info("ℹ️  No independent USER brokers detected (users operate via copy trading)")
+                    else:
+                        logger.warning("⚠️  No funded USER brokers detected")
+                except Exception:
+                    # If we can't check the copy engine, fall back to warning
+                    logger.warning("⚠️  No funded USER brokers detected")
+            else:
+                # If get_copy_engine wasn't imported, fall back to warning
+                logger.warning("⚠️  No funded USER brokers detected")
         logger.info("=" * 70)
         
         return funded_users
