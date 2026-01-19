@@ -60,6 +60,12 @@ DISABLED_PAIRS = ["XRP-USD"]
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
+# OPTION A: 30-MINUTE EXIT FOR LOSING TRADES
+# Enforce "exit losing trades within 30 minutes" for tracked positions
+# This limits whipsaws while still giving positions time to recover
+MAX_LOSING_POSITION_HOLD_MINUTES = 30  # Exit losing trades after 30 minutes MAX
+LOSING_POSITION_WARNING_MINUTES = 5    # Warn after 5 minutes of being in a losing trade
+
 # Configuration constants
 # CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
 # Coinbase has strict rate limits (~10 req/s burst, lower sustained)
@@ -1297,6 +1303,28 @@ class TradingStrategy:
                                 entry_price = pnl_data['entry_price']
                                 
                                 logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent:+.2f}%) | Entry: ${entry_price:.2f}")
+                                
+                                # ✅ OPTION A: 30-MINUTE EXIT FOR LOSING TRADES
+                                # For tracked positions with P&L < 0%, enforce max hold time of 30 minutes
+                                # This limits whipsaws while still giving positions a chance to recover
+                                if pnl_percent < 0 and entry_time_available:
+                                    # Convert position age from hours to minutes
+                                    position_age_minutes = position_age_hours * MINUTES_PER_HOUR
+                                    
+                                    # Check if position has been losing for more than 30 minutes
+                                    if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
+                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
+                                        logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent:.2f}%)'
+                                        })
+                                        continue
+                                    # Warning at 5 minutes for visibility
+                                    elif position_age_minutes >= LOSING_POSITION_WARNING_MINUTES:
+                                        minutes_remaining = MAX_LOSING_POSITION_HOLD_MINUTES - position_age_minutes
+                                        logger.warning(f"   ⚠️ LOSING TRADE: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f}min (will auto-exit in {minutes_remaining:.1f}min)")
                                 
                                 # ✅ FIX 2: GLOBAL FAILSAFE STOP-LOSS (CANNOT BE DISABLED)
                                 # This is capital survival logic - triggers BEFORE all other logic
