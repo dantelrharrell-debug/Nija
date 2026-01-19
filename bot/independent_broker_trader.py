@@ -323,7 +323,17 @@ class IndependentBrokerTrader:
                 for broker_name, balance in brokers.items():
                     logger.info(f"      • {broker_name}: ${balance:,.2f}")
         else:
-            logger.info("⚠️  NO FUNDED USER BROKERS DETECTED")
+            # Check if copy trading engine is active
+            try:
+                from bot.copy_trade_engine import get_copy_engine
+                copy_trading_engine = get_copy_engine()
+                if copy_trading_engine._running:
+                    logger.info("ℹ️  No independent USER brokers detected (users operate via copy trading)")
+                else:
+                    logger.warning("⚠️  No funded USER brokers detected")
+            except Exception:
+                # If we can't import or check the copy engine, fall back to warning
+                logger.warning("⚠️  No funded USER brokers detected")
         logger.info("=" * 70)
         
         return funded_users

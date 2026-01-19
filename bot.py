@@ -431,6 +431,7 @@ def main():
             from bot.copy_trade_engine import start_copy_engine
             start_copy_engine()
             logger.info("   ✅ Copy trade engine started - user trades will be replicated")
+            logger.info("   👥 USER ACCOUNTS MODE: COPY TRADING (no independent threads)")
         except Exception as e:
             logger.error(f"   ❌ Failed to start copy trade engine: {e}")
             logger.error("   ⚠️  User accounts will NOT receive copy trades!")
