@@ -192,7 +192,6 @@ class CopyTradeEngine:
                 time.sleep(1.0)  # Prevent tight error loop
         
         logger.info("📡 Copy engine thread exiting...")
-
     
     def copy_trade_to_users(self, signal: TradeSignal) -> List[CopyTradeResult]:
         """
