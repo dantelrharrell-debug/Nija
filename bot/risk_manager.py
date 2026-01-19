@@ -197,9 +197,14 @@ class AdaptiveRiskManager:
                                signal_strength: int = 3, ai_confidence: float = 0.5,
                                volatility_pct: float = 0.01, 
                                use_total_capital: bool = False,
-                               position_value: float = 0.0) -> Tuple[float, Dict]:
+                               position_value: float = 0.0,
+                               portfolio_state=None) -> Tuple[float, Dict]:
         """
         Calculate adaptive position size based on multiple factors.
+        
+        FIX #1: PORTFOLIO-FIRST ACCOUNTING
+        If portfolio_state is provided, uses total_equity as the sizing base instead of cash.
+        This ensures position sizing accounts for capital already deployed in open positions.
         
         PRO MODE: Can use total capital (free balance + position values) instead of just free balance.
         
@@ -219,13 +224,14 @@ class AdaptiveRiskManager:
         - ADX > 50: 10% (extremely strong trending)
         
         Args:
-            account_balance: Current free balance in USD
+            account_balance: Current free balance in USD (DEPRECATED if portfolio_state provided)
             adx: Current ADX value
             signal_strength: Entry signal strength (1-5, default 3)
             ai_confidence: AI model confidence (0-1, default 0.5)
             volatility_pct: Current market volatility as % (default 0.01)
             use_total_capital: If True, uses account_balance + position_value as base (PRO MODE)
             position_value: Total value of open positions (only used if use_total_capital=True)
+            portfolio_state: PortfolioState instance (preferred - uses total_equity for sizing)
         
         Returns:
             Tuple of (position_size, breakdown_dict)
@@ -234,27 +240,48 @@ class AdaptiveRiskManager:
         """
         breakdown = {}
         
-        # Calculate base capital for position sizing
-        if use_total_capital and self.pro_mode:
-            total_capital = account_balance + position_value
-            breakdown['pro_mode'] = True
-            breakdown['free_balance'] = account_balance
-            breakdown['position_value'] = position_value
-            breakdown['total_capital'] = total_capital
+        # FIX #1: Use portfolio total_equity if available
+        if portfolio_state is not None:
+            total_equity = portfolio_state.total_equity
+            available_cash = portfolio_state.available_cash
+            position_value_from_portfolio = portfolio_state.total_position_value
             
-            # In PRO MODE, ensure we maintain minimum free balance reserve
-            min_free_reserve = total_capital * self.min_free_reserve_pct
-            if account_balance < min_free_reserve:
-                logger.warning(f"⚠️ PRO MODE: Below minimum free reserve (${account_balance:.2f} < ${min_free_reserve:.2f})")
-                logger.warning(f"   Need to rotate positions or skip trade")
-                breakdown['below_free_reserve'] = True
-                # Still allow calculation but flag it
+            breakdown['portfolio_accounting'] = True
+            breakdown['total_equity'] = total_equity
+            breakdown['available_cash'] = available_cash
+            breakdown['position_value'] = position_value_from_portfolio
             
-            # Use total capital as base for sizing
-            sizing_base = total_capital
+            # Use total equity as sizing base (MANDATORY per problem statement)
+            sizing_base = total_equity
+            
+            logger.debug(
+                f"Portfolio-first sizing: equity=${total_equity:.2f}, "
+                f"cash=${available_cash:.2f}, positions=${position_value_from_portfolio:.2f}"
+            )
         else:
-            sizing_base = account_balance
-            breakdown['pro_mode'] = False
+            # Legacy mode: Calculate base capital for position sizing
+            if use_total_capital and self.pro_mode:
+                total_capital = account_balance + position_value
+                breakdown['pro_mode'] = True
+                breakdown['free_balance'] = account_balance
+                breakdown['position_value'] = position_value
+                breakdown['total_capital'] = total_capital
+                
+                # In PRO MODE, ensure we maintain minimum free balance reserve
+                min_free_reserve = total_capital * self.min_free_reserve_pct
+                if account_balance < min_free_reserve:
+                    logger.warning(f"⚠️ PRO MODE: Below minimum free reserve (${account_balance:.2f} < ${min_free_reserve:.2f})")
+                    logger.warning(f"   Need to rotate positions or skip trade")
+                    breakdown['below_free_reserve'] = True
+                    # Still allow calculation but flag it
+                
+                # Use total capital as base for sizing
+                sizing_base = total_capital
+            else:
+                sizing_base = account_balance
+                breakdown['pro_mode'] = False
+                breakdown['portfolio_accounting'] = False
+                logger.debug(f"Legacy cash-based sizing: ${account_balance:.2f}")
         
         # No trade if ADX < 20
         if adx < 20:
