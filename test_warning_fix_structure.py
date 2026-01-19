@@ -24,11 +24,11 @@ def test_independent_broker_trader_logic():
         print("❌ Test 1 Failed: Missing copy_trade_engine import")
         return False
     
-    # Check for the conditional logic
-    if 'copy_trading_engine._running' in code:
-        print("✅ Test 2: Found _running attribute check")
+    # Check for the conditional logic - updated to check for .active property
+    if 'copy_trading_engine.active' in code:
+        print("✅ Test 2: Found active property check")
     else:
-        print("❌ Test 2 Failed: Missing _running check")
+        print("❌ Test 2 Failed: Missing active property check")
         return False
     
     # Check for the info message
