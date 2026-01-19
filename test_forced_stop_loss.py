@@ -9,6 +9,7 @@ Priority A from architect's recommendation: "Forced stop-loss exit logic (preven
 """
 
 import sys
+import os
 import logging
 from unittest.mock import Mock, MagicMock, patch
 from datetime import datetime
@@ -19,6 +20,10 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Get the directory of this script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+TRADING_STRATEGY_PATH = os.path.join(SCRIPT_DIR, 'bot', 'trading_strategy.py')
 
 
 def test_stop_loss_fires_first():
@@ -82,7 +87,11 @@ def test_stop_loss_priority_order():
     
     try:
         # Read the trading_strategy.py file to verify code structure
-        with open('bot/trading_strategy.py', 'r') as f:
+        if not os.path.exists(TRADING_STRATEGY_PATH):
+            logger.error(f"❌ Could not find trading_strategy.py at {TRADING_STRATEGY_PATH}")
+            return False
+        
+        with open(TRADING_STRATEGY_PATH, 'r') as f:
             content = f.read()
         
         # Find the stop-loss check location
@@ -161,7 +170,11 @@ def test_3_minute_max_losing_hold():
         logger.info("   (Changed from 30 minutes to prevent capital bleed)")
         
         # Verify the logic exists in code
-        with open('bot/trading_strategy.py', 'r') as f:
+        if not os.path.exists(TRADING_STRATEGY_PATH):
+            logger.error(f"❌ Could not find trading_strategy.py at {TRADING_STRATEGY_PATH}")
+            return False
+        
+        with open(TRADING_STRATEGY_PATH, 'r') as f:
             content = f.read()
         
         # Look for the 3-minute time exit logic
@@ -219,7 +232,11 @@ def test_emergency_stop_loss():
     
     try:
         # Verify emergency stop-loss exists in code
-        with open('bot/trading_strategy.py', 'r') as f:
+        if not os.path.exists(TRADING_STRATEGY_PATH):
+            logger.error(f"❌ Could not find trading_strategy.py at {TRADING_STRATEGY_PATH}")
+            return False
+        
+        with open(TRADING_STRATEGY_PATH, 'r') as f:
             content = f.read()
         
         # Look for emergency stop-loss at -0.75%

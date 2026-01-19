@@ -228,13 +228,19 @@ def analyze_current_configuration():
     logger.info("=" * 80)
     
     try:
-        from bot.trading_strategy import (
-            PROFIT_TARGETS,
-            STOP_LOSS_THRESHOLD,
-            MIN_POSITION_SIZE_USD,
-            MIN_BALANCE_TO_TRADE_USD,
-            MIN_PROFIT_THRESHOLD
-        )
+        # Try to import trading strategy module
+        try:
+            from bot.trading_strategy import (
+                PROFIT_TARGETS,
+                STOP_LOSS_THRESHOLD,
+                MIN_POSITION_SIZE_USD,
+                MIN_BALANCE_TO_TRADE_USD,
+                MIN_PROFIT_THRESHOLD
+            )
+        except ImportError as import_err:
+            logger.warning(f"⚠️  Could not import trading_strategy module: {import_err}")
+            logger.warning("   Skipping current configuration analysis")
+            return False
         
         logger.info("")
         logger.info("Position Sizing:")

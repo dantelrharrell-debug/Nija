@@ -20,6 +20,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Get the directory of this script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BROKER_MANAGER_PATH = os.path.join(SCRIPT_DIR, 'bot', 'broker_manager.py')
+TRADE_JOURNAL_PATH = os.path.join(SCRIPT_DIR, 'trade_journal.jsonl')
+
 
 def test_kraken_credentials():
     """
@@ -266,7 +271,11 @@ def test_kraken_place_order_logic():
     
     try:
         # Read the broker_manager.py to check place_market_order logic
-        with open('bot/broker_manager.py', 'r') as f:
+        if not os.path.exists(BROKER_MANAGER_PATH):
+            logger.error(f"❌ Could not find broker_manager.py at {BROKER_MANAGER_PATH}")
+            return False
+        
+        with open(BROKER_MANAGER_PATH, 'r') as f:
             content = f.read()
         
         # Find the place_market_order method for KrakenBroker
@@ -340,15 +349,15 @@ def test_trade_journal_analysis():
     try:
         import json
         
-        if not os.path.exists('trade_journal.jsonl'):
-            logger.warning("⚠️  trade_journal.jsonl not found (no trades yet)")
+        if not os.path.exists(TRADE_JOURNAL_PATH):
+            logger.warning(f"⚠️  trade_journal.jsonl not found at {TRADE_JOURNAL_PATH} (no trades yet)")
             return True
         
         kraken_trades = []
         coinbase_trades = []
         total_trades = 0
         
-        with open('trade_journal.jsonl', 'r') as f:
+        with open(TRADE_JOURNAL_PATH, 'r') as f:
             for line in f:
                 if line.strip():
                     total_trades += 1
