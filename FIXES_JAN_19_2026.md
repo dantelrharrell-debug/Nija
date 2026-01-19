@@ -440,6 +440,221 @@ A: Check logs for "AUTO-IMPORTED LOSER" message. These should exit in the next c
 
 ---
 
+## ⚠️ CRITICAL UPDATES (January 19, 2026)
+
+### Issue: Emergency Stop-Loss Too Tight
+
+**Original Implementation:**
+- Emergency stop-loss triggered at `-0.75%`
+- This was **dangerously tight** for crypto on Kraken
+
+**Problems with -0.75%:**
+- Spread: ~0.1-0.3%
+- Fees: ~0.6% per trade (1.2% round-trip)
+- Slippage: ~0.1-0.2%
+- **Total overhead: ~1.4-1.7%**
+
+**Result:** -0.75% stop was triggering on normal market movement, causing:
+- Immediate churn
+- Fee bleed
+- "Phantom losses" (positions killed before they had a chance)
+
+### ✅ FIX 6: Adjusted Emergency Stop-Loss Threshold
+
+**File:** `bot/trading_strategy.py` (line ~1357)
+
+**Change:**
+```python
+# OLD (too tight):
+if pnl_percent <= -0.75:
+
+# NEW (crypto-appropriate):
+if pnl_percent <= -1.25:
+```
+
+**Rationale:**
+- `-1.25%` allows for spread + fees + normal volatility
+- Still protective (prevents catastrophic losses)
+- Recommended range: -1.25% to -1.75% for crypto
+- Reduces false positives and fee churn
+
+---
+
+### Issue: Stop-Loss Decision ≠ Execution
+
+**Problem:**
+Logs showed `STOP LOSS HIT` but position still held.
+
+**Root Cause:**
+Emergency exits could be blocked by:
+- Rotation mode restrictions
+- Position size caps
+- Minimum trade size requirements
+- Fee optimizer delays
+
+### ✅ FIX 7: Forced Exit Path
+
+**File:** `bot/execution_engine.py` (new method)
+
+**Implementation:**
+Added `force_exit_position()` function that:
+- **Bypasses ALL filters** (rotation, caps, min size, fee optimizer)
+- **Direct market sell** (no delays, no safeguards)
+- **One retry** (if first attempt fails, retry once)
+- **Comprehensive logging** (alerts for manual intervention if both fail)
+
+**Integration:**
+Updated emergency stop-loss in `trading_strategy.py` to:
+1. Attempt direct market sell
+2. If failed, retry once after 1 second
+3. If both fail, log `MANUAL INTERVENTION REQUIRED`
+
+**Example:**
+```python
+if pnl_percent <= -1.25:
+    logger.warning(f"🛑 EMERGENCY STOP LOSS HIT: {symbol}")
+    logger.warning(f"💥 FORCED EXIT MODE - Bypassing all filters")
+    
+    # Attempt 1
+    result = active_broker.place_market_order(...)
+    
+    # Attempt 2 (if failed)
+    if not success:
+        logger.warning(f"🔄 Retrying forced exit")
+        result = active_broker.place_market_order(...)
+    
+    # Alert if both fail
+    if not success:
+        logger.error(f"🛑 MANUAL INTERVENTION REQUIRED")
+```
+
+---
+
+### Issue: Invalid Symbols in Analysis
+
+**Problem:**
+Logs showed `Analyzing ETH.BUSD` even though Kraken doesn't support BUSD.
+
+**Impact:**
+- Wasted CPU cycles analyzing invalid markets
+- Unnecessary API calls
+- Misleading logs
+- No actual trades on Kraken
+
+### ✅ FIX 8: Broker Symbol Normalization (Pre-Analysis)
+
+**File:** `bot/trading_strategy.py` (line ~2000)
+
+**Implementation:**
+Added broker-specific symbol filtering **BEFORE** market analysis:
+
+```python
+# FIX 6: Filter invalid symbols BEFORE analysis
+if broker_name == 'kraken':
+    # Kraken only supports */USD and */USDT pairs
+    markets_to_scan = [
+        sym for sym in markets_to_scan 
+        if sym.endswith('/USD') or sym.endswith('/USDT') or 
+           sym.endswith('-USD') or sym.endswith('-USDT')
+    ]
+    logger.info(f"🔍 Kraken symbol filter: {filtered_count} unsupported symbols removed")
+```
+
+**Supported Symbols (Kraken):**
+- ✅ BTC-USD, ETH-USD, SOL-USD (*/USD pairs)
+- ✅ BTC-USDT, ETH-USDT (*/USDT pairs)
+- ❌ ETH-BUSD (BUSD not supported)
+- ❌ BTC-EUR (EUR not supported)
+
+**Benefits:**
+- Saves CPU (no analysis of unsupported symbols)
+- Saves API quota (no data fetching for invalid pairs)
+- Cleaner logs (only show tradeable markets)
+- More realistic expectations
+
+---
+
+## Updated Deployment Checklist
+
+### Pre-Deployment
+- [x] Code syntax validated
+- [x] Fixes 1-5 tested
+- [x] **Fixes 6-8 implemented**
+- [x] **Critical safeguards test suite created**
+- [x] **All tests passing**
+- [x] Documentation complete
+
+### Post-Deployment Monitoring
+
+#### Watch for Emergency Stops (NEW)
+```
+🛑 EMERGENCY STOP LOSS HIT: BTC-USD at -1.30% (threshold: -1.25%)
+💥 FORCED EXIT MODE - Bypassing all filters
+✅ FORCED EXIT COMPLETE: BTC-USD sold at market
+```
+
+**Expected:** Should see these less frequently than before (less false positives)
+
+#### Watch for Forced Exit Retries (NEW)
+```
+❌ FORCED EXIT ATTEMPT 1 FAILED: Network error
+🔄 Retrying forced exit (attempt 2/2)...
+✅ FORCED EXIT COMPLETE (retry): BTC-USD sold at market
+```
+
+**Action:** Monitor network stability
+
+#### Watch for Manual Intervention Alerts (CRITICAL)
+```
+🛑 FORCED EXIT FAILED AFTER 2 ATTEMPTS
+🛑 MANUAL INTERVENTION REQUIRED FOR BTC-USD
+🛑 Position may still be open - check broker manually
+```
+
+**Action:** **URGENT** - Manually check broker and close position
+
+#### Watch for Symbol Filtering (NEW)
+```
+🔍 Kraken symbol filter: 15 unsupported symbols removed
+   (Kraken only supports */USD and */USDT pairs)
+```
+
+**Expected:** Normal operation, confirms filter is working
+
+#### OLD Pattern (Should NOT See)
+```
+🛑 EMERGENCY STOP LOSS: BTC-USD PnL=-0.75%
+```
+
+**Action:** If you see this, code was not deployed. Stop deployment.
+
+---
+
+## Updated Files Modified
+
+1. **bot/trading_strategy.py**
+   - Emergency stop-loss: -0.75% → -1.25% (FIX 6)
+   - Forced exit with retry (FIX 7)
+   - Broker symbol filtering before analysis (FIX 8)
+
+2. **bot/broker_integration.py**
+   - Kraken symbol allowlist (FIX 3)
+   - Enhanced order failure logging (FIX 4)
+
+3. **bot/broker_manager.py**
+   - Signal emission verification (FIX 5)
+
+4. **bot/execution_engine.py** (NEW)
+   - `force_exit_position()` method (FIX 7)
+
+5. **test_critical_safeguards_jan_19_2026.py** (NEW)
+   - Validation test suite for fixes 6-8
+
+6. **CRITICAL_SAFEGUARDS_JAN_19_2026.md** (NEW)
+   - Comprehensive documentation for fixes 6-8
+
+---
+
 ## References
 
 - Original problem statement: GitHub Issue
@@ -447,3 +662,6 @@ A: Check logs for "AUTO-IMPORTED LOSER" message. These should exit in the next c
 - Broker integration: `bot/broker_integration.py`
 - Copy trading: `bot/trade_signal_emitter.py`
 - Strategy implementation: `bot/trading_strategy.py`
+- **Execution engine: `bot/execution_engine.py`**
+- **Critical safeguards documentation: `CRITICAL_SAFEGUARDS_JAN_19_2026.md`**
+
