@@ -1569,7 +1569,12 @@ class TradingStrategy:
                                 # FIX #3: Only exit if profit > minimum threshold (spread + fees + buffer)
                                 # ENHANCEMENT (Jan 19, 2026): Use broker-specific profit targets
                                 # Different brokers have different fee structures
-                                broker_type = active_broker.broker_type if hasattr(active_broker, 'broker_type') else None
+                                # Safely get broker_type, defaulting to generic targets if not available
+                                try:
+                                    broker_type = getattr(active_broker, 'broker_type', None)
+                                except AttributeError:
+                                    broker_type = None
+                                
                                 if broker_type == BrokerType.KRAKEN:
                                     profit_targets = PROFIT_TARGETS_KRAKEN
                                     min_threshold = 0.005  # 0.5% minimum for Kraken (0.36% fees)
@@ -1577,6 +1582,7 @@ class TradingStrategy:
                                     profit_targets = PROFIT_TARGETS_COINBASE
                                     min_threshold = MIN_PROFIT_THRESHOLD  # 1.6% minimum for Coinbase (1.4% fees)
                                 else:
+                                    # Default to Coinbase targets for unknown brokers (conservative)
                                     profit_targets = PROFIT_TARGETS
                                     min_threshold = MIN_PROFIT_THRESHOLD
                                 

@@ -5147,18 +5147,21 @@ class KrakenBroker(BaseBroker):
                 - total_funds: Complete balance (trading_balance + total_held)
                 - crypto: Dictionary of crypto asset balances
         """
+        # Default return structure for error cases
+        default_balance = {
+            'usd': 0.0,
+            'usdt': 0.0,
+            'trading_balance': 0.0,
+            'usd_held': 0.0,
+            'usdt_held': 0.0,
+            'total_held': 0.0,
+            'total_funds': 0.0,
+            'crypto': {}
+        }
+        
         try:
             if not self.api:
-                return {
-                    'usd': 0.0,
-                    'usdt': 0.0,
-                    'trading_balance': 0.0,
-                    'usd_held': 0.0,
-                    'usdt_held': 0.0,
-                    'total_held': 0.0,
-                    'total_funds': 0.0,
-                    'crypto': {}
-                }
+                return default_balance.copy()
             
             # Get account balance using serialized API call
             balance = self._kraken_private_call('Balance')
@@ -5166,16 +5169,7 @@ class KrakenBroker(BaseBroker):
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
                 logger.error(f"Error fetching Kraken detailed balance ({self.account_identifier}): {error_msgs}")
-                return {
-                    'usd': 0.0,
-                    'usdt': 0.0,
-                    'trading_balance': 0.0,
-                    'usd_held': 0.0,
-                    'usdt_held': 0.0,
-                    'total_held': 0.0,
-                    'total_funds': 0.0,
-                    'crypto': {}
-                }
+                return default_balance.copy()
             
             if balance and 'result' in balance:
                 result = balance['result']
@@ -5209,9 +5203,20 @@ class KrakenBroker(BaseBroker):
                     tb = float(tb_result.get('tb', 0))
                     total_held = eb - tb if eb > tb else 0.0
                     
-                    # For Kraken, we can't easily separate USD vs USDT held
-                    # So we assign all held amount to USD for simplicity
-                    usd_held = total_held
+                    # NOTE: Kraken's TradeBalance API returns total held amount in base currency (USD)
+                    # but doesn't break it down by USD vs USDT. We approximate the distribution
+                    # based on the ratio of USD to USDT in available balances.
+                    if trading_balance > 0 and total_held > 0:
+                        usd_ratio = usd_balance / trading_balance
+                        usdt_ratio = usdt_balance / trading_balance
+                        usd_held = total_held * usd_ratio
+                        usdt_held = total_held * usdt_ratio
+                    elif usd_balance > 0:
+                        # If only USD, assign all held to USD
+                        usd_held = total_held
+                    else:
+                        # If only USDT or no balance, assign all held to USDT
+                        usdt_held = total_held
                 
                 total_funds = trading_balance + total_held
                 
@@ -5226,29 +5231,11 @@ class KrakenBroker(BaseBroker):
                     'crypto': crypto_holdings
                 }
             
-            return {
-                'usd': 0.0,
-                'usdt': 0.0,
-                'trading_balance': 0.0,
-                'usd_held': 0.0,
-                'usdt_held': 0.0,
-                'total_held': 0.0,
-                'total_funds': 0.0,
-                'crypto': {}
-            }
+            return default_balance.copy()
             
         except Exception as e:
             logger.error(f"Error fetching Kraken detailed balance ({self.account_identifier}): {e}")
-            return {
-                'usd': 0.0,
-                'usdt': 0.0,
-                'trading_balance': 0.0,
-                'usd_held': 0.0,
-                'usdt_held': 0.0,
-                'total_held': 0.0,
-                'total_funds': 0.0,
-                'crypto': {}
-            }
+            return default_balance.copy()
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """
