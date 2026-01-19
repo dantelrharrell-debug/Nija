@@ -622,6 +622,12 @@ class CoinbaseBroker(BaseBroker):
             logger.warning(f"⚠️ Position tracker initialization failed: {e}")
             self.position_tracker = None
         
+        # Balance tracking for fail-closed behavior (Jan 19, 2026)
+        # When balance fetch fails, preserve last known balance instead of returning 0
+        self._last_known_balance = None  # Last successful balance fetch
+        self._balance_fetch_errors = 0   # Count of consecutive errors
+        self._is_available = True        # Broker availability flag
+        
         # CRITICAL FIX (Jan 11, 2026): Install logging filter to suppress invalid ProductID errors
         # The Coinbase SDK logs "ProductID is invalid" as ERROR before raising exceptions
         # These errors are expected (delisted coins) and already handled by our exception logic
@@ -1510,18 +1516,57 @@ class CoinbaseBroker(BaseBroker):
             }
     
     def get_account_balance(self) -> float:
-        """Get USD trading balance (conforms to BaseBroker interface).
+        """Get USD trading balance with fail-closed behavior (conforms to BaseBroker interface).
+        
+        CRITICAL FIX (Jan 19, 2026): Fail closed - not "balance = 0"
+        - On error: Return last known balance (if available) instead of 0
+        - Track consecutive errors to mark broker unavailable
+        - Distinguish API errors from actual zero balance
         
         Returns:
             float: Total trading balance (USD + USDC)
+                   Returns last known balance on error (not 0)
         """
-        balance_data = self._get_account_balance_detailed()
-        if balance_data is None:
-            logger.warning("⚠️ get_account_balance() received None from _get_account_balance_detailed(), returning 0.0")
+        try:
+            balance_data = self._get_account_balance_detailed()
+            
+            if balance_data is None:
+                # API call failed - use last known balance if available
+                self._balance_fetch_errors += 1
+                if self._balance_fetch_errors >= 3:
+                    self._is_available = False
+                    logger.error(f"❌ Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                
+                if self._last_known_balance is not None:
+                    logger.warning(f"⚠️ Coinbase balance fetch failed, using last known balance: ${self._last_known_balance:.2f}")
+                    return self._last_known_balance
+                else:
+                    logger.error("❌ Coinbase balance fetch failed and no last known balance available, returning 0.0")
+                    return 0.0
+            
+            result = float(balance_data.get('trading_balance', 0.0))
+            
+            # SUCCESS: Update last known balance and reset error count
+            self._last_known_balance = result
+            self._balance_fetch_errors = 0
+            self._is_available = True
+            
+            logger.debug(f"get_account_balance() returning: ${result:.2f}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Exception fetching Coinbase balance: {e}")
+            self._balance_fetch_errors += 1
+            if self._balance_fetch_errors >= 3:
+                self._is_available = False
+                logger.error(f"❌ Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
+            
+            # Return last known balance instead of 0
+            if self._last_known_balance is not None:
+                logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                return self._last_known_balance
+            
             return 0.0
-        result = float(balance_data.get('trading_balance', 0.0))
-        logger.debug(f"get_account_balance() returning: ${result:.2f}")
-        return result
     
     def get_account_balance_detailed(self) -> dict:
         """Get detailed account balance information including crypto holdings.
@@ -1533,6 +1578,27 @@ class CoinbaseBroker(BaseBroker):
             dict: Detailed balance info with keys: usdc, usd, trading_balance, crypto, consumer_usd, consumer_usdc
         """
         return self._get_account_balance_detailed()
+    
+    def is_available(self) -> bool:
+        """
+        Check if Coinbase broker is available for trading.
+        
+        Returns False if there have been 3+ consecutive balance fetch errors.
+        This prevents trading when the API is not working properly.
+        
+        Returns:
+            bool: True if broker is available, False if unavailable
+        """
+        return self._is_available
+    
+    def get_error_count(self) -> int:
+        """
+        Get the number of consecutive balance fetch errors.
+        
+        Returns:
+            int: Number of consecutive errors
+        """
+        return self._balance_fetch_errors
     
     def get_total_capital(self, include_positions: bool = True) -> Dict:
         """
@@ -5646,6 +5712,12 @@ class OKXBroker(BaseBroker):
         self.market_api = None
         self.trade_api = None
         self.use_testnet = False
+        
+        # Balance tracking for fail-closed behavior (Jan 19, 2026)
+        # When balance fetch fails, preserve last known balance instead of returning 0
+        self._last_known_balance = None  # Last successful balance fetch
+        self._balance_fetch_errors = 0   # Count of consecutive errors
+        self._is_available = True        # Broker availability flag
     
     def connect(self) -> bool:
         """
@@ -5794,14 +5866,32 @@ class OKXBroker(BaseBroker):
     
     def get_account_balance(self) -> float:
         """
-        Get USDT balance available for trading.
+        Get USDT balance available for trading with fail-closed behavior.
+        
+        CRITICAL FIX (Jan 19, 2026): Fail closed - not "balance = 0"
+        - On error: Return last known balance (if available) instead of 0
+        - Track consecutive errors to mark broker unavailable
+        - Distinguish API errors from actual zero balance
         
         Returns:
             float: Available USDT balance
+                   Returns last known balance on error (not 0)
         """
         try:
             if not self.account_api:
-                return 0.0
+                # Not connected - return last known balance if available
+                if self._last_known_balance is not None:
+                    logging.warning(f"⚠️ OKX API not connected, using last known balance: ${self._last_known_balance:.2f}")
+                    self._balance_fetch_errors += 1
+                    if self._balance_fetch_errors >= 3:
+                        self._is_available = False
+                        logging.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                    return self._last_known_balance
+                else:
+                    logging.error("❌ OKX API not connected and no last known balance")
+                    self._balance_fetch_errors += 1
+                    self._is_available = False
+                    return 0.0
             
             # Get account balance
             result = self.account_api.get_balance()
@@ -5816,19 +5906,72 @@ class OKXBroker(BaseBroker):
                         if detail.get('ccy') == 'USDT':
                             available = float(detail.get('availBal', 0))
                             logging.info(f"💰 OKX USDT Balance: ${available:.2f}")
+                            
+                            # SUCCESS: Update last known balance and reset error count
+                            self._last_known_balance = available
+                            self._balance_fetch_errors = 0
+                            self._is_available = True
+                            
                             return available
                 
-                # No USDT found
+                # No USDT found - treat as zero balance (not an error)
                 logging.warning("⚠️  No USDT balance found in OKX account")
+                # Update last known balance to 0 (this is a successful API call, just zero balance)
+                self._last_known_balance = 0.0
+                self._balance_fetch_errors = 0
+                self._is_available = True
                 return 0.0
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-                logging.error(f"Error fetching OKX balance: {error_msg}")
-                return 0.0
+                logging.error(f"❌ OKX API error fetching balance: {error_msg}")
+                
+                # Return last known balance instead of 0
+                self._balance_fetch_errors += 1
+                if self._balance_fetch_errors >= 3:
+                    self._is_available = False
+                    logging.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                
+                if self._last_known_balance is not None:
+                    logging.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                    return self._last_known_balance
+                else:
+                    logging.error(f"   ❌ No last known balance available, returning 0")
+                    return 0.0
                 
         except Exception as e:
-            logging.error(f"Error fetching OKX balance: {e}")
+            logging.error(f"❌ Exception fetching OKX balance: {e}")
+            self._balance_fetch_errors += 1
+            if self._balance_fetch_errors >= 3:
+                self._is_available = False
+                logging.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
+            
+            # Return last known balance instead of 0
+            if self._last_known_balance is not None:
+                logging.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                return self._last_known_balance
+            
             return 0.0
+    
+    def is_available(self) -> bool:
+        """
+        Check if OKX broker is available for trading.
+        
+        Returns False if there have been 3+ consecutive balance fetch errors.
+        This prevents trading when the API is not working properly.
+        
+        Returns:
+            bool: True if broker is available, False if unavailable
+        """
+        return self._is_available
+    
+    def get_error_count(self) -> int:
+        """
+        Get the number of consecutive balance fetch errors.
+        
+        Returns:
+            int: Number of consecutive errors
+        """
+        return self._balance_fetch_errors
     
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """
