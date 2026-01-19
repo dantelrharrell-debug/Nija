@@ -5139,10 +5139,12 @@ class KrakenBroker(BaseBroker):
                 return {"status": "error", "error": "Not connected to Kraken"}
             
             # CRITICAL FIX (Jan 19, 2026): Normalize symbol for Kraken and check support
+            # Railway Golden Rule #4: Broker-specific trading pairs
             # This prevents trying to trade Binance-only pairs (BUSD) on Kraken
             if not self.supports_symbol(symbol):
-                error_msg = f"Kraken does not support symbol: {symbol}"
-                logger.info(f"⏭️ {error_msg}")
+                error_msg = f"Kraken does not support symbol: {symbol} (broker-specific pair filtering)"
+                logger.warning(f"⏭️ SKIPPING TRADE: {error_msg}")
+                logger.warning(f"   💡 TIP: This symbol contains unsupported quote currency for Kraken (e.g., BUSD)")
                 return {"status": "error", "error": error_msg}
             
             # Normalize to Kraken format (ETH/USD, BTC/USDT, etc.)
