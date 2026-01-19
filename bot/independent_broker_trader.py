@@ -119,6 +119,12 @@ class IndependentBrokerTrader:
         # Thread safety locks
         self.health_lock = threading.Lock()
         
+        # FIX #2 (Jan 19, 2026): Thread singleton guard
+        # Prevents duplicate trading threads for same broker
+        # Structure: set of broker names currently running threads
+        self.active_trading_threads: Set[str] = set()
+        self.active_threads_lock = threading.Lock()
+        
         logger.info("=" * 70)
         logger.info("🔒 INDEPENDENT BROKER TRADER INITIALIZED")
         if multi_account_manager:
@@ -516,7 +522,12 @@ class IndependentBrokerTrader:
                 # Wait before retry
                 stop_flag.wait(60)
         
+        # Cleanup: Remove from active threads when loop exits
+        with self.active_threads_lock:
+            self.active_trading_threads.discard(broker_name)
+        
         logger.info(f"🛑 {broker_name} trading loop stopped (total cycles: {cycle_count})")
+        logger.info(f"   Thread removed from active trading threads")
     
     def run_user_broker_trading_loop(self, user_id: str, broker_type, broker, stop_flag: threading.Event):
         """
@@ -694,6 +705,15 @@ class IndependentBrokerTrader:
                 logger.info(f"   ✅ {broker_name_upper} is funded and connected")
                 logger.info(f"   💰 Balance: ${funded[broker_name]:,.2f}")
                 
+                # FIX #2 (Jan 19, 2026): Thread singleton guard
+                # Check if trading thread already running for this broker
+                with self.active_threads_lock:
+                    if broker_name in self.active_trading_threads:
+                        logger.warning(f"   ⚠️  Trading thread already running for {broker_name_upper} — skipping")
+                        logger.warning(f"   This prevents duplicate trading loops and double orders")
+                        logger.info("")
+                        continue
+                
                 # CRITICAL FIX (Jan 10, 2026): Stagger broker thread starts to prevent concurrent API bursts
                 # If we start all brokers simultaneously, they all hit the API at once causing rate limits
                 # Add a delay between each broker start (except the first one)
@@ -704,6 +724,10 @@ class IndependentBrokerTrader:
                 # Create stop flag for this broker
                 stop_flag = threading.Event()
                 self.stop_flags[broker_name] = stop_flag
+                
+                # Register this broker as having an active thread
+                with self.active_threads_lock:
+                    self.active_trading_threads.add(broker_name)
                 
                 # Create and start trading thread
                 thread = threading.Thread(
