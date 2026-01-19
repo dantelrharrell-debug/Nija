@@ -431,10 +431,9 @@ class MultiAccountBrokerManager:
             # and cause nonce conflicts / connection errors
             if broker_type == BrokerType.KRAKEN and self.kraken_copy_trading_active:
                 logger.info("=" * 70)
-                logger.info(f"✅ KRAKEN USER ALREADY INITIALIZED: {user.name} ({user.user_id})")
-                logger.info("   Kraken copy trading system is active")
-                logger.info("   This user is already connected via the copy trading system")
-                logger.info("   Skipping duplicate initialization")
+                logger.info(f"✅ KRAKEN USER ALREADY ACTIVE: {user.name} ({user.user_id})")
+                logger.info("   ℹ️  User already active in copy trading system (expected behavior)")
+                logger.info("   Users managed by Kraken copy trading system — skipping global user init")
                 logger.info("=" * 70)
                 continue
             

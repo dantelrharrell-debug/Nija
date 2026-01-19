@@ -223,6 +223,10 @@ class KrakenClient:
 KRAKEN_MASTER: Optional[KrakenClient] = None
 KRAKEN_USERS: List[Dict[str, Any]] = []
 
+# FIX PART 1: Hard guard flag to prevent duplicate user initialization
+# When True, initialize_kraken_users() will skip re-initialization
+_USERS_INITIALIZED: bool = False
+
 
 def initialize_kraken_master() -> bool:
     """
@@ -270,7 +274,14 @@ def initialize_kraken_users() -> int:
     Returns:
         Number of users successfully initialized
     """
-    global KRAKEN_USERS
+    global KRAKEN_USERS, _USERS_INITIALIZED
+    
+    # FIX PART 2: Block re-entry - prevent duplicate initialization
+    if _USERS_INITIALIZED:
+        logger.info("ℹ️  Kraken users already initialized — skipping user init phase")
+        return len(KRAKEN_USERS)
+    
+    logger.info("👤 Initializing Kraken users from config files...")
     
     try:
         # Load user config
@@ -348,10 +359,15 @@ def initialize_kraken_users() -> int:
             logger.info(f"✅ Initialized user: {name} ({user_id}) - Balance: ${total_balance:.2f}")
             initialized_count += 1
         
-        logger.info(f"✅ Initialized {initialized_count} Kraken users for copy trading")
+        # FIX PART 2: Mark users as initialized to prevent duplicate initialization
+        # Set flag immediately after successful loop completion
+        _USERS_INITIALIZED = True
+        logger.info(f"✅ Kraken user initialization COMPLETE — {initialized_count} users ready")
         return initialized_count
         
     except Exception as e:
+        # Reset flag on failure to allow retry (reset before logging for safety)
+        _USERS_INITIALIZED = False
         logger.error(f"❌ Failed to initialize Kraken users: {e}")
         return 0
 
