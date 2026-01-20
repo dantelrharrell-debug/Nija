@@ -12,6 +12,7 @@ Usage:
 import os
 import sys
 import time
+from typing import Tuple, Dict, Optional
 
 # Try to load environment variables from locked credentials file
 try:
@@ -37,7 +38,7 @@ def print_header():
     print("=" * 80)
     print()
 
-def check_credential_format(api_key, api_secret, user_name):
+def check_credential_format(api_key: str, api_secret: str, user_name: str) -> Tuple[bool, str]:
     """
     Validate credential format for Kraken API keys
     
@@ -47,7 +48,7 @@ def check_credential_format(api_key, api_secret, user_name):
         user_name: Name of the user (for logging)
     
     Returns:
-        tuple: (is_valid, message)
+        tuple: (is_valid: bool, message: str)
     """
     issues = []
     
@@ -72,7 +73,7 @@ def check_credential_format(api_key, api_secret, user_name):
     else:
         return True, f"Format OK (Key: {len(api_key)} chars, Secret: {len(api_secret)} chars)"
 
-def test_kraken_connection(api_key, api_secret, user_name):
+def test_kraken_connection(api_key: str, api_secret: str, user_name: str) -> Tuple[bool, str, Optional[Dict]]:
     """
     Test actual connection to Kraken API
     
@@ -82,7 +83,7 @@ def test_kraken_connection(api_key, api_secret, user_name):
         user_name: Name of the user (for logging)
     
     Returns:
-        tuple: (is_connected, message, balance_info)
+        tuple: (is_connected: bool, message: str, balance_info: Optional[Dict])
     """
     try:
         import krakenex
@@ -127,7 +128,7 @@ def test_kraken_connection(api_key, api_secret, user_name):
         else:
             return False, f"Connection error: {error_msg[:100]}", None
 
-def validate_user_credentials(user_id, user_name, env_key, env_secret):
+def validate_user_credentials(user_id: str, user_name: str, env_key: str, env_secret: str) -> bool:
     """
     Validate credentials for a single user
     

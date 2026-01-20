@@ -70,7 +70,9 @@ def check_user_config_files():
             print(f"   ❌ Tania Gilbert: NOT FOUND in config")
         
         print()
-        return daivon and tania and daivon.get('enabled') and tania.get('enabled')
+        # Check both users exist and are enabled
+        return (daivon is not None and tania is not None and 
+                daivon.get('enabled', False) and tania.get('enabled', False))
     
     except Exception as e:
         print(f"❌ Error reading config: {e}")
