@@ -25,6 +25,18 @@ from execution_engine import ExecutionEngine
 # Initialize logger before any imports that might fail
 logger = logging.getLogger("nija")
 
+# Import position sizer for minimum position validation
+try:
+    from position_sizer import MIN_POSITION_USD
+except ImportError:
+    MIN_POSITION_USD = 5.0  # Default to $5 minimum
+    logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $5.00")
+
+# Trade quality thresholds (Jan 20, 2026)
+# Confidence threshold to filter weak entries and increase trade size quality
+MIN_CONFIDENCE = 0.60  # Minimum confidence score (0.0-1.0) to execute trade
+MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
+
 # Import emergency liquidation for capital preservation (FIX 3)
 try:
     from emergency_liquidation import EmergencyLiquidator
@@ -79,6 +91,46 @@ class NIJAApexStrategyV71:
         self.last_candle_time = None
         
         logger.info("NIJA Apex Strategy v7.1 initialized")
+    
+    def _validate_trade_quality(self, position_size: float, score: float) -> Dict:
+        """
+        Validate trade quality based on position size and confidence threshold.
+        
+        Args:
+            position_size: Calculated position size in USD
+            score: Entry signal quality score (higher = better)
+            
+        Returns:
+            Dictionary with 'valid' (bool), 'reason' (str), and 'confidence' (float)
+        """
+        # Check minimum position size ($5.00 minimum)
+        if position_size < MIN_POSITION_USD:
+            logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below minimum ${MIN_POSITION_USD:.2f}")
+            return {
+                'valid': False,
+                'reason': f'Position too small: ${position_size:.2f} < ${MIN_POSITION_USD:.2f} minimum (increase account size for better trading)',
+                'confidence': 0.0
+            }
+        
+        # Calculate and check confidence threshold (0.60 minimum)
+        # Score is a quality metric (higher = better setup)
+        # Normalize score to 0-1 range for confidence check
+        confidence = min(score / MAX_ENTRY_SCORE, 1.0)
+        
+        if confidence < MIN_CONFIDENCE:
+            logger.info(f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below minimum {MIN_CONFIDENCE:.2f}")
+            return {
+                'valid': False,
+                'reason': f'Confidence too low: {confidence:.2f} < {MIN_CONFIDENCE:.2f} (weak entry signal)',
+                'confidence': confidence
+            }
+        
+        logger.info(f"   ✅ Trade approved: Size=${position_size:.2f}, Confidence={confidence:.2f}")
+        return {
+            'valid': True,
+            'reason': 'Trade quality validated',
+            'confidence': confidence
+        }
     
     def check_market_filter(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, str, str]:
         """
@@ -604,6 +656,14 @@ class NIJAApexStrategyV71:
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
                         }
                     
+                    # Validate trade quality (position size and confidence)
+                    validation = self._validate_trade_quality(position_size, score)
+                    if not validation['valid']:
+                        return {
+                            'action': 'hold',
+                            'reason': validation['reason']
+                        }
+                    
                     # Calculate stop loss and take profit
                     swing_low = self.risk_manager.find_swing_low(df, lookback=10)
                     atr = indicators['atr'].iloc[-1]
@@ -639,6 +699,14 @@ class NIJAApexStrategyV71:
                         return {
                             'action': 'hold',
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
+                        }
+                    
+                    # Validate trade quality (position size and confidence)
+                    validation = self._validate_trade_quality(position_size, score)
+                    if not validation['valid']:
+                        return {
+                            'action': 'hold',
+                            'reason': validation['reason']
                         }
                     
                     # Calculate stop loss and take profit
