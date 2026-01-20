@@ -102,6 +102,126 @@ def health_check():
     return "OK", 200
 
 
+@app.route('/api/users')
+def get_users():
+    """
+    Get list of all users with their account information.
+    
+    Returns:
+        JSON with user list including balances, positions, and trading stats
+    """
+    try:
+        from multi_account_broker_manager import MultiAccountBrokerManager
+        from config.user_loader import load_all_users
+        
+        users_data = []
+        
+        # Load user configurations
+        all_user_configs = load_all_users()
+        
+        # Try to get the multi-account broker manager
+        try:
+            import sys
+            if 'nija_bot' in sys.modules:
+                nija_bot = sys.modules['nija_bot']
+                if hasattr(nija_bot, 'account_manager'):
+                    account_mgr = nija_bot.account_manager
+                else:
+                    account_mgr = MultiAccountBrokerManager()
+            else:
+                account_mgr = MultiAccountBrokerManager()
+        except:
+            account_mgr = MultiAccountBrokerManager()
+        
+        # Get data for each user
+        for user_config in all_user_configs:
+            user_id = user_config.get('user_id')
+            if not user_id or user_id == 'master':
+                continue
+            
+            # Get balance
+            try:
+                user_balance = account_mgr.get_user_balance(user_id)
+            except:
+                user_balance = 0.0
+            
+            # Get positions
+            user_positions = []
+            user_positions_count = 0
+            try:
+                for broker_type in account_mgr.user_brokers.get(user_id, {}).keys():
+                    broker = account_mgr.get_user_broker(user_id, broker_type)
+                    if broker and broker.connected:
+                        positions = broker.get_positions()
+                        if positions:
+                            user_positions.extend(positions)
+                            user_positions_count += len(positions)
+            except:
+                pass
+            
+            # Get trading stats
+            try:
+                from user_pnl_tracker import get_user_pnl_tracker
+                pnl_tracker = get_user_pnl_tracker()
+                stats = pnl_tracker.get_stats(user_id)
+                recent_trades_data = pnl_tracker.get_recent_trades(user_id, limit=10)
+                recent_trades = [
+                    {
+                        "symbol": t.symbol,
+                        "side": t.side,
+                        "quantity": t.quantity,
+                        "price": t.price,
+                        "size_usd": t.size_usd,
+                        "pnl_usd": t.pnl_usd,
+                        "pnl_pct": t.pnl_pct,
+                        "timestamp": t.timestamp,
+                        "broker": t.broker
+                    }
+                    for t in recent_trades_data
+                ]
+                total_pnl = stats.get('total_pnl', 0.0)
+                daily_pnl = stats.get('daily_pnl', 0.0)
+                win_rate = stats.get('win_rate', 0.0)
+                total_trades = stats.get('completed_trades', 0)
+            except:
+                recent_trades = []
+                total_pnl = 0.0
+                daily_pnl = 0.0
+                win_rate = 0.0
+                total_trades = 0
+            
+            users_data.append({
+                "user_id": user_id,
+                "name": user_config.get('name', 'N/A'),
+                "enabled": user_config.get('enabled', False),
+                "account_type": user_config.get('account_type', 'N/A'),
+                "broker_type": user_config.get('broker_type', 'N/A'),
+                "balance": user_balance,
+                "positions_count": user_positions_count,
+                "positions": user_positions[:5],  # First 5 positions
+                "total_pnl": total_pnl,
+                "daily_pnl": daily_pnl,
+                "win_rate": win_rate,
+                "total_trades": total_trades,
+                "recent_trades": recent_trades
+            })
+        
+        return jsonify({
+            "users": users_data,
+            "total_users": len(users_data),
+            "timestamp": datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.exception("Error in get_users")
+        return jsonify({
+            "error": str(e),
+            "users": [],
+            "total_users": 0,
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+
 @app.route('/api/trading_status')
 def get_trading_status():
     """
@@ -249,34 +369,100 @@ def get_trading_status():
         except Exception as e:
             status["errors"].append(f"Trade journal check failed: {str(e)}")
         
-        # Check 4: User-specific trading status (if multi-user system available)
+        # Check 4: User-specific trading status from multi-account broker manager
         try:
-            from auth import get_user_manager
-            from controls import get_hard_controls
+            from multi_account_broker_manager import MultiAccountBrokerManager
+            from config.user_loader import load_all_users
             
-            user_mgr = get_user_manager()
-            controls = get_hard_controls()
+            # Load user configurations
+            all_user_configs = load_all_users()
             
-            # Get all users
-            all_users = user_mgr.list_users() if hasattr(user_mgr, 'list_users') else []
+            # Try to get the multi-account broker manager
+            try:
+                # Check if there's a global instance
+                import sys
+                if 'nija_bot' in sys.modules:
+                    nija_bot = sys.modules['nija_bot']
+                    if hasattr(nija_bot, 'account_manager'):
+                        account_mgr = nija_bot.account_manager
+                    else:
+                        account_mgr = MultiAccountBrokerManager()
+                else:
+                    account_mgr = MultiAccountBrokerManager()
+            except:
+                account_mgr = MultiAccountBrokerManager()
             
-            for user_id in all_users:
-                user = user_mgr.get_user(user_id)
-                if user:
-                    can_trade, error = controls.can_trade(user_id)
-                    status["users"].append({
-                        "user_id": user_id,
-                        "email": user.get('email', 'N/A'),
-                        "enabled": user.get('enabled', False),
-                        "can_trade": can_trade,
-                        "tier": user.get('subscription_tier', 'N/A'),
-                        "trading_blocked_reason": error if not can_trade else None
-                    })
-        except ImportError:
+            # Get user data from configuration files
+            for user_config in all_user_configs:
+                user_id = user_config.get('user_id')
+                if not user_id or user_id == 'master':
+                    continue
+                
+                # Get balance for this user across all brokers
+                try:
+                    user_balance = account_mgr.get_user_balance(user_id)
+                except:
+                    user_balance = 0.0
+                
+                # Get positions for this user
+                user_positions = 0
+                try:
+                    for broker_type in account_mgr.user_brokers.get(user_id, {}).keys():
+                        broker = account_mgr.get_user_broker(user_id, broker_type)
+                        if broker and broker.connected:
+                            positions = broker.get_positions()
+                            if positions:
+                                user_positions += len(positions)
+                except:
+                    pass
+                
+                # Get recent trades from user PnL tracker
+                recent_trades = []
+                try:
+                    from user_pnl_tracker import get_user_pnl_tracker
+                    pnl_tracker = get_user_pnl_tracker()
+                    stats = pnl_tracker.get_stats(user_id)
+                    recent_trades_data = pnl_tracker.get_recent_trades(user_id, limit=5)
+                    recent_trades = [
+                        {
+                            "symbol": t.symbol,
+                            "side": t.side,
+                            "pnl_usd": t.pnl_usd,
+                            "timestamp": t.timestamp
+                        }
+                        for t in recent_trades_data
+                    ]
+                    total_pnl = stats.get('total_pnl', 0.0)
+                    daily_pnl = stats.get('daily_pnl', 0.0)
+                    win_rate = stats.get('win_rate', 0.0)
+                    total_trades = stats.get('completed_trades', 0)
+                except:
+                    total_pnl = 0.0
+                    daily_pnl = 0.0
+                    win_rate = 0.0
+                    total_trades = 0
+                
+                status["users"].append({
+                    "user_id": user_id,
+                    "name": user_config.get('name', 'N/A'),
+                    "enabled": user_config.get('enabled', False),
+                    "account_type": user_config.get('account_type', 'N/A'),
+                    "broker_type": user_config.get('broker_type', 'N/A'),
+                    "balance": user_balance,
+                    "positions": user_positions,
+                    "total_pnl": total_pnl,
+                    "daily_pnl": daily_pnl,
+                    "win_rate": win_rate,
+                    "total_trades": total_trades,
+                    "recent_trades": recent_trades
+                })
+        except ImportError as e:
             # Multi-user system not available
-            status["users"] = None
+            status["errors"].append(f"Multi-user system import failed: {str(e)}")
+            status["users"] = []
         except Exception as e:
             status["errors"].append(f"User check failed: {str(e)}")
+            status["users"] = []
         
         # Determine overall trading status
         if status["is_trading"]:
@@ -441,16 +627,79 @@ def human_readable_status():
         # User details (if available)
         if data.get('users') and len(data.get('users', [])) > 0:
             html += """
-        <h2 style="margin-top: 30px; color: #1d9bf0;">User Trading Status</h2>
+        <h2 style="margin-top: 30px; color: #1d9bf0;">👥 User Accounts & Trading Activity</h2>
         <div class="user-list">"""
             for user in data['users']:
-                status_icon = "✅" if user.get('can_trade') and user.get('enabled') else "❌"
+                status_icon = "✅" if user.get('enabled') else "❌"
+                pnl_color = "color: #00ba7c;" if user.get('total_pnl', 0) >= 0 else "color: #f91880;"
+                daily_pnl_color = "color: #00ba7c;" if user.get('daily_pnl', 0) >= 0 else "color: #f91880;"
+                
                 html += """
-            <div class="user-item">
-                """ + status_icon + """ <strong>""" + user.get('user_id', 'Unknown') + """</strong> (""" + user.get('email', 'N/A') + """)<br>
-                Tier: """ + user.get('tier', 'N/A') + """ | Enabled: """ + str(user.get('enabled', False)) + """ | Can Trade: """ + str(user.get('can_trade', False)) + """
+            <div class="user-item" style="padding: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+                    <div>
+                        <div style="font-size: 18px; font-weight: bold; margin-bottom: 5px;">
+                            """ + status_icon + """ """ + user.get('name', user.get('user_id', 'Unknown')) + """
+                        </div>
+                        <div style="font-size: 13px; color: #71767b;">
+                            """ + user.get('user_id', '') + """ • """ + user.get('broker_type', 'N/A').upper() + """ • """ + user.get('account_type', 'N/A').title() + """
+                        </div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 24px; font-weight: bold;">$""" + f"{user.get('balance', 0):.2f}" + """</div>
+                        <div style="font-size: 12px; color: #71767b;">Account Balance</div>
+                    </div>
+                </div>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-top: 15px; padding-top: 15px; border-top: 1px solid #2f3336;">
+                    <div>
+                        <div style="font-size: 11px; color: #71767b; margin-bottom: 3px;">Open Positions</div>
+                        <div style="font-size: 16px; font-weight: bold;">""" + str(user.get('positions', 0)) + """</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 11px; color: #71767b; margin-bottom: 3px;">Total Trades</div>
+                        <div style="font-size: 16px; font-weight: bold;">""" + str(user.get('total_trades', 0)) + """</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 11px; color: #71767b; margin-bottom: 3px;">Win Rate</div>
+                        <div style="font-size: 16px; font-weight: bold;">""" + f"{user.get('win_rate', 0):.1f}" + """%</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 11px; color: #71767b; margin-bottom: 3px;">Total P&L</div>
+                        <div style="font-size: 16px; font-weight: bold; """ + pnl_color + """">$""" + f"{user.get('total_pnl', 0):.2f}" + """</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 11px; color: #71767b; margin-bottom: 3px;">Daily P&L</div>
+                        <div style="font-size: 16px; font-weight: bold; """ + daily_pnl_color + """">$""" + f"{user.get('daily_pnl', 0):.2f}" + """</div>
+                    </div>
+                </div>"""
+                
+                # Show recent trades if available
+                if user.get('recent_trades') and len(user.get('recent_trades', [])) > 0:
+                    html += """
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #2f3336;">
+                    <div style="font-size: 12px; color: #71767b; margin-bottom: 8px;">Recent Trades:</div>"""
+                    for trade in user.get('recent_trades', [])[:3]:
+                        trade_pnl = trade.get('pnl_usd', 0)
+                        trade_color = "#00ba7c" if trade_pnl >= 0 else "#f91880"
+                        html += """
+                    <div style="font-size: 11px; margin-bottom: 4px; display: flex; justify-content: space-between;">
+                        <span>""" + trade.get('symbol', 'N/A') + """ (""" + trade.get('side', 'N/A').upper() + """)</span>
+                        <span style="color: """ + trade_color + """;">$""" + f"{trade_pnl:.2f}" + """</span>
+                    </div>"""
+                    html += """
+                </div>"""
+                
+                html += """
             </div>"""
             html += "</div>"
+        else:
+            html += """
+        <h2 style="margin-top: 30px; color: #1d9bf0;">👥 User Accounts</h2>
+        <div style="padding: 30px; text-align: center; color: #71767b; background: #16181c; border-radius: 8px; margin-top: 15px;">
+            <p>No user accounts configured or unable to fetch user data.</p>
+            <p style="margin-top: 10px; font-size: 13px;">Configure users in <code>config/users/*.json</code> and set credentials in <code>.env</code></p>
+        </div>"""
         
         html += """
         <div style="margin-top: 30px; padding: 20px; background: #16181c; border-radius: 8px; font-size: 13px; color: #71767b;">
