@@ -18,47 +18,33 @@ import json
 import logging
 from typing import Dict, List, Set, Optional, Tuple
 from pathlib import Path
-import sys
-import io
-from contextlib import contextmanager
+
+# Import stdout suppression utility for pykrakenapi
+try:
+    from bot.stdout_utils import suppress_pykrakenapi_prints
+except ImportError:
+    try:
+        from stdout_utils import suppress_pykrakenapi_prints
+    except ImportError:
+        # Fallback: Define locally if import fails
+        import sys
+        import io
+        from contextlib import contextmanager
+        
+        @contextmanager
+        def suppress_pykrakenapi_prints():
+            original_stdout = sys.stdout
+            try:
+                sys.stdout = io.StringIO()
+                yield
+            finally:
+                sys.stdout = original_stdout
 
 logger = logging.getLogger('nija.kraken_symbol_mapper')
 
 # Path to the symbol mapping file
 CONFIG_DIR = Path(__file__).parent.parent / "config" / "brokers"
 SYMBOL_MAP_FILE = CONFIG_DIR / "kraken_pairs.json"
-
-# ============================================================================
-# STDOUT SUPPRESSION FOR PYKRAKENAPI (FIX - Jan 20, 2026)
-# ============================================================================
-# The pykrakenapi library uses print() statements for retry messages instead of
-# logging, which floods the console with:
-#   attempt: 463 | ['EQuery:Unknown asset pair']
-#   attempt: 464 | ['EQuery:Unknown asset pair']
-#   ...
-# This context manager redirects stdout temporarily to suppress these messages.
-# ============================================================================
-
-@contextmanager
-def suppress_pykrakenapi_prints():
-    """
-    Context manager to suppress pykrakenapi's print() statements.
-    
-    The pykrakenapi library prints retry attempts to stdout instead of using
-    logging. This creates log pollution that cannot be controlled via log levels.
-    
-    Usage:
-        with suppress_pykrakenapi_prints():
-            result = kraken_api.query_private('Balance')
-    """
-    original_stdout = sys.stdout
-    try:
-        # Redirect stdout to a null device
-        sys.stdout = io.StringIO()
-        yield
-    finally:
-        # Restore original stdout
-        sys.stdout = original_stdout
 
 
 class KrakenSymbolMapper:
