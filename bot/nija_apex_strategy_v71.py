@@ -35,6 +35,7 @@ except ImportError:
 # Trade quality thresholds (Jan 20, 2026)
 # Confidence threshold to filter weak entries and increase trade size quality
 MIN_CONFIDENCE = 0.60  # Minimum confidence score (0.0-1.0) to execute trade
+MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Import emergency liquidation for capital preservation (FIX 3)
 try:
@@ -114,7 +115,7 @@ class NIJAApexStrategyV71:
         # Calculate and check confidence threshold (0.60 minimum)
         # Score is a quality metric (higher = better setup)
         # Normalize score to 0-1 range for confidence check
-        confidence = min(score / 5.0, 1.0)  # Assuming max score is 5
+        confidence = min(score / MAX_ENTRY_SCORE, 1.0)
         
         if confidence < MIN_CONFIDENCE:
             logger.info(f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below minimum {MIN_CONFIDENCE:.2f}")
