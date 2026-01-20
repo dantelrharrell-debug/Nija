@@ -2269,7 +2269,7 @@ class CoinbaseBroker(BaseBroker):
                 pass
 
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
-            if side.lower() == 'buy' and self.exit_only_mode and not force_liquidate:
+            if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
                 logger.error(f"❌ BUY order rejected: Coinbase is in EXIT-ONLY mode (balance < ${COINBASE_MINIMUM_BALANCE:.2f})")
                 logger.error(f"   Only SELL orders are allowed to close existing positions")
                 logger.error(f"   To enable new entries, fund your account to at least ${COINBASE_MINIMUM_BALANCE:.2f}")
@@ -5842,7 +5842,7 @@ class KrakenBroker(BaseBroker):
                 return {"status": "error", "error": "Not connected to Kraken"}
             
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
-            if side.lower() == 'buy' and self.exit_only_mode and not force_liquidate:
+            if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
                 logger.error(f"❌ BUY order rejected: Kraken is in EXIT-ONLY mode (balance < ${KRAKEN_MINIMUM_BALANCE:.2f})")
                 logger.error(f"   Only SELL orders are allowed to close existing positions")
                 logger.error(f"   To enable new entries, fund your account to at least ${KRAKEN_MINIMUM_BALANCE:.2f}")
