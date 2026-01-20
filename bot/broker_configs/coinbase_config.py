@@ -81,8 +81,9 @@ class CoinbaseConfig:
     sell_rsi_max: float = 70.0  # Sell in overbought
     
     # Position sizing (fee-aware)
-    min_position_usd: float = 10.0  # $10 minimum (fees are ~$0.14)
-    recommended_min_usd: float = 25.0  # $25+ recommended for profitability
+    # UNIFIED MINIMUM: $25 to ensure profitability after 1.4% fees
+    min_position_usd: float = 25.0  # $25 minimum (enforced to beat 1.4% fees)
+    recommended_min_usd: float = 25.0  # $25 recommended for profitability
     
     # Order type preferences
     prefer_limit_orders: bool = True  # Use limit orders to save fees

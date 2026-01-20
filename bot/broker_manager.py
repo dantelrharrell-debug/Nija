@@ -105,7 +105,9 @@ DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent 
 
 # 🚑 FIX 2: Minimum balance for Coinbase to prevent fees eating small accounts
 # Coinbase has higher fees than Kraken, so small accounts should use Kraken instead
-COINBASE_MINIMUM_BALANCE = 75.00  # Disable Coinbase for accounts below this threshold
+# UNIFIED MINIMUM: $25 to match position sizing and adapter rules
+# At $25 balance, can make 1 full trade; at $50+ can make 2+ concurrent trades
+COINBASE_MINIMUM_BALANCE = 25.00  # Disable Coinbase for accounts below this threshold
 
 # Broker health monitoring constants
 # Maximum consecutive errors before marking broker unavailable

@@ -106,10 +106,11 @@ def _get_coinbase_profile() -> Dict:
         'fees': fees,
         
         # Position Sizing (larger positions to offset fees)
+        # UNIFIED MINIMUM: $25 to ensure profitability after 1.4% fees
         'min_position_pct': 0.15,  # 15% minimum (fees eat small positions)
         'max_position_pct': 0.30,  # 30% maximum
         'optimal_position_pct': 0.20,  # 20% optimal
-        'min_position_usd': 15.00,  # $15 minimum for fee efficiency
+        'min_position_usd': 25.00,  # $25 minimum for fee efficiency (unified)
         
         # Profit Targets (must exceed 1.4% fees)
         'min_profit_target_pct': 0.025,  # 2.5% minimum profit target
