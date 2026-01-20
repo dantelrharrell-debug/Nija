@@ -95,8 +95,11 @@ def _get_coinbase_profile() -> Dict:
     """
     Coinbase Advanced Trade - Higher fees require larger profit targets
     
-    Fee Structure: 1.4% round-trip (highest)
+    Fee Structure: 
+    - Limit orders (maker): 1.0% round-trip (0.4% x 2 + 0.2% spread)
+    - Market orders (taker): 1.4% round-trip (0.6% x 2 + 0.2% spread)
     Strategy: Larger positions, wider targets, quality over quantity
+    Uses limit orders primarily to minimize fees
     """
     fees = ExchangeFees.COINBASE
     
@@ -111,7 +114,7 @@ def _get_coinbase_profile() -> Dict:
         'optimal_position_pct': 0.20,  # 20% optimal
         'min_position_usd': 10.00,  # $10 minimum for fee efficiency
         
-        # Profit Targets (must exceed 1.4% fees)
+        # Profit Targets (must exceed 1.0% fees on limit orders)
         'min_profit_target_pct': 0.012,  # 1.2% minimum profit target (fee-aware)
         'tp1_pct': 0.030,  # 3.0% - first take profit
         'tp2_pct': 0.045,  # 4.5% - second take profit
@@ -124,7 +127,7 @@ def _get_coinbase_profile() -> Dict:
         # Trade Frequency (quality over quantity due to high fees - SELECTIVE TRADING)
         'max_trades_per_day': 10,  # Fewer trades, better quality (reduced from 15)
         'min_time_between_trades': 600,  # 10 min between trades (increased from 5 min)
-        'preferred_order_type': 'limit',  # Use limit orders to save fees
+        'preferred_order_type': 'limit',  # Use limit orders to save fees (0.4% vs 0.6%)
         
         # Signal Quality (stricter filtering for selective trading)
         'min_signal_strength': 5,  # Require 5/5 signal strength (perfect setups only)
