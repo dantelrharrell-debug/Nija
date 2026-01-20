@@ -1604,7 +1604,6 @@ class TradingStrategy:
                                             
                                             # Retry once for catastrophic exits
                                             logger.error(f"   🔄 Retrying catastrophic exit (attempt 2/2)...")
-                                            import time
                                             time.sleep(1)  # Brief pause
                                             
                                             result = active_broker.place_market_order(
