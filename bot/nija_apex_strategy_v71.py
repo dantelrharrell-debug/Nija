@@ -91,6 +91,46 @@ class NIJAApexStrategyV71:
         
         logger.info("NIJA Apex Strategy v7.1 initialized")
     
+    def _validate_trade_quality(self, position_size: float, score: float) -> Dict:
+        """
+        Validate trade quality based on position size and confidence threshold.
+        
+        Args:
+            position_size: Calculated position size in USD
+            score: Entry signal quality score (higher = better)
+            
+        Returns:
+            Dictionary with 'valid' (bool), 'reason' (str), and 'confidence' (float)
+        """
+        # Check minimum position size ($5.00 minimum)
+        if position_size < MIN_POSITION_USD:
+            logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below minimum ${MIN_POSITION_USD:.2f}")
+            return {
+                'valid': False,
+                'reason': f'Position too small: ${position_size:.2f} < ${MIN_POSITION_USD:.2f} minimum (increase account size for better trading)',
+                'confidence': 0.0
+            }
+        
+        # Calculate and check confidence threshold (0.60 minimum)
+        # Score is a quality metric (higher = better setup)
+        # Normalize score to 0-1 range for confidence check
+        confidence = min(score / 5.0, 1.0)  # Assuming max score is 5
+        
+        if confidence < MIN_CONFIDENCE:
+            logger.info(f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below minimum {MIN_CONFIDENCE:.2f}")
+            return {
+                'valid': False,
+                'reason': f'Confidence too low: {confidence:.2f} < {MIN_CONFIDENCE:.2f} (weak entry signal)',
+                'confidence': confidence
+            }
+        
+        logger.info(f"   ✅ Trade approved: Size=${position_size:.2f}, Confidence={confidence:.2f}")
+        return {
+            'valid': True,
+            'reason': 'Trade quality validated',
+            'confidence': confidence
+        }
+    
     def check_market_filter(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, str, str]:
         """
         Market Filter: Only allow trades if uptrend or downtrend conditions are met
@@ -615,26 +655,13 @@ class NIJAApexStrategyV71:
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
                         }
                     
-                    # OPTION A: Check minimum position size ($5.00 minimum)
-                    if position_size < MIN_POSITION_USD:
-                        logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below minimum ${MIN_POSITION_USD:.2f}")
+                    # Validate trade quality (position size and confidence)
+                    validation = self._validate_trade_quality(position_size, score)
+                    if not validation['valid']:
                         return {
                             'action': 'hold',
-                            'reason': f'Position too small: ${position_size:.2f} < ${MIN_POSITION_USD:.2f} minimum (increase account size for better trading)'
+                            'reason': validation['reason']
                         }
-                    
-                    # OPTION B: Check confidence threshold (0.60 minimum)
-                    # Score is a quality metric (higher = better setup)
-                    # Normalize score to 0-1 range for confidence check
-                    confidence = min(score / 5.0, 1.0)  # Assuming max score is 5
-                    if confidence < MIN_CONFIDENCE:
-                        logger.info(f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below minimum {MIN_CONFIDENCE:.2f}")
-                        return {
-                            'action': 'hold',
-                            'reason': f'Confidence too low: {confidence:.2f} < {MIN_CONFIDENCE:.2f} (weak entry signal)'
-                        }
-                    
-                    logger.info(f"   ✅ Trade approved: Size=${position_size:.2f}, Confidence={confidence:.2f}")
                     
                     # Calculate stop loss and take profit
                     swing_low = self.risk_manager.find_swing_low(df, lookback=10)
@@ -673,26 +700,13 @@ class NIJAApexStrategyV71:
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
                         }
                     
-                    # OPTION A: Check minimum position size ($5.00 minimum)
-                    if position_size < MIN_POSITION_USD:
-                        logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below minimum ${MIN_POSITION_USD:.2f}")
+                    # Validate trade quality (position size and confidence)
+                    validation = self._validate_trade_quality(position_size, score)
+                    if not validation['valid']:
                         return {
                             'action': 'hold',
-                            'reason': f'Position too small: ${position_size:.2f} < ${MIN_POSITION_USD:.2f} minimum (increase account size for better trading)'
+                            'reason': validation['reason']
                         }
-                    
-                    # OPTION B: Check confidence threshold (0.60 minimum)
-                    # Score is a quality metric (higher = better setup)
-                    # Normalize score to 0-1 range for confidence check
-                    confidence = min(score / 5.0, 1.0)  # Assuming max score is 5
-                    if confidence < MIN_CONFIDENCE:
-                        logger.info(f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below minimum {MIN_CONFIDENCE:.2f}")
-                        return {
-                            'action': 'hold',
-                            'reason': f'Confidence too low: {confidence:.2f} < {MIN_CONFIDENCE:.2f} (weak entry signal)'
-                        }
-                    
-                    logger.info(f"   ✅ Trade approved: Size=${position_size:.2f}, Confidence={confidence:.2f}")
                     
                     # Calculate stop loss and take profit
                     swing_high = self.risk_manager.find_swing_high(df, lookback=10)
