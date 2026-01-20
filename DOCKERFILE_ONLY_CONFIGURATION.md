@@ -95,11 +95,11 @@ COPY . .
 Railway should now show:
 ```
 Building with Dockerfile
-[1/5] FROM docker.io/library/python:3.11-slim
-[2/5] WORKDIR /app
-[3/5] COPY requirements.txt .
-[4/5] RUN pip install --no-cache-dir -r requirements.txt
-[5/5] COPY . .
+FROM docker.io/library/python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
 ```
 
 **Not**: "Using Detected Dockerfile" (which indicates auto-detection)  
@@ -173,12 +173,12 @@ If Railway deployment logs show "Using Detected Dockerfile" instead of "Building
 
 ## Summary
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| `Dockerfile` | ✅ Present | Used for all builds |
-| `railway.json` | ✅ Configured | Explicit `"builder": "DOCKERFILE"` |
-| `nixpacks.toml` | ✅ Removed | Prevented auto-detection conflicts |
-| `.gitignore` | ✅ Updated | Prevents re-adding nixpacks.toml |
-| Kraken SDK | ✅ Verified | Checked during startup |
+| Component       | Status        | Notes                                |
+|-----------------|---------------|--------------------------------------|
+| `Dockerfile`    | ✅ Present    | Used for all builds                  |
+| `railway.json`  | ✅ Configured | Explicit `"builder": "DOCKERFILE"`   |
+| `nixpacks.toml` | ✅ Removed    | Prevented auto-detection conflicts   |
+| `.gitignore`    | ✅ Updated    | Prevents re-adding nixpacks.toml     |
+| Kraken SDK      | ✅ Verified   | Checked during startup               |
 
 **Result**: Railway will now exclusively use the Dockerfile for all builds, ensuring reliable and reproducible deployments with proper Kraken SDK installation.
