@@ -22,6 +22,14 @@ from indicators import (
 from risk_manager import RiskManager
 from execution_engine import ExecutionEngine
 
+# Import emergency liquidation for capital preservation (FIX 3)
+try:
+    from emergency_liquidation import EmergencyLiquidator
+    EMERGENCY_LIQUIDATION_AVAILABLE = True
+except ImportError:
+    EMERGENCY_LIQUIDATION_AVAILABLE = False
+    logger.warning("Emergency liquidation module not available")
+
 logger = logging.getLogger("nija")
 
 
@@ -380,6 +388,7 @@ class NIJAApexStrategyV71:
         Exit Logic
         
         Conditions:
+        0. **EMERGENCY LIQUIDATION** (FIX 3): PnL <= -1% → IMMEDIATE SELL
         1. Opposite signal detected
         2. Trailing stop hit
         3. Trend break (EMA9/21 cross)
@@ -396,6 +405,19 @@ class NIJAApexStrategyV71:
         position = self.execution_engine.get_position(symbol)
         if not position:
             return False, 'No position'
+        
+        # FIX 3: EMERGENCY LIQUIDATION CHECK (HIGHEST PRIORITY)
+        # If PnL <= -1%, force immediate liquidation with NO QUESTIONS
+        # This bypasses ALL other checks and filters
+        if EMERGENCY_LIQUIDATION_AVAILABLE:
+            try:
+                liquidator = EmergencyLiquidator()
+                if liquidator.should_force_liquidate(position, current_price):
+                    # CRITICAL: Return True to trigger immediate exit
+                    # The execution will bypass all normal checks
+                    return True, '🚨 EMERGENCY LIQUIDATION: PnL <= -1% (capital preservation override)'
+            except Exception as e:
+                logger.error(f"Error checking emergency liquidation: {e}")
         
         side = position['side']
         ema9 = indicators['ema_9'].iloc[-1]

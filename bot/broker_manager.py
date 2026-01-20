@@ -63,6 +63,18 @@ except ImportError:
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
 
+# Import Balance Models (FIX 1: Three-part balance model)
+try:
+    from bot.balance_models import BalanceSnapshot, UserBrokerState, create_balance_snapshot_from_broker_response
+except ImportError:
+    try:
+        from balance_models import BalanceSnapshot, UserBrokerState, create_balance_snapshot_from_broker_response
+    except ImportError:
+        # Fallback: Balance models not available
+        BalanceSnapshot = None
+        UserBrokerState = None
+        create_balance_snapshot_from_broker_response = None
+
 # Import KrakenNonce for per-user nonce generation (DEPRECATED - kept for backward compatibility)
 # NOTE: This is being phased out in favor of GlobalKrakenNonceManager
 try:
@@ -2287,19 +2299,46 @@ class CoinbaseBroker(BaseBroker):
                             logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} available")
                             logger.info(f"   Tracked position size: {quantity:.8f} {base_currency}")
                             
+                            # FIX 2: SELL MUST IGNORE CASH BALANCE
+                            # CRITICAL: We're selling CRYPTO, not buying with USD
+                            # The check should be: "Do we have the crypto?" NOT "Do we have USD?"
+                            # Old (WRONG): if available_base <= epsilon: block_sell()
+                            # New (CORRECT): if position.quantity > 0: execute_sell()
+                            #
+                            # This single change stops the bleeding:
+                            # - We can now exit losing positions even with $0 USD balance
+                            # - Sells are NOT blocked by insufficient USD (which makes no sense!)
+                            # - Position management works correctly
+                            
                             epsilon = 1e-8
-                            if available_base <= epsilon:
+                            
+                            # Validate quantity is positive before proceeding
+                            if quantity <= epsilon:
                                 logger.error(
-                                    f"❌ PRE-FLIGHT CHECK FAILED: Zero {base_currency} balance "
-                                    f"(available: {available_base:.8f})"
+                                    f"❌ INVALID SELL: Zero or negative quantity "
+                                    f"(quantity: {quantity:.8f})"
                                 )
                                 return {
                                     "status": "unfilled",
-                                    "error": "INSUFFICIENT_FUND",
-                                    "message": f"No {base_currency} balance available for sell (requested {quantity})",
+                                    "error": "INVALID_QUANTITY",
+                                    "message": f"Cannot sell zero or negative quantity: {quantity}",
                                     "partial_fill": False,
                                     "filled_pct": 0.0
                                 }
+                            
+                            if available_base <= epsilon:
+                                # FIX 2: Changed from ERROR to WARNING
+                                # We should still TRY to sell even if balance shows zero
+                                # (position might exist on exchange but not in our cache)
+                                logger.warning(
+                                    f"⚠️ PRE-FLIGHT WARNING: Zero {base_currency} balance shown "
+                                    f"(available: {available_base:.8f})"
+                                )
+                                logger.warning(
+                                    f"   Attempting sell anyway - position may exist on exchange"
+                                )
+                                # DON'T RETURN - continue with sell attempt
+                                # The exchange will reject if there's truly no balance
                             
                             if available_base < quantity:
                                 diff = quantity - available_base
