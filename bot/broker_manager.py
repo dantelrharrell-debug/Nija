@@ -103,6 +103,10 @@ MINIMUM_BALANCE_PROTECTION = 0.50  # Lowered from 1.00 to allow trading with ver
 MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading (warning only, not enforced)
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
+# 🚑 FIX 2: Minimum balance for Coinbase to prevent fees eating small accounts
+# Coinbase has higher fees than Kraken, so small accounts should use Kraken instead
+COINBASE_MINIMUM_BALANCE = 75.00  # Disable Coinbase for accounts below this threshold
+
 # Broker health monitoring constants
 # Maximum consecutive errors before marking broker unavailable
 # This prevents trading when API is persistently failing
@@ -371,8 +375,28 @@ class BaseBroker(ABC):
         pass
     
     @abstractmethod
-    def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
-        """Place market order. Must be implemented by each broker."""
+    def place_market_order(
+        self, 
+        symbol: str, 
+        side: str, 
+        quantity: float, 
+        size_type: str = 'quote',
+        ignore_balance: bool = False,
+        ignore_min_trade: bool = False,
+        force_liquidate: bool = False
+    ) -> Dict:
+        """
+        Place market order. Must be implemented by each broker.
+        
+        Args:
+            symbol: Trading symbol
+            side: 'buy' or 'sell'
+            quantity: Order size
+            size_type: 'quote' (USD) or 'base' (crypto quantity)
+            ignore_balance: Bypass balance validation (EMERGENCY ONLY)
+            ignore_min_trade: Bypass minimum trade size validation (EMERGENCY ONLY)
+            force_liquidate: Bypass ALL validation (EMERGENCY ONLY)
+        """
         pass
     
     def close_position(self, symbol: str, base_size: Optional[float] = None, **kwargs) -> Dict:
@@ -857,17 +881,36 @@ class CoinbaseBroker(BaseBroker):
                     # This prevents Coinbase fees from eating small accounts
                     try:
                         balance_data = self._get_account_balance_detailed()
+                        if balance_data is None:
+                            # Balance fetch failed - this is critical for small account check
+                            # We MUST know account size before allowing connection
+                            logging.error("=" * 70)
+                            logging.error("⚠️  COINBASE CONNECTION BLOCKED")
+                            logging.error("=" * 70)
+                            logging.error("   Could not verify account balance")
+                            logging.error("   This check prevents small accounts from using Coinbase")
+                            logging.error("   ")
+                            logging.error("   Possible causes:")
+                            logging.error("   1. API permission issues")
+                            logging.error("   2. Network connectivity problems")
+                            logging.error("   3. Coinbase API temporarily unavailable")
+                            logging.error("   ")
+                            logging.error("   Solution: Fix API connectivity first")
+                            logging.error("=" * 70)
+                            self.connected = False
+                            return False
+                        
                         total_funds = balance_data.get('total_funds', 0.0)
                         
-                        if total_funds < 75.0:
+                        if total_funds < COINBASE_MINIMUM_BALANCE:
                             logging.error("=" * 70)
                             logging.error("🛑 COINBASE DISABLED: Account too small")
                             logging.error("=" * 70)
                             logging.error(f"   Your balance: ${total_funds:.2f}")
-                            logging.error(f"   Minimum required: $75.00")
+                            logging.error(f"   Minimum required: ${COINBASE_MINIMUM_BALANCE:.2f}")
                             logging.error(f"   ")
                             logging.error(f"   ⚠️  Coinbase fees will eat small accounts alive!")
-                            logging.error(f"   💡 Solution: Use Kraken for accounts under $75")
+                            logging.error(f"   💡 Solution: Use Kraken for accounts under ${COINBASE_MINIMUM_BALANCE:.2f}")
                             logging.error(f"   ")
                             logging.error(f"   Coinbase has been automatically disabled.")
                             logging.error(f"   Trading will route to Kraken instead.")
@@ -877,9 +920,19 @@ class CoinbaseBroker(BaseBroker):
                             self.connected = False
                             return False
                     except Exception as balance_check_err:
-                        # If balance check fails, allow connection but log warning
-                        logging.warning(f"⚠️  Could not check account balance: {balance_check_err}")
-                        logging.warning(f"   Allowing Coinbase connection but recommend manual verification")
+                        # Balance check failed - this is CRITICAL, do NOT allow connection
+                        # We cannot safely determine if account is too small
+                        logging.error("=" * 70)
+                        logging.error("⚠️  COINBASE CONNECTION BLOCKED")
+                        logging.error("=" * 70)
+                        logging.error(f"   Balance check failed: {balance_check_err}")
+                        logging.error("   Cannot verify account size - blocking Coinbase connection")
+                        logging.error("   ")
+                        logging.error("   This safety check prevents small accounts from using Coinbase.")
+                        logging.error("   Fix the balance check error before allowing Coinbase connection.")
+                        logging.error("=" * 70)
+                        self.connected = False
+                        return False
                     
                     return True
                     
@@ -1596,7 +1649,11 @@ class CoinbaseBroker(BaseBroker):
             
             # 🚑 FIX 4: Return total_funds (available + locked) instead of just trading_balance
             # This ensures rotation and sizing use TOTAL EQUITY not just free cash
-            result = float(balance_data.get('total_funds', balance_data.get('trading_balance', 0.0)))
+            # Fallback chain: total_funds -> trading_balance -> 0.0
+            total_funds = balance_data.get('total_funds', None)
+            if total_funds is None:
+                total_funds = balance_data.get('trading_balance', 0.0)
+            result = float(total_funds)
             
             # Log what we're returning for transparency
             trading_balance = float(balance_data.get('trading_balance', 0.0))
@@ -5602,11 +5659,14 @@ class KrakenBroker(BaseBroker):
         logger.warning("=" * 70)
         
         try:
-            # Force market sell - Kraken doesn't have the same balance validation issues as Coinbase
+            # Force market sell with emergency bypass flags
             result = self.place_market_order(
                 symbol=symbol,
                 side='sell',
-                quantity=quantity
+                quantity=quantity,
+                ignore_balance=True,
+                ignore_min_trade=True,
+                force_liquidate=True
             )
             
             if result.get('status') == 'filled':
@@ -5625,7 +5685,16 @@ class KrakenBroker(BaseBroker):
                 "symbol": symbol
             }
     
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+    def place_market_order(
+        self, 
+        symbol: str, 
+        side: str, 
+        quantity: float,
+        size_type: str = 'quote',
+        ignore_balance: bool = False,
+        ignore_min_trade: bool = False,
+        force_liquidate: bool = False
+    ) -> Dict:
         """
         Place market order on Kraken.
         
