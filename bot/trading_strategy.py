@@ -214,6 +214,11 @@ MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/m
 MIN_POSITION_SIZE_USD = 1.0  # Minimum position size in USD (lowered from $10 to allow very small accounts)
 MIN_BALANCE_TO_TRADE_USD = 1.0  # Minimum account balance to allow trading (lowered from $2 to allow trading with $1.37)
 
+# FIX #3 (Jan 20, 2026): Kraken-specific minimum thresholds
+# Kraken WILL NOT trade if balance < $25 OR min order size not met OR fees make position < min notional
+MIN_KRAKEN_BALANCE = 25.0  # Minimum balance for Kraken to allow trading
+MIN_POSITION_SIZE = 1.25   # 5% of $25 - minimum position size for Kraken
+
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
     Execute a function with a timeout. Returns (result, error).
@@ -2223,7 +2228,16 @@ class TradingStrategy:
                     skip_reasons.append(f"Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
                     logger.warning(f"   ❌ CONDITION FAILED: Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
                 else:
-                    logger.info(f"   ✅ CONDITION PASSED: Sufficient balance (${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f})")
+                    # FIX #3 (Jan 20, 2026): Additional Kraken-specific balance check
+                    # Kraken requires minimum $25 balance to trade effectively
+                    broker_name = self._get_broker_name(active_broker)
+                    if broker_name == 'kraken' and account_balance < MIN_KRAKEN_BALANCE:
+                        can_enter = False
+                        skip_reasons.append(f"Kraken minimum balance not met (${account_balance:.2f} < ${MIN_KRAKEN_BALANCE:.2f})")
+                        logger.warning(f"   ❌ CONDITION FAILED: Kraken minimum balance not met (${account_balance:.2f} < ${MIN_KRAKEN_BALANCE:.2f})")
+                        logger.warning(f"      💡 Kraken requires ${MIN_KRAKEN_BALANCE:.2f} minimum to trade (fees make smaller positions unprofitable)")
+                    else:
+                        logger.info(f"   ✅ CONDITION PASSED: Sufficient balance (${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f})")
                 
                 logger.info("")
                 logger.info("═" * 80)
@@ -2239,7 +2253,13 @@ class TradingStrategy:
                     logger.warning("")
             
             # Continue with market scanning if conditions passed
-            if not user_mode and not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD:
+            # FIX #3 (Jan 20, 2026): Additional Kraken balance check for market scanning
+            broker_name = self._get_broker_name(active_broker)
+            kraken_balance_ok = True
+            if broker_name == 'kraken':
+                kraken_balance_ok = account_balance >= MIN_KRAKEN_BALANCE
+            
+            if not user_mode and not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD and kraken_balance_ok:
                 logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
                 
                 # Get top market candidates (limit scan to prevent timeouts)
@@ -2251,6 +2271,21 @@ class TradingStrategy:
                         logger.info("   🔄 Refreshing market list from API...")
                         all_products = active_broker.get_all_products()
                         if all_products:
+                            # FIX #3 (Jan 20, 2026): Filter Kraken markets BEFORE caching
+                            # At startup: kraken_markets = [m for m in all_markets if kraken.supports_symbol(m)]
+                            # Then scan ONLY these filtered markets
+                            broker_name = self._get_broker_name(active_broker)
+                            if broker_name == 'kraken':
+                                original_count = len(all_products)
+                                all_products = [
+                                    sym for sym in all_products 
+                                    if sym.endswith('/USD') or sym.endswith('/USDT') or 
+                                       sym.endswith('-USD') or sym.endswith('-USDT')
+                                ]
+                                filtered_count = original_count - len(all_products)
+                                logger.info(f"   🔍 Kraken market filter: {filtered_count} unsupported symbols removed at startup")
+                                logger.info(f"      Kraken markets cached: {len(all_products)} (*/USD and */USDT pairs ONLY)")
+                            
                             self.all_markets_cache = all_products
                             self.markets_cache_time = current_time
                             logger.info(f"   ✅ Cached {len(all_products)} markets")
@@ -2269,24 +2304,8 @@ class TradingStrategy:
                     # Use rotation to scan different markets each cycle
                     markets_to_scan = self._get_rotated_markets(all_products)
                     
-                    # FIX 6: BROKER SYMBOL NORMALIZATION - Filter invalid symbols BEFORE analysis
-                    # This prevents wasting CPU and API calls on symbols the broker doesn't support
-                    # Example: Kraken only supports */USD and */USDT, so skip ETH-BUSD, BTC-EUR, etc.
-                    broker_name = self._get_broker_name(active_broker)
-                    original_count = len(markets_to_scan)
-                    
-                    if broker_name == 'kraken':
-                        # Kraken only supports */USD and */USDT pairs
-                        markets_to_scan = [
-                            sym for sym in markets_to_scan 
-                            if sym.endswith('/USD') or sym.endswith('/USDT') or 
-                               sym.endswith('-USD') or sym.endswith('-USDT')
-                        ]
-                        filtered_count = original_count - len(markets_to_scan)
-                        if filtered_count > 0:
-                            logger.info(f"   🔍 Kraken symbol filter: {filtered_count} unsupported symbols removed")
-                            logger.info(f"      (Kraken only supports */USD and */USDT pairs)")
-                    
+                    # FIX #3 (Jan 20, 2026): Kraken markets already filtered at startup
+                    # No need to filter again during scan - markets_to_scan already contains only supported pairs
                     scan_limit = len(markets_to_scan)
                     logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
                     
@@ -2473,6 +2492,16 @@ class TradingStrategy:
                                     # Calculate break-even % needed: (fee_dollars / position_size) * 100
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
                                     logger.info(f"      📊 Would need {breakeven_pct:.1f}% gain just to break even on fees")
+                                    continue
+                                
+                                # FIX #3 (Jan 20, 2026): Kraken-specific minimum position size check
+                                # Kraken requires larger minimum position size due to fees
+                                broker_name = self._get_broker_name(active_broker)
+                                if broker_name == 'kraken' and position_size < MIN_POSITION_SIZE:
+                                    filter_stats['position_too_small'] += 1
+                                    logger.info(f"   ❌ Entry rejected for {symbol}")
+                                    logger.info(f"      Reason: Kraken position size ${position_size:.2f} < ${MIN_POSITION_SIZE} minimum")
+                                    logger.info(f"      💡 Kraken requires ${MIN_POSITION_SIZE} minimum (5% of ${MIN_KRAKEN_BALANCE} balance)")
                                     continue
                                 
                                 # Warn if position is very small but allowed

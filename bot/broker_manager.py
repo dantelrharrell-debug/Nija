@@ -5451,6 +5451,9 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
                 logger.info("=" * 70)
                 
+                # FIX #3 (Jan 20, 2026): Confirmation log for Kraken balance fetch
+                logger.info(f"✅ KRAKEN balance fetched: ${total_funds:.2f}")
+                
                 # SUCCESS: Update last known balance and reset error count
                 # 🚑 FIX 4: Store and return total_funds instead of just available
                 self._last_known_balance = total_funds
