@@ -70,10 +70,10 @@ MAX_LOSING_POSITION_HOLD_MINUTES = 30  # Exit losing trades after 30 minutes (op
 # Coinbase has strict rate limits (~10 req/s burst, lower sustained)
 # Instead of scanning all 730 markets every cycle, we batch scan smaller subsets
 # RateLimiter enforces 10 req/min (6s between calls), so we must scan fewer markets
-MARKET_SCAN_LIMIT = 50   # Scan 50 markets per cycle for better opportunity discovery
+MARKET_SCAN_LIMIT = 30   # Scan 30 markets per cycle for better opportunity discovery
                          # This rotates through different markets each cycle
-                         # Complete scan of 730 markets takes ~15 cycles (~37 minutes)
-                         # Increased from 15 to find 3x more trading opportunities
+                         # Complete scan of 730 markets takes ~24 cycles (~60 minutes)
+                         # Increased from 15 to find 2x more trading opportunities while respecting rate limits
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Rate limiting constants (prevent 429 errors from Coinbase API)
@@ -93,8 +93,8 @@ MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
 # UPDATED (Jan 10, 2026): Adaptive batch sizing to prevent API rate limiting
-MARKET_BATCH_SIZE_MIN = 20   # Start with 20 markets per cycle on fresh start
-MARKET_BATCH_SIZE_MAX = 50  # Maximum markets to scan per cycle after warmup
+MARKET_BATCH_SIZE_MIN = 10   # Start with 10 markets per cycle on fresh start (gradual warmup)
+MARKET_BATCH_SIZE_MAX = 30  # Maximum markets to scan per cycle after warmup
 MARKET_BATCH_WARMUP_CYCLES = 3  # Number of cycles to warm up before using max batch size
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
@@ -116,7 +116,7 @@ STALE_POSITION_WARNING_HOURS = 12  # Warn about positions held this long (12 hou
 # Unsellable position retry timeout (prevent permanent blocking)
 # After this many hours, retry selling positions that were previously marked unsellable
 # This handles cases where position grew enough to be sellable, or API errors were temporary
-UNSELLABLE_RETRY_HOURS = 6  # Retry selling "unsellable" positions after 6 hours (reduced from 24h)
+UNSELLABLE_RETRY_HOURS = 12  # Retry selling "unsellable" positions after 12 hours (half of max hold time)
 # ZOMBIE POSITION DETECTION: Disabled - positions need time to develop
 # Auto-imported positions are tracked properly with entry prices now
 ZOMBIE_POSITION_HOURS = 24.0  # Increased from 1 hour to 24 hours to allow normal price movement
