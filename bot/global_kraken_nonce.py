@@ -120,8 +120,41 @@ def get_kraken_api_lock() -> threading.Lock:
     return _KRAKEN_API_LOCK
 
 
+def jump_global_kraken_nonce_forward(milliseconds: int) -> int:
+    """
+    Jump the global Kraken nonce forward by specified milliseconds.
+    
+    This is used for error recovery when an "Invalid nonce" error occurs.
+    Jumping forward clears the "burned" nonce window and ensures the next
+    nonce will be accepted by Kraken API.
+    
+    Thread-safe: Uses global lock to prevent race conditions.
+    
+    Args:
+        milliseconds: Number of milliseconds to jump forward
+        
+    Returns:
+        int: New nonce value after jump
+    """
+    global _GLOBAL_LAST_NONCE
+    
+    with _GLOBAL_NONCE_LOCK:
+        # Get current timestamp in milliseconds
+        current_time_ms = int(time.time() * 1000)
+        
+        # Calculate two candidate nonces and use the larger one
+        time_based = current_time_ms + milliseconds
+        increment_based = _GLOBAL_LAST_NONCE + milliseconds
+        
+        # Update to the larger of the two
+        _GLOBAL_LAST_NONCE = max(time_based, increment_based)
+        
+        return _GLOBAL_LAST_NONCE
+
+
 __all__ = [
     'get_kraken_nonce',
     'get_global_kraken_nonce',
     'get_kraken_api_lock',
+    'jump_global_kraken_nonce_forward',
 ]

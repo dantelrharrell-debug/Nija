@@ -54,14 +54,15 @@ except ImportError:
 
 # Import Global Kraken Nonce Manager (ONE source for all users - FINAL FIX)
 try:
-    from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock
+    from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
 except ImportError:
     try:
-        from global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock
+        from global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
     except ImportError:
         # Fallback: Global nonce manager not available
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
+        jump_global_kraken_nonce_forward = None
 
 # Import Balance Models (FIX 1: Three-part balance model)
 try:
@@ -4608,14 +4609,19 @@ class KrakenBroker(BaseBroker):
         """
         Immediately jump nonce forward when a nonce error is detected.
         
-        NOTE: With global nanosecond nonce manager, nonce errors should be extremely rare.
-        This method is kept for backward compatibility with fallback implementations.
+        This method jumps the nonce forward by 120 seconds to clear the "burned"
+        nonce window and ensure the next API call will succeed.
         
         Thread-safe: Uses the nonce generator's internal lock.
         """
         if self._use_global_nonce:
-            # Global nonce manager doesn't need jumps (nanosecond precision prevents collisions)
-            logger.debug(f"   ⚡ Global nonce manager in use - no jump needed (nanosecond precision)")
+            # Use global nonce manager to jump forward
+            if jump_global_kraken_nonce_forward is not None:
+                immediate_jump_ms = 120 * 1000  # 120 seconds in milliseconds
+                new_nonce = jump_global_kraken_nonce_forward(immediate_jump_ms)
+                logger.debug(f"   ⚡ Immediately jumped GLOBAL nonce forward by 120s to clear burned nonce window (new nonce: {new_nonce})")
+            else:
+                logger.debug(f"   ⚡ Global nonce jump function not available - using time-based recovery")
             return
         elif self._kraken_nonce is not None:
             # Use KrakenNonce instance (fallback)
