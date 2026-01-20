@@ -43,7 +43,7 @@ class EmergencyLiquidator:
             entry_price = position.get('entry_price')
             side = position.get('side', 'long')
             
-            if not entry_price or entry_price == 0:
+            if entry_price is None or entry_price == 0:
                 logger.warning("Cannot calculate PnL: missing or zero entry price")
                 return False
             
