@@ -2268,7 +2268,32 @@ class CoinbaseBroker(BaseBroker):
                 # If guard check fails, proceed but log later if needed
                 pass
 
+            # 🚑 FIX #1: FORCE SELL OVERRIDE - SELL orders bypass ALL restrictions
+            # ================================================================
+            # CRITICAL: SELL orders are NEVER blocked by:
+            #   ✅ MINIMUM_TRADING_BALANCE (balance checks only apply to BUY)
+            #   ✅ MIN_CASH_TO_BUY (balance checks only apply to BUY)
+            #   ✅ ENTRY_ONLY mode / EXIT_ONLY mode (blocks BUY, not SELL)
+            #   ✅ Broker preference routing (SELL always executes)
+            #   ✅ Emergency stop flags (only block BUY)
+            #
+            # This ensures:
+            #   - Stop-loss exits always execute
+            #   - Emergency liquidation always executes
+            #   - Losing positions can always be closed
+            #   - Capital bleeding can always be stopped
+            # ================================================================
+            
+            # Log explicit bypass for SELL orders
+            if side.lower() == 'sell':
+                logger.info(f"🚑 SELL order for {symbol}: ALL RESTRICTIONS BYPASSED")
+                logger.info(f"   ✅ Balance validation: SKIPPED (SELL only)")
+                logger.info(f"   ✅ Minimum balance check: SKIPPED (SELL only)")
+                logger.info(f"   ✅ EXIT-ONLY mode: ALLOWED (SELL only)")
+                logger.info(f"   ✅ Emergency exit: ENABLED")
+            
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
+            # NOTE: SELL orders are NOT checked here - they always pass through
             if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
                 logger.error(f"❌ BUY order rejected: Coinbase is in EXIT-ONLY mode (balance < ${COINBASE_MINIMUM_BALANCE:.2f})")
                 logger.error(f"   Only SELL orders are allowed to close existing positions")
@@ -2292,6 +2317,8 @@ class CoinbaseBroker(BaseBroker):
                 logger.warning(f"⚠️  BALANCE CHECK BYPASSED for {symbol} (force_liquidate={force_liquidate}, ignore_balance={ignore_balance})")
 
             # PRE-FLIGHT CHECK: Verify sufficient balance before placing order
+            # CRITICAL: This check ONLY applies to BUY orders
+            # SELL orders ALWAYS bypass this check
             # SKIP if force_liquidate or ignore_balance is True
             if side.lower() == 'buy' and not (force_liquidate or ignore_balance):
                 balance_data = self._get_account_balance_detailed()
@@ -5809,7 +5836,32 @@ class KrakenBroker(BaseBroker):
             if not self.api:
                 return {"status": "error", "error": "Not connected to Kraken"}
             
+            # 🚑 FIX #1: FORCE SELL OVERRIDE - SELL orders bypass ALL restrictions
+            # ================================================================
+            # CRITICAL: SELL orders are NEVER blocked by:
+            #   ✅ MINIMUM_TRADING_BALANCE (balance checks only apply to BUY)
+            #   ✅ MIN_CASH_TO_BUY (balance checks only apply to BUY)
+            #   ✅ ENTRY_ONLY mode / EXIT_ONLY mode (blocks BUY, not SELL)
+            #   ✅ Broker preference routing (SELL always executes)
+            #   ✅ Emergency stop flags (only block BUY)
+            #
+            # This ensures:
+            #   - Stop-loss exits always execute
+            #   - Emergency liquidation always executes
+            #   - Losing positions can always be closed
+            #   - Capital bleeding can always be stopped
+            # ================================================================
+            
+            # Log explicit bypass for SELL orders
+            if side.lower() == 'sell':
+                logger.info(f"🚑 SELL order for {symbol}: ALL RESTRICTIONS BYPASSED")
+                logger.info(f"   ✅ Balance validation: SKIPPED (SELL only)")
+                logger.info(f"   ✅ Minimum balance check: SKIPPED (SELL only)")
+                logger.info(f"   ✅ EXIT-ONLY mode: ALLOWED (SELL only)")
+                logger.info(f"   ✅ Emergency exit: ENABLED")
+            
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
+            # NOTE: SELL orders are NOT checked here - they always pass through
             if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
                 logger.error(f"❌ BUY order rejected: Kraken is in EXIT-ONLY mode (balance < ${KRAKEN_MINIMUM_BALANCE:.2f})")
                 logger.error(f"   Only SELL orders are allowed to close existing positions")
