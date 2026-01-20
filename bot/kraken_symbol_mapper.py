@@ -19,6 +19,27 @@ import logging
 from typing import Dict, List, Set, Optional, Tuple
 from pathlib import Path
 
+# Import stdout suppression utility for pykrakenapi
+try:
+    from bot.stdout_utils import suppress_pykrakenapi_prints
+except ImportError:
+    try:
+        from stdout_utils import suppress_pykrakenapi_prints
+    except ImportError:
+        # Fallback: Define locally if import fails
+        import sys
+        import io
+        from contextlib import contextmanager
+        
+        @contextmanager
+        def suppress_pykrakenapi_prints():
+            original_stdout = sys.stdout
+            try:
+                sys.stdout = io.StringIO()
+                yield
+            finally:
+                sys.stdout = original_stdout
+
 logger = logging.getLogger('nija.kraken_symbol_mapper')
 
 # Path to the symbol mapping file
@@ -88,7 +109,9 @@ class KrakenSymbolMapper:
                 logger.info("🔍 Fetching available Kraken trading pairs...")
                 
                 # Get tradable asset pairs from Kraken
-                asset_pairs = kraken_api.get_tradable_asset_pairs()
+                # Suppress pykrakenapi's print() statements
+                with suppress_pykrakenapi_prints():
+                    asset_pairs = kraken_api.get_tradable_asset_pairs()
                 
                 # Build dynamic mapping
                 for pair_name, pair_info in asset_pairs.iterrows():

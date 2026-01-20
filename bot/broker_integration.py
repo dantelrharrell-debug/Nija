@@ -26,6 +26,27 @@ except ImportError:
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
 
+# Import stdout suppression utility for pykrakenapi
+try:
+    from bot.stdout_utils import suppress_pykrakenapi_prints
+except ImportError:
+    try:
+        from stdout_utils import suppress_pykrakenapi_prints
+    except ImportError:
+        # Fallback: Define locally if import fails
+        import sys
+        import io
+        from contextlib import contextmanager
+        
+        @contextmanager
+        def suppress_pykrakenapi_prints():
+            original_stdout = sys.stdout
+            try:
+                sys.stdout = io.StringIO()
+                yield
+            finally:
+                sys.stdout = original_stdout
+
 logger = logging.getLogger("nija.broker")
 
 
@@ -453,19 +474,21 @@ class KrakenBrokerAdapter(BrokerInterface):
         Returns:
             API response
         """
-        if get_kraken_api_lock is not None:
-            api_lock = get_kraken_api_lock()
-            with api_lock:
+        # Suppress pykrakenapi's print() statements
+        with suppress_pykrakenapi_prints():
+            if get_kraken_api_lock is not None:
+                api_lock = get_kraken_api_lock()
+                with api_lock:
+                    if params:
+                        return self.api.query_private(method, params)
+                    else:
+                        return self.api.query_private(method)
+            else:
+                # Fallback: direct call without global lock
                 if params:
                     return self.api.query_private(method, params)
                 else:
                     return self.api.query_private(method)
-        else:
-            # Fallback: direct call without global lock
-            if params:
-                return self.api.query_private(method, params)
-            else:
-                return self.api.query_private(method)
     
     def connect(self) -> bool:
         """Connect to Kraken API."""
