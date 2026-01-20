@@ -501,46 +501,6 @@ def get_trading_status():
             logger.exception(f"User check failed: {e}")
             status["errors"].append(f"User check failed: {str(e)}")
             status["users"] = []
-                    recent_trades_data = pnl_tracker.get_recent_trades(user_id, limit=5)
-                    recent_trades = [
-                        {
-                            "symbol": t.symbol,
-                            "side": t.side,
-                            "pnl_usd": t.pnl_usd,
-                            "timestamp": t.timestamp
-                        }
-                        for t in recent_trades_data
-                    ]
-                    total_pnl = stats.get('total_pnl', 0.0)
-                    daily_pnl = stats.get('daily_pnl', 0.0)
-                    win_rate = stats.get('win_rate', 0.0)
-                    total_trades = stats.get('completed_trades', 0)
-                except Exception as e:
-                    logger.debug(f"Could not get PnL for {user_id}: {e}")
-                
-                status["users"].append({
-                    "user_id": user_id,
-                    "name": user_config.name,
-                    "enabled": user_config.enabled,
-                    "account_type": user_config.account_type,
-                    "broker_type": user_config.broker_type,
-                    "balance": user_balance,
-                    "positions": user_positions,
-                    "total_pnl": total_pnl,
-                    "daily_pnl": daily_pnl,
-                    "win_rate": win_rate,
-                    "total_trades": total_trades,
-                    "recent_trades": recent_trades
-                })
-        except ImportError as e:
-            # Multi-user system not available
-            logger.debug(f"Multi-user system import failed: {e}")
-            status["errors"].append(f"Multi-user system import failed: {str(e)}")
-            status["users"] = []
-        except Exception as e:
-            logger.exception(f"User check failed: {e}")
-            status["errors"].append(f"User check failed: {str(e)}")
-            status["users"] = []
         
         # Determine overall trading status
         if status["is_trading"]:
