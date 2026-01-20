@@ -205,14 +205,14 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than curren
                                           # Creates -0.99% immediate P&L, flagging as loser
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
-# Updated Dec 30, 2025: Lowered minimums to allow very small account trading
-# ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to fees (~1.4% round-trip)
-# With $1-2 positions, expect fees to consume most/all profits
-# This allows trading for learning/testing but profitability is severely limited
-# STRONG RECOMMENDATION: Fund account to $30+ for better trading outcomes
+# Updated Jan 20, 2026: Raised minimum to $5 for safer trade sizing
+# ⚠️ CRITICAL WARNING: Small positions are unprofitable due to fees (~1.4% round-trip)
+# With $5+ positions, trades have better chance of profitability after fees
+# This ensures better trading outcomes and quality over quantity
+# STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
 MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/micro positions)
-MIN_POSITION_SIZE_USD = 1.0  # Minimum position size in USD (lowered from $10 to allow very small accounts)
-MIN_BALANCE_TO_TRADE_USD = 1.0  # Minimum account balance to allow trading (lowered from $2 to allow trading with $1.37)
+MIN_POSITION_SIZE_USD = 5.0  # Minimum position size in USD (raised from $1.00 for better profitability)
+MIN_BALANCE_TO_TRADE_USD = 5.0  # Minimum account balance to allow trading (raised to match minimum position size)
 
 # FIX #3 (Jan 20, 2026): Kraken-specific minimum thresholds
 # Kraken WILL NOT trade if balance < $25 OR min order size not met OR fees make position < min notional
