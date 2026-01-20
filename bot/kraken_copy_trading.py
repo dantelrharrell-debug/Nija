@@ -525,6 +525,8 @@ def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
     """
     Copy a master trade to all Kraken user accounts.
     
+    Workflow: USER broker → fetch balances → size trades → execute
+    
     Args:
         master_trade: Dict containing trade details from master execution
     """
@@ -553,8 +555,31 @@ def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
         try:
             user_id = user['id']
             user_name = user['name']
-            user_balance = user['balance']
             client = user['client']
+            
+            # STEP 1: USER broker (already have the client)
+            
+            # STEP 2: Fetch balances (fresh, not cached from initialization)
+            logger.info(f"   🔄 Processing {user_name} ({user_id})...")
+            logger.info(f"      Step 2: Fetching current balance...")
+            
+            balance_result = client.get_balance()
+            if 'error' in balance_result and balance_result['error']:
+                error_msgs = ', '.join(balance_result['error'])
+                logger.error(f"      ❌ FAILED to fetch balance: {error_msgs}")
+                fail_count += 1
+                continue
+            
+            # Calculate USD balance
+            balances = balance_result.get('result', {})
+            usd_balance = float(balances.get('ZUSD', 0))
+            usdt_balance = float(balances.get('USDT', 0))
+            user_balance = usd_balance + usdt_balance
+            
+            logger.info(f"      Balance: ${user_balance:.2f}")
+            
+            # STEP 3: Size trades based on fresh balance
+            logger.info(f"      Step 3: Sizing trade based on balance ratio...")
             
             # Calculate scaled position size based on balance ratio
             user_size = (
@@ -566,7 +591,7 @@ def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
             max_allowed_size = user_balance * MAX_USER_RISK
             if user_size > max_allowed_size:
                 logger.warning(
-                    f"⚠️  User {user_name}: Scaled size ${user_size:.2f} exceeds "
+                    f"      ⚠️  Scaled size ${user_size:.2f} exceeds "
                     f"MAX_USER_RISK (10% = ${max_allowed_size:.2f}), capping to max"
                 )
                 user_size = max_allowed_size
@@ -574,10 +599,10 @@ def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
             # Calculate user volume
             user_volume = user_size / master_trade["price"]
             
-            # Place user order
-            logger.info(f"   🔄 Copying to {user_name} ({user_id})...")
-            logger.info(f"      Balance: ${user_balance:.2f}")
-            logger.info(f"      Size: ${user_size:.2f} ({user_volume:.8f})")
+            logger.info(f"      Size: ${user_size:.2f} ({user_volume:.8f} units)")
+            
+            # STEP 4: Execute the trade
+            logger.info(f"      Step 4: Executing trade...")
             
             result = client.place_order(
                 pair=master_trade["pair"],
@@ -588,7 +613,7 @@ def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
             # Check for errors
             if 'error' in result and result['error']:
                 error_msgs = ', '.join(result['error'])
-                logger.error(f"      ❌ COPY FAILED: {error_msgs}")
+                logger.error(f"      ❌ EXECUTION FAILED: {error_msgs}")
                 fail_count += 1
                 continue
             
@@ -597,7 +622,7 @@ def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
             txid = order_result.get('txid', [])
             order_id = txid[0] if txid else "unknown"
             
-            logger.info(f"      ✅ COPY SUCCESS | Order ID: {order_id}")
+            logger.info(f"      ✅ TRADE COMPLETE | Order ID: {order_id}")
             success_count += 1
             
         except Exception as e:
