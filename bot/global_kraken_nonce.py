@@ -64,16 +64,18 @@ class GlobalKrakenNonceManager:
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
+                # Initialize the flag immediately in __new__ to prevent AttributeError
                 cls._instance._initialized = False
             return cls._instance
     
     def __init__(self):
         """Initialize the nonce manager (only once)."""
-        if self._initialized:
+        # Use getattr to safely check if _initialized exists and is True
+        if getattr(self, '_initialized', False):
             return
         
         with self._lock:
-            if self._initialized:
+            if getattr(self, '_initialized', False):
                 return
             
             # Nanosecond precision (19 digits)
