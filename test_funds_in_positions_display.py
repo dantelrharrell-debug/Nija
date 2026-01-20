@@ -83,8 +83,12 @@ def simulate_balance_display():
         print(f"   💎 TOTAL ACCOUNT VALUE: ${grand_total:.2f}")
         
         if position_value > 0 or held_funds > 0:
-            allocation_pct = (account_balance / grand_total * 100) if grand_total > 0 else 0
-            print(f"   📈 Cash allocation: {allocation_pct:.1f}% available, {100-allocation_pct:.1f}% deployed")
+            if grand_total > 0:
+                allocation_pct = (account_balance / grand_total * 100)
+                deployed_pct = 100 - allocation_pct
+                print(f"   📈 Cash allocation: {allocation_pct:.1f}% available, {deployed_pct:.1f}% deployed")
+            else:
+                print(f"   📈 Cash allocation: 0.0% available, 0.0% deployed")
         
         print()
     
