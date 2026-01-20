@@ -5524,6 +5524,66 @@ class KrakenBroker(BaseBroker):
                     for handler in _root_logger.handlers:
                         handler.flush()
                 
+                # COPY TRADING: Emit trade signal for master account trades
+                # This allows user accounts to replicate master trades automatically
+                try:
+                    # Only emit signals for MASTER accounts (not USER accounts)
+                    if self.account_type == AccountType.MASTER:
+                        from trade_signal_emitter import emit_trade_signal
+                        
+                        # Get current balance for position sizing
+                        balance_data = self.get_account_balance_detailed()
+                        master_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
+                        
+                        # Get current price for this symbol
+                        # For market orders, use a reasonable estimate
+                        # In future, could fetch actual execution price from order details
+                        exec_price = 0.0
+                        try:
+                            # Try to get current market price using public API
+                            # Ticker is a public endpoint, so we use query_public instead of _kraken_private_call
+                            ticker_result = self.api.query_public('Ticker', {'pair': kraken_symbol})
+                            if ticker_result and 'result' in ticker_result:
+                                ticker_data = ticker_result['result'].get(kraken_symbol, {})
+                                if ticker_data:
+                                    # Use last trade price if available
+                                    last_price = ticker_data.get('c', [0.0])[0]  # 'c' is last trade closed array [price, lot volume]
+                                    exec_price = float(last_price) if last_price else 0.0
+                        except Exception as price_err:
+                            logger.debug(f"Could not fetch execution price: {price_err}")
+                        
+                        # Determine broker name
+                        broker_name = self.broker_type.value.lower() if hasattr(self, 'broker_type') else 'kraken'
+                        
+                        # Determine size_type (Kraken uses base currency quantity for market orders)
+                        size_type = 'base'
+                        
+                        logger.info("📡 Emitting trade signal to copy engine")
+                        
+                        # Emit signal
+                        signal_emitted = emit_trade_signal(
+                            broker=broker_name,
+                            symbol=symbol,  # Use original symbol format (e.g., BTC-USD)
+                            side=side,
+                            price=exec_price if exec_price else 0.0,
+                            size=quantity,
+                            size_type=size_type,
+                            order_id=order_id,
+                            master_balance=master_balance
+                        )
+                        
+                        # Confirm signal emission status
+                        if signal_emitted:
+                            logger.info(f"✅ Trade signal emitted successfully for {symbol} {side}")
+                        else:
+                            logger.error(f"❌ Trade signal emission FAILED for {symbol} {side}")
+                            logger.error("   ⚠️ User accounts will NOT copy this trade!")
+                except Exception as signal_err:
+                    # Don't fail the trade if signal emission fails
+                    logger.warning(f"   ⚠️ Trade signal emission failed: {signal_err}")
+                    logger.warning(f"   ⚠️ User accounts will NOT copy this trade!")
+                    logger.warning(f"   Traceback: {traceback.format_exc()}")
+                
                 return {
                     "status": "filled",
                     "order_id": order_id,
