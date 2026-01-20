@@ -54,26 +54,26 @@ except ImportError:
             USER = "user"
 
 # FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
-# XRP-USD: Spread > profit edge, not suitable for current strategy
-DISABLED_PAIRS = ["XRP-USD"]
+# REMOVED XRP-USD from blacklist to allow trading on all profitable pairs
+DISABLED_PAIRS = []  # Allow all pairs to trade
 
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
-# ULTRA-AGGRESSIVE EXIT FOR LOSING TRADES (Jan 19, 2026)
-# Exit losing trades within 3 MINUTES MAX to prevent capital bleed
-# NIJA is for PROFIT, not losses - losers get minimal patience
-MAX_LOSING_POSITION_HOLD_MINUTES = 3  # Exit losing trades after 3 minutes MAX (changed from 30 min)
+# OPTIMIZED EXIT FOR LOSING TRADES - Allow time for recovery
+# Exit losing trades after 30 minutes to allow profitable recovery
+# Most profitable trades need 20-40 minutes to develop
+MAX_LOSING_POSITION_HOLD_MINUTES = 30  # Exit losing trades after 30 minutes (optimized for profitability)
 
 # Configuration constants
 # CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
 # Coinbase has strict rate limits (~10 req/s burst, lower sustained)
 # Instead of scanning all 730 markets every cycle, we batch scan smaller subsets
 # RateLimiter enforces 10 req/min (6s between calls), so we must scan fewer markets
-MARKET_SCAN_LIMIT = 15   # Scan only 15 markets per cycle (reduced from 25 to prevent rate limits)
+MARKET_SCAN_LIMIT = 50   # Scan 50 markets per cycle for better opportunity discovery
                          # This rotates through different markets each cycle
-                         # Complete scan of 730 markets takes ~49 cycles (~2 hours)
-                         # At 15 markets with 6.5s delay, each scan takes ~97s (well under 2.5 min cycle time)
+                         # Complete scan of 730 markets takes ~15 cycles (~37 minutes)
+                         # Increased from 15 to find 3x more trading opportunities
 MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 100 to prevent infinite sell loops)
 
 # Rate limiting constants (prevent 429 errors from Coinbase API)
@@ -93,8 +93,8 @@ MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
 # UPDATED (Jan 10, 2026): Adaptive batch sizing to prevent API rate limiting
-MARKET_BATCH_SIZE_MIN = 5   # Start with just 5 markets per cycle on fresh start
-MARKET_BATCH_SIZE_MAX = 15  # Maximum markets to scan per cycle after warmup
+MARKET_BATCH_SIZE_MIN = 20   # Start with 20 markets per cycle on fresh start
+MARKET_BATCH_SIZE_MAX = 50  # Maximum markets to scan per cycle after warmup
 MARKET_BATCH_WARMUP_CYCLES = 3  # Number of cycles to warm up before using max batch size
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
