@@ -1228,7 +1228,7 @@ def create_users_dashboard_html():
 
         async function loadRecentTrades(userId) {
             try {
-                const response = await fetch(`http://localhost:5001/api/user/${userId}/pnl`);
+                const response = await fetch(`/api/user/${userId}/pnl`);
                 const data = await response.json();
                 
                 const tradesContainer = document.getElementById(`trades-${userId}`);
@@ -1265,7 +1265,7 @@ def create_users_dashboard_html():
         async function refreshUsers() {
             try {
                 // Fetch users with master included
-                const response = await fetch('http://localhost:5001/api/users?include_master=true');
+                const response = await fetch('/api/users?include_master=true');
                 const data = await response.json();
                 
                 const container = document.getElementById('users-container');
