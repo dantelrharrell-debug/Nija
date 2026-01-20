@@ -217,6 +217,26 @@ except ImportError:
         UserConfigLoader = None
         get_user_config_loader = None
 
+# Import individual user loader (with hard fail support)
+try:
+    from config.individual_user_loader import (
+        IndividualUserConfig,
+        IndividualUserConfigLoader,
+        get_individual_user_config_loader
+    )
+except ImportError:
+    try:
+        from .individual_user_loader import (
+            IndividualUserConfig,
+            IndividualUserConfigLoader,
+            get_individual_user_config_loader
+        )
+    except ImportError:
+        # Fallback if individual_user_loader not available
+        IndividualUserConfig = None
+        IndividualUserConfigLoader = None
+        get_individual_user_config_loader = None
+
 
 __all__ = [
     'UserConfig',
@@ -225,4 +245,7 @@ __all__ = [
     'UserConfigData',
     'UserConfigLoader',
     'get_user_config_loader',
+    'IndividualUserConfig',
+    'IndividualUserConfigLoader',
+    'get_individual_user_config_loader',
 ]
