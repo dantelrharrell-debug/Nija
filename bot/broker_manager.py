@@ -5540,8 +5540,9 @@ class KrakenBroker(BaseBroker):
                         # In future, could fetch actual execution price from order details
                         exec_price = 0.0
                         try:
-                            # Try to get current market price
-                            ticker_result = self._kraken_private_call('Ticker', {'pair': kraken_symbol})
+                            # Try to get current market price using public API
+                            # Ticker is a public endpoint, so we use query_public instead of _kraken_private_call
+                            ticker_result = self.api.query_public('Ticker', {'pair': kraken_symbol})
                             if ticker_result and 'result' in ticker_result:
                                 ticker_data = ticker_result['result'].get(kraken_symbol, {})
                                 if ticker_data:
