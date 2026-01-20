@@ -719,22 +719,44 @@ def initialize_copy_trading_system() -> bool:
     logger.info("=" * 70)
     logger.info("🚀 INITIALIZING KRAKEN COPY TRADING SYSTEM")
     logger.info("=" * 70)
+    logger.info("")
+    logger.info("📋 COPY TRADING ARCHITECTURE:")
+    logger.info("   • MASTER places trades → signals emitted")
+    logger.info("   • Users receive signals → positions scaled by balance ratio")
+    logger.info("   • Same symbol, same side, same exit logic")
+    logger.info("   • Independent user trading DISABLED for Kraken")
+    logger.info("")
     
     # Initialize master
     master_ok = initialize_kraken_master()
     if not master_ok:
         logger.error("❌ Failed to initialize Kraken MASTER - copy trading disabled")
+        logger.error("   💡 Set KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET to enable")
         return False
     
     # Initialize users
     user_count = initialize_kraken_users()
     if user_count == 0:
         logger.warning("⚠️  No Kraken users initialized - trades will execute on MASTER only")
+        logger.warning("   💡 Configure user credentials to enable copy trading")
+        logger.warning("      Example: KRAKEN_USER_JOHN_API_KEY=xxx")
     
     logger.info("=" * 70)
     logger.info("✅ KRAKEN COPY TRADING SYSTEM READY")
-    logger.info(f"   MASTER: Initialized")
-    logger.info(f"   USERS: {user_count} ready for copy trading")
+    logger.info("=" * 70)
+    logger.info(f"   🔷 MASTER: Initialized and connected")
+    logger.info(f"   👥 USERS: {user_count} ready for copy trading")
+    logger.info("")
+    logger.info("📊 TRADING MODE:")
+    if user_count > 0:
+        logger.info("   ✅ COPY TRADING ACTIVE")
+        logger.info("   • Master trades will automatically copy to all users")
+        logger.info("   • Position sizes scaled by balance ratio")
+        logger.info("   • Risk limited to 10% per trade per user")
+    else:
+        logger.info("   ⚪ MASTER-ONLY MODE")
+        logger.info("   • Only master account will trade")
+        logger.info("   • Configure user accounts to enable copy trading")
     logger.info("=" * 70)
     logger.info("")
     
