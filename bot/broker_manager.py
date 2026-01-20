@@ -2311,6 +2311,21 @@ class CoinbaseBroker(BaseBroker):
                             # - Position management works correctly
                             
                             epsilon = 1e-8
+                            
+                            # Validate quantity is positive before proceeding
+                            if quantity <= epsilon:
+                                logger.error(
+                                    f"❌ INVALID SELL: Zero or negative quantity "
+                                    f"(quantity: {quantity:.8f})"
+                                )
+                                return {
+                                    "status": "unfilled",
+                                    "error": "INVALID_QUANTITY",
+                                    "message": f"Cannot sell zero or negative quantity: {quantity}",
+                                    "partial_fill": False,
+                                    "filled_pct": 0.0
+                                }
+                            
                             if available_base <= epsilon:
                                 # FIX 2: Changed from ERROR to WARNING
                                 # We should still TRY to sell even if balance shows zero

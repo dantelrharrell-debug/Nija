@@ -44,13 +44,15 @@ class BalanceSnapshot:
     timestamp: datetime = field(default_factory=datetime.now)
     broker_name: str = ""
     
+    # Validation constants
+    BALANCE_TOLERANCE = 0.01  # Allow 1 cent difference for floating point errors
+    
     def __post_init__(self):
         """Validate balance invariants."""
         # Allow small floating point differences
-        epsilon = 0.01
         calculated_total = self.available_usd + self.locked_in_positions_usd
         
-        if abs(calculated_total - self.total_equity_usd) > epsilon:
+        if abs(calculated_total - self.total_equity_usd) > self.BALANCE_TOLERANCE:
             # Log warning but don't fail - broker APIs can have slight discrepancies
             import logging
             logger = logging.getLogger('nija.balance')

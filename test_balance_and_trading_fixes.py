@@ -86,12 +86,12 @@ def test_emergency_liquidation():
             'side': 'long'
         }
         should_liquidate = liquidator.should_force_liquidate(position1, 99.5)
-        assert should_liquidate == False
+        assert not should_liquidate
         print("✅ Small loss (-0.5%): No liquidation")
         
         # Test -1.5% loss (SHOULD liquidate)
         should_liquidate = liquidator.should_force_liquidate(position1, 98.5)
-        assert should_liquidate == True
+        assert should_liquidate
         print("✅ Big loss (-1.5%): Emergency liquidation triggered")
         
         print("\n✅ PASSED: Emergency Liquidation\n")
@@ -145,12 +145,12 @@ def test_fee_optimizer():
         
         # Test small balance
         should_disable = optimizer.should_disable_coinbase(30.0)
-        assert should_disable == True
+        assert should_disable
         print("✅ Small balance ($30): Coinbase disabled")
         
         # Test large balance
         should_disable = optimizer.should_disable_coinbase(100.0)
-        assert should_disable == False
+        assert not should_disable
         print("✅ Large balance ($100): Coinbase enabled")
         
         # Test broker selection
