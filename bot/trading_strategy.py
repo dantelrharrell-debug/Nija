@@ -1351,8 +1351,12 @@ class TradingStrategy:
             logger.info(f"   💎 TOTAL ACCOUNT VALUE: ${grand_total:.2f}")
             
             if position_value > 0 or held_funds > 0:
-                allocation_pct = (account_balance / grand_total * 100) if grand_total > 0 else 0
-                logger.info(f"   📈 Cash allocation: {allocation_pct:.1f}% available, {100-allocation_pct:.1f}% deployed")
+                if grand_total > 0:
+                    allocation_pct = (account_balance / grand_total * 100)
+                    deployed_pct = 100 - allocation_pct
+                    logger.info(f"   📈 Cash allocation: {allocation_pct:.1f}% available, {deployed_pct:.1f}% deployed")
+                else:
+                    logger.info(f"   📈 Cash allocation: 0.0% available, 0.0% deployed")
             
             # Small delay after balance check to avoid rapid-fire API calls
             time.sleep(0.5)
