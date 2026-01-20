@@ -91,7 +91,7 @@ class KrakenConfig:
     # Position sizing (can use smaller positions profitably)
     min_position_usd: float = 5.0  # $5 minimum (fees only ~$0.02)
     recommended_min_usd: float = 10.0  # $10+ recommended
-    min_balance_to_trade: float = 25.0  # $25 minimum account balance (Kraken = primary for small accounts)
+    min_balance_to_trade: float = 25.0  # $25 minimum - optimized for small accounts with low fees
     
     # Order type preferences
     prefer_limit_orders: bool = True  # Use limit orders for best fees

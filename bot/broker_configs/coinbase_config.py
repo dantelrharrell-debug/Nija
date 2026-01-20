@@ -83,7 +83,7 @@ class CoinbaseConfig:
     # Position sizing (fee-aware)
     min_position_usd: float = 10.0  # $10 minimum (fees are ~$0.14)
     recommended_min_usd: float = 25.0  # $25+ recommended for profitability
-    min_balance_to_trade: float = 25.0  # $25 minimum account balance (Coinbase = secondary/selective, not for small accounts)
+    min_balance_to_trade: float = 25.0  # $25 minimum - secondary/selective role with higher fees
     
     # Order type preferences
     prefer_limit_orders: bool = True  # Use limit orders to save fees
