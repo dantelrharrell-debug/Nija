@@ -96,6 +96,7 @@ check_*.py
 check_*.sh
 verify_*.py
 verify_*.sh
+!verify_kraken_user_credentials.py  # Exception: permanent validation tool for locked credentials
 diagnose_*.py
 deploy_*.py
 deploy_*.sh
