@@ -31,6 +31,43 @@ logger = logging.getLogger(__name__)
 # Data directory
 DATA_DIR = Path("/tmp/nija_monitoring")
 
+# Auto-refresh interval in seconds
+AUTO_REFRESH_INTERVAL = 10  # 10 seconds
+
+
+def _ensure_repo_in_path():
+    """
+    Ensure repository root is in sys.path for imports.
+    Helper function to avoid code duplication.
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+
+def _get_account_manager():
+    """
+    Get the multi-account broker manager instance.
+    Helper function to avoid code duplication.
+    
+    Returns:
+        MultiAccountBrokerManager instance
+    """
+    try:
+        from bot.multi_account_broker_manager import MultiAccountBrokerManager
+        
+        # Check if there's a global instance in the running bot
+        if 'nija_bot' in sys.modules:
+            nija_bot = sys.modules['nija_bot']
+            if hasattr(nija_bot, 'account_manager'):
+                return nija_bot.account_manager
+        
+        # Create new instance
+        return MultiAccountBrokerManager()
+    except Exception as e:
+        logger.debug(f"Could not get account manager: {e}")
+        return None
+
 
 @app.route('/')
 def index():
@@ -111,14 +148,7 @@ def get_users():
         JSON with user list including balances, positions, and trading stats
     """
     try:
-        import sys
-        import os
-        # Add repository root to path for imports
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if repo_root not in sys.path:
-            sys.path.insert(0, repo_root)
-        
-        from bot.multi_account_broker_manager import MultiAccountBrokerManager
+        _ensure_repo_in_path()
         from config.user_loader import get_user_config_loader
         
         users_data = []
@@ -127,18 +157,15 @@ def get_users():
         user_loader = get_user_config_loader()
         all_user_configs = user_loader.all_users
         
-        # Try to get the multi-account broker manager
-        try:
-            if 'nija_bot' in sys.modules:
-                nija_bot = sys.modules['nija_bot']
-                if hasattr(nija_bot, 'account_manager'):
-                    account_mgr = nija_bot.account_manager
-                else:
-                    account_mgr = MultiAccountBrokerManager()
-            else:
-                account_mgr = MultiAccountBrokerManager()
-        except:
-            account_mgr = MultiAccountBrokerManager()
+        # Get account manager
+        account_mgr = _get_account_manager()
+        if not account_mgr:
+            return jsonify({
+                "error": "Account manager not available",
+                "users": [],
+                "total_users": 0,
+                "timestamp": datetime.now().isoformat()
+            }), 500
         
         # Get data for each user
         for user_config in all_user_configs:
@@ -149,7 +176,8 @@ def get_users():
             # Get balance
             try:
                 user_balance = account_mgr.get_user_balance(user_id)
-            except:
+            except Exception as e:
+                logger.debug(f"Could not get balance for {user_id}: {e}")
                 user_balance = 0.0
             
             # Get positions
@@ -163,8 +191,8 @@ def get_users():
                         if positions:
                             user_positions.extend(positions)
                             user_positions_count += len(positions)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not get positions for {user_id}: {e}")
             
             # Get trading stats
             total_pnl = 0.0
@@ -220,6 +248,14 @@ def get_users():
             "timestamp": datetime.now().isoformat()
         })
     
+    except ImportError as e:
+        logger.exception("Import error in get_users")
+        return jsonify({
+            "error": f"Import error: {str(e)}",
+            "users": [],
+            "total_users": 0,
+            "timestamp": datetime.now().isoformat()
+        }), 500
     except Exception as e:
         logger.exception("Error in get_users")
         return jsonify({
@@ -379,69 +415,92 @@ def get_trading_status():
         
         # Check 4: User-specific trading status from multi-account broker manager
         try:
-            import sys
-            import os
-            # Add repository root to path for imports
-            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            if repo_root not in sys.path:
-                sys.path.insert(0, repo_root)
-            
-            from bot.multi_account_broker_manager import MultiAccountBrokerManager
+            _ensure_repo_in_path()
             from config.user_loader import get_user_config_loader
             
             # Load user configurations
             user_loader = get_user_config_loader()
             all_user_configs = user_loader.all_users
             
-            # Try to get the multi-account broker manager
-            try:
-                # Check if there's a global instance
-                if 'nija_bot' in sys.modules:
-                    nija_bot = sys.modules['nija_bot']
-                    if hasattr(nija_bot, 'account_manager'):
-                        account_mgr = nija_bot.account_manager
-                    else:
-                        account_mgr = MultiAccountBrokerManager()
-                else:
-                    account_mgr = MultiAccountBrokerManager()
-            except:
-                account_mgr = MultiAccountBrokerManager()
+            # Get account manager
+            account_mgr = _get_account_manager()
             
-            # Get user data from configuration files
-            for user_config in all_user_configs:
-                user_id = user_config.user_id
-                if not user_id or user_id == 'master':
-                    continue
-                
-                # Get balance for this user across all brokers
-                try:
-                    user_balance = account_mgr.get_user_balance(user_id)
-                except Exception as e:
-                    logger.debug(f"Could not get balance for {user_id}: {e}")
-                    user_balance = 0.0
-                
-                # Get positions for this user
-                user_positions = 0
-                try:
-                    for broker_type in account_mgr.user_brokers.get(user_id, {}).keys():
-                        broker = account_mgr.get_user_broker(user_id, broker_type)
-                        if broker and broker.connected:
-                            positions = broker.get_positions()
-                            if positions:
-                                user_positions += len(positions)
-                except Exception as e:
-                    logger.debug(f"Could not get positions for {user_id}: {e}")
-                
-                # Get recent trades from user PnL tracker
-                recent_trades = []
-                total_pnl = 0.0
-                daily_pnl = 0.0
-                win_rate = 0.0
-                total_trades = 0
-                try:
-                    from bot.user_pnl_tracker import get_user_pnl_tracker
-                    pnl_tracker = get_user_pnl_tracker()
-                    stats = pnl_tracker.get_stats(user_id)
+            if account_mgr:
+                # Get user data from configuration files
+                for user_config in all_user_configs:
+                    user_id = user_config.user_id
+                    if not user_id or user_id == 'master':
+                        continue
+                    
+                    # Get balance for this user across all brokers
+                    try:
+                        user_balance = account_mgr.get_user_balance(user_id)
+                    except Exception as e:
+                        logger.debug(f"Could not get balance for {user_id}: {e}")
+                        user_balance = 0.0
+                    
+                    # Get positions for this user
+                    user_positions = 0
+                    try:
+                        for broker_type in account_mgr.user_brokers.get(user_id, {}).keys():
+                            broker = account_mgr.get_user_broker(user_id, broker_type)
+                            if broker and broker.connected:
+                                positions = broker.get_positions()
+                                if positions:
+                                    user_positions += len(positions)
+                    except Exception as e:
+                        logger.debug(f"Could not get positions for {user_id}: {e}")
+                    
+                    # Get recent trades from user PnL tracker
+                    recent_trades = []
+                    total_pnl = 0.0
+                    daily_pnl = 0.0
+                    win_rate = 0.0
+                    total_trades = 0
+                    try:
+                        from bot.user_pnl_tracker import get_user_pnl_tracker
+                        pnl_tracker = get_user_pnl_tracker()
+                        stats = pnl_tracker.get_stats(user_id)
+                        recent_trades_data = pnl_tracker.get_recent_trades(user_id, limit=5)
+                        recent_trades = [
+                            {
+                                "symbol": t.symbol,
+                                "side": t.side,
+                                "pnl_usd": t.pnl_usd,
+                                "timestamp": t.timestamp
+                            }
+                            for t in recent_trades_data
+                        ]
+                        total_pnl = stats.get('total_pnl', 0.0)
+                        daily_pnl = stats.get('daily_pnl', 0.0)
+                        win_rate = stats.get('win_rate', 0.0)
+                        total_trades = stats.get('completed_trades', 0)
+                    except Exception as e:
+                        logger.debug(f"Could not get PnL for {user_id}: {e}")
+                    
+                    status["users"].append({
+                        "user_id": user_id,
+                        "name": user_config.name,
+                        "enabled": user_config.enabled,
+                        "account_type": user_config.account_type,
+                        "broker_type": user_config.broker_type,
+                        "balance": user_balance,
+                        "positions": user_positions,
+                        "total_pnl": total_pnl,
+                        "daily_pnl": daily_pnl,
+                        "win_rate": win_rate,
+                        "total_trades": total_trades,
+                        "recent_trades": recent_trades
+                    })
+        except ImportError as e:
+            # Multi-user system not available
+            logger.debug(f"Multi-user system import failed: {e}")
+            status["errors"].append(f"Multi-user system import failed: {str(e)}")
+            status["users"] = []
+        except Exception as e:
+            logger.exception(f"User check failed: {e}")
+            status["errors"].append(f"User check failed: {str(e)}")
+            status["users"] = []
                     recent_trades_data = pnl_tracker.get_recent_trades(user_id, limit=5)
                     recent_trades = [
                         {
@@ -914,8 +973,8 @@ def create_dashboard_html():
     </div>
 
     <script>
-        // Auto-refresh every 5 seconds
-        const REFRESH_INTERVAL = 5000;
+        // Auto-refresh every ${AUTO_REFRESH_INTERVAL} seconds
+        const REFRESH_INTERVAL = """ + str(AUTO_REFRESH_INTERVAL * 1000) + """;  // milliseconds
         let lastUpdate = Date.now();
 
         async function fetchData(endpoint) {
@@ -1073,7 +1132,7 @@ if __name__ == "__main__":
     
     print("🚀 Starting NIJA Dashboard Server...")
     print("📊 Dashboard will be available at: http://localhost:5001")
-    print("🔄 Auto-refresh every 5 seconds")
+    print(f"🔄 Auto-refresh every {AUTO_REFRESH_INTERVAL} seconds")
     print("\nPress Ctrl+C to stop\n")
     
     app.run(host='0.0.0.0', port=5001, debug=False)
