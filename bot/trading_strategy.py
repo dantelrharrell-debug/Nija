@@ -1318,34 +1318,45 @@ class TradingStrategy:
             held_funds = balance_data.get('total_held', 0.0)
             total_funds = balance_data.get('total_funds', account_balance)
             
-            # Log comprehensive balance breakdown
-            if held_funds > 0:
-                logger.info(f"💰 Account Balance Breakdown:")
-                logger.info(f"   ✅ Available (free to trade): ${account_balance:.2f}")
-                logger.info(f"   🔒 Held (in open orders): ${held_funds:.2f}")
-                logger.info(f"   💎 TOTAL FUNDS: ${total_funds:.2f}")
-            else:
-                logger.info(f"💰 Available Balance: ${account_balance:.2f}")
+            # ALWAYS calculate position values (not just in PRO_MODE)
+            # Users need to see funds in active trades regardless of mode
+            position_value = 0.0
+            position_count = 0
+            total_capital = account_balance
             
-            # PRO MODE: Get total capital including position values
-            if self.pro_mode_enabled and hasattr(active_broker, 'get_total_capital'):
+            if hasattr(active_broker, 'get_total_capital'):
                 try:
                     capital_data = active_broker.get_total_capital(include_positions=True)
-                    total_capital = capital_data.get('total_capital', account_balance)
                     position_value = capital_data.get('position_value', 0.0)
-                    
-                    logger.info(f"💎 PRO MODE Capital:")
-                    logger.info(f"   Free balance: ${account_balance:.2f}")
-                    logger.info(f"   Position value: ${position_value:.2f}")
-                    logger.info(f"   Total capital: ${total_capital:.2f}")
-                    logger.info(f"   Positions: {capital_data.get('position_count', 0)}")
+                    position_count = capital_data.get('position_count', 0)
+                    total_capital = capital_data.get('total_capital', account_balance)
                 except Exception as e:
-                    logger.warning(f"⚠️ PRO MODE capital calculation failed: {e}")
-                    total_capital = account_balance
+                    logger.warning(f"⚠️ Could not calculate position values: {e}")
                     position_value = 0.0
-            else:
-                total_capital = account_balance
-                position_value = 0.0
+                    position_count = 0
+                    total_capital = account_balance
+            
+            # Log comprehensive balance breakdown showing ALL fund allocations
+            logger.info(f"💰 Account Balance Breakdown:")
+            logger.info(f"   ✅ Available (free to trade): ${account_balance:.2f}")
+            
+            if held_funds > 0:
+                logger.info(f"   🔒 Held (in open orders): ${held_funds:.2f}")
+            
+            if position_value > 0:
+                logger.info(f"   📊 In Active Positions: ${position_value:.2f} ({position_count} positions)")
+            
+            # Calculate grand total including held funds and position values
+            grand_total = account_balance + held_funds + position_value
+            logger.info(f"   💎 TOTAL ACCOUNT VALUE: ${grand_total:.2f}")
+            
+            if position_value > 0 or held_funds > 0:
+                if grand_total > 0:
+                    allocation_pct = (account_balance / grand_total * 100)
+                    deployed_pct = 100 - allocation_pct
+                    logger.info(f"   📈 Cash allocation: {allocation_pct:.1f}% available, {deployed_pct:.1f}% deployed")
+                else:
+                    logger.info(f"   📈 Cash allocation: 0.0% available, 0.0% deployed")
             
             # Small delay after balance check to avoid rapid-fire API calls
             time.sleep(0.5)
