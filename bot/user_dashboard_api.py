@@ -62,17 +62,21 @@ def list_users():
         risk_manager = get_user_risk_manager()
         hard_controls = get_hard_controls()
         
+        # Check if we should include master
+        include_master = request.args.get('include_master', 'false').lower() == 'true'
+        
         # Get all users from various sources
         user_ids = set()
         
         # From hard controls
         for user_id in hard_controls.user_kill_switches.keys():
-            if user_id != 'master':
+            if user_id != 'master' or include_master:
                 user_ids.add(user_id)
         
         # From risk manager
         for user_id in risk_manager._user_states.keys():
-            user_ids.add(user_id)
+            if user_id != 'master' or include_master:
+                user_ids.add(user_id)
         
         # Build user list
         users = []
@@ -91,7 +95,8 @@ def list_users():
                 'win_rate': stats.get('win_rate', 0.0),
                 'total_trades': stats.get('completed_trades', 0),
                 'balance': risk_state.balance,
-                'circuit_breaker': risk_state.circuit_breaker_triggered
+                'circuit_breaker': risk_state.circuit_breaker_triggered,
+                'is_master': user_id == 'master'
             })
         
         return jsonify({
@@ -141,6 +146,12 @@ def get_user_pnl(user_id: str):
     except Exception as e:
         logger.error(f"Error getting PnL for {user_id}: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/master/pnl', methods=['GET'])
+def get_master_pnl():
+    """Get detailed PnL dashboard for the master account."""
+    return get_user_pnl('master')
 
 
 @app.route('/api/user/<user_id>/risk', methods=['GET'])
