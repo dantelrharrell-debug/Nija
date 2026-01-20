@@ -219,13 +219,18 @@ class CopyTradeEngine:
             logger.error(f"❌ Unknown broker type: {signal.broker}")
             return results
         
+        # ✅ FIX 5: Copy Trading Should Be Optional
         # CRITICAL CHECK: Verify master account is still connected before copying
-        # This prevents copy trading when master broker has gone offline
+        # When master is offline, copy trading is disabled but users can still:
+        # 1. Trade independently using run_user_broker_trading_loop() in independent_broker_trader.py
+        # 2. Execute their own strategies without waiting for master signals
+        # Copy trading is OPTIONAL, not required for user trading
         master_connected = self.multi_account_manager.is_master_connected(broker_type)
         if not master_connected:
             logger.warning(f"⚠️  {signal.broker.upper()} MASTER offline - skipping copy trading")
-            logger.info(f"   ℹ️  Copy trading disabled until MASTER reconnects")
-            return results
+            logger.info(f"   ℹ️  Users can still trade independently (copy trading is optional)")
+            logger.info(f"   ℹ️  Copy trading will resume when MASTER reconnects")
+            return results  # Skip copy trading when master offline (users trade independently)
         
         # Get all user accounts for this broker
         user_brokers = self.multi_account_manager.user_brokers
