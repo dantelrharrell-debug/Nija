@@ -81,9 +81,11 @@ def main():
             
             if pnl_pct < 0:
                 # Losing position
+                # Note: Using abs() for quantity as defensive programming against
+                # potential data corruption (Coinbase should never return negative)
                 losing_positions.append({
                     'symbol': symbol,
-                    'quantity': abs(quantity),  # Use absolute value
+                    'quantity': abs(quantity),
                     'entry_price': entry_price,
                     'current_price': current_price,
                     'value': value_usd,
@@ -104,9 +106,10 @@ def main():
         else:
             # No entry price - can't determine if losing
             # Be conservative and sell it
+            # Note: Using abs() for quantity as defensive programming
             losing_positions.append({
                 'symbol': symbol,
-                'quantity': abs(quantity),  # Use absolute value
+                'quantity': abs(quantity),
                 'entry_price': 0,
                 'current_price': current_price,
                 'value': value_usd,

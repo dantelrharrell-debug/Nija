@@ -23,6 +23,7 @@ Safety:
 import sys
 import logging
 from pathlib import Path
+from datetime import datetime
 
 # Add bot directory to path
 sys.path.insert(0, str(Path(__file__).parent / "bot"))
@@ -101,10 +102,12 @@ def main():
         total_value += value_usd
         
         # Prepare for forced sell (only non-zero quantities)
+        # Note: Using abs() as defensive programming - Coinbase API should never
+        # return negative quantities, but if data is corrupted, we handle it safely
         if quantity != 0:
             positions_to_sell.append({
                 'symbol': symbol,
-                'quantity': abs(quantity),  # Use absolute value for sell order
+                'quantity': abs(quantity),
                 'value': value_usd
             })
     
@@ -179,7 +182,6 @@ def main():
     
     for pos_file in position_files:
         if pos_file.exists():
-            from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup = pos_file.with_suffix(f'.emergency_backup_{timestamp}')
             try:
