@@ -706,6 +706,13 @@ def human_readable_status():
         if data.get('users') and len(data.get('users', [])) > 0:
             html += """
         <h2 style="margin-top: 30px; color: #1d9bf0;">👥 User Accounts & Trading Activity</h2>
+        <div style="background: #16181c; border: 2px solid #1d9bf0; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+            <div style="font-size: 14px; font-weight: bold; color: #1d9bf0; margin-bottom: 8px;">🔄 Copy Trading Active</div>
+            <div style="font-size: 13px; color: #e7e9ea; line-height: 1.6;">
+                All user trades are <strong>automatically copied</strong> from the NIJA master account. Users <strong>cannot initiate their own trades</strong>.
+                Position sizes are scaled proportionally to each user's account balance.
+            </div>
+        </div>
         <div class="user-list">"""
             for user in data['users']:
                 status_icon = "✅" if user.get('enabled') else "❌"
@@ -717,7 +724,7 @@ def human_readable_status():
                 <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
                     <div>
                         <div style="font-size: 18px; font-weight: bold; margin-bottom: 5px;">
-                            """ + status_icon + """ """ + user.get('name', user.get('user_id', 'Unknown')) + """
+                            """ + status_icon + """ """ + user.get('name', user.get('user_id', 'Unknown')) + """ <span style="font-size: 12px; color: #71767b; font-weight: normal;">(Copy Trading)</span>
                         </div>
                         <div style="font-size: 13px; color: #71767b;">
                             """ + user.get('user_id', '') + """ • """ + user.get('broker_type', 'N/A').upper() + """ • """ + user.get('account_type', 'N/A').title() + """
