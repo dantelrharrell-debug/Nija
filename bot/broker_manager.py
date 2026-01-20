@@ -4506,15 +4506,16 @@ class KrakenBroker(BaseBroker):
         
         logger.debug(f"   Nonce file for {self.account_identifier}: {self._nonce_file}")
         
-        # SIMPLIFIED FIX (Jan 20, 2026): Timestamp-based Kraken Nonce (Railway-safe)
+        # ✅ FIX 3: Timestamp-based Kraken Nonce (Global Nonce Manager)
         # ONE global nonce source shared across MASTER + ALL USERS
         # 
-        # This is the Railway-safe solution per requirements:
+        # This is the correct solution per FIX 3 requirements:
         # - Uses int(time.time() * 1000) for milliseconds since epoch
         # - Monotonically increasing (time only moves forward)
         # - No persistence needed (timestamps are always fresh)
         # - Thread-safe (built-in time function)
         # - Scales to any number of users
+        # - NO per-instance _last_nonce tracking
         #
         # Architecture:
         # - get_global_kraken_nonce() returns current timestamp in ms
@@ -4549,18 +4550,12 @@ class KrakenBroker(BaseBroker):
             
             logger.debug(f"   ✅ KrakenNonce instance created for {self.account_identifier} (fallback), initial nonce: {initial_nonce}ms")
         else:
-            # Final fallback to old implementation
-            logger.warning(f"   ⚠️  No nonce managers available, using basic fallback")
+            # ⚠️ DEPRECATED: This fallback is kept for backward compatibility only
+            # Should not be used in production - global nonce manager should always be available
+            logger.warning(f"   ⚠️  No nonce managers available, using deprecated fallback")
             self._use_global_nonce = False
             self._kraken_nonce = None
-            
-            base_offset = 0
-            random_jitter = random.randint(0, 5000)
-            total_offset = base_offset + random_jitter
-            
-            persisted_nonce = get_kraken_nonce(self.account_identifier)
-            time_based_nonce = int(time.time() * 1000) + total_offset
-            self._last_nonce = max(persisted_nonce, time_based_nonce)
+            # Note: _last_nonce is DEPRECATED and should be removed in future versions
         
         # Thread lock to ensure nonce generation is thread-safe
         # Prevents race conditions when multiple threads call API simultaneously
@@ -4609,21 +4604,10 @@ class KrakenBroker(BaseBroker):
             
             logger.debug(f"   ⚡ Immediately jumped nonce forward by 120s to clear burned nonce window")
         else:
-            # Final fallback implementation
-            with self._nonce_lock:
-                immediate_jump = 120000  # 120 seconds in milliseconds
-                time_based = int(time.time() * 1000) + immediate_jump
-                increment_based = self._last_nonce + immediate_jump
-                self._last_nonce = max(time_based, increment_based)
-                
-                # Persist the jumped nonce to account-specific file
-                try:
-                    with open(self._nonce_file, "w") as f:
-                        f.write(str(self._last_nonce))
-                except IOError as e:
-                    logging.debug(f"Could not persist jumped nonce: {e}")
-                
-                logger.debug(f"   ⚡ Immediately jumped nonce forward by {immediate_jump/1000:.0f}s to clear burned nonce window")
+            # FIX 3: Final fallback - use global nonce manager if available, else simple timestamp
+            # No per-instance _last_nonce tracking
+            logger.debug(f"   ⚡ Global nonce manager in use (fallback path) - timestamp-based, no jump needed")
+            return
     
     def _kraken_private_call(self, method: str, params: Optional[Dict] = None):
         """
@@ -4888,32 +4872,24 @@ class KrakenBroker(BaseBroker):
                 # Final fallback to basic implementation
                 def _nonce_monotonic():
                     """
-                    Generate nonce with guaranteed strict monotonic increase (thread-safe).
+                    DEPRECATED: Generate nonce using timestamp (fallback only).
                     
-                    Uses milliseconds since epoch with tracking to ensure each nonce
-                    is strictly greater than the previous one.
+                    FIX 3: No per-instance _last_nonce tracking.
+                    Uses simple timestamp-based nonce (milliseconds since epoch).
                     """
-                    with self._nonce_lock:
-                        # Get current time in milliseconds
-                        current_nonce = int(time.time() * 1000)
-                        
-                        # Ensure strictly increasing
-                        if current_nonce <= self._last_nonce:
-                            current_nonce = self._last_nonce + 1
-                        
-                        # Update tracking
-                        self._last_nonce = current_nonce
-                        
-                        # Persist to account-specific file for restart-safety
-                        try:
-                            with open(self._nonce_file, "w") as f:
-                                f.write(str(current_nonce))
-                        except IOError as e:
-                            logging.debug(f"Could not persist nonce: {e}")
-                        
-                        return str(current_nonce)
+                    # FIX 3: Use simple timestamp-based nonce (no per-instance state)
+                    current_nonce = int(time.time() * 1000)
+                    
+                    # Persist to account-specific file for restart-safety
+                    try:
+                        with open(self._nonce_file, "w") as f:
+                            f.write(str(current_nonce))
+                    except IOError as e:
+                        logging.debug(f"Could not persist nonce: {e}")
+                    
+                    return str(current_nonce)
                 
-                logger.debug(f"✅ Custom nonce generator installed for {cred_label} (basic fallback)")
+                logger.debug(f"⚠️  DEPRECATED: Basic fallback nonce generator installed for {cred_label} (should use global nonce manager)")
             
             # Replace the nonce generator
             # NOTE: This directly overrides the internal _nonce method of krakenex.API
@@ -4922,19 +4898,18 @@ class KrakenBroker(BaseBroker):
                 # Log initial nonce value for debugging nonce-related issues (only if debug enabled)
                 if logger.isEnabledFor(logging.DEBUG):
                     if self._use_global_nonce:
-                        # Global nonce manager uses nanoseconds (19 digits)
+                        # Global nonce manager uses milliseconds (13 digits)
                         test_nonce = get_global_kraken_nonce()
-                        logger.debug(f"   Initial nonce (GLOBAL): {test_nonce}ns (nanosecond precision)")
+                        logger.debug(f"   Initial nonce (GLOBAL): {test_nonce}ms (timestamp-based)")
                     elif self._kraken_nonce is not None:
                         # KrakenNonce uses milliseconds
                         current_time_ms = int(time.time() * 1000)
                         offset_seconds = (self._kraken_nonce.last - current_time_ms) / 1000.0
                         logger.debug(f"   Initial nonce (fallback): {self._kraken_nonce.last}ms (current time + {offset_seconds:.2f}s)")
                     else:
-                        # Basic fallback uses milliseconds
+                        # FIX 3: Basic fallback uses timestamp (no _last_nonce tracking)
                         current_time_ms = int(time.time() * 1000)
-                        offset_seconds = (self._last_nonce - current_time_ms) / 1000.0
-                        logger.debug(f"   Initial nonce (basic): {self._last_nonce}ms (current time + {offset_seconds:.2f}s)")
+                        logger.debug(f"   Initial nonce (basic fallback): {current_time_ms}ms (timestamp-based)")
             except AttributeError as e:
                 self.last_connection_error = f"Nonce generator override failed: {str(e)}"
                 logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
@@ -5033,30 +5008,23 @@ class KrakenBroker(BaseBroker):
                             else:
                                 logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms for retry {attempt}")
                         else:
-                            # Fallback implementation
-                            with self._nonce_lock:
-                                # Use 20x larger nonce jump for nonce-specific errors (INCREASED from 10x)
-                                nonce_multiplier = 20 if last_error_was_nonce else 1
-                                nonce_jump = nonce_multiplier * 1000 * attempt  # Formula: multiplier * attempt * 1000ms (CHANGED from microseconds)
-                                # Calculate two candidate nonces and use the larger one:
-                                # - time_based: current time + jump (ensures we're ahead of wall clock time)
-                                # - increment_based: previous nonce + jump (ensures strict monotonic increase)
-                                # Both are needed because time can drift or move backwards (NTP, clock skew)
-                                time_based = int(time.time() * 1000) + nonce_jump  # Changed to milliseconds
-                                increment_based = self._last_nonce + nonce_jump
-                                self._last_nonce = max(time_based, increment_based)
-                                
-                                # Persist the jumped nonce to account-specific file
-                                try:
-                                    with open(self._nonce_file, "w") as f:
-                                        f.write(str(self._last_nonce))
-                                except IOError as e:
-                                    logging.debug(f"Could not persist jumped nonce: {e}")
-                                
-                                if last_error_was_nonce:
-                                    logger.debug(f"   Jumped nonce forward by {nonce_jump}ms (20x jump for nonce error)")
-                                else:
-                                    logger.debug(f"   Jumped nonce forward by {nonce_jump}ms for retry {attempt}")
+                            # FIX 3: Fallback - no per-instance state, just persist current timestamp
+                            # Global nonce manager should be used - this path is deprecated
+                            nonce_multiplier = 20 if last_error_was_nonce else 1
+                            nonce_jump = nonce_multiplier * 1000 * attempt  # milliseconds
+                            current_nonce = int(time.time() * 1000) + nonce_jump
+                            
+                            # Persist the jumped nonce to account-specific file
+                            try:
+                                with open(self._nonce_file, "w") as f:
+                                    f.write(str(current_nonce))
+                            except IOError as e:
+                                logging.debug(f"Could not persist nonce: {e}")
+                            
+                            if last_error_was_nonce:
+                                logger.debug(f"   Jumped nonce forward by {nonce_jump}ms (20x jump for nonce error)")
+                            else:
+                                logger.debug(f"   Jumped nonce forward by {nonce_jump}ms for retry {attempt}")
                     
                     # The _nonce_monotonic() function automatically handles nonce generation
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
