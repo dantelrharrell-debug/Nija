@@ -1,5 +1,32 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
+## 🎯 **NEW: SAFE SMALL-ACCOUNT PRESET ($20-$100)**
+
+**Turnkey configuration for small accounts** - Just add your API key and start trading safely!
+
+- ✅ **Ultra-Conservative Risk** - Max 2% daily loss, 0.5% per trade
+- ✅ **Full Copy Trading** - Mirror master trades automatically
+- ✅ **Fee Optimized** - Uses Kraken (lowest fees for small accounts)
+- ✅ **Auto-Protection** - Circuit breakers, burn-down mode, emergency stops
+- ✅ **Beginner Friendly** - Works out of the box, no complex setup
+
+**Quick Start (5 Minutes):**
+```bash
+# 1. Copy the preset
+cp .env.small_account_preset .env
+
+# 2. Add your Kraken API credentials to .env
+# 3. Start trading!
+./start.sh
+```
+
+**Learn More:**
+- 📚 [SMALL_ACCOUNT_QUICKSTART.md](SMALL_ACCOUNT_QUICKSTART.md) - Complete quick start guide
+- ⚙️ [bot/small_account_preset.py](bot/small_account_preset.py) - Preset configuration details
+- 📋 [.env.small_account_preset](.env.small_account_preset) - Environment template
+
+---
+
 ## 🔥 **NEW: PRO MODE - Position Rotation Trading**
 
 Transform NIJA into a hedge-fund style system with intelligent position rotation:
