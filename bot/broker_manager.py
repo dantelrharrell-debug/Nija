@@ -112,6 +112,8 @@ KRAKEN_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Kraken is PRIMARY for small
 COINBASE_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Coinbase is SECONDARY with adjusted rules
 # 🚑 FIX 2: Minimum balance for Coinbase to prevent fees eating small accounts
 # Coinbase has higher fees than Kraken, so small accounts should use Kraken instead
+# UNIFIED MINIMUM: $25 to match position sizing and adapter rules
+# At $25 balance, can make 1 full trade; at $50+ can make 2+ concurrent trades
 COINBASE_MINIMUM_BALANCE = 25.00  # Disable Coinbase for accounts below this threshold
 
 # Broker health monitoring constants

@@ -97,7 +97,9 @@ class BrokerFeeOptimizer:
     """
     
     # Balance threshold for Coinbase disqualification
-    COINBASE_MIN_BALANCE = 50.0  # $50 minimum for Coinbase profitability
+    # UNIFIED MINIMUM: $25 to match broker_manager and config rules
+    # This ensures consistent enforcement across all systems
+    COINBASE_MIN_BALANCE = 25.0  # $25 minimum for Coinbase profitability (unified)
     
     def __init__(self):
         """Initialize broker fee optimizer."""
@@ -172,12 +174,15 @@ class BrokerFeeOptimizer:
             )
             return None
         
-        # Prioritize by fee structure
-        # 1. Alpaca (free trading)
-        # 2. Kraken (low fees)
-        # 3. Coinbase (high fees, only if balance is sufficient)
+        # Prioritize by fee structure (UPDATED: Kraken PRIMARY)
+        # 1. Kraken (PRIMARY ENGINE - low fees 0.36%, profitable both ways)
+        # 2. Alpaca (stocks only, commission-free)
+        # 3. Coinbase (THROTTLED - high fees 1.4%, only for large balances)
+        # 
+        # Rationale: Kraken is 4x cheaper than Coinbase (0.36% vs 1.4%)
+        # and supports bidirectional trading profitably
         
-        priority_order = ['alpaca', 'kraken', 'coinbase']
+        priority_order = ['kraken', 'alpaca', 'coinbase']
         
         for preferred_broker in priority_order:
             for broker in eligible_brokers:

@@ -138,9 +138,11 @@ class CoinbaseAdapter(BrokerAdapter):
     - Symbol format: ETH-USD, BTC-USDT, etc. (dash separator)
     """
     
-    # Coinbase minimum notional per pair (conservative estimates)
-    MIN_NOTIONAL_DEFAULT = 1.0  # $1 minimum for most pairs
-    MIN_NOTIONAL_BTC = 5.0  # $5 minimum for BTC pairs
+    # Coinbase minimum notional per pair
+    # UNIFIED MINIMUM: $25 to ensure profitability after 1.4% round-trip fees
+    # At $25 position with 1.4% fees = $0.35 fee cost, target 1.5% = $0.375 profit = net $0.025
+    MIN_NOTIONAL_DEFAULT = 25.0  # $25 minimum for all pairs (profitability threshold)
+    MIN_NOTIONAL_BTC = 25.0  # $25 minimum for BTC pairs (same as default)
     
     # Coinbase fee structure
     MAKER_FEE_PCT = 0.60  # 0.6% maker fee
