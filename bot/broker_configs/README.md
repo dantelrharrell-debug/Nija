@@ -38,7 +38,7 @@ COINBASE_CONFIG.stop_loss  # -1.0% (aggressive)
 
 # Position management
 COINBASE_CONFIG.max_hold_hours  # 8 hours (short due to high fees)
-COINBASE_CONFIG.min_position_usd  # $10 minimum
+COINBASE_CONFIG.min_position_usd  # $25 minimum (unified across all systems)
 
 # Strategy
 COINBASE_CONFIG.buy_preferred  # True
