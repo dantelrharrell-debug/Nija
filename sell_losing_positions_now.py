@@ -72,7 +72,7 @@ def main():
         entry_price = pos.get('entry_price', 0)
         value_usd = pos.get('value_usd', 0)
         
-        if quantity <= 0:
+        if quantity == 0:
             continue
         
         # Calculate P&L if we have entry price
@@ -83,7 +83,7 @@ def main():
                 # Losing position
                 losing_positions.append({
                     'symbol': symbol,
-                    'quantity': quantity,
+                    'quantity': abs(quantity),  # Use absolute value
                     'entry_price': entry_price,
                     'current_price': current_price,
                     'value': value_usd,
@@ -106,7 +106,7 @@ def main():
             # Be conservative and sell it
             losing_positions.append({
                 'symbol': symbol,
-                'quantity': quantity,
+                'quantity': abs(quantity),  # Use absolute value
                 'entry_price': 0,
                 'current_price': current_price,
                 'value': value_usd,

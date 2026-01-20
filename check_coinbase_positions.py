@@ -96,7 +96,7 @@ def main():
         # Calculate P&L if we have entry price
         if entry_price and entry_price > 0:
             pnl_pct = ((current_price - entry_price) / entry_price) * 100
-            pnl_usd = value_usd * (pnl_pct / 100)
+            pnl_usd = (current_price - entry_price) * quantity
             
             print(f"   Entry Price: ${entry_price:.4f}")
             print(f"   Current Value: ${value_usd:.2f}")

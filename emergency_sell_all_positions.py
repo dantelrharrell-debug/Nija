@@ -100,11 +100,11 @@ def main():
         
         total_value += value_usd
         
-        # Prepare for forced sell
-        if quantity > 0:
+        # Prepare for forced sell (only non-zero quantities)
+        if quantity != 0:
             positions_to_sell.append({
                 'symbol': symbol,
-                'quantity': quantity,
+                'quantity': abs(quantity),  # Use absolute value for sell order
                 'value': value_usd
             })
     
@@ -179,7 +179,9 @@ def main():
     
     for pos_file in position_files:
         if pos_file.exists():
-            backup = pos_file.with_suffix(f'.emergency_backup_{pos_file.stat().st_mtime:.0f}')
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = pos_file.with_suffix(f'.emergency_backup_{timestamp}')
             try:
                 pos_file.rename(backup)
                 logger.info(f"✅ Backed up {pos_file} to {backup}")
