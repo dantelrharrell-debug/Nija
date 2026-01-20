@@ -435,19 +435,19 @@ def main():
         else:
             logger.warning("   ⚠️  Multi-account manager not available - skipping balance audit")
         
-        # Start copy trade engine in OBSERVE MODE for user accounts
-        # OBSERVE MODE means:
+        # Start copy trade engine in ACTIVE MODE for user accounts
+        # ACTIVE MODE means:
         # - Track balances and positions
         # - Log all P&L
-        # - See what signals would be copied
-        # - BUT DO NOT EXECUTE TRADES until explicitly enabled
-        logger.info("🔄 Starting copy trade engine in OBSERVE MODE...")
+        # - See what signals are being copied
+        # - EXECUTE TRADES when master account trades
+        logger.info("🔄 Starting copy trade engine in ACTIVE MODE...")
         try:
             from bot.copy_trade_engine import start_copy_engine
-            start_copy_engine(observe_only=True)  # CRITICAL: observe_only=True prevents auto-trading
-            logger.info("   ✅ Copy trade engine started in OBSERVE MODE")
-            logger.info("   👁️  Users will see balances and signals but NO trades will execute")
-            logger.info("   ⚠️  To enable actual copy trading, set observe_only=False")
+            start_copy_engine(observe_only=False)  # CRITICAL: observe_only=False enables auto-trading
+            logger.info("   ✅ Copy trade engine started in ACTIVE MODE")
+            logger.info("   📡 Users will receive and execute copy trades from master accounts")
+            logger.info("   💰 User position sizes will be scaled based on account balance ratios")
         except Exception as e:
             logger.error(f"   ❌ Failed to start copy trade engine: {e}")
             logger.error("   ⚠️  User accounts will NOT receive copy trades!")
