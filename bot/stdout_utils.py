@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Stdout Utilities for NIJA Trading Bot
 ======================================
