@@ -55,7 +55,10 @@ except ImportError:
 
 # FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
 # XRP-USD is PERMANENTLY DISABLED due to negative profitability
-DISABLED_PAIRS = ["XRP-USD", "XRPUSD", "XRP-USDT"]  # Block all XRP pairs - net negative performance
+# Load additional disabled pairs from environment variable
+_env_disabled_pairs = os.getenv('DISABLED_PAIRS', '')
+_additional_disabled = [p.strip() for p in _env_disabled_pairs.split(',') if p.strip()]
+DISABLED_PAIRS = ["XRP-USD", "XRPUSD", "XRP-USDT"] + _additional_disabled  # Block all XRP pairs - net negative performance
 
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)

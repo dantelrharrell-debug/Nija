@@ -112,9 +112,14 @@ _root_logger = logging.getLogger('nija')
 #   - PROTECTION ($0.50): Absolute minimum to allow bot to start (hard requirement)
 #   - TRADING ($25.00): Minimum for both Kraken and Coinbase (enforced per broker)
 #   This ensures both exchanges require $25 minimum while maintaining different roles
+# 
+# COPY TRADING MODE: For small accounts in copy trading mode, these can be lowered:
+#   - MINIMUM_TRADING_BALANCE can be set to $15 via environment variable
+#   - MIN_CASH_TO_BUY can be set to $5 via environment variable
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
-STANDARD_MINIMUM_BALANCE = 25.00  # Standard minimum for active trading on both exchanges
+STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '25.00'))  # Can be overridden for copy trading
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
+MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', '5.50'))  # Minimum cash required to place a buy order
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 # Broker-specific minimum balance requirements

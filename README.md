@@ -18,6 +18,32 @@ PRO_MODE_MIN_RESERVE_PCT=0.15
 
 **Learn More:**
 - 📚 [PRO_MODE_README.md](PRO_MODE_README.md) - Complete guide and setup instructions
+
+---
+
+## 🔄 **COPY TRADING - Mirror Master Trades**
+
+Enable full copy trading to automatically mirror master account trades to user accounts with proportional position sizing:
+
+- ✅ **Automatic Trade Mirroring** - Users copy all master trades instantly
+- ✅ **Proportional Sizing** - Positions scaled by account balance ratio
+- ✅ **Small Account Support** - Works with accounts as low as $15
+- ✅ **Safety Built-in** - Risk management applies to all accounts
+
+**Quick Enable (Small Accounts $15-$50):**
+```bash
+# Add to .env
+COPY_TRADING_MODE=MASTER_FOLLOW
+PRO_MODE=true
+MINIMUM_TRADING_BALANCE=15.0
+MIN_CASH_TO_BUY=5.0
+DISABLED_PAIRS=XRP-USD
+```
+
+**Learn More:**
+- 📚 [COPY_TRADING_SETUP.md](COPY_TRADING_SETUP.md) - Complete setup guide
+- 📋 [.env.copy_trading_example](.env.copy_trading_example) - Example configuration
+
 ---
 
 ---
