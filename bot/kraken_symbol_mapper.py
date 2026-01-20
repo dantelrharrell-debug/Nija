@@ -16,7 +16,7 @@ before attempting to trade them on Kraken.
 import os
 import json
 import logging
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Tuple
 from pathlib import Path
 
 logger = logging.getLogger('nija.kraken_symbol_mapper')
@@ -77,15 +77,12 @@ class KrakenSymbolMapper:
         
         try:
             if kraken_api is None:
-                # Try to get API from broker manager
-                try:
-                    from bot.broker_manager import get_kraken_api
-                    kraken_api = get_kraken_api()
-                except Exception:
-                    logger.warning("⚠️  Could not get Kraken API for dynamic symbol detection")
-                    logger.warning("   Using static mappings only")
-                    self._initialized = True
-                    return
+                # We don't have a direct API accessor function
+                # The initialization should be done by passing the API instance
+                logger.warning("⚠️  No Kraken API provided for dynamic symbol detection")
+                logger.warning("   Using static mappings only")
+                self._initialized = True
+                return
             
             if kraken_api:
                 logger.info("🔍 Fetching available Kraken trading pairs...")
@@ -236,7 +233,7 @@ class KrakenSymbolMapper:
         kraken_symbol = self.to_kraken_symbol(standard_symbol)
         return kraken_symbol is not None
     
-    def validate_for_trading(self, standard_symbol: str) -> tuple[bool, str]:
+    def validate_for_trading(self, standard_symbol: str) -> Tuple[bool, str]:
         """
         Validate if a symbol can be traded on Kraken.
         
