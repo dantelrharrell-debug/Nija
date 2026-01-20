@@ -15,6 +15,9 @@ from datetime import datetime
 import logging
 import threading
 import traceback
+import sys
+import io
+from contextlib import contextmanager
 
 # Import global Kraken nonce manager (FINAL FIX)
 try:
@@ -27,6 +30,38 @@ except ImportError:
         get_kraken_api_lock = None
 
 logger = logging.getLogger("nija.broker")
+
+# ============================================================================
+# STDOUT SUPPRESSION FOR PYKRAKENAPI (FIX - Jan 20, 2026)
+# ============================================================================
+# The pykrakenapi library uses print() statements for retry messages instead of
+# logging, which floods the console with:
+#   attempt: 463 | ['EQuery:Unknown asset pair']
+#   attempt: 464 | ['EQuery:Unknown asset pair']
+#   ...
+# This context manager redirects stdout temporarily to suppress these messages.
+# ============================================================================
+
+@contextmanager
+def suppress_pykrakenapi_prints():
+    """
+    Context manager to suppress pykrakenapi's print() statements.
+    
+    The pykrakenapi library prints retry attempts to stdout instead of using
+    logging. This creates log pollution that cannot be controlled via log levels.
+    
+    Usage:
+        with suppress_pykrakenapi_prints():
+            result = kraken_api.query_private('Balance')
+    """
+    original_stdout = sys.stdout
+    try:
+        # Redirect stdout to a null device
+        sys.stdout = io.StringIO()
+        yield
+    finally:
+        # Restore original stdout
+        sys.stdout = original_stdout
 
 
 
@@ -453,19 +488,21 @@ class KrakenBrokerAdapter(BrokerInterface):
         Returns:
             API response
         """
-        if get_kraken_api_lock is not None:
-            api_lock = get_kraken_api_lock()
-            with api_lock:
+        # Suppress pykrakenapi's print() statements
+        with suppress_pykrakenapi_prints():
+            if get_kraken_api_lock is not None:
+                api_lock = get_kraken_api_lock()
+                with api_lock:
+                    if params:
+                        return self.api.query_private(method, params)
+                    else:
+                        return self.api.query_private(method)
+            else:
+                # Fallback: direct call without global lock
                 if params:
                     return self.api.query_private(method, params)
                 else:
                     return self.api.query_private(method)
-        else:
-            # Fallback: direct call without global lock
-            if params:
-                return self.api.query_private(method, params)
-            else:
-                return self.api.query_private(method)
     
     def connect(self) -> bool:
         """Connect to Kraken API."""
