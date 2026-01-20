@@ -50,8 +50,8 @@ class DefaultConfig:
     stop_loss_warning: float = -0.007  # -0.7%
     
     # Position management
-    max_hold_hours: float = 12.0
-    stale_warning_hours: float = 6.0
+    max_hold_hours: float = 24.0  # Allow full day for position development
+    stale_warning_hours: float = 12.0  # Warn at 12 hours
     
     # RSI thresholds
     rsi_overbought: float = 60.0

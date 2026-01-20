@@ -67,8 +67,8 @@ class CoinbaseConfig:
     stop_loss_warning: float = -0.007  # -0.7% warning
     
     # Position management
-    max_hold_hours: float = 8.0  # Maximum 8 hours (high fees = shorter holds)
-    stale_warning_hours: float = 4.0  # Warn at 4 hours
+    max_hold_hours: float = 24.0  # Maximum 24 hours to allow full daily profit potential
+    stale_warning_hours: float = 12.0  # Warn at 12 hours
     
     # RSI thresholds (aggressive for quick entries/exits)
     rsi_overbought: float = 55.0  # Exit when RSI > 55 (quick profit-taking)
@@ -81,12 +81,10 @@ class CoinbaseConfig:
     sell_rsi_max: float = 70.0  # Sell in overbought
     
     # Position sizing (fee-aware)
-    # UNIFIED MINIMUM: $25 to ensure profitability after 1.4% fees
-    min_position_usd: float = 25.0  # $25 minimum (enforced to beat 1.4% fees)
-    recommended_min_usd: float = 25.0  # $25 recommended for profitability
+    # Minimum $10 to allow trading, recommended $25+ for profitability after 1.4% fees
     min_position_usd: float = 10.0  # $10 minimum (fees are ~$0.14)
     recommended_min_usd: float = 25.0  # $25+ recommended for profitability
-    min_balance_to_trade: float = 25.0  # $25 minimum - secondary/selective role with higher fees
+    min_balance_to_trade: float = 10.0  # $10 minimum to allow small account trading
     
     # Order type preferences
     prefer_limit_orders: bool = True  # Use limit orders to save fees
