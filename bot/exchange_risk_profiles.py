@@ -107,29 +107,29 @@ def _get_coinbase_profile() -> Dict:
         
         # Position Sizing (larger positions to offset fees)
         'min_position_pct': 0.15,  # 15% minimum (fees eat small positions)
-        'max_position_pct': 0.30,  # 30% maximum
+        'max_position_pct': 0.25,  # 25% maximum
         'optimal_position_pct': 0.20,  # 20% optimal
-        'min_position_usd': 15.00,  # $15 minimum for fee efficiency
+        'min_position_usd': 10.00,  # $10 minimum for fee efficiency
         
         # Profit Targets (must exceed 1.4% fees)
-        'min_profit_target_pct': 0.025,  # 2.5% minimum profit target
+        'min_profit_target_pct': 0.012,  # 1.2% minimum profit target (fee-aware)
         'tp1_pct': 0.030,  # 3.0% - first take profit
         'tp2_pct': 0.045,  # 4.5% - second take profit
         'tp3_pct': 0.065,  # 6.5% - third take profit
         
-        # Stop Loss (tighter to protect capital from fee erosion)
-        'stop_loss_pct': 0.012,  # 1.2% stop loss
-        'max_loss_per_trade': 0.015,  # 1.5% max loss
+        # Stop Loss (fee-aware: -0.4% to -0.6%)
+        'stop_loss_pct': 0.005,  # 0.5% stop loss
+        'max_loss_per_trade': 0.006,  # 0.6% max loss
         
-        # Trade Frequency (quality over quantity due to high fees)
-        'max_trades_per_day': 15,  # Fewer trades, better quality
-        'min_time_between_trades': 300,  # 5 min between trades
+        # Trade Frequency (quality over quantity due to high fees - SELECTIVE TRADING)
+        'max_trades_per_day': 10,  # Fewer trades, better quality (reduced from 15)
+        'min_time_between_trades': 600,  # 10 min between trades (increased from 5 min)
         'preferred_order_type': 'limit',  # Use limit orders to save fees
         
-        # Signal Quality (stricter filtering)
-        'min_signal_strength': 4,  # Require 4/5 signal strength
-        'min_adx': 25,  # Higher ADX for stronger trends
-        'min_volume_multiplier': 1.2,  # Higher volume confirmation
+        # Signal Quality (stricter filtering for selective trading)
+        'min_signal_strength': 5,  # Require 5/5 signal strength (perfect setups only)
+        'min_adx': 28,  # Higher ADX for stronger trends (increased from 25)
+        'min_volume_multiplier': 1.5,  # Higher volume confirmation (increased from 1.2)
         
         # Risk Management
         'max_total_exposure': 0.60,  # 60% max exposure
@@ -585,18 +585,18 @@ EXCHANGE_PROFILES = {
         taker_fee=0.006,  # 0.6% taker (market orders)
         withdrawal_fee_usd=0.0,  # Free withdrawals to Coinbase wallet
         
-        # Position sizing (conservative due to higher fees)
+        # Position sizing (15-25% per trade to offset fees)
         min_position_size_usd=10.0,  # $10 minimum
-        max_position_size_pct=0.15,  # 15% max per trade
-        recommended_position_pct=0.08,  # 8% recommended
+        max_position_size_pct=0.25,  # 25% max per trade
+        recommended_position_pct=0.20,  # 20% recommended
         
-        # Stop-loss parameters
-        min_stop_loss_pct=0.008,  # 0.8% minimum
-        max_stop_loss_pct=0.025,  # 2.5% maximum
-        recommended_stop_loss_pct=0.015,  # 1.5% recommended
+        # Stop-loss parameters (fee-aware: -0.4% to -0.6%)
+        min_stop_loss_pct=0.004,  # 0.4% minimum
+        max_stop_loss_pct=0.006,  # 0.6% maximum
+        recommended_stop_loss_pct=0.005,  # 0.5% recommended
         
-        # Take-profit parameters
-        min_take_profit_pct=0.015,  # 1.5% minimum (covers fees)
+        # Take-profit parameters (MIN_PROFIT ≥ 0.9%-1.2%)
+        min_take_profit_pct=0.009,  # 0.9% minimum (covers fees)
         tp1_target_pct=0.025,  # 2.5%
         tp2_target_pct=0.040,  # 4.0%
         tp3_target_pct=0.060,  # 6.0%
@@ -606,9 +606,9 @@ EXCHANGE_PROFILES = {
         liquidity_multiplier=1.0,  # Good liquidity
         risk_score=4.0,  # Medium-low risk
         
-        # Trading constraints
-        max_trades_per_day=30,
-        max_open_positions=8,
+        # Trading constraints (selective trading - fewer trades)
+        max_trades_per_day=10,  # Reduced from 30 for quality over quantity
+        max_open_positions=3,  # Reduced from 8 to focus on quality
         max_total_exposure_pct=0.40,  # 40% max on Coinbase
         
         # Features
