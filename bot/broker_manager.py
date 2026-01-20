@@ -110,6 +110,9 @@ DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent 
 # - Coinbase: SECONDARY/selective (not for small accounts, uses Coinbase-specific strategy)
 KRAKEN_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Kraken is PRIMARY for small accounts
 COINBASE_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Coinbase is SECONDARY with adjusted rules
+# 🚑 FIX 2: Minimum balance for Coinbase to prevent fees eating small accounts
+# Coinbase has higher fees than Kraken, so small accounts should use Kraken instead
+COINBASE_MINIMUM_BALANCE = 25.00  # Disable Coinbase for accounts below this threshold
 
 # Broker health monitoring constants
 # Maximum consecutive errors before marking broker unavailable
