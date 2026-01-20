@@ -592,6 +592,8 @@ class NIJAApexStrategyV71:
                 long_signal, score, reason = self.check_long_entry(df, indicators)
                 if long_signal:
                     # Calculate position size
+                    # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
+                    # from broker.get_account_balance() which returns total equity, not just cash
                     position_size = self.risk_manager.calculate_position_size(
                         account_balance, adx, score
                     )
@@ -627,6 +629,8 @@ class NIJAApexStrategyV71:
                 short_signal, score, reason = self.check_short_entry(df, indicators)
                 if short_signal:
                     # Calculate position size
+                    # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
+                    # from broker.get_account_balance() which returns total equity, not just cash
                     position_size = self.risk_manager.calculate_position_size(
                         account_balance, adx, score
                     )
