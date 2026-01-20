@@ -169,11 +169,18 @@ def verify_broker_connection(credentials):
         logger.info("")
     
     # Test user connections
+    # Map user names to their full user IDs
+    user_id_map = {
+        'daivon': 'daivon_frazier',
+        'tania': 'tania_gilbert'
+    }
+    
     for user_name in ['daivon', 'tania']:
         if credentials[user_name]:
             logger.info(f"Testing KRAKEN USER ({user_name.upper()}) connection...")
             try:
-                user_broker = KrakenBroker(account_type=AccountType.USER, user_id=f"{user_name}_frazier" if user_name == 'daivon' else f"{user_name}_gilbert")
+                user_id = user_id_map[user_name]
+                user_broker = KrakenBroker(account_type=AccountType.USER, user_id=user_id)
                 if user_broker.connect():
                     balance = user_broker.get_account_balance()
                     logger.info(f"✅ KRAKEN USER ({user_name.upper()}): CONNECTED")
@@ -334,7 +341,7 @@ def main():
             logger.error("      - Change bot.py: start_copy_engine(observe_only=False)")
         logger.error("")
         logger.error("See documentation:")
-        logger.error("   - KRAKEN_NOT_TRADING_SOLUTION_JAN_19_2026.md")
+        logger.error("   - KRAKEN_TRADING_FIX_JAN_20_2026.md")
         logger.error("   - KRAKEN_COPY_TRADING_README.md")
         logger.error("=" * 70)
         return 1
