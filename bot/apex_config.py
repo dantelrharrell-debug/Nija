@@ -288,8 +288,12 @@ BROKERS = {
 
 # FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
 # XRP-USD: Spread > profit edge, not suitable for current strategy
+# PERMANENTLY DISABLED: Net-negative profitability confirmed
 DISABLED_PAIRS = [
-    "XRP-USD",  # High spread, low profit potential
+    "XRP-USD",    # High spread, low profit potential, net-negative performance
+    "XRPUSD",     # Kraken format
+    "XRP-USDT",   # USDT pair
+    "XRPUSDT",    # Alternative format
 ]
 
 TRADING_PAIRS = {
