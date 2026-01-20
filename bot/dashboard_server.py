@@ -14,7 +14,7 @@ Version: 1.1
 Date: January 9, 2026
 """
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 import json
 import logging
 import os
@@ -30,6 +30,26 @@ logger = logging.getLogger(__name__)
 
 # Data directory
 DATA_DIR = Path("/tmp/nija_monitoring")
+
+# Import user management modules
+try:
+    from user_pnl_tracker import get_user_pnl_tracker
+    from user_risk_manager import get_user_risk_manager
+    from user_nonce_manager import get_user_nonce_manager
+    from trade_webhook_notifier import get_webhook_notifier
+except ImportError:
+    logger.warning("User management modules not available - some endpoints will not work")
+    get_user_pnl_tracker = None
+    get_user_risk_manager = None
+    get_user_nonce_manager = None
+    get_webhook_notifier = None
+
+try:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    from controls import get_hard_controls
+except ImportError:
+    logger.warning("Hard controls module not available")
+    get_hard_controls = None
 
 
 @app.route('/')
@@ -106,6 +126,112 @@ def get_trades():
 def health_check():
     """Simple health check endpoint"""
     return "OK", 200
+
+
+@app.route('/api/users', methods=['GET'])
+def list_users():
+    """List all users with basic stats."""
+    try:
+        if not all([get_user_pnl_tracker, get_user_risk_manager, get_hard_controls]):
+            return jsonify({'error': 'User management modules not available'}), 503
+        
+        pnl_tracker = get_user_pnl_tracker()
+        risk_manager = get_user_risk_manager()
+        hard_controls = get_hard_controls()
+        
+        # Check if we should include master
+        include_master = request.args.get('include_master', 'false').lower() == 'true'
+        
+        # Get all users from various sources
+        user_ids = set()
+        
+        # From hard controls
+        for user_id in hard_controls.user_kill_switches.keys():
+            if user_id != 'master' or include_master:
+                user_ids.add(user_id)
+        
+        # From risk manager
+        for user_id in risk_manager._user_states.keys():
+            if user_id != 'master' or include_master:
+                user_ids.add(user_id)
+        
+        # Build user list
+        users = []
+        for user_id in sorted(user_ids):
+            stats = pnl_tracker.get_stats(user_id)
+            risk_state = risk_manager.get_state(user_id)
+            
+            can_trade, reason = hard_controls.can_trade(user_id)
+            
+            users.append({
+                'user_id': user_id,
+                'can_trade': can_trade,
+                'trading_status': reason if not can_trade else 'active',
+                'total_pnl': stats.get('total_pnl', 0.0),
+                'daily_pnl': stats.get('daily_pnl', 0.0),
+                'win_rate': stats.get('win_rate', 0.0),
+                'total_trades': stats.get('completed_trades', 0),
+                'balance': risk_state.balance,
+                'circuit_breaker': risk_state.circuit_breaker_triggered,
+                'is_master': user_id == 'master'
+            })
+        
+        return jsonify({
+            'users': users,
+            'total_users': len(users),
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error listing users: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/user/<user_id>/pnl', methods=['GET'])
+def get_user_pnl(user_id: str):
+    """Get detailed PnL dashboard for a user."""
+    try:
+        if not get_user_pnl_tracker:
+            return jsonify({'error': 'PnL tracker not available'}), 503
+        
+        pnl_tracker = get_user_pnl_tracker()
+        
+        # Get overall stats
+        stats = pnl_tracker.get_stats(user_id, force_refresh=True)
+        
+        # Get recent trades
+        recent_trades = pnl_tracker.get_recent_trades(user_id, limit=20)
+        
+        # Get daily breakdown
+        daily_breakdown = pnl_tracker.get_daily_breakdown(user_id, days=7)
+        
+        return jsonify({
+            'user_id': user_id,
+            'stats': stats,
+            'recent_trades': recent_trades,
+            'daily_breakdown': [
+                {
+                    'date': day.date,
+                    'trades': day.trades_count,
+                    'pnl': day.total_pnl,
+                    'win_rate': day.win_rate,
+                    'winners': day.winners,
+                    'losers': day.losers
+                }
+                for day in daily_breakdown
+            ],
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting PnL for {user_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/master/pnl', methods=['GET'])
+def get_master_pnl():
+    """Get detailed PnL dashboard for the master account."""
+    return get_user_pnl('master')
 
 
 @app.route('/api/trading_status')
