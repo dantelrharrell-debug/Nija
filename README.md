@@ -17,32 +17,8 @@ PRO_MODE_MIN_RESERVE_PCT=0.15
 ```
 
 **Learn More:**
-- 📖 [PRO_MODE_QUICKSTART.md](PRO_MODE_QUICKSTART.md) - Enable in 5 minutes
-- 📚 [PRO_MODE_README.md](PRO_MODE_README.md) - Complete guide
-- 🧪 Run `python3 test_pro_mode.py` to verify
+- 📚 [PRO_MODE_README.md](PRO_MODE_README.md) - Complete guide and setup instructions
 ---
-
-## 🚨 URGENT: Having Issues? (January 17, 2026)
-
-**Coinbase losing money?** → [QUICK_FIX_COINBASE_AND_KRAKEN.md](QUICK_FIX_COINBASE_AND_KRAKEN.md) - **30-min exit fix ready**  
-**Kraken not trading?** → [QUICK_FIX_COINBASE_AND_KRAKEN.md](QUICK_FIX_COINBASE_AND_KRAKEN.md) - **Just needs API keys**  
-**Full Details** → [ANSWER_COINBASE_KRAKEN_STATUS_JAN_17_2026.md](ANSWER_COINBASE_KRAKEN_STATUS_JAN_17_2026.md)
-
-**TL;DR**: Coinbase fix coded (needs deployment) | Kraken ready (needs credentials) | 40 minutes to resolve both
-
----
-
-## ⚡ **QUICK START: Start Trading in 60 Seconds**
-
-**No credentials? No problem!** Get NIJA trading immediately:
-
-```bash
-python3 enable_trading_now.py
-```
-
-This auto-configures **paper trading mode** with virtual $10,000 - zero risk, zero setup!
-
-**See**: [START_TRADING_NOW.md](START_TRADING_NOW.md) for all options (paper mode, Kraken demo, production)
 
 ---
 
@@ -59,13 +35,7 @@ This auto-configures **paper trading mode** with virtual $10,000 - zero risk, ze
 | **SDK Libraries** | ✅ Installed | krakenex + pykrakenapi in requirements.txt |
 | **Configuration** | ⚠️ Needs Setup | Add your API credentials |
 
-### 🚀 Quick Start - Enable Kraken in 5 Minutes
-
-**⚡ FASTEST:** [QUICKSTART_ENABLE_KRAKEN_MASTER.md](QUICKSTART_ENABLE_KRAKEN_MASTER.md) - Get started in 5 minutes!
-
-**📖 COMPLETE:** [KRAKEN_MASTER_SETUP_COMPLETE_GUIDE.md](KRAKEN_MASTER_SETUP_COMPLETE_GUIDE.md) - Full documentation with troubleshooting
-
-**🔍 VALIDATE:** Run `python3 validate_kraken_master_setup.py` to verify your setup
+### 🚀 Quick Start - Enable Kraken
 
 **Step 1**: Get API credentials from [Kraken](https://www.kraken.com/u/security/api)
 - Enable: Query Funds, Query/Create/Cancel Orders, Query Trades
@@ -78,43 +48,6 @@ KRAKEN_MASTER_API_SECRET=your-private-key-here
 ```
 
 **Step 3**: Restart and watch Kraken trade automatically!
-
-**Verify:**
-```bash
-python3 check_trading_status.py
-```
-
-### 📖 Complete Guides
-
-- **[CONFIGURE_KRAKEN_MASTER.md](CONFIGURE_KRAKEN_MASTER.md)** - Comprehensive setup guide with troubleshooting
-- **[ENABLE_KRAKEN_README.md](ENABLE_KRAKEN_README.md)** - Multi-broker architecture and user accounts
-- **[SETUP_KRAKEN_MASTER_QUICK.md](SETUP_KRAKEN_MASTER_QUICK.md)** - 5-minute quick reference
-
-**Guides include:**
-- ✅ Step-by-step setup for Railway, Render, and local deployment
-- ✅ API credential generation and permissions
-- ✅ Troubleshooting common issues
-- ✅ Multi-broker architecture explanation
-- ✅ User account configuration (optional)
-
-### 🔍 Verification & Diagnostics
-
-**🆕 Comprehensive Testing (January 18, 2026):**
-- **[test_master_and_user_connections.py](test_master_and_user_connections.py)** - Test ALL account connections (master + users)
-- **[verify_kraken_execution_ready.py](verify_kraken_execution_ready.py)** - Verify Kraken execution readiness
-- **[verify_coinbase_trade_history.py](verify_coinbase_trade_history.py)** - Verify trade history preservation
-- **[ACCOUNT_CONNECTION_TESTING_GUIDE.md](ACCOUNT_CONNECTION_TESTING_GUIDE.md)** - Complete testing documentation
-
-**Exchange-Specific:**
-- **[validate_kraken_master_setup.py](validate_kraken_master_setup.py)** - Complete Kraken validation (recommended)
-- **[diagnose_master_kraken_issue.py](diagnose_master_kraken_issue.py)** - Diagnose master account issues
-- **[test_kraken_connection_live.py](test_kraken_connection_live.py)** - Live API connection test
-
-**General Status:**
-- **[display_broker_status.py](display_broker_status.py)** - Display configuration status for all brokers
-- **[check_trading_status.py](check_trading_status.py)** - Check overall trading status
-- **[audit_coinbase_positions.py](audit_coinbase_positions.py)** - Verify no stuck losing positions
-- **[setup_kraken_master.py](setup_kraken_master.py)** - Interactive setup wizard for Kraken master
 
 **Library**: NIJA uses official Kraken SDKs: [`krakenex`](https://github.com/veox/python3-krakenex) + [`pykrakenapi`](https://github.com/dominiktraxl/pykrakenapi)
 
