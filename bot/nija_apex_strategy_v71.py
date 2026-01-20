@@ -22,6 +22,9 @@ from indicators import (
 from risk_manager import RiskManager
 from execution_engine import ExecutionEngine
 
+# Initialize logger before any imports that might fail
+logger = logging.getLogger("nija")
+
 # Import emergency liquidation for capital preservation (FIX 3)
 try:
     from emergency_liquidation import EmergencyLiquidator
@@ -29,8 +32,6 @@ try:
 except ImportError:
     EMERGENCY_LIQUIDATION_AVAILABLE = False
     logger.warning("Emergency liquidation module not available")
-
-logger = logging.getLogger("nija")
 
 
 class NIJAApexStrategyV71:
