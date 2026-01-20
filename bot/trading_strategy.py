@@ -107,22 +107,19 @@ DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
 # Time-based exit thresholds (prevent indefinite holding)
 # CRITICAL FIX (Jan 19, 2026): IMMEDIATE EXIT FOR ALL LOSING TRADES
-# LOSING TRADES: EXIT IMMEDIATELY on ANY loss (P&L < 0%) - NO WAITING PERIOD
-# PROFITABLE TRADES: Can run up to 8 hours to capture gains
-# Jan 16, 2026: Added EMERGENCY exit at 12 hours as absolute failsafe
-# NIJA is for PROFIT, not losses - ANY losing position exits IMMEDIATELY
-MAX_POSITION_HOLD_HOURS = 8  # Auto-exit ALL positions held longer than this (8 hours) - failsafe
-MAX_POSITION_HOLD_EMERGENCY = 12  # EMERGENCY exit - force sell ALL positions after 12 hours
-STALE_POSITION_WARNING_HOURS = 4  # Warn about positions held this long (4 hours)
+# LOSING TRADES: EXIT after 30 minutes to allow recovery (changed from immediate)
+# PROFITABLE TRADES: Can run up to 24 hours to capture full gains
+# NIJA is for PROFIT - give positions time to develop and capture gains
+MAX_POSITION_HOLD_HOURS = 24  # Auto-exit ALL positions held longer than 24 hours (daily strategy)
+MAX_POSITION_HOLD_EMERGENCY = 48  # EMERGENCY exit - force sell ALL positions after 48 hours (absolute failsafe)
+STALE_POSITION_WARNING_HOURS = 12  # Warn about positions held this long (12 hours)
 # Unsellable position retry timeout (prevent permanent blocking)
 # After this many hours, retry selling positions that were previously marked unsellable
 # This handles cases where position grew enough to be sellable, or API errors were temporary
-UNSELLABLE_RETRY_HOURS = 24  # Retry selling "unsellable" positions after 24 hours
-# ZOMBIE POSITION DETECTION (Jan 19, 2026): Detect auto-imported positions that mask losses
-# If a position shows ~0% P&L for too long, it's likely an auto-imported position that
-# was losing before import. Auto-import sets entry = current price, resetting P&L to 0%.
-# Real positions should move away from breakeven within 1-2 hours.
-ZOMBIE_POSITION_HOURS = 1.0  # Exit positions stuck at ~0% P&L for this many hours
+UNSELLABLE_RETRY_HOURS = 6  # Retry selling "unsellable" positions after 6 hours (reduced from 24h)
+# ZOMBIE POSITION DETECTION: Disabled - positions need time to develop
+# Auto-imported positions are tracked properly with entry prices now
+ZOMBIE_POSITION_HOURS = 24.0  # Increased from 1 hour to 24 hours to allow normal price movement
 ZOMBIE_PNL_THRESHOLD = 0.01  # Consider position "stuck" if abs(P&L) < this % (0.01%)
 
 # Profit target thresholds (stepped exits) - FEE-AWARE + ULTRA AGGRESSIVE V7.3
