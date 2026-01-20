@@ -103,6 +103,10 @@ MINIMUM_BALANCE_PROTECTION = 0.50  # Lowered from 1.00 to allow trading with ver
 MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading (warning only, not enforced)
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
+# 🚑 FIX 2: Minimum balance for Coinbase to prevent fees eating small accounts
+# Coinbase has higher fees than Kraken, so small accounts should use Kraken instead
+COINBASE_MINIMUM_BALANCE = 75.00  # Disable Coinbase for accounts below this threshold
+
 # Broker health monitoring constants
 # Maximum consecutive errors before marking broker unavailable
 # This prevents trading when API is persistently failing
@@ -371,8 +375,28 @@ class BaseBroker(ABC):
         pass
     
     @abstractmethod
-    def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
-        """Place market order. Must be implemented by each broker."""
+    def place_market_order(
+        self, 
+        symbol: str, 
+        side: str, 
+        quantity: float, 
+        size_type: str = 'quote',
+        ignore_balance: bool = False,
+        ignore_min_trade: bool = False,
+        force_liquidate: bool = False
+    ) -> Dict:
+        """
+        Place market order. Must be implemented by each broker.
+        
+        Args:
+            symbol: Trading symbol
+            side: 'buy' or 'sell'
+            quantity: Order size
+            size_type: 'quote' (USD) or 'base' (crypto quantity)
+            ignore_balance: Bypass balance validation (EMERGENCY ONLY)
+            ignore_min_trade: Bypass minimum trade size validation (EMERGENCY ONLY)
+            force_liquidate: Bypass ALL validation (EMERGENCY ONLY)
+        """
         pass
     
     def close_position(self, symbol: str, base_size: Optional[float] = None, **kwargs) -> Dict:
@@ -851,6 +875,64 @@ class CoinbaseBroker(BaseBroker):
                     
                     # Portfolio detection (will use cached accounts)
                     self._detect_portfolio()
+                    
+                    # 🚑 FIX 2: DISABLE COINBASE FOR SMALL ACCOUNTS
+                    # If total equity < $75, disable Coinbase and route to Kraken
+                    # This prevents Coinbase fees from eating small accounts
+                    try:
+                        balance_data = self._get_account_balance_detailed()
+                        if balance_data is None:
+                            # Balance fetch failed - this is critical for small account check
+                            # We MUST know account size before allowing connection
+                            logging.error("=" * 70)
+                            logging.error("⚠️  COINBASE CONNECTION BLOCKED")
+                            logging.error("=" * 70)
+                            logging.error("   Could not verify account balance")
+                            logging.error("   This check prevents small accounts from using Coinbase")
+                            logging.error("   ")
+                            logging.error("   Possible causes:")
+                            logging.error("   1. API permission issues")
+                            logging.error("   2. Network connectivity problems")
+                            logging.error("   3. Coinbase API temporarily unavailable")
+                            logging.error("   ")
+                            logging.error("   Solution: Fix API connectivity first")
+                            logging.error("=" * 70)
+                            self.connected = False
+                            return False
+                        
+                        total_funds = balance_data.get('total_funds', 0.0)
+                        
+                        if total_funds < COINBASE_MINIMUM_BALANCE:
+                            logging.error("=" * 70)
+                            logging.error("🛑 COINBASE DISABLED: Account too small")
+                            logging.error("=" * 70)
+                            logging.error(f"   Your balance: ${total_funds:.2f}")
+                            logging.error(f"   Minimum required: ${COINBASE_MINIMUM_BALANCE:.2f}")
+                            logging.error(f"   ")
+                            logging.error(f"   ⚠️  Coinbase fees will eat small accounts alive!")
+                            logging.error(f"   💡 Solution: Use Kraken for accounts under ${COINBASE_MINIMUM_BALANCE:.2f}")
+                            logging.error(f"   ")
+                            logging.error(f"   Coinbase has been automatically disabled.")
+                            logging.error(f"   Trading will route to Kraken instead.")
+                            logging.error("=" * 70)
+                            
+                            # Disconnect and mark as not connected
+                            self.connected = False
+                            return False
+                    except Exception as balance_check_err:
+                        # Balance check failed - this is CRITICAL, do NOT allow connection
+                        # We cannot safely determine if account is too small
+                        logging.error("=" * 70)
+                        logging.error("⚠️  COINBASE CONNECTION BLOCKED")
+                        logging.error("=" * 70)
+                        logging.error(f"   Balance check failed: {balance_check_err}")
+                        logging.error("   Cannot verify account size - blocking Coinbase connection")
+                        logging.error("   ")
+                        logging.error("   This safety check prevents small accounts from using Coinbase.")
+                        logging.error("   Fix the balance check error before allowing Coinbase connection.")
+                        logging.error("=" * 70)
+                        self.connected = False
+                        return False
                     
                     return True
                     
@@ -1535,13 +1617,17 @@ class CoinbaseBroker(BaseBroker):
     def get_account_balance(self) -> float:
         """Get USD trading balance with fail-closed behavior (conforms to BaseBroker interface).
         
+        🚑 FIX 4: BALANCE MUST INCLUDE LOCKED FUNDS
+        Returns total_equity (available + locked) instead of just available_usd.
+        This prevents NIJA from thinking it's broke when it has funds locked in positions.
+        
         CRITICAL FIX (Jan 19, 2026): Fail closed - not "balance = 0"
         - On error: Return last known balance (if available) instead of 0
         - Track consecutive errors to mark broker unavailable
         - Distinguish API errors from actual zero balance
         
         Returns:
-            float: Total trading balance (USD + USDC)
+            float: TOTAL EQUITY (cash + positions) not just available cash
                    Returns last known balance on error (not 0)
         """
         try:
@@ -1561,14 +1647,28 @@ class CoinbaseBroker(BaseBroker):
                     logger.error("❌ Coinbase balance fetch failed and no last known balance available, returning 0.0")
                     return 0.0
             
-            result = float(balance_data.get('trading_balance', 0.0))
+            # 🚑 FIX 4: Return total_funds (available + locked) instead of just trading_balance
+            # This ensures rotation and sizing use TOTAL EQUITY not just free cash
+            # Fallback chain: total_funds -> trading_balance -> 0.0
+            total_funds = balance_data.get('total_funds', None)
+            if total_funds is None:
+                total_funds = balance_data.get('trading_balance', 0.0)
+            result = float(total_funds)
+            
+            # Log what we're returning for transparency
+            trading_balance = float(balance_data.get('trading_balance', 0.0))
+            total_held = float(balance_data.get('total_held', 0.0))
+            
+            if total_held > 0:
+                logger.debug(f"💎 Total Equity: ${result:.2f} (Available: ${trading_balance:.2f} + Locked: ${total_held:.2f})")
+            else:
+                logger.debug(f"💰 Total Equity: ${result:.2f} (no locked funds)")
             
             # SUCCESS: Update last known balance and reset error count
             self._last_known_balance = result
             self._balance_fetch_errors = 0
             self._is_available = True
             
-            logger.debug(f"get_account_balance() returning: ${result:.2f}")
             return result
             
         except Exception as e:
@@ -2064,15 +2164,27 @@ class CoinbaseBroker(BaseBroker):
         self._product_cache[symbol] = meta
         return meta
     
-    def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
+    def place_market_order(
+        self, 
+        symbol: str, 
+        side: str, 
+        quantity: float, 
+        size_type: str = 'quote',
+        ignore_balance: bool = False,
+        ignore_min_trade: bool = False,
+        force_liquidate: bool = False
+    ) -> Dict:
         """
-        Place market order with balance verification
+        Place market order with balance verification (and optional bypasses for emergencies).
         
         Args:
             symbol: Trading pair (e.g., 'BTC-USD')
             side: 'buy' or 'sell'
             quantity: Amount to trade
             size_type: 'quote' for USD amount (default) or 'base' for crypto amount
+            ignore_balance: Bypass balance validation (EMERGENCY ONLY - FIX 1)
+            ignore_min_trade: Bypass minimum trade size validation (EMERGENCY ONLY - FIX 1)
+            force_liquidate: Bypass ALL validation (EMERGENCY ONLY - FIX 1)
         
         Returns:
             Order response dictionary
@@ -2140,8 +2252,14 @@ class CoinbaseBroker(BaseBroker):
 
             base_currency, quote_currency = (symbol.split('-') + ['USD'])[:2]
 
+            # 🚑 FIX 1: EMERGENCY SELL OVERRIDE - Bypass balance check if forced
+            # This allows NIJA to exit losing positions regardless of balance validation
+            if force_liquidate or ignore_balance:
+                logger.warning(f"⚠️  BALANCE CHECK BYPASSED for {symbol} (force_liquidate={force_liquidate}, ignore_balance={ignore_balance})")
+
             # PRE-FLIGHT CHECK: Verify sufficient balance before placing order
-            if side.lower() == 'buy':
+            # SKIP if force_liquidate or ignore_balance is True
+            if side.lower() == 'buy' and not (force_liquidate or ignore_balance):
                 balance_data = self._get_account_balance_detailed()
                 trading_balance = float(balance_data.get('trading_balance', 0.0))
                 
@@ -2884,6 +3002,68 @@ class CoinbaseBroker(BaseBroker):
                 
             return {"status": "error", "error": f"{error_type}: {error_msg}"}
 
+    def force_liquidate(
+        self,
+        symbol: str,
+        quantity: float,
+        reason: str = "Emergency liquidation"
+    ) -> Dict:
+        """
+        🚑 EMERGENCY SELL OVERRIDE - Force liquidate position bypassing ALL checks.
+        
+        This is the FIX 1 implementation that allows NIJA to exit losing positions
+        immediately without being blocked by balance validation or minimum trade limits.
+        
+        CRITICAL: This method MUST be used for emergency exits and losing trades.
+        It bypasses:
+        - Balance checks (ignore_balance=True)
+        - Minimum trade size validation (ignore_min_trade=True)
+        - All other validation that could prevent exit
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC-USD')
+            quantity: Quantity to sell (in base currency)
+            reason: Reason for forced liquidation (for logging)
+        
+        Returns:
+            Order result dict with status
+        """
+        logger.warning("=" * 70)
+        logger.warning(f"🚑 FORCE LIQUIDATE: {symbol}")
+        logger.warning(f"   Reason: {reason}")
+        logger.warning(f"   Quantity: {quantity}")
+        logger.warning(f"   ⚠️  ALL VALIDATION BYPASSED - EMERGENCY EXIT")
+        logger.warning("=" * 70)
+        
+        try:
+            # Force market sell with ALL checks bypassed
+            # This uses place_market_order but with special flags
+            result = self.place_market_order(
+                symbol=symbol,
+                side='sell',
+                quantity=quantity,
+                size_type='base',
+                ignore_balance=True,      # ← REQUIRED: Bypass balance validation
+                ignore_min_trade=True,    # ← REQUIRED: Bypass minimum trade size
+                force_liquidate=True      # ← REQUIRED: Bypass all other checks
+            )
+            
+            if result.get('status') == 'filled':
+                logger.warning(f"✅ FORCE LIQUIDATE SUCCESSFUL: {symbol}")
+            else:
+                logger.error(f"❌ FORCE LIQUIDATE FAILED: {symbol} - {result.get('error', 'Unknown error')}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ FORCE LIQUIDATE EXCEPTION: {symbol} - {e}")
+            logger.error(traceback.format_exc())
+            return {
+                "status": "error",
+                "error": str(e),
+                "symbol": symbol
+            }
+    
     def close_position(
         self,
         symbol: str,
@@ -5261,18 +5441,23 @@ class KrakenBroker(BaseBroker):
                 logger.info(f"   ✅ Available USDT: ${usdt_balance:.2f}")
                 logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 logger.info(f"   💵 Total Available: ${total:.2f}")
+                
+                # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken
+                total_funds = total + held_amount
+                
                 if held_amount > 0:
                     logger.info(f"   🔒 Held in open orders: ${held_amount:.2f}")
                     logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total + held_amount:.2f}")
+                    logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
                 logger.info("=" * 70)
                 
                 # SUCCESS: Update last known balance and reset error count
-                self._last_known_balance = total
+                # 🚑 FIX 4: Store and return total_funds instead of just available
+                self._last_known_balance = total_funds
                 self._balance_fetch_errors = 0
                 self._is_available = True
                 
-                return total
+                return total_funds
             
             # Unexpected response - treat as error
             logger.error(f"❌ Unexpected Kraken API response format ({self.account_identifier})")
@@ -5443,7 +5628,73 @@ class KrakenBroker(BaseBroker):
         """
         return self._balance_fetch_errors
     
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+    def force_liquidate(
+        self,
+        symbol: str,
+        quantity: float,
+        reason: str = "Emergency liquidation"
+    ) -> Dict:
+        """
+        🚑 EMERGENCY SELL OVERRIDE - Force liquidate position bypassing ALL checks.
+        
+        This is the FIX 1 implementation for Kraken that allows NIJA to exit losing positions
+        immediately without being blocked by validation.
+        
+        CRITICAL: This method MUST be used for emergency exits and losing trades.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC-USD')
+            quantity: Quantity to sell (in base currency)
+            reason: Reason for forced liquidation (for logging)
+        
+        Returns:
+            Order result dict with status
+        """
+        logger.warning("=" * 70)
+        logger.warning(f"🚑 FORCE LIQUIDATE [Kraken]: {symbol}")
+        logger.warning(f"   Account: {self.account_identifier if hasattr(self, 'account_identifier') else 'UNKNOWN'}")
+        logger.warning(f"   Reason: {reason}")
+        logger.warning(f"   Quantity: {quantity}")
+        logger.warning(f"   ⚠️  ALL VALIDATION BYPASSED - EMERGENCY EXIT")
+        logger.warning("=" * 70)
+        
+        try:
+            # Force market sell with emergency bypass flags
+            result = self.place_market_order(
+                symbol=symbol,
+                side='sell',
+                quantity=quantity,
+                ignore_balance=True,
+                ignore_min_trade=True,
+                force_liquidate=True
+            )
+            
+            if result.get('status') == 'filled':
+                logger.warning(f"✅ FORCE LIQUIDATE SUCCESSFUL [Kraken]: {symbol}")
+            else:
+                logger.error(f"❌ FORCE LIQUIDATE FAILED [Kraken]: {symbol} - {result.get('error', 'Unknown error')}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ FORCE LIQUIDATE EXCEPTION [Kraken]: {symbol} - {e}")
+            logger.error(traceback.format_exc())
+            return {
+                "status": "error",
+                "error": str(e),
+                "symbol": symbol
+            }
+    
+    def place_market_order(
+        self, 
+        symbol: str, 
+        side: str, 
+        quantity: float,
+        size_type: str = 'quote',
+        ignore_balance: bool = False,
+        ignore_min_trade: bool = False,
+        force_liquidate: bool = False
+    ) -> Dict:
         """
         Place market order on Kraken.
         
