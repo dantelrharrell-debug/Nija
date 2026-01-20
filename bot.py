@@ -441,18 +441,31 @@ def main():
         # - Log all P&L
         # - See what signals are being copied
         # - EXECUTE TRADES when master account trades
-        logger.info("🔄 Starting copy trade engine in ACTIVE MODE...")
-        try:
-            from bot.copy_trade_engine import start_copy_engine
-            start_copy_engine(observe_only=False)  # CRITICAL: observe_only=False enables auto-trading
-            logger.info("   ✅ Copy trade engine started in ACTIVE MODE")
-            logger.info("   📡 Users will receive and execute copy trades from master accounts")
-            logger.info("   💰 User position sizes will be scaled based on account balance ratios")
-        except Exception as e:
-            logger.error(f"   ❌ Failed to start copy trade engine: {e}")
-            logger.error("   ⚠️  User accounts will NOT receive copy trades!")
-            import traceback
-            logger.error(traceback.format_exc())
+        #
+        # COPY TRADING MODE configuration:
+        # - MASTER_FOLLOW: Users mirror all master trades (default)
+        # - INDEPENDENT: Users trade independently (no copy trading)
+        copy_trading_mode = os.getenv('COPY_TRADING_MODE', 'MASTER_FOLLOW').upper()
+        
+        if copy_trading_mode == 'MASTER_FOLLOW':
+            logger.info("🔄 Starting copy trade engine in MASTER_FOLLOW MODE...")
+            logger.info("   📋 Mode: MASTER_FOLLOW (mirror master trades)")
+            logger.info("   📊 Allocation: Proportional (auto-scaled by balance)")
+            try:
+                from bot.copy_trade_engine import start_copy_engine
+                start_copy_engine(observe_only=False)  # CRITICAL: observe_only=False enables auto-trading
+                logger.info("   ✅ Copy trade engine started in ACTIVE MODE")
+                logger.info("   📡 Users will receive and execute copy trades from master accounts")
+                logger.info("   💰 User position sizes will be scaled based on account balance ratios")
+            except Exception as e:
+                logger.error(f"   ❌ Failed to start copy trade engine: {e}")
+                logger.error("   ⚠️  User accounts will NOT receive copy trades!")
+                import traceback
+                logger.error(traceback.format_exc())
+        else:
+            logger.info("🔄 Copy trading mode: INDEPENDENT")
+            logger.info("   ℹ️  Users will trade independently (copy trading disabled)")
+            logger.info("   ℹ️  Set COPY_TRADING_MODE=MASTER_FOLLOW to enable copy trading")
 
         # Log clear trading readiness status
         logger.info("=" * 70)
