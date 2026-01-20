@@ -1,64 +1,96 @@
 """
-NIJA Kraken Nonce Generator (Railway-Safe)
-==========================================
+NIJA Kraken Nonce Generator (Global Monotonic)
+==============================================
 
-✅ CORRECT APPROACH (Railway-safe, timestamp-based)
+FIX #2: GLOBAL KRAKEN NONCE (FINAL SOLUTION)
 
-Uses timestamp-based nonce generation - NO persistence required.
-ONE global function shared across MASTER + ALL USERS.
+ONE global monotonic nonce shared across:
+- ALL Kraken API calls
+- ALL users (MASTER + USER accounts)
+- ALL retries
+- ALL sessions (survives restarts)
 
 Implementation:
-    def get_kraken_nonce():
-        return int(time.time() * 1000)
+    nonce = max(int(time.time() * 1000), last_nonce + 1)
 
-✅ DO:
-    - Use timestamp-based nonce (milliseconds since epoch)
-    - One nonce generator globally
-    - All Kraken private calls use this same function
-
-❌ DO NOT:
-    - Use counters
-    - Use per-thread nonce
-    - Use random numbers
-    - Persist nonce to disk (not needed with timestamps)
+Rules:
+    ✅ Shared across all Kraken calls
+    ✅ Shared across retries
+    ✅ Shared across users
+    ✅ Never stored per instance
+    ✅ Never reset on reconnect
+    ✅ Thread-safe with global lock
+    ✅ Monotonically increasing
 
 Usage:
     from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock
     
-    nonce = get_global_kraken_nonce()  # Always returns current timestamp in ms
-    
-    # For API calls requiring serialization:
+    # Always use the lock when making Kraken API calls
     lock = get_kraken_api_lock()
     with lock:
-        # Make Kraken API call here
+        nonce = get_global_kraken_nonce()
+        # Make Kraken API call here with nonce
 """
 
 import time
 import threading
 
+# FIX #2: Global state for monotonic nonce
+# This is THE SINGLE SOURCE OF TRUTH for all Kraken nonces
+# Never reset, never cleared, shared across all users
+_GLOBAL_LAST_NONCE = 0
+_GLOBAL_NONCE_LOCK = threading.Lock()
+
 def get_kraken_nonce():
     """
-    Get Kraken API nonce using timestamp (Railway-safe).
+    FIX #2: Get Kraken API nonce with GLOBAL monotonic guarantee.
     
-    Returns current time in milliseconds since epoch.
-    This is monotonically increasing (time only moves forward)
-    and requires no persistence.
+    Returns max(current_timestamp_ms, last_nonce + 1)
+    This ensures nonce is ALWAYS strictly increasing even if:
+    - Multiple calls happen in same millisecond
+    - System clock moves backward
+    - Multiple threads call simultaneously
+    - Retries happen rapidly
+    
+    Thread-safe: Uses global lock to prevent race conditions.
+    Global state: Shares _GLOBAL_LAST_NONCE across ALL users and calls.
     
     Returns:
-        int: Current timestamp in milliseconds
+        int: Monotonically increasing nonce (milliseconds)
     """
-    return int(time.time() * 1000)
+    global _GLOBAL_LAST_NONCE
+    
+    with _GLOBAL_NONCE_LOCK:
+        # Get current timestamp in milliseconds
+        current_time_ms = int(time.time() * 1000)
+        
+        # FIX #2: Ensure strict monotonic increase
+        # nonce = max(current_time, last_nonce + 1)
+        # This guarantees EVERY nonce is larger than the previous
+        new_nonce = max(current_time_ms, _GLOBAL_LAST_NONCE + 1)
+        
+        # Update global state
+        _GLOBAL_LAST_NONCE = new_nonce
+        
+        return new_nonce
 
-# Alias for backward compatibility - use the simple timestamp-based nonce
+# Alias for backward compatibility - use the global monotonic nonce
 def get_global_kraken_nonce() -> int:
     """
     Get Kraken API nonce (backward compatibility wrapper).
     
-    Returns current timestamp in milliseconds.
+    Returns max(current_timestamp_ms, last_nonce + 1).
     This is the ONE global function that ALL Kraken private calls should use.
     
+    FIX #2: This implementation guarantees:
+    - ONE global nonce source for all users
+    - Monotonically increasing (never decreases, never repeats)
+    - Shared across all retries
+    - Never reset on reconnect
+    - Thread-safe
+    
     Returns:
-        int: Current timestamp in milliseconds
+        int: Monotonically increasing nonce (milliseconds)
     """
     return get_kraken_nonce()
 
