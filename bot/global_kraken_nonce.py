@@ -143,10 +143,14 @@ def jump_global_kraken_nonce_forward(milliseconds: int) -> int:
         current_time_ms = int(time.time() * 1000)
         
         # Calculate two candidate nonces and use the larger one
+        # This ensures the jump is effective even if:
+        # - System time has advanced significantly (use time-based)
+        # - Multiple rapid calls happen (use increment-based)
+        # - Clock is adjusted backward (increment-based prevents going backward)
         time_based = current_time_ms + milliseconds
         increment_based = _GLOBAL_LAST_NONCE + milliseconds
         
-        # Update to the larger of the two
+        # Update to the larger of the two to maintain monotonic guarantee
         _GLOBAL_LAST_NONCE = max(time_based, increment_based)
         
         return _GLOBAL_LAST_NONCE
