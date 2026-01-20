@@ -99,7 +99,15 @@ def check_environment_variables():
     broker = 'kraken'
     
     for user_id in users:
-        firstname = user_id.split('_')[0].upper()
+        # Validate and extract firstname (same logic as has_api_keys)
+        parts = user_id.split('_')
+        if not parts or not parts[0]:
+            print(f"User: {user_id}")
+            print(f"  ❌ Invalid user_id format")
+            print()
+            continue
+        
+        firstname = parts[0].upper()
         api_key_var = f"{broker.upper()}_USER_{firstname}_API_KEY"
         api_secret_var = f"{broker.upper()}_USER_{firstname}_API_SECRET"
         
@@ -140,6 +148,9 @@ if __name__ == "__main__":
     print("=" * 70)
     print()
     
+    # Determine exit code
+    exit_code = 0
+    
     if not hard_passed:
         print("⚠️  TO FIX HARD FAIL MODE:")
         print("1. Ensure config files exist:")
@@ -154,7 +165,9 @@ if __name__ == "__main__":
         print()
         print("3. Restart the bot")
         print()
-        sys.exit(1)
+        exit_code = 1
     else:
         print("✅ All tests passed! Users are ready for trading.")
-        sys.exit(0)
+        exit_code = 0
+    
+    sys.exit(exit_code)

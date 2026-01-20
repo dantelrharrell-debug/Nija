@@ -106,7 +106,13 @@ class IndividualUserConfig:
             bool: True if both API key and secret are set
         """
         # Extract firstname from user_id (e.g., 'daivon_frazier' -> 'DAIVON')
-        firstname = self.user_id.split('_')[0].upper()
+        # Validate format: expects 'firstname_lastname' or just 'firstname'
+        parts = self.user_id.split('_')
+        if not parts or not parts[0]:
+            logger.warning(f"Invalid user_id format: {self.user_id} (expected 'firstname' or 'firstname_lastname')")
+            return False
+        
+        firstname = parts[0].upper()
         broker_upper = self.broker.upper()
         
         # Build environment variable names
