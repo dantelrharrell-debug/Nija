@@ -23,12 +23,18 @@ Implementation:
     - Persist nonce to disk (not needed with timestamps)
 
 Usage:
-    from bot.global_kraken_nonce import get_global_kraken_nonce
+    from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock
     
     nonce = get_global_kraken_nonce()  # Always returns current timestamp in ms
+    
+    # For API calls requiring serialization:
+    lock = get_kraken_api_lock()
+    with lock:
+        # Make Kraken API call here
 """
 
 import time
+import threading
 
 def get_kraken_nonce():
     """
@@ -57,7 +63,33 @@ def get_global_kraken_nonce() -> int:
     return get_kraken_nonce()
 
 
+# FIX 3: Global API lock for Kraken to prevent parallel writes
+# Kraken requires ONE monotonic nonce per API key with NO parallel writes
+_KRAKEN_API_LOCK = threading.Lock()
+
+def get_kraken_api_lock() -> threading.Lock:
+    """
+    Get the global Kraken API lock.
+    
+    FIX 3: Kraken Nonce Authority
+    - Kraken requires ONE monotonic nonce per API key
+    - NO parallel writes allowed
+    - All Kraken API calls must serialize through this lock
+    
+    Usage:
+        lock = get_kraken_api_lock()
+        with lock:
+            # Make Kraken API call here
+            # This ensures no parallel API calls that could cause nonce conflicts
+    
+    Returns:
+        threading.Lock: Global lock for Kraken API calls
+    """
+    return _KRAKEN_API_LOCK
+
+
 __all__ = [
     'get_kraken_nonce',
     'get_global_kraken_nonce',
+    'get_kraken_api_lock',
 ]

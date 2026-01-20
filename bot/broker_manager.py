@@ -678,6 +678,10 @@ class CoinbaseBroker(BaseBroker):
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
         
+        # FIX 2: EXIT-ONLY mode when balance is below minimum (Jan 20, 2026)
+        # Allows emergency sells even when account is too small for new entries
+        self.exit_only_mode = False
+        
         # CRITICAL FIX (Jan 11, 2026): Install logging filter to suppress invalid ProductID errors
         # The Coinbase SDK logs "ProductID is invalid" as ERROR before raising exceptions
         # These errors are expected (delisted coins) and already handled by our exception logic
@@ -911,27 +915,31 @@ class CoinbaseBroker(BaseBroker):
                         
                         total_funds = balance_data.get('total_funds', 0.0)
                         
+                        # FIX 2: FORCED EXIT OVERRIDES - Allow connection even when balance < minimum
+                        # This enables emergency sells to close losing positions
+                        # Only NEW ENTRIES are blocked, not EXITS
                         if total_funds < COINBASE_MINIMUM_BALANCE:
-                            logging.error("=" * 70)
-                            logging.error("🛑 COINBASE DISABLED: Account balance below minimum")
-                            logging.error("=" * 70)
-                            logging.error(f"   Your balance: ${total_funds:.2f}")
-                            logging.error(f"   Minimum required: ${COINBASE_MINIMUM_BALANCE:.2f}")
-                            logging.error(f"   ")
-                            logging.error(f"   📋 Broker Roles:")
-                            logging.error(f"      • Kraken: PRIMARY engine for small accounts ($25-$75)")
-                            logging.error(f"      • Coinbase: SECONDARY/selective (not for small accounts)")
-                            logging.error(f"   ")
-                            logging.error(f"   💡 Solution: Use Kraken for your account size")
-                            logging.error(f"      Kraken has 4x lower fees and is optimized for small accounts")
-                            logging.error(f"   ")
-                            logging.error(f"   Coinbase has been automatically disabled.")
-                            logging.error(f"   Trading will route to Kraken instead.")
-                            logging.error("=" * 70)
+                            logging.warning("=" * 70)
+                            logging.warning("⚠️ COINBASE: Account balance below minimum for NEW ENTRIES")
+                            logging.warning("=" * 70)
+                            logging.warning(f"   Your balance: ${total_funds:.2f}")
+                            logging.warning(f"   Minimum for entries: ${COINBASE_MINIMUM_BALANCE:.2f}")
+                            logging.warning(f"   ")
+                            logging.warning(f"   📋 Trading Mode: EXIT-ONLY")
+                            logging.warning(f"      ✅ Can SELL (close positions)")
+                            logging.warning(f"      ❌ Cannot BUY (new entries blocked)")
+                            logging.warning(f"   ")
+                            logging.warning(f"   💡 Solution: Use Kraken for new entries")
+                            logging.warning(f"      Kraken has 4x lower fees and is optimized for small accounts")
+                            logging.warning(f"   ")
+                            logging.warning(f"   ✅ Coinbase connection maintained for emergency exits")
+                            logging.warning("=" * 70)
                             
-                            # Disconnect and mark as not connected
-                            self.connected = False
-                            return False
+                            # Mark as EXIT-ONLY mode (not fully disabled)
+                            self.exit_only_mode = True
+                            # Keep connected = True so sells can execute
+                            self.connected = True
+                            return True
                     except Exception as balance_check_err:
                         # Balance check failed - this is CRITICAL, do NOT allow connection
                         # We cannot safely determine if account is too small
@@ -2259,6 +2267,19 @@ class CoinbaseBroker(BaseBroker):
             except Exception:
                 # If guard check fails, proceed but log later if needed
                 pass
+
+            # FIX 2: Reject BUY orders when in EXIT-ONLY mode
+            if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
+                logger.error(f"❌ BUY order rejected: Coinbase is in EXIT-ONLY mode (balance < ${COINBASE_MINIMUM_BALANCE:.2f})")
+                logger.error(f"   Only SELL orders are allowed to close existing positions")
+                logger.error(f"   To enable new entries, fund your account to at least ${COINBASE_MINIMUM_BALANCE:.2f}")
+                return {
+                    "status": "unfilled",
+                    "error": "EXIT_ONLY_MODE",
+                    "message": f"BUY orders blocked: Account balance below ${COINBASE_MINIMUM_BALANCE:.2f} minimum",
+                    "partial_fill": False,
+                    "filled_pct": 0.0
+                }
 
             if quantity <= 0:
                 raise ValueError(f"Refusing to place {side} order with non-positive size: {quantity}")
@@ -4422,6 +4443,10 @@ class KrakenBroker(BaseBroker):
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
         
+        # FIX 2: EXIT-ONLY mode when balance is below minimum (Jan 20, 2026)
+        # Allows emergency sells even when account is too small for new entries
+        self.exit_only_mode = False
+        
         # FIX #2: Balance cache and health status for Kraken
         # Cache balance after successful fetch and track health
         self.balance_cache = {}  # Structure: {"kraken": balance_value}
@@ -5193,26 +5218,32 @@ class KrakenBroker(BaseBroker):
                         
                         # Check minimum balance requirement for Kraken
                         # Kraken is PRIMARY engine for small accounts ($25+)
+                        # FIX 2: FORCED EXIT OVERRIDES - Allow connection even when balance < minimum
+                        # This enables emergency sells to close losing positions
                         if total < KRAKEN_MINIMUM_BALANCE:
-                            logger.error("=" * 70)
-                            logger.error("🛑 KRAKEN: Account balance below minimum")
-                            logger.error("=" * 70)
-                            logger.error(f"   Your balance: ${total:.2f}")
-                            logger.error(f"   Minimum required: ${KRAKEN_MINIMUM_BALANCE:.2f}")
-                            logger.error(f"   ")
-                            logger.error(f"   📋 Broker Roles:")
-                            logger.error(f"      • Kraken: PRIMARY engine for small accounts ($25-$75)")
-                            logger.error(f"      • Coinbase: SECONDARY/selective (not for small accounts)")
-                            logger.error(f"   ")
-                            logger.error(f"   💡 Solution: Fund your Kraken account to at least ${KRAKEN_MINIMUM_BALANCE:.2f}")
-                            logger.error(f"      Kraken is the best choice for small accounts (4x lower fees)")
-                            logger.error(f"   ")
-                            logger.error(f"   Kraken has been automatically disabled.")
-                            logger.error("=" * 70)
+                            logger.warning("=" * 70)
+                            logger.warning("⚠️ KRAKEN: Account balance below minimum for NEW ENTRIES")
+                            logger.warning("=" * 70)
+                            logger.warning(f"   Your balance: ${total:.2f}")
+                            logger.warning(f"   Minimum for entries: ${KRAKEN_MINIMUM_BALANCE:.2f}")
+                            logger.warning(f"   ")
+                            logger.warning(f"   📋 Trading Mode: EXIT-ONLY")
+                            logger.warning(f"      ✅ Can SELL (close positions)")
+                            logger.warning(f"      ❌ Cannot BUY (new entries blocked)")
+                            logger.warning(f"   ")
+                            logger.warning(f"   💡 Solution: Fund account to at least ${KRAKEN_MINIMUM_BALANCE:.2f}")
+                            logger.warning(f"      Kraken is the best choice for small accounts (4x lower fees)")
+                            logger.warning(f"   ")
+                            logger.warning(f"   ✅ Kraken connection maintained for emergency exits")
+                            logger.warning("=" * 70)
                             
-                            # Disconnect and mark as not connected
-                            self.connected = False
-                            return False
+                            # Mark as EXIT-ONLY mode (not fully disabled)
+                            self.exit_only_mode = True
+                            # Keep connected = True so sells can execute
+                            self.connected = True
+                        else:
+                            # Normal mode - full trading allowed
+                            self.exit_only_mode = False
                         
                         logger.info("=" * 70)
                         
@@ -5809,6 +5840,19 @@ class KrakenBroker(BaseBroker):
         try:
             if not self.api:
                 return {"status": "error", "error": "Not connected to Kraken"}
+            
+            # FIX 2: Reject BUY orders when in EXIT-ONLY mode
+            if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
+                logger.error(f"❌ BUY order rejected: Kraken is in EXIT-ONLY mode (balance < ${KRAKEN_MINIMUM_BALANCE:.2f})")
+                logger.error(f"   Only SELL orders are allowed to close existing positions")
+                logger.error(f"   To enable new entries, fund your account to at least ${KRAKEN_MINIMUM_BALANCE:.2f}")
+                return {
+                    "status": "unfilled",
+                    "error": "EXIT_ONLY_MODE",
+                    "message": f"BUY orders blocked: Account balance below ${KRAKEN_MINIMUM_BALANCE:.2f} minimum",
+                    "partial_fill": False,
+                    "filled_pct": 0.0
+                }
             
             # CRITICAL FIX (Jan 19, 2026): Normalize symbol for Kraken and check support
             # Railway Golden Rule #4: Broker-specific trading pairs
