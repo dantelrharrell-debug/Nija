@@ -63,6 +63,18 @@ except ImportError:
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
 
+# Import Balance Models (FIX 1: Three-part balance model)
+try:
+    from bot.balance_models import BalanceSnapshot, UserBrokerState, create_balance_snapshot_from_broker_response
+except ImportError:
+    try:
+        from balance_models import BalanceSnapshot, UserBrokerState, create_balance_snapshot_from_broker_response
+    except ImportError:
+        # Fallback: Balance models not available
+        BalanceSnapshot = None
+        UserBrokerState = None
+        create_balance_snapshot_from_broker_response = None
+
 # Import KrakenNonce for per-user nonce generation (DEPRECATED - kept for backward compatibility)
 # NOTE: This is being phased out in favor of GlobalKrakenNonceManager
 try:
