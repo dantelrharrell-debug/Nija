@@ -4378,6 +4378,11 @@ class KrakenBroker(BaseBroker):
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
         
+        # FIX #2: Balance cache and health status for Kraken
+        # Cache balance after successful fetch and track health
+        self.balance_cache = {}  # Structure: {"kraken": balance_value}
+        self.kraken_health = "UNKNOWN"  # Status: "OK", "ERROR", or "UNKNOWN"
+        
         # CRITICAL FIX (Jan 17, 2026): Monotonic nonce with API call serialization
         # 
         # Nonce tracking for guaranteeing strict monotonic increase
@@ -5378,18 +5383,23 @@ class KrakenBroker(BaseBroker):
         """
         try:
             if not self.api:
-                # Not connected - return last known balance if available
+                # FIX #2: Not connected - log warning and use last known balance
+                self._balance_fetch_errors += 1
+                if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
+                    self._is_available = False
+                    self.kraken_health = "ERROR"
+                    logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                
                 if self._last_known_balance is not None:
                     logger.warning(f"⚠️ Kraken API not connected ({self.account_identifier}), using last known balance: ${self._last_known_balance:.2f}")
-                    self._balance_fetch_errors += 1
-                    if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
-                        self._is_available = False
-                        logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                    # Use cached balance if available
+                    if "kraken" in self.balance_cache:
+                        return self.balance_cache["kraken"]
                     return self._last_known_balance
                 else:
                     logger.error(f"❌ Kraken API not connected ({self.account_identifier}) and no last known balance")
-                    self._balance_fetch_errors += 1
                     self._is_available = False
+                    self.kraken_health = "ERROR"
                     return 0.0
             
             # Get account balance using serialized API call
@@ -5397,16 +5407,22 @@ class KrakenBroker(BaseBroker):
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
-                logger.error(f"❌ Kraken API error fetching balance ({self.account_identifier}): {error_msgs}")
                 
-                # Return last known balance instead of 0
+                # FIX #2: On error, log warning and use last known balance
+                logger.warning(f"⚠️ Kraken API error fetching balance ({self.account_identifier}): {error_msgs}")
+                
+                # DO NOT zero balance on one failure
                 self._balance_fetch_errors += 1
                 if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
+                    self.kraken_health = "ERROR"
                     logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
                 
                 if self._last_known_balance is not None:
                     logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                    # Use cached balance if available
+                    if "kraken" in self.balance_cache:
+                        return self.balance_cache["kraken"]
                     return self._last_known_balance
                 else:
                     logger.error(f"   ❌ No last known balance available, returning 0")
@@ -5457,30 +5473,44 @@ class KrakenBroker(BaseBroker):
                 self._balance_fetch_errors = 0
                 self._is_available = True
                 
+                # FIX #2: Force Kraken balance cache after success
+                self.balance_cache["kraken"] = total_funds
+                self.kraken_health = "OK"
+                
                 return total_funds
             
             # Unexpected response - treat as error
-            logger.error(f"❌ Unexpected Kraken API response format ({self.account_identifier})")
+            # FIX #2: Log warning and use last known balance
+            logger.warning(f"⚠️ Unexpected Kraken API response format ({self.account_identifier})")
             self._balance_fetch_errors += 1
             if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
+                self.kraken_health = "ERROR"
             
             if self._last_known_balance is not None:
                 logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                # Use cached balance if available
+                if "kraken" in self.balance_cache:
+                    return self.balance_cache["kraken"]
                 return self._last_known_balance
             
             return 0.0
             
         except Exception as e:
-            logger.error(f"❌ Exception fetching Kraken balance ({self.account_identifier}): {e}")
+            # FIX #2: Log warning and use last known balance on exception
+            logger.warning(f"⚠️ Exception fetching Kraken balance ({self.account_identifier}): {e}")
             self._balance_fetch_errors += 1
             if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
+                self.kraken_health = "ERROR"
                 logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
             
             # Return last known balance instead of 0
             if self._last_known_balance is not None:
                 logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                # Use cached balance if available
+                if "kraken" in self.balance_cache:
+                    return self.balance_cache["kraken"]
                 return self._last_known_balance
             
             return 0.0
