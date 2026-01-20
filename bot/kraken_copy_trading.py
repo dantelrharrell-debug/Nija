@@ -52,12 +52,30 @@ except ImportError:
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
 
+# Import Kraken Symbol Mapper for symbol validation
+try:
+    from bot.kraken_symbol_mapper import get_kraken_symbol_mapper, validate_kraken_symbol, validate_for_copy_trading
+except ImportError:
+    try:
+        from kraken_symbol_mapper import get_kraken_symbol_mapper, validate_kraken_symbol, validate_for_copy_trading
+    except ImportError:
+        get_kraken_symbol_mapper = None
+        validate_kraken_symbol = None
+        validate_for_copy_trading = None
+
 # Try to import Kraken API libraries
 # These may not be available in all environments (e.g., test environments)
 try:
     import krakenex
     from pykrakenapi import KrakenAPI
     KRAKEN_API_AVAILABLE = True
+    
+    # Suppress verbose logging from Kraken SDK libraries
+    # This prevents "attempt: XXX | ['EQuery:...']" messages from flooding the logs
+    kraken_logger = logging.getLogger('krakenex')
+    kraken_logger.setLevel(logging.WARNING)
+    pykraken_logger = logging.getLogger('pykrakenapi')
+    pykraken_logger.setLevel(logging.WARNING)
 except ImportError:
     KRAKEN_API_AVAILABLE = False
 
@@ -112,6 +130,10 @@ class KrakenClient:
             self.api = krakenex.API()
             self.api.key = self.api_key
             self.api.secret = self.api_secret
+            
+            # Suppress verbose logging from Kraken SDK library
+            kraken_logger = logging.getLogger('krakenex')
+            kraken_logger.setLevel(logging.WARNING)
             
             # CRITICAL FIX: Override the nonce method to use global nonce manager
             # This ensures ALL Kraken API calls use the same nonce source
@@ -612,6 +634,15 @@ def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
     
     if not KRAKEN_USERS:
         logger.info("ℹ️  No Kraken users configured for copy trading")
+        return
+    
+    # SYMBOL VALIDATION: Check if symbol is available on Kraken
+    # This prevents "Unknown asset pair" errors during copy trading
+    symbol = master_trade.get('symbol', '')
+    if validate_kraken_symbol and not validate_kraken_symbol(symbol):
+        logger.warning(f"⏭️ SKIPPING COPY TRADE: Symbol {symbol} not available on Kraken")
+        logger.warning(f"   💡 TIP: This pair may have been delisted or is not tradable")
+        logger.info(f"   ℹ️  Master trade completed but copy trading blocked for unavailable symbol")
         return
     
     logger.info("")

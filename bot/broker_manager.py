@@ -87,6 +87,18 @@ except ImportError:
         # Fallback: KrakenNonce not available
         KrakenNonce = None
 
+# Import Kraken Symbol Mapper for symbol validation and conversion
+try:
+    from bot.kraken_symbol_mapper import get_kraken_symbol_mapper, validate_kraken_symbol, convert_to_kraken
+except ImportError:
+    try:
+        from kraken_symbol_mapper import get_kraken_symbol_mapper, validate_kraken_symbol, convert_to_kraken
+    except ImportError:
+        # Fallback: Symbol mapper not available
+        get_kraken_symbol_mapper = None
+        validate_kraken_symbol = None
+        convert_to_kraken = None
+
 # Configure logger for broker operations
 logger = logging.getLogger('nija.broker')
 
@@ -4718,6 +4730,13 @@ class KrakenBroker(BaseBroker):
             from pykrakenapi import KrakenAPI
             import time
             
+            # Suppress verbose logging from Kraken SDK libraries
+            # This prevents "attempt: XXX | ['EQuery:...']" messages from flooding the logs
+            kraken_logger = logging.getLogger('krakenex')
+            kraken_logger.setLevel(logging.WARNING)
+            pykraken_logger = logging.getLogger('pykrakenapi')
+            pykraken_logger.setLevel(logging.WARNING)
+            
             # Get credentials based on account type
             # Enhanced credential detection to identify "set but invalid" variables
             if self.account_type == AccountType.MASTER:
@@ -5892,14 +5911,36 @@ class KrakenBroker(BaseBroker):
             # Normalize to Kraken format (ETH/USD, BTC/USDT, etc.)
             normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
             
+            # SYMBOL VALIDATION FIX (Jan 20, 2026): Use symbol mapper to validate and convert
+            # This prevents "EQuery:Unknown asset pair" errors by validating symbols before trading
+            kraken_symbol = None
+            if validate_kraken_symbol and convert_to_kraken:
+                # Validate symbol is available on Kraken
+                if not validate_kraken_symbol(normalized_symbol):
+                    error_msg = f"Symbol {normalized_symbol} not available on Kraken"
+                    logger.warning(f"⏭️ SKIPPING TRADE: {error_msg}")
+                    logger.warning(f"   💡 TIP: This pair may have been delisted or is not tradable")
+                    return {"status": "error", "error": error_msg}
+                
+                # Convert to Kraken format using symbol mapper
+                kraken_symbol = convert_to_kraken(normalized_symbol)
+                if not kraken_symbol:
+                    error_msg = f"Cannot convert {normalized_symbol} to Kraken format"
+                    logger.error(f"❌ CONVERSION ERROR: {error_msg}")
+                    return {"status": "error", "error": error_msg}
+                
+                logger.debug(f"✅ Symbol validated: {normalized_symbol} -> {kraken_symbol}")
+            
+            # Fallback: Manual conversion if symbol mapper not available
             # Convert symbol format to Kraken internal format
             # Kraken uses XBTUSD, ETHUSD, etc. (no slash)
             # ETH/USD -> ETHUSD, BTC/USD -> XBTUSD
-            kraken_symbol = normalized_symbol.replace('/', '').upper()
-            
-            # Kraken uses X prefix for BTC
-            if kraken_symbol.startswith('BTC'):
-                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            if not kraken_symbol:
+                kraken_symbol = normalized_symbol.replace('/', '').upper()
+                
+                # Kraken uses X prefix for BTC
+                if kraken_symbol.startswith('BTC'):
+                    kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
             
             # Determine order type
             order_type = side.lower()  # 'buy' or 'sell'
@@ -6191,6 +6232,16 @@ class KrakenBroker(BaseBroker):
             if not self.kraken_api:
                 logging.warning("⚠️  Kraken not connected, cannot fetch products")
                 return []
+            
+            # Initialize symbol mapper with API data for dynamic symbol detection
+            # This prevents "Unknown asset pair" errors by building a complete symbol map
+            if get_kraken_symbol_mapper:
+                try:
+                    mapper = get_kraken_symbol_mapper()
+                    mapper.initialize_from_api(self.kraken_api)
+                    logging.debug("✅ Symbol mapper initialized with Kraken API data")
+                except Exception as mapper_err:
+                    logging.warning(f"⚠️  Could not initialize symbol mapper: {mapper_err}")
             
             # Get all tradable asset pairs (returns pandas DataFrame)
             asset_pairs = self.kraken_api.get_tradable_asset_pairs()
