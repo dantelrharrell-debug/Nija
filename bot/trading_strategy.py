@@ -2272,14 +2272,14 @@ class TradingStrategy:
                         all_products = active_broker.get_all_products()
                         if all_products:
                             # FIX #3 (Jan 20, 2026): Filter Kraken markets BEFORE caching
-                            # At startup: kraken_markets = [m for m in all_markets if kraken.supports_symbol(m)]
+                            # At startup, filter to only Kraken-supported symbols (*/USD and */USDT pairs)
                             # Then scan ONLY these filtered markets
                             broker_name = self._get_broker_name(active_broker)
                             if broker_name == 'kraken':
                                 original_count = len(all_products)
                                 all_products = [
-                                    sym for sym in all_products 
-                                    if sym.endswith('/USD') or sym.endswith('/USDT') or 
+                                    sym for sym in all_products
+                                    if sym.endswith('/USD') or sym.endswith('/USDT') or
                                        sym.endswith('-USD') or sym.endswith('-USDT')
                                 ]
                                 filtered_count = original_count - len(all_products)

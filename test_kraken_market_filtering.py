@@ -45,7 +45,7 @@ def test_market_filtering():
     
     # Check for Kraken market filter at startup
     assert "Filter Kraken markets BEFORE caching" in content, "Missing startup filter comment"
-    assert "kraken_markets = [m for m in all_markets" in content, "Missing filter implementation"
+    assert "all_products = [" in content, "Missing filter implementation"
     assert "if broker_name == 'kraken':" in content, "Missing Kraken broker check"
     assert "endswith('/USD') or sym.endswith('/USDT')" in content, "Missing USD/USDT filter"
     assert "Kraken markets cached:" in content, "Missing filter confirmation log"
