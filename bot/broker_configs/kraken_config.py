@@ -91,6 +91,7 @@ class KrakenConfig:
     # Position sizing (can use smaller positions profitably)
     min_position_usd: float = 5.0  # $5 minimum (fees only ~$0.02)
     recommended_min_usd: float = 10.0  # $10+ recommended
+    min_balance_to_trade: float = 25.0  # $25 minimum account balance (Kraken = primary for small accounts)
     
     # Order type preferences
     prefer_limit_orders: bool = True  # Use limit orders for best fees
@@ -256,6 +257,8 @@ class KrakenConfig:
         return f"""
 Kraken Trading Configuration:
   Broker: {self.broker_display_name}
+  Role: PRIMARY engine for small accounts
+  Min Balance: ${self.min_balance_to_trade} (Kraken-first for $25-$75 range)
   Fees: {self.round_trip_cost*100:.2f}% round-trip ({fee_advantage:.1f}x cheaper than Coinbase)
   Strategy: BIDIRECTIONAL (profit both ways)
   Profit Targets: {', '.join([f'{t[0]*100:.1f}%' for t in self.profit_targets])}
