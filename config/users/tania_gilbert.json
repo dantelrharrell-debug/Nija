@@ -1,0 +1,8 @@
+{
+  "name": "Tania Gilbert",
+  "broker": "kraken",
+  "role": "user",
+  "enabled": true,
+  "copy_from_master": true,
+  "risk_multiplier": 1.0
+}
