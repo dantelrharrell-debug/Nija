@@ -131,6 +131,10 @@ archive/
 .render-*
 .redeploy*
 
+# NIXPACKS configuration (removed - use Dockerfile exclusively)
+# Railway should use Dockerfile via railway.json, not NIXPACKS auto-detection
+nixpacks.toml
+
 # Temporary documentation (archive these instead)
 archive/old_documentation/
 archive/old_scripts/
