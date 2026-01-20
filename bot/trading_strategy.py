@@ -54,8 +54,8 @@ except ImportError:
             USER = "user"
 
 # FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
-# REMOVED XRP-USD from blacklist to allow trading on all profitable pairs
-DISABLED_PAIRS = []  # Allow all pairs to trade
+# XRP-USD is PERMANENTLY DISABLED due to negative profitability
+DISABLED_PAIRS = ["XRP-USD", "XRPUSD", "XRP-USDT"]  # Block all XRP pairs - net negative performance
 
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)

@@ -521,6 +521,77 @@ def execute_master_trade(pair: str, side: str, usd_size: float) -> bool:
         return False
 
 
+def on_master_trade(trade: Dict[str, Any]):
+    """
+    Primary hook for copy trading - called when master places a trade.
+    
+    This is the main entry point for copy trading. When master executes a trade,
+    this function is called to replicate it to all user accounts.
+    
+    Flow:
+        1. MASTER places trade
+        2. Trade event captured
+        3. Position size scaled per user balance (user.balance / master.balance)
+        4. Same symbol, same side, same exit logic
+        5. Users auto-execute
+    
+    Args:
+        trade: Dict containing:
+            - symbol: Trading pair (e.g., 'BTC-USD')
+            - side: 'buy' or 'sell'
+            - size: Trade size (in USD or base currency)
+            - master_balance: Master account balance for scaling
+            - price: Execution price (optional)
+            - order_id: Master order ID (optional)
+    
+    Example:
+        >>> on_master_trade({
+        ...     'symbol': 'BTC-USD',
+        ...     'side': 'buy',
+        ...     'size': 100.0,
+        ...     'master_balance': 10000.0
+        ... })
+    """
+    # Convert to kraken_copy_trading format and execute
+    logger.info("=" * 70)
+    logger.info("🎯 ON_MASTER_TRADE HOOK CALLED")
+    logger.info("=" * 70)
+    logger.info(f"   Symbol: {trade.get('symbol', 'unknown')}")
+    logger.info(f"   Side: {trade.get('side', 'unknown').upper()}")
+    logger.info(f"   Size: ${trade.get('size', 0):.2f}")
+    logger.info("=" * 70)
+    
+    # Convert symbol to Kraken format if needed
+    symbol = trade.get('symbol', '')
+    if symbol and '-' in symbol:
+        kraken_pair = _convert_symbol_to_kraken_format(symbol)
+    else:
+        kraken_pair = symbol
+    
+    # Get price if not provided
+    price = trade.get('price', 0)
+    if price <= 0:
+        price = get_price(kraken_pair)
+    
+    # Calculate volume
+    size = trade.get('size', 0)
+    volume = size / price if price > 0 else 0
+    
+    # Build master_trade object for copy_trade_to_kraken_users
+    master_trade = {
+        "pair": kraken_pair,
+        "side": trade.get('side', 'buy'),
+        "volume": volume,
+        "usd_size": size,
+        "master_balance": trade.get('master_balance', 0),
+        "price": price,
+        "order_id": trade.get('order_id', 'unknown')
+    }
+    
+    # Execute copy trading
+    copy_trade_to_kraken_users(master_trade)
+
+
 def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
     """
     Copy a master trade to all Kraken user accounts.
@@ -648,22 +719,44 @@ def initialize_copy_trading_system() -> bool:
     logger.info("=" * 70)
     logger.info("🚀 INITIALIZING KRAKEN COPY TRADING SYSTEM")
     logger.info("=" * 70)
+    logger.info("")
+    logger.info("📋 COPY TRADING ARCHITECTURE:")
+    logger.info("   • MASTER places trades → signals emitted")
+    logger.info("   • Users receive signals → positions scaled by balance ratio")
+    logger.info("   • Same symbol, same side, same exit logic")
+    logger.info("   • Independent user trading DISABLED for Kraken")
+    logger.info("")
     
     # Initialize master
     master_ok = initialize_kraken_master()
     if not master_ok:
         logger.error("❌ Failed to initialize Kraken MASTER - copy trading disabled")
+        logger.error("   💡 Set KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET to enable")
         return False
     
     # Initialize users
     user_count = initialize_kraken_users()
     if user_count == 0:
         logger.warning("⚠️  No Kraken users initialized - trades will execute on MASTER only")
+        logger.warning("   💡 Configure user credentials to enable copy trading")
+        logger.warning("      Example: KRAKEN_USER_JOHN_API_KEY=xxx")
     
     logger.info("=" * 70)
     logger.info("✅ KRAKEN COPY TRADING SYSTEM READY")
-    logger.info(f"   MASTER: Initialized")
-    logger.info(f"   USERS: {user_count} ready for copy trading")
+    logger.info("=" * 70)
+    logger.info(f"   🔷 MASTER: Initialized and connected")
+    logger.info(f"   👥 USERS: {user_count} ready for copy trading")
+    logger.info("")
+    logger.info("📊 TRADING MODE:")
+    if user_count > 0:
+        logger.info("   ✅ COPY TRADING ACTIVE")
+        logger.info("   • Master trades will automatically copy to all users")
+        logger.info("   • Position sizes scaled by balance ratio")
+        logger.info("   • Risk limited to 10% per trade per user")
+    else:
+        logger.info("   ⚪ MASTER-ONLY MODE")
+        logger.info("   • Only master account will trade")
+        logger.info("   • Configure user accounts to enable copy trading")
     logger.info("=" * 70)
     logger.info("")
     
@@ -775,6 +868,7 @@ __all__ = [
     'wrap_kraken_broker_for_copy_trading',
     'execute_master_trade',
     'copy_trade_to_kraken_users',
+    'on_master_trade',  # Primary copy trading hook
     'KRAKEN_MASTER',
     'KRAKEN_USERS',
     'MAX_USER_RISK',

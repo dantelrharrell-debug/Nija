@@ -5993,6 +5993,31 @@ class KrakenBroker(BaseBroker):
                             master_balance=master_balance
                         )
                         
+                        # ENHANCED COPY TRADING: Also trigger direct on_master_trade hook
+                        # This provides a simplified interface for copy trading implementations
+                        try:
+                            from kraken_copy_trading import on_master_trade
+                            
+                            # Build trade object for hook
+                            trade_obj = {
+                                'symbol': symbol,
+                                'side': side,
+                                'size': quantity,
+                                'master_balance': master_balance,
+                                'price': exec_price if exec_price else 0.0,
+                                'order_id': order_id,
+                                'broker': broker_name
+                            }
+                            
+                            logger.info("🎯 Triggering on_master_trade hook for direct copy execution")
+                            on_master_trade(trade_obj)
+                            logger.info("✅ on_master_trade hook completed")
+                        except ImportError:
+                            logger.debug("on_master_trade hook not available (expected for non-copy-trading setups)")
+                        except Exception as hook_err:
+                            logger.warning(f"⚠️ on_master_trade hook failed: {hook_err}")
+                            logger.warning(f"   Copy trading may not execute properly")
+                        
                         # Confirm signal emission status
                         if signal_emitted:
                             logger.info(f"✅ Trade signal emitted successfully for {symbol} {side}")
