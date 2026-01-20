@@ -97,12 +97,19 @@ _root_logger = logging.getLogger('nija')
 # Balance threshold constants
 # Note: Large gap between PROTECTION and TRADING thresholds is intentional:
 #   - PROTECTION ($0.50): Absolute minimum to allow bot to start (hard requirement)
-#   - TRADING ($25.00): Recommended for optimal performance (warning only)
-#   This allows users to start with small balances while encouraging adequate funding
-MINIMUM_BALANCE_PROTECTION = 0.50  # Lowered from 1.00 to allow trading with very small balances (e.g., $0.76)
-MINIMUM_TRADING_BALANCE = 25.00  # Recommended minimum for active trading (warning only, not enforced)
+#   - TRADING ($25.00): Minimum for both Kraken and Coinbase (enforced per broker)
+#   This ensures both exchanges require $25 minimum while maintaining different roles
+MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
+STANDARD_MINIMUM_BALANCE = 25.00  # Standard minimum for active trading on both exchanges
+MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
+# Broker-specific minimum balance requirements
+# Both require the same amount ($25) but with different priority and strategy rules:
+# - Kraken: PRIMARY engine for small accounts ($25-$75 range)
+# - Coinbase: SECONDARY/selective (not for small accounts, uses Coinbase-specific strategy)
+KRAKEN_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Kraken is PRIMARY for small accounts
+COINBASE_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Coinbase is SECONDARY with adjusted rules
 # 🚑 FIX 2: Minimum balance for Coinbase to prevent fees eating small accounts
 # Coinbase has higher fees than Kraken, so small accounts should use Kraken instead
 COINBASE_MINIMUM_BALANCE = 25.00  # Disable Coinbase for accounts below this threshold
@@ -904,13 +911,17 @@ class CoinbaseBroker(BaseBroker):
                         
                         if total_funds < COINBASE_MINIMUM_BALANCE:
                             logging.error("=" * 70)
-                            logging.error("🛑 COINBASE DISABLED: Account too small")
+                            logging.error("🛑 COINBASE DISABLED: Account balance below minimum")
                             logging.error("=" * 70)
                             logging.error(f"   Your balance: ${total_funds:.2f}")
                             logging.error(f"   Minimum required: ${COINBASE_MINIMUM_BALANCE:.2f}")
                             logging.error(f"   ")
-                            logging.error(f"   ⚠️  Coinbase fees will eat small accounts alive!")
-                            logging.error(f"   💡 Solution: Use Kraken for accounts under ${COINBASE_MINIMUM_BALANCE:.2f}")
+                            logging.error(f"   📋 Broker Roles:")
+                            logging.error(f"      • Kraken: PRIMARY engine for small accounts ($25-$75)")
+                            logging.error(f"      • Coinbase: SECONDARY/selective (not for small accounts)")
+                            logging.error(f"   ")
+                            logging.error(f"   💡 Solution: Use Kraken for your account size")
+                            logging.error(f"      Kraken has 4x lower fees and is optimized for small accounts")
                             logging.error(f"   ")
                             logging.error(f"   Coinbase has been automatically disabled.")
                             logging.error(f"   Trading will route to Kraken instead.")
@@ -5142,6 +5153,30 @@ class KrakenBroker(BaseBroker):
                         logger.info(f"   USD Balance: ${usd_balance:.2f}")
                         logger.info(f"   USDT Balance: ${usdt_balance:.2f}")
                         logger.info(f"   Total: ${total:.2f}")
+                        
+                        # Check minimum balance requirement for Kraken
+                        # Kraken is PRIMARY engine for small accounts ($25+)
+                        if total < KRAKEN_MINIMUM_BALANCE:
+                            logger.error("=" * 70)
+                            logger.error("🛑 KRAKEN: Account balance below minimum")
+                            logger.error("=" * 70)
+                            logger.error(f"   Your balance: ${total:.2f}")
+                            logger.error(f"   Minimum required: ${KRAKEN_MINIMUM_BALANCE:.2f}")
+                            logger.error(f"   ")
+                            logger.error(f"   📋 Broker Roles:")
+                            logger.error(f"      • Kraken: PRIMARY engine for small accounts ($25-$75)")
+                            logger.error(f"      • Coinbase: SECONDARY/selective (not for small accounts)")
+                            logger.error(f"   ")
+                            logger.error(f"   💡 Solution: Fund your Kraken account to at least ${KRAKEN_MINIMUM_BALANCE:.2f}")
+                            logger.error(f"      Kraken is the best choice for small accounts (4x lower fees)")
+                            logger.error(f"   ")
+                            logger.error(f"   Kraken has been automatically disabled.")
+                            logger.error("=" * 70)
+                            
+                            # Disconnect and mark as not connected
+                            self.connected = False
+                            return False
+                        
                         logger.info("=" * 70)
                         
                         # CRITICAL FIX (Jan 18, 2026): Add post-connection delay
