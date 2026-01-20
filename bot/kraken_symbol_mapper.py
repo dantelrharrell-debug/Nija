@@ -22,7 +22,7 @@ from pathlib import Path
 logger = logging.getLogger('nija.kraken_symbol_mapper')
 
 # Path to the symbol mapping file
-CONFIG_DIR = Path(__file__).parent.parent.parent / "config" / "brokers"
+CONFIG_DIR = Path(__file__).parent.parent / "config" / "brokers"
 SYMBOL_MAP_FILE = CONFIG_DIR / "kraken_pairs.json"
 
 
@@ -163,17 +163,13 @@ class KrakenSymbolMapper:
         if standard_symbol in self._dynamic_map:
             return self._dynamic_map[standard_symbol]
         
-        # Fallback: Manual conversion for common patterns
-        # This handles cases where API isn't available
+        # Fallback: Simple conversion
+        # Remove dash and uppercase
         kraken_symbol = standard_symbol.replace('-', '').upper()
         
-        # Apply Kraken's special naming conventions
+        # BTC -> XBT conversion (Kraken's special naming)
         if kraken_symbol.startswith('BTC'):
             kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
-        
-        # Add X prefix for certain currencies (Kraken convention)
-        if kraken_symbol in ['XRPUSD', 'LTCUSD', 'XLMUSD', 'ETCUSD', 'REPUSD', 'MLNUSD']:
-            kraken_symbol = 'X' + kraken_symbol
         
         logger.debug(f"🔄 Fallback conversion: {standard_symbol} -> {kraken_symbol}")
         return kraken_symbol
