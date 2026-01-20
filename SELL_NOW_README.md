@@ -5,6 +5,20 @@
 
 ---
 
+## Step 0: Check Current Positions (Optional)
+
+First, see what you actually have:
+```bash
+python3 check_coinbase_positions.py
+```
+
+This will show:
+- Current positions in Coinbase
+- Their P&L status (winning/losing)
+- Recommended action
+
+---
+
 ## Quick Start (Recommended)
 
 ### Option 1: Sell ONLY Losing Positions (Recommended)
