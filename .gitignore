@@ -73,31 +73,177 @@ test_logs_*.txt
 *.rej
 *.swp
 
-# Temporary documentation
-ANSWER_*.md
-CHECK_*.md
+# Temporary documentation (COMPREHENSIVE - prevents accumulation)
+ANSWER*.md
+CHECK*.md
 FIX_*.md
-DEPLOY_*.md
-QUICK_*.md
-CRITICAL_*.md
-EMERGENCY_*.md
-COMMIT_*.md
+DEPLOY*.md
+QUICK*.md
+CRITICAL*.md
+EMERGENCY*.md
+COMMIT*.md
 *_STATUS*.md
 *_COMPLETE*.md
 *_FIX*.md
-SOLUTION_*.md
-IMPLEMENTATION_*.md
-INDEX_*.md
+*_SUMMARY*.md
+*_REPORT*.md
+SOLUTION*.md
+IMPLEMENTATION*.md
+INDEX*.md
 README_*.md
-TASK_*.md
+TASK*.md
+START_HERE*.md
+ISSUE*.md
+INVESTIGATION*.md
+MASTER*.md
+KRAKEN*.md
+!KRAKEN_SYMBOL_MAPPER_IMPLEMENTATION.md  # Core implementation doc
+NONCE*.md
+OPTION*.md
+ORPHANED*.md
+POSITION*.md
+PROFITABILITY*.md
+OPTIMIZATION*.md
+USER*.md
+!USER_MANAGEMENT.md  # Core user guide
+TRADING*.md
+!TRADINGVIEW_SETUP.md  # Core setup guide
+UNBOUNDLOCALERROR*.md
+URGENT*.md
+XRP*.md
+YOUR*.md
+ZOMBIE*.md
+COPY_TRADING*.md
+LOSING*.md
+STOP_LOSS*.md
+THREE_TIER*.md
+RECURRING*.md
+SELL*.md
+MIN_BALANCE*.md
+MULTI_ASSET*.md
+FUND*.md
+IMMEDIATE*.md
+BALANCE*.md
+BROKER_*.md
+!BROKER_INTEGRATION_GUIDE.md  # Core integration guide
+AUTO_IMPORT*.md
+A_*.md
+B_*.md
+C_*.md
+D_*.md
+GLOBAL*.md
+LOG*.md
+QUICKSTART*.md
+QUICKFIX*.md
+RAILWAY*.md
+CONFIGURE*.md
+CONNECT*.md
+ENABLE*.md
+EXCHANGE*.md
+FEATURE*.md
+FIXES*.md
+HOW_TO*.md
+PERMISSION*.md
+PRO_MODE*.md
+!PRO_MODE_README.md  # Core feature guide
+RESTART*.md
+SECURITY_*.md
+!SECURITY.md  # Core security guide
+SETUP*.md
+TEST_RESULTS*.md
+TROUBLESHOOTING*.md
+CREDENTIALS*.md
+DIAGNOSTIC*.md
+SYMBOL_MAPPER*.md
+TESTING*.md
+CONFIRMATION*.md
+ENHANCEMENT*.md
+RESOLUTION*.md
+RESTORATION*.md
+VERIFICATION*.md
+VISIBILITY*.md
+WARNING*.md
+ACCOUNT*.md
+!ARCHITECTURE.md  # Core architecture doc
+ACTION*.md
+AGRESSIVE*.md
+ALL_*.md
+APEX_*.md
+!APEX_STRATEGY_README.md  # Core strategy doc
+!APEX_V71_DOCUMENTATION.md  # Core strategy version doc
+CLEANUP*.md
+COINBASE*.md
+COMPLETE*.md
+CONNECTION*.md
+DASHBOARD*.md
+DEPLOYMENT*.md
+DOCKERFILE*.md
+!DOCKER_DEPLOYMENT_GUIDE.md  # Core deployment guide
+DISPLAY*.md
+EMERGENCY_*.md
+ENV*.md
+EXECUTION*.md
+FAILSAFE*.md
+FEE*.md
+FORCE*.md
+GETTING*.md
+!GETTING_STARTED.md  # Core getting started guide
+GUARDRAILS*.md
+GUIDE*.md
+HEALTH*.md
+HIERARCHY*.md
+HOTFIX*.md
+IMPORT*.md
+INDEPENDENT*.md
+INFRASTRUCTURE*.md
+INSTALLATION*.md
+INTEGRATION_*.md
+ISOLATION*.md
+LIBRARY*.md
+LIQUIDATION*.md
+MANAGEMENT*.md
+MARKET*.md
+MONOTONIC*.md
+MULTI_*.md
+!MULTI_EXCHANGE_TRADING_GUIDE.md  # Core multi-exchange guide
+NIJA_*.md
+PACKAGE*.md
+PARAMETERS*.md
+PERSISTENT*.md
+PRECISION*.md
+PROFIT*.md
+QUICK_*.md
+REDUNDANT*.md
+REQUIRED*.md
+RESPONSE*.md
+REVIEW*.md
+SAFEGUARDS*.md
+SAFE_*.md
+SCAN*.md
+SDK*.md
+SERIALIZATION*.md
+SIGNAL*.md
+SIZING*.md
+SMALL*.md
+SPAM*.md
+STANDALONE*.md
+STATE*.md
+STRATEGY_*.md
+TIER*.md
+TIMING*.md
+TRACKER*.md
+UPGRADE*.md
+WATCHLIST*.md
 
 # Temporary scripts
 check_*.py
 check_*.sh
 verify_*.py
 verify_*.sh
-!verify_kraken_user_credentials.py  # Exception: permanent validation tool for locked credentials
+validate_*.py
+validate_*.sh
 diagnose_*.py
+diagnose_*.sh
 deploy_*.py
 deploy_*.sh
 commit_*.py
@@ -109,6 +255,28 @@ liquidate_*.py
 force_*.py
 cleanup_*.sh
 deep_clean.sh
+quick_*.py
+quick_*.sh
+enable_*.py
+connect_*.py
+setup_kraken*.py
+setup_user*.py
+start_user*.py
+display_*.py
+import_*.py
+sell_*.py
+restore_*.py
+kraken_*.py
+audit_*.py
+demo_*.py
+generate_*.py
+example_*.py
+!example_apex_integration.py  # Keep example integration
+!example_apex_v71.py  # Keep example usage
+!example_usage.py  # Keep example usage
+!example_user_management_integration.py  # Keep example integration
+test_*.py
+!bot/test_*.py  # Keep bot tests
 
 # Temporary text/config files
 *.txt.bak
@@ -116,13 +284,21 @@ REDEPLOY_*.txt
 READY_*.txt
 COMPLETE_*.txt
 FINAL_*.txt
+*_STATUS.txt
 broker_status_output.txt
 balance_check_result.txt
 git_analysis.txt
+*_README.txt
+*_CONFIRMATION.txt
 
 # Temporary JSON files
 nija_health_check_results.json
 nija_profit_capability_report.json
+*_readiness_report.json
+*_test_results.json
+connection_test_results.json
+*_history_report.json
+trade_journal.jsonl
 
 # Archived content
 archive/
