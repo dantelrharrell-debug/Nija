@@ -73,7 +73,7 @@ POSITION_SIZING = {
         6: 1.0,  # Perfect signal: 3% (base)
         5: 0.9,  # Strong signal: 2.7%
         4: 0.8,  # Good signal: 2.4%
-        3: 0.0,  # Skip trade (too risky for small account)
+        3: None,  # Skip trade (signal quality too low for small account safety)
     },
     
     # Balance-based adjustments
@@ -319,7 +319,7 @@ TRADING_PAIRS = {
     
     # Blacklist risky pairs
     'blacklisted_pairs': [
-        'XRP-USD', 'XRPUSD',  # High spread, low profit
+        'XRP-USD', 'XRPUSD',  # High spread, low profit potential for small accounts
         # Add any other risky pairs here
     ],
     
@@ -368,22 +368,42 @@ PRESET_INFO = {
 # PRESET APPLICATION FUNCTION
 # ============================================================================
 
-def apply_small_account_preset():
+def get_environment_variables():
     """
-    Apply safe small-account preset to environment.
+    Get environment variables for small-account preset.
     
     Returns:
-        Dict with all preset configurations
+        Dict of environment variable names and values
+    """
+    return {
+        'COPY_TRADING_MODE': 'MASTER_FOLLOW',
+        'PRO_MODE': 'true',
+        'MINIMUM_TRADING_BALANCE': str(ACCOUNT_SIZE['min_balance']),
+        'MIN_CASH_TO_BUY': str(POSITION_SIZING['absolute_min_position_usd']),
+        'MAX_CONCURRENT_POSITIONS': str(RISK_LIMITS['max_concurrent_positions']),
+        'DISABLED_PAIRS': ','.join(TRADING_PAIRS['blacklisted_pairs']),
+    }
+
+
+def apply_small_account_preset(set_env_vars=True):
+    """
+    Apply safe small-account preset configuration.
+    
+    Args:
+        set_env_vars: If True, sets environment variables. If False, only returns config.
+    
+    Returns:
+        Dict with all preset configurations and environment variables
     """
     import os
     
-    # Set environment variables
-    os.environ['COPY_TRADING_MODE'] = 'MASTER_FOLLOW'
-    os.environ['PRO_MODE'] = 'true'
-    os.environ['MINIMUM_TRADING_BALANCE'] = str(ACCOUNT_SIZE['min_balance'])
-    os.environ['MIN_CASH_TO_BUY'] = str(POSITION_SIZING['absolute_min_position_usd'])
-    os.environ['MAX_CONCURRENT_POSITIONS'] = str(RISK_LIMITS['max_concurrent_positions'])
-    os.environ['DISABLED_PAIRS'] = ','.join(TRADING_PAIRS['blacklisted_pairs'])
+    # Get environment variables
+    env_vars = get_environment_variables()
+    
+    # Optionally set environment variables
+    if set_env_vars:
+        for key, value in env_vars.items():
+            os.environ[key] = value
     
     # Return all preset configs
     return {
@@ -401,6 +421,7 @@ def apply_small_account_preset():
         'trading_pairs': TRADING_PAIRS,
         'execution': EXECUTION,
         'preset_info': PRESET_INFO,
+        'environment_variables': env_vars,
     }
 
 
