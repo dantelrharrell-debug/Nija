@@ -28,8 +28,13 @@ class TestFeeAwareConfig(unittest.TestCase):
     """Test fee-aware configuration parameters"""
     
     def test_minimum_balance(self):
-        """Test minimum balance requirement"""
-        self.assertEqual(MIN_BALANCE_TO_TRADE, 2.0, "Minimum balance should be $2 (lowered to allow very small accounts)")
+        """Test minimum balance requirement (system-wide fallback)"""
+        # NOTE: This is the system-wide fallback minimum ($1)
+        # Broker-specific minimums are enforced at connection level:
+        # - Kraken: $25 (broker_configs/kraken_config.py)
+        # - Coinbase: $25 (broker_configs/coinbase_config.py)
+        # - See: test_min_balance_requirements.py for broker-specific tests
+        self.assertEqual(MIN_BALANCE_TO_TRADE, 1.0, "System-wide minimum should be $1 (fallback)")
     
     def test_position_sizing(self):
         """Test position sizing percentages"""
