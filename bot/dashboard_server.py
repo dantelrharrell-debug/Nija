@@ -111,17 +111,24 @@ def get_users():
         JSON with user list including balances, positions, and trading stats
     """
     try:
-        from multi_account_broker_manager import MultiAccountBrokerManager
-        from config.user_loader import load_all_users
+        import sys
+        import os
+        # Add repository root to path for imports
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        
+        from bot.multi_account_broker_manager import MultiAccountBrokerManager
+        from config.user_loader import get_user_config_loader
         
         users_data = []
         
         # Load user configurations
-        all_user_configs = load_all_users()
+        user_loader = get_user_config_loader()
+        all_user_configs = user_loader.all_users
         
         # Try to get the multi-account broker manager
         try:
-            import sys
             if 'nija_bot' in sys.modules:
                 nija_bot = sys.modules['nija_bot']
                 if hasattr(nija_bot, 'account_manager'):
@@ -135,7 +142,7 @@ def get_users():
         
         # Get data for each user
         for user_config in all_user_configs:
-            user_id = user_config.get('user_id')
+            user_id = user_config.user_id
             if not user_id or user_id == 'master':
                 continue
             
@@ -160,8 +167,13 @@ def get_users():
                 pass
             
             # Get trading stats
+            total_pnl = 0.0
+            daily_pnl = 0.0
+            win_rate = 0.0
+            total_trades = 0
+            recent_trades = []
             try:
-                from user_pnl_tracker import get_user_pnl_tracker
+                from bot.user_pnl_tracker import get_user_pnl_tracker
                 pnl_tracker = get_user_pnl_tracker()
                 stats = pnl_tracker.get_stats(user_id)
                 recent_trades_data = pnl_tracker.get_recent_trades(user_id, limit=10)
@@ -183,19 +195,15 @@ def get_users():
                 daily_pnl = stats.get('daily_pnl', 0.0)
                 win_rate = stats.get('win_rate', 0.0)
                 total_trades = stats.get('completed_trades', 0)
-            except:
-                recent_trades = []
-                total_pnl = 0.0
-                daily_pnl = 0.0
-                win_rate = 0.0
-                total_trades = 0
+            except Exception as e:
+                logger.debug(f"Could not get stats for {user_id}: {e}")
             
             users_data.append({
                 "user_id": user_id,
-                "name": user_config.get('name', 'N/A'),
-                "enabled": user_config.get('enabled', False),
-                "account_type": user_config.get('account_type', 'N/A'),
-                "broker_type": user_config.get('broker_type', 'N/A'),
+                "name": user_config.name,
+                "enabled": user_config.enabled,
+                "account_type": user_config.account_type,
+                "broker_type": user_config.broker_type,
                 "balance": user_balance,
                 "positions_count": user_positions_count,
                 "positions": user_positions[:5],  # First 5 positions
@@ -371,16 +379,23 @@ def get_trading_status():
         
         # Check 4: User-specific trading status from multi-account broker manager
         try:
-            from multi_account_broker_manager import MultiAccountBrokerManager
-            from config.user_loader import load_all_users
+            import sys
+            import os
+            # Add repository root to path for imports
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if repo_root not in sys.path:
+                sys.path.insert(0, repo_root)
+            
+            from bot.multi_account_broker_manager import MultiAccountBrokerManager
+            from config.user_loader import get_user_config_loader
             
             # Load user configurations
-            all_user_configs = load_all_users()
+            user_loader = get_user_config_loader()
+            all_user_configs = user_loader.all_users
             
             # Try to get the multi-account broker manager
             try:
                 # Check if there's a global instance
-                import sys
                 if 'nija_bot' in sys.modules:
                     nija_bot = sys.modules['nija_bot']
                     if hasattr(nija_bot, 'account_manager'):
@@ -394,14 +409,15 @@ def get_trading_status():
             
             # Get user data from configuration files
             for user_config in all_user_configs:
-                user_id = user_config.get('user_id')
+                user_id = user_config.user_id
                 if not user_id or user_id == 'master':
                     continue
                 
                 # Get balance for this user across all brokers
                 try:
                     user_balance = account_mgr.get_user_balance(user_id)
-                except:
+                except Exception as e:
+                    logger.debug(f"Could not get balance for {user_id}: {e}")
                     user_balance = 0.0
                 
                 # Get positions for this user
@@ -413,13 +429,17 @@ def get_trading_status():
                             positions = broker.get_positions()
                             if positions:
                                 user_positions += len(positions)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Could not get positions for {user_id}: {e}")
                 
                 # Get recent trades from user PnL tracker
                 recent_trades = []
+                total_pnl = 0.0
+                daily_pnl = 0.0
+                win_rate = 0.0
+                total_trades = 0
                 try:
-                    from user_pnl_tracker import get_user_pnl_tracker
+                    from bot.user_pnl_tracker import get_user_pnl_tracker
                     pnl_tracker = get_user_pnl_tracker()
                     stats = pnl_tracker.get_stats(user_id)
                     recent_trades_data = pnl_tracker.get_recent_trades(user_id, limit=5)
@@ -436,18 +456,15 @@ def get_trading_status():
                     daily_pnl = stats.get('daily_pnl', 0.0)
                     win_rate = stats.get('win_rate', 0.0)
                     total_trades = stats.get('completed_trades', 0)
-                except:
-                    total_pnl = 0.0
-                    daily_pnl = 0.0
-                    win_rate = 0.0
-                    total_trades = 0
+                except Exception as e:
+                    logger.debug(f"Could not get PnL for {user_id}: {e}")
                 
                 status["users"].append({
                     "user_id": user_id,
-                    "name": user_config.get('name', 'N/A'),
-                    "enabled": user_config.get('enabled', False),
-                    "account_type": user_config.get('account_type', 'N/A'),
-                    "broker_type": user_config.get('broker_type', 'N/A'),
+                    "name": user_config.name,
+                    "enabled": user_config.enabled,
+                    "account_type": user_config.account_type,
+                    "broker_type": user_config.broker_type,
                     "balance": user_balance,
                     "positions": user_positions,
                     "total_pnl": total_pnl,
@@ -458,9 +475,11 @@ def get_trading_status():
                 })
         except ImportError as e:
             # Multi-user system not available
+            logger.debug(f"Multi-user system import failed: {e}")
             status["errors"].append(f"Multi-user system import failed: {str(e)}")
             status["users"] = []
         except Exception as e:
+            logger.exception(f"User check failed: {e}")
             status["errors"].append(f"User check failed: {str(e)}")
             status["users"] = []
         
