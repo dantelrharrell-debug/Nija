@@ -4391,6 +4391,11 @@ class KrakenBroker(BaseBroker):
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
         
+        # FIX #2: Balance cache and health status for Kraken
+        # Cache balance after successful fetch and track health
+        self.balance_cache = {}  # Structure: {"kraken": balance_value}
+        self.kraken_health = "UNKNOWN"  # Status: "OK", "ERROR", or "UNKNOWN"
+        
         # CRITICAL FIX (Jan 17, 2026): Monotonic nonce with API call serialization
         # 
         # Nonce tracking for guaranteeing strict monotonic increase
@@ -4445,26 +4450,25 @@ class KrakenBroker(BaseBroker):
         
         logger.debug(f"   Nonce file for {self.account_identifier}: {self._nonce_file}")
         
-        # FINAL FIX (Jan 18, 2026): Global Kraken Nonce Manager
+        # SIMPLIFIED FIX (Jan 20, 2026): Timestamp-based Kraken Nonce (Railway-safe)
         # ONE global nonce source shared across MASTER + ALL USERS
         # 
-        # This is the production-safe solution:
-        # - Single process-wide nonce generator (no per-user instances)
-        # - Uses time.time_ns() for nanosecond precision (19 digits)
-        # - Thread-safe across all users
-        # - No nonce collisions possible (single source of truth)
-        # - No file persistence needed (nanoseconds always increase)
-        # - Scales safely to 10-100+ users
+        # This is the Railway-safe solution per requirements:
+        # - Uses int(time.time() * 1000) for milliseconds since epoch
+        # - Monotonically increasing (time only moves forward)
+        # - No persistence needed (timestamps are always fresh)
+        # - Thread-safe (built-in time function)
+        # - Scales to any number of users
         #
         # Architecture:
-        # - get_global_kraken_nonce() returns next monotonic nonce
+        # - get_global_kraken_nonce() returns current timestamp in ms
         # - All Kraken API calls (master + users) use this ONE function
-        # - Simple, reliable, production-ready
+        # - Simple, reliable, Railway-ready
         if get_global_kraken_nonce is not None:
-            # Use global nonce manager (FINAL FIX)
+            # Use global timestamp-based nonce (Railway-safe)
             self._use_global_nonce = True
-            self._kraken_nonce = None  # Not used with global manager
-            logger.debug(f"   ✅ Using GLOBAL Kraken Nonce Manager for {self.account_identifier} (nanosecond precision)")
+            self._kraken_nonce = None  # Not used with global timestamp
+            logger.debug(f"   ✅ Using GLOBAL Kraken Nonce (timestamp-based) for {self.account_identifier}")
         elif KrakenNonce is not None:
             # Fallback to per-user KrakenNonce (DEPRECATED but kept for compatibility)
             logger.warning(f"   ⚠️  Global nonce manager not available, falling back to per-user KrakenNonce")
@@ -4774,33 +4778,33 @@ class KrakenBroker(BaseBroker):
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
             
-            # Override _nonce to use Global Kraken Nonce Manager (FINAL FIX)
-            # This prevents "EAPI:Invalid nonce" errors by using ONE global nonce source
-            # shared across MASTER + ALL USERS with nanosecond precision.
+            # Override _nonce to use simplified timestamp-based nonce (Railway-safe)
+            # This prevents "EAPI:Invalid nonce" errors by using ONE global timestamp source
+            # shared across MASTER + ALL USERS.
             # 
             # Benefits:
-            # 1. No nonce collisions (single source of truth)
-            # 2. Nanosecond precision (19 digits) - no duplicates possible
-            # 3. Thread-safe across all users
-            # 4. Scales to 10-100+ users
-            # 5. No file persistence needed
+            # 1. No nonce collisions (timestamps only move forward)
+            # 2. Millisecond precision (13 digits) - adequate for API calls
+            # 3. Thread-safe (built-in time function)
+            # 4. Scales to any number of users
+            # 5. No file persistence needed (timestamps are always fresh)
             
             if self._use_global_nonce:
-                # FINAL FIX: Use global nonce manager (production-safe)
+                # Use global timestamp-based nonce (Railway-safe)
                 def _nonce_monotonic():
                     """
-                    Generate nonce using GLOBAL Kraken Nonce Manager.
+                    Generate nonce using timestamp (Railway-safe).
                     
                     ONE global source for MASTER + ALL USERS.
-                    - Nanosecond precision (19 digits)
-                    - Thread-safe
-                    - No collisions possible
+                    - Millisecond precision (13 digits)
+                    - Thread-safe (uses time.time())
+                    - No collisions (time only moves forward)
                     - No file persistence needed
                     """
                     nonce = get_global_kraken_nonce()
                     return str(nonce)
                 
-                logger.debug(f"✅ GLOBAL Kraken Nonce Manager installed for {cred_label} (nanosecond precision)")
+                logger.debug(f"✅ GLOBAL Kraken Nonce (timestamp-based) installed for {cred_label}")
                 
             elif self._kraken_nonce is not None:
                 # Fallback: Use per-user KrakenNonce instance (DEPRECATED)
@@ -5415,18 +5419,23 @@ class KrakenBroker(BaseBroker):
         """
         try:
             if not self.api:
-                # Not connected - return last known balance if available
+                # FIX #2: Not connected - log warning and use last known balance
+                self._balance_fetch_errors += 1
+                if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
+                    self._is_available = False
+                    self.kraken_health = "ERROR"
+                    logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                
                 if self._last_known_balance is not None:
                     logger.warning(f"⚠️ Kraken API not connected ({self.account_identifier}), using last known balance: ${self._last_known_balance:.2f}")
-                    self._balance_fetch_errors += 1
-                    if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
-                        self._is_available = False
-                        logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                    # Use cached balance if available
+                    if "kraken" in self.balance_cache:
+                        return self.balance_cache["kraken"]
                     return self._last_known_balance
                 else:
                     logger.error(f"❌ Kraken API not connected ({self.account_identifier}) and no last known balance")
-                    self._balance_fetch_errors += 1
                     self._is_available = False
+                    self.kraken_health = "ERROR"
                     return 0.0
             
             # Get account balance using serialized API call
@@ -5434,16 +5443,22 @@ class KrakenBroker(BaseBroker):
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
-                logger.error(f"❌ Kraken API error fetching balance ({self.account_identifier}): {error_msgs}")
                 
-                # Return last known balance instead of 0
+                # FIX #2: On error, log warning and use last known balance
+                logger.warning(f"⚠️ Kraken API error fetching balance ({self.account_identifier}): {error_msgs}")
+                
+                # DO NOT zero balance on one failure
                 self._balance_fetch_errors += 1
                 if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
+                    self.kraken_health = "ERROR"
                     logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
                 
                 if self._last_known_balance is not None:
                     logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                    # Use cached balance if available
+                    if "kraken" in self.balance_cache:
+                        return self.balance_cache["kraken"]
                     return self._last_known_balance
                 else:
                     logger.error(f"   ❌ No last known balance available, returning 0")
@@ -5494,30 +5509,44 @@ class KrakenBroker(BaseBroker):
                 self._balance_fetch_errors = 0
                 self._is_available = True
                 
+                # FIX #2: Force Kraken balance cache after success
+                self.balance_cache["kraken"] = total_funds
+                self.kraken_health = "OK"
+                
                 return total_funds
             
             # Unexpected response - treat as error
-            logger.error(f"❌ Unexpected Kraken API response format ({self.account_identifier})")
+            # FIX #2: Log warning and use last known balance
+            logger.warning(f"⚠️ Unexpected Kraken API response format ({self.account_identifier})")
             self._balance_fetch_errors += 1
             if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
+                self.kraken_health = "ERROR"
             
             if self._last_known_balance is not None:
                 logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                # Use cached balance if available
+                if "kraken" in self.balance_cache:
+                    return self.balance_cache["kraken"]
                 return self._last_known_balance
             
             return 0.0
             
         except Exception as e:
-            logger.error(f"❌ Exception fetching Kraken balance ({self.account_identifier}): {e}")
+            # FIX #2: Log warning and use last known balance on exception
+            logger.warning(f"⚠️ Exception fetching Kraken balance ({self.account_identifier}): {e}")
             self._balance_fetch_errors += 1
             if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
+                self.kraken_health = "ERROR"
                 logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
             
             # Return last known balance instead of 0
             if self._last_known_balance is not None:
                 logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
+                # Use cached balance if available
+                if "kraken" in self.balance_cache:
+                    return self.balance_cache["kraken"]
                 return self._last_known_balance
             
             return 0.0
