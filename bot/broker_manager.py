@@ -3592,10 +3592,41 @@ class AlpacaBroker(BaseBroker):
             return False
     
     def get_account_balance(self) -> float:
-        """Get USD balance"""
+        """
+        Get total equity (cash + position values) for Alpaca account.
+        
+        CRITICAL FIX (Rule #3): Balance = CASH + POSITION VALUE
+        Returns total equity (available cash + position market value), not just cash.
+        
+        For Alpaca, the account object provides 'equity' which includes both cash and positions.
+        This is the correct value to use for risk calculations and position sizing.
+        
+        Returns:
+            float: Total equity (cash + positions)
+        """
         try:
             account = self.api.get_account()
-            return float(account.cash)
+            
+            # Alpaca provides 'equity' which is cash + position values
+            # This is exactly what we need per Rule #3
+            equity = float(account.equity)
+            cash = float(account.cash)
+            position_value = equity - cash
+            
+            # Enhanced logging to show breakdown
+            logger.info("=" * 70)
+            logger.info(f"💰 Alpaca Balance ({self.account_identifier}):")
+            logger.info(f"   ✅ Cash: ${cash:.2f}")
+            if position_value > 0:
+                logger.info(f"   📊 Position Value: ${position_value:.2f}")
+                logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                logger.info(f"   💎 TOTAL EQUITY: ${equity:.2f}")
+            else:
+                logger.info(f"   💎 TOTAL EQUITY: ${equity:.2f} (no positions)")
+            logger.info("=" * 70)
+            
+            return equity
+            
         except Exception as e:
             logger.error(f"Error fetching Alpaca balance: {e}")
             return 0.0
@@ -6290,7 +6321,11 @@ class OKXBroker(BaseBroker):
     
     def get_account_balance(self) -> float:
         """
-        Get USDT balance available for trading with fail-closed behavior.
+        Get total equity (USDT + position values) with fail-closed behavior.
+        
+        CRITICAL FIX (Rule #3): Balance = CASH + POSITION VALUE
+        Returns total equity (available cash + position market value), not just available balance.
+        This ensures risk calculations and position sizing account for capital deployed in positions.
         
         CRITICAL FIX (Jan 19, 2026): Fail closed - not "balance = 0"
         - On error: Return last known balance (if available) instead of 0
@@ -6298,7 +6333,7 @@ class OKXBroker(BaseBroker):
         - Distinguish API errors from actual zero balance
         
         Returns:
-            float: Available USDT balance
+            float: Total equity (available USDT + position values)
                    Returns last known balance on error (not 0)
         """
         try:
@@ -6317,7 +6352,7 @@ class OKXBroker(BaseBroker):
                     self._is_available = False
                     return 0.0
             
-            # Get account balance
+            # Get account balance (available cash)
             result = self.account_api.get_balance()
             
             if result and result.get('code') == '0':
@@ -6326,17 +6361,56 @@ class OKXBroker(BaseBroker):
                     details = data[0].get('details', [])
                     
                     # Find USDT balance
+                    available = 0.0
                     for detail in details:
                         if detail.get('ccy') == 'USDT':
                             available = float(detail.get('availBal', 0))
-                            logger.info(f"💰 OKX USDT Balance: ${available:.2f}")
-                            
-                            # SUCCESS: Update last known balance and reset error count
-                            self._last_known_balance = available
-                            self._balance_fetch_errors = 0
-                            self._is_available = True
-                            
-                            return available
+                            break
+                    
+                    # FIX Rule #3: Get position values and add to available cash
+                    position_value = 0.0
+                    try:
+                        positions = self.get_positions()
+                        for pos in positions:
+                            symbol = pos.get('symbol', '')
+                            quantity = pos.get('quantity', 0.0)
+                            if symbol and quantity > 0:
+                                # Get current price for this position
+                                try:
+                                    price = self.get_current_price(symbol)
+                                    if price > 0:
+                                        pos_value = quantity * price
+                                        position_value += pos_value
+                                        logger.debug(f"   Position {symbol}: {quantity:.8f} @ ${price:.2f} = ${pos_value:.2f}")
+                                except Exception as price_err:
+                                    logger.debug(f"   Could not price position {symbol}: {price_err}")
+                                    # If we can't price a position, skip it rather than fail
+                                    continue
+                    except Exception as pos_err:
+                        logger.debug(f"   Could not fetch positions: {pos_err}")
+                        # Continue with just cash balance if positions can't be fetched
+                    
+                    # Calculate total equity
+                    total_equity = available + position_value
+                    
+                    # Enhanced logging
+                    logger.info("=" * 70)
+                    logger.info(f"💰 OKX Balance:")
+                    logger.info(f"   ✅ Available USDT: ${available:.2f}")
+                    if position_value > 0:
+                        logger.info(f"   📊 Position Value: ${position_value:.2f}")
+                        logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        logger.info(f"   💎 TOTAL EQUITY (Available + Positions): ${total_equity:.2f}")
+                    else:
+                        logger.info(f"   💎 TOTAL EQUITY: ${total_equity:.2f} (no positions)")
+                    logger.info("=" * 70)
+                    
+                    # SUCCESS: Update last known balance and reset error count
+                    self._last_known_balance = total_equity
+                    self._balance_fetch_errors = 0
+                    self._is_available = True
+                    
+                    return total_equity
                 
                 # No USDT found - treat as zero balance (not an error)
                 logger.warning("⚠️  No USDT balance found in OKX account")
@@ -6553,6 +6627,38 @@ class OKXBroker(BaseBroker):
         except Exception as e:
             logging.error(f"Error fetching OKX candles: {e}")
             return []
+    
+    def get_current_price(self, symbol: str) -> float:
+        """
+        Get current market price for a symbol.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USDT')
+        
+        Returns:
+            float: Current price or 0.0 on error
+        """
+        try:
+            if not self.market_api:
+                return 0.0
+            
+            # Convert symbol format if needed
+            okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
+            
+            # Get ticker data
+            result = self.market_api.get_ticker(instId=okx_symbol)
+            
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    last_price = data[0].get('last')
+                    return float(last_price) if last_price else 0.0
+            
+            return 0.0
+            
+        except Exception as e:
+            logging.debug(f"Error fetching OKX price for {symbol}: {e}")
+            return 0.0
     
     def supports_asset_class(self, asset_class: str) -> bool:
         """OKX supports crypto spot and futures"""

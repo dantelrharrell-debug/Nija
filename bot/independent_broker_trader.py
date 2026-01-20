@@ -62,7 +62,10 @@ from typing import Dict, List, Optional, Set
 from datetime import datetime
 
 # Import BrokerType for connection order enforcement
-from broker_manager import BrokerType
+try:
+    from bot.broker_manager import BrokerType
+except ImportError:
+    from broker_manager import BrokerType
 
 # Import copy trade engine for checking if copy trading is active
 try:
