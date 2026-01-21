@@ -87,7 +87,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
     TradingTier.LIVABLE: TierConfig(
         name="LIVABLE",
         capital_min=1000.0,
-        capital_max=5000.0,
+        capital_max=4999.99,  # Up to but not including $5k (BALLER starts at $5k)
         risk_per_trade_pct=(2.0, 4.0),
         trade_size_min=25.0,
         trade_size_max=100.0,
