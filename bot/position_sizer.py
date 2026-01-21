@@ -21,8 +21,9 @@ logger = logging.getLogger('nija.position_sizer')
 
 # Minimum position sizes (exchange-specific)
 # These prevent creating dust positions that can't be sold
-# Updated Jan 20, 2026: Raised to $5.00 for safer trade sizing
-MIN_POSITION_USD = 5.0  # Minimum $5 USD value for any position
+# Updated Jan 21, 2026: Lowered to $2.00 to allow smaller trades (from $5.00)
+# Position size must be >= $2.00 for trades to execute
+MIN_POSITION_USD = 2.0  # Minimum $2 USD value for any position
 MIN_BASE_SIZES = {
     # Coinbase minimums (approximate - updated Jan 2026)
     # NOTE: USD values in comments are examples at Jan 2026 prices and will change

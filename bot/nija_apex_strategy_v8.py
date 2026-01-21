@@ -182,14 +182,19 @@ class NIJAApexStrategyV8:
             
             # Momentum indicators
             indicators['rsi'] = calculate_rsi(df, period=14)
-            macd_result = calculate_macd(df)
-            indicators['macd'] = macd_result.get('macd', pd.Series([0]))
-            indicators['signal'] = macd_result.get('signal', pd.Series([0]))
-            indicators['histogram'] = macd_result.get('histogram', pd.Series([0]))
+            # FIX: calculate_macd returns tuple (macd_line, signal_line, histogram), not dict
+            macd_line, signal_line, histogram = calculate_macd(df)
+            indicators['macd'] = macd_line
+            indicators['signal'] = signal_line
+            indicators['histogram'] = histogram
             
             # Volatility indicators
             indicators['atr'] = calculate_atr(df, period=14)
-            indicators['adx'] = calculate_adx(df, period=14)
+            # FIX: calculate_adx returns tuple (adx, plus_di, minus_di), unpack properly
+            adx_series, plus_di, minus_di = calculate_adx(df, period=14)
+            indicators['adx'] = adx_series
+            indicators['plus_di'] = plus_di
+            indicators['minus_di'] = minus_di
             
             # Derived metrics
             current_price = df['close'].iloc[-1]

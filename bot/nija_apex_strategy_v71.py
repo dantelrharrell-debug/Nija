@@ -29,8 +29,8 @@ logger = logging.getLogger("nija")
 try:
     from position_sizer import MIN_POSITION_USD
 except ImportError:
-    MIN_POSITION_USD = 5.0  # Default to $5 minimum
-    logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $5.00")
+    MIN_POSITION_USD = 2.0  # Default to $2 minimum (lowered from $5 on Jan 21, 2026)
+    logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $2.00")
 
 # Trade quality thresholds (Jan 20, 2026)
 # Confidence threshold to filter weak entries and increase trade size quality
@@ -116,6 +116,10 @@ class NIJAApexStrategyV71:
         # Score is a quality metric (higher = better setup)
         # Normalize score to 0-1 range for confidence check
         confidence = min(score / MAX_ENTRY_SCORE, 1.0)
+        # FIX: Guard against tuple returns (defensive programming)
+        if isinstance(confidence, tuple):
+            confidence = confidence[0]
+        confidence = float(confidence)
         
         if confidence < MIN_CONFIDENCE:
             logger.info(f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below minimum {MIN_CONFIDENCE:.2f}")
