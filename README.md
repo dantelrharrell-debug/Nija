@@ -681,7 +681,7 @@ NIJA now supports multiple cryptocurrency exchanges:
 4. **Kraken Pro Exchange** (✅ NEW - FULLY IMPLEMENTED!)
    - Status: ✅ **Full implementation complete** (December 30, 2024)
    - Features: Spot trading, 200+ pairs, 0.16% maker / 0.26% taker fees
-   - Setup: Set `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` in `.env`
+   - Setup: Set `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET` in `.env` (master account credentials)
    - Get credentials: https://www.kraken.com/u/security/api
    - Quick test: `python test_broker_integrations.py`
    - Note: Requires `krakenex==2.2.2` and `pykrakenapi==0.3.2` (auto-installed via requirements.txt)
@@ -744,9 +744,9 @@ pip install krakenex pykrakenapi
 # 2. Get API credentials from https://www.kraken.com/u/security/api
 # Important: Enable "Query Funds", "Create & Modify Orders", and "Query Ledger Entries"
 
-# 3. Add to .env file
-export KRAKEN_API_KEY="your_api_key"
-export KRAKEN_API_SECRET="your_private_key"
+# 3. Add to .env file (master account credentials)
+export KRAKEN_MASTER_API_KEY="your_api_key"
+export KRAKEN_MASTER_API_SECRET="your_private_key"
 
 # 4. Test connection
 python test_broker_integrations.py
