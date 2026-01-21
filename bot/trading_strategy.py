@@ -1644,17 +1644,16 @@ class TradingStrategy:
                                     
                                     continue
                                 
-                                # ✅ FIX #2: LOSING TRADES GET 30 MINUTES MAX
+                                # ✅ LOSING TRADES: 30-MINUTE MAXIMUM HOLD TIME
                                 # For tracked positions with P&L < 0%, enforce STRICT 30-minute max hold time
-                                # This prevents "will auto-exit in 23.7min" nonsense that bleeds capital
+                                # This prevents capital erosion from positions held too long in a losing state
                                 # CRITICAL FIX (Jan 21, 2026): Also exit losing positions WITHOUT entry time tracking
                                 # to prevent positions from being stuck indefinitely
                                 if pnl_percent < 0:
                                     # Convert position age from hours to minutes
                                     position_age_minutes = position_age_hours * MINUTES_PER_HOUR
                                     
-                                    # Check if position has been losing for more than the max allowed time
-                                    # OR if we don't have entry time tracking (safety fallback)
+                                    # SCENARIO 1: Position with time tracking that exceeds max hold time
                                     if entry_time_available and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
                                         logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent*100:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
                                         logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
@@ -1665,8 +1664,8 @@ class TradingStrategy:
                                         })
                                         continue
                                     elif not entry_time_available:
-                                        # SAFETY FALLBACK: If we can't track entry time but position is losing,
-                                        # exit immediately to prevent indefinite losses
+                                        # SCENARIO 2: Losing position without time tracking (SAFETY FALLBACK)
+                                        # Exit immediately to prevent indefinite losses when we cannot determine age
                                         logger.warning(f"   🚨 LOSING POSITION WITHOUT TIME TRACKING: {symbol} at {pnl_percent*100:.2f}%")
                                         logger.warning(f"   💥 Cannot determine age - exiting to prevent indefinite losses!")
                                         positions_to_exit.append({
