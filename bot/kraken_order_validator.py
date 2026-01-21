@@ -35,8 +35,11 @@ KRAKEN_MINIMUMS = {
 }
 
 # Kraken fee structure
-KRAKEN_TAKER_FEE = 0.0016  # 0.16%
-KRAKEN_MAKER_FEE = 0.0010  # 0.10%
+# Source: https://www.kraken.com/features/fee-schedule
+# Note: Fees vary by 30-day trading volume. These are the default/lowest tier rates.
+# Higher volume traders may have lower fees. Update these values as needed.
+KRAKEN_TAKER_FEE = 0.0016  # 0.16% (volume tier 0-50k)
+KRAKEN_MAKER_FEE = 0.0010  # 0.10% (volume tier 0-50k)
 
 
 def get_pair_minimums(pair: str) -> Dict[str, float]:
@@ -167,24 +170,24 @@ def log_order_validation(pair: str, volume: float, price: float,
     quote_value = volume * price
     
     if is_valid:
-        logger.info("=" * 70)
+        logger.info(SEPARATOR)
         logger.info("✅ KRAKEN ORDER VALIDATION PASSED")
-        logger.info("=" * 70)
+        logger.info(SEPARATOR)
         logger.info(f"   Pair: {pair}")
         logger.info(f"   Side: {side.upper()}")
         logger.info(f"   Volume: {volume:.8f} (min: {minimums['min_base']:.8f})")
         logger.info(f"   Quote Value: ${quote_value:.2f} (min: ${minimums['min_quote']:.2f})")
-        logger.info("=" * 70)
+        logger.info(SEPARATOR)
     else:
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         logger.error("❌ KRAKEN ORDER VALIDATION FAILED")
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         logger.error(f"   Pair: {pair}")
         logger.error(f"   Side: {side.upper()}")
         logger.error(f"   Volume: {volume:.8f} (min: {minimums['min_base']:.8f})")
         logger.error(f"   Quote Value: ${quote_value:.2f} (min: ${minimums['min_quote']:.2f})")
         logger.error(f"   Error: {error}")
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
 
 
 def verify_txid_returned(result: Dict, pair: str, side: str, volume: float,
@@ -205,14 +208,14 @@ def verify_txid_returned(result: Dict, pair: str, side: str, volume: float,
         tuple: (has_txid: bool, txid: Optional[str])
     """
     if not result or 'result' not in result:
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         logger.error("❌ NO TXID - KRAKEN API RESPONSE INVALID")
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         logger.error(f"   Account: {account_id}")
         logger.error(f"   Pair: {pair}, Side: {side}, Volume: {volume}")
         logger.error(f"   Response: {result}")
         logger.error("   ⚠️  NO TRADE EXECUTED")
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         return False, None
     
     order_result = result.get('result', {})
@@ -220,26 +223,26 @@ def verify_txid_returned(result: Dict, pair: str, side: str, volume: float,
     txid = txid_list[0] if txid_list else None
     
     if not txid:
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         logger.error("❌ NO TXID RETURNED - TRADE DID NOT EXECUTE")
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         logger.error(f"   Account: {account_id}")
         logger.error(f"   Pair: {pair}, Side: {side}, Volume: {volume}")
         logger.error(f"   API Response: {result}")
         logger.error("   ⚠️  Kraken must return txid for valid order")
         logger.error("   ⚠️  NO TRADE EXECUTED - Nothing visible in Kraken UI")
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         return False, None
     
     # Success - txid received
-    logger.info("=" * 70)
+    logger.info(SEPARATOR)
     logger.info("✅ TXID VERIFIED - TRADE EXECUTED")
-    logger.info("=" * 70)
+    logger.info(SEPARATOR)
     logger.info(f"   Account: {account_id}")
     logger.info(f"   Pair: {pair}, Side: {side}")
     logger.info(f"   Transaction ID: {txid}")
     logger.info(f"   ✅ Trade visible in Kraken UI")
-    logger.info("=" * 70)
+    logger.info(SEPARATOR)
     
     return True, txid
 
@@ -260,25 +263,25 @@ def verify_per_api_key_execution(api_key: str, account_type: str = "unknown") ->
         bool: True if API key is properly set
     """
     if not api_key:
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         logger.error("❌ PER-API KEY EXECUTION FAILED")
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         logger.error(f"   Account Type: {account_type}")
         logger.error(f"   Error: No API key configured")
         logger.error("   ⚠️  Each account must use its own API key")
-        logger.error("=" * 70)
+        logger.error(SEPARATOR)
         return False
     
     # Mask API key for security (show first 10 chars only)
     masked_key = api_key[:10] + "..." if len(api_key) > 10 else api_key
     
-    logger.info("=" * 70)
+    logger.info(SEPARATOR)
     logger.info("✅ PER-API KEY EXECUTION VERIFIED")
-    logger.info("=" * 70)
+    logger.info(SEPARATOR)
     logger.info(f"   Account Type: {account_type}")
     logger.info(f"   API Key: {masked_key}")
     logger.info(f"   ✅ Using dedicated API credentials")
-    logger.info("=" * 70)
+    logger.info(SEPARATOR)
     
     return True
 

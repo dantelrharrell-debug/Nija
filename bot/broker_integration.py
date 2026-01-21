@@ -784,8 +784,10 @@ class KrakenBrokerAdapter(BrokerInterface):
                 kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
             
             # Get current price for validation (rough estimate for market orders)
-            # For better accuracy, could fetch ticker, but adds latency
-            # Using a conservative estimate for now
+            # NOTE: This adds latency (~50-200ms) to fetch ticker data for validation.
+            # Alternative: Could use cached price data or skip validation for market orders
+            # since the final fill price may differ anyway. For now, accepting the latency
+            # trade-off for better order validation accuracy.
             try:
                 ticker_result = self._kraken_api_call('Ticker', {'pair': kraken_symbol})
                 if ticker_result and 'result' in ticker_result:
