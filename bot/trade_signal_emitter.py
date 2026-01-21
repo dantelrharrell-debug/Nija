@@ -84,9 +84,11 @@ class TradeSignalEmitter:
                     self.signal_queue.put_nowait(signal)
                     self._total_signals_emitted += 1
                     
+                    # ✅ REQUIREMENT #1 & #3: Updated logging for master - "signals sent, not executed"
                     logger.info("=" * 70)
-                    logger.info("📡 TRADE SIGNAL EMITTED")
+                    logger.info("📡 MASTER TRADE SIGNAL SENT (NOT EXECUTED)")
                     logger.info("=" * 70)
+                    logger.info(f"   Master Account: Signal generated for copy trading")
                     logger.info(f"   Broker: {signal.broker}")
                     logger.info(f"   Symbol: {signal.symbol}")
                     logger.info(f"   Side: {signal.side.upper()}")
@@ -94,6 +96,7 @@ class TradeSignalEmitter:
                     logger.info(f"   Price: ${signal.price:.2f}")
                     logger.info(f"   Order ID: {signal.order_id}")
                     logger.info(f"   Master Balance: ${signal.master_balance:.2f}")
+                    logger.info(f"   ℹ️  This signal will be sent to user accounts for execution")
                     logger.info(f"   Total Signals Emitted: {self._total_signals_emitted}")
                     logger.info("=" * 70)
                     

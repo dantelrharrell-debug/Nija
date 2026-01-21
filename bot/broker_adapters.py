@@ -132,22 +132,23 @@ class CoinbaseAdapter(BrokerAdapter):
     Coinbase-specific execution adapter.
     
     Enforces:
-    - Minimum notional: $1-$5 depending on pair
+    - Minimum notional: $25 for all pairs (profitability after fees)
     - Portfolio routing for efficient fills
     - Fee-aware exits (account for 0.6% maker + 0.6% taker fees)
     - Symbol format: ETH-USD, BTC-USDT, etc. (dash separator)
     """
     
-    # Coinbase minimum notional per pair
-    # UNIFIED MINIMUM: $25 to ensure profitability after 1.4% round-trip fees
-    # At $25 position with 1.4% fees = $0.35 fee cost, target 1.5% = $0.375 profit = net $0.025
+    # ✅ REQUIREMENT #4: Coinbase minimum notional per pair
+    # UNIFIED MINIMUM: $25 to ensure profitability after 1.20% round-trip fees
+    # At $25 position with 1.20% fees = $0.30 fee cost, target 1.5% = $0.375 profit = net $0.075
+    # NOTE: $5 positions will be REJECTED as they cannot cover fees
     MIN_NOTIONAL_DEFAULT = 25.0  # $25 minimum for all pairs (profitability threshold)
     MIN_NOTIONAL_BTC = 25.0  # $25 minimum for BTC pairs (same as default)
     
     # Coinbase fee structure
     MAKER_FEE_PCT = 0.60  # 0.6% maker fee
     TAKER_FEE_PCT = 0.60  # 0.6% taker fee
-    TOTAL_FEE_PCT = 1.20  # Combined round-trip cost
+    TOTAL_FEE_PCT = 1.20  # 1.20% combined round-trip cost (stored as decimal 1.20)
     
     def __init__(self):
         """Initialize Coinbase adapter."""
@@ -254,14 +255,16 @@ class KrakenAdapter(BrokerAdapter):
     - Symbol format: ETH/USD, BTC/USDT, etc. (slash separator or no separator)
     """
     
-    # Kraken minimum volumes (conservative estimates)
-    MIN_VOLUME_DEFAULT = 10.0  # $10 minimum for most pairs
+    # ✅ REQUIREMENT #4: Kraken minimum volumes (lower than Coinbase)
+    # Kraken fees are lower (0.42% vs Coinbase 1.20%), so minimum can be lower
+    # $10 minimum ensures profitability after fees for small accounts
+    MIN_VOLUME_DEFAULT = 10.0  # $10 minimum for most pairs (lower than Coinbase $25)
     MIN_VOLUME_BTC = 10.0  # $10 minimum even for BTC
     
     # Kraken fee structure (lower than Coinbase)
     MAKER_FEE_PCT = 0.16  # 0.16% maker fee (volume tier)
     TAKER_FEE_PCT = 0.26  # 0.26% taker fee (volume tier)
-    TOTAL_FEE_PCT = 0.42  # Combined round-trip cost
+    TOTAL_FEE_PCT = 0.42  # 0.42% combined round-trip cost (stored as decimal 0.42)
     
     # Kraken doesn't support certain quote currencies
     UNSUPPORTED_QUOTES = ["BUSD"]  # Kraken doesn't have BUSD pairs
