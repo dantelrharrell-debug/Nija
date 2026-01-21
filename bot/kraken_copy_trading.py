@@ -152,6 +152,13 @@ class KrakenClient:
             self.api.key = self.api_key
             self.api.secret = self.api_secret
             
+            # ✅ REQUIREMENT 3: Verify per-API key execution
+            try:
+                from bot.kraken_order_validator import verify_per_api_key_execution
+                verify_per_api_key_execution(self.api_key, self.account_identifier)
+            except ImportError:
+                logger.debug("Kraken order validator not available, skipping per-API key verification")
+            
             # Suppress verbose logging from Kraken SDK library
             kraken_logger = logging.getLogger('krakenex')
             kraken_logger.setLevel(logging.WARNING)
@@ -527,16 +534,31 @@ def execute_master_trade(pair: str, side: str, usd_size: float) -> bool:
             volume=volume
         )
         
-        # Check for errors
+        # ✅ REQUIREMENT 1: Check for errors first
         if 'error' in result and result['error']:
             error_msgs = ', '.join(result['error'])
             logger.error(f"❌ MASTER TRADE FAILED: {error_msgs}")
             return False
         
-        # Extract order ID
+        # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
         order_result = result.get('result', {})
         txid = order_result.get('txid', [])
-        order_id = txid[0] if txid else "unknown"
+        order_id = txid[0] if txid else None
+        
+        # ✅ CRITICAL: If no txid returned, the trade did NOT execute
+        if not order_id:
+            logger.error("=" * 70)
+            logger.error(f"❌ MASTER KRAKEN TRADE FAILED - NO TXID RETURNED")
+            logger.error("=" * 70)
+            logger.error(f"   Pair: {pair}")
+            logger.error(f"   Side: {side.upper()}")
+            logger.error(f"   Size: ${usd_size:.2f} ({volume:.8f} {pair.split('Z')[0]})")
+            logger.error(f"   API Response: {result}")
+            logger.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
+            logger.error("=" * 70)
+            return False
+        
+        logger.info(f"✅ KRAKEN TXID RECEIVED: {order_id}")
         
         logger.info(f"✅ MASTER KRAKEN TRADE EXECUTED")
         logger.info(f"   Pair: {pair}")
@@ -737,19 +759,32 @@ def copy_trade_to_kraken_users(master_trade: Dict[str, Any]):
                 volume=user_volume
             )
             
-            # Check for errors
+            # ✅ REQUIREMENT 1: Check for errors first
             if 'error' in result and result['error']:
                 error_msgs = ', '.join(result['error'])
                 logger.error(f"      ❌ EXECUTION FAILED: {error_msgs}")
                 fail_count += 1
                 continue
             
-            # Extract order ID
+            # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
             order_result = result.get('result', {})
             txid = order_result.get('txid', [])
-            order_id = txid[0] if txid else "unknown"
+            order_id = txid[0] if txid else None
             
-            logger.info(f"      ✅ TRADE COMPLETE | Order ID: {order_id}")
+            # ✅ CRITICAL: If no txid returned, the trade did NOT execute
+            if not order_id:
+                user_id = user.get('id', 'unknown')
+                logger.error(f"      ❌ COPY TRADE FAILED - NO TXID RETURNED")
+                logger.error(f"         User: {user_id}")
+                logger.error(f"         Pair: {master_trade['pair']}")
+                logger.error(f"         Side: {master_trade['side']}")
+                logger.error(f"         Size: ${user_size:.2f}")
+                logger.error(f"         API Response: {result}")
+                logger.error(f"         ⚠️  NO TRADE EXECUTED - Kraken must return txid")
+                fail_count += 1
+                continue
+            
+            logger.info(f"      ✅ TRADE COMPLETE | txid: {order_id}")
             success_count += 1
             
         except Exception as e:

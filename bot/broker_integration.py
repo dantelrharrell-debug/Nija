@@ -16,6 +16,26 @@ import logging
 import threading
 import traceback
 
+# Import Kraken order validator for minimum order validation
+try:
+    from bot.kraken_order_validator import (
+        validate_and_adjust_order, log_order_validation, 
+        get_pair_minimums
+    )
+except ImportError:
+    try:
+        from kraken_order_validator import (
+            validate_and_adjust_order, log_order_validation,
+            get_pair_minimums
+        )
+    except ImportError:
+        # Fallback if validator not available
+        def validate_and_adjust_order(pair, volume, price, side, ordertype='market'):
+            return True, volume, None
+        def log_order_validation(pair, volume, price, side, is_valid, error=None):
+            pass
+        def get_pair_minimums(pair):
+            return {'min_base': 0.001, 'min_quote': 10.0}
 # Import broker adapters for validation
 try:
     from bot.broker_adapters import (
@@ -569,6 +589,14 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.error("Kraken credentials not found")
                 return False
             
+            # ✅ REQUIREMENT 3: Verify per-API key execution
+            try:
+                from bot.kraken_order_validator import verify_per_api_key_execution
+                account_type = getattr(self, 'account_identifier', 'UNKNOWN')
+                verify_per_api_key_execution(self.api_key, account_type)
+            except ImportError:
+                logger.debug("Kraken order validator not available, skipping per-API key verification")
+            
             self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
             
             # FINAL FIX: Override nonce generator to use GLOBAL Kraken Nonce Manager
@@ -972,6 +1000,60 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.info(f"📝 Placing Kraken market {side} order: {kraken_symbol}")
             logger.info(f"   Size: {size} {size_type}, Validation: PASSED")
             
+            # Get current price for validation (rough estimate for market orders)
+            # NOTE: This adds latency (~50-200ms) to fetch ticker data for validation.
+            # Alternative: Could use cached price data or skip validation for market orders
+            # since the final fill price may differ anyway. For now, accepting the latency
+            # trade-off for better order validation accuracy.
+            try:
+                ticker_result = self._kraken_api_call('Ticker', {'pair': kraken_symbol})
+                if ticker_result and 'result' in ticker_result:
+                    ticker_data = ticker_result['result'].get(kraken_symbol, {})
+                    current_price = float(ticker_data.get('c', [0.0])[0]) if ticker_data else 0.0
+                else:
+                    current_price = 0.0
+            except Exception as price_err:
+                logger.debug(f"Could not fetch price for validation: {price_err}")
+                current_price = 0.0
+            
+            # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
+            if current_price > 0:
+                is_valid, adjusted_size, error_msg = validate_and_adjust_order(
+                    pair=kraken_symbol,
+                    volume=size,
+                    price=current_price,
+                    side=side,
+                    ordertype='market'
+                )
+                
+                log_order_validation(kraken_symbol, size, current_price, side, is_valid, error_msg)
+                
+                if not is_valid:
+                    logger.error(f"❌ Order rejected - fails Kraken minimums: {error_msg}")
+                    return {
+                        'order_id': None,
+                        'symbol': symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': 0.0,
+                        'status': 'error',
+                        'error': f'Order validation failed: {error_msg}',
+                        'timestamp': datetime.now()
+                    }
+                
+                # Use adjusted size (fee-adjusted)
+                size = adjusted_size
+                logger.info(f"   Using fee-adjusted size: {size:.8f}")
+            else:
+                # If we can't get price, log warning and skip validation
+                # Order will still be submitted but without pre-validation
+                logger.warning(f"⚠️  Could not fetch price for pre-validation")
+                logger.warning(f"   Order will be submitted without size validation")
+                logger.warning(f"   Kraken will reject if order doesn't meet minimums")
+                minimums = get_pair_minimums(kraken_symbol)
+                logger.info(f"   Expected pair minimums: {minimums}")
+            
+            # Place market order
             # ✅ REQUIREMENT #2: Build order parameters with proper format
             # Ensure parameters match Kraken API requirements exactly
             order_params = {
@@ -985,13 +1067,31 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Use helper method for global nonce management and thread safety
             result = self._kraken_api_call('AddOrder', order_params)
             
-            # ✅ FIX 4: ENHANCED ORDER LOGGING WITH FILL DETAILS
+            # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
                 
-                logger.info(f"Kraken market {side} order placed: {kraken_symbol} (ID: {order_id})")
+                # ✅ CRITICAL: If no txid returned, the trade did NOT execute
+                if not order_id:
+                    logger.error("❌ KRAKEN ORDER FAILED - NO TXID RETURNED")
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
+                    return {
+                        'order_id': None,
+                        'symbol': symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': 0.0,
+                        'status': 'error',
+                        'error': 'No txid returned from Kraken - order did not execute',
+                        'timestamp': datetime.now()
+                    }
+                
+                logger.info(f"✅ Kraken txid received: {order_id}")
+                logger.info(f"   Market {side} order: {kraken_symbol} (ID: {order_id})")
                 
                 # ✅ REQUIREMENT #2: Attempt to fetch order fill details
                 # Query the order to get filled price and volume
@@ -1131,6 +1231,19 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Calculate USD size for validation (limit orders use price)
             order_size_usd = size * price if size_type == 'base' else size
             
+            # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
+            is_valid, adjusted_size, error_msg = validate_and_adjust_order(
+                pair=kraken_symbol,
+                volume=size,
+                price=price,
+                side=side,
+                ordertype='limit'
+            )
+            
+            log_order_validation(kraken_symbol, size, price, side, is_valid, error_msg)
+            
+            if not is_valid:
+                logger.error(f"❌ Limit order rejected - fails Kraken minimums: {error_msg}")
             is_valid, kraken_symbol, error_msg = self._validate_kraken_order(
                 symbol, side, size, size_type, current_price=price
             )
@@ -1146,6 +1259,15 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'size': size,
                     'filled_price': price,
                     'status': 'error',
+                    'error': f'Order validation failed: {error_msg}',
+                    'timestamp': datetime.now()
+                }
+            
+            # Use adjusted size (fee-adjusted)
+            size = adjusted_size
+            logger.info(f"   Using fee-adjusted size: {size:.8f}")
+            
+            # Place limit order
                     'error': 'VALIDATION_FAILED',
                     'message': error_msg,
                     'timestamp': datetime.now()
@@ -1167,12 +1289,32 @@ class KrakenBrokerAdapter(BrokerInterface):
             # ✅ REQUIREMENT #3: Execute order via serialized API call
             result = self._kraken_api_call('AddOrder', order_params)
             
+            # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
             # ✅ REQUIREMENT #4: Verify txid and return comprehensive response
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
                 
+                # ✅ CRITICAL: If no txid returned, the trade did NOT execute
+                if not order_id:
+                    logger.error("❌ KRAKEN LIMIT ORDER FAILED - NO TXID RETURNED")
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: {price}, Size: {size}")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
+                    return {
+                        'order_id': None,
+                        'symbol': symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': price,
+                        'status': 'error',
+                        'error': 'No txid returned from Kraken - order did not execute',
+                        'timestamp': datetime.now()
+                    }
+                
+                logger.info(f"✅ Kraken txid received: {order_id}")
+                logger.info(f"   Limit {side} order: {kraken_symbol} @ ${price} (ID: {order_id})")
                 if order_id:
                     logger.info(f"✅ Kraken limit {side} order placed successfully")
                     logger.info(f"   • Order ID (txid): {order_id}")
