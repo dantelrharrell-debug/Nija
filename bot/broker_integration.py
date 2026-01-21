@@ -464,10 +464,10 @@ class KrakenBrokerAdapter(BrokerInterface):
         else:
             # Load from environment variables
             # Prioritize KRAKEN_MASTER_API_KEY, fallback to legacy KRAKEN_API_KEY
-            master_key = os.getenv("KRAKEN_MASTER_API_KEY")
-            master_secret = os.getenv("KRAKEN_MASTER_API_SECRET")
-            legacy_key = os.getenv("KRAKEN_API_KEY")
-            legacy_secret = os.getenv("KRAKEN_API_SECRET")
+            master_key = os.getenv("KRAKEN_MASTER_API_KEY", "").strip()
+            master_secret = os.getenv("KRAKEN_MASTER_API_SECRET", "").strip()
+            legacy_key = os.getenv("KRAKEN_API_KEY", "").strip()
+            legacy_secret = os.getenv("KRAKEN_API_SECRET", "").strip()
             
             # Use master credentials if both are available, otherwise try legacy
             if master_key and master_secret:
