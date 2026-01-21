@@ -109,6 +109,31 @@ except ImportError:
             finally:
                 sys.stdout = original_stdout
 
+# Import custom exceptions for safety checks
+try:
+    from bot.exceptions import (
+        ExecutionError, BrokerMismatchError, InvalidTxidError,
+        InvalidFillPriceError, OrderRejectedError
+    )
+except ImportError:
+    try:
+        from exceptions import (
+            ExecutionError, BrokerMismatchError, InvalidTxidError,
+            InvalidFillPriceError, OrderRejectedError
+        )
+    except ImportError:
+        # Fallback: Define locally if import fails
+        class ExecutionError(Exception):
+            pass
+        class BrokerMismatchError(ExecutionError):
+            pass
+        class InvalidTxidError(ExecutionError):
+            pass
+        class InvalidFillPriceError(ExecutionError):
+            pass
+        class OrderRejectedError(ExecutionError):
+            pass
+
 logger = logging.getLogger("nija.broker")
 
 
@@ -1067,28 +1092,38 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Use helper method for global nonce management and thread safety
             result = self._kraken_api_call('AddOrder', order_params)
             
+            # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
+            # DO NOT allow rejected orders to be recorded as successful trades
+            if result and 'error' in result and result['error']:
+                error_msgs = ', '.join(result['error'])
+                logger.error("=" * 70)
+                logger.error("❌ KRAKEN ORDER REJECTED - ABORTING")
+                logger.error("=" * 70)
+                logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                logger.error(f"   Rejection Reason: {error_msgs}")
+                logger.error("   ⚠️  ORDER REJECTED - DO NOT RECORD TRADE")
+                logger.error("=" * 70)
+                # Raise exception to prevent recording this as a successful trade
+                raise OrderRejectedError(f"Order rejected by Kraken: {error_msgs}")
+            
             # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
                 
-                # ✅ CRITICAL: If no txid returned, the trade did NOT execute
+                # ✅ SAFETY CHECK #3: Require txid before recording position
+                # If no txid → trade not executed → raise exception
                 if not order_id:
+                    logger.error("=" * 70)
                     logger.error("❌ KRAKEN ORDER FAILED - NO TXID RETURNED")
+                    logger.error("=" * 70)
                     logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
                     logger.error(f"   API Response: {result}")
                     logger.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
-                    return {
-                        'order_id': None,
-                        'symbol': symbol,
-                        'side': side,
-                        'size': size,
-                        'filled_price': 0.0,
-                        'status': 'error',
-                        'error': 'No txid returned from Kraken - order did not execute',
-                        'timestamp': datetime.now()
-                    }
+                    logger.error("=" * 70)
+                    # Raise exception to prevent recording this as a successful trade
+                    raise InvalidTxidError("No txid returned from Kraken - order did not execute")
                 
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Market {side} order: {kraken_symbol} (ID: {order_id})")
@@ -1119,6 +1154,20 @@ class KrakenBrokerAdapter(BrokerInterface):
                             # ✅ REQUIREMENT #2: Verify Kraken returns status=closed and vol_exec > 0
                             is_filled = (order_status == 'closed' and filled_volume > 0)
                             order_verified = is_filled
+                            
+                            # ✅ SAFETY CHECK #4: Kill zero-price fills immediately
+                            # Invalid fill price indicates data corruption or API error
+                            if filled_price <= 0:
+                                logger.error("=" * 70)
+                                logger.error("❌ INVALID FILL PRICE - ABORTING")
+                                logger.error("=" * 70)
+                                logger.error(f"   Order ID: {order_id}")
+                                logger.error(f"   Symbol: {kraken_symbol}, Side: {side}")
+                                logger.error(f"   Filled Price: {filled_price} (INVALID)")
+                                logger.error("   ⚠️  Price must be greater than zero")
+                                logger.error("=" * 70)
+                                # Raise exception to prevent recording this trade
+                                raise InvalidFillPriceError(f"Invalid fill price: {filled_price}")
                             
                             if is_filled:
                                 # ✅ ORDER CONFIRMATION LOGGING (REQUIREMENT #2)
@@ -1255,6 +1304,19 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.info(f"📝 Placing Kraken limit {side} order: {kraken_symbol} @ ${price}")
             logger.info(f"   Size: {size} {size_type}, USD Value: ${order_size_usd:.2f}, Validation: PASSED")
             
+            # ✅ SAFETY CHECK #4: Validate limit price before placing order
+            # For limit orders, validate the limit price itself before API call
+            if price <= 0:
+                logger.error("=" * 70)
+                logger.error("❌ INVALID LIMIT PRICE - ABORTING")
+                logger.error("=" * 70)
+                logger.error(f"   Symbol: {kraken_symbol}, Side: {side}")
+                logger.error(f"   Limit Price: {price} (INVALID)")
+                logger.error("   ⚠️  Price must be greater than zero")
+                logger.error("=" * 70)
+                # Raise exception to prevent placing order
+                raise InvalidFillPriceError(f"Invalid limit price: {price}")
+            
             # ✅ REQUIREMENT #2: Build order parameters with proper format
             order_params = {
                 'pair': kraken_symbol,
@@ -1267,6 +1329,20 @@ class KrakenBrokerAdapter(BrokerInterface):
             # ✅ REQUIREMENT #3: Execute order via serialized API call
             result = self._kraken_api_call('AddOrder', order_params)
             
+            # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
+            # DO NOT allow rejected orders to be recorded as successful trades
+            if result and 'error' in result and result['error']:
+                error_msgs = ', '.join(result['error'])
+                logger.error("=" * 70)
+                logger.error("❌ KRAKEN LIMIT ORDER REJECTED - ABORTING")
+                logger.error("=" * 70)
+                logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: ${price}, Size: {size}")
+                logger.error(f"   Rejection Reason: {error_msgs}")
+                logger.error("   ⚠️  ORDER REJECTED - DO NOT RECORD TRADE")
+                logger.error("=" * 70)
+                # Raise exception to prevent recording this as a successful trade
+                raise OrderRejectedError(f"Limit order rejected by Kraken: {error_msgs}")
+            
             # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
             # ✅ REQUIREMENT #4: Verify txid and return comprehensive response
             if result and 'result' in result:
@@ -1274,22 +1350,18 @@ class KrakenBrokerAdapter(BrokerInterface):
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
                 
-                # ✅ CRITICAL: If no txid returned, the trade did NOT execute
+                # ✅ SAFETY CHECK #3: Require txid before recording position
+                # If no txid → trade not executed → raise exception
                 if not order_id:
+                    logger.error("=" * 70)
                     logger.error("❌ KRAKEN LIMIT ORDER FAILED - NO TXID RETURNED")
+                    logger.error("=" * 70)
                     logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: {price}, Size: {size}")
                     logger.error(f"   API Response: {result}")
                     logger.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
-                    return {
-                        'order_id': None,
-                        'symbol': symbol,
-                        'side': side,
-                        'size': size,
-                        'filled_price': price,
-                        'status': 'error',
-                        'error': 'No txid returned from Kraken - order did not execute',
-                        'timestamp': datetime.now()
-                    }
+                    logger.error("=" * 70)
+                    # Raise exception to prevent recording this as a successful trade
+                    raise InvalidTxidError("No txid returned from Kraken - limit order did not execute")
                 
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Limit {side} order: {kraken_symbol} @ ${price} (ID: {order_id})")
