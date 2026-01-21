@@ -7,6 +7,7 @@ Handles order execution and position management for Apex Strategy v7.1
 from typing import Dict, Optional, List
 from datetime import datetime
 import logging
+import uuid
 
 logger = logging.getLogger("nija")
 
@@ -21,6 +22,15 @@ except ImportError:
     FEE_AWARE_MODE = False
     DEFAULT_ROUND_TRIP_FEE = 0.014  # 1.4% default
     logger.warning(f"⚠️ Fee-aware config not found - using default {DEFAULT_ROUND_TRIP_FEE*100:.1f}% round-trip fee")
+
+# Import trade ledger database
+try:
+    from trade_ledger_db import get_trade_ledger_db
+    TRADE_LEDGER_ENABLED = True
+    logger.info("✅ Trade ledger database enabled")
+except ImportError:
+    TRADE_LEDGER_ENABLED = False
+    logger.warning("⚠️ Trade ledger database not available")
 
 
 class ExecutionEngine:
@@ -38,20 +48,33 @@ class ExecutionEngine:
     # beyond what's expected from the quote price. So 0.5% extra slippage = very bad fill
     MAX_IMMEDIATE_LOSS_PCT = 0.005  # 0.5%
     
-    def __init__(self, broker_client=None):
+    def __init__(self, broker_client=None, user_id: str = 'master'):
         """
         Initialize Execution Engine
         
         Args:
             broker_client: Broker client instance (Coinbase, Alpaca, Binance, etc.)
+            user_id: User ID for trade tracking (default: 'master')
         """
         self.broker_client = broker_client
+        self.user_id = user_id
         self.positions: Dict[str, Dict] = {}
         self.orders: List[Dict] = []
         
         # Track rejected trades for monitoring
         self.rejected_trades_count = 0
         self.immediate_exit_count = 0
+        
+        # Initialize trade ledger database
+        if TRADE_LEDGER_ENABLED:
+            try:
+                self.trade_ledger = get_trade_ledger_db()
+                logger.info("✅ Trade ledger database connected")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not connect to trade ledger: {e}")
+                self.trade_ledger = None
+        else:
+            self.trade_ledger = None
     
     def execute_entry(self, symbol: str, side: str, position_size: float,
                      entry_price: float, stop_loss: float, 
@@ -116,12 +139,57 @@ class ExecutionEngine:
                 # Use actual fill price if available, otherwise use expected
                 final_entry_price = actual_fill_price if actual_fill_price else entry_price
                 
+                # Calculate quantity from position size
+                quantity = position_size / final_entry_price
+                
+                # Calculate entry fee (assuming 0.6% taker fee)
+                entry_fee = position_size * 0.006
+                
+                # Generate unique position ID
+                position_id = f"{symbol}_{int(datetime.now().timestamp())}"
+                
+                # Record BUY/SELL in trade ledger database
+                if self.trade_ledger:
+                    try:
+                        order_id = result.get('order_id') or result.get('id')
+                        self.trade_ledger.record_buy(
+                            symbol=symbol,
+                            price=final_entry_price,
+                            quantity=quantity,
+                            size_usd=position_size,
+                            fee=entry_fee,
+                            order_id=str(order_id) if order_id else None,
+                            position_id=position_id,
+                            user_id=self.user_id,
+                            notes=f"{side.upper()} entry"
+                        )
+                        
+                        # Open position in database
+                        self.trade_ledger.open_position(
+                            position_id=position_id,
+                            symbol=symbol,
+                            side=side.upper(),
+                            entry_price=final_entry_price,
+                            quantity=quantity,
+                            size_usd=position_size,
+                            stop_loss=stop_loss,
+                            take_profit_1=take_profit_levels['tp1'],
+                            take_profit_2=take_profit_levels['tp2'],
+                            take_profit_3=take_profit_levels['tp3'],
+                            entry_fee=entry_fee,
+                            user_id=self.user_id
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not record trade in ledger: {e}")
+                
                 # Create position record
                 position = {
                     'symbol': symbol,
                     'side': side,
                     'entry_price': final_entry_price,
                     'position_size': position_size,
+                    'quantity': quantity,
+                    'position_id': position_id,
                     'stop_loss': stop_loss,
                     'tp1': take_profit_levels['tp1'],
                     'tp2': take_profit_levels['tp2'],
@@ -185,6 +253,29 @@ class ExecutionEngine:
                 if result.get('status') == 'error':
                     logger.error(f"Exit order failed: {result.get('error')}")
                     return False
+                
+                # Calculate exit fee
+                exit_fee = exit_size * 0.006
+                
+                # Record SELL in trade ledger database
+                if self.trade_ledger:
+                    try:
+                        order_id = result.get('order_id') or result.get('id')
+                        exit_quantity = position.get('quantity', exit_size / exit_price) * size_pct
+                        
+                        self.trade_ledger.record_sell(
+                            symbol=symbol,
+                            price=exit_price,
+                            quantity=exit_quantity,
+                            size_usd=exit_size,
+                            fee=exit_fee,
+                            order_id=str(order_id) if order_id else None,
+                            position_id=position.get('position_id'),
+                            user_id=self.user_id,
+                            notes=f"Exit: {reason}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not record exit in ledger: {e}")
             
             # Update position
             position['remaining_size'] *= (1.0 - size_pct)
@@ -193,6 +284,20 @@ class ExecutionEngine:
             if position['remaining_size'] < 0.01:  # Less than 1% remaining
                 position['status'] = 'closed'
                 position['closed_at'] = datetime.now()
+                
+                # Close position in database
+                if self.trade_ledger and position.get('position_id'):
+                    try:
+                        exit_fee = exit_size * 0.006
+                        self.trade_ledger.close_position(
+                            position_id=position['position_id'],
+                            exit_price=exit_price,
+                            exit_fee=exit_fee,
+                            exit_reason=reason
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not close position in ledger: {e}")
+                
                 logger.info(f"Position closed: {symbol}")
             else:
                 logger.info(f"Partial exit: {symbol} ({position['remaining_size']*100:.0f}% remaining)")
