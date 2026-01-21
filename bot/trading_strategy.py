@@ -21,6 +21,19 @@ except ImportError:
         # Graceful fallback if market_filters not available
         check_pair_quality = None
 
+# Import scalar helper for indicator conversions
+try:
+    from indicators import scalar
+except ImportError:
+    try:
+        from bot.indicators import scalar
+    except ImportError:
+        # Fallback if indicators.py is not available
+        def scalar(x):
+            if isinstance(x, (tuple, list)):
+                return float(x[0])
+            return float(x)
+
 load_dotenv()
 
 logger = logging.getLogger("nija")
@@ -1949,7 +1962,7 @@ class TradingStrategy:
                     # When we don't have entry price, use price momentum and trend reversal signals
                     # This helps lock in gains on strong moves and cut losses on weak positions
                     
-                    rsi = indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI
+                    rsi = scalar(indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI)
                     
                     # CRITICAL FIX (Jan 16, 2026): ORPHANED POSITION PROTECTION
                     # Positions without entry prices are more likely to be losing trades
