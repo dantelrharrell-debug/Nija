@@ -250,6 +250,11 @@ class AdaptiveRiskManager:
         """
         breakdown = {}
         
+        # Normalize all numeric inputs to handle tuples/lists
+        adx = scalar(adx)
+        ai_confidence = scalar(ai_confidence)
+        volatility_pct = scalar(volatility_pct)
+        
         # FIX #1: Use portfolio total_equity if available
         if portfolio_state is not None:
             total_equity = portfolio_state.total_equity
@@ -293,21 +298,18 @@ class AdaptiveRiskManager:
                 breakdown['portfolio_accounting'] = False
                 logger.debug(f"Legacy cash-based sizing: ${account_balance:.2f}")
         
-        # Convert ADX to scalar to handle tuples/lists
-        adx = scalar(adx)
-        
         # No trade if ADX < 20
-        if adx < 20:
+        if float(adx) < 20:
             return 0.0, {'reason': 'ADX too low', 'adx': adx}
         
         # 1. Base allocation from ADX
-        if adx < 25:
+        if float(adx) < 25:
             base_pct = 0.02  # 2%
-        elif adx < 30:
+        elif float(adx) < 30:
             base_pct = 0.04  # 4%
-        elif adx < 40:
+        elif float(adx) < 40:
             base_pct = 0.06  # 6%
-        elif adx < 50:
+        elif float(adx) < 50:
             base_pct = 0.08  # 8%
         else:
             base_pct = 0.10  # 10%
@@ -329,12 +331,12 @@ class AdaptiveRiskManager:
         # High confidence (>0.7) = up to 1.2x
         # Medium confidence (0.4-0.7) = 1.0x
         # Low confidence (<0.4) = 0.7x
-        if ai_confidence > 0.7:
-            confidence_multiplier = 1.0 + ((ai_confidence - 0.7) / 0.3) * 0.2
-        elif ai_confidence >= 0.4:
+        if float(ai_confidence) > 0.7:
+            confidence_multiplier = 1.0 + ((float(ai_confidence) - 0.7) / 0.3) * 0.2
+        elif float(ai_confidence) >= 0.4:
             confidence_multiplier = 1.0
         else:
-            confidence_multiplier = 0.7 + (ai_confidence / 0.4) * 0.3
+            confidence_multiplier = 0.7 + (float(ai_confidence) / 0.4) * 0.3
         
         breakdown['ai_confidence'] = ai_confidence
         breakdown['confidence_multiplier'] = confidence_multiplier
@@ -366,11 +368,11 @@ class AdaptiveRiskManager:
         # 5. Adjust for volatility
         # Optimal volatility: 0.5% - 2%
         # Reduce size if too volatile or too low
-        if volatility_pct < 0.003:
+        if float(volatility_pct) < 0.003:
             volatility_multiplier = 0.7  # Very low volatility - choppy market
-        elif volatility_pct > 0.03:
+        elif float(volatility_pct) > 0.03:
             volatility_multiplier = 0.6  # Very high volatility - risky
-        elif volatility_pct > 0.02:
+        elif float(volatility_pct) > 0.02:
             volatility_multiplier = 0.8  # High volatility
         else:
             volatility_multiplier = 1.0  # Good volatility
@@ -463,7 +465,9 @@ class AdaptiveRiskManager:
         # With $1-2 positions, expect fees to consume most/all profits
         # This minimum allows trading for learning/testing but profitability is severely limited
         MIN_ABSOLUTE_POSITION_SIZE = 1.0
-        if position_size < MIN_ABSOLUTE_POSITION_SIZE:
+        # Normalize position_size (defensive programming - ensures scalar type)
+        position_size = scalar(position_size)
+        if float(position_size) < MIN_ABSOLUTE_POSITION_SIZE:
             logger.warning(f"🚫 MICRO TRADE BLOCKED: Calculated ${position_size:.2f} < ${MIN_ABSOLUTE_POSITION_SIZE} minimum")
             logger.warning(f"   💡 Reason: Extremely small positions face severe fee impact")
             return 0.0, {'reason': 'Position too small (micro trade prevention)', 'calculated_size': position_size, 'minimum': MIN_ABSOLUTE_POSITION_SIZE}

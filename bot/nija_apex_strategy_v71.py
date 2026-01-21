@@ -103,8 +103,11 @@ class NIJAApexStrategyV71:
         Returns:
             Dictionary with 'valid' (bool), 'reason' (str), and 'confidence' (float)
         """
-        # Check minimum position size ($5.00 minimum)
-        if position_size < MIN_POSITION_USD:
+        # Normalize position_size in case it's a tuple
+        position_size = scalar(position_size)
+        
+        # Check minimum position size
+        if float(position_size) < MIN_POSITION_USD:
             logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below minimum ${MIN_POSITION_USD:.2f}")
             return {
                 'valid': False,
@@ -117,11 +120,9 @@ class NIJAApexStrategyV71:
         # Normalize score to 0-1 range for confidence check
         confidence = min(score / MAX_ENTRY_SCORE, 1.0)
         # FIX: Guard against tuple returns (defensive programming)
-        if isinstance(confidence, tuple):
-            confidence = confidence[0]
-        confidence = float(confidence)
+        confidence = scalar(confidence)
         
-        if confidence < MIN_CONFIDENCE:
+        if float(confidence) < MIN_CONFIDENCE:
             logger.info(f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below minimum {MIN_CONFIDENCE:.2f}")
             return {
                 'valid': False,
@@ -172,7 +173,7 @@ class NIJAApexStrategyV71:
         volume_ratio = current_volume / avg_volume_5 if avg_volume_5 > 0 else 0
         
         # ADX filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
-        if self.min_adx > 0 and adx < self.min_adx:
+        if self.min_adx > 0 and float(adx) < self.min_adx:
             return False, 'none', f'ADX too low ({adx:.1f} < {self.min_adx})'
         
         # Volume filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
@@ -650,11 +651,13 @@ class NIJAApexStrategyV71:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
-                    position_size = self.risk_manager.calculate_position_size(
+                    position_size, size_breakdown = self.risk_manager.calculate_position_size(
                         account_balance, adx, score
                     )
+                    # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
+                    position_size = scalar(position_size)
                     
-                    if position_size == 0:
+                    if float(position_size) == 0:
                         return {
                             'action': 'hold',
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
@@ -695,11 +698,13 @@ class NIJAApexStrategyV71:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
-                    position_size = self.risk_manager.calculate_position_size(
+                    position_size, size_breakdown = self.risk_manager.calculate_position_size(
                         account_balance, adx, score
                     )
+                    # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
+                    position_size = scalar(position_size)
                     
-                    if position_size == 0:
+                    if float(position_size) == 0:
                         return {
                             'action': 'hold',
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
