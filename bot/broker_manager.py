@@ -684,31 +684,32 @@ class BaseBroker(ABC):
             Dict with order result or error
         """
         broker_name = self.broker_type.value.lower()
+        broker_title = broker_name.title()
         
         # PRE-FLIGHT CHECK 1: Symbol support validation
         # Skip if symbol not supported by this broker
         if not self.supports_symbol(symbol):
             logger.info(f"   ❌ Trade rejected for {symbol}")
-            logger.info(f"      Reason: {broker_name.title()} does not support this symbol")
+            logger.info(f"      Reason: {broker_title} does not support this symbol")
             logger.info(f"      💡 This symbol may be specific to another exchange")
             return {
                 "status": "skipped",
                 "error": "UNSUPPORTED_SYMBOL",
-                "message": f"{broker_name.title()} does not support {symbol}",
+                "message": f"{broker_title} does not support {symbol}",
                 "partial_fill": False,
                 "filled_pct": 0.0
             }
         
         # PRE-FLIGHT CHECK 2: EXIT-ONLY mode validation
         # Block BUY orders when broker is in exit-only mode
-        if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
+        if side.lower() == 'buy' and self.exit_only_mode and not force_liquidate:
             logger.info(f"   ❌ Trade rejected for {symbol}")
-            logger.info(f"      Reason: {broker_name.title()} is in EXIT-ONLY mode")
+            logger.info(f"      Reason: {broker_title} is in EXIT-ONLY mode")
             logger.info(f"      Only SELL orders are allowed to close existing positions")
             return {
                 "status": "skipped",
                 "error": "EXIT_ONLY_MODE",
-                "message": f"BUY orders blocked: {broker_name.title()} in EXIT-ONLY mode",
+                "message": f"BUY orders blocked: {broker_title} in EXIT-ONLY mode",
                 "partial_fill": False,
                 "filled_pct": 0.0
             }
@@ -720,13 +721,13 @@ class BaseBroker(ABC):
             if quantity < self.warn_trade_size:
                 logger.warning(f"   ⚠️  Trade size warning for {symbol}")
                 logger.warning(f"      Size: ${quantity:.2f} < ${self.warn_trade_size:.2f} (warning threshold)")
-                logger.warning(f"      Broker: {broker_name.title()}")
+                logger.warning(f"      Broker: {broker_title}")
                 logger.warning(f"      💡 For better copy trading optics, consider larger positions")
             
             # Check hard minimum (block)
             if quantity < self.min_trade_size:
                 logger.info(f"   ❌ Trade rejected for {symbol}")
-                logger.info(f"      Reason: Size ${quantity:.2f} < ${self.min_trade_size:.2f} minimum for {broker_name.title()}")
+                logger.info(f"      Reason: Size ${quantity:.2f} < ${self.min_trade_size:.2f} minimum for {broker_title}")
                 logger.info(f"      Minimum trade size: ${self.min_trade_size:.2f}")
                 return {
                     "status": "skipped",
