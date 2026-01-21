@@ -208,10 +208,16 @@ STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.008  # -0.8% maximum (conservative)
 # Terminology: "Emergency micro-stop to prevent logic failures (not a trading stop)"
 STOP_LOSS_MICRO = -0.01  # -1% emergency micro-stop for logic failure prevention
 STOP_LOSS_WARNING = -0.01  # Same as micro-stop - warn immediately
+STOP_LOSS_THRESHOLD = -0.01  # Legacy threshold (same as micro-stop)
 
 # TIER 3: CATASTROPHIC FAILSAFE
 # Last resort protection - should NEVER be reached in normal operation
-STOP_LOSS_EMERGENCY = -5.0  # EMERGENCY exit at -5% loss (FAILSAFE - absolute last resort)
+# NORMALIZED FORMAT: -0.05 = -5% (fractional format)
+STOP_LOSS_EMERGENCY = -0.05  # EMERGENCY exit at -5% loss (FAILSAFE - absolute last resort)
+
+# OPTIONAL ENHANCEMENT: Minimum loss floor
+# Ignore very small losses to reduce noise and prevent overtrading
+MIN_LOSS_FLOOR = -0.0025  # -0.25% - ignore losses smaller than this
 
 # Auto-import safety default constants (FIX #1 - Jan 19, 2026)
 # When auto-importing orphaned positions without real entry price, use safety default
@@ -1199,8 +1205,8 @@ class TradingStrategy:
         
         return (
             primary_stop,           # Tier 1: Primary trading stop
-            STOP_LOSS_MICRO,        # Tier 2: Emergency micro-stop (-1.0%)
-            STOP_LOSS_EMERGENCY,    # Tier 3: Catastrophic failsafe (-5.0%)
+            STOP_LOSS_MICRO,        # Tier 2: Emergency micro-stop (-1%)
+            STOP_LOSS_EMERGENCY,    # Tier 3: Catastrophic failsafe (-5%)
             description
         )
 
@@ -1531,9 +1537,13 @@ class TradingStrategy:
                                 pnl_dollars = pnl_data['pnl_dollars']
                                 entry_price = pnl_data['entry_price']
                                 
-                                logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent:+.2f}%) | Entry: ${entry_price:.2f}")
+                                # CRITICAL: Validate PnL is in fractional format (not percentage)
+                                # If abs(pnl_percent) >= 1, it's likely using wrong scale (percentage instead of fractional)
+                                assert abs(pnl_percent) < 1.0, f"PNL scale mismatch for {symbol}: {pnl_percent} (expected fractional format like -0.01 for -1%)"
                                 
-                                # 🔥 3-TIER STOP-LOSS SYSTEM (JAN 19, 2026)
+                                logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent*100:+.2f}%) | Entry: ${entry_price:.2f}")
+                                
+                                # 🛡️ 3-TIER PROTECTIVE STOP-LOSS SYSTEM (JAN 21, 2026)
                                 # Tier 1: Primary trading stop (varies by broker and balance)
                                 # Tier 2: Emergency micro-stop to prevent logic failures
                                 # Tier 3: Catastrophic failsafe (last resort)
@@ -1543,27 +1553,27 @@ class TradingStrategy:
                                 # For Kraken small balances: -0.6% to -0.8%
                                 # For Coinbase/other: -1.0%
                                 if pnl_percent <= primary_stop:
-                                    logger.warning(f"   🛑 PRIMARY STOP-LOSS HIT: {symbol} at {pnl_percent:.2f}% (threshold: {primary_stop*100:.2f}%)")
-                                    logger.warning(f"   💥 TIER 1: Trading stop-loss triggered - exiting position to prevent further loss")
+                                    logger.warning(f"   🛡️ PRIMARY PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {primary_stop*100:.2f}%)")
+                                    logger.warning(f"   💥 TIER 1: Protective trading stop triggered - capital preservation mode")
                                     
-                                    # FIX #2: Use forced stop-loss executor (bypasses all filters)
+                                    # FIX #2: Use protective stop-loss executor (risk management override)
                                     if self.forced_stop_loss:
                                         success, result, error = self.forced_stop_loss.force_sell_position(
                                             symbol=symbol,
                                             quantity=quantity,
-                                            reason=f"Primary stop-loss: {pnl_percent:.2f}% <= {primary_stop*100:.2f}%"
+                                            reason=f"Primary protective stop-loss: {pnl_percent*100:.2f}% <= {primary_stop*100:.2f}%"
                                         )
                                         
                                         if success:
-                                            logger.info(f"   ✅ FORCED STOP-LOSS EXECUTED: {symbol}")
+                                            logger.info(f"   ✅ PROTECTIVE STOP-LOSS EXECUTED: {symbol}")
                                             # Track the exit
                                             if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                 active_broker.position_tracker.track_exit(symbol, quantity)
                                         else:
-                                            logger.error(f"   ❌ FORCED STOP-LOSS FAILED: {error}")
+                                            logger.error(f"   ❌ PROTECTIVE STOP-LOSS FAILED: {error}")
                                     else:
-                                        # Fallback to legacy stop-loss if forced executor not available
-                                        logger.warning("   ⚠️ Forced stop-loss not available, using legacy method")
+                                        # Fallback to legacy stop-loss if protective executor not available
+                                        logger.warning("   ⚠️ Protective stop-loss executor not available, using legacy method")
                                         try:
                                             result = active_broker.place_market_order(
                                                 symbol=symbol,
@@ -1652,13 +1662,13 @@ class TradingStrategy:
                                         })
                                         continue
                                 
-                                # TIER 3: CATASTROPHIC FAILSAFE (Last resort protection)
+                                # TIER 3: CATASTROPHIC PROTECTIVE FAILSAFE (Last resort protection)
                                 # This should NEVER be reached in normal operation
                                 # Only triggers at -5.0% to catch extreme edge cases
                                 if pnl_percent <= catastrophic_stop:
-                                    logger.error(f"   🚨 CATASTROPHIC FAILSAFE TRIGGERED: {symbol} at {pnl_percent:.2f}% (threshold: {catastrophic_stop*100:.1f}%)")
-                                    logger.error(f"   💥 TIER 3: Last resort protection - something went very wrong!")
-                                    logger.error(f"   💥 FORCED EXIT MODE - Bypassing all filters and safeguards")
+                                    logger.warning(f"   🚨 CATASTROPHIC PROTECTIVE FAILSAFE TRIGGERED: {symbol} at {pnl_percent*100:.2f}% (threshold: {catastrophic_stop*100:.1f}%)")
+                                    logger.warning(f"   💥 TIER 3: Last resort capital preservation - severe loss detected!")
+                                    logger.warning(f"   🛡️ PROTECTIVE EXIT MODE — Risk Management Override Active")
                                     
                                     # Use forced exit path with retry - bypasses ALL filters
                                     exit_success = False
@@ -1751,27 +1761,31 @@ class TradingStrategy:
                                         else:
                                             logger.info(f"   ⚠️ Target {target_pct}% hit but profit {pnl_percent:.2f}% < minimum threshold {min_threshold*100:.1f}% - holding")
                                 else:
-                                    # No profit target hit, check stop loss
+                                    # No profit target hit, check stop loss (LEGACY FALLBACK)
                                     # CRITICAL FIX (Jan 19, 2026): Stop-loss checks happen BEFORE time-based exits
                                     # This ensures losing trades get stopped out immediately, not held for hours
-                                    # EMERGENCY STOP LOSS: Force exit at -5% or worse (FAILSAFE)
+                                    
+                                    # CATASTROPHIC STOP LOSS: Force exit at -5% or worse (ABSOLUTE FAILSAFE)
                                     if pnl_percent <= STOP_LOSS_EMERGENCY:
-                                        logger.error(f"   🚨 EMERGENCY STOP LOSS: {symbol} at {pnl_percent:.2f}% (emergency: {STOP_LOSS_EMERGENCY}%)")
-                                        logger.error(f"   💥 FORCE SELLING to prevent catastrophic loss!")
+                                        logger.warning(f"   🛡️ CATASTROPHIC PROTECTIVE EXIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_EMERGENCY*100:.0f}%)")
+                                        logger.warning(f"   💥 PROTECTIVE ACTION: Exiting to prevent severe capital loss")
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'EMERGENCY STOP LOSS {STOP_LOSS_EMERGENCY}% (actual: {pnl_percent:.2f}%)'
+                                            'reason': f'Catastrophic protective exit at {STOP_LOSS_EMERGENCY*100:.0f}% (actual: {pnl_percent*100:.2f}%)'
                                         })
-                                    elif pnl_percent <= STOP_LOSS_THRESHOLD:
-                                        logger.warning(f"   🛑 STOP LOSS HIT: {symbol} at {pnl_percent:.2f}% (stop: {STOP_LOSS_THRESHOLD}%)")
+                                    # STANDARD STOP LOSS: Normal stop-loss threshold
+                                    # WITH MINIMUM LOSS FLOOR: Only trigger if loss is significant enough
+                                    elif pnl_percent <= STOP_LOSS_THRESHOLD and pnl_percent <= MIN_LOSS_FLOOR:
+                                        logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Stop loss {STOP_LOSS_THRESHOLD}% hit (actual: {pnl_percent:.2f}%)'
+                                            'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)'
                                         })
+                                    # WARNING THRESHOLD: Approaching stop loss
                                     elif pnl_percent <= STOP_LOSS_WARNING:
-                                        logger.warning(f"   ⚠️ Approaching stop loss: {symbol} at {pnl_percent:.2f}%")
+                                        logger.warning(f"   ⚠️ Approaching protective stop: {symbol} at {pnl_percent*100:.2f}%")
                                         # Don't exit yet, but log it
                                     elif self._is_zombie_position(pnl_percent, entry_time_available, position_age_hours):
                                         # ZOMBIE POSITION DETECTION: Position stuck at ~0% P&L for too long
