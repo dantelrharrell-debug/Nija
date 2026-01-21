@@ -1211,6 +1211,17 @@ For detailed results and troubleshooting:
 - Checklist: [NIJA_BROKER_PROFITABILITY_CHECKLIST.md](NIJA_BROKER_PROFITABILITY_CHECKLIST.md)
 - Results JSON: `nija_health_check_results.json` (auto-generated)
 
+**Restart the bot** (when needed):
+```bash
+# Command-line restart
+./restart_nija.sh
+
+# Or via web dashboard API
+curl -X POST http://localhost:5001/api/restart
+```
+
+For detailed restart documentation, see [RESTART_GUIDE.md](RESTART_GUIDE.md).
+
 **Check rebalance results** (after deployment):
 ```bash
 python verify_rebalance.py
