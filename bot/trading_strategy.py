@@ -78,10 +78,10 @@ DISABLED_PAIRS = ["XRP-USD", "XRPUSD", "XRP-USDT"] + _additional_disabled  # Blo
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
-# OPTIMIZED EXIT FOR LOSING TRADES - Allow time for recovery
-# Exit losing trades after 30 minutes to allow profitable recovery
-# Most profitable trades need 20-40 minutes to develop
-MAX_LOSING_POSITION_HOLD_MINUTES = 30  # Exit losing trades after 30 minutes (optimized for profitability)
+# OPTIMIZED EXIT FOR LOSING TRADES - Aggressive capital protection
+# Exit losing trades after 15 minutes to minimize capital erosion
+# Updated from 30 minutes to be more aggressive with loss prevention
+MAX_LOSING_POSITION_HOLD_MINUTES = 15  # Exit losing trades after 15 minutes (aggressive protection)
 
 # Configuration constants
 # CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
@@ -1644,21 +1644,34 @@ class TradingStrategy:
                                     
                                     continue
                                 
-                                # ✅ FIX #2: LOSING TRADES GET 3 MINUTES MAX (NOT 30)
-                                # For tracked positions with P&L < 0%, enforce STRICT 3-minute max hold time
-                                # This prevents "will auto-exit in 23.7min" nonsense that bleeds capital
-                                if pnl_percent < 0 and entry_time_available:
+                                # ✅ LOSING TRADES: 15-MINUTE MAXIMUM HOLD TIME
+                                # For tracked positions with P&L < 0%, enforce STRICT 15-minute max hold time
+                                # This prevents capital erosion from positions held too long in a losing state
+                                # CRITICAL FIX (Jan 21, 2026): Also exit losing positions WITHOUT entry time tracking
+                                # to prevent positions from being stuck indefinitely
+                                if pnl_percent < 0:
                                     # Convert position age from hours to minutes
                                     position_age_minutes = position_age_hours * MINUTES_PER_HOUR
                                     
-                                    # Check if position has been losing for more than the max allowed time
-                                    if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
-                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
+                                    # SCENARIO 1: Position with time tracking that exceeds max hold time
+                                    if entry_time_available and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
+                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent*100:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
                                         logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent:.2f}%)'
+                                            'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent*100:.2f}%)'
+                                        })
+                                        continue
+                                    elif not entry_time_available:
+                                        # SCENARIO 2: Losing position without time tracking (SAFETY FALLBACK)
+                                        # Exit immediately to prevent indefinite losses when we cannot determine age
+                                        logger.warning(f"   🚨 LOSING POSITION WITHOUT TIME TRACKING: {symbol} at {pnl_percent*100:.2f}%")
+                                        logger.warning(f"   💥 Cannot determine age - exiting to prevent indefinite losses!")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Losing position without time tracking (P&L: {pnl_percent*100:.2f}%)'
                                         })
                                         continue
                                 
