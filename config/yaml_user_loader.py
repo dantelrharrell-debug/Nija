@@ -107,10 +107,22 @@ class YamlUserConfig:
         Returns:
             bool: True if both API key and secret are set
         """
-        return bool(self.api_key and self.api_secret and 
-                   self.api_key.strip() and self.api_secret.strip() and
-                   self.api_key != 'YOUR_API_KEY_HERE' and 
-                   self.api_secret != 'YOUR_API_SECRET_HERE')
+        # List of placeholder values to reject
+        placeholders = [
+            'YOUR_API_KEY_HERE',
+            'YOUR_API_SECRET_HERE', 
+            'YOUR_KEY',
+            'YOUR_SECRET',
+            'your_api_key',
+            'your_api_secret'
+        ]
+        
+        return bool(
+            self.api_key and self.api_secret and 
+            self.api_key.strip() and self.api_secret.strip() and
+            self.api_key not in placeholders and 
+            self.api_secret not in placeholders
+        )
 
 
 class YamlUserConfigLoader:
