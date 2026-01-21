@@ -697,14 +697,15 @@ class MultiAccountBrokerManager:
             try:
                 broker = self.add_user_broker(user.user_id, broker_type)
                 
-                # Store user metadata for audit and reporting
+                # Store/update user metadata for audit and reporting
+                # Always update to ensure we have the latest user state
                 if user.user_id not in self._user_metadata:
-                    self._user_metadata[user.user_id] = {
-                        'name': user.name,
-                        'enabled': user.enabled,
-                        'copy_from_master': getattr(user, 'copy_from_master', True),
-                        'brokers': {}
-                    }
+                    self._user_metadata[user.user_id] = {'brokers': {}}
+                
+                # Update user properties (may change between calls)
+                self._user_metadata[user.user_id]['name'] = user.name
+                self._user_metadata[user.user_id]['enabled'] = user.enabled
+                self._user_metadata[user.user_id]['copy_from_master'] = getattr(user, 'copy_from_master', True)
                 
                 if broker and broker.connected:
                     # Successfully connected
@@ -747,6 +748,17 @@ class MultiAccountBrokerManager:
                     self._user_metadata[user.user_id]['brokers'][broker_type] = False
             
             except Exception as e:
+                # Initialize metadata if not already present (needed for exception case)
+                if user.user_id not in self._user_metadata:
+                    self._user_metadata[user.user_id] = {
+                        'name': user.name,
+                        'enabled': user.enabled,
+                        'copy_from_master': getattr(user, 'copy_from_master', True),
+                        'brokers': {}
+                    }
+                # Update metadata with disconnected status
+                self._user_metadata[user.user_id]['brokers'][broker_type] = False
+                
                 logger.warning(f"   ⚠️  Error connecting {user.name}: {e}")
                 # Track the failed connection to avoid repeated attempts
                 # Truncate error message to prevent excessive memory usage, add ellipsis if truncated
