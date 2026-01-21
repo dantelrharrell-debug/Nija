@@ -658,6 +658,19 @@ class TradingStrategy:
                 
                 if enabled_users:
                     for user in enabled_users:
+                        # FIX #1: Check if this is a Kraken user managed by copy trading system
+                        is_kraken = user.broker_type.upper() == "KRAKEN"
+                        is_copy_trader = getattr(user, 'copy_from_master', False)
+                        kraken_copy_active = self.multi_account_manager.kraken_copy_trading_active
+                        
+                        # If Kraken user is managed by copy trading, show special status and skip re-evaluation
+                        if is_kraken and is_copy_trader and kraken_copy_active:
+                            logger.info(f"✅ USER: {user.name}: ACTIVE (COPY TRADING) (Broker: KRAKEN)")
+                            # Add disabled symbols info for Kraken copy traders
+                            logger.info(f"   ℹ️  Disabled symbols: XRP-USD (configured for copy trading)")
+                            active_user_count += 1
+                            continue  # Skip re-evaluation for copy trading users
+                        
                         # Check if this user is actually connected
                         user_broker = self.multi_account_manager.get_user_broker(
                             user.user_id, 
