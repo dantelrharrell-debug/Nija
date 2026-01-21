@@ -206,7 +206,13 @@ class PositionTracker:
         
         current_value = quantity * current_price
         pnl_dollars = current_value - entry_value
-        pnl_percent = (pnl_dollars / entry_value * 100) if entry_value > 0 else 0
+        # NORMALIZED FORMAT (Option A - Fractional): -0.01 = -1%, not -1.0 = -1%
+        pnl_pct = (pnl_dollars / entry_value) if entry_value > 0 else 0
+        
+        # CRITICAL: Validate PnL is in fractional format
+        # Large values (>1 or <-1) indicate potential bugs or extreme market moves
+        if abs(pnl_pct) >= 1.0:
+            logger.warning(f"⚠️ Large PnL detected for {symbol}: {pnl_pct*100:.2f}% - validating scale")
         
         return {
             'symbol': symbol,
@@ -216,7 +222,7 @@ class PositionTracker:
             'entry_value': entry_value,
             'current_value': current_value,
             'pnl_dollars': pnl_dollars,
-            'pnl_percent': pnl_percent
+            'pnl_percent': pnl_pct  # FRACTIONAL: -0.01 = -1%, -0.12 = -12%
         }
     
     def get_all_positions(self) -> List[str]:

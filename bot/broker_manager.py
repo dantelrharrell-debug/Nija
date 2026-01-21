@@ -2330,11 +2330,11 @@ class CoinbaseBroker(BaseBroker):
             
             # Log explicit bypass for SELL orders
             if side.lower() == 'sell':
-                logger.info(f"🚑 SELL order for {symbol}: ALL RESTRICTIONS BYPASSED")
-                logger.info(f"   ✅ Balance validation: SKIPPED (SELL only)")
-                logger.info(f"   ✅ Minimum balance check: SKIPPED (SELL only)")
-                logger.info(f"   ✅ EXIT-ONLY mode: ALLOWED (SELL only)")
-                logger.info(f"   ✅ Emergency exit: ENABLED")
+                logger.info(f"🛡️ PROTECTIVE SELL MODE for {symbol}: EMERGENCY EXIT MODE — SELL ONLY")
+                logger.info(f"   ✅ Balance validation: SKIPPED (protective exit)")
+                logger.info(f"   ✅ Minimum balance check: SKIPPED (protective exit)")
+                logger.info(f"   ✅ EXIT-ONLY mode: ALLOWED (protective exit)")
+                logger.info(f"   ✅ Capital preservation: ACTIVE")
             
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
             # NOTE: SELL orders are NOT checked here - they always pass through
@@ -2355,10 +2355,10 @@ class CoinbaseBroker(BaseBroker):
 
             base_currency, quote_currency = (symbol.split('-') + ['USD'])[:2]
 
-            # 🚑 FIX 1: EMERGENCY SELL OVERRIDE - Bypass balance check if forced
-            # This allows NIJA to exit losing positions regardless of balance validation
+            # 🛡️ PROTECTIVE EXIT OVERRIDE - Skip balance check for protective exits
+            # This allows NIJA to exit losing positions for capital preservation
             if force_liquidate or ignore_balance:
-                logger.warning(f"⚠️  BALANCE CHECK BYPASSED for {symbol} (force_liquidate={force_liquidate}, ignore_balance={ignore_balance})")
+                logger.warning(f"🛡️ PROTECTIVE EXIT MODE for {symbol} (force_liquidate={force_liquidate}, ignore_balance={ignore_balance})")
 
             # PRE-FLIGHT CHECK: Verify sufficient balance before placing order
             # CRITICAL: This check ONLY applies to BUY orders
@@ -3134,10 +3134,10 @@ class CoinbaseBroker(BaseBroker):
             Order result dict with status
         """
         logger.warning("=" * 70)
-        logger.warning(f"🚑 FORCE LIQUIDATE: {symbol}")
+        logger.warning(f"🛡️ PROTECTIVE LIQUIDATION: {symbol}")
         logger.warning(f"   Reason: {reason}")
         logger.warning(f"   Quantity: {quantity}")
-        logger.warning(f"   ⚠️  ALL VALIDATION BYPASSED - EMERGENCY EXIT")
+        logger.warning(f"   Mode: EMERGENCY EXIT MODE — SELL ONLY")
         logger.warning("=" * 70)
         
         try:
@@ -5915,7 +5915,7 @@ class KrakenBroker(BaseBroker):
         logger.warning(f"   Account: {self.account_identifier if hasattr(self, 'account_identifier') else 'UNKNOWN'}")
         logger.warning(f"   Reason: {reason}")
         logger.warning(f"   Quantity: {quantity}")
-        logger.warning(f"   ⚠️  ALL VALIDATION BYPASSED - EMERGENCY EXIT")
+        logger.warning(f"   Mode: EMERGENCY EXIT MODE — SELL ONLY")
         logger.warning("=" * 70)
         
         try:
@@ -5930,14 +5930,14 @@ class KrakenBroker(BaseBroker):
             )
             
             if result.get('status') == 'filled':
-                logger.warning(f"✅ FORCE LIQUIDATE SUCCESSFUL [Kraken]: {symbol}")
+                logger.warning(f"✅ PROTECTIVE LIQUIDATION SUCCESSFUL [Kraken]: {symbol}")
             else:
-                logger.error(f"❌ FORCE LIQUIDATE FAILED [Kraken]: {symbol} - {result.get('error', 'Unknown error')}")
+                logger.error(f"❌ PROTECTIVE LIQUIDATION FAILED [Kraken]: {symbol} - {result.get('error', 'Unknown error')}")
             
             return result
             
         except Exception as e:
-            logger.error(f"❌ FORCE LIQUIDATE EXCEPTION [Kraken]: {symbol} - {e}")
+            logger.error(f"❌ PROTECTIVE LIQUIDATION EXCEPTION [Kraken]: {symbol} - {e}")
             logger.error(traceback.format_exc())
             return {
                 "status": "error",
@@ -5988,11 +5988,11 @@ class KrakenBroker(BaseBroker):
             
             # Log explicit bypass for SELL orders
             if side.lower() == 'sell':
-                logger.info(f"🚑 SELL order for {symbol}: ALL RESTRICTIONS BYPASSED")
-                logger.info(f"   ✅ Balance validation: SKIPPED (SELL only)")
-                logger.info(f"   ✅ Minimum balance check: SKIPPED (SELL only)")
-                logger.info(f"   ✅ EXIT-ONLY mode: ALLOWED (SELL only)")
-                logger.info(f"   ✅ Emergency exit: ENABLED")
+                logger.info(f"🛡️ PROTECTIVE SELL MODE for {symbol}: EMERGENCY EXIT MODE — SELL ONLY")
+                logger.info(f"   ✅ Balance validation: SKIPPED (protective exit)")
+                logger.info(f"   ✅ Minimum balance check: SKIPPED (protective exit)")
+                logger.info(f"   ✅ EXIT-ONLY mode: ALLOWED (protective exit)")
+                logger.info(f"   ✅ Capital preservation: ACTIVE")
             
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
             # NOTE: SELL orders are NOT checked here - they always pass through
