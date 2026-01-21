@@ -411,6 +411,7 @@ class BaseBroker(ABC):
         self.connected = False
         self.credentials_configured = False  # Track if credentials were provided
         self.last_connection_error = None  # Track last connection error for troubleshooting
+        self.exit_only_mode = False  # Default: not in exit-only mode (can be overridden by subclasses)
     
     @abstractmethod
     def connect(self) -> bool:
@@ -606,6 +607,145 @@ class BaseBroker(ABC):
                 return False
         
         return True
+    
+    @property
+    def min_trade_size(self) -> float:
+        """
+        Minimum trade size for this broker (hard block).
+        Trades below this size will be rejected.
+        
+        Broker-specific minimums:
+        - Coinbase: $5.00 (higher fees require larger trades)
+        - Kraken: $5.00 (allows smaller positions)
+        - Default: $5.00
+        
+        Returns:
+            float: Minimum trade size in USD
+        """
+        broker_name = self.broker_type.value.lower()
+        
+        # Broker-specific minimums
+        minimums = {
+            'coinbase': 5.00,
+            'kraken': 5.00,
+            'binance': 5.00,
+            'okx': 5.00,
+            'alpaca': 1.00,  # Stocks/traditional assets have lower minimums
+        }
+        
+        return minimums.get(broker_name, 5.00)
+    
+    @property
+    def warn_trade_size(self) -> float:
+        """
+        Warning threshold for trade size.
+        Trades below this size will generate a warning but still execute.
+        
+        Set to $10 for copy trading optics (user experience).
+        
+        Returns:
+            float: Warning threshold in USD
+        """
+        return 10.00
+    
+    def execute_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        size_type: str = 'quote',
+        ignore_balance: bool = False,
+        ignore_min_trade: bool = False,
+        force_liquidate: bool = False
+    ) -> Dict:
+        """
+        Execute order with broker-specific pre-flight validation.
+        
+        This is a wrapper around place_market_order that adds:
+        1. Symbol support validation
+        2. EXIT-ONLY mode validation
+        3. Minimum trade size validation with warnings
+        
+        One signal → Broker-specific execution
+        SIGNAL: AUSD-USD BUY
+        ├── Kraken → SUPPORTED → EXECUTE ✅
+        └── Coinbase → UNSUPPORTED + EXIT-ONLY → SKIP 🚫
+        
+        Args:
+            symbol: Trading symbol
+            side: 'buy' or 'sell'
+            quantity: Order size
+            size_type: 'quote' (USD) or 'base' (crypto quantity)
+            ignore_balance: Bypass balance validation (EMERGENCY ONLY)
+            ignore_min_trade: Bypass minimum trade size validation (EMERGENCY ONLY)
+            force_liquidate: Bypass ALL validation (EMERGENCY ONLY)
+        
+        Returns:
+            Dict with order result or error
+        """
+        broker_name = self.broker_type.value.lower()
+        
+        # PRE-FLIGHT CHECK 1: Symbol support validation
+        # Skip if symbol not supported by this broker
+        if not self.supports_symbol(symbol):
+            logger.info(f"   ❌ Trade rejected for {symbol}")
+            logger.info(f"      Reason: {broker_name.title()} does not support this symbol")
+            logger.info(f"      💡 This symbol may be specific to another exchange")
+            return {
+                "status": "skipped",
+                "error": "UNSUPPORTED_SYMBOL",
+                "message": f"{broker_name.title()} does not support {symbol}",
+                "partial_fill": False,
+                "filled_pct": 0.0
+            }
+        
+        # PRE-FLIGHT CHECK 2: EXIT-ONLY mode validation
+        # Block BUY orders when broker is in exit-only mode
+        if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
+            logger.info(f"   ❌ Trade rejected for {symbol}")
+            logger.info(f"      Reason: {broker_name.title()} is in EXIT-ONLY mode")
+            logger.info(f"      Only SELL orders are allowed to close existing positions")
+            return {
+                "status": "skipped",
+                "error": "EXIT_ONLY_MODE",
+                "message": f"BUY orders blocked: {broker_name.title()} in EXIT-ONLY mode",
+                "partial_fill": False,
+                "filled_pct": 0.0
+            }
+        
+        # PRE-FLIGHT CHECK 3: Minimum trade size validation
+        # Only check for quote (USD) size, not base (crypto quantity)
+        if size_type == 'quote' and not ignore_min_trade and not force_liquidate:
+            # Check warning threshold
+            if quantity < self.warn_trade_size:
+                logger.warning(f"   ⚠️  Trade size warning for {symbol}")
+                logger.warning(f"      Size: ${quantity:.2f} < ${self.warn_trade_size:.2f} (warning threshold)")
+                logger.warning(f"      Broker: {broker_name.title()}")
+                logger.warning(f"      💡 For better copy trading optics, consider larger positions")
+            
+            # Check hard minimum (block)
+            if quantity < self.min_trade_size:
+                logger.info(f"   ❌ Trade rejected for {symbol}")
+                logger.info(f"      Reason: Size ${quantity:.2f} < ${self.min_trade_size:.2f} minimum for {broker_name.title()}")
+                logger.info(f"      Minimum trade size: ${self.min_trade_size:.2f}")
+                return {
+                    "status": "skipped",
+                    "error": "TRADE_SIZE_TOO_SMALL",
+                    "message": f"Trade size ${quantity:.2f} below ${self.min_trade_size:.2f} minimum",
+                    "partial_fill": False,
+                    "filled_pct": 0.0
+                }
+        
+        # All pre-flight checks passed - execute order
+        return self.place_market_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            size_type=size_type,
+            ignore_balance=ignore_balance,
+            ignore_min_trade=ignore_min_trade,
+            force_liquidate=force_liquidate
+        )
 
 
 # CRITICAL FIX (Jan 11, 2026): Invalid ProductID error detection
