@@ -148,7 +148,7 @@ class CoinbaseAdapter(BrokerAdapter):
     # Coinbase fee structure
     MAKER_FEE_PCT = 0.60  # 0.6% maker fee
     TAKER_FEE_PCT = 0.60  # 0.6% taker fee
-    TOTAL_FEE_PCT = 1.20  # 1.20% combined round-trip cost (not percentage, decimal)
+    TOTAL_FEE_PCT = 1.20  # 1.20% combined round-trip cost (stored as decimal 1.20)
     
     def __init__(self):
         """Initialize Coinbase adapter."""
@@ -264,7 +264,7 @@ class KrakenAdapter(BrokerAdapter):
     # Kraken fee structure (lower than Coinbase)
     MAKER_FEE_PCT = 0.16  # 0.16% maker fee (volume tier)
     TAKER_FEE_PCT = 0.26  # 0.26% taker fee (volume tier)
-    TOTAL_FEE_PCT = 0.42  # 0.42% combined round-trip cost (not percentage, decimal)
+    TOTAL_FEE_PCT = 0.42  # 0.42% combined round-trip cost (stored as decimal 0.42)
     
     # Kraken doesn't support certain quote currencies
     UNSUPPORTED_QUOTES = ["BUSD"]  # Kraken doesn't have BUSD pairs

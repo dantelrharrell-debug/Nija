@@ -805,8 +805,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                 final_status = 'filled' if order_verified else 'pending'
                 
                 if not order_verified and order_id:
-                    logger.info(f"   ℹ️  Order placed but verification inconclusive - status: 'pending'")
-                    logger.info(f"      This is a safety measure - order may still have filled successfully")
+                    logger.info("   ℹ️  Order placed but verification inconclusive - status: 'pending'")
+                    logger.info("      This is a safety measure - order may still have filled successfully")
                 
                 return {
                     'order_id': order_id,
