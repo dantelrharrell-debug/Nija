@@ -15,6 +15,13 @@ Endpoints:
 - GET /api/positions/open - Get open positions
 - GET /api/trades/history - Get trade history
 - GET /api/trades/export - Export trades to CSV/PDF
+
+Aggregated Read-Only Reporting Endpoints:
+- GET /api/aggregated/summary - Combined master + users overview
+- GET /api/aggregated/performance - Performance metrics across all accounts
+- GET /api/aggregated/positions - Portfolio-wide position summary
+- GET /api/aggregated/statistics - System-wide trading statistics
+- GET /api/aggregated/traceability - Master-to-user trade traceability report
 """
 
 import os
@@ -532,6 +539,443 @@ def get_trade_statistics():
     
     except Exception as e:
         logger.error(f"Error getting statistics: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/aggregated/summary', methods=['GET'])
+def get_aggregated_summary():
+    """
+    Get aggregated read-only summary of master + all users.
+    
+    Returns:
+        - Master account performance
+        - Combined user performance
+        - Total portfolio metrics
+        - System-wide statistics
+    """
+    try:
+        pnl_tracker = get_user_pnl_tracker()
+        risk_manager = get_user_risk_manager()
+        hard_controls = get_hard_controls()
+        trade_ledger = get_trade_ledger_db()
+        
+        # Get master stats
+        master_stats = pnl_tracker.get_stats('master', force_refresh=True)
+        master_risk_state = risk_manager.get_state('master')
+        
+        # Get all user stats (excluding master)
+        all_user_ids = set()
+        for user_id in risk_manager._user_states.keys():
+            if user_id != 'master':
+                all_user_ids.add(user_id)
+        
+        # Aggregate user metrics
+        total_users = len(all_user_ids)
+        users_can_trade = 0
+        total_user_balance = 0.0
+        total_user_pnl = 0.0
+        total_user_trades = 0
+        total_user_wins = 0
+        total_user_losses = 0
+        
+        user_summaries = []
+        for user_id in sorted(all_user_ids):
+            user_stats = pnl_tracker.get_stats(user_id)
+            user_risk_state = risk_manager.get_state(user_id)
+            can_trade, reason = hard_controls.can_trade(user_id)
+            
+            if can_trade:
+                users_can_trade += 1
+            
+            total_user_balance += user_risk_state.balance
+            total_user_pnl += user_stats.get('total_pnl', 0.0)
+            total_user_trades += user_stats.get('completed_trades', 0)
+            total_user_wins += user_stats.get('winning_trades', 0)
+            total_user_losses += user_stats.get('losing_trades', 0)
+            
+            user_summaries.append({
+                'user_id': user_id,
+                'balance': user_risk_state.balance,
+                'total_pnl': user_stats.get('total_pnl', 0.0),
+                'win_rate': user_stats.get('win_rate', 0.0),
+                'trades': user_stats.get('completed_trades', 0),
+                'can_trade': can_trade
+            })
+        
+        # Calculate aggregate win rate
+        aggregate_win_rate = (total_user_wins / total_user_trades * 100) if total_user_trades > 0 else 0.0
+        
+        # Get open positions count
+        open_positions = trade_ledger.get_open_positions()
+        master_open_positions = [p for p in open_positions if p.get('user_id') == 'master']
+        user_open_positions = [p for p in open_positions if p.get('user_id') != 'master']
+        
+        # Portfolio totals
+        portfolio_balance = master_risk_state.balance + total_user_balance
+        portfolio_pnl = master_stats.get('total_pnl', 0.0) + total_user_pnl
+        
+        return jsonify({
+            'timestamp': datetime.now().isoformat(),
+            'master_account': {
+                'balance': master_risk_state.balance,
+                'total_pnl': master_stats.get('total_pnl', 0.0),
+                'daily_pnl': master_stats.get('daily_pnl', 0.0),
+                'win_rate': master_stats.get('win_rate', 0.0),
+                'total_trades': master_stats.get('completed_trades', 0),
+                'winning_trades': master_stats.get('winning_trades', 0),
+                'losing_trades': master_stats.get('losing_trades', 0),
+                'open_positions': len(master_open_positions)
+            },
+            'users_aggregate': {
+                'total_users': total_users,
+                'active_users': users_can_trade,
+                'total_balance': total_user_balance,
+                'total_pnl': total_user_pnl,
+                'total_trades': total_user_trades,
+                'winning_trades': total_user_wins,
+                'losing_trades': total_user_losses,
+                'aggregate_win_rate': aggregate_win_rate,
+                'open_positions': len(user_open_positions)
+            },
+            'portfolio_totals': {
+                'total_balance': portfolio_balance,
+                'total_pnl': portfolio_pnl,
+                'total_trades': master_stats.get('completed_trades', 0) + total_user_trades,
+                'total_open_positions': len(open_positions),
+                'pnl_return_pct': (portfolio_pnl / portfolio_balance * 100) if portfolio_balance > 0 else 0.0
+            },
+            'user_details': user_summaries
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting aggregated summary: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/aggregated/performance', methods=['GET'])
+def get_aggregated_performance():
+    """
+    Get detailed performance metrics aggregated across master and all users.
+    
+    Query params:
+        - days: Number of days to include in breakdown (default: 7)
+    """
+    try:
+        pnl_tracker = get_user_pnl_tracker()
+        days = int(request.args.get('days', 7))
+        
+        # Get master performance
+        master_stats = pnl_tracker.get_stats('master', force_refresh=True)
+        master_daily = pnl_tracker.get_daily_breakdown('master', days=days)
+        
+        # Get all user IDs
+        all_user_ids = set()
+        for user_id in pnl_tracker._user_pnl.keys():
+            if user_id != 'master':
+                all_user_ids.add(user_id)
+        
+        # Aggregate daily performance across all users
+        daily_aggregate = {}
+        
+        for user_id in all_user_ids:
+            user_daily = pnl_tracker.get_daily_breakdown(user_id, days=days)
+            for day in user_daily:
+                date_key = day.date
+                if date_key not in daily_aggregate:
+                    daily_aggregate[date_key] = {
+                        'trades': 0,
+                        'pnl': 0.0,
+                        'winners': 0,
+                        'losers': 0
+                    }
+                daily_aggregate[date_key]['trades'] += day.trades_count
+                daily_aggregate[date_key]['pnl'] += day.total_pnl
+                daily_aggregate[date_key]['winners'] += day.winners
+                daily_aggregate[date_key]['losers'] += day.losers
+        
+        # Format daily breakdown
+        users_daily_breakdown = [
+            {
+                'date': date,
+                'trades': stats['trades'],
+                'pnl': stats['pnl'],
+                'winners': stats['winners'],
+                'losers': stats['losers'],
+                'win_rate': (stats['winners'] / stats['trades'] * 100) if stats['trades'] > 0 else 0.0
+            }
+            for date, stats in sorted(daily_aggregate.items())
+        ]
+        
+        return jsonify({
+            'timestamp': datetime.now().isoformat(),
+            'period_days': days,
+            'master_performance': {
+                'stats': master_stats,
+                'daily_breakdown': [
+                    {
+                        'date': day.date,
+                        'trades': day.trades_count,
+                        'pnl': day.total_pnl,
+                        'win_rate': day.win_rate,
+                        'winners': day.winners,
+                        'losers': day.losers
+                    }
+                    for day in master_daily
+                ]
+            },
+            'users_performance': {
+                'daily_breakdown': users_daily_breakdown
+            }
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting aggregated performance: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/aggregated/positions', methods=['GET'])
+def get_aggregated_positions():
+    """
+    Get portfolio-wide position summary (master + all users).
+    
+    Returns position breakdown by:
+        - Account (master vs users)
+        - Symbol
+        - Broker
+    """
+    try:
+        trade_ledger = get_trade_ledger_db()
+        
+        # Get all open positions
+        all_positions = trade_ledger.get_open_positions()
+        
+        # Separate master and user positions
+        master_positions = [p for p in all_positions if p.get('user_id') == 'master']
+        user_positions = [p for p in all_positions if p.get('user_id') != 'master']
+        
+        # Aggregate by symbol
+        symbol_aggregate = {}
+        for position in all_positions:
+            symbol = position.get('symbol', 'UNKNOWN')
+            if symbol not in symbol_aggregate:
+                symbol_aggregate[symbol] = {
+                    'total_positions': 0,
+                    'master_positions': 0,
+                    'user_positions': 0,
+                    'total_size': 0.0,
+                    'total_unrealized_pnl': 0.0
+                }
+            
+            symbol_aggregate[symbol]['total_positions'] += 1
+            if position.get('user_id') == 'master':
+                symbol_aggregate[symbol]['master_positions'] += 1
+            else:
+                symbol_aggregate[symbol]['user_positions'] += 1
+            
+            symbol_aggregate[symbol]['total_size'] += position.get('size', 0.0)
+            symbol_aggregate[symbol]['total_unrealized_pnl'] += position.get('unrealized_pnl', 0.0)
+        
+        # Aggregate by broker
+        broker_aggregate = {}
+        for position in all_positions:
+            broker = position.get('broker', 'unknown')
+            if broker not in broker_aggregate:
+                broker_aggregate[broker] = {
+                    'positions': 0,
+                    'total_size': 0.0,
+                    'unrealized_pnl': 0.0
+                }
+            
+            broker_aggregate[broker]['positions'] += 1
+            broker_aggregate[broker]['total_size'] += position.get('size', 0.0)
+            broker_aggregate[broker]['unrealized_pnl'] += position.get('unrealized_pnl', 0.0)
+        
+        return jsonify({
+            'timestamp': datetime.now().isoformat(),
+            'summary': {
+                'total_positions': len(all_positions),
+                'master_positions': len(master_positions),
+                'user_positions': len(user_positions),
+                'unique_symbols': len(symbol_aggregate),
+                'unique_brokers': len(broker_aggregate)
+            },
+            'by_symbol': symbol_aggregate,
+            'by_broker': broker_aggregate,
+            'master_positions_list': master_positions,
+            'user_positions_list': user_positions
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting aggregated positions: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/aggregated/statistics', methods=['GET'])
+def get_aggregated_statistics():
+    """
+    Get comprehensive system-wide trading statistics.
+    
+    Includes:
+        - All-time performance metrics
+        - Risk metrics
+        - Trading activity metrics
+        - Success rates and profit factors
+    """
+    try:
+        trade_ledger = get_trade_ledger_db()
+        pnl_tracker = get_user_pnl_tracker()
+        risk_manager = get_user_risk_manager()
+        
+        # Get master statistics
+        master_stats = trade_ledger.get_statistics(user_id='master')
+        
+        # Get all user statistics combined
+        all_user_ids = set()
+        for user_id in risk_manager._user_states.keys():
+            if user_id != 'master':
+                all_user_ids.add(user_id)
+        
+        # Aggregate user statistics
+        users_total_trades = 0
+        users_total_volume = 0.0
+        users_total_fees = 0.0
+        users_total_pnl = 0.0
+        users_winning_trades = 0
+        users_losing_trades = 0
+        
+        for user_id in all_user_ids:
+            user_stats = pnl_tracker.get_stats(user_id)
+            users_total_trades += user_stats.get('completed_trades', 0)
+            users_total_volume += user_stats.get('total_volume', 0.0)
+            users_total_fees += user_stats.get('total_fees', 0.0)
+            users_total_pnl += user_stats.get('total_pnl', 0.0)
+            users_winning_trades += user_stats.get('winning_trades', 0)
+            users_losing_trades += user_stats.get('losing_trades', 0)
+        
+        users_win_rate = (users_winning_trades / users_total_trades * 100) if users_total_trades > 0 else 0.0
+        
+        # System totals
+        system_total_trades = master_stats.get('total_trades', 0) + users_total_trades
+        system_total_pnl = master_stats.get('total_pnl', 0.0) + users_total_pnl
+        system_total_fees = master_stats.get('total_fees', 0.0) + users_total_fees
+        
+        return jsonify({
+            'timestamp': datetime.now().isoformat(),
+            'master_statistics': master_stats,
+            'users_statistics': {
+                'total_trades': users_total_trades,
+                'total_volume': users_total_volume,
+                'total_fees': users_total_fees,
+                'total_pnl': users_total_pnl,
+                'winning_trades': users_winning_trades,
+                'losing_trades': users_losing_trades,
+                'win_rate': users_win_rate,
+                'average_pnl_per_trade': users_total_pnl / users_total_trades if users_total_trades > 0 else 0.0
+            },
+            'system_totals': {
+                'total_trades': system_total_trades,
+                'total_pnl': system_total_pnl,
+                'total_fees': system_total_fees,
+                'net_pnl': system_total_pnl - system_total_fees,
+                'total_users': len(all_user_ids)
+            }
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting aggregated statistics: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/aggregated/traceability', methods=['GET'])
+def get_trade_traceability():
+    """
+    Get master-to-user trade traceability report.
+    
+    Shows how user trades correlate to master signals and execution.
+    This endpoint helps stakeholders understand copy trading performance.
+    
+    Query params:
+        - hours: Number of hours to look back (default: 24)
+        - limit: Max number of trade groups to return (default: 50)
+    """
+    try:
+        trade_ledger = get_trade_ledger_db()
+        
+        hours = int(request.args.get('hours', 24))
+        limit = int(request.args.get('limit', 50))
+        
+        # Get recent master trades
+        master_trades = trade_ledger.get_trade_history(
+            user_id='master',
+            limit=limit
+        )
+        
+        # For each master trade, find corresponding user trades
+        # (trades with same symbol around the same time)
+        traceability_report = []
+        
+        for master_trade in master_trades:
+            master_time = datetime.fromisoformat(master_trade['entry_time'])
+            symbol = master_trade['symbol']
+            
+            # Find user trades for same symbol within 5 minutes of master trade
+            user_trades_for_symbol = []
+            
+            # Get all user trades for this symbol
+            all_symbol_trades = trade_ledger.get_trade_history(symbol=symbol, limit=100)
+            
+            for trade in all_symbol_trades:
+                if trade['user_id'] == 'master':
+                    continue
+                
+                trade_time = datetime.fromisoformat(trade['entry_time'])
+                time_diff = abs((trade_time - master_time).total_seconds())
+                
+                # If trade is within 5 minutes, consider it a copy trade
+                if time_diff <= 300:  # 5 minutes
+                    user_trades_for_symbol.append({
+                        'user_id': trade['user_id'],
+                        'entry_time': trade['entry_time'],
+                        'entry_price': trade['entry_price'],
+                        'exit_price': trade.get('exit_price'),
+                        'pnl': trade.get('pnl', 0.0),
+                        'size': trade.get('size', 0.0),
+                        'time_delay_seconds': time_diff
+                    })
+            
+            traceability_report.append({
+                'master_trade': {
+                    'symbol': symbol,
+                    'entry_time': master_trade['entry_time'],
+                    'entry_price': master_trade['entry_price'],
+                    'exit_price': master_trade.get('exit_price'),
+                    'pnl': master_trade.get('pnl', 0.0),
+                    'size': master_trade.get('size', 0.0),
+                    'side': master_trade.get('side', 'UNKNOWN')
+                },
+                'user_trades': user_trades_for_symbol,
+                'replication_count': len(user_trades_for_symbol),
+                'average_delay_seconds': sum(t['time_delay_seconds'] for t in user_trades_for_symbol) / len(user_trades_for_symbol) if user_trades_for_symbol else 0
+            })
+        
+        # Calculate summary statistics
+        total_master_trades = len(master_trades)
+        total_replications = sum(item['replication_count'] for item in traceability_report)
+        avg_replications_per_signal = total_replications / total_master_trades if total_master_trades > 0 else 0
+        
+        return jsonify({
+            'timestamp': datetime.now().isoformat(),
+            'period_hours': hours,
+            'summary': {
+                'master_trades': total_master_trades,
+                'total_user_replications': total_replications,
+                'average_replications_per_signal': avg_replications_per_signal
+            },
+            'traceability': traceability_report
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting trade traceability: {e}")
         return jsonify({'error': str(e)}), 500
 
 

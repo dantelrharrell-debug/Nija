@@ -1755,6 +1755,120 @@ def get_positions_by_broker(broker: str):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/reports/aggregated')
+def aggregated_report():
+    """Aggregated read-only report page for stakeholders."""
+    return render_template('aggregated_report.html')
+
+
+@app.route('/api/aggregated/summary')
+def get_aggregated_summary():
+    """
+    Get aggregated read-only summary of master + all users.
+    
+    Returns:
+        - Master account performance
+        - Combined user performance
+        - Total portfolio metrics
+        - System-wide statistics
+    """
+    try:
+        if not get_user_pnl_tracker or not get_user_risk_manager:
+            return jsonify({'error': 'Required modules not available'}), 503
+        
+        pnl_tracker = get_user_pnl_tracker()
+        risk_manager = get_user_risk_manager()
+        
+        # Get master stats
+        master_stats = pnl_tracker.get_stats('master', force_refresh=True)
+        master_risk_state = risk_manager.get_state('master')
+        
+        # Get all user stats (excluding master)
+        all_user_ids = set()
+        for user_id in risk_manager._user_states.keys():
+            if user_id != 'master':
+                all_user_ids.add(user_id)
+        
+        # Aggregate user metrics
+        total_users = len(all_user_ids)
+        users_can_trade = 0
+        total_user_balance = 0.0
+        total_user_pnl = 0.0
+        total_user_trades = 0
+        total_user_wins = 0
+        total_user_losses = 0
+        
+        user_summaries = []
+        for user_id in sorted(all_user_ids):
+            user_stats = pnl_tracker.get_stats(user_id)
+            user_risk_state = risk_manager.get_state(user_id)
+            
+            if get_hard_controls:
+                hard_controls = get_hard_controls()
+                can_trade, reason = hard_controls.can_trade(user_id)
+                if can_trade:
+                    users_can_trade += 1
+            else:
+                can_trade = True
+                users_can_trade += 1
+            
+            total_user_balance += user_risk_state.balance
+            total_user_pnl += user_stats.get('total_pnl', 0.0)
+            total_user_trades += user_stats.get('completed_trades', 0)
+            total_user_wins += user_stats.get('winning_trades', 0)
+            total_user_losses += user_stats.get('losing_trades', 0)
+            
+            user_summaries.append({
+                'user_id': user_id,
+                'balance': user_risk_state.balance,
+                'total_pnl': user_stats.get('total_pnl', 0.0),
+                'win_rate': user_stats.get('win_rate', 0.0),
+                'trades': user_stats.get('completed_trades', 0),
+                'can_trade': can_trade
+            })
+        
+        # Calculate aggregate win rate
+        aggregate_win_rate = (total_user_wins / total_user_trades * 100) if total_user_trades > 0 else 0.0
+        
+        # Portfolio totals
+        portfolio_balance = master_risk_state.balance + total_user_balance
+        portfolio_pnl = master_stats.get('total_pnl', 0.0) + total_user_pnl
+        
+        return jsonify({
+            'timestamp': datetime.now().isoformat(),
+            'master_account': {
+                'balance': master_risk_state.balance,
+                'total_pnl': master_stats.get('total_pnl', 0.0),
+                'daily_pnl': master_stats.get('daily_pnl', 0.0),
+                'win_rate': master_stats.get('win_rate', 0.0),
+                'total_trades': master_stats.get('completed_trades', 0),
+                'winning_trades': master_stats.get('winning_trades', 0),
+                'losing_trades': master_stats.get('losing_trades', 0)
+            },
+            'users_aggregate': {
+                'total_users': total_users,
+                'active_users': users_can_trade,
+                'total_balance': total_user_balance,
+                'total_pnl': total_user_pnl,
+                'total_trades': total_user_trades,
+                'winning_trades': total_user_wins,
+                'losing_trades': total_user_losses,
+                'aggregate_win_rate': aggregate_win_rate
+            },
+            'portfolio_totals': {
+                'total_balance': portfolio_balance,
+                'total_pnl': portfolio_pnl,
+                'total_trades': master_stats.get('completed_trades', 0) + total_user_trades,
+                'pnl_return_pct': (portfolio_pnl / portfolio_balance * 100) if portfolio_balance > 0 else 0.0
+            },
+            'user_details': user_summaries
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting aggregated summary: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
