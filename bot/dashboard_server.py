@@ -38,6 +38,7 @@ try:
     from user_nonce_manager import get_user_nonce_manager
     from trade_webhook_notifier import get_webhook_notifier
     from activity_feed import get_activity_feed
+    from position_mirror import get_position_mirror
 except ImportError:
     logger.warning("User management modules not available - some endpoints will not work")
     get_user_pnl_tracker = None
@@ -45,6 +46,7 @@ except ImportError:
     get_user_nonce_manager = None
     get_webhook_notifier = None
     get_activity_feed = None
+    get_position_mirror = None
 
 try:
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -1684,6 +1686,66 @@ def get_rejection_reasons():
     
     except Exception as e:
         logger.error(f"Error getting rejection reasons: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/positions/live')
+def get_live_positions():
+    """Get live position mirror (real-time positions)."""
+    try:
+        if not get_position_mirror:
+            return jsonify({'error': 'Position mirror not available'}), 503
+        
+        position_mirror = get_position_mirror()
+        positions = position_mirror.get_all_positions()
+        
+        return jsonify({
+            'positions': [pos.to_dict() for pos in positions],
+            'count': len(positions),
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting live positions: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/positions/summary')
+def get_positions_summary():
+    """Get portfolio summary from position mirror."""
+    try:
+        if not get_position_mirror:
+            return jsonify({'error': 'Position mirror not available'}), 503
+        
+        position_mirror = get_position_mirror()
+        summary = position_mirror.get_portfolio_summary()
+        
+        return jsonify(summary)
+    
+    except Exception as e:
+        logger.error(f"Error getting positions summary: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/positions/broker/<broker>')
+def get_positions_by_broker(broker: str):
+    """Get positions for a specific broker."""
+    try:
+        if not get_position_mirror:
+            return jsonify({'error': 'Position mirror not available'}), 503
+        
+        position_mirror = get_position_mirror()
+        positions = position_mirror.get_positions_by_broker(broker)
+        
+        return jsonify({
+            'broker': broker,
+            'positions': [pos.to_dict() for pos in positions],
+            'count': len(positions),
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting positions for {broker}: {e}")
         return jsonify({'error': str(e)}), 500
 
 

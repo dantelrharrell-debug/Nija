@@ -189,6 +189,15 @@
             </div>
             <div id="activity-container" class="loading">Loading activity...</div>
         </div>
+
+        <!-- Live Position Mirror -->
+        <div class="card" style="margin-top: 20px;">
+            <h2>🔄 Live Position Mirror</h2>
+            <div style="margin-bottom: 10px; font-size: 13px; color: #71767b;">
+                Real-time positions (updates even when broker UI lags)
+            </div>
+            <div id="positions-container" class="loading">Loading positions...</div>
+        </div>
     </div>
 
     <script>
@@ -330,6 +339,55 @@
             `).join('');
         }
 
+        function updatePositions(positions) {
+            const container = document.getElementById('positions-container');
+            if (!positions || positions.positions.length === 0) {
+                container.innerHTML = '<div style="padding: 20px; text-align: center; color: #71767b;">No open positions</div>';
+                return;
+            }
+
+            container.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Broker</th>
+                            <th>Side</th>
+                            <th>Entry</th>
+                            <th>Current</th>
+                            <th>Size</th>
+                            <th>P&L</th>
+                            <th>Hold Time</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${positions.positions.map(pos => `
+                            <tr>
+                                <td>${pos.symbol}</td>
+                                <td>${pos.broker}</td>
+                                <td class="${pos.side === 'long' ? 'positive' : 'negative'}">
+                                    ${pos.side.toUpperCase()}
+                                </td>
+                                <td>${formatCurrency(pos.entry_price)}</td>
+                                <td>${formatCurrency(pos.current_price)}</td>
+                                <td>${formatCurrency(pos.position_size)}</td>
+                                <td class="${pos.unrealized_pnl >= 0 ? 'positive' : 'negative'}">
+                                    ${formatCurrency(pos.unrealized_pnl)} (${pos.unrealized_pnl_pct.toFixed(2)}%)
+                                </td>
+                                <td>${pos.hold_time_minutes}m</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+                <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #2f3336; font-size: 13px;">
+                    <strong>Summary:</strong> ${positions.count} position(s) | 
+                    Total Unrealized P&L: <span class="${positions.positions.reduce((sum, p) => sum + p.unrealized_pnl, 0) >= 0 ? 'positive' : 'negative'}">
+                        ${formatCurrency(positions.positions.reduce((sum, p) => sum + p.unrealized_pnl, 0))}
+                    </span>
+                </div>
+            `;
+        }
+
         function formatActivityDetails(details) {
             // Format key details for display
             const relevantKeys = ['rejection_reason', 'filter_reason', 'reason', 'ai_score', 'confidence', 
@@ -354,17 +412,19 @@
         }
 
         async function refreshAll() {
-            const [status, alerts, trades, activity] = await Promise.all([
+            const [status, alerts, trades, activity, positions] = await Promise.all([
                 fetchData('status'),
                 fetchData('alerts'),
                 fetchData('trades'),
-                fetchData('activity/recent?limit=50')
+                fetchData('activity/recent?limit=50'),
+                fetchData('positions/live')
             ]);
 
             updateStatus(status);
             updateAlerts(alerts);
             updateTrades(trades);
             updateActivity(activity);
+            updatePositions(positions);
 
             lastUpdate = Date.now();
             document.getElementById('refresh-status').textContent = 
