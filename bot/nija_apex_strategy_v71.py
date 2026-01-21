@@ -116,7 +116,6 @@ class NIJAApexStrategyV71:
         # Score is a quality metric (higher = better setup)
         # Normalize score to 0-1 range for confidence check
         confidence = min(score / MAX_ENTRY_SCORE, 1.0)
-        
         # FIX: Guard against tuple returns (defensive programming)
         if isinstance(confidence, tuple):
             confidence = confidence[0]
