@@ -17,7 +17,7 @@ import os
 
 from indicators import (
     calculate_vwap, calculate_ema, calculate_rsi, calculate_macd,
-    calculate_atr, calculate_adx
+    calculate_atr, calculate_adx, scalar
 )
 from risk_manager import RiskManager
 from execution_engine import ExecutionEngine
@@ -160,7 +160,7 @@ class NIJAApexStrategyV71:
         ema21 = indicators['ema_21'].iloc[-1]
         ema50 = indicators['ema_50'].iloc[-1]
         macd_hist = indicators['histogram'].iloc[-1]
-        adx = indicators['adx'].iloc[-1]
+        adx = scalar(indicators['adx'].iloc[-1])
         
         # Volume check (5-candle average)
         avg_volume_5 = df['volume'].iloc[-5:].mean()
@@ -240,8 +240,8 @@ class NIJAApexStrategyV71:
         current_price = current['close']
         vwap = indicators['vwap'].iloc[-1]
         ema21 = indicators['ema_21'].iloc[-1]
-        rsi = indicators['rsi'].iloc[-1]
-        rsi_prev = indicators['rsi'].iloc[-2]
+        rsi = scalar(indicators['rsi'].iloc[-1])
+        rsi_prev = scalar(indicators['rsi'].iloc[-2])
         macd_hist = indicators['histogram'].iloc[-1]
         macd_hist_prev = indicators['histogram'].iloc[-2]
         
@@ -321,8 +321,8 @@ class NIJAApexStrategyV71:
         current_price = current['close']
         vwap = indicators['vwap'].iloc[-1]
         ema21 = indicators['ema_21'].iloc[-1]
-        rsi = indicators['rsi'].iloc[-1]
-        rsi_prev = indicators['rsi'].iloc[-2]
+        rsi = scalar(indicators['rsi'].iloc[-1])
+        rsi_prev = scalar(indicators['rsi'].iloc[-2])
         macd_hist = indicators['histogram'].iloc[-1]
         macd_hist_prev = indicators['histogram'].iloc[-2]
         
@@ -623,7 +623,7 @@ class NIJAApexStrategyV71:
                     }
                 
                 # Update trailing stop
-                atr = indicators['atr'].iloc[-1]
+                atr = scalar(indicators['atr'].iloc[-1])
                 if position.get('tp1_hit', False):
                     new_stop = self.risk_manager.calculate_trailing_stop(
                         current_price, position['entry_price'],
@@ -638,7 +638,7 @@ class NIJAApexStrategyV71:
                 }
             
             # No position - check for entry
-            adx = indicators['adx'].iloc[-1]
+            adx = scalar(indicators['adx'].iloc[-1])
             
             if trend == 'uptrend':
                 long_signal, score, reason = self.check_long_entry(df, indicators)
@@ -666,7 +666,7 @@ class NIJAApexStrategyV71:
                     
                     # Calculate stop loss and take profit
                     swing_low = self.risk_manager.find_swing_low(df, lookback=10)
-                    atr = indicators['atr'].iloc[-1]
+                    atr = scalar(indicators['atr'].iloc[-1])
                     stop_loss = self.risk_manager.calculate_stop_loss(
                         current_price, 'long', swing_low, atr
                     )
@@ -711,7 +711,7 @@ class NIJAApexStrategyV71:
                     
                     # Calculate stop loss and take profit
                     swing_high = self.risk_manager.find_swing_high(df, lookback=10)
-                    atr = indicators['atr'].iloc[-1]
+                    atr = scalar(indicators['atr'].iloc[-1])
                     stop_loss = self.risk_manager.calculate_stop_loss(
                         current_price, 'short', swing_high, atr
                     )
@@ -869,8 +869,8 @@ class NIJAApexStrategyV71:
         
         if self.ai_momentum_enabled:
             # Example: weighted scoring
-            rsi = indicators['rsi'].iloc[-1]
-            adx = indicators['adx'].iloc[-1]
+            rsi = scalar(indicators['rsi'].iloc[-1])
+            adx = scalar(indicators['adx'].iloc[-1])
             macd_hist = indicators['histogram'].iloc[-1]
             
             # Normalize to 0-1 range
