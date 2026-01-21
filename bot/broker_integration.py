@@ -721,10 +721,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             if not self.kraken_api:
                 return None
             
-            # Convert symbol format to Kraken format
-            kraken_symbol = symbol.replace('-', '').upper()
-            if kraken_symbol.startswith('BTC'):
-                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            # Convert symbol format using helper method
+            kraken_symbol = self._convert_to_kraken_symbol(symbol)
             
             # Map timeframe to Kraken interval (in minutes)
             interval_map = {
@@ -765,6 +763,34 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.error(f"Error fetching Kraken market data: {e}")
             return None
     
+    def _convert_to_kraken_symbol(self, symbol: str) -> str:
+        """
+        Convert a symbol to Kraken format.
+        
+        Helper method to ensure consistent symbol conversion across all methods.
+        
+        Args:
+            symbol: Symbol in various formats (BTC-USD, ETH/USDT, etc.)
+            
+        Returns:
+            Kraken-formatted symbol (XBTUSD, ETHUSDT, etc.)
+        """
+        # Use symbol mapper if available
+        if convert_to_kraken:
+            kraken_symbol = convert_to_kraken(symbol)
+            if kraken_symbol:
+                return kraken_symbol
+        
+        # Fallback: Manual conversion
+        # Remove separators and uppercase
+        kraken_symbol = symbol.replace('-', '').replace('/', '').upper()
+        
+        # BTC -> XBT conversion (Kraken's special naming)
+        if kraken_symbol.startswith('BTC'):
+            kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+        
+        return kraken_symbol
+    
     def _validate_kraken_order(self, symbol: str, side: str, size: float, 
                               size_type: str = 'quote', 
                               current_price: float = None) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -787,24 +813,15 @@ class KrakenBrokerAdapter(BrokerInterface):
         Returns:
             Tuple of (is_valid, kraken_symbol, error_message)
         """
-        # ✅ REQUIREMENT #1: Symbol format validation
+        # ✅ REQUIREMENT #1: Symbol format validation (case-insensitive)
         # Kraken only supports */USD and */USDT pairs
-        if not (symbol.endswith('/USD') or symbol.endswith('/USDT') or 
-                symbol.endswith('-USD') or symbol.endswith('-USDT')):
+        symbol_upper = symbol.upper()
+        if not (symbol_upper.endswith('/USD') or symbol_upper.endswith('/USDT') or 
+                symbol_upper.endswith('-USD') or symbol_upper.endswith('-USDT')):
             return (False, None, f"Kraken only supports USD/USDT pairs. Symbol '{symbol}' is not supported.")
         
-        # ✅ REQUIREMENT #2: Convert to Kraken format
-        # Use symbol mapper if available, otherwise fallback to manual conversion
-        kraken_symbol = None
-        if convert_to_kraken:
-            kraken_symbol = convert_to_kraken(symbol)
-        
-        # Fallback: Manual conversion
-        if not kraken_symbol:
-            kraken_symbol = symbol.replace('-', '').upper()
-            # BTC -> XBT conversion (Kraken's special naming)
-            if kraken_symbol.startswith('BTC'):
-                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+        # ✅ REQUIREMENT #2: Convert to Kraken format using helper method
+        kraken_symbol = self._convert_to_kraken_symbol(symbol)
         
         # ✅ REQUIREMENT #3: Validate order size meets Kraken minimums
         # Calculate USD notional value
@@ -815,8 +832,16 @@ class KrakenBrokerAdapter(BrokerInterface):
         else:
             order_size_usd = size  # Assume it's in USD if we can't calculate
         
-        # Kraken minimum order size (from broker_adapters.py)
-        KRAKEN_MIN_ORDER_USD = 10.0  # $10 minimum
+        # Kraken minimum order size - import from broker adapter if available
+        if BrokerAdapterFactory:
+            try:
+                # Get minimum from KrakenAdapter
+                from bot.broker_adapters import KrakenAdapter
+                KRAKEN_MIN_ORDER_USD = KrakenAdapter.MIN_VOLUME_DEFAULT
+            except (ImportError, AttributeError):
+                KRAKEN_MIN_ORDER_USD = 10.0  # Fallback
+        else:
+            KRAKEN_MIN_ORDER_USD = 10.0  # Fallback
         
         if order_size_usd < KRAKEN_MIN_ORDER_USD:
             return (False, kraken_symbol, 
@@ -824,6 +849,8 @@ class KrakenBrokerAdapter(BrokerInterface):
         
         # ✅ REQUIREMENT #4: Tier-based minimum enforcement
         # Check if user's balance tier allows this trade size
+        tier_validation_result = None  # Store result to log outside try-except
+        
         if get_tier_from_balance and validate_trade_size:
             try:
                 # Get current balance
@@ -847,12 +874,17 @@ class KrakenBrokerAdapter(BrokerInterface):
                         return (False, kraken_symbol,
                                 f"[{user_tier.value} Tier] {reason}. Account balance: ${current_balance:.2f}")
                     
-                    # Log tier info for successful validation
-                    logger.info(f"✅ Tier validation passed: [{user_tier.value}] ${order_size_usd:.2f} trade")
+                    # Store validation success for logging outside try-except
+                    tier_validation_result = (user_tier.value, order_size_usd)
                     
             except Exception as tier_err:
                 # Don't block trade if tier validation fails - just log warning
                 logger.warning(f"⚠️  Tier validation error (allowing trade): {tier_err}")
+        
+        # Log tier validation success (outside try-except for performance)
+        if tier_validation_result:
+            tier_name, validated_size = tier_validation_result
+            logger.info(f"✅ Tier validation passed: [{tier_name}] ${validated_size:.2f} trade")
         
         # ✅ REQUIREMENT #5: Broker adapter validation (if available)
         if BrokerAdapterFactory and TradeIntent and OrderIntent:
