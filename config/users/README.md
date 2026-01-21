@@ -2,7 +2,11 @@
 
 This directory contains user configuration files organized by account type and brokerage.
 
-## Structure
+## Configuration Formats
+
+NIJA supports two configuration formats:
+
+### 1. JSON Format (Recommended for production - uses environment variables)
 
 Configuration files are organized by account type (retail/investor) and brokerage:
 - `retail_kraken.json` - Retail users trading on Kraken
@@ -12,7 +16,24 @@ Configuration files are organized by account type (retail/investor) and brokerag
 - `investor_alpaca.json` - Investor accounts trading on Alpaca (stocks)
 - `investor_coinbase.json` - Investor accounts trading on Coinbase (future use)
 
+Individual user files:
+- `daivon_frazier.json` - Individual user configuration
+- `tania_gilbert.json` - Individual user configuration
+
+### 2. YAML Format (Alternative - embedded credentials)
+
+Individual YAML files with embedded API credentials:
+- `daivon_frazier.yaml` - YAML config with API keys
+- `tania_gilbert.yaml` - YAML config with API keys
+
+**IMPORTANT SECURITY NOTE:**
+- YAML files with API keys are automatically excluded from git via `.gitignore`
+- Never commit YAML files containing real API credentials
+- Use `user.yaml.example` as a template
+
 ## User Configuration Format
+
+### JSON Format (with environment variables)
 
 Each user configuration file is a JSON array of user objects:
 
@@ -28,6 +49,34 @@ Each user configuration file is a JSON array of user objects:
   }
 ]
 ```
+
+### YAML Format (with embedded credentials)
+
+Each user has an individual YAML file (e.g., `daivon_frazier.yaml`):
+
+```yaml
+broker: KRAKEN
+api_key: YOUR_API_KEY_HERE
+api_secret: YOUR_API_SECRET_HERE
+enabled: true
+copy_from_master: true
+```
+
+**YAML Configuration Fields:**
+- **broker** (required): The brokerage (e.g., `KRAKEN`, `COINBASE`, `ALPACA`)
+- **api_key** (required): User's API key from the exchange
+- **api_secret** (required): User's API secret from the exchange
+- **enabled** (required): Whether this account is active (`true` or `false`)
+- **copy_from_master** (required): Whether to copy trades from master account
+- **risk_multiplier** (optional): Risk multiplier (default: 1.0)
+
+**Example YAML Configuration:**
+
+To create a new user configuration:
+1. Copy `user.yaml.example` to `<username>.yaml` (e.g., `tania_gilbert.yaml`)
+2. Fill in the broker, API key, and API secret
+3. Set `enabled: true` to activate
+4. File will be automatically excluded from git
 
 ### Fields
 
