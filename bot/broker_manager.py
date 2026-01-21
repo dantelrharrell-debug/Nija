@@ -3070,6 +3070,24 @@ class CoinbaseBroker(BaseBroker):
             
             logger.info(f"✅ Order filled successfully: {symbol}")
             
+            # P0 GUARD: Execution broker decides reality - verify order success before ANY position creation
+            # This is the CRITICAL guard that prevents "fake positions" when broker orders actually fail
+            if not success:
+                logger.error("=" * 70)
+                logger.error("🔴 P0 GUARD: Order failed — aborting position creation")
+                logger.error("=" * 70)
+                logger.error(f"   Symbol: {symbol}")
+                logger.error(f"   Side: {side.upper()}")
+                logger.error(f"   Reason: Execution broker reported order failure")
+                logger.error(f"   Enforcement: No ledger write. No position. No copy trading.")
+                logger.error("=" * 70)
+                return {
+                    "status": "unfilled",
+                    "error": "ORDER_FAILED",
+                    "message": "Broker reported order failure",
+                    "order": order_dict
+                }
+            
             # Enhanced trade confirmation logging with account identification
             account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "MASTER"
             
@@ -3131,7 +3149,7 @@ class CoinbaseBroker(BaseBroker):
             if filled_size:
                 logger.info(f"   Filled crypto amount: {filled_size:.6f}")
             
-            # CRITICAL: Track position for profit-based exits
+            # CRITICAL: Track position for profit-based exits (ONLY after P0 guard passes)
             if self.position_tracker:
                 try:
                     if side.lower() == 'buy':
