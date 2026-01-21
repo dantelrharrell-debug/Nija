@@ -21,6 +21,8 @@ import os
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
+import psutil
+import signal as sig
 
 # Add bot directory to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
@@ -1882,9 +1884,6 @@ def restart_bot():
         JSON response with restart status
     """
     try:
-        import psutil
-        import signal as sig
-        
         # Find the bot.py process
         bot_pid = None
         current_pid = os.getpid()
@@ -1893,11 +1892,17 @@ def restart_bot():
             try:
                 cmdline = proc.info.get('cmdline', [])
                 if cmdline and len(cmdline) > 1:
-                    # Look for python process running bot.py
-                    if 'python' in cmdline[0].lower() and any('bot.py' in arg for arg in cmdline):
-                        # Don't kill ourselves (dashboard server)
-                        if proc.info['pid'] != current_pid:
-                            bot_pid = proc.info['pid']
+                    # Look for python process running bot.py specifically (not chatbot.py, mybot.py, etc.)
+                    # Check for exact filename match with path separator or as last argument
+                    if 'python' in cmdline[0].lower():
+                        for arg in cmdline:
+                            # Match only if it ends with /bot.py or is exactly bot.py
+                            if arg.endswith('/bot.py') or arg == 'bot.py':
+                                # Don't kill ourselves (dashboard server)
+                                if proc.info['pid'] != current_pid:
+                                    bot_pid = proc.info['pid']
+                                    break
+                        if bot_pid:
                             break
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
