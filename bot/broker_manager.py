@@ -6210,15 +6210,32 @@ class KrakenBroker(BaseBroker):
             
             result = self._kraken_private_call('AddOrder', order_params)
             
+            # ✅ REQUIREMENT 1: Check for API errors first
             if result and 'error' in result and result['error']:
                 error_msgs = ', '.join(result['error'])
                 logging.error(f"❌ Kraken order failed: {error_msgs}")
                 return {"status": "error", "error": error_msgs}
             
+            # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
+                
+                # ✅ CRITICAL: If no txid returned, the trade did NOT execute
+                if not order_id:
+                    account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "UNKNOWN"
+                    logging.error("=" * 70)
+                    logging.error(f"❌ KRAKEN ORDER FAILED - NO TXID RETURNED")
+                    logging.error("=" * 70)
+                    logging.error(f"   Account: {account_label}")
+                    logging.error(f"   Symbol: {kraken_symbol}, Side: {order_type}, Quantity: {quantity}")
+                    logging.error(f"   API Response: {result}")
+                    logging.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
+                    logging.error("=" * 70)
+                    return {"status": "error", "error": "No txid returned from Kraken - order did not execute"}
+                
+                logging.info(f"✅ Kraken txid received: {order_id}")
                 
                 # Enhanced trade confirmation logging with account identification
                 account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "UNKNOWN"
