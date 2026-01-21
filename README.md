@@ -151,6 +151,84 @@ KRAKEN_MASTER_API_SECRET=your-private-key-here
 
 ---
 
+## 🔍 **Three-Layer Visibility System**
+
+**NIJA provides complete transparency** with three complementary visibility layers - see exactly what the bot is doing, why it's doing it, and verify execution:
+
+### Layer 1: Kraken Trade History (Execution Proof) 🏦
+- **Shows**: Official exchange record of all filled orders
+- **Trust Level**: 100% accurate (exchange-verified)
+- **Use For**: Tax reporting, verifying execution, checking fees
+- **Access**: Kraken.com → Portfolio → Trade History
+
+### Layer 2: NIJA Activity Feed (Decision Truth) 🤖
+- **Shows**: EVERY decision - signals, rejections, filters, exits
+- **Trust Level**: Bot's internal decision log
+- **Use For**: Understanding WHY trades did/didn't happen
+- **Access**: NIJA Dashboard → Activity Feed
+- **Features**:
+  - ✅ All trading signals generated
+  - ✅ Rejection reasons (fees too high, size too small, risk limits)
+  - ✅ Filter blocks (pair quality, spread, volatility)
+  - ✅ Stablecoin routing decisions
+  - ✅ Fee impact analysis
+  - ✅ Position exits with reasons
+
+### Layer 3: Live Position Mirror (Real-Time Positions) ⚡
+- **Shows**: Current open positions updated instantly
+- **Trust Level**: NIJA's real-time tracking
+- **Use For**: Quick P&L checks, position monitoring during volatility
+- **Access**: NIJA Dashboard → Live Position Mirror
+- **Features**:
+  - 🔄 Unrealized P&L (live updates)
+  - 🔄 Stop-loss and take-profit levels
+  - 🔄 Hold time tracking
+  - 🔄 Works even when broker UI lags
+
+**Why Three Layers?**
+- **Kraken** = Legal proof of execution (what happened)
+- **Activity Feed** = Decision transparency (why it happened)
+- **Position Mirror** = Live tracking (current state)
+
+**Learn More**:
+- 📚 [THREE_LAYER_VISIBILITY.md](THREE_LAYER_VISIBILITY.md) - Complete visibility system guide
+- 📚 [KRAKEN_TRADING_GUIDE.md](KRAKEN_TRADING_GUIDE.md) - Where to find your trades in Kraken
+- 🎯 See Activity Feed API: `GET /api/activity/recent`
+- 🎯 See Position Mirror API: `GET /api/positions/live`
+
+**Quick Example - Activity Feed Events**:
+```
+✅ EXECUTED: BUY 0.05 ETH/USD @ $3,250 on kraken
+❌ Signal REJECTED: LONG BTC/USDT - fees too high (2.1% of position)
+🚫 FILTER BLOCK: SOL/USD - below tier minimum ($12.50 < $15.00)
+🔀 STABLECOIN ROUTED: ETH/USDT - coinbase → kraken (lower fees)
+📈 POSITION CLOSED: ETH/USD - Take Profit 1 hit (P&L: +$23.50)
+```
+
+**Stablecoin Routing Policy**:
+Configure how NIJA handles USDT/USDC trades in `.env`:
+```bash
+# Route all stablecoin trades to Kraken (recommended - saves fees)
+STABLECOIN_POLICY=route_to_kraken
+
+# Block all stablecoin trades
+STABLECOIN_POLICY=block_all
+
+# Allow stablecoin trades on any broker
+STABLECOIN_POLICY=allow_all
+```
+
+**Tier-Based Visibility**:
+- **SAVER**: Show all trades ($2+ visible)
+- **INVESTOR**: Filter micro-trades ($10+ visible)
+- **INCOME**: Focus on meaningful trades ($15+ visible)
+- **LIVABLE**: Professional filtering ($25+ visible)
+- **BALLER**: High-signal, low-noise ($50+ visible)
+
+Trades below tier minimums are still executed but marked for easier filtering.
+
+---
+
 **What is NIJA?** NIJA is a sophisticated, AI-powered autonomous trading platform that goes far beyond simple cryptocurrency trading. It's a comprehensive algorithmic trading system featuring:
 
 - 🤖 **Multi-Asset Trading**: Cryptocurrencies (732+ pairs) AND traditional stocks via Alpaca
