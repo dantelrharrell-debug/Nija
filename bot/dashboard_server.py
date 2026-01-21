@@ -104,6 +104,12 @@ def users_dashboard():
     return render_template('users_dashboard.html')
 
 
+@app.route('/trades')
+def trades_dashboard():
+    """Trades ledger dashboard page"""
+    return render_template('trades_dashboard.html')
+
+
 @app.route('/api/status')
 def get_status():
     """Get current bot status"""
