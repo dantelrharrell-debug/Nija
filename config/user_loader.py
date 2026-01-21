@@ -28,7 +28,7 @@ class UserConfig:
     Represents a single user or investor configuration.
     """
     
-    def __init__(self, user_id: str, name: str, account_type: str, broker_type: str, enabled: bool = True, description: str = ""):
+    def __init__(self, user_id: str, name: str, account_type: str, broker_type: str, enabled: bool = True, description: str = "", copy_from_master: bool = True, disabled_symbols: Optional[List[str]] = None):
         """
         Initialize user/investor configuration.
         
@@ -39,6 +39,8 @@ class UserConfig:
             broker_type: Brokerage type (e.g., 'kraken', 'alpaca', 'coinbase')
             enabled: Whether this account is active
             description: Optional description
+            copy_from_master: Whether to copy trades from master (default: True)
+            disabled_symbols: List of symbols to disable for this user (default: None)
         """
         self.user_id = user_id
         self.name = name
@@ -46,6 +48,8 @@ class UserConfig:
         self.broker_type = broker_type
         self.enabled = enabled
         self.description = description
+        self.copy_from_master = copy_from_master
+        self.disabled_symbols = disabled_symbols or []
     
     def __repr__(self):
         status = "enabled" if self.enabled else "disabled"
@@ -60,7 +64,9 @@ class UserConfig:
             account_type=data['account_type'],
             broker_type=data['broker_type'],
             enabled=data.get('enabled', True),
-            description=data.get('description', '')
+            description=data.get('description', ''),
+            copy_from_master=data.get('copy_from_master', True),
+            disabled_symbols=data.get('disabled_symbols', [])
         )
     
     def to_dict(self) -> Dict:
@@ -71,7 +77,9 @@ class UserConfig:
             'account_type': self.account_type,
             'broker_type': self.broker_type,
             'enabled': self.enabled,
-            'description': self.description
+            'description': self.description,
+            'copy_from_master': self.copy_from_master,
+            'disabled_symbols': self.disabled_symbols
         }
 
 

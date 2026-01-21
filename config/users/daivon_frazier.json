@@ -4,5 +4,6 @@
   "role": "user",
   "enabled": true,
   "copy_from_master": true,
-  "risk_multiplier": 1.0
+  "risk_multiplier": 1.0,
+  "disabled_symbols": ["XRP-USD"]
 }

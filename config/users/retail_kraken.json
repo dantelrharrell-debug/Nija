@@ -5,7 +5,9 @@
     "account_type": "retail",
     "broker_type": "kraken",
     "enabled": true,
-    "description": "Retail user - Kraken crypto account"
+    "copy_from_master": true,
+    "disabled_symbols": ["XRP-USD"],
+    "description": "Retail user - Kraken crypto account (copy trading enabled)"
   },
   {
     "user_id": "tania_gilbert",
@@ -13,6 +15,8 @@
     "account_type": "retail",
     "broker_type": "kraken",
     "enabled": true,
-    "description": "Retail user - Kraken crypto account"
+    "copy_from_master": true,
+    "disabled_symbols": ["XRP-USD"],
+    "description": "Retail user - Kraken crypto account (copy trading enabled)"
   }
 ]
