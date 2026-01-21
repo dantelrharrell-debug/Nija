@@ -132,15 +132,16 @@ class CoinbaseAdapter(BrokerAdapter):
     Coinbase-specific execution adapter.
     
     Enforces:
-    - Minimum notional: $1-$5 depending on pair
+    - Minimum notional: $25 for all pairs (profitability after fees)
     - Portfolio routing for efficient fills
     - Fee-aware exits (account for 0.6% maker + 0.6% taker fees)
     - Symbol format: ETH-USD, BTC-USDT, etc. (dash separator)
     """
     
-    # Coinbase minimum notional per pair
-    # UNIFIED MINIMUM: $25 to ensure profitability after 1.4% round-trip fees
-    # At $25 position with 1.4% fees = $0.35 fee cost, target 1.5% = $0.375 profit = net $0.025
+    # ✅ REQUIREMENT #4: Coinbase minimum notional per pair
+    # UNIFIED MINIMUM: $25 to ensure profitability after 1.2% round-trip fees
+    # At $25 position with 1.2% fees = $0.30 fee cost, target 1.5% = $0.375 profit = net $0.075
+    # NOTE: $5 positions will be REJECTED as they cannot cover fees
     MIN_NOTIONAL_DEFAULT = 25.0  # $25 minimum for all pairs (profitability threshold)
     MIN_NOTIONAL_BTC = 25.0  # $25 minimum for BTC pairs (same as default)
     
@@ -254,8 +255,10 @@ class KrakenAdapter(BrokerAdapter):
     - Symbol format: ETH/USD, BTC/USDT, etc. (slash separator or no separator)
     """
     
-    # Kraken minimum volumes (conservative estimates)
-    MIN_VOLUME_DEFAULT = 10.0  # $10 minimum for most pairs
+    # ✅ REQUIREMENT #4: Kraken minimum volumes (lower than Coinbase)
+    # Kraken fees are lower (0.42% vs Coinbase 1.20%), so minimum can be lower
+    # $10 minimum ensures profitability after fees for small accounts
+    MIN_VOLUME_DEFAULT = 10.0  # $10 minimum for most pairs (lower than Coinbase $25)
     MIN_VOLUME_BTC = 10.0  # $10 minimum even for BTC
     
     # Kraken fee structure (lower than Coinbase)

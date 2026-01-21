@@ -750,6 +750,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 # Query the order to get filled price and volume
                 filled_price = 0.0
                 filled_volume = size
+                order_verified = False  # Track if order passes verification
                 
                 if order_id:
                     try:
@@ -768,23 +769,37 @@ class KrakenBrokerAdapter(BrokerInterface):
                             filled_volume = float(order_details.get('vol_exec', size))
                             order_status = order_details.get('status', 'unknown')
                             
-                            # ✅ ORDER CONFIRMATION LOGGING (REQUIREMENT #2)
-                            logger.info(f"   ✅ ORDER CONFIRMED:")
-                            logger.info(f"      • Order ID: {order_id}")
-                            logger.info(f"      • Filled Volume: {filled_volume:.8f} {kraken_symbol[:3]}")
-                            logger.info(f"      • Filled Price: ${filled_price:.2f}")
-                            logger.info(f"      • Status: {order_status}")
+                            # ✅ REQUIREMENT #2: Verify Kraken returns status=closed and vol_exec > 0
+                            is_filled = (order_status == 'closed' and filled_volume > 0)
+                            order_verified = is_filled
                             
-                            # Note: Balance delta requires fetching balance before/after
-                            # We can calculate approximate delta from filled volume * price
-                            if side.lower() == 'sell':
-                                balance_delta = filled_volume * filled_price
-                                logger.info(f"      • Balance Delta (approx): +${balance_delta:.2f}")
+                            if is_filled:
+                                # ✅ ORDER CONFIRMATION LOGGING (REQUIREMENT #2)
+                                logger.info(f"   ✅ ORDER CONFIRMED:")
+                                logger.info(f"      • Order ID: {order_id}")
+                                logger.info(f"      • Filled Volume: {filled_volume:.8f} {kraken_symbol[:3]}")
+                                logger.info(f"      • Filled Price: ${filled_price:.2f}")
+                                logger.info(f"      • Status: {order_status}")
+                                
+                                # Note: Balance delta requires fetching balance before/after
+                                # We can calculate approximate delta from filled volume * price
+                                if side.lower() == 'sell':
+                                    balance_delta = filled_volume * filled_price
+                                    logger.info(f"      • Balance Delta (approx): +${balance_delta:.2f}")
+                                else:
+                                    balance_delta = -(filled_volume * filled_price)
+                                    logger.info(f"      • Balance Delta (approx): ${balance_delta:.2f}")
                             else:
-                                balance_delta = -(filled_volume * filled_price)
-                                logger.info(f"      • Balance Delta (approx): ${balance_delta:.2f}")
+                                logger.warning(f"   ⚠️  ORDER NOT FULLY FILLED:")
+                                logger.warning(f"      • Order ID: {order_id}")
+                                logger.warning(f"      • Status: {order_status} (expected 'closed')")
+                                logger.warning(f"      • Filled Volume: {filled_volume} (expected > 0)")
+                                logger.warning(f"      • Order may still be pending or partially filled")
                     except Exception as query_err:
                         logger.warning(f"   ⚠️  Could not query order details: {query_err}")
+                
+                # Only mark as 'filled' if verification passed
+                final_status = 'filled' if order_verified else 'pending'
                 
                 return {
                     'order_id': order_id,
@@ -793,7 +808,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'size': size,
                     'filled_price': filled_price,
                     'filled_volume': filled_volume,
-                    'status': 'filled',
+                    'status': final_status,
                     'timestamp': datetime.now()
                 }
             
