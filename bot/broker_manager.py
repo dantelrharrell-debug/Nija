@@ -5812,6 +5812,82 @@ class KrakenBroker(BaseBroker):
         """
         return self._balance_fetch_errors
     
+    def get_current_price(self, symbol: str) -> Optional[float]:
+        """
+        Get current market price for a symbol from Kraken.
+        
+        CRITICAL FIX: Implements proper price fetching with broker-specific symbol translation.
+        This prevents ghost positions by ensuring prices can be fetched correctly.
+        
+        Args:
+            symbol: Trading pair in standard format (e.g., 'BTC-USD', 'ETH-USD', 'DOGE-USD')
+            
+        Returns:
+            float: Current market price, or None if fetch fails
+            
+        Safety:
+            - Uses symbol mapper to convert to Kraken format
+            - Returns None on failure (not 0.0) for explicit error handling
+            - Logs errors with symbol mismatch hints
+        """
+        try:
+            if not self.api:
+                logger.error(f"❌ Price fetch failed for {symbol} — Kraken API not connected")
+                return None
+            
+            # CRITICAL: Use symbol mapper to convert to Kraken format
+            # This ensures we use the correct format (e.g., XETHZUSD, XXBTZUSD)
+            # instead of incorrect formats like ETHUSD, BTCUSD
+            kraken_symbol = None
+            normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
+            
+            if convert_to_kraken:
+                kraken_symbol = convert_to_kraken(normalized_symbol)
+                if not kraken_symbol:
+                    logger.error(f"❌ Price fetch failed for {symbol} — Cannot convert to Kraken format")
+                    logger.error(f"   💡 Symbol mismatch: {normalized_symbol} not found in Kraken pairs")
+                    return None
+            else:
+                # Fallback: Manual conversion if symbol mapper not available
+                kraken_symbol = normalized_symbol.replace('/', '').upper()
+                if kraken_symbol.startswith('BTC'):
+                    kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            
+            logger.debug(f"📊 Fetching price for {symbol} (Kraken: {kraken_symbol})")
+            
+            # Fetch current price using Kraken Ticker API
+            # Ticker is a public endpoint (no authentication needed)
+            # Suppress pykrakenapi's print() statements
+            with suppress_pykrakenapi_prints():
+                ticker_result = self.api.query_public('Ticker', {'pair': kraken_symbol})
+            
+            if ticker_result and 'result' in ticker_result:
+                ticker_data = ticker_result['result'].get(kraken_symbol, {})
+                if ticker_data:
+                    # Use last trade price ('c' field is last trade closed array [price, lot volume])
+                    last_price = ticker_data.get('c', [None])[0]
+                    if last_price:
+                        price = float(last_price)
+                        logger.debug(f"✅ Price for {symbol}: ${price:.2f}")
+                        return price
+                    else:
+                        logger.error(f"❌ Price fetch failed for {symbol} — No last trade price in ticker data")
+                        return None
+                else:
+                    logger.error(f"❌ Price fetch failed for {symbol} — Symbol not found in ticker result")
+                    logger.error(f"   💡 Symbol mismatch: Kraken doesn't recognize '{kraken_symbol}'")
+                    return None
+            else:
+                logger.error(f"❌ Price fetch failed for {symbol} — Ticker API error")
+                if ticker_result and 'error' in ticker_result and ticker_result['error']:
+                    logger.error(f"   API errors: {', '.join(ticker_result['error'])}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Price fetch failed for {symbol} — Exception: {e}")
+            logger.error(f"   💡 This may indicate symbol mismatch or API connectivity issues")
+            return None
+    
     def force_liquidate(
         self,
         symbol: str,
@@ -6193,10 +6269,22 @@ class KrakenBroker(BaseBroker):
             if not self.kraken_api:
                 return []
             
-            # Convert symbol format to Kraken format
-            kraken_symbol = symbol.replace('-', '').upper()
-            if kraken_symbol.startswith('BTC'):
-                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            # CRITICAL FIX: Use symbol mapper to convert to Kraken format
+            # This ensures we use the correct format (e.g., XETHZUSD, XXBTZUSD)
+            # instead of incorrect formats like ETHUSD, BTCUSD
+            kraken_symbol = None
+            normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
+            
+            if convert_to_kraken:
+                kraken_symbol = convert_to_kraken(normalized_symbol)
+                if not kraken_symbol:
+                    logger.error(f"❌ Cannot convert {symbol} to Kraken format for candles")
+                    return []
+            else:
+                # Fallback: Manual conversion if symbol mapper not available
+                kraken_symbol = normalized_symbol.replace('/', '').upper()
+                if kraken_symbol.startswith('BTC'):
+                    kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
             
             # Map timeframe to Kraken interval (in minutes)
             # Kraken supports: 1, 5, 15, 30, 60, 240, 1440, 10080, 21600
