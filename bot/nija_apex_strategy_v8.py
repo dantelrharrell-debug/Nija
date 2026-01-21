@@ -68,7 +68,7 @@ class NIJAApexStrategyV8:
         # Initialize core components
         self.risk_manager = AdaptiveRiskManager(
             min_position_pct=self.config.get('min_position_pct', 0.02),
-            max_position_pct=self.config.get('max_position_pct', 0.10),
+            max_position_pct=self.config.get('max_position_pct', 0.20),  # UPDATED Jan 21, 2026: OPTION 2 - Increased to 20% (was 10%)
             max_total_exposure=self.config.get('max_total_exposure', 0.30)
         )
         self.execution_engine = ExecutionEngine(broker_client)

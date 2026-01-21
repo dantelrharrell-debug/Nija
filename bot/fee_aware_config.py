@@ -36,13 +36,16 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 
 # PROFITABILITY FIX: December 28, 2025
 # UPDATED: December 30, 2025 - Lowered to allow very small account trading
+# UPDATED: January 21, 2026 - OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
 # ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to fees (~1.4% round-trip)
 # With $2-5 positions, expect fees to consume most/all profits
 # This setting allows trading for learning/testing but profitability will be limited
 # STRONG RECOMMENDATION: Fund account to $30+ for viable trading
 
+# OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
+# MIN_TRADE_USD = max(2.00, balance * 0.15)
 # For $1-50 balance: Trade with 50% positions (leave 50% reserve)
-MIN_BALANCE_TO_TRADE = 1.0  # $1 minimum (LOWERED from $2 to allow trading with $1.37 balance)
+MIN_BALANCE_TO_TRADE = 2.0  # $2 minimum (OPTION 1: Lowered from $5 to allow small account trading)
 MICRO_BALANCE_THRESHOLD = 50.0
 MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position
 
