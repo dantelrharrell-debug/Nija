@@ -14,6 +14,32 @@ import pandas as pd
 import numpy as np
 
 
+def scalar(x):
+    """
+    Convert indicator value to float.
+    
+    Defensive helper to handle cases where indicators may return tuples/lists
+    instead of scalar values. This prevents comparison bugs.
+    
+    Args:
+        x: Indicator value (could be float, int, tuple, list, or pandas Series)
+        
+    Returns:
+        float: Scalar float value
+        
+    Examples:
+        >>> scalar(25.5)
+        25.5
+        >>> scalar((25.5, 30.0))
+        25.5
+        >>> scalar([25.5, 30.0])
+        25.5
+    """
+    if isinstance(x, (tuple, list)):
+        return float(x[0])
+    return float(x)
+
+
 def calculate_atr(df, period=14):
     """
     Calculate Average True Range (ATR)

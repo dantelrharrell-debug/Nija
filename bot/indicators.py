@@ -2,6 +2,32 @@
 import pandas as pd
 
 
+def scalar(x):
+    """
+    Convert indicator value to float.
+    
+    Defensive helper to handle cases where indicators may return tuples/lists
+    instead of scalar values. This prevents comparison bugs.
+    
+    Args:
+        x: Indicator value (could be float, int, tuple, list, or pandas Series)
+        
+    Returns:
+        float: Scalar float value
+        
+    Examples:
+        >>> scalar(25.5)
+        25.5
+        >>> scalar((25.5, 30.0))
+        25.5
+        >>> scalar([25.5, 30.0])
+        25.5
+    """
+    if isinstance(x, (tuple, list)):
+        return float(x[0])
+    return float(x)
+
+
 def _ensure_numeric(df: pd.DataFrame, cols) -> pd.DataFrame:
     """Coerce selected columns to numeric and drop rows with NaN in them."""
     numeric_df = df.copy()
