@@ -1644,21 +1644,35 @@ class TradingStrategy:
                                     
                                     continue
                                 
-                                # ✅ FIX #2: LOSING TRADES GET 3 MINUTES MAX (NOT 30)
-                                # For tracked positions with P&L < 0%, enforce STRICT 3-minute max hold time
+                                # ✅ FIX #2: LOSING TRADES GET 30 MINUTES MAX
+                                # For tracked positions with P&L < 0%, enforce STRICT 30-minute max hold time
                                 # This prevents "will auto-exit in 23.7min" nonsense that bleeds capital
-                                if pnl_percent < 0 and entry_time_available:
+                                # CRITICAL FIX (Jan 21, 2026): Also exit losing positions WITHOUT entry time tracking
+                                # to prevent positions from being stuck indefinitely
+                                if pnl_percent < 0:
                                     # Convert position age from hours to minutes
                                     position_age_minutes = position_age_hours * MINUTES_PER_HOUR
                                     
                                     # Check if position has been losing for more than the max allowed time
-                                    if position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
-                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
+                                    # OR if we don't have entry time tracking (safety fallback)
+                                    if entry_time_available and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
+                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent*100:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
                                         logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent:.2f}%)'
+                                            'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent*100:.2f}%)'
+                                        })
+                                        continue
+                                    elif not entry_time_available:
+                                        # SAFETY FALLBACK: If we can't track entry time but position is losing,
+                                        # exit immediately to prevent indefinite losses
+                                        logger.warning(f"   🚨 LOSING POSITION WITHOUT TIME TRACKING: {symbol} at {pnl_percent*100:.2f}%")
+                                        logger.warning(f"   💥 Cannot determine age - exiting to prevent indefinite losses!")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Losing position without time tracking (P&L: {pnl_percent*100:.2f}%)'
                                         })
                                         continue
                                 
