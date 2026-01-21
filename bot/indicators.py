@@ -22,8 +22,13 @@ def scalar(x):
         25.5
         >>> scalar([25.5, 30.0])
         25.5
+        
+    Raises:
+        ValueError: If tuple/list is empty
     """
     if isinstance(x, (tuple, list)):
+        if len(x) == 0:
+            raise ValueError("Cannot convert empty tuple/list to scalar")
         return float(x[0])
     return float(x)
 

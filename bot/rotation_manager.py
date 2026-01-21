@@ -22,6 +22,8 @@ except ImportError:
     # Fallback if indicators.py is not available
     def scalar(x):
         if isinstance(x, (tuple, list)):
+            if len(x) == 0:
+                raise ValueError("Cannot convert empty tuple/list to scalar")
             return float(x[0])
         return float(x)
 
