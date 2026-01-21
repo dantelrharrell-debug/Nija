@@ -6,4 +6,4 @@ bp = Blueprint("tradingview_webhook", __name__)
 
 @bp.route("/webhook", methods=["POST"])
 def webhook_route():
-    return handle_tradingview_webhook(request))
+    return handle_tradingview_webhook(request)

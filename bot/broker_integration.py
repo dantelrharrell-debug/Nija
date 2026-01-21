@@ -1231,19 +1231,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Calculate USD size for validation (limit orders use price)
             order_size_usd = size * price if size_type == 'base' else size
             
-            # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
-            is_valid, adjusted_size, error_msg = validate_and_adjust_order(
-                pair=kraken_symbol,
-                volume=size,
-                price=price,
-                side=side,
-                ordertype='limit'
-            )
-            
-            log_order_validation(kraken_symbol, size, price, side, is_valid, error_msg)
-            
-            if not is_valid:
-                logger.error(f"❌ Limit order rejected - fails Kraken minimums: {error_msg}")
+            # Validate symbol and convert to Kraken format
             is_valid, kraken_symbol, error_msg = self._validate_kraken_order(
                 symbol, side, size, size_type, current_price=price
             )
@@ -1260,16 +1248,6 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'filled_price': price,
                     'status': 'error',
                     'error': f'Order validation failed: {error_msg}',
-                    'timestamp': datetime.now()
-                }
-            
-            # Use adjusted size (fee-adjusted)
-            size = adjusted_size
-            logger.info(f"   Using fee-adjusted size: {size:.8f}")
-            
-            # Place limit order
-                    'error': 'VALIDATION_FAILED',
-                    'message': error_msg,
                     'timestamp': datetime.now()
                 }
             
