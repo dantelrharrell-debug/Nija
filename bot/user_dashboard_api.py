@@ -12,6 +12,9 @@ Endpoints:
 - POST /api/killswitch/global - Trigger global kill switch
 - POST /api/killswitch/user/{user_id} - Trigger user kill switch
 - GET /api/stats - Get system statistics
+- GET /api/positions/open - Get open positions
+- GET /api/trades/history - Get trade history
+- GET /api/trades/export - Export trades to CSV/PDF
 """
 
 import os
@@ -19,7 +22,8 @@ import json
 import logging
 from typing import Dict, List, Optional
 from datetime import datetime
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
+import io
 
 # Import our new modules
 try:
@@ -27,12 +31,14 @@ try:
     from bot.user_risk_manager import get_user_risk_manager
     from bot.user_nonce_manager import get_user_nonce_manager
     from bot.trade_webhook_notifier import get_webhook_notifier
+    from bot.trade_ledger_db import get_trade_ledger_db
     from controls import get_hard_controls
 except ImportError:
     from user_pnl_tracker import get_user_pnl_tracker
     from user_risk_manager import get_user_risk_manager
     from user_nonce_manager import get_user_nonce_manager
     from trade_webhook_notifier import get_webhook_notifier
+    from trade_ledger_db import get_trade_ledger_db
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     from controls import get_hard_controls
@@ -367,6 +373,165 @@ def reset_user_nonce(user_id: str):
     
     except Exception as e:
         logger.error(f"Error resetting nonce for {user_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/positions/open', methods=['GET'])
+def get_open_positions():
+    """Get all open positions from trade ledger database."""
+    try:
+        trade_ledger = get_trade_ledger_db()
+        
+        # Get query parameters
+        user_id = request.args.get('user_id')
+        symbol = request.args.get('symbol')
+        
+        # Get open positions
+        positions = trade_ledger.get_open_positions(user_id=user_id, symbol=symbol)
+        
+        return jsonify({
+            'positions': positions,
+            'count': len(positions),
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting open positions: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trades/history', methods=['GET'])
+def get_trade_history():
+    """Get trade history from trade ledger database."""
+    try:
+        trade_ledger = get_trade_ledger_db()
+        
+        # Get query parameters
+        user_id = request.args.get('user_id')
+        symbol = request.args.get('symbol')
+        limit = int(request.args.get('limit', 100))
+        offset = int(request.args.get('offset', 0))
+        
+        # Get trade history
+        trades = trade_ledger.get_trade_history(
+            user_id=user_id,
+            symbol=symbol,
+            limit=limit,
+            offset=offset
+        )
+        
+        # Get statistics
+        stats = trade_ledger.get_statistics(user_id=user_id)
+        
+        return jsonify({
+            'trades': trades,
+            'count': len(trades),
+            'statistics': stats,
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting trade history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trades/ledger', methods=['GET'])
+def get_trade_ledger():
+    """Get raw trade ledger (all BUY/SELL transactions)."""
+    try:
+        trade_ledger = get_trade_ledger_db()
+        
+        # Get query parameters
+        user_id = request.args.get('user_id')
+        symbol = request.args.get('symbol')
+        limit = int(request.args.get('limit', 100))
+        
+        # Get ledger transactions
+        transactions = trade_ledger.get_ledger_transactions(
+            user_id=user_id,
+            symbol=symbol,
+            limit=limit
+        )
+        
+        return jsonify({
+            'transactions': transactions,
+            'count': len(transactions),
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting trade ledger: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trades/export', methods=['GET'])
+def export_trades():
+    """Export trades to CSV or PDF format."""
+    try:
+        trade_ledger = get_trade_ledger_db()
+        
+        # Get query parameters
+        format_type = request.args.get('format', 'csv').lower()
+        table = request.args.get('table', 'completed_trades')
+        user_id = request.args.get('user_id')
+        
+        # Validate table name
+        valid_tables = ['trade_ledger', 'open_positions', 'completed_trades']
+        if table not in valid_tables:
+            return jsonify({'error': f'Invalid table. Must be one of: {", ".join(valid_tables)}'}), 400
+        
+        if format_type == 'csv':
+            # Export to CSV
+            csv_data = trade_ledger.export_to_csv(table=table, user_id=user_id)
+            
+            # Create a file-like object
+            output = io.BytesIO()
+            output.write(csv_data.encode('utf-8'))
+            output.seek(0)
+            
+            # Generate filename
+            filename = f'nija_{table}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            
+            return send_file(
+                output,
+                mimetype='text/csv',
+                as_attachment=True,
+                download_name=filename
+            )
+        
+        elif format_type == 'pdf':
+            # PDF export (basic implementation)
+            # For a full PDF implementation, you would use reportlab or similar
+            return jsonify({'error': 'PDF export not yet implemented. Use CSV format.'}), 501
+        
+        else:
+            return jsonify({'error': 'Invalid format. Use "csv" or "pdf"'}), 400
+    
+    except Exception as e:
+        logger.error(f"Error exporting trades: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trades/statistics', methods=['GET'])
+def get_trade_statistics():
+    """Get trading statistics."""
+    try:
+        trade_ledger = get_trade_ledger_db()
+        
+        # Get query parameters
+        user_id = request.args.get('user_id')
+        
+        # Get statistics
+        stats = trade_ledger.get_statistics(user_id=user_id)
+        
+        return jsonify({
+            'statistics': stats,
+            'user_id': user_id or 'all',
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting statistics: {e}")
         return jsonify({'error': str(e)}), 500
 
 
