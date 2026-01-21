@@ -31,6 +31,31 @@ except ImportError:
     TRADE_LEDGER_ENABLED = False
     logger.warning("⚠️ Trade ledger database not available")
 
+# Import custom exceptions for safety checks
+try:
+    from bot.exceptions import (
+        ExecutionError, BrokerMismatchError, InvalidTxidError,
+        InvalidFillPriceError, OrderRejectedError
+    )
+except ImportError:
+    try:
+        from exceptions import (
+            ExecutionError, BrokerMismatchError, InvalidTxidError,
+            InvalidFillPriceError, OrderRejectedError
+        )
+    except ImportError:
+        # Fallback: Define locally if import fails
+        class ExecutionError(Exception):
+            pass
+        class BrokerMismatchError(ExecutionError):
+            pass
+        class InvalidTxidError(ExecutionError):
+            pass
+        class InvalidFillPriceError(ExecutionError):
+            pass
+        class OrderRejectedError(ExecutionError):
+            pass
+
 
 class ExecutionEngine:
     """
@@ -115,13 +140,42 @@ class ExecutionEngine:
                     quantity=position_size
                 )
                 
+                # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
+                # DO NOT record trade if order failed or was rejected
                 if result.get('status') == 'error':
-                    logger.error(f"Order failed: {result.get('error')}")
+                    error_msg = result.get('error', 'Unknown error')
+                    logger.error(f"❌ Order rejected: {error_msg}")
+                    logger.error("   ⚠️  DO NOT RECORD TRADE - Order did not execute")
+                    return None
+                
+                # ✅ SAFETY CHECK #3: Require txid before recording position
+                # Verify order has a valid transaction ID
+                order_id = result.get('order_id') or result.get('id')
+                if not order_id:
+                    logger.error("=" * 70)
+                    logger.error("❌ NO TXID - CANNOT RECORD POSITION")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {symbol}, Side: {side}")
+                    logger.error(f"   Position Size: ${position_size:.2f}")
+                    logger.error("   ⚠️  Order must have valid txid before recording position")
+                    logger.error("=" * 70)
                     return None
                 
                 # CRITICAL: Validate filled price to prevent accepting immediate losers
                 # Extract actual fill price from order result
                 actual_fill_price = self._extract_fill_price(result, symbol)
+                
+                # ✅ SAFETY CHECK #4: Kill zero-price fills immediately
+                # Validate that fill price is valid (> 0)
+                if actual_fill_price is not None and actual_fill_price <= 0:
+                    logger.error("=" * 70)
+                    logger.error("❌ INVALID FILL PRICE - CANNOT RECORD POSITION")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {symbol}, Side: {side}")
+                    logger.error(f"   Fill Price: {actual_fill_price} (INVALID)")
+                    logger.error("   ⚠️  Price must be greater than zero")
+                    logger.error("=" * 70)
+                    return None
                 
                 # Validate immediate P&L to reject bad fills
                 if actual_fill_price and not self._validate_entry_price(
@@ -150,7 +204,7 @@ class ExecutionEngine:
                 # Record BUY/SELL in trade ledger database
                 if self.trade_ledger:
                     try:
-                        order_id = result.get('order_id') or result.get('id')
+                        # Use the already validated order_id from safety check #3
                         self.trade_ledger.record_buy(
                             symbol=symbol,
                             price=final_entry_price,

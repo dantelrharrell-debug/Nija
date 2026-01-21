@@ -133,6 +133,31 @@ except ImportError:
             finally:
                 sys.stdout = original_stdout
 
+# Import custom exceptions for safety checks
+try:
+    from bot.exceptions import (
+        ExecutionError, BrokerMismatchError, InvalidTxidError,
+        InvalidFillPriceError, OrderRejectedError
+    )
+except ImportError:
+    try:
+        from exceptions import (
+            ExecutionError, BrokerMismatchError, InvalidTxidError,
+            InvalidFillPriceError, OrderRejectedError
+        )
+    except ImportError:
+        # Fallback: Define locally if import fails
+        class ExecutionError(Exception):
+            pass
+        class BrokerMismatchError(ExecutionError):
+            pass
+        class InvalidTxidError(ExecutionError):
+            pass
+        class InvalidFillPriceError(ExecutionError):
+            pass
+        class OrderRejectedError(ExecutionError):
+            pass
+
 # Balance threshold constants
 # Note: Large gap between PROTECTION and TRADING thresholds is intentional:
 #   - PROTECTION ($0.50): Absolute minimum to allow bot to start (hard requirement)
@@ -6210,10 +6235,18 @@ class KrakenBroker(BaseBroker):
             
             result = self._kraken_private_call('AddOrder', order_params)
             
-            # ✅ REQUIREMENT 1: Check for API errors first
+            # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
+            # DO NOT allow rejected orders to be recorded as successful trades
             if result and 'error' in result and result['error']:
                 error_msgs = ', '.join(result['error'])
-                logging.error(f"❌ Kraken order failed: {error_msgs}")
+                logging.error("=" * 70)
+                logging.error("❌ KRAKEN ORDER REJECTED - ABORTING")
+                logging.error("=" * 70)
+                logging.error(f"   Symbol: {kraken_symbol}, Side: {order_type}, Quantity: {quantity}")
+                logging.error(f"   Rejection Reason: {error_msgs}")
+                logging.error("   ⚠️  ORDER REJECTED - DO NOT RECORD TRADE")
+                logging.error("=" * 70)
+                # Return error status to prevent recording this as a successful trade
                 return {"status": "error", "error": error_msgs}
             
             # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
@@ -6222,7 +6255,8 @@ class KrakenBroker(BaseBroker):
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
                 
-                # ✅ CRITICAL: If no txid returned, the trade did NOT execute
+                # ✅ SAFETY CHECK #3: Require txid before recording position
+                # If no txid → trade not executed → return error
                 if not order_id:
                     account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "UNKNOWN"
                     logging.error("=" * 70)
@@ -6233,6 +6267,7 @@ class KrakenBroker(BaseBroker):
                     logging.error(f"   API Response: {result}")
                     logging.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
                     logging.error("=" * 70)
+                    # Return error status to prevent recording this as a successful trade
                     return {"status": "error", "error": "No txid returned from Kraken - order did not execute"}
                 
                 logging.info(f"✅ Kraken txid received: {order_id}")
