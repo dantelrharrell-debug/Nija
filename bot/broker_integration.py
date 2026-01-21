@@ -1304,6 +1304,19 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.info(f"📝 Placing Kraken limit {side} order: {kraken_symbol} @ ${price}")
             logger.info(f"   Size: {size} {size_type}, USD Value: ${order_size_usd:.2f}, Validation: PASSED")
             
+            # ✅ SAFETY CHECK #4: Validate limit price before placing order
+            # For limit orders, validate the limit price itself before API call
+            if price <= 0:
+                logger.error("=" * 70)
+                logger.error("❌ INVALID LIMIT PRICE - ABORTING")
+                logger.error("=" * 70)
+                logger.error(f"   Symbol: {kraken_symbol}, Side: {side}")
+                logger.error(f"   Limit Price: {price} (INVALID)")
+                logger.error("   ⚠️  Price must be greater than zero")
+                logger.error("=" * 70)
+                # Raise exception to prevent placing order
+                raise InvalidFillPriceError(f"Invalid limit price: {price}")
+            
             # ✅ REQUIREMENT #2: Build order parameters with proper format
             order_params = {
                 'pair': kraken_symbol,
@@ -1349,20 +1362,6 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("=" * 70)
                     # Raise exception to prevent recording this as a successful trade
                     raise InvalidTxidError("No txid returned from Kraken - limit order did not execute")
-                
-                # ✅ SAFETY CHECK #4: Kill zero-price fills immediately
-                # For limit orders, validate the limit price itself
-                if price <= 0:
-                    logger.error("=" * 70)
-                    logger.error("❌ INVALID LIMIT PRICE - ABORTING")
-                    logger.error("=" * 70)
-                    logger.error(f"   Order ID: {order_id}")
-                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}")
-                    logger.error(f"   Limit Price: {price} (INVALID)")
-                    logger.error("   ⚠️  Price must be greater than zero")
-                    logger.error("=" * 70)
-                    # Raise exception to prevent recording this trade
-                    raise InvalidFillPriceError(f"Invalid limit price: {price}")
                 
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Limit {side} order: {kraken_symbol} @ ${price} (ID: {order_id})")
