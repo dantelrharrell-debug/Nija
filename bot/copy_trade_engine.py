@@ -77,6 +77,18 @@ class CopyTradeEngine:
         self._lock = threading.Lock()
         self.observe_only = observe_only
         
+        # P2: Initialize trade ledger for copy trade map visibility
+        try:
+            from bot.trade_ledger_db import get_trade_ledger_db
+            self.trade_ledger = get_trade_ledger_db()
+        except ImportError:
+            try:
+                from trade_ledger_db import get_trade_ledger_db
+                self.trade_ledger = get_trade_ledger_db()
+            except ImportError:
+                logger.warning("⚠️  Trade ledger not available - copy trade visibility will be limited")
+                self.trade_ledger = None
+        
         logger.info("=" * 70)
         if observe_only:
             logger.info("🔄 COPY TRADE ENGINE INITIALIZED - OBSERVE MODE")
@@ -246,6 +258,22 @@ class CopyTradeEngine:
             # Check if user has this broker type
             if broker_type not in user_broker_dict:
                 logger.debug(f"   ⏭️  {user_id}: No {signal.broker} account configured")
+                
+                # P2: Record skipped trade in trade map
+                if self.trade_ledger:
+                    try:
+                        self.trade_ledger.record_copy_trade(
+                            master_trade_id=signal.master_trade_id or signal.order_id,
+                            master_symbol=signal.symbol,
+                            master_side=signal.side,
+                            master_order_id=signal.order_id,
+                            user_id=user_id,
+                            user_status='skipped',
+                            user_error=f"No {signal.broker} account configured"
+                        )
+                    except Exception as ledger_err:
+                        logger.debug(f"Could not record skipped trade: {ledger_err}")
+                
                 continue
             
             user_broker = user_broker_dict[broker_type]
@@ -253,6 +281,22 @@ class CopyTradeEngine:
             # Check if broker is connected
             if not user_broker.connected:
                 logger.warning(f"   ⚠️  {user_id}: {signal.broker} not connected - skipping")
+                
+                # P2: Record skipped trade in trade map
+                if self.trade_ledger:
+                    try:
+                        self.trade_ledger.record_copy_trade(
+                            master_trade_id=signal.master_trade_id or signal.order_id,
+                            master_symbol=signal.symbol,
+                            master_side=signal.side,
+                            master_order_id=signal.order_id,
+                            user_id=user_id,
+                            user_status='skipped',
+                            user_error=f"{signal.broker} not connected"
+                        )
+                    except Exception as ledger_err:
+                        logger.debug(f"Could not record skipped trade: {ledger_err}")
+                
                 results.append(CopyTradeResult(
                     user_id=user_id,
                     success=False,
@@ -358,7 +402,13 @@ class CopyTradeEngine:
             )
             
             # Check if order was successful
-            if order_result and order_result.get('status') not in ['error', 'unfilled']:
+            # P1: Verify order has FILLED or PARTIALLY_FILLED status
+            # This is the second layer of defense after signal emission guard
+            order_status = order_result.get('status', 'unknown') if order_result else 'no_response'
+            
+            # P1 ENFORCEMENT: Only accept filled orders, not pending/approved signals
+            # Consistent with emit_trade_signal() guard which only allows FILLED/PARTIALLY_FILLED
+            if order_result and order_status in ['filled', 'FILLED', 'partially_filled', 'PARTIALLY_FILLED']:
                 order_id = order_result.get('order_id', order_result.get('id', 'unknown'))
                 broker_name = signal.broker.upper()
                 
@@ -372,10 +422,27 @@ class CopyTradeEngine:
                 logger.info(f"      Symbol: {signal.symbol}")
                 logger.info(f"      Side: {signal.side.upper()}")
                 logger.info(f"      Size: {user_size_rounded} ({signal.size_type})")
+                logger.info(f"      Order Status: {order_status}")
                 logger.info("      " + "=" * 50)
                 
                 with self._lock:
                     self._total_trades_copied += 1
+                
+                # P2: Record copy trade result in trade map for visibility
+                if self.trade_ledger:
+                    try:
+                        self.trade_ledger.record_copy_trade(
+                            master_trade_id=signal.master_trade_id or signal.order_id,
+                            master_symbol=signal.symbol,
+                            master_side=signal.side,
+                            master_order_id=signal.order_id,
+                            user_id=user_id,
+                            user_status='filled',
+                            user_order_id=order_id,
+                            user_size=user_size_rounded
+                        )
+                    except Exception as ledger_err:
+                        logger.warning(f"      ⚠️  Could not record copy trade in map: {ledger_err}")
                 
                 return CopyTradeResult(
                     user_id=user_id,
@@ -386,16 +453,34 @@ class CopyTradeEngine:
                     size_type=signal.size_type
                 )
             else:
-                error_msg = order_result.get('error', order_result.get('message', 'Unknown error')) if order_result else 'No response'
+                # Order failed, unfilled, or has invalid status
+                error_msg = order_result.get('error', order_result.get('message', f'Order status: {order_status}')) if order_result else 'No response'
                 logger.error("      " + "=" * 50)
                 logger.error("      ❌ COPY TRADE FAILED")
                 logger.error("      " + "=" * 50)
                 logger.error(f"      User: {user_id}")
                 logger.error(f"      Error: {error_msg}")
+                logger.error(f"      Order Status: {order_status}")
                 logger.error("      " + "=" * 50)
                 
                 with self._lock:
                     self._total_copy_failures += 1
+                
+                # P2: Record copy trade failure in trade map
+                if self.trade_ledger:
+                    try:
+                        self.trade_ledger.record_copy_trade(
+                            master_trade_id=signal.master_trade_id or signal.order_id,
+                            master_symbol=signal.symbol,
+                            master_side=signal.side,
+                            master_order_id=signal.order_id,
+                            user_id=user_id,
+                            user_status='failed',
+                            user_error=error_msg,
+                            user_size=user_size_rounded
+                        )
+                    except Exception as ledger_err:
+                        logger.warning(f"      ⚠️  Could not record copy trade in map: {ledger_err}")
                 
                 return CopyTradeResult(
                     user_id=user_id,

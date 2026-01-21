@@ -13,6 +13,7 @@ import logging
 import time
 import queue
 import threading
+import uuid
 from typing import Dict, Optional, List
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -36,6 +37,8 @@ class TradeSignal:
     timestamp: float  # Unix timestamp when trade was executed
     order_id: str  # Master account order ID for tracking
     master_balance: float  # Master account balance at time of trade (for position sizing)
+    master_trade_id: str = None  # P2: Master trade ID for copy tracking (optional, generated if not provided)
+    order_status: str = "FILLED"  # P1: Order status (FILLED, PARTIALLY_FILLED, etc.)
     
     def to_dict(self) -> Dict:
         """Convert signal to dictionary for logging/serialization."""
@@ -177,7 +180,9 @@ def emit_trade_signal(
     size: float,
     size_type: str,
     order_id: str,
-    master_balance: float
+    master_balance: float,
+    master_trade_id: str = None,
+    order_status: str = "FILLED"
 ) -> bool:
     """
     Convenience function to emit a trade signal.
@@ -193,6 +198,8 @@ def emit_trade_signal(
         size_type: "base" (crypto amount) or "quote" (USD amount)
         order_id: Order ID from the exchange
         master_balance: Current master account balance
+        master_trade_id: Master trade ID for copy tracking (auto-generated if None)
+        order_status: Order fill status (default: "FILLED")
         
     Returns:
         True if signal was emitted successfully
@@ -206,9 +213,22 @@ def emit_trade_signal(
         ...     size=500.0,
         ...     size_type="quote",
         ...     order_id="abc-123-def",
-        ...     master_balance=10000.0
+        ...     master_balance=10000.0,
+        ...     order_status="FILLED"
         ... )
     """
+    # P1: Verify order is filled before emitting signal
+    # Copy trading should ONLY trigger on FILLED or PARTIALLY_FILLED orders
+    # NOT on "signal approved" or pending states
+    if order_status not in ["FILLED", "PARTIALLY_FILLED"]:
+        logger.warning(f"⚠️  Signal NOT emitted - order status is {order_status}, not FILLED/PARTIALLY_FILLED")
+        logger.warning(f"   Copy trading requires confirmed filled orders, not pending/approved signals")
+        return False
+    
+    # P2: Generate master_trade_id if not provided
+    if not master_trade_id:
+        master_trade_id = f"{broker}_{symbol}_{order_id}_{int(time.time())}"
+    
     signal = TradeSignal(
         broker=broker,
         symbol=symbol,
@@ -218,7 +238,9 @@ def emit_trade_signal(
         size_type=size_type,
         timestamp=time.time(),
         order_id=order_id,
-        master_balance=master_balance
+        master_balance=master_balance,
+        master_trade_id=master_trade_id,
+        order_status=order_status
     )
     
     emitter = get_signal_emitter()

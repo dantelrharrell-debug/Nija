@@ -81,6 +81,7 @@ class TradeLedgerDB:
                     fee REAL DEFAULT 0.0,
                     order_id TEXT,
                     position_id TEXT,
+                    master_trade_id TEXT,
                     notes TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
@@ -136,6 +137,25 @@ class TradeLedgerDB:
                 )
             """)
             
+            # P2: Copy trade map table - tracks master trade → user executions
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS copy_trade_map (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    master_trade_id TEXT NOT NULL,
+                    master_user_id TEXT DEFAULT 'master',
+                    master_symbol TEXT NOT NULL,
+                    master_side TEXT NOT NULL,
+                    master_order_id TEXT,
+                    master_timestamp TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    user_status TEXT NOT NULL,
+                    user_order_id TEXT,
+                    user_error TEXT,
+                    user_size REAL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             # Create indexes for performance
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_ledger_symbol 
@@ -148,6 +168,10 @@ class TradeLedgerDB:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_ledger_user 
                 ON trade_ledger(user_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ledger_master_trade 
+                ON trade_ledger(master_trade_id)
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_positions_symbol 
@@ -169,26 +193,47 @@ class TradeLedgerDB:
                 CREATE INDEX IF NOT EXISTS idx_completed_time 
                 ON completed_trades(exit_time)
             """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_copy_trade_map_master 
+                ON copy_trade_map(master_trade_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_copy_trade_map_user 
+                ON copy_trade_map(user_id)
+            """)
             
             logger.info("✅ Database schema initialized")
     
     def record_buy(self, symbol: str, price: float, quantity: float, 
                    size_usd: float, fee: float = 0.0, 
                    order_id: str = None, position_id: str = None,
-                   user_id: str = 'master', notes: str = None) -> int:
+                   user_id: str = 'master', notes: str = None,
+                   master_trade_id: str = None) -> int:
         """
         Record a BUY transaction in the ledger
         
+        Args:
+            symbol: Trading symbol (e.g., 'BTC-USD')
+            price: Execution price
+            quantity: Amount of crypto purchased
+            size_usd: Position size in USD
+            fee: Transaction fee (default: 0.0)
+            order_id: Broker order ID (optional)
+            position_id: Position identifier (optional)
+            user_id: User account ID (default: 'master')
+            notes: Additional notes (optional)
+            master_trade_id: Reference to master trade for copy trading visibility (optional)
+        
         Returns:
-            Transaction ID
+            int: Transaction ID
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO trade_ledger 
                 (timestamp, user_id, symbol, side, action, price, quantity, 
-                 size_usd, fee, order_id, position_id, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 size_usd, fee, order_id, position_id, master_trade_id, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 datetime.now().isoformat(),
                 user_id,
@@ -201,6 +246,7 @@ class TradeLedgerDB:
                 fee,
                 order_id,
                 position_id,
+                master_trade_id,
                 notes
             ))
             
@@ -211,20 +257,33 @@ class TradeLedgerDB:
     def record_sell(self, symbol: str, price: float, quantity: float, 
                     size_usd: float, fee: float = 0.0,
                     order_id: str = None, position_id: str = None,
-                    user_id: str = 'master', notes: str = None) -> int:
+                    user_id: str = 'master', notes: str = None,
+                    master_trade_id: str = None) -> int:
         """
         Record a SELL transaction in the ledger
         
+        Args:
+            symbol: Trading symbol (e.g., 'BTC-USD')
+            price: Execution price
+            quantity: Amount of crypto sold
+            size_usd: Position size in USD
+            fee: Transaction fee (default: 0.0)
+            order_id: Broker order ID (optional)
+            position_id: Position identifier (optional)
+            user_id: User account ID (default: 'master')
+            notes: Additional notes (optional)
+            master_trade_id: Reference to master trade for copy trading visibility (optional)
+        
         Returns:
-            Transaction ID
+            int: Transaction ID
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO trade_ledger 
                 (timestamp, user_id, symbol, side, action, price, quantity, 
-                 size_usd, fee, order_id, position_id, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 size_usd, fee, order_id, position_id, master_trade_id, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 datetime.now().isoformat(),
                 user_id,
@@ -237,6 +296,7 @@ class TradeLedgerDB:
                 fee,
                 order_id,
                 position_id,
+                master_trade_id,
                 notes
             ))
             
@@ -596,6 +656,129 @@ class TradeLedgerDB:
                 stats['win_rate'] = 0.0
             
             return stats
+    
+    def record_copy_trade(self, master_trade_id: str, master_symbol: str, 
+                         master_side: str, master_order_id: str = None,
+                         master_user_id: str = 'master',
+                         user_id: str = None, user_status: str = None, 
+                         user_order_id: str = None, user_error: str = None,
+                         user_size: float = None) -> int:
+        """
+        P2: Record a copy trade execution for visibility
+        
+        Args:
+            master_trade_id: Master trade identifier
+            master_symbol: Trading symbol
+            master_side: 'buy' or 'sell'
+            master_order_id: Master order ID
+            master_user_id: Master user ID (default: 'master')
+            user_id: User account ID
+            user_status: Execution status ('filled', 'skipped', 'failed')
+            user_order_id: User's order ID (if filled)
+            user_error: Error message (if failed)
+            user_size: User's position size
+            
+        Returns:
+            Record ID
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO copy_trade_map
+                (master_trade_id, master_user_id, master_symbol, master_side, 
+                 master_order_id, master_timestamp, user_id, user_status, 
+                 user_order_id, user_error, user_size)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                master_trade_id,
+                master_user_id,
+                master_symbol,
+                master_side,
+                master_order_id,
+                datetime.now().isoformat(),
+                user_id,
+                user_status,
+                user_order_id,
+                user_error,
+                user_size
+            ))
+            
+            record_id = cursor.lastrowid
+            logger.info(f"📊 Copy trade recorded: {master_trade_id} → {user_id} ({user_status})")
+            return record_id
+    
+    def get_copy_trade_map(self, master_trade_id: str = None) -> List[Dict]:
+        """
+        P2: Get copy trade map showing master trade → user executions
+        
+        Args:
+            master_trade_id: Filter by specific master trade (optional)
+            
+        Returns:
+            List of copy trade execution records
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if master_trade_id:
+                query = """
+                    SELECT * FROM copy_trade_map 
+                    WHERE master_trade_id = ?
+                    ORDER BY created_at DESC
+                """
+                cursor.execute(query, (master_trade_id,))
+            else:
+                query = """
+                    SELECT * FROM copy_trade_map 
+                    ORDER BY created_at DESC
+                    LIMIT 100
+                """
+                cursor.execute(query)
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append(dict(row))
+            
+            return results
+    
+    def get_copy_trade_summary(self, master_trade_id: str) -> Dict:
+        """
+        P2: Get summary of copy trade execution for a master trade
+        
+        Args:
+            master_trade_id: Master trade identifier
+            
+        Returns:
+            Dictionary with execution summary
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total_users,
+                    SUM(CASE WHEN user_status = 'filled' THEN 1 ELSE 0 END) as filled_count,
+                    SUM(CASE WHEN user_status = 'skipped' THEN 1 ELSE 0 END) as skipped_count,
+                    SUM(CASE WHEN user_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                    master_symbol,
+                    master_side
+                FROM copy_trade_map
+                WHERE master_trade_id = ?
+                GROUP BY master_trade_id
+            """, (master_trade_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            else:
+                return {
+                    'total_users': 0,
+                    'filled_count': 0,
+                    'skipped_count': 0,
+                    'failed_count': 0,
+                    'master_symbol': None,
+                    'master_side': None
+                }
 
 
 # Global instance
