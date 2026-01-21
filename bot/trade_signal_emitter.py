@@ -13,6 +13,7 @@ import logging
 import time
 import queue
 import threading
+import uuid
 from typing import Dict, Optional, List
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -226,7 +227,6 @@ def emit_trade_signal(
     
     # P2: Generate master_trade_id if not provided
     if not master_trade_id:
-        import uuid
         master_trade_id = f"{broker}_{symbol}_{order_id}_{int(time.time())}"
     
     signal = TradeSignal(

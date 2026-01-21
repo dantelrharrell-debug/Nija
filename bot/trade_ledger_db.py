@@ -213,10 +213,19 @@ class TradeLedgerDB:
         Record a BUY transaction in the ledger
         
         Args:
-            master_trade_id: Reference to master trade (for copy trading visibility)
+            symbol: Trading symbol (e.g., 'BTC-USD')
+            price: Execution price
+            quantity: Amount of crypto purchased
+            size_usd: Position size in USD
+            fee: Transaction fee (default: 0.0)
+            order_id: Broker order ID (optional)
+            position_id: Position identifier (optional)
+            user_id: User account ID (default: 'master')
+            notes: Additional notes (optional)
+            master_trade_id: Reference to master trade for copy trading visibility (optional)
         
         Returns:
-            Transaction ID
+            int: Transaction ID
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -254,10 +263,19 @@ class TradeLedgerDB:
         Record a SELL transaction in the ledger
         
         Args:
-            master_trade_id: Reference to master trade (for copy trading visibility)
+            symbol: Trading symbol (e.g., 'BTC-USD')
+            price: Execution price
+            quantity: Amount of crypto sold
+            size_usd: Position size in USD
+            fee: Transaction fee (default: 0.0)
+            order_id: Broker order ID (optional)
+            position_id: Position identifier (optional)
+            user_id: User account ID (default: 'master')
+            notes: Additional notes (optional)
+            master_trade_id: Reference to master trade for copy trading visibility (optional)
         
         Returns:
-            Transaction ID
+            int: Transaction ID
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()

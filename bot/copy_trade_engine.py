@@ -403,8 +403,12 @@ class CopyTradeEngine:
             
             # Check if order was successful
             # P1: Verify order has FILLED or PARTIALLY_FILLED status
+            # This is the second layer of defense after signal emission guard
             order_status = order_result.get('status', 'unknown') if order_result else 'no_response'
-            if order_result and order_status not in ['error', 'unfilled']:
+            
+            # P1 ENFORCEMENT: Only accept filled orders, not pending/approved signals
+            # Consistent with emit_trade_signal() guard which only allows FILLED/PARTIALLY_FILLED
+            if order_result and order_status in ['filled', 'FILLED', 'partially_filled', 'PARTIALLY_FILLED']:
                 order_id = order_result.get('order_id', order_result.get('id', 'unknown'))
                 broker_name = signal.broker.upper()
                 
@@ -418,6 +422,7 @@ class CopyTradeEngine:
                 logger.info(f"      Symbol: {signal.symbol}")
                 logger.info(f"      Side: {signal.side.upper()}")
                 logger.info(f"      Size: {user_size_rounded} ({signal.size_type})")
+                logger.info(f"      Order Status: {order_status}")
                 logger.info("      " + "=" * 50)
                 
                 with self._lock:
@@ -448,12 +453,14 @@ class CopyTradeEngine:
                     size_type=signal.size_type
                 )
             else:
-                error_msg = order_result.get('error', order_result.get('message', 'Unknown error')) if order_result else 'No response'
+                # Order failed, unfilled, or has invalid status
+                error_msg = order_result.get('error', order_result.get('message', f'Order status: {order_status}')) if order_result else 'No response'
                 logger.error("      " + "=" * 50)
                 logger.error("      ❌ COPY TRADE FAILED")
                 logger.error("      " + "=" * 50)
                 logger.error(f"      User: {user_id}")
                 logger.error(f"      Error: {error_msg}")
+                logger.error(f"      Order Status: {order_status}")
                 logger.error("      " + "=" * 50)
                 
                 with self._lock:
