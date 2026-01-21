@@ -25,6 +25,16 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 from enum import Enum
 
+# Import scalar helper for indicator conversions
+try:
+    from indicators import scalar
+except ImportError:
+    # Fallback if indicators.py is not available
+    def scalar(x):
+        if isinstance(x, (tuple, list)):
+            return float(x[0])
+        return float(x)
+
 logger = logging.getLogger("nija.market_adaptation")
 
 
@@ -169,7 +179,7 @@ class MarketAdaptationEngine:
         
         dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 0.0001)
         adx = dx.rolling(14).mean().iloc[-1]
-        metrics.trend_strength = adx if not np.isnan(adx) else 0
+        metrics.trend_strength = scalar(adx) if not np.isnan(adx) else 0
         
         # 3. Volume ratio
         avg_volume = market_data['volume'].rolling(20).mean().iloc[-1]
@@ -183,7 +193,7 @@ class MarketAdaptationEngine:
             metrics.price_momentum = (price_change / market_data['close'].iloc[-roc_period]) * 100
         
         # 5. Determine regime
-        regime = self._classify_regime(metrics, plus_di.iloc[-1], minus_di.iloc[-1])
+        regime = self._classify_regime(metrics, scalar(plus_di.iloc[-1]), scalar(minus_di.iloc[-1]))
         metrics.regime = regime
         
         # Update current state
@@ -208,9 +218,9 @@ class MarketAdaptationEngine:
         Returns:
             Market regime classification
         """
-        adx = metrics.trend_strength
-        volatility = metrics.volatility
-        volume_ratio = metrics.volume_ratio
+        adx = scalar(metrics.trend_strength)
+        volatility = scalar(metrics.volatility)
+        volume_ratio = scalar(metrics.volume_ratio)
         
         # High volatility, low volume = Choppy
         if volatility > 3.0 and volume_ratio < 0.8:

@@ -15,6 +15,16 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
+# Import scalar helper for indicator conversions
+try:
+    from indicators import scalar
+except ImportError:
+    # Fallback if indicators.py is not available
+    def scalar(x):
+        if isinstance(x, (tuple, list)):
+            return float(x[0])
+        return float(x)
+
 logger = logging.getLogger("nija.rotation_manager")
 
 
@@ -130,7 +140,7 @@ class RotationManager:
             score -= 10  # Very new - give it time
         
         # Factor 3: RSI (overbought = close, oversold = hold)
-        rsi = position_metrics.get('rsi', 50)
+        rsi = scalar(position_metrics.get('rsi', 50))
         if rsi > 70:
             score += 15  # Overbought - good time to exit
         elif rsi < 30:

@@ -12,6 +12,16 @@ Implements:
 import pandas as pd
 from datetime import datetime
 
+# Import scalar helper for indicator conversions
+try:
+    from indicators import scalar
+except ImportError:
+    # Fallback if indicators.py is not available
+    def scalar(x):
+        if isinstance(x, (tuple, list)):
+            return float(x[0])
+        return float(x)
+
 class NIJATrailingSystem:
     """
     NIJA Trailing System for advanced position management
@@ -93,6 +103,10 @@ class NIJATrailingSystem:
         side = position['side']
         current_price = current_candle['close']
         profit_pct = position['profit_pct']
+        
+        # Convert indicators to scalar values
+        rsi = scalar(rsi)
+        vwap = scalar(vwap)
         
         # Not activated until TP2 (+1%) hits and 25% remaining
         if position['remaining_size'] > 0.25 or profit_pct < 1.0:
@@ -179,6 +193,10 @@ class NIJATrailingSystem:
         position = self.positions[position_id]
         side = position['side']
         entry_price = position['entry_price']
+        
+        # Convert indicators to scalar values
+        rsi = scalar(rsi)
+        vwap = scalar(vwap)
         
         # Calculate current profit
         if side == 'long':
