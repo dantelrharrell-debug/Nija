@@ -16,6 +16,48 @@ import logging
 import threading
 import traceback
 
+# Import broker adapters for validation
+try:
+    from bot.broker_adapters import (
+        BrokerAdapterFactory, TradeIntent, ValidatedOrder, OrderIntent
+    )
+except ImportError:
+    try:
+        from broker_adapters import (
+            BrokerAdapterFactory, TradeIntent, ValidatedOrder, OrderIntent
+        )
+    except ImportError:
+        BrokerAdapterFactory = None
+        TradeIntent = None
+        ValidatedOrder = None
+        OrderIntent = None
+
+# Import tier configuration for minimum enforcement
+try:
+    from bot.tier_config import (
+        get_tier_from_balance, get_tier_config, validate_trade_size, TradingTier
+    )
+except ImportError:
+    try:
+        from tier_config import (
+            get_tier_from_balance, get_tier_config, validate_trade_size, TradingTier
+        )
+    except ImportError:
+        get_tier_from_balance = None
+        get_tier_config = None
+        validate_trade_size = None
+        TradingTier = None
+
+# Import Kraken symbol mapper
+try:
+    from bot.kraken_symbol_mapper import get_kraken_symbol_mapper, convert_to_kraken
+except ImportError:
+    try:
+        from kraken_symbol_mapper import get_kraken_symbol_mapper, convert_to_kraken
+    except ImportError:
+        get_kraken_symbol_mapper = None
+        convert_to_kraken = None
+
 # Import global Kraken nonce manager (FINAL FIX)
 try:
     from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock
@@ -679,10 +721,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             if not self.kraken_api:
                 return None
             
-            # Convert symbol format to Kraken format
-            kraken_symbol = symbol.replace('-', '').upper()
-            if kraken_symbol.startswith('BTC'):
-                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            # Convert symbol format using helper method
+            kraken_symbol = self._convert_to_kraken_symbol(symbol)
             
             # Map timeframe to Kraken interval (in minutes)
             interval_map = {
@@ -723,20 +763,178 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.error(f"Error fetching Kraken market data: {e}")
             return None
     
+    def _convert_to_kraken_symbol(self, symbol: str) -> str:
+        """
+        Convert a symbol to Kraken format.
+        
+        Helper method to ensure consistent symbol conversion across all methods.
+        
+        Args:
+            symbol: Symbol in various formats (BTC-USD, ETH/USDT, etc.)
+            
+        Returns:
+            Kraken-formatted symbol (XBTUSD, ETHUSDT, etc.)
+        """
+        # Use symbol mapper if available
+        if convert_to_kraken:
+            kraken_symbol = convert_to_kraken(symbol)
+            if kraken_symbol:
+                return kraken_symbol
+        
+        # Fallback: Manual conversion
+        # Remove separators and uppercase
+        kraken_symbol = symbol.replace('-', '').replace('/', '').upper()
+        
+        # BTC -> XBT conversion (Kraken's special naming)
+        if kraken_symbol.startswith('BTC'):
+            kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+        
+        return kraken_symbol
+    
+    def _validate_kraken_order(self, symbol: str, side: str, size: float, 
+                              size_type: str = 'quote', 
+                              current_price: float = None) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Validate Kraken order before placing it.
+        
+        This method enforces:
+        1. Symbol format validation (Kraken only supports USD/USDT pairs)
+        2. Order minimum validation (Kraken minimums)
+        3. Tier-based minimum enforcement (prevent fee-destroying trades)
+        4. Proper symbol conversion (BTC -> XBT, etc.)
+        
+        Args:
+            symbol: Trading pair symbol (e.g., "BTC-USD", "ETH/USDT")
+            side: 'buy' or 'sell'
+            size: Order size (quantity)
+            size_type: 'quote' (USD value) or 'base' (asset quantity)
+            current_price: Optional current price for USD calculation
+            
+        Returns:
+            Tuple of (is_valid, kraken_symbol, error_message)
+        """
+        # ✅ REQUIREMENT #1: Symbol format validation (case-insensitive)
+        # Kraken only supports */USD and */USDT pairs
+        symbol_upper = symbol.upper()
+        if not (symbol_upper.endswith('/USD') or symbol_upper.endswith('/USDT') or 
+                symbol_upper.endswith('-USD') or symbol_upper.endswith('-USDT')):
+            return (False, None, f"Kraken only supports USD/USDT pairs. Symbol '{symbol}' is not supported.")
+        
+        # ✅ REQUIREMENT #2: Convert to Kraken format using helper method
+        kraken_symbol = self._convert_to_kraken_symbol(symbol)
+        
+        # ✅ REQUIREMENT #3: Validate order size meets Kraken minimums
+        # Calculate USD notional value
+        if size_type == 'quote':
+            order_size_usd = size
+        elif size_type == 'base' and current_price:
+            order_size_usd = size * current_price
+        else:
+            order_size_usd = size  # Assume it's in USD if we can't calculate
+        
+        # Kraken minimum order size - import from broker adapter if available
+        if BrokerAdapterFactory:
+            try:
+                # Get minimum from KrakenAdapter
+                from bot.broker_adapters import KrakenAdapter
+                KRAKEN_MIN_ORDER_USD = KrakenAdapter.MIN_VOLUME_DEFAULT
+            except (ImportError, AttributeError):
+                KRAKEN_MIN_ORDER_USD = 10.0  # Fallback
+        else:
+            KRAKEN_MIN_ORDER_USD = 10.0  # Fallback
+        
+        if order_size_usd < KRAKEN_MIN_ORDER_USD:
+            return (False, kraken_symbol, 
+                    f"Order size ${order_size_usd:.2f} below Kraken minimum ${KRAKEN_MIN_ORDER_USD:.2f}")
+        
+        # ✅ REQUIREMENT #4: Tier-based minimum enforcement
+        # Check if user's balance tier allows this trade size
+        tier_validation_result = None  # Store result to log outside try-except
+        
+        if get_tier_from_balance and validate_trade_size:
+            try:
+                # Get current balance
+                balance_info = self.get_account_balance()
+                if balance_info and not balance_info.get('error', False):
+                    current_balance = balance_info.get('total_balance', 0.0)
+                    
+                    # Check if balance meets minimum tier requirement
+                    if current_balance < 25.0:  # Minimum SAVER tier
+                        return (False, kraken_symbol,
+                                f"Account balance ${current_balance:.2f} below minimum tier requirement $25.00. Cannot execute trades.")
+                    
+                    # Determine user's tier
+                    user_tier = get_tier_from_balance(current_balance)
+                    tier_config = get_tier_config(user_tier)
+                    
+                    # Validate trade size for tier
+                    is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
+                    
+                    if not is_valid:
+                        return (False, kraken_symbol,
+                                f"[{user_tier.value} Tier] {reason}. Account balance: ${current_balance:.2f}")
+                    
+                    # Store validation success for logging outside try-except
+                    tier_validation_result = (user_tier.value, order_size_usd)
+                    
+            except Exception as tier_err:
+                # Don't block trade if tier validation fails - just log warning
+                logger.warning(f"⚠️  Tier validation error (allowing trade): {tier_err}")
+        
+        # Log tier validation success (outside try-except for performance)
+        if tier_validation_result:
+            tier_name, validated_size = tier_validation_result
+            logger.info(f"✅ Tier validation passed: [{tier_name}] ${validated_size:.2f} trade")
+        
+        # ✅ REQUIREMENT #5: Broker adapter validation (if available)
+        if BrokerAdapterFactory and TradeIntent and OrderIntent:
+            try:
+                # Create trade intent
+                intent_type = OrderIntent.BUY if side.lower() == 'buy' else OrderIntent.SELL
+                intent = TradeIntent(
+                    intent_type=intent_type,
+                    symbol=symbol,
+                    quantity=size,
+                    size_usd=order_size_usd,
+                    size_type=size_type,
+                    force_execute=False,
+                    reason="Strategy signal"
+                )
+                
+                # Validate with Kraken adapter
+                adapter = BrokerAdapterFactory.create_adapter("kraken")
+                validated = adapter.validate_and_adjust(intent)
+                
+                if not validated.valid:
+                    return (False, kraken_symbol, validated.error_message)
+                
+                # Log any warnings
+                if validated.warnings:
+                    for warning in validated.warnings:
+                        logger.warning(f"⚠️  {warning}")
+                        
+            except Exception as adapter_err:
+                # Don't block trade if adapter validation fails - just log warning
+                logger.warning(f"⚠️  Adapter validation error (allowing trade): {adapter_err}")
+        
+        # All validations passed
+        return (True, kraken_symbol, None)
+    
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote') -> Optional[Dict]:
-        """Place market order on Kraken."""
+        """
+        Place market order on Kraken with comprehensive validation.
+        
+        This method now includes:
+        - Symbol format validation
+        - Order minimum enforcement (Kraken + tier minimums)
+        - Proper symbol conversion (BTC -> XBT)
+        - txid confirmation and verification
+        - Enhanced error logging
+        """
         try:
             if not self.api:
-                return None
-            
-            # ✅ FIX 3: HARD SYMBOL ALLOWLIST FOR KRAKEN
-            # Kraken only supports */USD and */USDT pairs
-            # Skip unsupported symbols (BUSD, etc.) to prevent silent order rejection
-            if not (symbol.endswith('/USD') or symbol.endswith('/USDT') or 
-                    symbol.endswith('-USD') or symbol.endswith('-USDT')):
-                logger.info(f"⏭️ Kraken skip unsupported symbol {symbol}")
-                logger.info(f"   💡 Kraken only supports */USD and */USDT pairs")
+                logger.error("❌ Kraken API not connected")
                 return {
                     'order_id': None,
                     'symbol': symbol,
@@ -744,25 +942,47 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'size': size,
                     'filled_price': 0.0,
                     'status': 'error',
-                    'error': 'UNSUPPORTED_SYMBOL',
-                    'message': 'Kraken only supports */USD and */USDT pairs',
+                    'error': 'API_NOT_CONNECTED',
                     'timestamp': datetime.now()
                 }
             
-            # Convert symbol format
-            kraken_symbol = symbol.replace('-', '').upper()
-            if kraken_symbol.startswith('BTC'):
-                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            # ✅ COMPREHENSIVE ORDER VALIDATION (REQUIREMENT #1)
+            # Validates: symbol format, minimums, tier requirements, symbol conversion
+            is_valid, kraken_symbol, error_msg = self._validate_kraken_order(
+                symbol, side, size, size_type
+            )
             
-            # Place market order
+            if not is_valid:
+                logger.error(f"❌ ORDER VALIDATION FAILED [kraken] {symbol}")
+                logger.error(f"   Reason: {error_msg}")
+                logger.error(f"   Side: {side}, Size: {size}, Type: {size_type}")
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': 0.0,
+                    'status': 'error',
+                    'error': 'VALIDATION_FAILED',
+                    'message': error_msg,
+                    'timestamp': datetime.now()
+                }
+            
+            # Log validated order details
+            logger.info(f"📝 Placing Kraken market {side} order: {kraken_symbol}")
+            logger.info(f"   Size: {size} {size_type}, Validation: PASSED")
+            
+            # ✅ REQUIREMENT #2: Build order parameters with proper format
+            # Ensure parameters match Kraken API requirements exactly
             order_params = {
                 'pair': kraken_symbol,
-                'type': side.lower(),
+                'type': side.lower(),  # 'buy' or 'sell'
                 'ordertype': 'market',
-                'volume': str(size)
+                'volume': str(size)  # Must be string format
             }
             
-            # Use helper method for serialized API call
+            # ✅ REQUIREMENT #3: Execute order via serialized API call
+            # Use helper method for global nonce management and thread safety
             result = self._kraken_api_call('AddOrder', order_params)
             
             # ✅ FIX 4: ENHANCED ORDER LOGGING WITH FILL DETAILS
@@ -883,17 +1103,59 @@ class KrakenBrokerAdapter(BrokerInterface):
     
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote') -> Optional[Dict]:
-        """Place limit order on Kraken."""
+        """
+        Place limit order on Kraken with comprehensive validation.
+        
+        This method now includes:
+        - Symbol format validation
+        - Order minimum enforcement (Kraken + tier minimums)
+        - Proper symbol conversion (BTC -> XBT)
+        - txid confirmation
+        - Enhanced error logging
+        """
         try:
             if not self.api:
-                return None
+                logger.error("❌ Kraken API not connected")
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': 0.0,
+                    'status': 'error',
+                    'error': 'API_NOT_CONNECTED',
+                    'timestamp': datetime.now()
+                }
             
-            # Convert symbol format
-            kraken_symbol = symbol.replace('-', '').upper()
-            if kraken_symbol.startswith('BTC'):
-                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            # ✅ COMPREHENSIVE ORDER VALIDATION (REQUIREMENT #1)
+            # Calculate USD size for validation (limit orders use price)
+            order_size_usd = size * price if size_type == 'base' else size
             
-            # Place limit order
+            is_valid, kraken_symbol, error_msg = self._validate_kraken_order(
+                symbol, side, size, size_type, current_price=price
+            )
+            
+            if not is_valid:
+                logger.error(f"❌ ORDER VALIDATION FAILED [kraken limit] {symbol}")
+                logger.error(f"   Reason: {error_msg}")
+                logger.error(f"   Side: {side}, Size: {size}, Price: ${price}, Type: {size_type}")
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': price,
+                    'status': 'error',
+                    'error': 'VALIDATION_FAILED',
+                    'message': error_msg,
+                    'timestamp': datetime.now()
+                }
+            
+            # Log validated order details
+            logger.info(f"📝 Placing Kraken limit {side} order: {kraken_symbol} @ ${price}")
+            logger.info(f"   Size: {size} {size_type}, USD Value: ${order_size_usd:.2f}, Validation: PASSED")
+            
+            # ✅ REQUIREMENT #2: Build order parameters with proper format
             order_params = {
                 'pair': kraken_symbol,
                 'type': side.lower(),
@@ -902,15 +1164,23 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'volume': str(size)
             }
             
-            # Use helper method for serialized API call
+            # ✅ REQUIREMENT #3: Execute order via serialized API call
             result = self._kraken_api_call('AddOrder', order_params)
             
+            # ✅ REQUIREMENT #4: Verify txid and return comprehensive response
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
                 
-                logger.info(f"Kraken limit {side} order placed: {kraken_symbol} @ ${price} (ID: {order_id})")
+                if order_id:
+                    logger.info(f"✅ Kraken limit {side} order placed successfully")
+                    logger.info(f"   • Order ID (txid): {order_id}")
+                    logger.info(f"   • Symbol: {kraken_symbol}")
+                    logger.info(f"   • Price: ${price}")
+                    logger.info(f"   • Size: {size} {size_type}")
+                else:
+                    logger.warning(f"⚠️  Kraken limit order accepted but no txid returned")
                 
                 return {
                     'order_id': order_id,
@@ -922,13 +1192,39 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'timestamp': datetime.now()
                 }
             
+            # Order failed
             error_msg = result.get('error', ['Unknown error'])[0] if result else 'No response'
-            logger.error(f"Kraken limit order failed: {error_msg}")
-            return None
+            logger.error(f"❌ ORDER FAILED [kraken limit] {symbol}: {error_msg}")
+            logger.error(f"   Side: {side}, Size: {size}, Price: ${price}, Type: {size_type}")
+            logger.error(f"   Full result: {result}")
+            
+            return {
+                'order_id': None,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'filled_price': price,
+                'status': 'error',
+                'error': error_msg,
+                'timestamp': datetime.now()
+            }
             
         except Exception as e:
-            logger.error(f"Kraken limit order error: {e}")
-            return None
+            logger.error(f"❌ ORDER FAILED [kraken limit] {symbol}: {e}")
+            logger.error(f"   Exception type: {type(e).__name__}")
+            logger.error(f"   Side: {side}, Size: {size}, Price: ${price}")
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+            
+            return {
+                'order_id': None,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'filled_price': price,
+                'status': 'error',
+                'error': str(e),
+                'timestamp': datetime.now()
+            }
     
     def cancel_order(self, order_id: str) -> bool:
         """Cancel order on Kraken."""
