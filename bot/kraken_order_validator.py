@@ -6,6 +6,8 @@ Prevents order rejections due to:
 - Pair minimums
 - Quote currency minimums  
 - Fee-adjusted sizing
+
+Also provides utilities for verifying per-API key execution.
 """
 
 import logging
@@ -13,8 +15,12 @@ from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger("nija.kraken_validator")
 
-# Kraken minimum order sizes (as of 2026)
+# Logging constants
+SEPARATOR = "=" * 70
+
+# Kraken minimum order sizes
 # Source: https://support.kraken.com/hc/en-us/articles/205893708-Minimum-order-size-volume-for-trading
+# Note: These minimums are subject to change. Verify against current Kraken documentation.
 KRAKEN_MINIMUMS = {
     # Major pairs
     'XXBTZUSD': {'min_base': 0.0001, 'min_quote': 10.0},  # BTC/USD
@@ -102,23 +108,27 @@ def adjust_size_for_fees(volume: float, price: float, side: str,
     """
     Adjust order size to account for Kraken fees.
     
-    For buys: Ensures we have enough to cover fees
-    For sells: Ensures we sell enough to meet minimums after fees
+    IMPORTANT: This returns the effective tradeable volume after accounting for fees.
+    
+    For buys: Reduces volume to ensure we can afford fees with available funds
+              (e.g., 1.0 BTC requested → ~0.9984 BTC after 0.16% fee deduction)
+    For sells: Volume stays the same (fee is deducted from sale proceeds)
     
     Args:
-        volume: Order volume in base currency
+        volume: Desired order volume in base currency
         price: Order price
         side: 'buy' or 'sell'
         use_maker_fee: True for limit orders, False for market orders
         
     Returns:
-        float: Fee-adjusted volume
+        float: Adjusted volume that can be safely executed
     """
     fee_rate = KRAKEN_MAKER_FEE if use_maker_fee else KRAKEN_TAKER_FEE
     
     if side.lower() == 'buy':
         # For buys, we need to ensure we can afford the fee
         # Reduce volume slightly to account for fee
+        # Example: Want to buy $100 worth, but need to reserve $0.16 for fee
         return volume * (1 - fee_rate)
     else:
         # For sells, volume stays the same (fee comes from proceeds)

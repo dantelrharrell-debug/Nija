@@ -828,10 +828,13 @@ class KrakenBrokerAdapter(BrokerInterface):
                 size = adjusted_size
                 logger.info(f"   Using fee-adjusted size: {size:.8f}")
             else:
-                # If we can't get price, log warning but proceed
-                logger.warning(f"⚠️  Could not fetch price for validation, proceeding without validation")
+                # If we can't get price, log warning and skip validation
+                # Order will still be submitted but without pre-validation
+                logger.warning(f"⚠️  Could not fetch price for pre-validation")
+                logger.warning(f"   Order will be submitted without size validation")
+                logger.warning(f"   Kraken will reject if order doesn't meet minimums")
                 minimums = get_pair_minimums(kraken_symbol)
-                logger.info(f"   Pair minimums: {minimums}")
+                logger.info(f"   Expected pair minimums: {minimums}")
             
             # Place market order
             order_params = {
