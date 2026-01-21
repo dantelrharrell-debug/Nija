@@ -360,11 +360,14 @@ class CopyTradeEngine:
             # Check if order was successful
             if order_result and order_result.get('status') not in ['error', 'unfilled']:
                 order_id = order_result.get('order_id', order_result.get('id', 'unknown'))
+                broker_name = signal.broker.upper()
                 
                 logger.info("      " + "=" * 50)
                 logger.info("      🟢 COPY TRADE SUCCESS")
                 logger.info("      " + "=" * 50)
                 logger.info(f"      User: {user_id}")
+                # ✅ REQUIREMENT #3: Updated logging for users - "Trade executed in your [broker] account"
+                logger.info(f"      ✅ Trade executed in your {broker_name} account")
                 logger.info(f"      Order ID: {order_id}")
                 logger.info(f"      Symbol: {signal.symbol}")
                 logger.info(f"      Side: {signal.side.upper()}")
