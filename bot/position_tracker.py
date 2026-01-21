@@ -210,9 +210,10 @@ class PositionTracker:
         pnl_pct = (pnl_dollars / entry_value) if entry_value > 0 else 0
         
         # CRITICAL: Validate PnL is in fractional format
-        # Large values (>1 or <-1) indicate potential bugs or extreme market moves
+        # Large values (>1 or <-1) could indicate bugs or extreme market moves (>100%)
+        # This is a monitoring warning - no corrective action needed, just alerting
         if abs(pnl_pct) >= 1.0:
-            logger.warning(f"⚠️ Large PnL detected for {symbol}: {pnl_pct*100:.2f}% - validating scale")
+            logger.warning(f"⚠️ Large PnL detected for {symbol}: {pnl_pct*100:.2f}% - this is unusual but valid for extreme moves")
         
         return {
             'symbol': symbol,

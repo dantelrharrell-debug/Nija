@@ -215,6 +215,10 @@ STOP_LOSS_THRESHOLD = -0.01  # Legacy threshold (same as micro-stop)
 # NORMALIZED FORMAT: -0.05 = -5% (fractional format)
 STOP_LOSS_EMERGENCY = -0.05  # EMERGENCY exit at -5% loss (FAILSAFE - absolute last resort)
 
+# OPTIONAL ENHANCEMENT: Minimum loss floor
+# Ignore very small losses to reduce noise and prevent overtrading
+MIN_LOSS_FLOOR = -0.0025  # -0.25% - ignore losses smaller than this
+
 # Auto-import safety default constants (FIX #1 - Jan 19, 2026)
 # When auto-importing orphaned positions without real entry price, use safety default
 # This creates immediate negative P&L to flag position as losing for aggressive exit
@@ -1201,8 +1205,8 @@ class TradingStrategy:
         
         return (
             primary_stop,           # Tier 1: Primary trading stop
-            STOP_LOSS_MICRO,        # Tier 2: Emergency micro-stop (-1.0%)
-            STOP_LOSS_EMERGENCY,    # Tier 3: Catastrophic failsafe (-5.0%)
+            STOP_LOSS_MICRO,        # Tier 2: Emergency micro-stop (-1%)
+            STOP_LOSS_EMERGENCY,    # Tier 3: Catastrophic failsafe (-5%)
             description
         )
 
@@ -1761,9 +1765,6 @@ class TradingStrategy:
                                     # CRITICAL FIX (Jan 19, 2026): Stop-loss checks happen BEFORE time-based exits
                                     # This ensures losing trades get stopped out immediately, not held for hours
                                     
-                                    # OPTIONAL: Minimum loss floor - ignore very small losses (< -0.25%) to reduce noise
-                                    MIN_LOSS_FLOOR = -0.0025  # -0.25% - ignore losses smaller than this
-                                    
                                     # CATASTROPHIC STOP LOSS: Force exit at -5% or worse (ABSOLUTE FAILSAFE)
                                     if pnl_percent <= STOP_LOSS_EMERGENCY:
                                         logger.warning(f"   🛡️ CATASTROPHIC PROTECTIVE EXIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_EMERGENCY*100:.0f}%)")
@@ -1774,18 +1775,14 @@ class TradingStrategy:
                                             'reason': f'Catastrophic protective exit at {STOP_LOSS_EMERGENCY*100:.0f}% (actual: {pnl_percent*100:.2f}%)'
                                         })
                                     # STANDARD STOP LOSS: Normal stop-loss threshold
-                                    elif pnl_percent <= STOP_LOSS_THRESHOLD:
-                                        # Check if loss is significant enough to act on (reduce noise)
-                                        if pnl_percent < MIN_LOSS_FLOOR or abs(pnl_percent) > abs(MIN_LOSS_FLOOR):
-                                            logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
-                                            positions_to_exit.append({
-                                                'symbol': symbol,
-                                                'quantity': quantity,
-                                                'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)'
-                                            })
-                                        else:
-                                            # Loss too small - ignore (reduce noise)
-                                            logger.debug(f"   📊 Minor loss {pnl_percent*100:.2f}% < floor {MIN_LOSS_FLOOR*100:.2f}% - ignoring")
+                                    # WITH MINIMUM LOSS FLOOR: Only trigger if loss is significant enough
+                                    elif pnl_percent <= STOP_LOSS_THRESHOLD and pnl_percent <= MIN_LOSS_FLOOR:
+                                        logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)'
+                                        })
                                     # WARNING THRESHOLD: Approaching stop loss
                                     elif pnl_percent <= STOP_LOSS_WARNING:
                                         logger.warning(f"   ⚠️ Approaching protective stop: {symbol} at {pnl_percent*100:.2f}%")
