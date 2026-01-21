@@ -4919,6 +4919,10 @@ class KrakenBroker(BaseBroker):
                 api_key_raw = os.getenv(key_name, "")
                 api_secret_raw = os.getenv(secret_name, "")
                 
+                # Log when master credentials are found
+                if api_key_raw and api_secret_raw:
+                    logger.info("   ✅ Using KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET for master account")
+                
                 # Fallback to legacy credentials if master credentials not set
                 # This provides backward compatibility for deployments using KRAKEN_API_KEY
                 if not api_key_raw:

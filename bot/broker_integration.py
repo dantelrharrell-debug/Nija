@@ -455,11 +455,24 @@ class KrakenBrokerAdapter(BrokerInterface):
         """
         import os
         # Use KRAKEN_MASTER_API_KEY for master account, fallback to legacy KRAKEN_API_KEY
-        self.api_key = api_key or os.getenv("KRAKEN_MASTER_API_KEY") or os.getenv("KRAKEN_API_KEY")
-        self.api_secret = api_secret or os.getenv("KRAKEN_MASTER_API_SECRET") or os.getenv("KRAKEN_API_SECRET")
+        master_key = os.getenv("KRAKEN_MASTER_API_KEY")
+        master_secret = os.getenv("KRAKEN_MASTER_API_SECRET")
+        legacy_key = os.getenv("KRAKEN_API_KEY")
+        legacy_secret = os.getenv("KRAKEN_API_SECRET")
+        
+        self.api_key = api_key or master_key or legacy_key
+        self.api_secret = api_secret or master_secret or legacy_secret
+        
+        # Log which credentials are being used
+        if not api_key and master_key:
+            logger.info("Kraken broker adapter initialized with KRAKEN_MASTER_API_KEY")
+        elif not api_key and legacy_key:
+            logger.info("Kraken broker adapter initialized with legacy KRAKEN_API_KEY")
+        else:
+            logger.info("Kraken broker adapter initialized")
+        
         self.api = None
         self.kraken_api = None
-        logger.info("Kraken broker adapter initialized")
     
     def _kraken_api_call(self, method: str, params: dict = None):
         """
