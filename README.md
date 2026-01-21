@@ -1,27 +1,47 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-## 🎯 **NEW: RISK PROFILES - Master, Retail, Investor-Safe**
+## 🎯 **Official Trading Tiers - Five Levels for Every Trader**
 
-**Three optimized risk profiles** for different trading styles and capital levels:
+**NIJA uses five official trading tiers** optimized for different capital levels and trading goals:
 
-| Profile | Capital | Risk Level | Max Risk/Trade | Max Positions | Daily Loss Limit |
-|---------|---------|------------|----------------|---------------|------------------|
-| **MASTER** | $1,000+ | Moderate-High | 3% | 10 | 5% |
-| **RETAIL** | $100-$1,000 | Moderate | 2% | 5 | 3% |
-| **INVESTOR** | $50+ | Low | 1% | 3 | 1.5% |
+| Tier | Capital | Risk/Trade | Trade Size | Max Positions | Goal |
+|------|---------|------------|------------|---------------|------|
+| **SAVER** | $25-$99 | 10-15% | $2-$5 | 1 | Learn the system |
+| **INVESTOR** | $100-$249 | 7-10% | $10+ | 2-3 | Build consistency (DEFAULT) |
+| **INCOME** ⭐ | $250-$999 | 4-7% | $15-$25 | 3-5 | Generate returns (Core Retail) |
+| **LIVABLE** | $1k-$5k | 2-4% | $25+ | 5-6 | Stable returns |
+| **BALLER** | $5k+ | 1-2% | $50+ | 6-8 | Scale capital |
 
 **Quick Setup:**
 ```bash
-# Add to .env - choose your profile:
-RISK_PROFILE=MASTER        # For professional traders
-RISK_PROFILE=RETAIL        # For active traders (default)
-RISK_PROFILE=INVESTOR      # For conservative investors
-RISK_PROFILE=AUTO          # Auto-select based on balance
+# Add to .env - choose your tier:
+TRADING_TIER=SAVER       # For $25-$99 capital
+TRADING_TIER=INVESTOR    # For $100-$249 capital (default)
+TRADING_TIER=INCOME      # For $250-$999 capital ⭐ core retail tier
+TRADING_TIER=LIVABLE     # For $1k-$5k capital
+TRADING_TIER=BALLER      # For $5k+ capital
+TRADING_TIER=AUTO        # Auto-select based on balance
+```
+
+**Or use preset templates:**
+```bash
+cp .env.saver_tier .env      # SAVER tier ($25-$99)
+cp .env.investor_tier .env   # INVESTOR tier ($100-$249)
+cp .env.income_tier .env     # INCOME tier ($250-$999) ⭐
+cp .env.livable_tier .env    # LIVABLE tier ($1k-$5k)
+cp .env.baller_tier .env     # BALLER tier ($5k+)
+# Then edit .env and add your API credentials
 ```
 
 **Learn More:**
-- 📚 [RISK_PROFILES_GUIDE.md](RISK_PROFILES_GUIDE.md) - Complete guide to all profiles
-- ⚙️ [bot/apex_config.py](bot/apex_config.py) - Configuration details
+- 📚 [RISK_PROFILES_GUIDE.md](RISK_PROFILES_GUIDE.md) - Complete tier guide and specifications
+- ⚙️ [bot/apex_config.py](bot/apex_config.py) - Tier configuration details
+
+**Key Notes:**
+- **INVESTOR** is the default tier if not specified
+- **INCOME** ($250-$999) is NIJA's **core retail power tier** ⭐
+- **MASTER** is system authority only (NOT a user tier)
+- Start conservative and upgrade as capital and experience grow
 
 ---
 
