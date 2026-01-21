@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NIJA - Trade Ledger</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #0f1419;
+            color: #e7e9ea;
+            padding: 20px;
+        }
+        .container { max-width: 1600px; margin: 0 auto; }
+        .header {
+            background: linear-gradient(135deg, #1d4ed8 0%, #7c3aed 100%);
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 32px; margin-bottom: 5px; }
+        .header .subtitle { opacity: 0.9; font-size: 14px; }
+        .nav-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-primary {
+            background: #1d9bf0;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #1a8cd8;
+        }
+        .btn-secondary {
+            background: #2f3336;
+            color: #e7e9ea;
+        }
+        .btn-secondary:hover {
+            background: #3a3f44;
+        }
+        .btn-success {
+            background: #00ba7c;
+            color: white;
+        }
+        .btn-success:hover {
+            background: #00a56b;
+        }
+        .card {
+            background: #16181c;
+            border: 1px solid #2f3336;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+        .card h2 { 
+            font-size: 18px; 
+            margin-bottom: 15px; 
+            color: #1d9bf0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: #16181c;
+            border: 1px solid #2f3336;
+            border-radius: 8px;
+            padding: 15px;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #71767b;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .positive { color: #00ba7c; }
+        .negative { color: #f91880; }
+        .neutral { color: #ffd400; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #2f3336;
+        }
+        th {
+            color: #71767b;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            background: #0a0b0d;
+        }
+        td {
+            font-size: 14px;
+        }
+        tr:hover {
+            background: #1a1d21;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-long { background: #00ba7c33; color: #00ba7c; }
+        .badge-short { background: #f9188033; color: #f91880; }
+        .badge-buy { background: #1d9bf033; color: #1d9bf0; }
+        .badge-sell { background: #ffd40033; color: #ffd400; }
+        .badge-open { background: #1d9bf033; color: #1d9bf0; }
+        .badge-closed { background: #71767b33; color: #71767b; }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #71767b;
+        }
+        .tab-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .tab-button {
+            padding: 10px 20px;
+            background: #2f3336;
+            color: #e7e9ea;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        .tab-button.active {
+            background: #1d9bf0;
+            color: white;
+        }
+        .tab-button:hover {
+            background: #3a3f44;
+        }
+        .tab-button.active:hover {
+            background: #1a8cd8;
+        }
+        .export-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        .filters {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        .filter-input {
+            padding: 8px 12px;
+            background: #0a0b0d;
+            border: 1px solid #2f3336;
+            border-radius: 6px;
+            color: #e7e9ea;
+            font-size: 14px;
+        }
+        .filter-input:focus {
+            outline: none;
+            border-color: #1d9bf0;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #71767b;
+        }
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>📊 Trade Ledger</h1>
+                <div class="subtitle">Complete trade history and open positions</div>
+            </div>
+            <div class="nav-buttons">
+                <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
+                <a href="/users" class="btn btn-secondary">👥 Users</a>
+            </div>
+        </div>
+
+        <!-- Statistics -->
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Trades</div>
+                <div class="stat-value" id="stat-total-trades">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Win Rate</div>
+                <div class="stat-value positive" id="stat-win-rate">0%</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total P&L</div>
+                <div class="stat-value" id="stat-total-pnl">$0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Open Positions</div>
+                <div class="stat-value neutral" id="stat-open-positions">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Fees</div>
+                <div class="stat-value negative" id="stat-total-fees">$0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Best Trade</div>
+                <div class="stat-value positive" id="stat-best-trade">$0.00</div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tab-buttons">
+            <button class="tab-button active" onclick="switchTab('open')">Open Positions</button>
+            <button class="tab-button" onclick="switchTab('history')">Trade History</button>
+            <button class="tab-button" onclick="switchTab('ledger')">Raw Ledger</button>
+        </div>
+
+        <!-- Open Positions -->
+        <div class="card" id="open-positions-card">
+            <h2>
+                <span>📈 Open Positions</span>
+                <div class="export-buttons">
+                    <button class="btn btn-success btn-sm" onclick="exportData('open_positions', 'csv')">
+                        📥 Export CSV
+                    </button>
+                </div>
+            </h2>
+            
+            <div class="filters">
+                <input type="text" class="filter-input" id="filter-symbol-open" placeholder="Filter by symbol...">
+                <select class="filter-input" id="filter-user-open">
+                    <option value="">All Users</option>
+                    <option value="master">Master</option>
+                </select>
+            </div>
+
+            <div id="open-positions-content">
+                <div class="loading">Loading open positions...</div>
+            </div>
+        </div>
+
+        <!-- Trade History -->
+        <div class="card" id="trade-history-card" style="display: none;">
+            <h2>
+                <span>📜 Trade History</span>
+                <div class="export-buttons">
+                    <button class="btn btn-success btn-sm" onclick="exportData('completed_trades', 'csv')">
+                        📥 Export CSV
+                    </button>
+                </div>
+            </h2>
+            
+            <div class="filters">
+                <input type="text" class="filter-input" id="filter-symbol-history" placeholder="Filter by symbol...">
+                <select class="filter-input" id="filter-user-history">
+                    <option value="">All Users</option>
+                    <option value="master">Master</option>
+                </select>
+            </div>
+
+            <div id="trade-history-content">
+                <div class="loading">Loading trade history...</div>
+            </div>
+        </div>
+
+        <!-- Raw Ledger -->
+        <div class="card" id="raw-ledger-card" style="display: none;">
+            <h2>
+                <span>📋 Raw Transaction Ledger</span>
+                <div class="export-buttons">
+                    <button class="btn btn-success btn-sm" onclick="exportData('trade_ledger', 'csv')">
+                        📥 Export CSV
+                    </button>
+                </div>
+            </h2>
+            
+            <div class="filters">
+                <input type="text" class="filter-input" id="filter-symbol-ledger" placeholder="Filter by symbol...">
+                <select class="filter-input" id="filter-user-ledger">
+                    <option value="">All Users</option>
+                    <option value="master">Master</option>
+                </select>
+            </div>
+
+            <div id="raw-ledger-content">
+                <div class="loading">Loading ledger transactions...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentTab = 'open';
+
+        // Switch between tabs
+        function switchTab(tab) {
+            currentTab = tab;
+            
+            // Update button states
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            // Show/hide cards
+            document.getElementById('open-positions-card').style.display = tab === 'open' ? 'block' : 'none';
+            document.getElementById('trade-history-card').style.display = tab === 'history' ? 'block' : 'none';
+            document.getElementById('raw-ledger-card').style.display = tab === 'ledger' ? 'block' : 'none';
+            
+            // Load data for the selected tab
+            if (tab === 'open') loadOpenPositions();
+            else if (tab === 'history') loadTradeHistory();
+            else if (tab === 'ledger') loadRawLedger();
+        }
+
+        // Load statistics
+        async function loadStatistics() {
+            try {
+                const response = await fetch('/api/trades/statistics');
+                const data = await response.json();
+                
+                const stats = data.statistics;
+                
+                document.getElementById('stat-total-trades').textContent = stats.total_trades || 0;
+                document.getElementById('stat-win-rate').textContent = (stats.win_rate || 0).toFixed(1) + '%';
+                
+                const totalPnl = stats.total_pnl || 0;
+                const pnlElement = document.getElementById('stat-total-pnl');
+                pnlElement.textContent = '$' + totalPnl.toFixed(2);
+                pnlElement.className = 'stat-value ' + (totalPnl >= 0 ? 'positive' : 'negative');
+                
+                document.getElementById('stat-open-positions').textContent = stats.open_positions || 0;
+                document.getElementById('stat-total-fees').textContent = '$' + (stats.total_fees || 0).toFixed(2);
+                document.getElementById('stat-best-trade').textContent = '$' + (stats.best_trade || 0).toFixed(2);
+            } catch (error) {
+                console.error('Error loading statistics:', error);
+            }
+        }
+
+        // Load open positions
+        async function loadOpenPositions() {
+            try {
+                const symbol = document.getElementById('filter-symbol-open')?.value || '';
+                const userId = document.getElementById('filter-user-open')?.value || '';
+                
+                let url = '/api/positions/open?';
+                if (symbol) url += `symbol=${symbol}&`;
+                if (userId) url += `user_id=${userId}&`;
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                const container = document.getElementById('open-positions-content');
+                
+                if (data.positions && data.positions.length > 0) {
+                    let html = '<table><thead><tr>';
+                    html += '<th>Symbol</th><th>Side</th><th>Entry Price</th><th>Quantity</th>';
+                    html += '<th>Size (USD)</th><th>Stop Loss</th><th>Take Profit</th>';
+                    html += '<th>Entry Time</th><th>User</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    data.positions.forEach(pos => {
+                        const sideClass = pos.side.toLowerCase() === 'long' ? 'badge-long' : 'badge-short';
+                        html += '<tr>';
+                        html += `<td><strong>${pos.symbol}</strong></td>`;
+                        html += `<td><span class="badge ${sideClass}">${pos.side}</span></td>`;
+                        html += `<td>$${pos.entry_price.toFixed(2)}</td>`;
+                        html += `<td>${pos.quantity.toFixed(6)}</td>`;
+                        html += `<td>$${pos.size_usd.toFixed(2)}</td>`;
+                        html += `<td>${pos.stop_loss ? '$' + pos.stop_loss.toFixed(2) : '-'}</td>`;
+                        html += `<td>${pos.take_profit_1 ? '$' + pos.take_profit_1.toFixed(2) : '-'}</td>`;
+                        html += `<td>${new Date(pos.entry_time).toLocaleString()}</td>`;
+                        html += `<td>${pos.user_id}</td>`;
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No open positions</p></div>';
+                }
+            } catch (error) {
+                console.error('Error loading open positions:', error);
+                document.getElementById('open-positions-content').innerHTML = 
+                    '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Error loading positions</p></div>';
+            }
+        }
+
+        // Load trade history
+        async function loadTradeHistory() {
+            try {
+                const symbol = document.getElementById('filter-symbol-history')?.value || '';
+                const userId = document.getElementById('filter-user-history')?.value || '';
+                
+                let url = '/api/trades/history?limit=50&';
+                if (symbol) url += `symbol=${symbol}&`;
+                if (userId) url += `user_id=${userId}&`;
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                const container = document.getElementById('trade-history-content');
+                
+                if (data.trades && data.trades.length > 0) {
+                    let html = '<table><thead><tr>';
+                    html += '<th>Symbol</th><th>Side</th><th>Entry Price</th><th>Exit Price</th>';
+                    html += '<th>Size (USD)</th><th>Net P&L</th><th>P&L %</th>';
+                    html += '<th>Duration</th><th>Exit Reason</th><th>Exit Time</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    data.trades.forEach(trade => {
+                        const sideClass = trade.side.toLowerCase() === 'long' ? 'badge-long' : 'badge-short';
+                        const pnlClass = trade.net_profit >= 0 ? 'positive' : 'negative';
+                        const duration = formatDuration(trade.duration_seconds);
+                        
+                        html += '<tr>';
+                        html += `<td><strong>${trade.symbol}</strong></td>`;
+                        html += `<td><span class="badge ${sideClass}">${trade.side}</span></td>`;
+                        html += `<td>$${trade.entry_price.toFixed(2)}</td>`;
+                        html += `<td>$${trade.exit_price.toFixed(2)}</td>`;
+                        html += `<td>$${trade.size_usd.toFixed(2)}</td>`;
+                        html += `<td class="${pnlClass}">$${trade.net_profit.toFixed(2)}</td>`;
+                        html += `<td class="${pnlClass}">${trade.profit_pct >= 0 ? '+' : ''}${trade.profit_pct.toFixed(2)}%</td>`;
+                        html += `<td>${duration}</td>`;
+                        html += `<td>${trade.exit_reason || '-'}</td>`;
+                        html += `<td>${new Date(trade.exit_time).toLocaleString()}</td>`;
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No trade history</p></div>';
+                }
+            } catch (error) {
+                console.error('Error loading trade history:', error);
+                document.getElementById('trade-history-content').innerHTML = 
+                    '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Error loading history</p></div>';
+            }
+        }
+
+        // Load raw ledger
+        async function loadRawLedger() {
+            try {
+                const symbol = document.getElementById('filter-symbol-ledger')?.value || '';
+                const userId = document.getElementById('filter-user-ledger')?.value || '';
+                
+                let url = '/api/trades/ledger?limit=100&';
+                if (symbol) url += `symbol=${symbol}&`;
+                if (userId) url += `user_id=${userId}&`;
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                const container = document.getElementById('raw-ledger-content');
+                
+                if (data.transactions && data.transactions.length > 0) {
+                    let html = '<table><thead><tr>';
+                    html += '<th>Timestamp</th><th>Symbol</th><th>Side</th><th>Action</th>';
+                    html += '<th>Price</th><th>Quantity</th><th>Size (USD)</th><th>Fee</th><th>User</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    data.transactions.forEach(tx => {
+                        const sideClass = tx.side === 'BUY' ? 'badge-buy' : 'badge-sell';
+                        
+                        html += '<tr>';
+                        html += `<td>${new Date(tx.timestamp).toLocaleString()}</td>`;
+                        html += `<td><strong>${tx.symbol}</strong></td>`;
+                        html += `<td><span class="badge ${sideClass}">${tx.side}</span></td>`;
+                        html += `<td>${tx.action}</td>`;
+                        html += `<td>$${tx.price.toFixed(2)}</td>`;
+                        html += `<td>${tx.quantity.toFixed(6)}</td>`;
+                        html += `<td>$${tx.size_usd.toFixed(2)}</td>`;
+                        html += `<td>$${tx.fee.toFixed(2)}</td>`;
+                        html += `<td>${tx.user_id}</td>`;
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No ledger transactions</p></div>';
+                }
+            } catch (error) {
+                console.error('Error loading ledger:', error);
+                document.getElementById('raw-ledger-content').innerHTML = 
+                    '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Error loading ledger</p></div>';
+            }
+        }
+
+        // Export data
+        function exportData(table, format) {
+            const userId = '';  // Could add user filter here
+            window.location.href = `/api/trades/export?table=${table}&format=${format}${userId ? '&user_id=' + userId : ''}`;
+        }
+
+        // Format duration
+        function formatDuration(seconds) {
+            if (seconds < 60) return `${seconds.toFixed(0)}s`;
+            if (seconds < 3600) return `${(seconds / 60).toFixed(0)}m`;
+            if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
+            return `${(seconds / 86400).toFixed(1)}d`;
+        }
+
+        // Setup filter event listeners
+        function setupFilters() {
+            const filters = [
+                'filter-symbol-open', 'filter-user-open',
+                'filter-symbol-history', 'filter-user-history',
+                'filter-symbol-ledger', 'filter-user-ledger'
+            ];
+            
+            filters.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.addEventListener('change', () => {
+                        if (currentTab === 'open') loadOpenPositions();
+                        else if (currentTab === 'history') loadTradeHistory();
+                        else if (currentTab === 'ledger') loadRawLedger();
+                    });
+                }
+            });
+        }
+
+        // Initialize
+        loadStatistics();
+        loadOpenPositions();
+        setupFilters();
+
+        // Auto-refresh every 30 seconds
+        setInterval(() => {
+            loadStatistics();
+            if (currentTab === 'open') loadOpenPositions();
+            else if (currentTab === 'history') loadTradeHistory();
+            else if (currentTab === 'ledger') loadRawLedger();
+        }, 30000);
+    </script>
+</body>
+</html>
