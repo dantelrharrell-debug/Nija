@@ -454,8 +454,9 @@ class KrakenBrokerAdapter(BrokerInterface):
             api_secret: Kraken API private key
         """
         import os
-        self.api_key = api_key or os.getenv("KRAKEN_API_KEY")
-        self.api_secret = api_secret or os.getenv("KRAKEN_API_SECRET")
+        # Use KRAKEN_MASTER_API_KEY for master account, fallback to legacy KRAKEN_API_KEY
+        self.api_key = api_key or os.getenv("KRAKEN_MASTER_API_KEY") or os.getenv("KRAKEN_API_KEY")
+        self.api_secret = api_secret or os.getenv("KRAKEN_MASTER_API_SECRET") or os.getenv("KRAKEN_API_SECRET")
         self.api = None
         self.kraken_api = None
         logger.info("Kraken broker adapter initialized")
