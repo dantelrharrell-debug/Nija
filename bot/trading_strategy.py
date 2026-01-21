@@ -221,13 +221,46 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than curren
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Updated Jan 20, 2026: Raised minimum to $5 for safer trade sizing
+# Updated Jan 21, 2026: OPTION 3 (BEST LONG-TERM) - Dynamic minimum based on balance
 # ⚠️ CRITICAL WARNING: Small positions are unprofitable due to fees (~1.4% round-trip)
 # With $5+ positions, trades have better chance of profitability after fees
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
 MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/micro positions)
-MIN_POSITION_SIZE_USD = 5.0  # Minimum position size in USD (raised from $1.00 for better profitability)
-MIN_BALANCE_TO_TRADE_USD = 5.0  # Minimum account balance to allow trading (raised to match minimum position size)
+
+# OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
+# MIN_TRADE_USD = max(2.00, balance * 0.15)
+# This scales automatically with account size:
+# - $13 account: min trade = $2.00 (15% would be $1.95)
+# - $20 account: min trade = $3.00 (15% of $20)
+# - $50 account: min trade = $7.50 (15% of $50)
+# - $100 account: min trade = $15.00 (15% of $100)
+BASE_MIN_POSITION_SIZE_USD = 2.0  # Floor minimum ($2 for very small accounts)
+DYNAMIC_POSITION_SIZE_PCT = 0.15  # 15% of balance as minimum (OPTION 3)
+
+def get_dynamic_min_position_size(balance: float) -> float:
+    """
+    Calculate dynamic minimum position size based on account balance.
+    OPTION 3 (BEST LONG-TERM): MIN_TRADE_USD = max(2.00, balance * 0.15)
+    
+    Args:
+        balance: Current account balance in USD
+        
+    Returns:
+        Minimum position size in USD
+        
+    Raises:
+        ValueError: If balance is negative
+    """
+    if balance < 0:
+        raise ValueError(f"Balance cannot be negative: {balance}")
+    
+    return max(BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT)
+
+# DEPRECATED: Use get_dynamic_min_position_size() instead
+# This constant is maintained for backward compatibility only
+MIN_POSITION_SIZE_USD = BASE_MIN_POSITION_SIZE_USD  # Legacy fallback (use get_dynamic_min_position_size() instead)
+MIN_BALANCE_TO_TRADE_USD = 2.0  # Minimum account balance to allow trading (lowered from $5 to support small accounts)
 
 # FIX #3 (Jan 20, 2026): Kraken-specific minimum thresholds
 # Kraken WILL NOT trade if balance < $25 OR min order size not met OR fees make position < min notional
@@ -2522,14 +2555,18 @@ class TradingStrategy:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 
+                                # Calculate dynamic minimum based on account balance (OPTION 3)
+                                min_position_size_dynamic = get_dynamic_min_position_size(account_balance)
+                                
                                 # PROFITABILITY WARNING: Small positions have lower profitability
                                 # Fees are ~1.4% round-trip, so very small positions face significant fee pressure
-                                # MICRO TRADE PREVENTION: Block positions under $1 minimum
-                                if position_size < MIN_POSITION_SIZE_USD:
+                                # DYNAMIC MINIMUM: Position must meet max(2.00, balance * 0.15)
+                                if position_size < min_position_size_dynamic:
                                     filter_stats['position_too_small'] += 1
                                     # FIX #3 (Jan 19, 2026): Explicit trade rejection logging
                                     logger.info(f"   ❌ Entry rejected for {symbol}")
-                                    logger.info(f"      Reason: Position size ${position_size:.2f} < ${MIN_POSITION_SIZE_USD} minimum")
+                                    logger.info(f"      Reason: Position size ${position_size:.2f} < ${min_position_size_dynamic:.2f} minimum")
+                                    logger.info(f"      💡 Dynamic minimum = max($2.00, ${account_balance:.2f} × 15%) = ${min_position_size_dynamic:.2f}")
                                     logger.info(f"      💡 Small positions face severe fee impact (~1.4% round-trip)")
                                     # Calculate break-even % needed: (fee_dollars / position_size) * 100
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0

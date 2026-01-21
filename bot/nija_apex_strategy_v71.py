@@ -73,7 +73,7 @@ class NIJAApexStrategyV71:
         # Initialize components
         self.risk_manager = RiskManager(
             min_position_pct=self.config.get('min_position_pct', 0.02),
-            max_position_pct=self.config.get('max_position_pct', 0.10)  # OPTIMAL: 10% max allows ADX-based scaling (2-10%) for strong trends
+            max_position_pct=self.config.get('max_position_pct', 0.20)  # UPDATED Jan 21, 2026: OPTION 2 - Increased to 20% for better trade sizing (was 10%)
         )
         self.execution_engine = ExecutionEngine(broker_client)
         

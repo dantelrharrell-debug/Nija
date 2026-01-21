@@ -31,8 +31,8 @@ class UserRiskLimits:
     """Risk limits for a user."""
     user_id: str
     
-    # Position sizing
-    max_position_pct: float = 0.10  # 10% max per trade
+    # Position sizing - UPDATED Jan 21, 2026: OPTION 2 (20% max for better trade sizing)
+    max_position_pct: float = 0.20  # 20% max per trade (increased from 10%)
     min_position_pct: float = 0.02  # 2% min per trade
     max_open_positions: int = 5     # Max concurrent positions
     
