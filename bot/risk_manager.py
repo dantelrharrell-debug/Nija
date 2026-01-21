@@ -465,7 +465,7 @@ class AdaptiveRiskManager:
         # With $1-2 positions, expect fees to consume most/all profits
         # This minimum allows trading for learning/testing but profitability is severely limited
         MIN_ABSOLUTE_POSITION_SIZE = 1.0
-        # Normalize position_size to ensure it's a scalar
+        # Normalize position_size (defensive programming - ensures scalar type)
         position_size = scalar(position_size)
         if float(position_size) < MIN_ABSOLUTE_POSITION_SIZE:
             logger.warning(f"🚫 MICRO TRADE BLOCKED: Calculated ${position_size:.2f} < ${MIN_ABSOLUTE_POSITION_SIZE} minimum")

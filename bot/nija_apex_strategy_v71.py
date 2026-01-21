@@ -106,7 +106,7 @@ class NIJAApexStrategyV71:
         # Normalize position_size in case it's a tuple
         position_size = scalar(position_size)
         
-        # Check minimum position size ($2.00 minimum)
+        # Check minimum position size
         if float(position_size) < MIN_POSITION_USD:
             logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below minimum ${MIN_POSITION_USD:.2f}")
             return {
@@ -654,7 +654,7 @@ class NIJAApexStrategyV71:
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
                         account_balance, adx, score
                     )
-                    # Normalize position_size in case it's returned as tuple
+                    # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
                     
                     if float(position_size) == 0:
@@ -701,7 +701,7 @@ class NIJAApexStrategyV71:
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
                         account_balance, adx, score
                     )
-                    # Normalize position_size in case it's returned as tuple
+                    # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
                     
                     if float(position_size) == 0:
