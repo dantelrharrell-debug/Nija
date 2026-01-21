@@ -313,24 +313,185 @@ RISK_LIMITS = {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# RISK MANAGEMENT
+# RISK MANAGEMENT - PROFILE-BASED CONFIGURATIONS
+# ═══════════════════════════════════════════════════════════════════
+#
+# Three optimized risk profiles:
+# 1. MASTER - High capital ($1000+), professional, aggressive risk management
+# 2. RETAIL - Moderate capital ($100-$1000), balanced risk/reward
+# 3. INVESTOR_SAFE - Conservative, maximum protection, risk-averse defaults
+#
+# To use a specific profile, set RISK_PROFILE environment variable:
+#   export RISK_PROFILE=MASTER     # For master account
+#   export RISK_PROFILE=RETAIL     # For retail users
+#   export RISK_PROFILE=INVESTOR   # For conservative investors
+#
+# Default profile is RETAIL if not specified
 # ═══════════════════════════════════════════════════════════════════
 
-RISK_CONFIG = {
+# MASTER ACCOUNT - Professional Trader Profile
+# Designed for: High capital ($1000+), experienced traders, active management
+# Risk tolerance: Moderate-High | Focus: Maximizing returns with controlled risk
+RISK_CONFIG_MASTER = {
     # Per-Trade Risk Limits
-    'max_risk_per_trade': 0.02,  # 2% maximum risk per trade
-    'min_risk_reward': 2.0,  # Minimum 2:1 risk/reward ratio
+    'max_risk_per_trade': 0.03,  # 3% maximum risk per trade (aggressive)
+    'min_risk_reward': 1.5,  # Minimum 1.5:1 risk/reward ratio (flexible for quality setups)
     
     # Account-Level Risk Limits
-    'max_daily_loss': 0.025,  # 2.5% maximum daily loss
-    'max_weekly_loss': 0.05,  # 5% maximum weekly loss
-    'max_total_exposure': 0.30,  # 30% maximum total exposure
-    'max_drawdown': 0.10,  # 10% maximum account drawdown
+    'max_daily_loss': 0.05,  # 5% maximum daily loss (professional risk management)
+    'max_weekly_loss': 0.10,  # 10% maximum weekly loss (allows recovery time)
+    'max_total_exposure': 0.60,  # 60% maximum total exposure (diversified positions)
+    'max_drawdown': 0.15,  # 15% maximum account drawdown (professional tolerance)
     
     # Drawdown Protection
-    'drawdown_reduce_size_at': 0.05,  # Reduce size at 5% drawdown
-    'drawdown_stop_trading_at': 0.10,  # Stop trading at 10% drawdown
+    'drawdown_reduce_size_at': 0.08,  # Reduce size at 8% drawdown (early warning)
+    'drawdown_stop_trading_at': 0.15,  # Stop trading at 15% drawdown (hard stop)
+    
+    # Position Management
+    'max_concurrent_positions': 10,  # Up to 10 positions (diversification)
+    'max_position_concentration': 0.15,  # 15% max per single position (controlled concentration)
+    
+    # Circuit Breakers
+    'consecutive_loss_limit': 5,  # Stop after 5 consecutive losses
+    'daily_trade_limit': 50,  # Maximum 50 trades per day (high activity)
+    'min_time_between_trades_sec': 30,  # 30 seconds minimum (fast execution)
+    
+    # Performance-Based Adjustments
+    'reduce_size_on_losing_streak': True,  # Reduce size after losses
+    'losing_streak_threshold': 3,  # Trigger after 3 losses
+    'size_reduction_factor': 0.5,  # Reduce to 50% size during streak
+    
+    # Profile Metadata
+    'profile_name': 'MASTER',
+    'min_account_balance': 1000.0,  # Recommended minimum $1000
+    'risk_level': 'moderate-high',
+    'experience_required': 'professional',
 }
+
+# RETAIL USER - Balanced Active Trader Profile
+# Designed for: Moderate capital ($100-$1000), active retail traders
+# Risk tolerance: Moderate | Focus: Sustainable growth with protection
+RISK_CONFIG_RETAIL = {
+    # Per-Trade Risk Limits
+    'max_risk_per_trade': 0.02,  # 2% maximum risk per trade (balanced)
+    'min_risk_reward': 2.0,  # Minimum 2:1 risk/reward ratio (quality setups)
+    
+    # Account-Level Risk Limits
+    'max_daily_loss': 0.03,  # 3% maximum daily loss (protective)
+    'max_weekly_loss': 0.06,  # 6% maximum weekly loss (controlled weekly risk)
+    'max_total_exposure': 0.40,  # 40% maximum total exposure (moderate diversification)
+    'max_drawdown': 0.10,  # 10% maximum account drawdown (standard protection)
+    
+    # Drawdown Protection
+    'drawdown_reduce_size_at': 0.05,  # Reduce size at 5% drawdown (early protection)
+    'drawdown_stop_trading_at': 0.10,  # Stop trading at 10% drawdown (safety net)
+    
+    # Position Management
+    'max_concurrent_positions': 5,  # Up to 5 positions (manageable diversification)
+    'max_position_concentration': 0.10,  # 10% max per single position (balanced)
+    
+    # Circuit Breakers
+    'consecutive_loss_limit': 3,  # Stop after 3 consecutive losses (protective)
+    'daily_trade_limit': 30,  # Maximum 30 trades per day (active but controlled)
+    'min_time_between_trades_sec': 60,  # 60 seconds minimum (prevents overtrading)
+    
+    # Performance-Based Adjustments
+    'reduce_size_on_losing_streak': True,  # Reduce size after losses
+    'losing_streak_threshold': 2,  # Trigger after 2 losses (conservative)
+    'size_reduction_factor': 0.6,  # Reduce to 60% size during streak
+    
+    # Profile Metadata
+    'profile_name': 'RETAIL',
+    'min_account_balance': 100.0,  # Recommended minimum $100
+    'risk_level': 'moderate',
+    'experience_required': 'intermediate',
+}
+
+# INVESTOR-SAFE - Conservative Protection Profile
+# Designed for: Risk-averse investors, any capital size, hands-off approach
+# Risk tolerance: Low | Focus: Capital preservation with modest returns
+RISK_CONFIG_INVESTOR = {
+    # Per-Trade Risk Limits
+    'max_risk_per_trade': 0.01,  # 1% maximum risk per trade (ultra-conservative)
+    'min_risk_reward': 3.0,  # Minimum 3:1 risk/reward ratio (high quality only)
+    
+    # Account-Level Risk Limits
+    'max_daily_loss': 0.015,  # 1.5% maximum daily loss (very protective)
+    'max_weekly_loss': 0.03,  # 3% maximum weekly loss (strict weekly limit)
+    'max_total_exposure': 0.20,  # 20% maximum total exposure (conservative allocation)
+    'max_drawdown': 0.05,  # 5% maximum account drawdown (strict protection)
+    
+    # Drawdown Protection
+    'drawdown_reduce_size_at': 0.03,  # Reduce size at 3% drawdown (very early warning)
+    'drawdown_stop_trading_at': 0.05,  # Stop trading at 5% drawdown (hard protection)
+    
+    # Position Management
+    'max_concurrent_positions': 3,  # Up to 3 positions (minimal diversification)
+    'max_position_concentration': 0.08,  # 8% max per single position (very conservative)
+    
+    # Circuit Breakers
+    'consecutive_loss_limit': 2,  # Stop after 2 consecutive losses (immediate protection)
+    'daily_trade_limit': 15,  # Maximum 15 trades per day (selective trading)
+    'min_time_between_trades_sec': 300,  # 5 minutes minimum (prevents overtrading)
+    
+    # Performance-Based Adjustments
+    'reduce_size_on_losing_streak': True,  # Reduce size after losses
+    'losing_streak_threshold': 1,  # Trigger after 1 loss (maximum protection)
+    'size_reduction_factor': 0.5,  # Reduce to 50% size immediately
+    
+    # Profile Metadata
+    'profile_name': 'INVESTOR_SAFE',
+    'min_account_balance': 50.0,  # Recommended minimum $50
+    'risk_level': 'low',
+    'experience_required': 'beginner-friendly',
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# AUTOMATIC PROFILE SELECTION
+# ═══════════════════════════════════════════════════════════════════
+
+def get_active_risk_config():
+    """
+    Get the active risk configuration based on environment variable or defaults.
+    
+    Priority:
+    1. RISK_PROFILE environment variable (MASTER, RETAIL, INVESTOR)
+    2. AUTO mode - selects based on account balance
+    3. Default to RETAIL if not specified
+    
+    Returns:
+        dict: Active risk configuration
+    """
+    import os
+    
+    risk_profile = os.getenv('RISK_PROFILE', 'AUTO').upper()
+    
+    if risk_profile == 'MASTER':
+        return RISK_CONFIG_MASTER
+    elif risk_profile == 'RETAIL':
+        return RISK_CONFIG_RETAIL
+    elif risk_profile == 'INVESTOR':
+        return RISK_CONFIG_INVESTOR
+    elif risk_profile == 'AUTO':
+        # Auto-select based on account balance (if available)
+        try:
+            balance = float(os.getenv('ACCOUNT_BALANCE', '0'))
+            if balance >= 1000:
+                return RISK_CONFIG_MASTER
+            elif balance >= 100:
+                return RISK_CONFIG_RETAIL
+            else:
+                return RISK_CONFIG_INVESTOR
+        except:
+            # Default to RETAIL if balance unavailable
+            return RISK_CONFIG_RETAIL
+    else:
+        # Default to RETAIL for unknown profiles
+        return RISK_CONFIG_RETAIL
+
+# Active configuration (backward compatibility)
+# This allows existing code to use RISK_CONFIG without changes
+RISK_CONFIG = get_active_risk_config()
 
 # ═══════════════════════════════════════════════════════════════════
 # POSITION SIZING

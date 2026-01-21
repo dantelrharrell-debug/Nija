@@ -7,7 +7,13 @@ __pycache__/
 # Virtual envs
 venv/
 .env
-.env.* 
+.env.*
+!.env.master_profile        # Allow risk profile template
+!.env.retail_profile        # Allow risk profile template
+!.env.investor_safe_profile # Allow risk profile template
+!.env.small_account_preset  # Allow small account preset
+!.env.example               # Allow example template
+!.env.copy_trading_example  # Allow copy trading example
 .venv/
 pip-wheel-metadata/
 build/

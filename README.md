@@ -1,6 +1,31 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-## 🎯 **NEW: SAFE SMALL-ACCOUNT PRESET ($20-$100)**
+## 🎯 **NEW: RISK PROFILES - Master, Retail, Investor-Safe**
+
+**Three optimized risk profiles** for different trading styles and capital levels:
+
+| Profile | Capital | Risk Level | Max Risk/Trade | Max Positions | Daily Loss Limit |
+|---------|---------|------------|----------------|---------------|------------------|
+| **MASTER** | $1,000+ | Moderate-High | 3% | 10 | 5% |
+| **RETAIL** | $100-$1,000 | Moderate | 2% | 5 | 3% |
+| **INVESTOR** | $50+ | Low | 1% | 3 | 1.5% |
+
+**Quick Setup:**
+```bash
+# Add to .env - choose your profile:
+RISK_PROFILE=MASTER        # For professional traders
+RISK_PROFILE=RETAIL        # For active traders (default)
+RISK_PROFILE=INVESTOR      # For conservative investors
+RISK_PROFILE=AUTO          # Auto-select based on balance
+```
+
+**Learn More:**
+- 📚 [RISK_PROFILES_GUIDE.md](RISK_PROFILES_GUIDE.md) - Complete guide to all profiles
+- ⚙️ [bot/apex_config.py](bot/apex_config.py) - Configuration details
+
+---
+
+## 🎯 **SAFE SMALL-ACCOUNT PRESET ($20-$100)**
 
 **Turnkey configuration for small accounts** - Just add your API key and start trading safely!
 
