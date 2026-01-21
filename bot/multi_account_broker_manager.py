@@ -101,6 +101,10 @@ class MultiAccountBrokerManager:
         # Track last Kraken balance API call time for rate limiting
         self._last_kraken_balance_call: float = 0.0
         
+        # User metadata storage for audit and reporting
+        # Structure: {user_id: {'name': str, 'enabled': bool, 'copy_from_master': bool, 'brokers': {BrokerType: bool}}}
+        self._user_metadata: Dict[str, Dict] = {}
+        
         # FIX #3: Initialize portfolio manager for user portfolio states
         try:
             from portfolio_state import get_portfolio_manager
@@ -693,12 +697,24 @@ class MultiAccountBrokerManager:
             try:
                 broker = self.add_user_broker(user.user_id, broker_type)
                 
+                # Store user metadata for audit and reporting
+                if user.user_id not in self._user_metadata:
+                    self._user_metadata[user.user_id] = {
+                        'name': user.name,
+                        'enabled': user.enabled,
+                        'copy_from_master': getattr(user, 'copy_from_master', True),
+                        'brokers': {}
+                    }
+                
                 if broker and broker.connected:
                     # Successfully connected
-                    # Track connected user
+                    # Track connected user and broker connection status
                     if broker_type.value not in connected_users:
                         connected_users[broker_type.value] = []
                     connected_users[broker_type.value].append(user.user_id)
+                    
+                    # Update metadata with connection status
+                    self._user_metadata[user.user_id]['brokers'][broker_type] = True
                     
                     logger.info(f"   ✅ {user.name} connected to {broker_type.value.title()}")
                     
@@ -713,16 +729,22 @@ class MultiAccountBrokerManager:
                     # The broker's connect() method already logged informational messages
                     # Track this so we can show proper status later
                     self._users_without_credentials[connection_key] = True
+                    # Update metadata with disconnected status
+                    self._user_metadata[user.user_id]['brokers'][broker_type] = False
                     logger.info(f"   ⚪ {user.name} - credentials not configured (optional)")
                 elif broker:
                     # Actual connection failure with configured credentials
                     logger.warning(f"   ⚠️  Failed to connect {user.name} to {broker_type.value.title()}")
                     # Track the failed connection to avoid repeated attempts
                     self._failed_user_connections[connection_key] = "connection_failed"
+                    # Update metadata with disconnected status
+                    self._user_metadata[user.user_id]['brokers'][broker_type] = False
                 else:
                     # broker is None - unsupported broker type or exception
                     logger.warning(f"   ⚠️  Could not create broker for {user.name}")
                     self._failed_user_connections[connection_key] = "broker_creation_failed"
+                    # Update metadata with disconnected status
+                    self._user_metadata[user.user_id]['brokers'][broker_type] = False
             
             except Exception as e:
                 logger.warning(f"   ⚠️  Error connecting {user.name}: {e}")
@@ -857,54 +879,81 @@ class MultiAccountBrokerManager:
     
     def audit_user_accounts(self):
         """
-        Audit and log all user account balances.
+        Audit and log all ACTIVE user accounts with broker connections.
         
-        This function displays user balances regardless of trading status.
-        It does NOT place trades - only reports current balances for visibility.
+        This function displays:
+        - COPY_TRADING users (copy_from_master=True)
+        - MASTER-linked users 
+        - Any account with status=="ACTIVE" (enabled=True) and broker_connected=True
         
-        Called at startup to ensure all users are visible even if not actively trading.
+        Output format is clean and investor-ready.
+        Called at startup to ensure all active users are visible.
         """
         logger.info("=" * 70)
         logger.info("👥 USER ACCOUNT BALANCES AUDIT")
         logger.info("=" * 70)
         
-        if not self.user_brokers:
-            logger.info("   ⚪ No user accounts connected")
+        if not self.user_brokers and not self._user_metadata:
+            logger.info("   ⚪ No user accounts configured")
             logger.info("=" * 70)
             return
         
-        total_users = 0
-        total_balance = 0.0
+        # Build list of active users with broker connections
+        active_users = []
         
         for user_id, user_broker_dict in self.user_brokers.items():
-            total_users += 1
-            logger.info(f"\n👤 User: {user_id}")
+            # Get user metadata
+            user_meta = self._user_metadata.get(user_id, {})
+            user_name = user_meta.get('name', user_id)
+            is_enabled = user_meta.get('enabled', True)
+            copy_from_master = user_meta.get('copy_from_master', True)
             
-            user_total = 0.0
+            # Check if user has at least one connected broker
+            has_connection = False
+            broker_connections = []
+            
             for broker_type, broker in user_broker_dict.items():
-                try:
-                    if broker.connected:
-                        balance_data = broker.get_account_balance()
-                        if isinstance(balance_data, dict):
-                            balance = balance_data.get('trading_balance', 0.0)
-                        else:
-                            balance = float(balance_data) if balance_data else 0.0
-                        
-                        logger.info(f"   {broker_type.value.upper()}: ${balance:.2f}")
-                        user_total += balance
-                    else:
-                        logger.info(f"   {broker_type.value.upper()}: Not connected")
-                except Exception as e:
-                    logger.warning(f"   {broker_type.value.upper()}: Error reading balance - {e}")
+                if broker.connected:
+                    has_connection = True
+                    broker_connections.append({
+                        'broker_type': broker_type,
+                        'broker': broker
+                    })
             
-            logger.info(f"   💰 User Total: ${user_total:.2f}")
-            total_balance += user_total
+            # Only include ACTIVE users with broker connections
+            if is_enabled and has_connection:
+                active_users.append({
+                    'user_id': user_id,
+                    'name': user_name,
+                    'enabled': is_enabled,
+                    'copy_from_master': copy_from_master,
+                    'broker_connections': broker_connections
+                })
         
+        # Display active users
+        if not active_users:
+            logger.info("   ⚪ No ACTIVE user accounts with broker connections")
+            logger.info("=" * 70)
+            return
+        
+        for user_data in active_users:
+            user_name = user_data['name']
+            copy_from_master = user_data['copy_from_master']
+            
+            # Determine trading mode
+            trading_mode = "Copy Trading" if copy_from_master else "Independent"
+            
+            # Display each broker connection
+            for conn in user_data['broker_connections']:
+                broker_type = conn['broker_type']
+                broker_name = broker_type.value.upper()
+                
+                logger.info(f"✅ {user_name} ({broker_name}): CONNECTED – {trading_mode}")
+        
+        # Display summary
         logger.info("")
-        logger.info("=" * 70)
-        logger.info(f"📊 AUDIT SUMMARY")
-        logger.info(f"   Total Users: {total_users}")
-        logger.info(f"   Total User Balance: ${total_balance:.2f}")
+        total_active = len(active_users)
+        logger.info(f"✅ {total_active} active user account(s) connected")
         logger.info("=" * 70)
 
 
