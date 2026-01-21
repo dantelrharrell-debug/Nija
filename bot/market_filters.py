@@ -13,6 +13,18 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
+# Import scalar helper to prevent tuple comparison crashes
+try:
+    from indicators import scalar
+except ImportError:
+    def scalar(x):
+        """Convert indicator value to float, handling tuples/lists"""
+        if isinstance(x, (tuple, list)):
+            if len(x) == 0:
+                raise ValueError("Cannot convert empty tuple/list to scalar")
+            return float(x[0])
+        return float(x)
+
 
 def detect_choppy_market(df, adx_threshold=20, atr_threshold_low=0.001):
     """
@@ -44,9 +56,10 @@ def detect_choppy_market(df, adx_threshold=20, atr_threshold_low=0.001):
             'atr_value': 0
         }
     
-    adx_value = df['adx'].iloc[-1]
-    atr_value = df['atr'].iloc[-1]
-    current_price = df['close'].iloc[-1]
+    # FIX: Use scalar() to safely extract values (prevents tuple comparison crashes)
+    adx_value = scalar(df['adx'].iloc[-1])
+    atr_value = scalar(df['atr'].iloc[-1])
+    current_price = scalar(df['close'].iloc[-1])
     
     # Calculate ATR as percentage of price
     if current_price > 0:
