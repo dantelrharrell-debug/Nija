@@ -37,12 +37,16 @@ try:
     from user_risk_manager import get_user_risk_manager
     from user_nonce_manager import get_user_nonce_manager
     from trade_webhook_notifier import get_webhook_notifier
+    from activity_feed import get_activity_feed
+    from position_mirror import get_position_mirror
 except ImportError:
     logger.warning("User management modules not available - some endpoints will not work")
     get_user_pnl_tracker = None
     get_user_risk_manager = None
     get_user_nonce_manager = None
     get_webhook_notifier = None
+    get_activity_feed = None
+    get_position_mirror = None
 
 try:
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -1614,6 +1618,141 @@ def create_users_dashboard_html():
     
     (templates_dir / "users_dashboard.html").write_text(html_content)
     logger.info(f"✅ Users dashboard template created at {templates_dir / 'users_dashboard.html'}")
+
+
+@app.route('/api/activity/recent')
+def get_recent_activity():
+    """Get recent activity feed events."""
+    try:
+        if not get_activity_feed:
+            return jsonify({'error': 'Activity feed not available'}), 503
+        
+        # Get query parameters
+        n = request.args.get('limit', default=100, type=int)
+        event_type = request.args.get('type', default=None, type=str)
+        symbol = request.args.get('symbol', default=None, type=str)
+        
+        activity_feed = get_activity_feed()
+        events = activity_feed.get_recent_events(n=n, event_type=event_type, symbol=symbol)
+        
+        return jsonify({
+            'events': events,
+            'count': len(events),
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting recent activity: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/activity/summary')
+def get_activity_summary():
+    """Get activity feed summary statistics."""
+    try:
+        if not get_activity_feed:
+            return jsonify({'error': 'Activity feed not available'}), 503
+        
+        hours = request.args.get('hours', default=24, type=int)
+        
+        activity_feed = get_activity_feed()
+        summary = activity_feed.get_activity_summary(hours=hours)
+        
+        return jsonify(summary)
+    
+    except Exception as e:
+        logger.error(f"Error getting activity summary: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/activity/rejections')
+def get_rejection_reasons():
+    """Get reasons why trades were rejected."""
+    try:
+        if not get_activity_feed:
+            return jsonify({'error': 'Activity feed not available'}), 503
+        
+        hours = request.args.get('hours', default=24, type=int)
+        
+        activity_feed = get_activity_feed()
+        reasons = activity_feed.get_rejection_reasons(hours=hours)
+        
+        # Convert to sorted list for easier display
+        reasons_list = [
+            {'reason': reason, 'count': count}
+            for reason, count in sorted(reasons.items(), key=lambda x: x[1], reverse=True)
+        ]
+        
+        return jsonify({
+            'rejection_reasons': reasons_list,
+            'total_rejections': sum(reasons.values()),
+            'period_hours': hours,
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting rejection reasons: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/positions/live')
+def get_live_positions():
+    """Get live position mirror (real-time positions)."""
+    try:
+        if not get_position_mirror:
+            return jsonify({'error': 'Position mirror not available'}), 503
+        
+        position_mirror = get_position_mirror()
+        positions = position_mirror.get_all_positions()
+        
+        return jsonify({
+            'positions': [pos.to_dict() for pos in positions],
+            'count': len(positions),
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting live positions: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/positions/summary')
+def get_positions_summary():
+    """Get portfolio summary from position mirror."""
+    try:
+        if not get_position_mirror:
+            return jsonify({'error': 'Position mirror not available'}), 503
+        
+        position_mirror = get_position_mirror()
+        summary = position_mirror.get_portfolio_summary()
+        
+        return jsonify(summary)
+    
+    except Exception as e:
+        logger.error(f"Error getting positions summary: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/positions/broker/<broker>')
+def get_positions_by_broker(broker: str):
+    """Get positions for a specific broker."""
+    try:
+        if not get_position_mirror:
+            return jsonify({'error': 'Position mirror not available'}), 503
+        
+        position_mirror = get_position_mirror()
+        positions = position_mirror.get_positions_by_broker(broker)
+        
+        return jsonify({
+            'broker': broker,
+            'positions': [pos.to_dict() for pos in positions],
+            'count': len(positions),
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting positions for {broker}: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == "__main__":
