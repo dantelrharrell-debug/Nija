@@ -667,7 +667,10 @@ class TradingStrategy:
                         if is_kraken and is_copy_trader and kraken_copy_active:
                             logger.info(f"✅ USER: {user.name}: ACTIVE (COPY TRADING) (Broker: KRAKEN)")
                             # Add disabled symbols info for Kraken copy traders
-                            logger.info(f"   ℹ️  Disabled symbols: XRP-USD (configured for copy trading)")
+                            disabled_symbols = getattr(user, 'disabled_symbols', [])
+                            if disabled_symbols:
+                                disabled_str = ", ".join(disabled_symbols)
+                                logger.info(f"   ℹ️  Disabled symbols: {disabled_str} (configured for copy trading)")
                             active_user_count += 1
                             continue  # Skip re-evaluation for copy trading users
                         
