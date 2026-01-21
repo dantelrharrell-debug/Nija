@@ -77,8 +77,19 @@ class PositionCapEnforcer:
                 # Try to get current price
                 try:
                     price = self.broker.get_current_price(symbol)
-                    if price <= 0:
+                    
+                    # CRITICAL FIX: Add None-check safety guard
+                    # Prevents counting positions with invalid price fetches
+                    if price is None:
+                        logger.error(f"❌ Price fetch failed for {symbol} — symbol mismatch")
+                        logger.error(f"   💡 This position cannot be valued due to incorrect broker symbol format")
+                        # CRITICAL: Still count position even if price fetch fails (use fallback price)
+                        # This prevents ghost positions from being invisible
+                        price = 1.0  # Fallback for counting purposes
+                        logger.warning(f"   Using fallback price $1.00 for counting position")
+                    elif price <= 0:
                         price = 1.0  # Fallback if price unavailable
+                    
                     usd_value = balance * price
 
                     # CRITICAL FIX: Only skip TRUE dust to match broker.get_positions()

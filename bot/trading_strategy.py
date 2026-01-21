@@ -2140,7 +2140,16 @@ class TradingStrategy:
                 remaining_positions = [p for p in current_positions if p.get('symbol') not in symbols_to_exit]
                 
                 # Sort by USD value (smallest first - easiest to exit and lowest capital impact)
-                remaining_sorted = sorted(remaining_positions, key=lambda p: p.get('quantity', 0) * active_broker.get_current_price(p.get('symbol', '')))
+                # CRITICAL FIX: Add None-check safety guard for price fetching in sort key
+                def get_position_value(p):
+                    """Calculate position value with None-check safety."""
+                    symbol = p.get('symbol', '')
+                    quantity = p.get('quantity', 0)
+                    price = active_broker.get_current_price(symbol)
+                    # Return 0 if price is None to sort invalid positions first
+                    return quantity * (price if price is not None else 0)
+                
+                remaining_sorted = sorted(remaining_positions, key=get_position_value)
                 
                 # Force-sell smallest positions to get under cap
                 positions_needed = (len(current_positions) - MAX_POSITIONS_ALLOWED) - len(positions_to_exit)
@@ -2149,6 +2158,20 @@ class TradingStrategy:
                     quantity = pos.get('quantity', 0)
                     try:
                         price = active_broker.get_current_price(symbol)
+                        
+                        # CRITICAL FIX: Add None-check safety guard
+                        # Prevents ghost positions from invalid price fetches
+                        if price is None or price == 0:
+                            logger.error(f"   ❌ Price fetch failed for {symbol} — symbol mismatch")
+                            logger.error(f"   💡 This position may be unmanageable due to incorrect broker symbol format")
+                            logger.warning(f"   🔴 FORCE-EXIT anyway: {symbol} (price unknown)")
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': 'Over position cap (price fetch failed - symbol mismatch)'
+                            })
+                            continue
+                        
                         value = quantity * price
                         logger.warning(f"   🔴 FORCE-EXIT to meet cap: {symbol} (${value:.2f})")
                         positions_to_exit.append({
@@ -2622,6 +2645,14 @@ class TradingStrategy:
                                             
                                             try:
                                                 pos_price = active_broker.get_current_price(pos_symbol)
+                                                
+                                                # CRITICAL FIX: Add None-check safety guard
+                                                # Prevents errors from invalid price fetches
+                                                if pos_price is None:
+                                                    logger.error(f"   ❌ Price fetch failed for {pos_symbol} — symbol mismatch")
+                                                    logger.error(f"   💡 Skipping position from rotation scoring due to invalid price")
+                                                    continue
+                                                
                                                 pos_value = pos_qty * pos_price if pos_price > 0 else 0
                                                 
                                                 # Get position age if available
