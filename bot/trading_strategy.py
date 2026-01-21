@@ -2163,7 +2163,7 @@ class TradingStrategy:
                         # Prevents ghost positions from invalid price fetches
                         if price is None or price == 0:
                             logger.error(f"   ❌ Price fetch failed for {symbol} — symbol mismatch")
-                            logger.error(f"   💡 This position may be unmana geable due to incorrect broker symbol format")
+                            logger.error(f"   💡 This position may be unmanageable due to incorrect broker symbol format")
                             logger.warning(f"   🔴 FORCE-EXIT anyway: {symbol} (price unknown)")
                             positions_to_exit.append({
                                 'symbol': symbol,
