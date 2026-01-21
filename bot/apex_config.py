@@ -4,6 +4,10 @@ NIJA Apex Strategy v7.1 - Configuration
 All configuration parameters for the Apex trading strategy.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # ═══════════════════════════════════════════════════════════════════
 # MARKET FILTER PARAMETERS
 # ═══════════════════════════════════════════════════════════════════
@@ -475,22 +479,26 @@ def get_active_risk_config():
     elif risk_profile == 'AUTO':
         # Auto-select based on account balance (if available)
         try:
-            balance = float(os.getenv('ACCOUNT_BALANCE', '0'))
+            balance_str = os.getenv('ACCOUNT_BALANCE', '0')
+            balance = float(balance_str)
             if balance >= 1000:
                 return RISK_CONFIG_MASTER
             elif balance >= 100:
                 return RISK_CONFIG_RETAIL
             else:
                 return RISK_CONFIG_INVESTOR
-        except:
-            # Default to RETAIL if balance unavailable
+        except (ValueError, TypeError) as e:
+            # Default to RETAIL if balance unavailable or invalid
+            logger.warning(f"Unable to parse ACCOUNT_BALANCE, defaulting to RETAIL profile: {e}")
             return RISK_CONFIG_RETAIL
     else:
         # Default to RETAIL for unknown profiles
+        logger.warning(f"Unknown RISK_PROFILE '{risk_profile}', defaulting to RETAIL")
         return RISK_CONFIG_RETAIL
 
 # Active configuration (backward compatibility)
-# This allows existing code to use RISK_CONFIG without changes
+# Note: This is evaluated at module import time. To change profiles at runtime,
+# call get_active_risk_config() directly or reload the module.
 RISK_CONFIG = get_active_risk_config()
 
 # ═══════════════════════════════════════════════════════════════════
