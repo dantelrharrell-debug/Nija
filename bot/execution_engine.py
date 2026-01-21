@@ -7,7 +7,6 @@ Handles order execution and position management for Apex Strategy v7.1
 from typing import Dict, Optional, List
 from datetime import datetime
 import logging
-import uuid
 
 logger = logging.getLogger("nija")
 

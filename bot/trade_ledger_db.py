@@ -322,9 +322,14 @@ class TradeLedgerDB:
                 
                 exit_value = quantity * exit_price
                 
-                if side.upper() == 'LONG' or side.upper() == 'BUY':
+                # Correct P&L calculation for LONG and SHORT positions
+                if side.upper() in ('LONG', 'BUY'):
+                    # For LONG: profit when price goes up
                     gross_profit = exit_value - size_usd
                 else:  # SHORT or SELL
+                    # For SHORT: profit when price goes down
+                    # Entry: Sell high (receive size_usd)
+                    # Exit: Buy low (pay exit_value)
                     gross_profit = size_usd - exit_value
                 
                 total_fees = entry_fee + exit_fee
@@ -500,10 +505,24 @@ class TradeLedgerDB:
         Returns:
             CSV string
         """
+        # Validate table name against whitelist to prevent SQL injection
+        valid_tables = {
+            'trade_ledger': 'trade_ledger',
+            'open_positions': 'open_positions',
+            'completed_trades': 'completed_trades'
+        }
+        
+        if table not in valid_tables:
+            raise ValueError(f"Invalid table name. Must be one of: {', '.join(valid_tables.keys())}")
+        
+        # Use validated table name
+        safe_table = valid_tables[table]
+        
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
-            query = f"SELECT * FROM {table} WHERE 1=1"
+            # Build query with parameterized user filter
+            query = f"SELECT * FROM {safe_table} WHERE 1=1"
             params = []
             
             if user_id:
