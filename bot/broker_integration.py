@@ -454,22 +454,35 @@ class KrakenBrokerAdapter(BrokerInterface):
             api_secret: Kraken API private key
         """
         import os
-        # Use KRAKEN_MASTER_API_KEY for master account, fallback to legacy KRAKEN_API_KEY
-        master_key = os.getenv("KRAKEN_MASTER_API_KEY")
-        master_secret = os.getenv("KRAKEN_MASTER_API_SECRET")
-        legacy_key = os.getenv("KRAKEN_API_KEY")
-        legacy_secret = os.getenv("KRAKEN_API_SECRET")
         
-        self.api_key = api_key or master_key or legacy_key
-        self.api_secret = api_secret or master_secret or legacy_secret
-        
-        # Log which credentials are being used
-        if not api_key and master_key:
-            logger.info("Kraken broker adapter initialized with KRAKEN_MASTER_API_KEY")
-        elif not api_key and legacy_key:
-            logger.info("Kraken broker adapter initialized with legacy KRAKEN_API_KEY")
+        # Use explicit credentials if both are provided, otherwise use environment variables
+        if api_key and api_secret:
+            # Explicit credentials provided - use them directly
+            self.api_key = api_key
+            self.api_secret = api_secret
+            logger.info("Kraken broker adapter initialized with explicit credentials")
         else:
-            logger.info("Kraken broker adapter initialized")
+            # Load from environment variables
+            # Prioritize KRAKEN_MASTER_API_KEY, fallback to legacy KRAKEN_API_KEY
+            master_key = os.getenv("KRAKEN_MASTER_API_KEY")
+            master_secret = os.getenv("KRAKEN_MASTER_API_SECRET")
+            legacy_key = os.getenv("KRAKEN_API_KEY")
+            legacy_secret = os.getenv("KRAKEN_API_SECRET")
+            
+            # Use master credentials if both are available, otherwise try legacy
+            if master_key and master_secret:
+                self.api_key = master_key
+                self.api_secret = master_secret
+                logger.info("Kraken broker adapter initialized with KRAKEN_MASTER_API_KEY")
+            elif legacy_key and legacy_secret:
+                self.api_key = legacy_key
+                self.api_secret = legacy_secret
+                logger.info("Kraken broker adapter initialized with legacy KRAKEN_API_KEY")
+            else:
+                # No credentials available
+                self.api_key = None
+                self.api_secret = None
+                logger.warning("Kraken broker adapter initialized without credentials")
         
         self.api = None
         self.kraken_api = None
