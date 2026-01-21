@@ -879,12 +879,13 @@ class MultiAccountBrokerManager:
     
     def audit_user_accounts(self):
         """
-        Audit and log all ACTIVE user accounts with broker connections.
+        Audit and log all user accounts with broker status.
         
         This function displays:
         - COPY_TRADING users (copy_from_master=True)
         - MASTER-linked users 
-        - Any account with status=="ACTIVE" (enabled=True) and broker_connected=True
+        - Any account with status=="ACTIVE" (enabled=True)
+        - Shows connection status for each broker
         
         Output format is clean and investor-ready.
         Called at startup to ensure all active users are visible.
@@ -893,67 +894,60 @@ class MultiAccountBrokerManager:
         logger.info("👥 USER ACCOUNT BALANCES AUDIT")
         logger.info("=" * 70)
         
-        if not self.user_brokers and not self._user_metadata:
+        if not self._user_metadata:
             logger.info("   ⚪ No user accounts configured")
             logger.info("=" * 70)
             return
         
-        # Build list of active users with broker connections
-        active_users = []
+        # Collect all active users (enabled=True) with their broker statuses
+        active_connected_count = 0
         
-        for user_id, user_broker_dict in self.user_brokers.items():
-            # Get user metadata
-            user_meta = self._user_metadata.get(user_id, {})
+        for user_id, user_meta in self._user_metadata.items():
             user_name = user_meta.get('name', user_id)
             is_enabled = user_meta.get('enabled', True)
             copy_from_master = user_meta.get('copy_from_master', True)
+            brokers_status = user_meta.get('brokers', {})
             
-            # Check if user has at least one connected broker
-            has_connection = False
-            broker_connections = []
-            
-            for broker_type, broker in user_broker_dict.items():
-                if broker.connected:
-                    has_connection = True
-                    broker_connections.append({
-                        'broker_type': broker_type,
-                        'broker': broker
-                    })
-            
-            # Only include ACTIVE users with broker connections
-            if is_enabled and has_connection:
-                active_users.append({
-                    'user_id': user_id,
-                    'name': user_name,
-                    'enabled': is_enabled,
-                    'copy_from_master': copy_from_master,
-                    'broker_connections': broker_connections
-                })
-        
-        # Display active users
-        if not active_users:
-            logger.info("   ⚪ No ACTIVE user accounts with broker connections")
-            logger.info("=" * 70)
-            return
-        
-        for user_data in active_users:
-            user_name = user_data['name']
-            copy_from_master = user_data['copy_from_master']
+            # Skip disabled users
+            if not is_enabled:
+                continue
             
             # Determine trading mode
             trading_mode = "Copy Trading" if copy_from_master else "Independent"
             
-            # Display each broker connection
-            for conn in user_data['broker_connections']:
-                broker_type = conn['broker_type']
+            # Get actual broker connections from user_brokers
+            user_broker_dict = self.user_brokers.get(user_id, {})
+            
+            # Track if this user has at least one active connection
+            user_has_connection = False
+            
+            # Display all configured brokers for this user
+            for broker_type, is_connected in brokers_status.items():
                 broker_name = broker_type.value.upper()
                 
-                logger.info(f"✅ {user_name} ({broker_name}): CONNECTED – {trading_mode}")
+                # Verify connection status from actual broker object
+                if broker_type in user_broker_dict:
+                    broker = user_broker_dict[broker_type]
+                    if broker.connected:
+                        logger.info(f"✅ {user_name} ({broker_name}): CONNECTED – {trading_mode}")
+                        user_has_connection = True
+                    else:
+                        logger.info(f"⚪ {user_name} ({broker_name}): Not configured")
+                else:
+                    logger.info(f"⚪ {user_name} ({broker_name}): Not configured")
+            
+            # Count users with at least one connection
+            if user_has_connection:
+                active_connected_count += 1
         
         # Display summary
-        logger.info("")
-        total_active = len(active_users)
-        logger.info(f"✅ {total_active} active user account(s) connected")
+        if active_connected_count == 0:
+            logger.info("")
+            logger.info("   ⚪ No ACTIVE user accounts with broker connections")
+        else:
+            logger.info("")
+            logger.info(f"✅ {active_connected_count} active user account(s) connected")
+        
         logger.info("=" * 70)
 
 
