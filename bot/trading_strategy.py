@@ -248,9 +248,17 @@ def get_dynamic_min_position_size(balance: float) -> float:
         
     Returns:
         Minimum position size in USD
+        
+    Raises:
+        ValueError: If balance is negative
     """
+    if balance < 0:
+        raise ValueError(f"Balance cannot be negative: {balance}")
+    
     return max(BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT)
 
+# DEPRECATED: Use get_dynamic_min_position_size() instead
+# This constant is maintained for backward compatibility only
 MIN_POSITION_SIZE_USD = BASE_MIN_POSITION_SIZE_USD  # Legacy fallback (use get_dynamic_min_position_size() instead)
 MIN_BALANCE_TO_TRADE_USD = 2.0  # Minimum account balance to allow trading (lowered from $5 to support small accounts)
 
