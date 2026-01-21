@@ -78,10 +78,10 @@ DISABLED_PAIRS = ["XRP-USD", "XRPUSD", "XRP-USDT"] + _additional_disabled  # Blo
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
-# OPTIMIZED EXIT FOR LOSING TRADES - Allow time for recovery
-# Exit losing trades after 30 minutes to allow profitable recovery
-# Most profitable trades need 20-40 minutes to develop
-MAX_LOSING_POSITION_HOLD_MINUTES = 30  # Exit losing trades after 30 minutes (optimized for profitability)
+# OPTIMIZED EXIT FOR LOSING TRADES - Aggressive capital protection
+# Exit losing trades after 15 minutes to minimize capital erosion
+# Updated from 30 minutes to be more aggressive with loss prevention
+MAX_LOSING_POSITION_HOLD_MINUTES = 15  # Exit losing trades after 15 minutes (aggressive protection)
 
 # Configuration constants
 # CRITICAL FIX (Jan 10, 2026): Further reduced market scanning to prevent 429/403 rate limit errors
@@ -1644,8 +1644,8 @@ class TradingStrategy:
                                     
                                     continue
                                 
-                                # ✅ LOSING TRADES: 30-MINUTE MAXIMUM HOLD TIME
-                                # For tracked positions with P&L < 0%, enforce STRICT 30-minute max hold time
+                                # ✅ LOSING TRADES: 15-MINUTE MAXIMUM HOLD TIME
+                                # For tracked positions with P&L < 0%, enforce STRICT 15-minute max hold time
                                 # This prevents capital erosion from positions held too long in a losing state
                                 # CRITICAL FIX (Jan 21, 2026): Also exit losing positions WITHOUT entry time tracking
                                 # to prevent positions from being stuck indefinitely
