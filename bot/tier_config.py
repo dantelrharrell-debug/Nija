@@ -65,7 +65,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
     TradingTier.INVESTOR: TierConfig(
         name="INVESTOR",
         capital_min=100.0,
-        capital_max=249.0,
+        capital_max=249.99,  # Up to but not including $250 (INCOME starts at $250)
         risk_per_trade_pct=(7.0, 10.0),
         trade_size_min=10.0,
         trade_size_max=25.0,
@@ -76,7 +76,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
     TradingTier.INCOME: TierConfig(
         name="INCOME",
         capital_min=250.0,
-        capital_max=999.0,
+        capital_max=999.99,  # Up to but not including $1k (LIVABLE starts at $1k)
         risk_per_trade_pct=(4.0, 7.0),
         trade_size_min=15.0,
         trade_size_max=50.0,
@@ -87,7 +87,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
     TradingTier.LIVABLE: TierConfig(
         name="LIVABLE",
         capital_min=1000.0,
-        capital_max=5000.0,
+        capital_max=4999.99,  # Up to but not including $5k (BALLER starts at $5k)
         risk_per_trade_pct=(2.0, 4.0),
         trade_size_min=25.0,
         trade_size_max=100.0,
@@ -138,12 +138,23 @@ def get_tier_from_balance(balance: float) -> TradingTier:
         logger.warning(f"Balance ${balance:.2f} below minimum for SAVER tier (${TIER_CONFIGS[TradingTier.SAVER].capital_min:.2f})")
         return TradingTier.SAVER
     
-    for tier, config in TIER_CONFIGS.items():
-        if config.capital_min <= balance <= config.capital_max:
+    # Check tiers in reverse order (highest first) to handle boundaries correctly
+    # This ensures $5000 exactly goes to BALLER tier
+    tier_order = [
+        TradingTier.BALLER,
+        TradingTier.LIVABLE,
+        TradingTier.INCOME,
+        TradingTier.INVESTOR,
+        TradingTier.SAVER
+    ]
+    
+    for tier in tier_order:
+        config = TIER_CONFIGS[tier]
+        if balance >= config.capital_min:
             return tier
     
-    # If balance exceeds all tiers, return BALLER
-    return TradingTier.BALLER
+    # Fallback (should not reach here)
+    return TradingTier.SAVER
 
 
 def get_tier_config(tier: TradingTier) -> TierConfig:
