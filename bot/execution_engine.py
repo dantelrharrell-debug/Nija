@@ -675,7 +675,7 @@ class ExecutionEngine:
             logger.warning(f"🚨 FORCED EXIT TRIGGERED: {symbol}")
             logger.warning(f"   Reason: {reason}")
             logger.warning(f"   Quantity: {quantity}")
-            logger.warning(f"   ⚠️ BYPASSING ALL FILTERS AND SAFEGUARDS")
+            logger.warning(f"   🛡️ PROTECTIVE EXIT MODE — Risk Management Override Active")
             
             # Attempt 1: Direct market sell
             result = broker_client.place_market_order(
