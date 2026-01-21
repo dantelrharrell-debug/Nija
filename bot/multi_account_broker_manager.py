@@ -549,6 +549,60 @@ class MultiAccountBrokerManager:
         
         return "\n".join(lines)
     
+    def log_all_balances(self):
+        """
+        Log all account balances to the console.
+        
+        This is a convenience method for quick balance visibility.
+        Calls get_status_report() and logs the output.
+        """
+        report = self.get_status_report()
+        logger.info("\n" + report)
+    
+    def get_user_balance_summary(self) -> Dict:
+        """
+        Get a summary of all user balances for quick review.
+        
+        Returns:
+            dict with structure: {
+                'user_count': int,
+                'total_capital': float,
+                'average_balance': float,
+                'users': [
+                    {
+                        'user_id': str,
+                        'total': float,
+                        'brokers': {broker: balance, ...}
+                    },
+                    ...
+                ]
+            }
+        """
+        balances = self.get_all_balances()
+        user_balances = balances.get('users', {})
+        
+        users_list = []
+        total_capital = 0.0
+        
+        for user_id, brokers in user_balances.items():
+            user_total = sum(brokers.values())
+            users_list.append({
+                'user_id': user_id,
+                'total': user_total,
+                'brokers': brokers
+            })
+            total_capital += user_total
+        
+        # Sort by total balance (descending)
+        users_list.sort(key=lambda x: x['total'], reverse=True)
+        
+        return {
+            'user_count': len(users_list),
+            'total_capital': total_capital,
+            'average_balance': total_capital / len(users_list) if users_list else 0,
+            'users': users_list
+        }
+    
     def connect_users_from_config(self) -> Dict[str, List[str]]:
         """
         Connect all users from configuration files.
