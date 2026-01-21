@@ -1869,6 +1869,65 @@ def get_aggregated_summary():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/restart', methods=['POST'])
+def restart_bot():
+    """
+    Restart the NIJA trading bot.
+    
+    This endpoint sends a SIGTERM signal to the bot process, causing it
+    to shut down gracefully. The deployment platform (Railway/Render) will
+    automatically restart the bot.
+    
+    Returns:
+        JSON response with restart status
+    """
+    try:
+        import psutil
+        import signal as sig
+        
+        # Find the bot.py process
+        bot_pid = None
+        current_pid = os.getpid()
+        
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = proc.info.get('cmdline', [])
+                if cmdline and len(cmdline) > 1:
+                    # Look for python process running bot.py
+                    if 'python' in cmdline[0].lower() and any('bot.py' in arg for arg in cmdline):
+                        # Don't kill ourselves (dashboard server)
+                        if proc.info['pid'] != current_pid:
+                            bot_pid = proc.info['pid']
+                            break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        
+        if bot_pid:
+            logger.info(f"🔄 Restart requested - sending SIGTERM to bot process {bot_pid}")
+            os.kill(bot_pid, sig.SIGTERM)
+            return jsonify({
+                'success': True,
+                'message': 'Restart signal sent to NIJA bot',
+                'pid': bot_pid,
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            logger.warning("⚠️ Restart requested but bot process not found")
+            return jsonify({
+                'success': False,
+                'message': 'Bot process not found - it may not be running',
+                'timestamp': datetime.now().isoformat()
+            }), 404
+    
+    except Exception as e:
+        logger.error(f"Error restarting bot: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
