@@ -7,7 +7,15 @@ __pycache__/
 # Virtual envs
 venv/
 .env
-.env.* 
+.env.*
+!.env.saver_tier           # Allow SAVER tier template
+!.env.investor_tier         # Allow INVESTOR tier template
+!.env.income_tier           # Allow INCOME tier template
+!.env.livable_tier          # Allow LIVABLE tier template
+!.env.baller_tier           # Allow BALLER tier template
+!.env.small_account_preset  # Allow small account preset
+!.env.example               # Allow example template
+!.env.copy_trading_example  # Allow copy trading example
 .venv/
 pip-wheel-metadata/
 build/

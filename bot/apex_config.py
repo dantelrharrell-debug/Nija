@@ -4,6 +4,10 @@ NIJA Apex Strategy v7.1 - Configuration
 All configuration parameters for the Apex trading strategy.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # ═══════════════════════════════════════════════════════════════════
 # MARKET FILTER PARAMETERS
 # ═══════════════════════════════════════════════════════════════════
@@ -313,24 +317,397 @@ RISK_LIMITS = {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# RISK MANAGEMENT
+# RISK MANAGEMENT - NIJA USER TRADING TIERS (OFFICIAL)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Five official user trading tiers based on capital and goals:
+# 1. SAVER ($25-$99) - Protect capital, learn the system
+# 2. INVESTOR ($100-$249) - Build consistency, reduce randomness
+# 3. INCOME ($250-$999) - Generate repeatable returns (core retail)
+# 4. LIVABLE ($1,000-$4,999) - Stable returns, capital protection
+# 5. BALLER ($5,000+) - Scale capital, preserve dominance
+#
+# MASTER (System Authority) - Not a user tier, system governance only
+#
+# To use a specific tier, set RISK_PROFILE environment variable:
+#   export RISK_PROFILE=SAVER      # For learning ($25-$99)
+#   export RISK_PROFILE=INVESTOR   # For consistency ($100-$249)
+#   export RISK_PROFILE=INCOME     # For income ($250-$999)
+#   export RISK_PROFILE=LIVABLE    # For serious traders ($1k-$5k)
+#   export RISK_PROFILE=BALLER     # For capital deployment ($5k+)
+#   export RISK_PROFILE=AUTO       # Auto-select based on balance
+#
+# Default tier is INVESTOR if not specified
 # ═══════════════════════════════════════════════════════════════════
 
-RISK_CONFIG = {
+# TIER 1: SAVER - "Protect capital. Learn the system."
+# Target Balance: $25 – $99
+# Reality Check: Not designed for income. Validates execution, not performance.
+RISK_CONFIG_SAVER = {
     # Per-Trade Risk Limits
-    'max_risk_per_trade': 0.02,  # 2% maximum risk per trade
-    'min_risk_reward': 2.0,  # Minimum 2:1 risk/reward ratio
+    'max_risk_per_trade': 0.15,  # 15% maximum risk per trade (high for small capital)
+    'min_risk_per_trade': 0.10,  # 10% minimum risk per trade (dynamic)
+    'min_risk_reward': 3.0,  # Minimum 3:1 risk/reward ratio (quality only)
     
     # Account-Level Risk Limits
-    'max_daily_loss': 0.025,  # 2.5% maximum daily loss
-    'max_weekly_loss': 0.05,  # 5% maximum weekly loss
-    'max_total_exposure': 0.30,  # 30% maximum total exposure
+    'max_daily_loss': 0.08,  # 8% maximum daily loss (very defensive)
+    'max_weekly_loss': 0.15,  # 15% maximum weekly loss
+    'max_total_exposure': 0.15,  # 15% maximum total exposure (single position focus)
     'max_drawdown': 0.10,  # 10% maximum account drawdown
     
     # Drawdown Protection
     'drawdown_reduce_size_at': 0.05,  # Reduce size at 5% drawdown
     'drawdown_stop_trading_at': 0.10,  # Stop trading at 10% drawdown
+    
+    # Position Management
+    'max_concurrent_positions': 1,  # Only 1 position (strict focus)
+    'max_position_concentration': 0.15,  # 15% max per position
+    'min_trade_size_usd': 2.0,  # $2 minimum trade (dynamic)
+    'max_trade_size_usd': 5.0,  # $5 maximum trade (fee-aware)
+    
+    # Circuit Breakers
+    'consecutive_loss_limit': 2,  # Stop after 2 consecutive losses
+    'daily_trade_limit': 5,  # Maximum 5 trades per day (very low frequency)
+    'min_time_between_trades_sec': 600,  # 10 minutes minimum
+    
+    # Performance-Based Adjustments
+    'reduce_size_on_losing_streak': True,
+    'losing_streak_threshold': 1,  # Trigger after 1 loss
+    'size_reduction_factor': 0.5,
+    
+    # System Behavior
+    'strict_fee_aware_filtering': True,  # Skip trades if fees > profit expectancy
+    'high_signal_confidence_required': True,  # Only take A+ setups
+    'skip_trades_on_poor_fee_ratio': True,
+    
+    # Profile Metadata
+    'profile_name': 'SAVER',
+    'tier_number': 1,
+    'balance_range': (25.0, 99.0),
+    'primary_goal': 'Capital preservation + learning',
+    'trade_frequency': 'Low',
+    'experience_required': 'Beginner',
 }
+
+# TIER 2: INVESTOR - "Build consistency. Reduce randomness."
+# Target Balance: $100 – $249
+# "This is where NIJA starts to feel 'real'."
+RISK_CONFIG_INVESTOR = {
+    # Per-Trade Risk Limits
+    'max_risk_per_trade': 0.10,  # 10% maximum risk per trade
+    'min_risk_per_trade': 0.07,  # 7% minimum risk per trade
+    'min_risk_reward': 2.5,  # Minimum 2.5:1 risk/reward ratio
+    
+    # Account-Level Risk Limits
+    'max_daily_loss': 0.05,  # 5% maximum daily loss
+    'max_weekly_loss': 0.10,  # 10% maximum weekly loss
+    'max_total_exposure': 0.25,  # 25% maximum total exposure
+    'max_drawdown': 0.12,  # 12% maximum account drawdown
+    
+    # Drawdown Protection
+    'drawdown_reduce_size_at': 0.06,  # Reduce size at 6% drawdown
+    'drawdown_stop_trading_at': 0.12,  # Stop trading at 12% drawdown
+    
+    # Position Management
+    'max_concurrent_positions': 3,  # Up to 3 positions
+    'max_position_concentration': 0.10,  # 10% max per position
+    'min_trade_size_usd': 10.0,  # $10 minimum trade
+    'max_trade_size_usd': 25.0,  # $25 maximum trade (improved fee efficiency)
+    
+    # Circuit Breakers
+    'consecutive_loss_limit': 3,  # Stop after 3 consecutive losses
+    'daily_trade_limit': 10,  # Maximum 10 trades per day (moderate frequency)
+    'min_time_between_trades_sec': 300,  # 5 minutes minimum
+    
+    # Performance-Based Adjustments
+    'reduce_size_on_losing_streak': True,
+    'losing_streak_threshold': 2,  # Trigger after 2 losses
+    'size_reduction_factor': 0.6,
+    
+    # System Behavior
+    'fee_aware_filtering': True,  # Improved fee efficiency
+    'core_strategy_active': True,  # Core strategy begins operating as intended
+    'reduced_trade_rejection_rate': True,
+    
+    # Profile Metadata
+    'profile_name': 'INVESTOR',
+    'tier_number': 2,
+    'balance_range': (100.0, 249.0),
+    'primary_goal': 'Consistent growth',
+    'trade_frequency': 'Moderate',
+    'experience_required': 'Intermediate',
+}
+
+# TIER 3: INCOME - "Generate repeatable returns."
+# Target Balance: $250 – $999
+# "This is NIJA's core retail power tier."
+RISK_CONFIG_INCOME = {
+    # Per-Trade Risk Limits
+    'max_risk_per_trade': 0.07,  # 7% maximum risk per trade
+    'min_risk_per_trade': 0.04,  # 4% minimum risk per trade
+    'min_risk_reward': 2.0,  # Minimum 2:1 risk/reward ratio
+    
+    # Account-Level Risk Limits
+    'max_daily_loss': 0.04,  # 4% maximum daily loss
+    'max_weekly_loss': 0.08,  # 8% maximum weekly loss
+    'max_total_exposure': 0.35,  # 35% maximum total exposure
+    'max_drawdown': 0.10,  # 10% maximum account drawdown
+    
+    # Drawdown Protection
+    'drawdown_reduce_size_at': 0.05,  # Reduce size at 5% drawdown (lower drawdowns)
+    'drawdown_stop_trading_at': 0.10,  # Stop trading at 10% drawdown
+    
+    # Position Management
+    'max_concurrent_positions': 5,  # Up to 5 positions
+    'max_position_concentration': 0.08,  # 8% max per position
+    'min_trade_size_usd': 15.0,  # $15 minimum trade
+    'max_trade_size_usd': 70.0,  # $70 maximum trade (7% of $1000)
+    
+    # Circuit Breakers
+    'consecutive_loss_limit': 3,  # Stop after 3 consecutive losses
+    'daily_trade_limit': 20,  # Maximum 20 trades per day (active but selective)
+    'min_time_between_trades_sec': 180,  # 3 minutes minimum
+    
+    # Performance-Based Adjustments
+    'reduce_size_on_losing_streak': True,
+    'losing_streak_threshold': 2,  # Trigger after 2 losses
+    'size_reduction_factor': 0.65,
+    
+    # System Behavior
+    'optimized_position_sizing': True,  # Optimized position sizing
+    'better_signal_to_fee_ratio': True,  # Better signal-to-fee ratio
+    'supplemental_income_mode': True,
+    
+    # Profile Metadata
+    'profile_name': 'INCOME',
+    'tier_number': 3,
+    'balance_range': (250.0, 999.0),
+    'primary_goal': 'Supplemental income',
+    'trade_frequency': 'Active but selective',
+    'experience_required': 'Intermediate-Advanced',
+}
+
+# TIER 4: LIVABLE - "Stable returns. Capital protection."
+# Target Balance: $1,000 – $4,999
+# "Designed for serious users, not gamblers."
+RISK_CONFIG_LIVABLE = {
+    # Per-Trade Risk Limits
+    'max_risk_per_trade': 0.04,  # 4% maximum risk per trade
+    'min_risk_per_trade': 0.02,  # 2% minimum risk per trade
+    'min_risk_reward': 2.0,  # Minimum 2:1 risk/reward ratio
+    
+    # Account-Level Risk Limits
+    'max_daily_loss': 0.03,  # 3% maximum daily loss
+    'max_weekly_loss': 0.06,  # 6% maximum weekly loss
+    'max_total_exposure': 0.30,  # 30% maximum total exposure (drawdown prioritization)
+    'max_drawdown': 0.08,  # 8% maximum account drawdown (conservative)
+    
+    # Drawdown Protection
+    'drawdown_reduce_size_at': 0.04,  # Reduce size at 4% drawdown (drawdown prioritization)
+    'drawdown_stop_trading_at': 0.08,  # Stop trading at 8% drawdown
+    
+    # Position Management
+    'max_concurrent_positions': 6,  # Up to 6 positions
+    'max_position_concentration': 0.06,  # 6% max per position (institutional-style)
+    'min_trade_size_usd': 25.0,  # $25 minimum trade
+    'max_trade_size_usd': 200.0,  # $200 maximum trade (4% of $5000)
+    
+    # Circuit Breakers
+    'consecutive_loss_limit': 4,  # Stop after 4 consecutive losses
+    'daily_trade_limit': 15,  # Maximum 15 trades per day (selective, high-confidence)
+    'min_time_between_trades_sec': 240,  # 4 minutes minimum
+    
+    # Performance-Based Adjustments
+    'reduce_size_on_losing_streak': True,
+    'losing_streak_threshold': 2,  # Trigger after 2 losses
+    'size_reduction_factor': 0.7,
+    
+    # System Behavior
+    'institutional_risk_management': True,  # Institutional-style risk management
+    'conservative_stop_tiers': True,  # Conservative stop tiers
+    'drawdown_over_trade_count': True,  # Drawdown prioritization over trade count
+    
+    # Profile Metadata
+    'profile_name': 'LIVABLE',
+    'tier_number': 4,
+    'balance_range': (1000.0, 4999.0),
+    'primary_goal': 'Reliable monthly performance',
+    'trade_frequency': 'Selective, high-confidence only',
+    'experience_required': 'Advanced',
+}
+
+# TIER 5: BALLER - "Scale capital. Preserve dominance."
+# Target Balance: $5,000+
+# "This is capital deployment, not speculation."
+RISK_CONFIG_BALLER = {
+    # Per-Trade Risk Limits
+    'max_risk_per_trade': 0.02,  # 2% maximum risk per trade (capital preservation)
+    'min_risk_per_trade': 0.01,  # 1% minimum risk per trade
+    'min_risk_reward': 2.5,  # Minimum 2.5:1 risk/reward ratio (precision)
+    
+    # Account-Level Risk Limits
+    'max_daily_loss': 0.02,  # 2% maximum daily loss (wealth preservation)
+    'max_weekly_loss': 0.04,  # 4% maximum weekly loss
+    'max_total_exposure': 0.25,  # 25% maximum total exposure (advanced portfolio balancing)
+    'max_drawdown': 0.06,  # 6% maximum account drawdown (tight controls)
+    
+    # Drawdown Protection
+    'drawdown_reduce_size_at': 0.03,  # Reduce size at 3% drawdown
+    'drawdown_stop_trading_at': 0.06,  # Stop trading at 6% drawdown
+    
+    # Position Management
+    'max_concurrent_positions': 8,  # Up to 8 positions (advanced diversification)
+    'max_position_concentration': 0.04,  # 4% max per position (tight execution filters)
+    'min_trade_size_usd': 50.0,  # $50 minimum trade
+    'max_trade_size_usd': 1000.0,  # $1000 maximum trade (2% of $50k)
+    
+    # Circuit Breakers
+    'consecutive_loss_limit': 5,  # Stop after 5 consecutive losses
+    'daily_trade_limit': 12,  # Maximum 12 trades per day (precision-only)
+    'min_time_between_trades_sec': 300,  # 5 minutes minimum (minimal overtrading)
+    
+    # Performance-Based Adjustments
+    'reduce_size_on_losing_streak': True,
+    'losing_streak_threshold': 2,  # Trigger after 2 losses
+    'size_reduction_factor': 0.75,
+    
+    # System Behavior
+    'tight_execution_filters': True,  # Tight execution filters
+    'advanced_portfolio_balancing': True,  # Advanced portfolio balancing
+    'minimal_overtrading': True,  # Minimal overtrading
+    'capital_deployment_mode': True,  # Capital deployment, not speculation
+    
+    # Profile Metadata
+    'profile_name': 'BALLER',
+    'tier_number': 5,
+    'balance_range': (5000.0, float('inf')),
+    'primary_goal': 'Capital growth + wealth preservation',
+    'trade_frequency': 'Precision-only',
+    'experience_required': 'Expert',
+}
+
+# MASTER (System Authority) - NOT A USER TIER
+# Role: Strategy source + execution authority
+# Functions: Signal generation, global risk enforcement, entry/exit override logic, multi-exchange coordination
+# Access: Internal only
+# "MASTER does not trade 'for profit' — it governs profit logic"
+RISK_CONFIG_MASTER = {
+    # System Authority Parameters (Not for direct user trading)
+    'max_risk_per_trade': 0.02,  # 2% for system governance
+    'min_risk_reward': 2.0,
+    
+    'max_daily_loss': 0.03,
+    'max_weekly_loss': 0.06,
+    'max_total_exposure': 0.50,  # Higher for multi-exchange coordination
+    'max_drawdown': 0.10,
+    
+    'drawdown_reduce_size_at': 0.05,
+    'drawdown_stop_trading_at': 0.10,
+    
+    'max_concurrent_positions': 10,  # System-wide coordination
+    'max_position_concentration': 0.10,
+    
+    'consecutive_loss_limit': 5,
+    'daily_trade_limit': 100,  # System-wide signal generation
+    'min_time_between_trades_sec': 30,
+    
+    'reduce_size_on_losing_streak': True,
+    'losing_streak_threshold': 3,
+    'size_reduction_factor': 0.7,
+    
+    # System Authority Flags
+    'system_authority': True,  # Not a user-facing tier
+    'signal_generation': True,
+    'global_risk_enforcement': True,
+    'entry_exit_override': True,
+    'multi_exchange_coordination': True,
+    
+    # Profile Metadata
+    'profile_name': 'MASTER',
+    'tier_number': 0,  # System tier, not user tier
+    'balance_range': None,  # Non-user facing
+    'primary_goal': 'System governance',
+    'trade_frequency': 'System-controlled',
+    'experience_required': 'Internal only',
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# AUTOMATIC PROFILE SELECTION
+# ═══════════════════════════════════════════════════════════════════
+
+def get_active_risk_config():
+    """
+    Get the active risk configuration based on environment variable or defaults.
+    
+    Priority:
+    1. RISK_PROFILE environment variable (SAVER, INVESTOR, INCOME, LIVABLE, BALLER, MASTER)
+    2. AUTO mode - selects based on account balance
+    3. Default to INVESTOR if not specified
+    
+    NIJA User Trading Tiers:
+    - SAVER: $25-$99 (Capital preservation + learning)
+    - INVESTOR: $100-$249 (Build consistency) - DEFAULT
+    - INCOME: $250-$999 (Core retail power tier)
+    - LIVABLE: $1,000-$4,999 (Serious users)
+    - BALLER: $5,000+ (Capital deployment)
+    - MASTER: System authority only (not for users)
+    
+    Returns:
+        dict: Active risk configuration
+    """
+    import os
+    
+    risk_profile = os.getenv('RISK_PROFILE', 'AUTO').upper()
+    
+    if risk_profile == 'SAVER':
+        return RISK_CONFIG_SAVER
+    elif risk_profile == 'INVESTOR':
+        return RISK_CONFIG_INVESTOR
+    elif risk_profile == 'INCOME':
+        return RISK_CONFIG_INCOME
+    elif risk_profile == 'LIVABLE':
+        return RISK_CONFIG_LIVABLE
+    elif risk_profile == 'BALLER':
+        return RISK_CONFIG_BALLER
+    elif risk_profile == 'MASTER':
+        logger.warning("⚠️ MASTER tier is for system authority only, not user trading")
+        return RISK_CONFIG_MASTER
+    elif risk_profile == 'AUTO':
+        # Auto-select based on account balance (if available)
+        try:
+            balance_str = os.getenv('ACCOUNT_BALANCE', '0')
+            balance = float(balance_str)
+            if balance >= 5000:
+                logger.info(f"AUTO mode: Selected BALLER tier (balance: ${balance:.2f})")
+                return RISK_CONFIG_BALLER
+            elif balance >= 1000:
+                logger.info(f"AUTO mode: Selected LIVABLE tier (balance: ${balance:.2f})")
+                return RISK_CONFIG_LIVABLE
+            elif balance >= 250:
+                logger.info(f"AUTO mode: Selected INCOME tier (balance: ${balance:.2f})")
+                return RISK_CONFIG_INCOME
+            elif balance >= 100:
+                logger.info(f"AUTO mode: Selected INVESTOR tier (balance: ${balance:.2f})")
+                return RISK_CONFIG_INVESTOR
+            elif balance >= 25:
+                logger.info(f"AUTO mode: Selected SAVER tier (balance: ${balance:.2f})")
+                return RISK_CONFIG_SAVER
+            else:
+                logger.warning(f"AUTO mode: Balance ${balance:.2f} below minimum ($25), defaulting to SAVER tier")
+                return RISK_CONFIG_SAVER
+        except (ValueError, TypeError) as e:
+            # Default to INVESTOR if balance unavailable or invalid
+            logger.warning(f"Unable to parse ACCOUNT_BALANCE, defaulting to INVESTOR tier: {e}")
+            return RISK_CONFIG_INVESTOR
+    else:
+        # Default to INVESTOR for unknown profiles
+        logger.warning(f"Unknown RISK_PROFILE '{risk_profile}', defaulting to INVESTOR tier")
+        return RISK_CONFIG_INVESTOR
+
+# Active configuration (backward compatibility)
+# Note: This is evaluated at module import time. To change profiles at runtime,
+# call get_active_risk_config() directly or reload the module.
+RISK_CONFIG = get_active_risk_config()
 
 # ═══════════════════════════════════════════════════════════════════
 # POSITION SIZING
