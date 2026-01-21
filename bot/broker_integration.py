@@ -797,9 +797,16 @@ class KrakenBrokerAdapter(BrokerInterface):
                                 logger.warning(f"      • Order may still be pending or partially filled")
                     except Exception as query_err:
                         logger.warning(f"   ⚠️  Could not query order details: {query_err}")
+                        logger.warning(f"      Order verification failed - marking as 'pending'")
+                        logger.warning(f"      Check order status manually if needed")
                 
                 # Only mark as 'filled' if verification passed
+                # If verification failed (exception or didn't meet criteria), mark as 'pending'
                 final_status = 'filled' if order_verified else 'pending'
+                
+                if not order_verified and order_id:
+                    logger.info(f"   ℹ️  Order placed but verification inconclusive - status: 'pending'")
+                    logger.info(f"      This is a safety measure - order may still have filled successfully")
                 
                 return {
                     'order_id': order_id,
