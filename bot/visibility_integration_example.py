@@ -267,8 +267,6 @@ class EnhancedTradingStrategy:
 
 # Example usage
 if __name__ == "__main__":
-    import time
-    
     strategy = EnhancedTradingStrategy()
     
     print("=== Example 1: Signal Generation and Rejection ===")
