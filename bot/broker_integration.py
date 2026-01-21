@@ -548,6 +548,11 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.error("Kraken credentials not found")
                 return False
             
+            # ✅ REQUIREMENT 3: Verify per-API key execution
+            from bot.kraken_order_validator import verify_per_api_key_execution
+            account_type = getattr(self, 'account_identifier', 'UNKNOWN')
+            verify_per_api_key_execution(self.api_key, account_type)
+            
             self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
             
             # FINAL FIX: Override nonce generator to use GLOBAL Kraken Nonce Manager

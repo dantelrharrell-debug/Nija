@@ -152,6 +152,13 @@ class KrakenClient:
             self.api.key = self.api_key
             self.api.secret = self.api_secret
             
+            # ✅ REQUIREMENT 3: Verify per-API key execution
+            try:
+                from bot.kraken_order_validator import verify_per_api_key_execution
+                verify_per_api_key_execution(self.api_key, self.account_identifier)
+            except ImportError:
+                logger.debug("Kraken order validator not available, skipping per-API key verification")
+            
             # Suppress verbose logging from Kraken SDK library
             kraken_logger = logging.getLogger('krakenex')
             kraken_logger.setLevel(logging.WARNING)
