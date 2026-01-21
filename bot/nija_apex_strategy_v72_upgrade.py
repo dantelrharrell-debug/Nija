@@ -23,6 +23,16 @@ import logging
 
 logger = logging.getLogger("nija")
 
+# Import scalar helper for indicator conversions
+try:
+    from indicators import scalar
+except ImportError:
+    # Fallback if indicators.py is not available
+    def scalar(x):
+        if isinstance(x, (tuple, list)):
+            return float(x[0])
+        return float(x)
+
 
 class NIJAApexStrategyV72:
     """
@@ -89,8 +99,8 @@ class NIJAApexStrategyV72:
         current_price = current['close']
         vwap = indicators['vwap'].iloc[-1]
         ema21 = indicators['ema_21'].iloc[-1]
-        rsi = indicators['rsi'].iloc[-1]
-        rsi_prev = indicators['rsi'].iloc[-2]
+        rsi = scalar(indicators['rsi'].iloc[-1])
+        rsi_prev = scalar(indicators['rsi'].iloc[-2])
         macd_hist = indicators['histogram'].iloc[-1]
         macd_hist_prev = indicators['histogram'].iloc[-2]
         
@@ -151,8 +161,8 @@ class NIJAApexStrategyV72:
         current_price = current['close']
         vwap = indicators['vwap'].iloc[-1]
         ema21 = indicators['ema_21'].iloc[-1]
-        rsi = indicators['rsi'].iloc[-1]
-        rsi_prev = indicators['rsi'].iloc[-2]
+        rsi = scalar(indicators['rsi'].iloc[-1])
+        rsi_prev = scalar(indicators['rsi'].iloc[-2])
         macd_hist = indicators['histogram'].iloc[-1]
         macd_hist_prev = indicators['histogram'].iloc[-2]
         

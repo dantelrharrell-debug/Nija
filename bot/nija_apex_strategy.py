@@ -32,6 +32,16 @@ from ai_momentum import MomentumScorer, AIRegimedDetector, AdaptiveSignalWeighte
 # Import existing NIJA modules
 from indicators import calculate_vwap, calculate_rsi, calculate_ema
 
+# Import scalar helper for indicator conversions
+try:
+    from indicators import scalar
+except ImportError:
+    # Fallback if indicators.py is not available
+    def scalar(x):
+        if isinstance(x, (tuple, list)):
+            return float(x[0])
+        return float(x)
+
 logger = logging.getLogger("nija.apex")
 
 
@@ -161,8 +171,8 @@ class NijaApexStrategyV71:
         df['minus_di'] = minus_di
         
         current_price = df['close'].iloc[-1]
-        current_adx = df['adx'].iloc[-1]
-        current_atr = df['atr'].iloc[-1]
+        current_adx = scalar(df['adx'].iloc[-1])
+        current_atr = scalar(df['atr'].iloc[-1])
         atr_pct = current_atr / current_price if current_price > 0 else 0
         
         # Check EMA alignment
@@ -247,8 +257,8 @@ class NijaApexStrategyV71:
         volume_conf = check_volume_confirmation(df, threshold=1.5)
         
         current_price = df['close'].iloc[-1]
-        vwap = df['vwap'].iloc[-1]
-        rsi = df['rsi'].iloc[-1]
+        vwap = scalar(df['vwap'].iloc[-1])
+        rsi = scalar(df['rsi'].iloc[-1])
         
         details = market_state['details']
         
@@ -371,8 +381,8 @@ class NijaApexStrategyV71:
             dict: Position parameters
         """
         current_price = df['close'].iloc[-1]
-        atr = df['atr'].iloc[-1]
-        adx = df['adx'].iloc[-1]
+        atr = scalar(df['atr'].iloc[-1])
+        adx = scalar(df['adx'].iloc[-1])
         
         # Calculate position size with ADX weighting
         position_calc = self.risk_manager.calculate_position_size_adx_weighted(

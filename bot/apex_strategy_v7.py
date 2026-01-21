@@ -43,6 +43,16 @@ from apex_filters import ApexSmartFilters
 from apex_trailing_system import ApexTrailingSystem
 from apex_ai_engine import ApexAIEngine
 
+# Import scalar helper for indicator conversions
+try:
+    from indicators import scalar
+except ImportError:
+    # Fallback if indicators.py is not available
+    def scalar(x):
+        if isinstance(x, (tuple, list)):
+            return float(x[0])
+        return float(x)
+
 logger = logging.getLogger("nija.apex")
 
 
@@ -107,25 +117,25 @@ class ApexStrategyV7:
         ema_data = calculate_ema_alignment(df)
         
         indicators = {
-            'adx': adx.iloc[-1],
-            'plus_di': plus_di.iloc[-1],
-            'minus_di': minus_di.iloc[-1],
-            'atr': atr.iloc[-1],
-            'vwap': vwap.iloc[-1],
-            'rsi': rsi.iloc[-1],
-            'macd_line': macd_line.iloc[-1],
-            'macd_signal': signal_line.iloc[-1],
-            'macd_histogram': histogram.iloc[-1],
-            'macd_direction': hist_direction.iloc[-1],
-            'ema9': ema_data['ema9'].iloc[-1],
-            'ema21': ema_data['ema21'].iloc[-1],
+            'adx': scalar(adx.iloc[-1]),
+            'plus_di': scalar(plus_di.iloc[-1]),
+            'minus_di': scalar(minus_di.iloc[-1]),
+            'atr': scalar(atr.iloc[-1]),
+            'vwap': scalar(vwap.iloc[-1]),
+            'rsi': scalar(rsi.iloc[-1]),
+            'macd_line': scalar(macd_line.iloc[-1]),
+            'macd_signal': scalar(signal_line.iloc[-1]),
+            'macd_histogram': scalar(histogram.iloc[-1]),
+            'macd_direction': scalar(hist_direction.iloc[-1]),
+            'ema9': scalar(ema_data['ema9'].iloc[-1]),
+            'ema21': scalar(ema_data['ema21'].iloc[-1]),
             'ema_bullish_alignment': ema_data['bullish_alignment'],
             'ema_bearish_alignment': ema_data['bearish_alignment'],
         }
         
         # Add EMA50 if available
         if 'ema50' in ema_data:
-            indicators['ema50'] = ema_data['ema50'].iloc[-1]
+            indicators['ema50'] = scalar(ema_data['ema50'].iloc[-1])
         
         return indicators
     

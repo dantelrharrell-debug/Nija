@@ -8,6 +8,7 @@ Handles position sizing, risk calculations, and trend quality assessment.
 import pandas as pd
 from typing import Dict, Tuple
 from apex_config import POSITION_SIZING, RISK_LIMITS, STOP_LOSS
+from indicators import scalar
 
 
 class ApexRiskManager:
@@ -43,6 +44,7 @@ class ApexRiskManager:
         Returns:
             str: 'weak', 'good', 'strong', or 'very_strong'
         """
+        adx = scalar(adx)
         if adx >= 40:
             return 'very_strong'
         elif adx >= 30:

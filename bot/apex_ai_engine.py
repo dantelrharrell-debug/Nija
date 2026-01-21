@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Optional, List
 from apex_config import AI_ENGINE
+from indicators import scalar
 
 
 class ApexAIEngine:
@@ -74,10 +75,10 @@ class ApexAIEngine:
         volume_trend = df['volume'].rolling(5).mean().iloc[-1] / df['volume'].rolling(20).mean().iloc[-1]
         
         # Trend strength (from ADX if available)
-        trend_strength = indicators.get('adx', 0) / 100.0  # Normalize to 0-1
+        trend_strength = scalar(indicators.get('adx', 0)) / 100.0  # Normalize to 0-1
         
         # Volatility regime (from ATR if available)
-        atr = indicators.get('atr', 0)
+        atr = scalar(indicators.get('atr', 0))
         avg_price = df['close'].iloc[-1]
         volatility_pct = (atr / avg_price) if avg_price > 0 else 0
         
@@ -154,7 +155,7 @@ class ApexAIEngine:
         score = 0
         
         # ADX contribution (0-3 points)
-        adx = indicators.get('adx', 0)
+        adx = scalar(indicators.get('adx', 0))
         if adx >= 40:
             score += 3
         elif adx >= 30:
@@ -163,7 +164,7 @@ class ApexAIEngine:
             score += 1
         
         # RSI contribution (0-2 points)
-        rsi = indicators.get('rsi', 50)
+        rsi = scalar(indicators.get('rsi', 50))
         if 40 <= rsi <= 70:  # Bullish zone
             score += 2
         elif 30 <= rsi <= 80:

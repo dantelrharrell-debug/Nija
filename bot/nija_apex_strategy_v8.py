@@ -23,7 +23,7 @@ import logging
 
 from indicators import (
     calculate_vwap, calculate_ema, calculate_rsi, calculate_macd,
-    calculate_atr, calculate_adx
+    calculate_atr, calculate_adx, scalar
 )
 from risk_manager import AdaptiveRiskManager
 from execution_engine import ExecutionEngine
@@ -227,7 +227,7 @@ class NIJAApexStrategyV8:
             ema21 = indicators['ema_21'].iloc[-1]
             ema50 = indicators['ema_50'].iloc[-1]
             macd_hist = indicators['histogram'].iloc[-1]
-            adx = indicators['adx'].iloc[-1] if hasattr(indicators['adx'], 'iloc') else indicators['adx']
+            adx = scalar(indicators['adx'].iloc[-1] if hasattr(indicators['adx'], 'iloc') else indicators['adx'])
             
             # ADX filter
             if adx < self.min_adx:
@@ -245,20 +245,20 @@ class NIJAApexStrategyV8:
                 macd_hist > 0
             )
             
-                # HARD GUARD: Ensure numeric OHLCV before any indicator math
-                try:
-                    required_cols = ['open', 'high', 'low', 'close', 'volume']
-                    if not all(col in df.columns for col in required_cols):
-                        logger.error("Missing OHLCV columns; cannot calculate indicators (V8)")
-                        return {}
-                    df[required_cols] = df[required_cols].astype(float)
-                    logger.info(
-                        f"DEBUG[V8] candle types → close={type(df['close'].iloc[-1])}, "
-                        f"open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to normalize candle types (V8): {e}")
+            # HARD GUARD: Ensure numeric OHLCV before any indicator math
+            try:
+                required_cols = ['open', 'high', 'low', 'close', 'volume']
+                if not all(col in df.columns for col in required_cols):
+                    logger.error("Missing OHLCV columns; cannot calculate indicators (V8)")
                     return {}
+                df[required_cols] = df[required_cols].astype(float)
+                logger.info(
+                    f"DEBUG[V8] candle types → close={type(df['close'].iloc[-1])}, "
+                    f"open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to normalize candle types (V8): {e}")
+                return {}
 
             downtrend = (
                 current_price < vwap and
@@ -374,7 +374,7 @@ class NIJAApexStrategyV8:
             
             ema21 = indicators['ema_21'].iloc[-1]
             vwap = indicators['vwap'].iloc[-1]
-            rsi = indicators['rsi'].iloc[-1] if hasattr(indicators['rsi'], 'iloc') else indicators['rsi']
+            rsi = scalar(indicators['rsi'].iloc[-1] if hasattr(indicators['rsi'], 'iloc') else indicators['rsi'])
             macd_hist = indicators['histogram'].iloc[-1]
             macd_hist_prev = indicators['histogram'].iloc[-2]
             
@@ -454,9 +454,9 @@ class NIJAApexStrategyV8:
             
             # Get current price and ATR
             current_price = df['close'].iloc[-1]
-            atr = indicators['atr'].iloc[-1] if hasattr(indicators['atr'], 'iloc') else indicators['atr']
+            atr = scalar(indicators['atr'].iloc[-1] if hasattr(indicators['atr'], 'iloc') else indicators['atr'])
             atr_pct = indicators['atr_pct']
-            adx = indicators['adx'].iloc[-1] if hasattr(indicators['adx'], 'iloc') else indicators['adx']
+            adx = scalar(indicators['adx'].iloc[-1] if hasattr(indicators['adx'], 'iloc') else indicators['adx'])
             
             # Calculate adaptive position size
             ai_confidence = entry_signal['confidence']

@@ -22,6 +22,16 @@ import logging
 
 logger = logging.getLogger("nija.risk_manager")
 
+# Import scalar helper for indicator conversions
+try:
+    from indicators import scalar
+except ImportError:
+    # Fallback if indicators.py is not available
+    def scalar(x):
+        if isinstance(x, (tuple, list)):
+            return float(x[0])
+        return float(x)
+
 # Import fee-aware configuration
 try:
     from fee_aware_config import (
@@ -282,6 +292,9 @@ class AdaptiveRiskManager:
                 breakdown['pro_mode'] = False
                 breakdown['portfolio_accounting'] = False
                 logger.debug(f"Legacy cash-based sizing: ${account_balance:.2f}")
+        
+        # Convert ADX to scalar to handle tuples/lists
+        adx = scalar(adx)
         
         # No trade if ADX < 20
         if adx < 20:

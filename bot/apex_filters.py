@@ -13,6 +13,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Tuple, Optional
 from apex_config import SMART_FILTERS
+from indicators import scalar
 
 
 class ApexSmartFilters:
@@ -135,6 +136,7 @@ class ApexSmartFilters:
             return False, "Chop detection disabled"
         
         threshold = SMART_FILTERS['chop_detection']['adx_threshold']
+        adx = scalar(adx)
         
         if adx < threshold:
             return True, f"Market is choppy (ADX {adx:.1f} < {threshold})"

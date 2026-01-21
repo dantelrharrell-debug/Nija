@@ -16,6 +16,16 @@ import logging
 
 logger = logging.getLogger("nija.ai_momentum")
 
+# Import scalar helper for indicator conversions
+try:
+    from indicators import scalar
+except ImportError:
+    # Fallback if indicators.py is not available
+    def scalar(x):
+        if isinstance(x, (tuple, list)):
+            return float(x[0])
+        return float(x)
+
 
 class AIRegimedDetector:
     """
@@ -58,6 +68,10 @@ class AIRegimedDetector:
         ema_20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
         current_price = df['close'].iloc[-1]
         price_vs_ema = (current_price - ema_20) / ema_20 if ema_20 > 0 else 0
+        
+        # Convert indicators to scalar to handle tuples/lists
+        adx_value = scalar(adx_value)
+        atr_pct = scalar(atr_pct)
         
         # Determine regime
         if adx_value > 25 and price_vs_ema > 0.01:
@@ -179,7 +193,7 @@ class MomentumScorer:
             score += 10.0
         
         # ADX strength
-        adx = indicators.get('adx', 0)
+        adx = scalar(indicators.get('adx', 0))
         if adx > 25:
             score += min((adx - 25) / 25 * 10, 10)
         
@@ -200,7 +214,7 @@ class MomentumScorer:
             score += 10.0
         
         # RSI momentum
-        rsi = indicators.get('rsi', 50)
+        rsi = scalar(indicators.get('rsi', 50))
         if 40 < rsi < 60:
             score += 5.0
         elif 30 < rsi < 70:
