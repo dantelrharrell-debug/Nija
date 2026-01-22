@@ -231,8 +231,7 @@ _FIRST_TRADE_LOCK = threading.Lock()
 # ============================================================================
 # Each exchange uses different symbol formats:
 # - Coinbase:  ETH-USD, ETH-USDT, ETH-USDC (dash separator)
-# - Kraken:    ETH-USD, ETH-USDT (dash separator for standard format)
-#              Internally: XETHZUSD, XXBTZUSD (no separator, X prefix)
+# - Kraken:    ETH-USD, ETH-USDT (dash separator, internally XETHZUSD/XXBTZUSD)
 # - Binance:   ETHUSDT, ETHBUSD (no separator, includes BUSD)
 # - OKX:       ETH-USDT (dash separator, prefers USDT over USD)
 #
@@ -319,10 +318,7 @@ def normalize_symbol_for_broker(symbol: str, broker_name: str) -> str:
     
     # Broker-specific formatting
     if broker_name == 'kraken':
-        # Kraken format: ETH-USD, BTC-USDT (dash separator for standard format)
-        # Note: This matches the format expected by kraken_symbol_mapper
-        # Kraken internally uses X prefix for some assets (XETH, XXBT) and no separator
-        # but the dash format is the standard format for symbol validation and conversion
+        # Kraken: ETH-USD (dash separator, matches kraken_symbol_mapper expectations)
         return f"{base}-{quote}"
         
     elif broker_name == 'coinbase':
@@ -6269,7 +6265,7 @@ class KrakenBroker(BaseBroker):
                 logger.warning(f"   💡 TIP: This symbol contains unsupported quote currency for Kraken (e.g., BUSD)")
                 return {"status": "error", "error": error_msg}
             
-            # Normalize to Kraken format (ETH-USD, BTC-USDT, etc.)
+            # Normalize to standard format for Kraken (ETH-USD, BTC-USDT, etc.)
             normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
             
             # SYMBOL VALIDATION FIX (Jan 20, 2026): Use symbol mapper to validate and convert
@@ -6293,9 +6289,9 @@ class KrakenBroker(BaseBroker):
                 logger.debug(f"✅ Symbol validated: {normalized_symbol} -> {kraken_symbol}")
             
             # Fallback: Manual conversion if symbol mapper not available
-            # Convert symbol format to Kraken internal format
-            # Kraken uses XBTUSD, ETHUSD, etc. (no separator)
-            # ETH-USD -> ETHUSD, BTC-USD -> XBTUSD
+            # Convert from standard format (ETH-USD) to Kraken internal format (XETHZUSD)
+            # Kraken internal format: no separator, X prefix for some assets
+            # Examples: ETH-USD -> XETHZUSD, BTC-USD -> XXBTZUSD
             if not kraken_symbol:
                 kraken_symbol = normalized_symbol.replace('-', '').upper()
                 
