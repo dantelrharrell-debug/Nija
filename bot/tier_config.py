@@ -4,14 +4,15 @@ NIJA Tier Configuration and Trade Size Minimums
 This module defines tier-based minimum trade sizes and stablecoin routing policies.
 
 Tier Structure (OFFICIAL - Updated Jan 22, 2026):
-- SAVER/Starter ($100-$249): Capital preservation + learning
+- STARTER ($50-$99): Entry level learning
+- SAVER ($100-$249): Capital preservation + learning
 - INVESTOR ($250-$999): Consistent participation
 - INCOME ($1,000-$4,999): Serious retail trading
 - LIVABLE ($5,000-$24,999): Professional-level execution
 - BALLER ($25,000+): Capital deployment
 
 Author: NIJA Trading Systems
-Version: 3.0 (OFFICIAL FUNDING TIERS)
+Version: 4.0 (OFFICIAL FUNDING TIERS - 6 TIERS)
 Date: January 22, 2026
 """
 
@@ -25,6 +26,7 @@ logger = logging.getLogger("nija.tier_config")
 
 class TradingTier(Enum):
     """User trading tiers with associated capital ranges."""
+    STARTER = "STARTER"
     SAVER = "SAVER"
     INVESTOR = "INVESTOR"
     INCOME = "INCOME"
@@ -53,8 +55,19 @@ class TierConfig:
 # OFFICIAL FUNDING TIERS (Final Version - Jan 22, 2026)
 # These are the official capital ranges to be used everywhere in NIJA
 TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
+    TradingTier.STARTER: TierConfig(
+        name="STARTER",
+        capital_min=50.0,
+        capital_max=99.0,
+        risk_per_trade_pct=(10.0, 15.0),
+        trade_size_min=10.0,
+        trade_size_max=25.0,
+        max_positions=1,
+        description="Entry level learning",
+        min_visible_size=10.0
+    ),
     TradingTier.SAVER: TierConfig(
-        name="SAVER (Starter)",
+        name="SAVER",
         capital_min=100.0,
         capital_max=249.0,
         risk_per_trade_pct=(7.0, 10.0),
@@ -136,18 +149,18 @@ def get_tier_from_balance(balance: float) -> TradingTier:
     Returns:
         TradingTier enum
     """
-    if balance < TIER_CONFIGS[TradingTier.SAVER].capital_min:
-        logger.warning(f"Balance ${balance:.2f} below minimum for SAVER tier (${TIER_CONFIGS[TradingTier.SAVER].capital_min:.2f})")
-        return TradingTier.SAVER
+    if balance < TIER_CONFIGS[TradingTier.STARTER].capital_min:
+        logger.warning(f"Balance ${balance:.2f} below minimum for STARTER tier (${TIER_CONFIGS[TradingTier.STARTER].capital_min:.2f})")
+        return TradingTier.STARTER
     
     # Check tiers in reverse order (highest first) to handle boundaries correctly
-    # This ensures $5000 exactly goes to BALLER tier
     tier_order = [
         TradingTier.BALLER,
         TradingTier.LIVABLE,
         TradingTier.INCOME,
         TradingTier.INVESTOR,
-        TradingTier.SAVER
+        TradingTier.SAVER,
+        TradingTier.STARTER
     ]
     
     for tier in tier_order:
@@ -156,7 +169,7 @@ def get_tier_from_balance(balance: float) -> TradingTier:
             return tier
     
     # Fallback (should not reach here)
-    return TradingTier.SAVER
+    return TradingTier.STARTER
 
 
 def get_tier_config(tier: TradingTier) -> TierConfig:

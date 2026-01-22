@@ -320,17 +320,19 @@ RISK_LIMITS = {
 # RISK MANAGEMENT - NIJA USER TRADING TIERS (OFFICIAL - FINAL VERSION)
 # ═══════════════════════════════════════════════════════════════════
 #
-# Five official user trading tiers based on capital and goals:
-# 1. SAVER ($100-$249) - Capital preservation + learning (STARTER LEVEL)
-# 2. INVESTOR ($250-$999) - Consistent participation
-# 3. INCOME ($1,000-$4,999) - Serious retail trading
-# 4. LIVABLE ($5,000-$24,999) - Professional-level execution
-# 5. BALLER ($25,000+) - Capital deployment
+# Six official user trading tiers based on capital and goals:
+# 1. STARTER ($50-$99) - Entry level learning
+# 2. SAVER ($100-$249) - Capital preservation + learning
+# 3. INVESTOR ($250-$999) - Consistent participation
+# 4. INCOME ($1,000-$4,999) - Serious retail trading
+# 5. LIVABLE ($5,000-$24,999) - Professional-level execution
+# 6. BALLER ($25,000+) - Capital deployment
 #
 # MASTER (System Authority) - Not a user tier, system governance only
 #
 # To use a specific tier, set RISK_PROFILE environment variable:
-#   export RISK_PROFILE=SAVER      # For learning ($100-$249) - STARTER LEVEL
+#   export RISK_PROFILE=STARTER    # For entry level ($50-$99)
+#   export RISK_PROFILE=SAVER      # For learning ($100-$249)
 #   export RISK_PROFILE=INVESTOR   # For consistency ($250-$999)
 #   export RISK_PROFILE=INCOME     # For serious trading ($1k-$4.9k)
 #   export RISK_PROFILE=LIVABLE    # For professional execution ($5k-$24.9k)
@@ -340,7 +342,56 @@ RISK_LIMITS = {
 # Default tier is INVESTOR if not specified
 # ═══════════════════════════════════════════════════════════════════
 
-# TIER 1: SAVER - "Capital preservation + learning" (STARTER LEVEL)
+# TIER 1: STARTER - "Entry level learning"
+# Target Balance: $50 – $99
+# Focus: First steps in algorithmic trading
+RISK_CONFIG_STARTER = {
+    # Per-Trade Risk Limits
+    'max_risk_per_trade': 0.15,  # 15% maximum risk per trade
+    'min_risk_per_trade': 0.10,  # 10% minimum risk per trade
+    'min_risk_reward': 3.0,  # Minimum 3:1 risk/reward ratio
+    
+    # Account-Level Risk Limits
+    'max_daily_loss': 0.10,  # 10% maximum daily loss
+    'max_weekly_loss': 0.20,  # 20% maximum weekly loss
+    'max_total_exposure': 0.15,  # 15% maximum total exposure
+    'max_drawdown': 0.15,  # 15% maximum account drawdown
+    
+    # Drawdown Protection
+    'drawdown_reduce_size_at': 0.08,  # Reduce size at 8% drawdown
+    'drawdown_stop_trading_at': 0.15,  # Stop trading at 15% drawdown
+    
+    # Position Management
+    'max_concurrent_positions': 1,  # Only 1 position
+    'max_position_concentration': 0.15,  # 15% max per position
+    'min_trade_size_usd': 10.0,  # $10 minimum trade
+    'max_trade_size_usd': 25.0,  # $25 maximum trade
+    
+    # Circuit Breakers
+    'consecutive_loss_limit': 2,  # Stop after 2 consecutive losses
+    'daily_trade_limit': 5,  # Maximum 5 trades per day
+    'min_time_between_trades_sec': 900,  # 15 minutes minimum
+    
+    # Performance-Based Adjustments
+    'reduce_size_on_losing_streak': True,
+    'losing_streak_threshold': 1,  # Trigger after 1 loss
+    'size_reduction_factor': 0.5,
+    
+    # System Behavior
+    'strict_fee_aware_filtering': True,
+    'high_signal_confidence_required': True,
+    'skip_trades_on_poor_fee_ratio': True,
+    
+    # Profile Metadata
+    'profile_name': 'STARTER',
+    'tier_number': 1,
+    'balance_range': (50.0, 99.0),
+    'primary_goal': 'Entry level learning',
+    'trade_frequency': 'Very Low',
+    'experience_required': 'Beginner',
+}
+
+# TIER 2: SAVER - "Capital preservation + learning"
 # Target Balance: $100 – $249
 # Focus: Capital preservation while learning the system
 RISK_CONFIG_SAVER = {
@@ -382,14 +433,14 @@ RISK_CONFIG_SAVER = {
     
     # Profile Metadata
     'profile_name': 'SAVER',
-    'tier_number': 1,
+    'tier_number': 2,
     'balance_range': (100.0, 249.0),
     'primary_goal': 'Capital preservation + learning',
     'trade_frequency': 'Moderate',
     'experience_required': 'Beginner',
 }
 
-# TIER 2: INVESTOR - "Consistent participation"
+# TIER 3: INVESTOR - "Consistent participation"
 # Target Balance: $250 – $999
 # "Default tier for consistent market participation"
 RISK_CONFIG_INVESTOR = {
@@ -431,7 +482,7 @@ RISK_CONFIG_INVESTOR = {
     
     # Profile Metadata
     'profile_name': 'INVESTOR',
-    'tier_number': 2,
+    'tier_number': 3,
     'balance_range': (250.0, 999.0),
     'primary_goal': 'Consistent participation',
     'trade_frequency': 'Active',
@@ -480,7 +531,7 @@ RISK_CONFIG_INCOME = {
     
     # Profile Metadata
     'profile_name': 'INCOME',
-    'tier_number': 3,
+    'tier_number': 4,
     'balance_range': (1000.0, 4999.0),
     'primary_goal': 'Serious retail trading',
     'trade_frequency': 'Very active',
@@ -529,7 +580,7 @@ RISK_CONFIG_LIVABLE = {
     
     # Profile Metadata
     'profile_name': 'LIVABLE',
-    'tier_number': 4,
+    'tier_number': 5,
     'balance_range': (5000.0, 24999.0),
     'primary_goal': 'Professional-level execution',
     'trade_frequency': 'Selective, high-precision',
@@ -579,7 +630,7 @@ RISK_CONFIG_BALLER = {
     
     # Profile Metadata
     'profile_name': 'BALLER',
-    'tier_number': 5,
+    'tier_number': 6,
     'balance_range': (25000.0, float('inf')),
     'primary_goal': 'Capital deployment',
     'trade_frequency': 'Precision-only',
@@ -640,12 +691,13 @@ def get_active_risk_config():
     Get the active risk configuration based on environment variable or defaults.
     
     Priority:
-    1. RISK_PROFILE environment variable (SAVER, INVESTOR, INCOME, LIVABLE, BALLER, MASTER)
+    1. RISK_PROFILE environment variable (STARTER, SAVER, INVESTOR, INCOME, LIVABLE, BALLER, MASTER)
     2. AUTO mode - selects based on account balance
     3. Default to INVESTOR if not specified
     
     NIJA User Trading Tiers:
-    - SAVER: $100-$249 (Capital preservation + learning) - STARTER LEVEL
+    - STARTER: $50-$99 (Entry level learning)
+    - SAVER: $100-$249 (Capital preservation + learning)
     - INVESTOR: $250-$999 (Consistent participation) - DEFAULT
     - INCOME: $1,000-$4,999 (Serious retail trading)
     - LIVABLE: $5,000-$24,999 (Professional-level execution)
@@ -659,7 +711,9 @@ def get_active_risk_config():
     
     risk_profile = os.getenv('RISK_PROFILE', 'AUTO').upper()
     
-    if risk_profile == 'SAVER':
+    if risk_profile == 'STARTER':
+        return RISK_CONFIG_STARTER
+    elif risk_profile == 'SAVER':
         return RISK_CONFIG_SAVER
     elif risk_profile == 'INVESTOR':
         return RISK_CONFIG_INVESTOR
@@ -692,9 +746,12 @@ def get_active_risk_config():
             elif balance >= 100:
                 logger.info(f"AUTO mode: Selected SAVER tier (balance: ${balance:.2f})")
                 return RISK_CONFIG_SAVER
+            elif balance >= 50:
+                logger.info(f"AUTO mode: Selected STARTER tier (balance: ${balance:.2f})")
+                return RISK_CONFIG_STARTER
             else:
-                logger.warning(f"AUTO mode: Balance ${balance:.2f} below minimum ($100), defaulting to SAVER tier")
-                return RISK_CONFIG_SAVER
+                logger.warning(f"AUTO mode: Balance ${balance:.2f} below minimum ($50), defaulting to STARTER tier")
+                return RISK_CONFIG_STARTER
         except (ValueError, TypeError) as e:
             # Default to INVESTOR if balance unavailable or invalid
             logger.warning(f"Unable to parse ACCOUNT_BALANCE, defaulting to INVESTOR tier: {e}")

@@ -247,6 +247,7 @@ NIJA shows trades differently based on your trading tier:
 
 | Tier | Min Visible Size | Why? |
 |------|-----------------|------|
+| **STARTER** | $10 | Show all trades for entry level |
 | **SAVER** | $15 | Show all trades for learning |
 | **INVESTOR** | $20 | Filter out micro-adjustments |
 | **INCOME** | $30 | Focus on meaningful trades |

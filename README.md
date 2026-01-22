@@ -1,11 +1,12 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-## 🎯 **Official Trading Tiers - Five Levels for Every Trader**
+## 🎯 **Official Trading Tiers - Six Levels for Every Trader**
 
-**NIJA uses five official trading tiers** optimized for different capital levels and trading goals:
+**NIJA uses six official trading tiers** optimized for different capital levels and trading goals:
 
 | Tier | Capital | Risk/Trade | Trade Size | Max Positions | Goal |
 |------|---------|------------|------------|---------------|------|
+| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | Entry level learning |
 | **SAVER** | $100–$249 | 7-10% | $15-$40 | 2 | Capital preservation + learning |
 | **INVESTOR** | $250–$999 | 5-7% | $20-$75 | 3 | Consistent participation |
 | **INCOME** ⭐ | $1k–$4.9k | 3-5% | $30-$150 | 5 | Serious retail trading |
@@ -15,6 +16,7 @@
 **Quick Setup:**
 ```bash
 # Add to .env - choose your tier:
+TRADING_TIER=STARTER     # For $50-$99 capital
 TRADING_TIER=SAVER       # For $100-$249 capital
 TRADING_TIER=INVESTOR    # For $250-$999 capital
 TRADING_TIER=INCOME      # For $1k-$4.9k capital ⭐ serious retail trading
@@ -25,6 +27,7 @@ TRADING_TIER=AUTO        # Auto-select based on balance
 
 **Or use preset templates:**
 ```bash
+cp .env.starter_tier .env    # STARTER tier ($50-$99)
 cp .env.saver_tier .env      # SAVER tier ($100-$249)
 cp .env.investor_tier .env   # INVESTOR tier ($250-$999)
 cp .env.income_tier .env     # INCOME tier ($1k-$4.9k) ⭐
@@ -39,6 +42,7 @@ cp .env.baller_tier .env     # BALLER tier ($25k+)
 
 **Key Notes:**
 - **INVESTOR** is the default tier if not specified
+- **STARTER** ($50-$99) is the entry level for new traders
 - **INCOME** ($1k-$4.9k) is NIJA's **serious retail trading tier** ⭐
 - **MASTER** is system authority only (NOT a user tier)
 - Start conservative and upgrade as capital and experience grow
@@ -219,6 +223,7 @@ STABLECOIN_POLICY=allow_all
 ```
 
 **Tier-Based Visibility**:
+- **STARTER**: Show all trades ($10+ visible)
 - **SAVER**: Show all trades ($15+ visible)
 - **INVESTOR**: Filter micro-trades ($20+ visible)
 - **INCOME**: Focus on meaningful trades ($30+ visible)
