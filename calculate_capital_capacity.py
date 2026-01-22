@@ -119,25 +119,21 @@ def calculate_portfolio_capacity(
         Dictionary with capital breakdown
     """
     # Create portfolio state
-    # Note: position_value should already include unrealized_pnl in the market value
-    # So we calculate available_cash by subtracting position_value from total
-    total_equity = balance + position_value
-    available_cash = total_equity - position_value
-    
+    # Total equity = cash + positions
+    # Available cash is what we have free
     portfolio = PortfolioState(
-        available_cash=available_cash,
+        available_cash=balance,
         min_reserve_pct=min_reserve_pct / 100.0
     )
     
     # Add a dummy position if there's position value
-    # This is just for calculation purposes
+    # This is just for calculation purposes to simulate deployed capital
     if position_value > 0:
-        # Create a synthetic position
-        # We don't know the actual entry price, so we'll assume current = entry for simplicity
-        # This means unrealized_pnl will show as 0 in the position, but it's already
-        # accounted for in the total_equity calculation
+        # Create a synthetic position to represent deployed capital
+        # Note: We use position_value for both entry and current price
+        # because we don't have actual position details
         portfolio.add_position(
-            symbol="AGGREGATE_POSITIONS",
+            symbol="DEPLOYED_CAPITAL",  # Clearer name than AGGREGATE_POSITIONS
             quantity=1.0,
             entry_price=position_value,
             current_price=position_value

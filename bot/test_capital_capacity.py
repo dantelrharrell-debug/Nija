@@ -21,16 +21,20 @@ def test_empty_portfolio():
     assert portfolio.total_position_value == 0.0, "No positions"
     
     deployable = portfolio.calculate_deployable_capital()
-    expected_deployable = 1000.0 * 0.9  # 90% of cash (10% reserve)
+    # Deployable = total_equity * (1 - reserve_pct) - positions
+    # = 1000 * (1 - 0.10) - 0 = 900
+    expected_deployable = 1000.0 * (1 - 0.10)
     assert abs(deployable - expected_deployable) < 0.01, f"Expected {expected_deployable}, got {deployable}"
     
     max_position = portfolio.calculate_max_position_size()
-    expected_max = min(1000.0 * 0.15, deployable)  # 15% or deployable, whichever is less
+    # Max = min(total_equity * max_pct, deployable, available_cash)
+    # = min(1000 * 0.15, 900, 1000) = min(150, 900, 1000) = 150
+    expected_max = min(1000.0 * 0.15, deployable)
     assert abs(max_position - expected_max) < 0.01, f"Expected {expected_max}, got {max_position}"
     
     print(f"   ✅ Total Equity: ${portfolio.total_equity:.2f}")
-    print(f"   ✅ Deployable: ${deployable:.2f}")
-    print(f"   ✅ Max Position: ${max_position:.2f}")
+    print(f"   ✅ Deployable: ${deployable:.2f} (calculated: {1000.0} * (1 - 0.10) = {expected_deployable:.2f})")
+    print(f"   ✅ Max Position: ${max_position:.2f} (min of 15% equity or deployable)")
 
 
 def test_portfolio_with_positions():
@@ -39,25 +43,29 @@ def test_portfolio_with_positions():
     portfolio = PortfolioState(available_cash=8000.0, min_reserve_pct=0.10)
     portfolio.add_position("BTC-USD", 0.1, 45000, 46000)  # $4600 position
     
+    # Total equity = cash + positions = 8000 + 4600 = 12600
     assert portfolio.total_equity == 12600.0, "Total equity = cash + positions"
     assert abs(portfolio.total_position_value - 4600.0) < 0.01, "Position value"
     
     # Calculate deployable
-    # Max deployable = 12600 * 0.9 = 11340
-    # Already deployed = 4600
-    # Remaining = 11340 - 4600 = 6740
+    # Max deployable = total_equity * (1 - reserve_pct) - deployed
+    # = 12600 * (1 - 0.10) - 4600
+    # = 12600 * 0.9 - 4600
+    # = 11340 - 4600 = 6740
     deployable = portfolio.calculate_deployable_capital()
-    expected_deployable = 6740.0
+    expected_deployable = (12600.0 * (1 - 0.10)) - 4600.0
     assert abs(deployable - expected_deployable) < 0.01, f"Expected {expected_deployable}, got {deployable}"
     
-    # Max position = min(12600 * 0.15, 6740, 8000) = min(1890, 6740, 8000) = 1890
+    # Max position = min(total_equity * max_pct, deployable, available_cash)
+    # = min(12600 * 0.15, 6740, 8000)
+    # = min(1890, 6740, 8000) = 1890
     max_position = portfolio.calculate_max_position_size()
-    expected_max = 1890.0
+    expected_max = min(12600.0 * 0.15, deployable, 8000.0)
     assert abs(max_position - expected_max) < 0.01, f"Expected {expected_max}, got {max_position}"
     
     print(f"   ✅ Total Equity: ${portfolio.total_equity:.2f}")
-    print(f"   ✅ Deployable: ${deployable:.2f}")
-    print(f"   ✅ Max Position: ${max_position:.2f}")
+    print(f"   ✅ Deployable: ${deployable:.2f} (12600 * 0.9 - 4600 = {expected_deployable:.2f})")
+    print(f"   ✅ Max Position: ${max_position:.2f} (min(1890, 6740, 8000) = {expected_max:.2f})")
 
 
 def test_fully_deployed_portfolio():

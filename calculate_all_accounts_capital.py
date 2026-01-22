@@ -97,6 +97,9 @@ def simulate_example_accounts() -> List[tuple]:
     """
     Create simulated example accounts for demonstration.
     
+    Note: Cryptocurrency prices used here are for example purposes only
+    and do not reflect actual market prices.
+    
     Returns:
         List of (account_name, account_type, portfolio_state) tuples
     """
@@ -104,7 +107,8 @@ def simulate_example_accounts() -> List[tuple]:
     
     # Master account - well funded
     master = PortfolioState(available_cash=20000.0, min_reserve_pct=0.10)
-    master.add_position("BTC-USD", 0.1, 45000, 46000)  # $4,600 position with profit
+    # Example: BTC position with profit (prices are illustrative)
+    master.add_position("BTC-USD", 0.1, 45000, 46000)  # $4,600 position
     accounts.append(("Master Account", "Master", master))
     
     # User 1 - moderate account
