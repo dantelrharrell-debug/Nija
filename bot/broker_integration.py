@@ -900,17 +900,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             order_size_usd = size  # Assume it's in USD if we can't calculate
         
         # FIX #3: Kraken minimum order size enforcement with $7.00 safety buffer
-        # Use module constant (now $7.00) or fallback from KrakenAdapter
-        if BrokerAdapterFactory:
-            try:
-                # Get minimum from KrakenAdapter if it differs from our constant
-                from bot.broker_adapters import KrakenAdapter
-                # Always use our FIX #3 constant which is higher for safety
-                KRAKEN_MIN_ORDER_USD = max(KrakenAdapter.MIN_VOLUME_DEFAULT, KRAKEN_MIN_ORDER_COST)
-            except (ImportError, AttributeError):
-                KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($7.00)
-        else:
-            KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($7.00)
+        # Always enforce our FIX #3 constant ($7.00), regardless of KrakenAdapter setting
+        KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($7.00)
         
         if order_size_usd < KRAKEN_MIN_ORDER_USD:
             return (False, kraken_symbol, 

@@ -78,6 +78,11 @@ DISABLED_PAIRS = ["XRP-USD", "XRPUSD", "XRP-USDT"] + _additional_disabled  # Blo
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
+# FIX #1: Minimal placeholder capital for advanced manager initialization
+# This placeholder is replaced with live multi-broker balance after connection
+# Set to $1 instead of fake $100 to make it obvious it's a placeholder
+PLACEHOLDER_CAPITAL = 1.0  # Minimal placeholder (replaced with live balance)
+
 # OPTIMIZED EXIT FOR LOSING TRADES - Aggressive capital protection
 # Exit losing trades after 15 minutes to minimize capital erosion
 # Updated from 30 minutes to be more aggressive with loss prevention
@@ -1103,14 +1108,14 @@ class TradingStrategy:
             try:
                 initial_capital = float(initial_capital_str)
                 if initial_capital <= 0:
-                    # Use minimal default (will be replaced with live balance after broker connection)
-                    initial_capital = 1.0  # Minimal placeholder, not fake $100
+                    # Use minimal placeholder (will be replaced with live balance after broker connection)
+                    initial_capital = PLACEHOLDER_CAPITAL
                     logger.info(f"ℹ️ INITIAL_CAPITAL not set, will use live broker balance after connection")
                 else:
                     logger.info(f"ℹ️ Using INITIAL_CAPITAL=${initial_capital:.2f} (will be updated with live balance)")
             except (ValueError, TypeError):
                 logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, will use live broker balance")
-                initial_capital = 1.0  # Minimal placeholder
+                initial_capital = PLACEHOLDER_CAPITAL
             
             allocation_strategy = os.getenv('ALLOCATION_STRATEGY', 'conservative')
             
