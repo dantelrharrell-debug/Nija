@@ -21,11 +21,17 @@ logger = logging.getLogger("nija.broker_configs")
 try:
     from .coinbase_config import CoinbaseConfig
     from .kraken_config import KrakenConfig
+    from .binance_config import BinanceConfig
+    from .okx_config import OKXConfig
+    from .alpaca_config import AlpacaConfig
     from .default_config import DefaultConfig
 except ImportError:
     # Fallback if submodules not yet loaded
     CoinbaseConfig = None
     KrakenConfig = None
+    BinanceConfig = None
+    OKXConfig = None
+    AlpacaConfig = None
     DefaultConfig = None
 
 
@@ -44,7 +50,7 @@ def get_broker_config(broker_type: str):
     Get broker-specific configuration.
     
     Args:
-        broker_type: Broker type string (e.g., 'coinbase', 'kraken')
+        broker_type: Broker type string (e.g., 'coinbase', 'kraken', 'binance', 'okx', 'alpaca')
         
     Returns:
         Broker-specific configuration object
@@ -55,6 +61,12 @@ def get_broker_config(broker_type: str):
         return CoinbaseConfig()
     elif broker_type_lower == "kraken" and KrakenConfig:
         return KrakenConfig()
+    elif broker_type_lower == "binance" and BinanceConfig:
+        return BinanceConfig()
+    elif broker_type_lower == "okx" and OKXConfig:
+        return OKXConfig()
+    elif broker_type_lower == "alpaca" and AlpacaConfig:
+        return AlpacaConfig()
     elif DefaultConfig:
         return DefaultConfig()
     else:
@@ -68,5 +80,8 @@ __all__ = [
     'get_broker_config',
     'CoinbaseConfig',
     'KrakenConfig',
+    'BinanceConfig',
+    'OKXConfig',
+    'AlpacaConfig',
     'DefaultConfig'
 ]

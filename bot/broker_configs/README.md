@@ -16,6 +16,126 @@ Each brokerage has different fee structures, supported assets, and optimal tradi
 
 ## Broker Configurations
 
+### 🟢 OKX (`okx_config.py`) - ULTRA-LOW FEES
+
+**Characteristics:**
+- **Fees**: 0.20% round-trip (LOWEST)
+- **Assets**: Crypto + Futures + Perpetuals + Options
+- **Strategy**: BIDIRECTIONAL (high frequency)
+
+**Configuration:**
+```python
+from bot.broker_configs import OKX_CONFIG
+
+# Fee structure
+OKX_CONFIG.round_trip_cost  # 0.0020 (0.20% - LOWEST!)
+
+# Profit targets (ultra-tight)
+OKX_CONFIG.profit_targets  # [(0.8%, "EXCELLENT"), (0.6%, "VERY GOOD"), (0.4%, "GOOD")]
+
+# Stop loss
+OKX_CONFIG.stop_loss  # -0.5% (tightest)
+
+# Position management
+OKX_CONFIG.max_hold_hours  # 36 hours
+OKX_CONFIG.min_position_usd  # $5 minimum
+OKX_CONFIG.max_positions  # 15 (highest)
+OKX_CONFIG.max_trades_per_day  # 80 (highest volume)
+
+# Strategy
+OKX_CONFIG.bidirectional  # True (both directions profitable)
+OKX_CONFIG.enable_perpetuals  # True (OKX specialty)
+```
+
+**Why OKX for Scaling?**
+- Ultra-low fees (0.20%) enable highest frequency trading
+- Tightest profit targets (0.4%+)
+- Supports perpetuals for 24/7 trading
+- Most aggressive position sizing
+- Ideal for scaling operations
+
+---
+
+### 🟡 Binance (`binance_config.py`) - BEST LIQUIDITY
+
+**Characteristics:**
+- **Fees**: 0.28% round-trip (very low)
+- **Assets**: Crypto (1000+ pairs) + Futures
+- **Strategy**: BIDIRECTIONAL (high volume)
+
+**Configuration:**
+```python
+from bot.broker_configs import BINANCE_CONFIG
+
+# Fee structure
+BINANCE_CONFIG.round_trip_cost  # 0.0028 (0.28% - very competitive)
+
+# Profit targets (tight)
+BINANCE_CONFIG.profit_targets  # [(0.9%, "EXCELLENT"), (0.6%, "GOOD"), (0.5%, "ACCEPTABLE")]
+
+# Stop loss
+BINANCE_CONFIG.stop_loss  # -0.6%
+
+# Position management
+BINANCE_CONFIG.max_hold_hours  # 30 hours
+BINANCE_CONFIG.min_position_usd  # $5 minimum
+BINANCE_CONFIG.max_positions  # 12
+BINANCE_CONFIG.max_trades_per_day  # 70
+
+# Strategy
+BINANCE_CONFIG.bidirectional  # True (both directions profitable)
+BINANCE_CONFIG.enable_futures  # True
+```
+
+**Why Binance for Scaling?**
+- Best liquidity in crypto markets
+- Low fees (0.28%) enable high frequency
+- 1000+ trading pairs
+- Deep order books reduce slippage
+- BNB discount reduces fees further
+
+---
+
+### 🔷 Alpaca (`alpaca_config.py`) - ZERO COMMISSIONS
+
+**Characteristics:**
+- **Fees**: 0.20% (spread only, ZERO commissions)
+- **Assets**: US Stocks + ETFs + Options
+- **Strategy**: AGGRESSIVE (zero fees)
+
+**Configuration:**
+```python
+from bot.broker_configs import ALPACA_CONFIG
+
+# Fee structure
+ALPACA_CONFIG.round_trip_cost  # 0.0020 (0.20% spread only)
+
+# Profit targets (very tight)
+ALPACA_CONFIG.profit_targets  # [(0.6%, "EXCELLENT"), (0.4%, "GOOD"), (0.3%, "ACCEPTABLE")]
+
+# Stop loss
+ALPACA_CONFIG.stop_loss  # -0.4%
+
+# Position management
+ALPACA_CONFIG.max_hold_hours  # 6.5 hours (market hours only)
+ALPACA_CONFIG.min_position_usd  # $1 minimum (fractional shares)
+ALPACA_CONFIG.max_positions  # 10
+ALPACA_CONFIG.max_trades_per_day  # 50
+
+# PDT enforcement
+ALPACA_CONFIG.pdt_threshold  # $25,000
+ALPACA_CONFIG.enforce_pdt  # True
+```
+
+**Why Alpaca for Scaling?**
+- Zero commissions (only spread costs)
+- Fractional shares ($1 minimum)
+- Stock market diversification
+- PDT-aware position sizing
+- Paper trading for testing
+
+---
+
 ### 🔵 Coinbase (`coinbase_config.py`)
 
 **Characteristics:**
@@ -150,17 +270,21 @@ STRATEGY_SELECTOR.print_strategy_comparison()
 
 ## Key Differences Summary
 
-| Feature | Coinbase | Kraken | Difference |
-|---------|----------|--------|------------|
-| **Round-trip fees** | 1.4% | 0.36% | **4x cheaper** |
-| **Min profit target** | 1.5% | 0.5% | **3x lower** |
-| **Stop loss** | -1.0% | -0.7% | Tighter |
-| **Max hold time** | 8 hours | 24 hours | **3x longer** |
-| **Min position** | $10 | $5 | **2x smaller** |
-| **Max trades/day** | 30 | 60 | **2x more** |
-| **Short selling** | ❌ Unprofitable | ✅ **PROFITABLE** | Huge advantage |
-| **Futures/Options** | ❌ Not supported | ✅ **Supported** | More strategies |
-| **Strategy** | Buy-only | Bidirectional | More opportunities |
+| Feature | OKX | Binance | Alpaca | Kraken | Coinbase |
+|---------|-----|---------|--------|--------|----------|
+| **Round-trip fees** | 0.20% | 0.28% | 0.20% | 0.36% | 1.40% |
+| **Min profit target** | 0.4% | 0.5% | 0.3% | 0.5% | 1.5% |
+| **Stop loss** | -0.5% | -0.6% | -0.4% | -0.7% | -1.0% |
+| **Max hold time** | 36h | 30h | 6.5h | 24h | 8h |
+| **Min position** | $5 | $5 | $1 | $5 | $10 |
+| **Max trades/day** | 80 | 70 | 50 | 60 | 30 |
+| **Max positions** | 15 | 12 | 10 | 12 | 8 |
+| **Short selling** | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Futures** | ✅ | ✅ | ❌ | ✅ | ❌ |
+| **Perpetuals** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Stocks** | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **Strategy** | Bidirectional | Bidirectional | Aggressive | Bidirectional | Buy-only |
+| **Best For** | Scaling | Liquidity | Stocks | Reliability | Selective |
 
 ---
 
@@ -224,11 +348,9 @@ def run_cycle(self, broker):
 
 ## Future Enhancements
 
-- **Alpaca configuration** - Stock-specific strategies
-- **Binance configuration** - International crypto exchange
-- **OKX configuration** - Derivatives-focused
-- **Dynamic fee updates** - Adjust to tier changes
 - **Machine learning** - Optimize targets per broker
+- **Dynamic fee updates** - Adjust to tier changes
+- **Real-time market conditions** - Adjust strategies based on volatility
 
 ---
 
@@ -237,12 +359,15 @@ def run_cycle(self, broker):
 - `__init__.py` - Module initialization and exports
 - `coinbase_config.py` - Coinbase-specific configuration
 - `kraken_config.py` - Kraken-specific configuration
+- `binance_config.py` - Binance-specific configuration (NEW)
+- `okx_config.py` - OKX-specific configuration (NEW)
+- `alpaca_config.py` - Alpaca-specific configuration (NEW)
 - `default_config.py` - Default conservative configuration
 - `strategy_selector.py` - Broker strategy routing logic
 - `README.md` - This file
 
 ---
 
-**Last Updated**: January 16, 2026  
-**Version**: 1.0  
-**Status**: ✅ Production Ready
+**Last Updated**: January 22, 2026  
+**Version**: 2.0  
+**Status**: ✅ Production Ready with Multi-Broker Scaling Support
