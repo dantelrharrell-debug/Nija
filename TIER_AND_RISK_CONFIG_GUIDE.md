@@ -2,7 +2,9 @@
 
 ## Overview
 
-This guide explains the recent changes to account tier management and trade size limits in the NIJA trading bot.
+This guide explains the account tier management and trade size limits in the NIJA trading bot.
+
+**⚠️ CRITICAL: Master account is ALWAYS BALLER tier regardless of balance.**
 
 ## Changes Made (Jan 22, 2026)
 
@@ -12,18 +14,26 @@ This guide explains the recent changes to account tier management and trade size
 - Previous: `max_position_pct = 0.20` (20%)
 - New: `max_position_pct = 0.15` (15%)
 
-This ensures that individual trades cannot exceed 15% of the account balance, providing better risk management for smaller accounts.
+This ensures that individual trades cannot exceed 15% of the account balance, providing better risk management for all accounts.
 
 **Example:**
 - Balance: $62.49
 - Max trade size (15%): $9.37
 - Previous max (20%): $12.50
 
-### 2. Added Account Tier Override
+### 2. Master Account Always Uses BALLER Tier
+
+**Changed:** `bot/tier_config.py`
+- Master account is hardcoded to BALLER tier
+- Provides best risk management parameters (1-2% max risk per tier guidelines)
+- 15% max trade size cap still applies globally
+
+### 3. Added Account Tier Override for User Accounts
 
 **Changed:** `bot/tier_config.py`
 - Added `MASTER_ACCOUNT_TIER` environment variable support
-- Allows forcing a specific tier regardless of account balance
+- Allows forcing a specific tier for user accounts
+- Set to `BALLER` or `MASTER` to enforce BALLER tier
 
 ## Account Tiers
 
@@ -40,13 +50,39 @@ NIJA uses 6 trading tiers based on account balance:
 
 ## Configuration
 
-### Automatic Tier Detection (Default)
+### Master Account (ALWAYS BALLER Tier)
 
-By default, NIJA automatically detects your tier based on your account balance:
+**⚠️ CRITICAL: The master account is ALWAYS BALLER tier regardless of balance.**
+
+To enable this, set in your `.env` file:
 
 ```bash
-# .env file
-# Leave MASTER_ACCOUNT_TIER empty or commented out
+# Master account - always BALLER tier
+MASTER_ACCOUNT_TIER=BALLER
+```
+
+**Benefits for Master Account:**
+- ✅ Best risk management parameters (1-2% max risk per tier guidelines)
+- ✅ Highest trade size range ($100-$1,000 per tier)
+- ✅ Maximum positions allowed (8 concurrent positions)
+- ✅ 15% max trade size cap still applies globally
+
+**Example: Master account with $62.49 balance:**
+- Tier: BALLER (forced, not STARTER)
+- Max trade size: $9.37 (15% cap applies)
+- Tier guidelines: 1-2% risk
+- **Note:** 15% cap ($9.37) is below BALLER tier minimum ($100)
+- Trades will be limited to what the 15% cap allows
+
+### User Accounts (Auto-Detection or Override)
+
+#### Automatic Tier Detection (Default for User Accounts)
+
+By default, user accounts automatically detect their tier based on balance:
+
+```bash
+# .env file for user accounts
+# Leave MASTER_ACCOUNT_TIER empty or commented out for auto-detection
 # MASTER_ACCOUNT_TIER=
 ```
 
@@ -55,9 +91,9 @@ By default, NIJA automatically detects your tier based on your account balance:
 - Balance: $500 → INVESTOR tier
 - Balance: $5,000 → LIVABLE tier
 
-### Manual Tier Override
+#### Manual Tier Override for User Accounts
 
-To force a specific tier (e.g., for better risk management on small accounts):
+To force a specific tier for a user account:
 
 ```bash
 # .env file
@@ -65,12 +101,12 @@ MASTER_ACCOUNT_TIER=INVESTOR
 ```
 
 **Valid values:**
+- `BALLER` or `MASTER` - Forces BALLER tier (recommended for master account)
 - `STARTER`
 - `SAVER`
 - `INVESTOR`
 - `INCOME`
 - `LIVABLE`
-- `BALLER`
 
 ### When to Use Tier Override
 
@@ -94,14 +130,38 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 ## Examples
 
-### Example 1: Small Account with STARTER Tier (Auto-Detected)
+### Example 1: Master Account with BALLER Tier (Required)
 
 ```bash
-# .env file (no override)
-# MASTER_ACCOUNT_TIER=
+# .env file
+MASTER_ACCOUNT_TIER=BALLER
 ```
 
-**Account:** $62.49
+**Account:** $62.49 (Master Account)
+
+**Tier:** BALLER (forced, always)
+
+**Risk Parameters:**
+- Max risk per trade: 1-2% (tier guidelines)
+- Trade size range: $100-$1,000 (tier limits)
+- Max positions: 8
+- **Actual max trade:** $9.37 (15% of $62.49 - global cap applies)
+
+**Important Notes:**
+- ✅ Master account ALWAYS uses BALLER tier
+- ✅ Best risk management parameters
+- ⚠️ 15% cap ($9.37) is below BALLER tier minimum ($100)
+- Smaller trades will execute up to the 15% cap
+- This is the REQUIRED configuration for master account
+
+### Example 2: User Account with Auto-Detection (STARTER)
+
+```bash
+# .env file for user account
+# Leave MASTER_ACCOUNT_TIER empty or commented out
+```
+
+**Account:** $62.49 (User Account)
 
 **Tier:** STARTER (auto-detected)
 
@@ -112,9 +172,10 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 **Position Sizing:**
 - With 15% risk limit: max $9.37 per trade
-- Actual trades will be smaller based on signal strength
+- Tier allows trades as small as $10
+- ✅ Configuration compatible - trades can execute
 
-### Example 2: Small Account with INVESTOR Tier (Override) - ⚠️ NOT RECOMMENDED
+### Example 2: Small Account with INVESTOR Tier (Override) - Not Recommended
 
 ```bash
 # .env file
@@ -132,17 +193,17 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 **Position Sizing:**
 - With 15% risk limit: max $9.37 per trade
-- **⚠️ CRITICAL ISSUE:** Tier minimum is $20
-- **Result: NO TRADES will execute** (balance too small for INVESTOR tier minimums)
+- **⚠️ Critical Issue:** Tier minimum is $20
+- **Result: No trades will execute** (balance too small for INVESTOR tier minimums)
 
-**Recommendation:** DO NOT use this configuration. The 15% cap ($9.37) is below the INVESTOR tier minimum ($20), preventing all trades. Either:
+**Recommendation:** Do not use this configuration. The 15% cap ($9.37) is below the INVESTOR tier minimum ($20), preventing all trades. Either:
 1. Use auto-detection (STARTER tier) for accounts under $250
 2. Deposit at least $250 to naturally qualify for INVESTOR tier
 
-### Example 3: Medium Account with Auto-Detection
+### Example 4: Medium User Account with Auto-Detection
 
 ```bash
-# .env file (no override)
+# .env file (no override for user account)
 # MASTER_ACCOUNT_TIER=
 ```
 
@@ -162,9 +223,19 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 ## Recommendations
 
-### For Accounts Under $100
+### For Master Account
 
-**Option 1: Use Auto-Detection (STARTER tier) - RECOMMENDED**
+**Required: Always use BALLER tier**
+```bash
+MASTER_ACCOUNT_TIER=BALLER
+```
+- ✅ Best risk management parameters
+- ✅ Enforced by design - master is always BALLER
+- ✅ 15% max trade size cap still applies
+
+### For User Accounts Under $100
+
+**Option 1: Use Auto-Detection (STARTER tier) - Recommended**
 ```bash
 # Leave MASTER_ACCOUNT_TIER commented out
 ```
@@ -173,26 +244,26 @@ MASTER_ACCOUNT_TIER=INVESTOR
 - ✅ 15% cap ($9.37 for $62.49) still applies
 - ⚠️ Higher max risk per tier guidelines (10-15%, but actual trades limited by 15% cap)
 
-**Option 2: DO NOT Override to Higher Tiers**
+**Option 2: Do Not Override to Higher Tiers**
 - ❌ INVESTOR tier has $20 minimum trade size
 - ❌ 15% of $62.49 is only $9.37 (below minimum)
-- ❌ This configuration will BLOCK ALL TRADES
+- ❌ This configuration will block all trades
 
-**Option 3: Deposit More Funds - BEST LONG-TERM**
+**Option 3: Deposit More Funds - Best Long-Term**
 - Deposit to at least $250 to qualify for INVESTOR tier naturally
 - ✅ Best option for sustainable trading success
 
-### For Accounts $100-$249
+### For User Accounts $100-$249
 
 **Recommended:** Use auto-detection (SAVER tier)
 ```bash
-# Leave MASTER_ACCOUNT_TIER commented out
+# Leave MASTER_ACCOUNT_TIER commented out for user accounts
 ```
 - Balanced risk management (7-10%)
 - Trade sizes $15-$40
 - 2 concurrent positions allowed
 
-### For Accounts $250+
+### For User Accounts $250+
 
 **Recommended:** Use auto-detection
 - System will automatically assign appropriate tier

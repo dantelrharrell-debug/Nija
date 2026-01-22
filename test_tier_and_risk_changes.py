@@ -26,31 +26,42 @@ def test_tier_override():
     
     balance = 62.49
     
-    # Test without override
-    print(f"\n📊 Without override (balance: ${balance:.2f}):")
-    tier_default = get_tier_from_balance(balance)
+    # Test without override (user account)
+    print(f"\n📊 User account without override (balance: ${balance:.2f}):")
+    tier_default = get_tier_from_balance(balance, is_master=False)
     config_default = get_tier_config(tier_default)
     print(f"  ├─ Tier: {tier_default.value}")
     print(f"  ├─ Risk range: {config_default.risk_per_trade_pct[0]:.0f}%-{config_default.risk_per_trade_pct[1]:.0f}%")
     print(f"  └─ Trade size: ${config_default.trade_size_min:.2f}-${config_default.trade_size_max:.2f}")
     
     assert tier_default == TradingTier.STARTER, f"Expected STARTER, got {tier_default.value}"
-    print("  ✅ Correctly assigned STARTER tier")
+    print("  ✅ Correctly assigned STARTER tier for user account")
     
-    # Test with INVESTOR override
-    print(f"\n📊 With INVESTOR override (balance: ${balance:.2f}):")
-    os.environ['MASTER_ACCOUNT_TIER'] = 'INVESTOR'
+    # Test master account (should ALWAYS be BALLER)
+    print(f"\n📊 Master account (balance: ${balance:.2f}):")
+    tier_master = get_tier_from_balance(balance, is_master=True)
+    config_master = get_tier_config(tier_master)
+    print(f"  ├─ Tier: {tier_master.value}")
+    print(f"  ├─ Risk range: {config_master.risk_per_trade_pct[0]:.0f}%-{config_master.risk_per_trade_pct[1]:.0f}%")
+    print(f"  └─ Trade size: ${config_master.trade_size_min:.2f}-${config_master.trade_size_max:.2f}")
+    
+    assert tier_master == TradingTier.BALLER, f"Expected BALLER for master, got {tier_master.value}"
+    print("  ✅ Master account correctly forced to BALLER tier")
+    
+    # Test with BALLER override via env var
+    print(f"\n📊 With BALLER override via env var (balance: ${balance:.2f}):")
+    os.environ['MASTER_ACCOUNT_TIER'] = 'BALLER'
     tier_override = get_tier_from_balance(balance)
     config_override = get_tier_config(tier_override)
     print(f"  ├─ Tier: {tier_override.value}")
     print(f"  ├─ Risk range: {config_override.risk_per_trade_pct[0]:.0f}%-{config_override.risk_per_trade_pct[1]:.0f}%")
     print(f"  └─ Trade size: ${config_override.trade_size_min:.2f}-${config_override.trade_size_max:.2f}")
     
-    assert tier_override == TradingTier.INVESTOR, f"Expected INVESTOR, got {tier_override.value}"
-    print("  ✅ Successfully overridden to INVESTOR tier")
+    assert tier_override == TradingTier.BALLER, f"Expected BALLER, got {tier_override.value}"
+    print("  ✅ Successfully overridden to BALLER tier")
     
-    # Clean up
-    del os.environ['MASTER_ACCOUNT_TIER']
+    # Clean up - safely remove env var
+    os.environ.pop('MASTER_ACCOUNT_TIER', None)
     
     return True
 
@@ -122,38 +133,39 @@ def test_trade_size_calculations():
 
 
 def test_investor_tier_benefits():
-    """Show the benefits of INVESTOR tier vs STARTER tier."""
+    """Show the benefits of BALLER tier for master account."""
     print("\n" + "="*70)
-    print("TEST 4: INVESTOR Tier Benefits")
+    print("TEST 4: Master Account BALLER Tier Benefits")
     print("="*70)
     
     balance = 62.49
     
-    # STARTER tier (default for $62.49)
+    # STARTER tier (user account)
     starter_config = get_tier_config(TradingTier.STARTER)
-    print(f"\n📊 STARTER tier (auto-detected for ${balance:.2f}):")
+    print(f"\n📊 STARTER tier (user account, ${balance:.2f}):")
     print(f"  ├─ Risk range: {starter_config.risk_per_trade_pct[0]:.0f}%-{starter_config.risk_per_trade_pct[1]:.0f}%")
     print(f"  ├─ Trade size: ${starter_config.trade_size_min:.2f}-${starter_config.trade_size_max:.2f}")
     print(f"  └─ Max positions: {starter_config.max_positions}")
     
-    # INVESTOR tier (override)
-    investor_config = get_tier_config(TradingTier.INVESTOR)
-    print(f"\n📊 INVESTOR tier (override):")
-    print(f"  ├─ Risk range: {investor_config.risk_per_trade_pct[0]:.0f}%-{investor_config.risk_per_trade_pct[1]:.0f}%")
-    print(f"  ├─ Trade size: ${investor_config.trade_size_min:.2f}-${investor_config.trade_size_max:.2f}")
-    print(f"  └─ Max positions: {investor_config.max_positions}")
+    # BALLER tier (master account)
+    baller_config = get_tier_config(TradingTier.BALLER)
+    print(f"\n📊 BALLER tier (MASTER account, ${balance:.2f}):")
+    print(f"  ├─ Risk range: {baller_config.risk_per_trade_pct[0]:.0f}%-{baller_config.risk_per_trade_pct[1]:.0f}%")
+    print(f"  ├─ Trade size: ${baller_config.trade_size_min:.2f}-${baller_config.trade_size_max:.2f}")
+    print(f"  └─ Max positions: {baller_config.max_positions}")
     
-    print(f"\n📊 Key differences (INVESTOR vs STARTER):")
-    print(f"  ✅ Lower max risk: {investor_config.risk_per_trade_pct[1]:.0f}% vs {starter_config.risk_per_trade_pct[1]:.0f}%")
-    print(f"  ✅ Higher min trade: ${investor_config.trade_size_min:.2f} vs ${starter_config.trade_size_min:.2f}")
-    print(f"  ✅ More positions: {investor_config.max_positions} vs {starter_config.max_positions}")
+    print(f"\n📊 Key improvements with BALLER tier (master account):")
+    print(f"  ✅ Much lower max risk: {baller_config.risk_per_trade_pct[1]:.0f}% vs {starter_config.risk_per_trade_pct[1]:.0f}%")
+    print(f"  ✅ Higher min trade: ${baller_config.trade_size_min:.2f} vs ${starter_config.trade_size_min:.2f}")
+    print(f"  ✅ More positions: {baller_config.max_positions} vs {starter_config.max_positions}")
     
-    print(f"\n⚠️  WARNING for ${balance:.2f} balance:")
+    print(f"\n⚠️  Important for ${balance:.2f} master account balance:")
     max_with_15_pct = balance * 0.15
-    print(f"  • 15% cap limits trades to ${max_with_15_pct:.2f}")
-    print(f"  • INVESTOR tier minimum is ${investor_config.trade_size_min:.2f}")
-    print(f"  • This configuration would BLOCK ALL TRADES (${max_with_15_pct:.2f} < ${investor_config.trade_size_min:.2f})")
-    print(f"  • Use STARTER tier for balances under $250")
+    print(f"  • 15% global cap limits trades to ${max_with_15_pct:.2f}")
+    print(f"  • BALLER tier minimum is ${baller_config.trade_size_min:.2f}")
+    print(f"  • Actual trades will be limited by 15% cap (${max_with_15_pct:.2f})")
+    print(f"  • Master account still gets best risk parameters (1-2% tier guidelines)")
+    print(f"  ✅ This is the REQUIRED configuration for master account")
     
     return True
 
@@ -164,14 +176,14 @@ def main():
     print("TESTING: Tier Override and Risk Manager Changes")
     print("="*70)
     print("\nRequirements:")
-    print("  1. Increase master account tier to INVESTOR")
+    print("  1. Master account ALWAYS at BALLER tier (never lower)")
     print("  2. Reduce max trade size to ≤15% of balance")
     
     tests = [
-        ("Tier Override", test_tier_override),
+        ("Tier Override & Master BALLER", test_tier_override),
         ("Risk Manager Max Position", test_risk_manager_max_position),
         ("Trade Size Calculations", test_trade_size_calculations),
-        ("INVESTOR Tier Benefits", test_investor_tier_benefits),
+        ("Master Account BALLER Benefits", test_investor_tier_benefits),
     ]
     
     results = []
@@ -204,17 +216,17 @@ def main():
     if passed == total:
         print("\n✅ All tests passed!")
         print("\n📝 Configuration instructions:")
-        print("  For accounts with balance ≥ $250, add to .env file:")
-        print("  MASTER_ACCOUNT_TIER=INVESTOR")
-        print("\n  ⚠️  WARNING: DO NOT use INVESTOR tier override for accounts under $250")
-        print("  • 15% of $62.49 = $9.37 (max trade size)")
-        print("  • INVESTOR tier minimum = $20")
-        print("  • This would BLOCK ALL TRADES")
-        print("\n  ✅ For accounts under $250, use auto-detection (STARTER tier)")
-        print("\n  Benefits with appropriate tier:")
-        print("  • Proper risk management aligned with account size")
-        print("  • Max trade size capped at 15% of balance")
-        print("  • Trade sizes that can actually execute")
+        print("  For MASTER account, add to .env file:")
+        print("  MASTER_ACCOUNT_TIER=BALLER")
+        print("\n  ⚠️  CRITICAL: Master account is ALWAYS BALLER tier")
+        print("  • Best risk management parameters (1-2% tier guidelines)")
+        print("  • 15% max trade size cap still applies globally")
+        print("  • For $62.49 balance: max trade = $9.37 (15% cap)")
+        print("\n  ✅ For user accounts, use auto-detection based on balance")
+        print("\n  Benefits:")
+        print("  • Master: BALLER tier with 15% cap for safety")
+        print("  • Users: Appropriate tier for their account size")
+        print("  • All accounts: Max 15% per trade (global protection)")
         return 0
     else:
         print("\n❌ Some tests failed")
