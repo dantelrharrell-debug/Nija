@@ -397,9 +397,12 @@ class TradingStrategy:
         self.candle_cache = {}           # {symbol: (timestamp, candles_data)}
         self.CANDLE_CACHE_TTL = 150      # Cache candles for 2.5 minutes (one cycle)
         
-        # Initialize advanced trading features (progressive targets, exchange profiles, capital allocation)
+        # Initialize advanced trading features placeholder
+        # NOTE: Advanced modules will be initialized AFTER first live balance fetch
+        # and only if LIVE_CAPITAL_VERIFIED=true is set (see below after broker connections)
         self.advanced_manager = None
-        self._init_advanced_features()
+        self.rotation_manager = None
+        self.pro_mode_enabled = False
         
         # Initialize credential health monitoring to detect credential loss
         # This helps diagnose recurring disconnection issues
@@ -744,6 +747,12 @@ class TradingStrategy:
                     logger.info(f"💰 LIVE CAPITAL SYNC COMPLETE: ${total_capital:.2f}")
                     logger.info(f"   Active exchanges: {', '.join(active_exchanges)}")
                     logger.info("=" * 70)
+                    
+                    # Initialize advanced trading features AFTER first live balance fetch
+                    # This ensures advanced modules have access to real capital data
+                    # Gated by LIVE_CAPITAL_VERIFIED environment variable
+                    logger.info("🔧 Initializing advanced trading modules with live capital...")
+                    self._init_advanced_features()
                     
                     # FIX #3: Hard fail if capital below minimum (non-negotiable)
                     if total_capital < MINIMUM_TRADING_BALANCE:
@@ -1112,7 +1121,32 @@ class TradingStrategy:
         This is optional and will gracefully degrade if modules are not available.
         
         Also initializes PRO MODE rotation manager if enabled.
+        
+        CRITICAL: This method is gated by LIVE_CAPITAL_VERIFIED environment variable.
+        Advanced modules are only initialized if LIVE_CAPITAL_VERIFIED=true is set.
         """
+        # CRITICAL SAFETY: Check LIVE_CAPITAL_VERIFIED first
+        # This is the MASTER safety switch that must be explicitly enabled
+        # to allow advanced trading features with real capital.
+        live_capital_verified_str = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower().strip()
+        live_capital_verified = live_capital_verified_str in ['true', '1', 'yes', 'enabled']
+        
+        if not live_capital_verified:
+            logger.info("=" * 70)
+            logger.info("🔒 LIVE CAPITAL VERIFIED: FALSE")
+            logger.info("   Advanced trading modules initialization SKIPPED")
+            logger.info("   To enable advanced features, set LIVE_CAPITAL_VERIFIED=true in .env")
+            logger.info("=" * 70)
+            self.rotation_manager = None
+            self.pro_mode_enabled = False
+            self.advanced_manager = None
+            return
+        
+        logger.info("=" * 70)
+        logger.info("🔓 LIVE CAPITAL VERIFIED: TRUE")
+        logger.info("   Initializing advanced trading modules...")
+        logger.info("=" * 70)
+        
         # Initialize PRO MODE rotation manager
         pro_mode_enabled = os.getenv('PRO_MODE', 'false').lower() in ('true', '1', 'yes')
         min_free_reserve_pct = float(os.getenv('PRO_MODE_MIN_RESERVE_PCT', '0.15'))
