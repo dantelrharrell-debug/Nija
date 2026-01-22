@@ -7302,10 +7302,10 @@ class BrokerManager:
         """
         Select the primary master broker with intelligent fallback logic.
         
-        CRITICAL FIX: Promote Kraken to primary when Coinbase is in exit_only mode.
+        CRITICAL FIX: Promote Kraken to primary when Coinbase is in exit_only mode or has insufficient balance.
         
         Priority rules:
-        1. If current primary is in exit_only mode, promote Kraken (if available and not exit_only)
+        1. If current primary is in exit_only mode or balance < MINIMUM_TRADING_BALANCE, promote Kraken
         2. Otherwise, keep current primary broker
         
         This ensures the master portfolio uses the correct broker for new entries.
@@ -7314,12 +7314,28 @@ class BrokerManager:
             logger.warning("⚠️ No primary broker set - cannot select primary master")
             return
         
-        # Check if current primary is in exit_only mode
-        # Note: exit_only_mode is defined in BaseBroker, so all brokers have this attribute
+        current_primary = self.active_broker.broker_type.value.upper()
+        
+        # Check if current primary is in exit_only mode OR has insufficient balance
+        should_promote_kraken = False
+        promotion_reason = ""
+        
         if self.active_broker.exit_only_mode:
-            current_primary = self.active_broker.broker_type.value
+            should_promote_kraken = True
+            promotion_reason = f"{current_primary} EXIT-ONLY"
             logger.info(f"🔍 Current primary broker ({current_primary}) is in EXIT_ONLY mode")
-            
+        else:
+            # Also check balance to determine if we should promote Kraken
+            try:
+                balance = self.active_broker.get_account_balance()
+                if balance < MINIMUM_TRADING_BALANCE:
+                    should_promote_kraken = True
+                    promotion_reason = f"{current_primary} balance (${balance:.2f}) < minimum (${MINIMUM_TRADING_BALANCE:.2f})"
+                    logger.info(f"🔍 Current primary broker ({current_primary}) has insufficient balance: ${balance:.2f} < ${MINIMUM_TRADING_BALANCE:.2f}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not check balance for {current_primary}: {e}")
+        
+        if should_promote_kraken:
             # Try to promote Kraken
             if BrokerType.KRAKEN in self.brokers:
                 kraken = self.brokers[BrokerType.KRAKEN]
@@ -7327,17 +7343,17 @@ class BrokerManager:
                     logger.info("=" * 70)
                     logger.info("🔄 PROMOTING KRAKEN TO PRIMARY MASTER BROKER")
                     logger.info("=" * 70)
-                    logger.info(f"   Reason: {current_primary} is in EXIT_ONLY mode")
+                    logger.info(f"   Reason: {promotion_reason}")
                     logger.info("   Kraken will handle new entries for master portfolio")
                     logger.info("=" * 70)
                     self.set_primary_broker(BrokerType.KRAKEN)
                     return
                 else:
-                    logger.warning(f"⚠️ Kraken broker not available for promotion (connected={kraken.connected})")
+                    logger.warning(f"⚠️ Kraken broker not available for promotion (connected={kraken.connected}, exit_only={getattr(kraken, 'exit_only_mode', 'unknown')})")
             else:
                 logger.warning("⚠️ Kraken broker not configured - cannot promote")
         else:
-            logger.debug(f"✅ Primary broker ({self.active_broker.broker_type.value}) is ready for entries")
+            logger.debug(f"✅ Primary broker ({current_primary}) is ready for entries")
     
     def connect_all(self):
         """Connect to all configured brokers"""
