@@ -36,6 +36,18 @@ except ImportError:
     from multi_account_broker_manager import multi_account_broker_manager
     from broker_manager import BrokerType, BaseBroker
 
+# ✅ FIX: Import Kraken adapter for symbol normalization
+try:
+    from bot.kraken_adapter import normalize_symbol, is_dust_position, DUST_THRESHOLD_USD
+except ImportError:
+    try:
+        from kraken_adapter import normalize_symbol, is_dust_position, DUST_THRESHOLD_USD
+    except ImportError:
+        # Fallback: no normalization
+        normalize_symbol = None
+        is_dust_position = None
+        DUST_THRESHOLD_USD = 1.00
+
 
 @dataclass
 class CopyTradeResult:
@@ -388,14 +400,40 @@ class CopyTradeEngine:
                 size_type=signal.size_type
             )
             
+            # ✅ FIX: Normalize symbol for broker if needed
+            normalized_symbol = signal.symbol
+            if normalize_symbol and signal.broker.lower() == 'kraken':
+                normalized_symbol = normalize_symbol(signal.symbol, 'kraken')
+                if normalized_symbol != signal.symbol:
+                    logger.info(f"      Symbol normalized: {signal.symbol} → {normalized_symbol}")
+            
             logger.info(f"      Calculated Size: {user_size_rounded} ({signal.size_type})")
             logger.info(f"      Scale Factor: {scale_factor:.4f} ({scale_factor*100:.2f}%)")
+            
+            # ✅ FIX (MANDATORY): Check if position size is dust (< $1.00 USD)
+            # Skip copy trade if the calculated size is below dust threshold
+            # Note: For base currency (e.g., BTC), broker validation will catch dust positions
+            # since we cannot determine USD value without current price here
+            if signal.size_type == 'quote':  # USD value
+                position_usd_value = user_size_rounded
+                
+                if is_dust_position and is_dust_position(position_usd_value):
+                    error_msg = f"Position size ${position_usd_value:.4f} below dust threshold ${DUST_THRESHOLD_USD}"
+                    logger.warning(f"      ⚠️  Skipping dust position: {error_msg}")
+                    return CopyTradeResult(
+                        user_id=user_id,
+                        success=False,
+                        order_id=None,
+                        error_message=error_msg,
+                        size=user_size_rounded,
+                        size_type=signal.size_type
+                    )
             
             # Place order on user's exchange
             logger.info(f"      📤 Placing {signal.side.upper()} order...")
             
             order_result = user_broker.execute_order(
-                symbol=signal.symbol,
+                symbol=normalized_symbol,  # Use normalized symbol
                 side=signal.side,
                 quantity=user_size_rounded,
                 size_type=signal.size_type

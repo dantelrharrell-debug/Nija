@@ -78,6 +78,28 @@ except ImportError:
         get_kraken_symbol_mapper = None
         convert_to_kraken = None
 
+# Import Kraken adapter for symbol normalization and position reconciliation
+try:
+    from bot.kraken_adapter import (
+        normalize_kraken_symbol, is_dust_position, should_track_position,
+        get_kraken_reconciler, reconcile_kraken_position_after_failed_exit,
+        DUST_THRESHOLD_USD
+    )
+except ImportError:
+    try:
+        from kraken_adapter import (
+            normalize_kraken_symbol, is_dust_position, should_track_position,
+            get_kraken_reconciler, reconcile_kraken_position_after_failed_exit,
+            DUST_THRESHOLD_USD
+        )
+    except ImportError:
+        normalize_kraken_symbol = None
+        is_dust_position = None
+        should_track_position = None
+        get_kraken_reconciler = None
+        reconcile_kraken_position_after_failed_exit = None
+        DUST_THRESHOLD_USD = 1.00
+
 # Import global Kraken nonce manager (FINAL FIX)
 try:
     from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock
@@ -147,8 +169,10 @@ logger = logging.getLogger("nija.broker")
 KRAKEN_MIN_ORDER_COST = 7.00  # USD (increased from $5.00 for safety buffer)
 
 # ✅ REQUIREMENT 3: DUST EXCLUSION - Positions below this value are IGNORED COMPLETELY
-# Consistent with position_cap_enforcer.DUST_THRESHOLD_USD
-MIN_POSITION_USD = 1.00  # USD value threshold for dust positions
+# ✅ FIX (MANDATORY): Dust threshold for position tracking
+# Consistent with position_cap_enforcer.DUST_THRESHOLD_USD and kraken_adapter.DUST_THRESHOLD_USD
+# Use the imported DUST_THRESHOLD_USD if available, otherwise fallback to 1.00
+MIN_POSITION_USD = DUST_THRESHOLD_USD  # USD value threshold for dust positions
 
 
 
@@ -835,14 +859,19 @@ class KrakenBrokerAdapter(BrokerInterface):
         Convert a symbol to Kraken format.
         
         Helper method to ensure consistent symbol conversion across all methods.
+        Uses the centralized kraken_adapter module for normalization.
         
         Args:
             symbol: Symbol in various formats (BTC-USD, ETH/USDT, etc.)
             
         Returns:
-            Kraken-formatted symbol (XBTUSD, ETHUSDT, etc.)
+            Kraken-formatted symbol (BTCUSD, ETHUSD, etc.)
         """
-        # Use symbol mapper if available
+        # ✅ FIX (MANDATORY): Use centralized Kraken symbol normalization
+        if normalize_kraken_symbol:
+            return normalize_kraken_symbol(symbol)
+        
+        # Fallback: Use symbol mapper if available
         if convert_to_kraken:
             kraken_symbol = convert_to_kraken(symbol)
             if kraken_symbol:
@@ -852,10 +881,7 @@ class KrakenBrokerAdapter(BrokerInterface):
         # Remove separators and uppercase
         kraken_symbol = symbol.replace('-', '').replace('/', '').upper()
         
-        # BTC -> XBT conversion (Kraken's special naming)
-        if kraken_symbol.startswith('BTC'):
-            kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
-        
+        # Modern Kraken API uses BTC (not XBT) for Bitcoin pairs
         return kraken_symbol
     
     def _validate_kraken_order(self, symbol: str, side: str, size: float, 
@@ -1306,6 +1332,14 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.error(f"   Side: {side}, Size: {size}")
             logger.error(f"   Traceback: {traceback.format_exc()}")
             
+            # ✅ FIX (STRONGLY RECOMMENDED): Reconcile position on failed exit
+            if side.lower() == 'sell':
+                logger.warning(f"⚠️  Failed SELL order detected - triggering position reconciliation")
+                try:
+                    self.reconcile_position_after_failed_exit(symbol, size)
+                except Exception as reconcile_err:
+                    logger.error(f"❌ Position reconciliation error: {reconcile_err}")
+            
             return {
                 'order_id': None,
                 'symbol': symbol,
@@ -1527,6 +1561,14 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.error(f"   Side: {side}, Size: {size}, Price: ${price}")
             logger.error(f"   Traceback: {traceback.format_exc()}")
             
+            # ✅ FIX (STRONGLY RECOMMENDED): Reconcile position on failed exit
+            if side.lower() == 'sell':
+                logger.warning(f"⚠️  Failed SELL limit order detected - triggering position reconciliation")
+                try:
+                    self.reconcile_position_after_failed_exit(symbol, size)
+                except Exception as reconcile_err:
+                    logger.error(f"❌ Position reconciliation error: {reconcile_err}")
+            
             return {
                 'order_id': None,
                 'symbol': symbol,
@@ -1650,9 +1692,9 @@ class KrakenBrokerAdapter(BrokerInterface):
                         
                         usd_value = balance_val * current_price if current_price > 0 else 0
                         
-                        # ✅ REQUIREMENT 3: DUST EXCLUSION - If usd_value < MIN_POSITION_USD, IGNORE COMPLETELY
-                        if usd_value > 0 and usd_value < MIN_POSITION_USD:
-                            logger.info(f"   🗑️  Excluding dust position: {symbol} (${usd_value:.4f} < ${MIN_POSITION_USD})")
+                        # ✅ FIX (MANDATORY): DUST EXCLUSION - If usd_value < DUST_THRESHOLD_USD, IGNORE COMPLETELY
+                        if is_dust_position and is_dust_position(usd_value):
+                            logger.info(f"   🗑️  Excluding dust position: {symbol} (${usd_value:.4f} < ${DUST_THRESHOLD_USD})")
                             continue
                         
                         # ✅ FIX: If price is zero, skip position (cannot value it)
@@ -1763,6 +1805,110 @@ class KrakenBrokerAdapter(BrokerInterface):
         except Exception as e:
             logger.debug(f"Error fetching real entry price for {symbol}: {e}")
             return None
+    
+    def refresh_positions_from_exchange(self) -> List[Dict]:
+        """
+        ✅ FIX (STRONGLY RECOMMENDED): Refresh positions from Kraken exchange.
+        
+        This method forces a refresh of positions directly from the exchange API,
+        ensuring internal state matches reality. Used after failed exits to prevent
+        phantom positions.
+        
+        Returns:
+            List of actual positions from Kraken exchange
+        """
+        logger.info("🔄 Refreshing positions from Kraken exchange...")
+        
+        try:
+            # Use get_open_positions which already implements dust filtering
+            positions = self.get_open_positions()
+            
+            logger.info(f"✅ Refreshed {len(positions)} positions from Kraken")
+            for pos in positions:
+                logger.info(f"   • {pos['symbol']}: {pos['size']:.8f} @ ${pos.get('current_price', 0):.2f}")
+            
+            return positions
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to refresh positions from Kraken: {e}")
+            return []
+    
+    def reconcile_position_after_failed_exit(self, symbol: str, attempted_size: float) -> bool:
+        """
+        ✅ FIX (STRONGLY RECOMMENDED): Reconcile position after failed exit attempt.
+        
+        After any failed exit, force reconciliation to prevent:
+        - Phantom positions (internal state says position exists, but it doesn't)
+        - Position cap pollution (counting positions that don't exist)
+        - Endless cleanup attempts (trying to exit non-existent positions)
+        
+        Args:
+            symbol: Symbol that failed to exit
+            attempted_size: Size that was attempted to exit
+            
+        Returns:
+            True if reconciliation successful, False otherwise
+        """
+        logger.warning(f"🔄 Reconciling position after failed exit: {symbol}")
+        logger.warning(f"   Attempted to exit: {attempted_size}")
+        
+        try:
+            # Use kraken_adapter reconciliation if available
+            if reconcile_kraken_position_after_failed_exit:
+                return reconcile_kraken_position_after_failed_exit(
+                    symbol, attempted_size, broker_adapter=self
+                )
+            
+            # Fallback: Simple position refresh
+            positions = self.refresh_positions_from_exchange()
+            
+            # Check if position still exists
+            position_exists = any(p.get('symbol') == symbol for p in positions)
+            
+            if position_exists:
+                logger.warning(f"   ⚠️  Position still exists after failed exit: {symbol}")
+            else:
+                logger.info(f"   ✅ Position no longer exists: {symbol}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Position reconciliation failed for {symbol}: {e}")
+            return False
+    
+    def filter_dust_positions(self, positions: List[Dict]) -> List[Dict]:
+        """
+        ✅ FIX (MANDATORY): Filter out dust positions below $1.00 USD value.
+        
+        This prevents dust positions from:
+        - Polluting position cap count
+        - Triggering endless cleanup attempts
+        - Appearing in position tracking
+        
+        Args:
+            positions: List of positions
+            
+        Returns:
+            Filtered list without dust positions
+        """
+        filtered = []
+        dust_count = 0
+        
+        for pos in positions:
+            usd_value = pos.get('usd_value', 0.0)
+            
+            # Use is_dust_position from kraken_adapter if available
+            if is_dust_position and is_dust_position(usd_value):
+                dust_count += 1
+                symbol = pos.get('symbol', 'UNKNOWN')
+                logger.debug(f"   🗑️  Filtering dust position: {symbol} (${usd_value:.4f})")
+            else:
+                filtered.append(pos)
+        
+        if dust_count > 0:
+            logger.info(f"🧹 Filtered {dust_count} dust positions (< ${DUST_THRESHOLD_USD:.2f})")
+        
+        return filtered
 
 
 
