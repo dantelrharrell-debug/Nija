@@ -1101,7 +1101,7 @@ class TradingStrategy:
         3. Account balance meets minimum threshold
         
         Args:
-            broker: Broker instance to check
+            broker: Broker instance to check (uses duck typing to avoid circular imports)
             
         Returns:
             tuple: (is_eligible: bool, reason: str)
@@ -1129,7 +1129,7 @@ class TradingStrategy:
         except Exception as e:
             return False, f"{self._get_broker_name(broker).upper()} balance check failed: {e}"
     
-    def _select_entry_broker(self, all_brokers: Dict) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
+    def _select_entry_broker(self, all_brokers: Dict[BrokerType, object]) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
         """
         Select the best broker for new entry (BUY) orders based on priority.
         
