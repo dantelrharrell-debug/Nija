@@ -138,6 +138,10 @@ except ImportError:
 
 logger = logging.getLogger("nija.broker")
 
+# ✅ REQUIREMENT 2: KRAKEN MINIMUM ORDER COST
+# Kraken's actual minimum order cost for any trade
+KRAKEN_MIN_ORDER_COST = 5.00  # USD
+
 # ✅ REQUIREMENT 3: DUST EXCLUSION - Positions below this value are IGNORED COMPLETELY
 # Consistent with position_cap_enforcer.DUST_THRESHOLD_USD
 MIN_POSITION_USD = 1.00  # USD value threshold for dust positions
@@ -891,16 +895,16 @@ class KrakenBrokerAdapter(BrokerInterface):
         else:
             order_size_usd = size  # Assume it's in USD if we can't calculate
         
-        # Kraken minimum order size - import from broker adapter if available
+        # Kraken minimum order size - use module constant or fallback
         if BrokerAdapterFactory:
             try:
-                # Get minimum from KrakenAdapter
+                # Get minimum from KrakenAdapter if it differs from our constant
                 from bot.broker_adapters import KrakenAdapter
                 KRAKEN_MIN_ORDER_USD = KrakenAdapter.MIN_VOLUME_DEFAULT
             except (ImportError, AttributeError):
-                KRAKEN_MIN_ORDER_USD = 5.0  # Fallback - Kraken's actual minimum
+                KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant
         else:
-            KRAKEN_MIN_ORDER_USD = 5.0  # Fallback - Kraken's actual minimum
+            KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant
         
         if order_size_usd < KRAKEN_MIN_ORDER_USD:
             return (False, kraken_symbol, 
@@ -1048,9 +1052,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 current_price = 0.0
             
             # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
-            # ✅ REQUIREMENT 2B: Check minimum order cost ($5.00 USD minimum)
-            KRAKEN_MIN_ORDER_COST = 5.00  # Kraken's actual minimum order cost
-            
+            # ✅ REQUIREMENT 2B: Check minimum order cost before AddOrder
             if current_price > 0:
                 # Calculate order cost in USD
                 if size_type == 'quote':
@@ -1347,8 +1349,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Calculate USD size for validation (limit orders use price)
             order_size_usd = size * price if size_type == 'base' else size
             
-            # ✅ REQUIREMENT 2B: Check minimum order cost ($5.00 USD minimum)
-            KRAKEN_MIN_ORDER_COST = 5.00  # Kraken's actual minimum order cost
+            # ✅ REQUIREMENT 2B: Check minimum order cost before AddOrder
             if order_size_usd < KRAKEN_MIN_ORDER_COST:
                 logger.error("=" * 70)
                 logger.error("❌ Kraken order blocked: Below minimum order cost")
