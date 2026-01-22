@@ -28,7 +28,9 @@ from tier_config import (
     TIER_CONFIGS, 
     get_tier_from_balance,
     get_tier_config,
-    validate_trade_size
+    validate_trade_size,
+    get_min_trade_size,
+    get_max_trade_size
 )
 from position_sizer import MIN_POSITION_USD, calculate_user_position_size
 from fee_aware_config import (
@@ -84,20 +86,25 @@ def calculate_fees(trade_size: float, use_limit_order: bool = True) -> Dict[str,
 
 
 def calculate_safe_trade_size(balance: float, tier: TradingTier = None, 
-                              use_limit_order: bool = True) -> Dict:
+                              use_limit_order: bool = True, is_master: bool = False) -> Dict:
     """
     Calculate the exact safe trade size for a given balance and tier.
+    
+    MASTER ACCOUNT MODE:
+    When is_master=True with BALLER tier, applies flexible limits for low balances.
+    This allows master to maintain control even with small funded accounts.
     
     Args:
         balance: Account balance in USD
         tier: TradingTier enum (if None, auto-detect from balance)
         use_limit_order: True for limit orders (lower fees)
+        is_master: True if this is the master account (gets BALLER flexibility)
     
     Returns:
         Dictionary with complete calculation breakdown
     """
     # Determine actual tier from balance
-    actual_tier = get_tier_from_balance(balance)
+    actual_tier = get_tier_from_balance(balance, is_master=is_master)
     
     # Use specified tier or actual tier
     if tier is None:
@@ -120,9 +127,9 @@ def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
     fee_aware_pct = get_position_size_pct(balance)
     fee_aware_size = balance * fee_aware_pct
     
-    # Tier-based size limits
-    tier_min = tier_config.trade_size_min
-    tier_max = tier_config.trade_size_max
+    # Tier-based size limits (with master account flexibility)
+    tier_min = get_min_trade_size(tier, balance, is_master)
+    tier_max = get_max_trade_size(tier, balance, is_master)
     
     # Position sizer minimum
     position_sizer_min = MIN_POSITION_USD
@@ -151,8 +158,8 @@ def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
     if suggested_size > balance:
         suggested_size = balance
     
-    # Validate against tier
-    is_valid, validation_reason = validate_trade_size(suggested_size, tier, balance)
+    # Validate against tier (with master account support)
+    is_valid, validation_reason = validate_trade_size(suggested_size, tier, balance, is_master)
     
     # Calculate fees for this trade size
     fees = calculate_fees(suggested_size, use_limit_order)
@@ -172,6 +179,7 @@ def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
         'tier': tier.value,
         'actual_tier': actual_tier.value,
         'tier_match': tier == actual_tier,
+        'is_master': is_master,
         
         # Trade size calculations
         'fee_aware_pct': fee_aware_pct * 100,
@@ -261,6 +269,8 @@ def print_calculation_report(result: Dict) -> None:
     print(f"\n💰 ACCOUNT INFORMATION:")
     print(f"   Balance: ${result['balance']:.2f}")
     print(f"   Current Tier: {result['tier']}")
+    if result.get('is_master'):
+        print(f"   Account Type: 🎯 MASTER (Full Control)")
     print(f"   Appropriate Tier: {result['actual_tier']}")
     print(f"   Tier Match: {'✅ YES' if result['tier_match'] else '⚠️  NO (Manual Override)'}")
     
@@ -336,6 +346,8 @@ Examples:
                        help='Account balance in USD')
     parser.add_argument('--tier', type=str, choices=['STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER'],
                        help='Trading tier (default: auto-detect from balance)')
+    parser.add_argument('--master', action='store_true',
+                       help='Enable master account mode (BALLER tier with flexible limits at low balances)')
     parser.add_argument('--market-order', action='store_true',
                        help='Use market order fees (0.6%%) instead of limit order fees (0.4%%)')
     
@@ -350,7 +362,8 @@ Examples:
     result = calculate_safe_trade_size(
         balance=args.balance,
         tier=tier,
-        use_limit_order=not args.market_order
+        use_limit_order=not args.market_order,
+        is_master=args.master
     )
     
     # Print report

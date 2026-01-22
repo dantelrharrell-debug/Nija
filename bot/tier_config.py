@@ -235,34 +235,64 @@ def get_tier_config(tier: TradingTier) -> TierConfig:
     return TIER_CONFIGS[tier]
 
 
-def get_min_trade_size(tier: TradingTier, balance: float) -> float:
-    """
-    Get minimum trade size for a tier based on balance.
-    
-    Args:
-        tier: Trading tier
-        balance: Account balance
-    
-    Returns:
-        Minimum trade size in USD
-    """
-    config = get_tier_config(tier)
-    return config.trade_size_min
-
-
-def get_max_trade_size(tier: TradingTier, balance: float) -> float:
+def get_max_trade_size(tier: TradingTier, balance: float, is_master: bool = False) -> float:
     """
     Get maximum trade size for a tier based on balance.
     
+    MASTER ACCOUNT OVERRIDE:
+    Master accounts with BALLER tier get flexible maximums at low balances.
+    
     Args:
         tier: Trading tier
         balance: Account balance
+        is_master: If True, applies master account rules
     
     Returns:
         Maximum trade size in USD
     """
     config = get_tier_config(tier)
+    
+    # MASTER BALLER tier with low balance: use dynamic maximums
+    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+        if balance < 100.0:
+            flexible_max = balance * 0.50  # 50% max for very small balances
+        elif balance < 1000.0:
+            flexible_max = balance * 0.40  # 40% max for small balances
+        else:
+            flexible_max = balance * 0.25  # 25% max for larger balances
+        return min(flexible_max, config.trade_size_max)
+    
     return config.trade_size_max
+
+
+def get_min_trade_size(tier: TradingTier, balance: float, is_master: bool = False) -> float:
+    """
+    Get minimum trade size for a tier based on balance.
+    
+    MASTER ACCOUNT OVERRIDE:
+    Master accounts with BALLER tier get flexible minimums at low balances.
+    
+    Args:
+        tier: Trading tier
+        balance: Account balance
+        is_master: If True, applies master account rules
+    
+    Returns:
+        Minimum trade size in USD
+    """
+    config = get_tier_config(tier)
+    
+    # MASTER BALLER tier with low balance: use dynamic minimums
+    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+        if balance < 100.0:
+            flexible_min = max(balance * 0.15, 2.0)  # 15% min or $2
+        elif balance < 1000.0:
+            flexible_min = balance * 0.10  # 10% min
+        else:
+            flexible_min = balance * 0.05  # 5% min
+        return min(flexible_min, config.trade_size_min)
+    
+    return config.trade_size_min
 
 
 def get_min_visible_size(tier: TradingTier) -> float:
@@ -368,30 +398,72 @@ def get_tier_summary() -> Dict[str, Dict]:
     return summary
 
 
-def validate_trade_size(trade_size: float, tier: TradingTier, balance: float) -> Tuple[bool, str]:
+def validate_trade_size(trade_size: float, tier: TradingTier, balance: float, 
+                       is_master: bool = False) -> Tuple[bool, str]:
     """
     Validate if a trade size is appropriate for the tier.
+    
+    MASTER ACCOUNT OVERRIDE:
+    Master accounts using BALLER tier can trade with lower minimums when balance is low.
+    This allows master to maintain full control even with small funded accounts.
     
     Args:
         trade_size: Proposed trade size in USD
         tier: Trading tier
         balance: Account balance
+        is_master: If True, applies master account flexibility rules
     
     Returns:
         Tuple of (is_valid, reason)
     """
     config = get_tier_config(tier)
     
-    if trade_size < config.trade_size_min:
-        return (False, f"Trade size ${trade_size:.2f} below tier minimum ${config.trade_size_min:.2f}")
-    
-    if trade_size > config.trade_size_max:
-        return (False, f"Trade size ${trade_size:.2f} exceeds tier maximum ${config.trade_size_max:.2f}")
+    # MASTER ACCOUNT SPECIAL HANDLING FOR BALLER TIER
+    # If master account with BALLER tier and low balance, use dynamic minimums
+    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+        # For master accounts under $25k, use flexible minimums based on balance
+        # This keeps master in full control while ensuring safety
+        
+        # At low balances, allow 15-50% position sizing for master control
+        if balance < 100.0:
+            # Very small balances: 15-50% range
+            effective_min = max(balance * 0.15, 2.0)  # 15% min or $2
+            effective_max = balance * 0.50  # 50% max
+        elif balance < 1000.0:
+            # Small balances: 10-40% range  
+            effective_min = balance * 0.10  # 10% min
+            effective_max = balance * 0.40  # 40% max
+        else:
+            # Larger balances approaching tier minimum: 5-25% range
+            effective_min = balance * 0.05  # 5% min
+            effective_max = balance * 0.25  # 25% max
+        
+        # Ensure we don't exceed tier absolute maximums
+        effective_max = min(effective_max, config.trade_size_max)
+        
+        logger.info(f"🎯 MASTER BALLER tier with low balance (${balance:.2f})")
+        logger.info(f"   Adjusted limits: ${effective_min:.2f} - ${effective_max:.2f}")
+        
+        if trade_size < effective_min:
+            return (False, f"Trade size ${trade_size:.2f} below minimum ${effective_min:.2f}")
+        
+        if trade_size > effective_max:
+            return (False, f"Trade size ${trade_size:.2f} exceeds maximum ${effective_max:.2f}")
+    else:
+        # Standard tier validation for non-master or properly funded accounts
+        if trade_size < config.trade_size_min:
+            return (False, f"Trade size ${trade_size:.2f} below tier minimum ${config.trade_size_min:.2f}")
+        
+        if trade_size > config.trade_size_max:
+            return (False, f"Trade size ${trade_size:.2f} exceeds tier maximum ${config.trade_size_max:.2f}")
     
     # Check if trade size is reasonable relative to balance
+    # For master with low balance, allow up to 25% risk (more flexible)
+    max_risk_pct = 25.0 if (is_master and balance < 1000.0) else config.risk_per_trade_pct[1]
+    
     risk_pct = (trade_size / balance) * 100 if balance > 0 else 0
-    if risk_pct > config.risk_per_trade_pct[1]:
-        return (False, f"Trade size {risk_pct:.1f}% of balance exceeds tier max risk {config.risk_per_trade_pct[1]:.1f}%")
+    if risk_pct > max_risk_pct:
+        return (False, f"Trade size {risk_pct:.1f}% of balance exceeds max risk {max_risk_pct:.1f}%")
     
     return (True, "valid")
 
