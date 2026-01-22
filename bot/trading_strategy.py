@@ -3333,6 +3333,13 @@ class TradingStrategy:
                     logger.info(f"      📊 Market filter: {filter_stats['market_filter']}")
                     logger.info(f"      🚫 No entry signal: {filter_stats['no_entry_signal']}")
                     logger.info(f"      💵 Position too small: {filter_stats['position_too_small']}")
+                    
+                    # EXPLICIT: Log waiting status when no signals found
+                    if filter_stats['signals_found'] == 0:
+                        logger.info("")
+                        logger.info("   ⏳ WAITING FOR MASTER ENTRY")
+                        logger.info("   → No qualifying signals found in this cycle")
+                        logger.info("   → Will continue monitoring markets...")
                 
                 except Exception as e:
                     logger.error(f"Error during market scan: {e}", exc_info=True)
