@@ -613,33 +613,6 @@ class ExecutionEngine:
             if position.get(exit_flag, False):
                 continue
             
-            # Check if gross profit threshold reached
-            if gross_profit_pct >= gross_threshold:
-                # Mark as executed
-                position[exit_flag] = True
-                
-                # Calculate exit size
-                position_size = position.get('size', 0)
-                exit_size = position_size * exit_pct
-                
-                # Log the profit-taking opportunity
-                logger.info(f"💰 STEPPED PROFIT EXIT TRIGGERED: {symbol}")
-                logger.info(f"   Gross profit: {gross_profit_pct*100:.1f}% | Net profit: {net_profit_pct*100:.1f}%")
-                logger.info(f"   Exit level: {exit_flag} | Exit size: {exit_pct*100:.0f}% of position")
-                logger.info(f"   Current price: ${current_price:.2f} | Entry: ${entry_price:.2f}")
-                
-                return {
-                    'exit_size': exit_size,
-                    'exit_pct': exit_pct,
-                    'profit_level': exit_flag,
-                    'gross_profit_pct': gross_profit_pct,
-                    'net_profit_pct': net_profit_pct,
-                    'current_price': current_price,
-                    'entry_price': entry_price
-                }
-            if position.get(exit_flag, False):
-                continue
-            
             # Check if GROSS profit target hit (net will be profitable)
             if gross_profit_pct >= gross_threshold:
                 # Mark as executed
@@ -651,12 +624,14 @@ class ExecutionEngine:
                 # Calculate expected NET profit for this exit
                 expected_net_pct = gross_threshold - DEFAULT_ROUND_TRIP_FEE
                 
-                logger.info(f"✅ FEE-AWARE profit exit triggered: {symbol} {side}")
-                logger.info(f"  Gross profit: {gross_profit_pct*100:.2f}% ≥ {gross_threshold*100:.1f}% threshold")
-                logger.info(f"  Est. fees: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%")
-                logger.info(f"  NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
-                logger.info(f"  Exiting: {exit_pct*100:.0f}% of position (${exit_size:.2f})")
-                logger.info(f"  Remaining: {(position['remaining_size'] * (1.0 - exit_pct))*100:.0f}% for trailing stop")
+                logger.info(f"💰 STEPPED PROFIT EXIT TRIGGERED: {symbol}")
+                logger.info(f"   Gross profit: {gross_profit_pct*100:.1f}% | Net profit: {net_profit_pct*100:.1f}%")
+                logger.info(f"   Exit level: {exit_flag} | Exit size: {exit_pct*100:.0f}% of position")
+                logger.info(f"   Current price: ${current_price:.2f} | Entry: ${entry_price:.2f}")
+                logger.info(f"   Est. fees: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%")
+                logger.info(f"   NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
+                logger.info(f"   Exiting: {exit_pct*100:.0f}% of position (${exit_size:.2f})")
+                logger.info(f"   Remaining: {(position['remaining_size'] * (1.0 - exit_pct))*100:.0f}% for trailing stop")
                 
                 # Update position
                 position['remaining_size'] *= (1.0 - exit_pct)
@@ -666,7 +641,9 @@ class ExecutionEngine:
                     'profit_level': f"{gross_threshold*100:.1f}%",
                     'exit_pct': exit_pct,
                     'gross_profit_pct': gross_profit_pct,
-                    'net_profit_pct': expected_net_pct
+                    'net_profit_pct': expected_net_pct,
+                    'current_price': current_price,
+                    'entry_price': entry_price
                 }
         
         return None
