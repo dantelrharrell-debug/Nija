@@ -16,6 +16,7 @@ Version: 4.0 (OFFICIAL FUNDING TIERS - 6 TIERS)
 Date: January 22, 2026
 """
 
+import os
 from enum import Enum
 from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
@@ -139,9 +140,58 @@ class StablecoinPolicy(Enum):
 DEFAULT_STABLECOIN_POLICY = StablecoinPolicy.ROUTE_TO_KRAKEN
 
 
-def get_tier_from_balance(balance: float) -> TradingTier:
+def get_tier_from_balance(balance: float, override_tier: str = None, is_master: bool = False) -> TradingTier:
     """
     Determine trading tier based on account balance.
+    
+    IMPORTANT: Master account is ALWAYS BALLER tier regardless of balance.
+    
+    Can be overridden by setting MASTER_ACCOUNT_TIER environment variable.
+    This is useful for small accounts that need higher tier risk management.
+    
+    Args:
+        balance: Account balance in USD
+        override_tier: Optional tier name to force (e.g., "INVESTOR")
+        is_master: If True, forces BALLER tier (master account always uses BALLER)
+    
+    Returns:
+        TradingTier enum
+    """
+    # CRITICAL: Master account is ALWAYS BALLER tier
+    if is_master:
+        logger.info(f"🎯 Master account: Using BALLER tier (balance: ${balance:.2f})")
+        logger.info(f"   Note: Master account always uses BALLER tier regardless of balance")
+        return TradingTier.BALLER
+    
+    # Check for environment variable override first
+    env_tier = override_tier or os.getenv('MASTER_ACCOUNT_TIER', '').upper()
+    if env_tier:
+        # Special handling: If set to "BALLER" or "MASTER", force BALLER tier
+        if env_tier in ('BALLER', 'MASTER'):
+            logger.info(f"🎯 Tier override: Using BALLER tier (balance: ${balance:.2f})")
+            return TradingTier.BALLER
+        
+        # Validate tier name before attempting to use it
+        valid_tiers = [tier.name for tier in TradingTier]
+        if env_tier not in valid_tiers:
+            logger.warning(f"⚠️ Invalid MASTER_ACCOUNT_TIER: {env_tier}. Valid options: {', '.join(valid_tiers)}")
+            logger.warning(f"   Using balance-based tier instead.")
+        else:
+            try:
+                forced_tier = TradingTier[env_tier]
+                logger.info(f"🎯 Tier override active: Using {env_tier} tier (balance: ${balance:.2f})")
+                logger.info(f"   Note: Balance-based tier would be {get_tier_from_balance_internal(balance).value}")
+                return forced_tier
+            except KeyError:
+                # Should not happen due to validation above, but keep for safety
+                logger.warning(f"⚠️ Failed to apply tier override: {env_tier}. Using balance-based tier.")
+    
+    return get_tier_from_balance_internal(balance)
+
+
+def get_tier_from_balance_internal(balance: float) -> TradingTier:
+    """
+    Internal function to determine trading tier based on account balance only.
     
     Args:
         balance: Account balance in USD
