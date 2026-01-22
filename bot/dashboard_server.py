@@ -176,6 +176,54 @@ def health_check():
     return "OK", 200
 
 
+@app.route('/api/live_capital_status')
+def get_live_capital_status():
+    """
+    Get LIVE CAPITAL VERIFIED status.
+    
+    This endpoint returns the current status of the LIVE CAPITAL VERIFIED
+    kill-switch, which is the master safety control that must be enabled
+    for live trading.
+    
+    Returns:
+        JSON with verification status and details
+    """
+    try:
+        if not get_hard_controls:
+            return jsonify({
+                'error': 'Hard controls not available',
+                'live_capital_verified': False,
+                'can_trade': False,
+                'status': 'error'
+            }), 503
+        
+        hard_controls = get_hard_controls()
+        status = hard_controls.get_verification_status()
+        
+        # Add human-readable status
+        if status['live_capital_verified']:
+            status['status'] = 'LIVE TRADING ENABLED'
+            status['status_class'] = 'danger'
+            status['icon'] = '🔴'
+            status['message'] = 'REAL MONEY TRADING IS ACTIVE'
+        else:
+            status['status'] = 'SAFE MODE (Trading Disabled)'
+            status['status_class'] = 'success'
+            status['icon'] = '🟢'
+            status['message'] = 'Live trading is disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable.'
+        
+        return jsonify(status)
+    
+    except Exception as e:
+        logger.error(f"Error getting live capital status: {e}")
+        return jsonify({
+            'error': str(e),
+            'live_capital_verified': False,
+            'can_trade': False,
+            'status': 'error'
+        }), 500
+
+
 @app.route('/api/users', methods=['GET'])
 def list_users():
     """List all users with basic stats."""
