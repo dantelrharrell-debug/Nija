@@ -1731,6 +1731,34 @@ class TradingStrategy:
             
             # CRITICAL: Check if new entries are blocked
             current_positions = active_broker.get_positions() if active_broker else []
+            
+            # CRITICAL FIX: Filter out unsellable positions (dust, unsupported symbols)
+            # These positions can't be traded so they shouldn't count toward position cap
+            # This prevents dust positions from blocking new entries
+            # Note: After timeout expires (24h), positions will be included and retry attempted
+            if current_positions and hasattr(self, 'unsellable_positions'):
+                tradable_positions = []
+                for pos in current_positions:
+                    symbol = pos.get('symbol')
+                    if symbol and symbol in self.unsellable_positions:
+                        # Check if the unsellable timeout is still active (position still marked as unsellable)
+                        # When timeout expires, position will be included in count and exit will be retried
+                        # (in case position grew above minimum or API error was temporary)
+                        marked_time = self.unsellable_positions[symbol]
+                        time_since_marked = time.time() - marked_time
+                        if time_since_marked < self.unsellable_retry_timeout:
+                            # Timeout hasn't passed yet - exclude from count
+                            logger.debug(f"   Excluding {symbol} from position count (marked unsellable {time_since_marked/3600:.1f}h ago)")
+                            continue  # Skip this position - don't count it
+                    tradable_positions.append(pos)
+                
+                # Log if we filtered any positions
+                filtered_count = len(current_positions) - len(tradable_positions)
+                if filtered_count > 0:
+                    logger.info(f"   ℹ️  Filtered {filtered_count} unsellable position(s) from count (dust or unsupported)")
+                
+                current_positions = tradable_positions
+            
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
             

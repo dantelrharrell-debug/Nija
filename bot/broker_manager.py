@@ -622,12 +622,14 @@ class BaseBroker(ABC):
             quote = symbol_upper.split('.')[-1]
         else:
             # No separator - try to detect common patterns
+            # CRITICAL: Check longer patterns first to avoid false matches
+            # Check USDT/USDC first (4 chars), then BUSD (4 chars), then USD (3 chars)
             if symbol_upper.endswith('USDT'):
                 quote = 'USDT'
-            elif symbol_upper.endswith('BUSD'):
-                quote = 'BUSD'
             elif symbol_upper.endswith('USDC'):
                 quote = 'USDC'
+            elif symbol_upper.endswith('BUSD'):
+                quote = 'BUSD'
             elif symbol_upper.endswith('USD'):
                 quote = 'USD'
         
@@ -6649,8 +6651,16 @@ class KrakenBroker(BaseBroker):
                     if currency == 'XBT':
                         currency = 'BTC'
                     
-                    # Create symbol (e.g., BTCUSD)
-                    symbol = f'{currency}USD'
+                    # CRITICAL FIX: Create symbol with dash separator to avoid ambiguity
+                    # This prevents ARBUSD being misinterpreted as ARB-BUSD instead of ARB-USD
+                    # Always use dash separator for Kraken symbols: ARB-USD, ETH-USD, etc.
+                    symbol = f'{currency}-USD'
+                    
+                    # CRITICAL FIX: Filter out unsupported symbols before adding to positions
+                    # This prevents orphaned positions from unsupported pairs (e.g., BUSD-based)
+                    if not self.supports_symbol(symbol):
+                        logger.debug(f"⏭️ Skipping unsupported position: {symbol} (balance: {balance_val} {currency})")
+                        continue
                     
                     positions.append({
                         'symbol': symbol,
