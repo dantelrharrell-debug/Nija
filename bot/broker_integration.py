@@ -873,13 +873,11 @@ class KrakenBrokerAdapter(BrokerInterface):
             if kraken_symbol:
                 return kraken_symbol
         
-        # Final fallback: Manual conversion
+        # Fallback: Manual conversion
         # Remove separators and uppercase
         kraken_symbol = symbol.replace('-', '').replace('/', '').upper()
         
-        # BTC -> XBT conversion (Kraken's legacy naming - not used in modern API)
-        # Modern Kraken API uses BTC, so we skip this conversion
-        
+        # Modern Kraken API uses BTC (not XBT) for Bitcoin pairs
         return kraken_symbol
     
     def _validate_kraken_order(self, symbol: str, side: str, size: float, 
@@ -1696,12 +1694,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                         usd_value = balance_val * current_price if current_price > 0 else 0
                         
                         # ✅ FIX (MANDATORY): DUST EXCLUSION - If usd_value < DUST_THRESHOLD_USD, IGNORE COMPLETELY
-                        # Use is_dust_position from kraken_adapter if available
                         if is_dust_position and is_dust_position(usd_value):
-                            logger.info(f"   🗑️  Excluding dust position: {symbol} (${usd_value:.4f} < ${DUST_THRESHOLD_USD})")
-                            continue
-                        elif usd_value > 0 and usd_value < DUST_THRESHOLD_USD:
-                            # Fallback check
                             logger.info(f"   🗑️  Excluding dust position: {symbol} (${usd_value:.4f} < ${DUST_THRESHOLD_USD})")
                             continue
                         
@@ -1905,13 +1898,8 @@ class KrakenBrokerAdapter(BrokerInterface):
         for pos in positions:
             usd_value = pos.get('usd_value', 0.0)
             
-            # Use kraken_adapter if available
+            # Use is_dust_position from kraken_adapter if available
             if is_dust_position and is_dust_position(usd_value):
-                dust_count += 1
-                symbol = pos.get('symbol', 'UNKNOWN')
-                logger.debug(f"   🗑️  Filtering dust position: {symbol} (${usd_value:.4f})")
-            elif usd_value < DUST_THRESHOLD_USD:
-                # Fallback check
                 dust_count += 1
                 symbol = pos.get('symbol', 'UNKNOWN')
                 logger.debug(f"   🗑️  Filtering dust position: {symbol} (${usd_value:.4f})")

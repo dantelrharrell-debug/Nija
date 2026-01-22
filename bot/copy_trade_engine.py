@@ -412,24 +412,22 @@ class CopyTradeEngine:
             
             # ✅ FIX (MANDATORY): Check if position size is dust (< $1.00 USD)
             # Skip copy trade if the calculated size is below dust threshold
+            # Note: For base currency (e.g., BTC), broker validation will catch dust positions
+            # since we cannot determine USD value without current price here
             if signal.size_type == 'quote':  # USD value
                 position_usd_value = user_size_rounded
-            else:
-                # For base currency, we'd need price to calculate USD value
-                # For now, assume broker validation will catch this
-                position_usd_value = user_size_rounded
-            
-            if is_dust_position and is_dust_position(position_usd_value):
-                error_msg = f"Position size ${position_usd_value:.4f} below dust threshold ${DUST_THRESHOLD_USD}"
-                logger.warning(f"      ⚠️  Skipping dust position: {error_msg}")
-                return CopyTradeResult(
-                    user_id=user_id,
-                    success=False,
-                    order_id=None,
-                    error_message=error_msg,
-                    size=user_size_rounded,
-                    size_type=signal.size_type
-                )
+                
+                if is_dust_position and is_dust_position(position_usd_value):
+                    error_msg = f"Position size ${position_usd_value:.4f} below dust threshold ${DUST_THRESHOLD_USD}"
+                    logger.warning(f"      ⚠️  Skipping dust position: {error_msg}")
+                    return CopyTradeResult(
+                        user_id=user_id,
+                        success=False,
+                        order_id=None,
+                        error_message=error_msg,
+                        size=user_size_rounded,
+                        size_type=signal.size_type
+                    )
             
             # Place order on user's exchange
             logger.info(f"      📤 Placing {signal.side.upper()} order...")
