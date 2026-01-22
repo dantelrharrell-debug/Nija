@@ -1615,6 +1615,17 @@ class CoinbaseBroker(BaseBroker):
                     # Try to get held amount if available in the response
                     held_val = getattr(pos, 'hold_fiat', None) if not isinstance(pos, dict) else pos.get('hold_fiat')
                     
+                    # CRITICAL FIX: For crypto assets, we need BASE quantity (not fiat value) to properly handle sells
+                    # Get available_to_trade (base crypto amount) instead of just the fiat value
+                    base_available = None
+                    base_held = None
+                    if isinstance(pos, dict):
+                        base_available = pos.get('available_to_trade') or pos.get('available_to_trade_base')
+                        base_held = pos.get('hold') or pos.get('hold_base')
+                    else:
+                        base_available = getattr(pos, 'available_to_trade', None) or getattr(pos, 'available_to_trade_base', None)
+                        base_held = getattr(pos, 'hold', None) or getattr(pos, 'hold_base', None)
+                    
                     try:
                         available = float(available_val or 0)
                     except Exception:
@@ -1624,6 +1635,16 @@ class CoinbaseBroker(BaseBroker):
                         held = float(held_val or 0)
                     except Exception:
                         held = 0.0
+                    
+                    try:
+                        base_avail_qty = float(base_available or 0)
+                    except Exception:
+                        base_avail_qty = 0.0
+                    
+                    try:
+                        base_held_qty = float(base_held or 0)
+                    except Exception:
+                        base_held_qty = 0.0
 
                     if asset == 'USD':
                         usd_balance += available
@@ -1632,7 +1653,16 @@ class CoinbaseBroker(BaseBroker):
                         usdc_balance += available
                         usdc_held += held
                     elif asset:
-                        crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + available
+                        # CRITICAL FIX: Store TOTAL crypto quantity (available + held in base units)
+                        # This ensures sells can find the full position, not just what's "available to trade"
+                        if base_avail_qty > 0 or base_held_qty > 0:
+                            # Use base crypto quantity (e.g., BNB amount, not USD value)
+                            crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + base_avail_qty + base_held_qty
+                            if base_held_qty > 0:
+                                logging.debug(f"   {asset}: available={base_avail_qty:.8f}, held={base_held_qty:.8f}, total={base_avail_qty + base_held_qty:.8f}")
+                        else:
+                            # Fallback: if base quantities not available, calculate from fiat values
+                            crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + available
 
                 trading_balance = usd_balance + usdc_balance
                 total_held = usd_held + usdc_held
@@ -1770,14 +1800,22 @@ class CoinbaseBroker(BaseBroker):
                             consumer_usd += available
                         else:
                             consumer_usdc += available
-                elif currency and available > 0:
+                elif currency and (available > 0 or hold > 0):
                     # Track non-cash crypto holdings ONLY if tradeable via API
                     # Consumer wallet positions cannot be traded and will cause INSUFFICIENT_FUND errors
                     if is_tradeable:
-                        crypto_holdings[currency] = available
-                        logging.info(
-                            f"   ✅ 🪙 {currency}: {available} (type={account_type}, platform={platform})"
-                        )
+                        # CRITICAL FIX: Include HELD crypto, not just available
+                        # This ensures sells can see the full position (available + held in orders/positions)
+                        total_crypto = available + hold
+                        crypto_holdings[currency] = total_crypto
+                        if hold > 0:
+                            logging.info(
+                                f"   ✅ 🪙 {currency}: available={available:.8f}, held={hold:.8f}, total={total_crypto:.8f} (type={account_type}, platform={platform})"
+                            )
+                        else:
+                            logging.info(
+                                f"   ✅ 🪙 {currency}: {available:.8f} (type={account_type}, platform={platform})"
+                            )
                     else:
                         # Log consumer wallet holdings separately but don't add to crypto_holdings
                         logging.info(
@@ -2680,30 +2718,11 @@ class CoinbaseBroker(BaseBroker):
                             holdings = (balance_snapshot or {}).get('crypto', {}) or {}
                             available_base = float(holdings.get(base_currency, 0.0))
 
-                            try:
-                                # RATE LIMIT FIX: Wrap get_accounts with retry logic to prevent 429 errors
-                                accounts = self._api_call_with_retry(self.client.get_accounts)
-                                hold_amount = 0.0
-                                for a in accounts:
-                                    if isinstance(a, dict):
-                                        currency = a.get('currency')
-                                        hd = (a.get('hold') or {}).get('value')
-                                    else:
-                                        currency = getattr(a, 'currency', None)
-                                        hd = getattr(getattr(a, 'hold', None), 'value', None)
-                                    if currency == base_currency and hd is not None:
-                                        try:
-                                            hold_amount = float(hd)
-                                        except Exception:
-                                            hold_amount = 0.0
-                                        break
-                                if hold_amount > 0:
-                                    available_base = max(0.0, available_base - hold_amount)
-                                    logger.info(f"   Adjusted for holds: {hold_amount:.8f} {base_currency} held → usable {available_base:.8f}")
-                            except Exception as hold_err:
-                                logger.warning(f"⚠️ Could not read holds for {base_currency}: {hold_err}")
-
-                            logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} available")
+                            # NOTE: available_base now includes BOTH available AND held crypto
+                            # (fixed in _get_account_balance_detailed to prevent INSUFFICIENT_FUND errors)
+                            # No need to adjust for holds separately - they're already included
+                            
+                            logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} total (available+held)")
                             logger.info(f"   Tracked position size: {quantity:.8f} {base_currency}")
                             
                             # FIX 2: SELL MUST IGNORE CASH BALANCE
@@ -2750,10 +2769,10 @@ class CoinbaseBroker(BaseBroker):
                             if available_base < quantity:
                                 diff = quantity - available_base
                                 logger.warning(
-                                    f"⚠️ Balance mismatch: tracked {quantity:.8f} but only {available_base:.8f} available"
+                                    f"⚠️ Balance mismatch: tracked {quantity:.8f} but only {available_base:.8f} total (available+held)"
                                 )
                                 logger.warning(f"   Difference: {diff:.8f} {base_currency} (likely from partial fills or fees)")
-                                logger.warning(f"   SOLUTION: Adjusting sell size to actual available balance")
+                                logger.warning(f"   SOLUTION: Adjusting sell size to actual total balance")
                                 quantity = available_base
                         except Exception as bal_err:
                             logger.warning(f"⚠️ Could not pre-check balance for {base_currency}: {bal_err}")
