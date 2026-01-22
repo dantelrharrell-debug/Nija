@@ -21,9 +21,28 @@ logger = logging.getLogger('nija.position_sizer')
 
 # Minimum position sizes (exchange-specific)
 # These prevent creating dust positions that can't be sold
-# Updated Jan 21, 2026: Lowered to $2.00 to allow smaller trades (from $5.00)
-# Position size must be >= $2.00 for trades to execute
-MIN_POSITION_USD = 2.0  # Minimum $2 USD value for any position
+# Updated Jan 22, 2026: Added exchange-specific minimums
+
+# KRAKEN: $10 minimum trade + fees
+# With ~0.4% maker fee (limit orders), we need $10.04+ to have $10 after entry fee
+# With ~0.6% taker fee (market orders), we need $10.06+ to have $10 after entry fee
+# Conservative: use $10.50 to ensure we're always above $10 after fees
+KRAKEN_MIN_TRADE_USD = 10.50  # $10 Kraken minimum + fee buffer
+
+# COINBASE: Lower minimums, use $2 general minimum
+COINBASE_MIN_TRADE_USD = 2.0
+
+# Default minimum for other exchanges
+MIN_POSITION_USD = 2.0  # Minimum $2 USD value for any position (default)
+
+# Exchange-specific minimums (with fee buffers)
+EXCHANGE_MIN_TRADE_USD = {
+    'kraken': KRAKEN_MIN_TRADE_USD,      # $10.50 (accounts for Kraken $10 min + fees)
+    'coinbase': COINBASE_MIN_TRADE_USD,  # $2.00
+    'okx': 1.0,                          # OKX has very low minimums
+    'binance': 10.0,                     # Binance also has ~$10 minimums
+}
+
 MIN_BASE_SIZES = {
     # Coinbase minimums (approximate - updated Jan 2026)
     # NOTE: USD values in comments are examples at Jan 2026 prices and will change
@@ -34,6 +53,20 @@ MIN_BASE_SIZES = {
     'ADA': 1.0,      # Example: ~$0.50 at $0.50 ADA
     'DOGE': 1.0,     # Example: ~$0.10 at $0.10 DOGE
 }
+
+
+def get_exchange_min_trade_size(exchange: str = 'coinbase') -> float:
+    """
+    Get minimum trade size for a specific exchange (with fee buffer included).
+    
+    Args:
+        exchange: Exchange name (kraken, coinbase, okx, binance, etc.)
+    
+    Returns:
+        Minimum trade size in USD (includes fee buffer)
+    """
+    exchange_lower = exchange.lower()
+    return EXCHANGE_MIN_TRADE_USD.get(exchange_lower, MIN_POSITION_USD)
 
 
 def calculate_user_position_size(
