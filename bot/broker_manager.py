@@ -220,6 +220,11 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
 # Logging constants
 LOG_SEPARATOR = "=" * 70
 
+# First trade tracking flag (for legal/operational protection)
+# This flag ensures the "FIRST LIVE TRADE" banner is displayed only once per bot session
+_FIRST_TRADE_EXECUTED = False
+_FIRST_TRADE_LOCK = threading.Lock()
+
 
 # ============================================================================
 # BROKER-AWARE SYMBOL NORMALIZATION (FIX #1 - Jan 19, 2026)
@@ -3106,9 +3111,30 @@ class CoinbaseBroker(BaseBroker):
             # Enhanced trade confirmation logging with account identification
             account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "MASTER"
             
-            logger.info("=" * 70)
+            # FIRST LIVE TRADE BANNER (for legal/operational protection)
+            global _FIRST_TRADE_EXECUTED
+            with _FIRST_TRADE_LOCK:
+                if not _FIRST_TRADE_EXECUTED:
+                    _FIRST_TRADE_EXECUTED = True
+                    logger.info("")
+                    logger.info(LOG_SEPARATOR)
+                    logger.info("🚨 FIRST LIVE TRADE EXECUTED 🚨")
+                    logger.info(LOG_SEPARATOR)
+                    logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+                    logger.info(f"   Symbol: {symbol}")
+                    logger.info(f"   Size: {quantity} ({size_type})")
+                    logger.info(f"   Account: {account_label}")
+                    logger.info(f"   Side: {side.upper()}")
+                    logger.info(f"   Exchange: Coinbase")
+                    logger.info("")
+                    logger.info("   This confirms live trading is operational.")
+                    logger.info("   All subsequent trades will be logged normally.")
+                    logger.info(LOG_SEPARATOR)
+                    logger.info("")
+            
+            logger.info(LOG_SEPARATOR)
             logger.info(f"✅ TRADE CONFIRMATION - {account_label}")
-            logger.info("=" * 70)
+            logger.info(LOG_SEPARATOR)
             logger.info(f"   Exchange: Coinbase")
             logger.info(f"   Order Type: {side.upper()}")
             logger.info(f"   Symbol: {symbol}")
@@ -3116,7 +3142,7 @@ class CoinbaseBroker(BaseBroker):
             logger.info(f"   Size Type: {size_type}")
             logger.info(f"   Account: {account_label}")
             logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
-            logger.info("=" * 70)
+            logger.info(LOG_SEPARATOR)
             
             # Flush logs immediately to ensure confirmation is visible
             if _root_logger.handlers:
@@ -3942,9 +3968,30 @@ class AlpacaBroker(BaseBroker):
             # Enhanced trade confirmation logging with account identification
             account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "MASTER"
             
-            logger.info("=" * 70)
+            # FIRST LIVE TRADE BANNER (for legal/operational protection)
+            global _FIRST_TRADE_EXECUTED
+            with _FIRST_TRADE_LOCK:
+                if not _FIRST_TRADE_EXECUTED:
+                    _FIRST_TRADE_EXECUTED = True
+                    logger.info("")
+                    logger.info(LOG_SEPARATOR)
+                    logger.info("🚨 FIRST LIVE TRADE EXECUTED 🚨")
+                    logger.info(LOG_SEPARATOR)
+                    logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+                    logger.info(f"   Symbol: {symbol}")
+                    logger.info(f"   Size: {quantity} (shares)")
+                    logger.info(f"   Account: {account_label}")
+                    logger.info(f"   Side: {side.upper()}")
+                    logger.info(f"   Exchange: Alpaca (Stocks)")
+                    logger.info("")
+                    logger.info("   This confirms live trading is operational.")
+                    logger.info("   All subsequent trades will be logged normally.")
+                    logger.info(LOG_SEPARATOR)
+                    logger.info("")
+            
+            logger.info(LOG_SEPARATOR)
             logger.info(f"✅ TRADE CONFIRMATION - {account_label}")
-            logger.info("=" * 70)
+            logger.info(LOG_SEPARATOR)
             logger.info(f"   Exchange: Alpaca (Stocks)")
             logger.info(f"   Order Type: {side.upper()}")
             logger.info(f"   Symbol: {symbol}")
@@ -3952,7 +3999,7 @@ class AlpacaBroker(BaseBroker):
             logger.info(f"   Order ID: {order.id if hasattr(order, 'id') else 'N/A'}")
             logger.info(f"   Account: {account_label}")
             logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
-            logger.info("=" * 70)
+            logger.info(LOG_SEPARATOR)
             
             # Flush logs immediately to ensure confirmation is visible
             if _root_logger.handlers:
@@ -6368,6 +6415,27 @@ class KrakenBroker(BaseBroker):
                 
                 # Enhanced trade confirmation logging with account identification
                 account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "UNKNOWN"
+                
+                # FIRST LIVE TRADE BANNER (for legal/operational protection)
+                global _FIRST_TRADE_EXECUTED
+                with _FIRST_TRADE_LOCK:
+                    if not _FIRST_TRADE_EXECUTED:
+                        _FIRST_TRADE_EXECUTED = True
+                        logging.info("")
+                        logging.info(LOG_SEPARATOR)
+                        logging.info("🚨 FIRST LIVE TRADE EXECUTED 🚨")
+                        logging.info(LOG_SEPARATOR)
+                        logging.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+                        logging.info(f"   Symbol: {kraken_symbol}")
+                        logging.info(f"   Size: {quantity} (base currency)")
+                        logging.info(f"   Account: {account_label}")
+                        logging.info(f"   Side: {order_type.upper()}")
+                        logging.info(f"   Exchange: Kraken")
+                        logging.info("")
+                        logging.info("   This confirms live trading is operational.")
+                        logging.info("   All subsequent trades will be logged normally.")
+                        logging.info(LOG_SEPARATOR)
+                        logging.info("")
                 
                 logging.info(LOG_SEPARATOR)
                 logging.info(f"✅ TRADE CONFIRMATION - {account_label}")

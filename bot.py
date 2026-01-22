@@ -435,6 +435,52 @@ def main():
         else:
             logger.warning("   ⚠️  Multi-account manager not available - skipping balance audit")
         
+        # STARTUP BALANCE CONFIRMATION - Display live capital for legal/operational protection
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info("💰 LIVE CAPITAL CONFIRMED:")
+        logger.info("=" * 70)
+        if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
+            try:
+                manager = strategy.multi_account_manager
+                
+                # Get all balances
+                all_balances = manager.get_all_balances()
+                
+                # Master account total
+                master_total = sum(all_balances.get('master', {}).values())
+                logger.info(f"   Master: ${master_total:,.2f}")
+                
+                # User accounts - specifically Daivon and Tania
+                users_balances = all_balances.get('users', {})
+                
+                # Find Daivon's balance
+                daivon_total = 0.0
+                for user_id, balances in users_balances.items():
+                    if 'daivon' in user_id.lower():
+                        daivon_total = sum(balances.values())
+                        break
+                logger.info(f"   Daivon: ${daivon_total:,.2f}")
+                
+                # Find Tania's balance
+                tania_total = 0.0
+                for user_id, balances in users_balances.items():
+                    if 'tania' in user_id.lower():
+                        tania_total = sum(balances.values())
+                        break
+                logger.info(f"   Tania: ${tania_total:,.2f}")
+                
+                # Show grand total
+                grand_total = master_total + daivon_total + tania_total
+                logger.info("")
+                logger.info(f"   🏦 TOTAL CAPITAL UNDER MANAGEMENT: ${grand_total:,.2f}")
+            except Exception as e:
+                logger.error(f"   ⚠️  Error fetching balances: {e}")
+                logger.error("   ⚠️  Continuing with startup - balances will be shown in trade logs")
+        else:
+            logger.warning("   ⚠️  Multi-account manager not available - cannot confirm balances")
+        logger.info("=" * 70)
+        
         # Start copy trade engine in ACTIVE MODE for user accounts
         # ACTIVE MODE means:
         # - Track balances and positions
