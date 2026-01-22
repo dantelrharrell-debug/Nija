@@ -43,10 +43,10 @@ logger = logging.getLogger("nija")
 # Import BrokerType and AccountType at module level for use throughout the class
 # These are needed in _register_kraken_for_retry and other methods outside __init__
 try:
-    from broker_manager import BrokerType, AccountType
+    from broker_manager import BrokerType, AccountType, MINIMUM_TRADING_BALANCE
 except ImportError:
     try:
-        from bot.broker_manager import BrokerType, AccountType
+        from bot.broker_manager import BrokerType, AccountType, MINIMUM_TRADING_BALANCE
     except ImportError:
         # If broker_manager is not available, define placeholder enums
         # This allows the module to load even if broker_manager is missing
@@ -67,6 +67,9 @@ except ImportError:
         class AccountType(Enum):
             MASTER = "master"
             USER = "user"
+        
+        # Also need MINIMUM_TRADING_BALANCE fallback
+        MINIMUM_TRADING_BALANCE = 25.0  # Default minimum
 
 # FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
 # XRP-USD is PERMANENTLY DISABLED due to negative profitability
@@ -702,19 +705,14 @@ class TradingStrategy:
                 logger.info("=" * 70)
                 
                 # FIX #2: Force capital re-hydration after broker connections
-                # Sum all exchange balances and update capital allocator + portfolio manager
-                total_capital = 0.0
-                active_exchanges = []
+                # Use the already-calculated master_balance from above (avoids duplication)
+                total_capital = master_balance
                 
-                # Sum balances from all connected exchanges
+                # Build list of active exchanges for logging
+                active_exchanges = []
                 for broker_type, broker in self.multi_account_manager.master_brokers.items():
                     if broker and broker.connected:
-                        try:
-                            balance = broker.get_balance() if hasattr(broker, 'get_balance') else broker.get_account_balance()
-                            total_capital += balance
-                            active_exchanges.append(broker_type.value)
-                        except Exception as e:
-                            logger.warning(f"   ⚠️ Could not fetch balance from {broker_type.value}: {e}")
+                        active_exchanges.append(broker_type.value)
                 
                 # Update capital allocator with live total
                 if self.advanced_manager and total_capital > 0:
@@ -748,9 +746,6 @@ class TradingStrategy:
                     logger.info("=" * 70)
                     
                     # FIX #3: Hard fail if capital below minimum (non-negotiable)
-                    # Import MINIMUM_TRADING_BALANCE from broker_manager
-                    from broker_manager import MINIMUM_TRADING_BALANCE
-                    
                     if total_capital < MINIMUM_TRADING_BALANCE:
                         logger.error("=" * 70)
                         logger.error("❌ FATAL: Capital below minimum — trading disabled")
