@@ -161,6 +161,20 @@ class ExecutionEngine:
                     logger.error("=" * 70)
                     return None
                 
+                # ✅ REQUIREMENT: Confirm status=open or closed
+                # BLOCK ledger writes until order status is confirmed
+                order_status = result.get('status', '')
+                if order_status not in ['open', 'closed', 'filled', 'pending']:
+                    logger.error("=" * 70)
+                    logger.error("❌ INVALID ORDER STATUS - CANNOT RECORD POSITION")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {symbol}, Side: {side}")
+                    logger.error(f"   Order ID: {order_id}")
+                    logger.error(f"   Status: {order_status} (expected: open/closed/filled)")
+                    logger.error("   ⚠️  Order status must be confirmed before recording position")
+                    logger.error("=" * 70)
+                    return None
+                
                 # CRITICAL: Validate filled price to prevent accepting immediate losers
                 # Extract actual fill price from order result
                 actual_fill_price = self._extract_fill_price(result, symbol)
@@ -198,6 +212,29 @@ class ExecutionEngine:
                 # Calculate entry fee (assuming 0.6% taker fee)
                 entry_fee = position_size * 0.006
                 
+                # ✅ MASTER TRADE VERIFICATION: Capture required data
+                # Extract fill_time from result (use timestamp field or current time)
+                fill_time = result.get('timestamp') or datetime.now()
+                
+                # Extract filled_volume from result
+                filled_volume = result.get('filled_volume', quantity)
+                
+                # Calculate executed_cost: filled_price * filled_volume + fees
+                executed_cost = (final_entry_price * filled_volume) + entry_fee
+                
+                # Log master trade verification data
+                logger.info("=" * 70)
+                logger.info("✅ MASTER TRADE VERIFICATION")
+                logger.info("=" * 70)
+                logger.info(f"   Kraken Order ID: {order_id}")
+                logger.info(f"   Fill Time: {fill_time}")
+                logger.info(f"   Executed Cost: ${executed_cost:.2f}")
+                logger.info(f"   Fill Price: ${final_entry_price:.2f}")
+                logger.info(f"   Filled Volume: {filled_volume:.8f}")
+                logger.info(f"   Entry Fee: ${entry_fee:.2f}")
+                logger.info(f"   Order Status: {order_status}")
+                logger.info("=" * 70)
+                
                 # Generate unique position ID
                 position_id = f"{symbol}_{int(datetime.now().timestamp())}"
                 
@@ -205,16 +242,25 @@ class ExecutionEngine:
                 if self.trade_ledger:
                     try:
                         # Use the already validated order_id from safety check #3
+                        # Include master trade verification data in notes
+                        verification_notes = (
+                            f"{side.upper()} entry | "
+                            f"Order ID: {order_id} | "
+                            f"Fill Time: {fill_time} | "
+                            f"Executed Cost: ${executed_cost:.2f} | "
+                            f"Status: {order_status}"
+                        )
+                        
                         self.trade_ledger.record_buy(
                             symbol=symbol,
                             price=final_entry_price,
-                            quantity=quantity,
+                            quantity=filled_volume,
                             size_usd=position_size,
                             fee=entry_fee,
                             order_id=str(order_id) if order_id else None,
                             position_id=position_id,
                             user_id=self.user_id,
-                            notes=f"{side.upper()} entry"
+                            notes=verification_notes
                         )
                         
                         # Open position in database
@@ -223,7 +269,7 @@ class ExecutionEngine:
                             symbol=symbol,
                             side=side.upper(),
                             entry_price=final_entry_price,
-                            quantity=quantity,
+                            quantity=filled_volume,
                             size_usd=position_size,
                             stop_loss=stop_loss,
                             take_profit_1=take_profit_levels['tp1'],
@@ -232,6 +278,8 @@ class ExecutionEngine:
                             entry_fee=entry_fee,
                             user_id=self.user_id
                         )
+                        
+                        logger.info(f"✅ Trade recorded in ledger (ID: {order_id})")
                     except Exception as e:
                         logger.warning(f"Could not record trade in ledger: {e}")
                 
@@ -241,14 +289,17 @@ class ExecutionEngine:
                     'side': side,
                     'entry_price': final_entry_price,
                     'position_size': position_size,
-                    'quantity': quantity,
+                    'quantity': filled_volume,
                     'position_id': position_id,
+                    'order_id': order_id,  # Store order_id for verification
+                    'fill_time': fill_time,  # Store fill_time for verification
+                    'executed_cost': executed_cost,  # Store executed_cost for verification
                     'stop_loss': stop_loss,
                     'tp1': take_profit_levels['tp1'],
                     'tp2': take_profit_levels['tp2'],
                     'tp3': take_profit_levels['tp3'],
                     'opened_at': datetime.now(),
-                    'status': 'open',
+                    'status': order_status,  # Use confirmed status from order
                     'tp1_hit': False,
                     'tp2_hit': False,
                     'breakeven_moved': False,
@@ -257,6 +308,7 @@ class ExecutionEngine:
                 
                 self.positions[symbol] = position
                 logger.info(f"Position opened: {symbol} {side} @ {final_entry_price:.2f}")
+                logger.info(f"   Order ID: {order_id}, Status: {order_status}")
                 
                 return position
             else:
