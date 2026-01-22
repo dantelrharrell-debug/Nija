@@ -708,8 +708,28 @@ class TradingStrategy:
                 logger.info("=" * 70)
                 
                 # FIX #2: Force capital re-hydration after broker connections
-                # Use the already-calculated master_balance from above (avoids duplication)
-                total_capital = master_balance
+                # MASTER AUTHORITY RULE: Master capital is always authoritative
+                # Users are followers, not required for startup
+                if master_balance > 0:
+                    # Master is funded - include user balances for total capital
+                    total_capital = master_balance + user_total_balance
+                    logger.info(f"   ✅ Capital calculation: Master (${master_balance:.2f}) + Users (${user_total_balance:.2f})")
+                elif user_total_balance > 0:
+                    # Master unfunded but users have capital - allow user-only trading
+                    total_capital = user_total_balance
+                    logger.info(f"   ✅ Capital calculation: User-only trading (${user_total_balance:.2f})")
+                else:
+                    # No capital from master or users - cannot trade
+                    logger.error("=" * 70)
+                    logger.error("❌ FATAL: No capital detected from any account")
+                    logger.error("=" * 70)
+                    logger.error("   Master balance: $0.00")
+                    logger.error("   User balance: $0.00")
+                    logger.error("")
+                    logger.error("   🛑 Bot cannot trade without capital")
+                    logger.error("   💵 Fund at least one account to continue")
+                    logger.error("=" * 70)
+                    raise RuntimeError("No capital detected from master or user accounts")
                 
                 # Build list of active exchanges for logging
                 active_exchanges = []
@@ -824,10 +844,6 @@ class TradingStrategy:
                         logger.error("   💵 Fund your account to continue trading")
                         logger.error("=" * 70)
                         raise RuntimeError(f"Capital below minimum — trading disabled (${total_capital:.2f} < ${MINIMUM_TRADING_BALANCE:.2f})")
-                else:
-                    logger.error("❌ LIVE CAPITAL SYNC FAILED: No capital detected from exchanges")
-                    logger.error("   Trading will remain frozen until capital is detected")
-                    raise RuntimeError("Capital sync failed — no capital detected from exchanges")
                 
                 # FIX #1: Select primary master broker with Kraken promotion logic
                 # CRITICAL: If Coinbase is in exit_only mode or has insufficient balance, promote Kraken to primary
