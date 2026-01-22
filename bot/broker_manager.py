@@ -1620,11 +1620,11 @@ class CoinbaseBroker(BaseBroker):
                     base_available = None
                     base_held = None
                     if isinstance(pos, dict):
-                        base_available = pos.get('available_to_trade') or pos.get('available_to_trade_base')
-                        base_held = pos.get('hold') or pos.get('hold_base')
+                        base_available = pos.get('available_to_trade_base') if pos.get('available_to_trade_base') is not None else pos.get('available_to_trade')
+                        base_held = pos.get('hold_base') if pos.get('hold_base') is not None else pos.get('hold')
                     else:
-                        base_available = getattr(pos, 'available_to_trade', None) or getattr(pos, 'available_to_trade_base', None)
-                        base_held = getattr(pos, 'hold', None) or getattr(pos, 'hold_base', None)
+                        base_available = getattr(pos, 'available_to_trade_base', None) if getattr(pos, 'available_to_trade_base', None) is not None else getattr(pos, 'available_to_trade', None)
+                        base_held = getattr(pos, 'hold_base', None) if getattr(pos, 'hold_base', None) is not None else getattr(pos, 'hold', None)
                     
                     try:
                         available = float(available_val or 0)
@@ -1655,11 +1655,13 @@ class CoinbaseBroker(BaseBroker):
                     elif asset:
                         # CRITICAL FIX: Store TOTAL crypto quantity (available + held in base units)
                         # This ensures sells can find the full position, not just what's "available to trade"
-                        if base_avail_qty > 0 or base_held_qty > 0:
+                        # Handle both zero and positive values (zero is valid and should be tracked)
+                        if base_avail_qty is not None or base_held_qty is not None:
                             # Use base crypto quantity (e.g., BNB amount, not USD value)
-                            crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + base_avail_qty + base_held_qty
-                            if base_held_qty > 0:
-                                logging.debug(f"   {asset}: available={base_avail_qty:.8f}, held={base_held_qty:.8f}, total={base_avail_qty + base_held_qty:.8f}")
+                            total_qty = (base_avail_qty if base_avail_qty is not None else 0.0) + (base_held_qty if base_held_qty is not None else 0.0)
+                            crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + total_qty
+                            if base_held_qty and base_held_qty > 0:
+                                logging.debug(f"   {asset}: available={base_avail_qty:.8f}, held={base_held_qty:.8f}, total={total_qty:.8f}")
                         else:
                             # Fallback: if base quantities not available, calculate from fiat values
                             crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + available
@@ -1806,16 +1808,18 @@ class CoinbaseBroker(BaseBroker):
                     if is_tradeable:
                         # CRITICAL FIX: Include HELD crypto, not just available
                         # This ensures sells can see the full position (available + held in orders/positions)
+                        # Use same logic as portfolio breakdown path for consistency
                         total_crypto = available + hold
-                        crypto_holdings[currency] = total_crypto
-                        if hold > 0:
-                            logging.info(
-                                f"   ✅ 🪙 {currency}: available={available:.8f}, held={hold:.8f}, total={total_crypto:.8f} (type={account_type}, platform={platform})"
-                            )
-                        else:
-                            logging.info(
-                                f"   ✅ 🪙 {currency}: {available:.8f} (type={account_type}, platform={platform})"
-                            )
+                        if total_crypto > 0:
+                            crypto_holdings[currency] = total_crypto
+                            if hold > 0:
+                                logging.info(
+                                    f"   ✅ 🪙 {currency}: available={available:.8f}, held={hold:.8f}, total={total_crypto:.8f} (type={account_type}, platform={platform})"
+                                )
+                            else:
+                                logging.info(
+                                    f"   ✅ 🪙 {currency}: {available:.8f} (type={account_type}, platform={platform})"
+                                )
                     else:
                         # Log consumer wallet holdings separately but don't add to crypto_holdings
                         logging.info(
