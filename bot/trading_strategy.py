@@ -879,10 +879,15 @@ class TradingStrategy:
                 try:
                     from broker_failsafes import create_failsafe_for_broker
                     broker_name = self.broker.broker_type.value if hasattr(self.broker, 'broker_type') else 'coinbase'
-                    # Use master_balance only - users are completely independent
-                    account_balance = master_balance if master_balance > 0 else 100.0
-                    self.failsafes = create_failsafe_for_broker(broker_name, account_balance)
-                    logger.info(f"🛡️  Broker failsafes initialized for {broker_name} (Master balance: ${account_balance:,.2f})")
+                    # ✅ REQUIREMENT 1: Use REAL exchange balance ONLY - No fake $100 fallback
+                    if master_balance <= 0:
+                        logger.error(f"❌ Cannot initialize trading: Master balance is ${master_balance:.2f}")
+                        logger.error("   Fund your account with real capital to enable trading")
+                        self.failsafes = None
+                    else:
+                        account_balance = master_balance
+                        self.failsafes = create_failsafe_for_broker(broker_name, account_balance)
+                        logger.info(f"🛡️  Broker failsafes initialized for {broker_name} (Master balance: ${account_balance:,.2f})")
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to initialize broker failsafes: {e}")
                     self.failsafes = None

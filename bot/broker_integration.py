@@ -898,9 +898,9 @@ class KrakenBrokerAdapter(BrokerInterface):
                 from bot.broker_adapters import KrakenAdapter
                 KRAKEN_MIN_ORDER_USD = KrakenAdapter.MIN_VOLUME_DEFAULT
             except (ImportError, AttributeError):
-                KRAKEN_MIN_ORDER_USD = 10.0  # Fallback
+                KRAKEN_MIN_ORDER_USD = 5.0  # Fallback - Kraken's actual minimum
         else:
-            KRAKEN_MIN_ORDER_USD = 10.0  # Fallback
+            KRAKEN_MIN_ORDER_USD = 5.0  # Fallback - Kraken's actual minimum
         
         if order_size_usd < KRAKEN_MIN_ORDER_USD:
             return (False, kraken_symbol, 
@@ -1048,7 +1048,36 @@ class KrakenBrokerAdapter(BrokerInterface):
                 current_price = 0.0
             
             # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
+            # ✅ REQUIREMENT 2B: Check minimum order cost ($5.00 USD minimum)
+            KRAKEN_MIN_ORDER_COST = 5.00  # Kraken's actual minimum order cost
+            
             if current_price > 0:
+                # Calculate order cost in USD
+                if size_type == 'quote':
+                    order_cost_usd = size
+                else:  # base
+                    order_cost_usd = size * current_price
+                
+                # Check if order meets Kraken's minimum cost requirement
+                if order_cost_usd < KRAKEN_MIN_ORDER_COST:
+                    logger.error("=" * 70)
+                    logger.error("❌ Kraken order blocked: Below minimum order cost")
+                    logger.error("=" * 70)
+                    logger.error(f"   Order Cost: ${order_cost_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                    logger.error("   ⚠️  Increase position size or skip this trade")
+                    logger.error("=" * 70)
+                    return {
+                        'order_id': None,
+                        'symbol': symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': 0.0,
+                        'status': 'skipped',
+                        'error': f'Below Kraken minimum: ${order_cost_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f}',
+                        'timestamp': datetime.now()
+                    }
+                
                 is_valid, adjusted_size, error_msg = validate_and_adjust_order(
                     pair=kraken_symbol,
                     volume=size,
@@ -1118,8 +1147,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
                 
-                # ✅ SAFETY CHECK #3: Require txid before recording position
-                # If no txid → trade not executed → raise exception
+                # ✅ REQUIREMENT 3: HARD-FAIL if no txid (Requirement from problem statement)
+                # If no txid → trade not executed → raise ExecutionFailed
                 if not order_id:
                     logger.error("=" * 70)
                     logger.error("❌ KRAKEN ORDER FAILED - NO TXID RETURNED")
@@ -1128,8 +1157,9 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error(f"   API Response: {result}")
                     logger.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
                     logger.error("=" * 70)
-                    # Raise exception to prevent recording this as a successful trade
-                    raise InvalidTxidError("No txid returned from Kraken - order did not execute")
+                    # Raise ExecutionFailed to prevent recording this as a successful trade
+                    # NO position, NO ledger write, NO stop-loss, NO cap increment
+                    raise ExecutionFailed("Kraken order not confirmed")
                 
                 # ✅ REQUIREMENT 1: HARD-FAIL - Verify descr.order exists
                 descr = order_result.get('descr', {})
@@ -1317,6 +1347,27 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Calculate USD size for validation (limit orders use price)
             order_size_usd = size * price if size_type == 'base' else size
             
+            # ✅ REQUIREMENT 2B: Check minimum order cost ($5.00 USD minimum)
+            KRAKEN_MIN_ORDER_COST = 5.00  # Kraken's actual minimum order cost
+            if order_size_usd < KRAKEN_MIN_ORDER_COST:
+                logger.error("=" * 70)
+                logger.error("❌ Kraken order blocked: Below minimum order cost")
+                logger.error("=" * 70)
+                logger.error(f"   Order Cost: ${order_size_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
+                logger.error(f"   Symbol: {symbol}, Side: {side}, Size: {size}, Price: {price}")
+                logger.error("   ⚠️  Increase position size or skip this trade")
+                logger.error("=" * 70)
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': 0.0,
+                    'status': 'skipped',
+                    'error': f'Below Kraken minimum: ${order_size_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f}',
+                    'timestamp': datetime.now()
+                }
+            
             # Validate symbol and convert to Kraken format
             is_valid, kraken_symbol, error_msg = self._validate_kraken_order(
                 symbol, side, size, size_type, current_price=price
@@ -1387,8 +1438,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
                 
-                # ✅ SAFETY CHECK #3: Require txid before recording position
-                # If no txid → trade not executed → raise exception
+                # ✅ REQUIREMENT 3: HARD-FAIL if no txid (Requirement from problem statement)
+                # If no txid → trade not executed → raise ExecutionFailed
                 if not order_id:
                     logger.error("=" * 70)
                     logger.error("❌ KRAKEN LIMIT ORDER FAILED - NO TXID RETURNED")
@@ -1397,8 +1448,9 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error(f"   API Response: {result}")
                     logger.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
                     logger.error("=" * 70)
-                    # Raise exception to prevent recording this as a successful trade
-                    raise InvalidTxidError("No txid returned from Kraken - limit order did not execute")
+                    # Raise ExecutionFailed to prevent recording this as a successful trade
+                    # NO position, NO ledger write, NO stop-loss, NO cap increment
+                    raise ExecutionFailed("Kraken order not confirmed")
                 
                 # ✅ REQUIREMENT 1: HARD-FAIL - Verify descr.order exists
                 descr = order_result.get('descr', {})
