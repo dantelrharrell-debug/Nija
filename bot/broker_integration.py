@@ -946,9 +946,18 @@ class KrakenBrokerAdapter(BrokerInterface):
                     current_balance = balance_info.get('total_balance', 0.0)
                     
                     # Check if balance meets minimum to operate bot (SAVER tier minimum)
-                    if current_balance < 10.0:  # Minimum balance to operate bot
+                    # Get minimum from tier config for consistency
+                    min_balance = 10.0  # Default if tier_config not available
+                    if get_tier_config and TradingTier:
+                        try:
+                            saver_config = get_tier_config(TradingTier.SAVER)
+                            min_balance = saver_config.capital_min
+                        except Exception:
+                            pass  # Use default
+                    
+                    if current_balance < min_balance:
                         return (False, kraken_symbol,
-                                f"Account balance ${current_balance:.2f} below minimum to operate bot ($10.00). Cannot execute trades.")
+                                f"Account balance ${current_balance:.2f} below minimum to operate bot (${min_balance:.2f}). Cannot execute trades.")
                     
                     # Determine user's tier
                     user_tier = get_tier_from_balance(current_balance)
