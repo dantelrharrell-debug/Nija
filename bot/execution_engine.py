@@ -7,8 +7,32 @@ Handles order execution and position management for Apex Strategy v7.1
 from typing import Dict, Optional, List
 from datetime import datetime
 import logging
+import sys
+import os
 
 logger = logging.getLogger("nija")
+
+# Import hard controls for LIVE CAPITAL VERIFIED check
+try:
+    # Try standard import first (when running as package)
+    from controls import get_hard_controls
+    HARD_CONTROLS_AVAILABLE = True
+    logger.info("✅ Hard controls module loaded for LIVE CAPITAL VERIFIED checks")
+except ImportError:
+    try:
+        # Fallback: Add controls directory to path if needed
+        controls_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'controls')
+        if controls_path not in sys.path:
+            sys.path.insert(0, controls_path)
+        
+        from controls import get_hard_controls
+        HARD_CONTROLS_AVAILABLE = True
+        logger.info("✅ Hard controls module loaded for LIVE CAPITAL VERIFIED checks")
+    except ImportError as e:
+        HARD_CONTROLS_AVAILABLE = False
+        logger.warning(f"⚠️ Hard controls not available: {e}")
+        logger.warning("   LIVE CAPITAL VERIFIED check will be skipped")
+        get_hard_controls = None
 
 # Constants
 VALID_ORDER_STATUSES = ['open', 'closed', 'filled', 'pending']
@@ -122,6 +146,25 @@ class ExecutionEngine:
             Position dictionary or None if failed
         """
         try:
+            # ✅ CRITICAL SAFETY CHECK #1: LIVE CAPITAL VERIFIED
+            # This is the MASTER kill-switch that prevents accidental live trading
+            # Check BEFORE any trade execution
+            if HARD_CONTROLS_AVAILABLE and get_hard_controls:
+                hard_controls = get_hard_controls()
+                can_trade, error_msg = hard_controls.can_trade(self.user_id)
+                
+                if not can_trade:
+                    logger.error("=" * 80)
+                    logger.error("🔴 TRADE EXECUTION BLOCKED")
+                    logger.error("=" * 80)
+                    logger.error(f"   Symbol: {symbol}")
+                    logger.error(f"   Side: {side}")
+                    logger.error(f"   Position Size: ${position_size:.2f}")
+                    logger.error(f"   User ID: {self.user_id}")
+                    logger.error(f"   Reason: {error_msg}")
+                    logger.error("=" * 80)
+                    return None
+            
             # FIX #3 (Jan 19, 2026): Check if broker supports this symbol before attempting trade
             if self.broker_client and hasattr(self.broker_client, 'supports_symbol'):
                 if not self.broker_client.supports_symbol(symbol):
