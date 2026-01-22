@@ -333,15 +333,20 @@ class ExchangeCapabilityMatrix:
         """
         symbol_upper = symbol.upper()
         
-        # Perpetual futures
+        # Perpetual futures (most common naming)
         if 'PERP' in symbol_upper or 'PERPETUAL' in symbol_upper:
             return MarketMode.PERPETUAL
         
+        # Futures - check for "FUTURE" keyword or typical futures patterns
+        if 'FUTURE' in symbol_upper:
+            return MarketMode.FUTURES
+        
         # Dated futures (month codes, expiry dates)
-        if 'FUTURE' in symbol_upper or any(month in symbol_upper for month in ['F', 'G', 'H', 'J', 'K', 'M', 'N', 'Q', 'U', 'V', 'X', 'Z']):
-            # Check if it looks like a futures contract (has date/month)
-            if any(char.isdigit() for char in symbol_upper[-6:]):
-                return MarketMode.FUTURES
+        # Common futures month codes: F, G, H, J, K, M, N, Q, U, V, X, Z
+        # But need to be careful not to match regular symbols
+        if any(char.isdigit() for char in symbol_upper[-6:]):
+            # Has digits at end, might be dated futures
+            return MarketMode.FUTURES
         
         # Margin indicators
         if 'MARGIN' in symbol_upper:
