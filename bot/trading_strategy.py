@@ -1740,10 +1740,11 @@ class TradingStrategy:
                 for pos in current_positions:
                     symbol = pos.get('symbol')
                     if symbol and symbol in self.unsellable_positions:
-                        # Check if retry timeout has passed
+                        # Check if the unsellable timeout is still active (position still marked as unsellable)
                         marked_time = self.unsellable_positions[symbol]
                         time_since_marked = time.time() - marked_time
                         if time_since_marked < self.unsellable_retry_timeout:
+                            # Timeout hasn't passed yet - exclude from count
                             logger.debug(f"   Excluding {symbol} from position count (marked unsellable {time_since_marked/3600:.1f}h ago)")
                             continue  # Skip this position - don't count it
                     tradable_positions.append(pos)
