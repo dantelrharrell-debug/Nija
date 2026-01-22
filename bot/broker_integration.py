@@ -138,6 +138,10 @@ except ImportError:
 
 logger = logging.getLogger("nija.broker")
 
+# ✅ REQUIREMENT 3: DUST EXCLUSION - Positions below this value are IGNORED COMPLETELY
+# Consistent with position_cap_enforcer.DUST_THRESHOLD_USD
+MIN_POSITION_USD = 1.00  # USD value threshold for dust positions
+
 
 
 class BrokerInterface(ABC):
@@ -1561,12 +1565,32 @@ class KrakenBrokerAdapter(BrokerInterface):
                     # ✅ REQUIREMENT 3: Exclude dust positions
                     # Get current price to calculate USD value
                     try:
-                        ticker_pair = convert_to_kraken(symbol) if convert_to_kraken else symbol.replace('/', '')
+                        # Use convert_to_kraken if available, otherwise construct ticker pair
+                        # Kraken ticker pairs are typically in format like 'XXBTZUSD', 'XETHZUSD'
+                        if convert_to_kraken:
+                            ticker_pair = convert_to_kraken(symbol)
+                        else:
+                            # Construct Kraken ticker pair format
+                            # Most assets use X prefix + asset + ZUSD
+                            if currency == 'BTC':
+                                ticker_pair = 'XXBTZUSD'
+                            elif currency == 'ETH':
+                                ticker_pair = 'XETHZUSD'
+                            else:
+                                # Try standard format
+                                ticker_pair = f'X{currency}ZUSD'
+                        
                         ticker_result = self._kraken_api_call('Ticker', {'pair': ticker_pair})
                         
                         current_price = 0.0
                         if ticker_result and 'result' in ticker_result:
-                            ticker_data = ticker_result['result'].get(ticker_pair, {})
+                            # Ticker result may have the pair name as key
+                            # Try the exact pair name first, then any key in result
+                            ticker_data = ticker_result['result'].get(ticker_pair)
+                            if not ticker_data and ticker_result['result']:
+                                # Use first available ticker if exact match fails
+                                ticker_data = list(ticker_result['result'].values())[0]
+                            
                             if ticker_data:
                                 # Get last price from ticker
                                 last_price = ticker_data.get('c', [0, 0])
@@ -1575,9 +1599,13 @@ class KrakenBrokerAdapter(BrokerInterface):
                         usd_value = balance_val * current_price if current_price > 0 else 0
                         
                         # ✅ REQUIREMENT 3: DUST EXCLUSION - If usd_value < MIN_POSITION_USD, IGNORE COMPLETELY
-                        MIN_POSITION_USD = 1.00  # Consistent with DUST_THRESHOLD_USD
                         if usd_value > 0 and usd_value < MIN_POSITION_USD:
                             logger.info(f"   🗑️  Excluding dust position: {symbol} (${usd_value:.4f} < ${MIN_POSITION_USD})")
+                            continue
+                        
+                        # ✅ FIX: If price is zero, skip position (cannot value it)
+                        if current_price <= 0:
+                            logger.warning(f"   ⚠️  Skipping {symbol}: price unavailable (cannot determine if dust)")
                             continue
                         
                         positions.append({
@@ -1592,16 +1620,10 @@ class KrakenBrokerAdapter(BrokerInterface):
                         
                     except Exception as price_err:
                         logger.warning(f"Could not get price for {symbol}: {price_err}")
-                        # Still include position but with zero price
-                        positions.append({
-                            'symbol': symbol,
-                            'size': balance_val,
-                            'entry_price': 0.0,
-                            'current_price': 0.0,
-                            'pnl': 0.0,
-                            'pnl_pct': 0.0,
-                            'usd_value': 0.0
-                        })
+                        # ✅ FIX: Do NOT include positions we cannot price
+                        # Cannot determine if dust without price, so skip to be safe
+                        logger.warning(f"   ⚠️  Skipping {symbol}: cannot verify dust threshold without price")
+                        continue
             
             # ✅ REQUIREMENT 2: If Kraken reports no positions → positions = 0
             if not positions:
