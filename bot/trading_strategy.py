@@ -964,6 +964,60 @@ class TradingStrategy:
         self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken_broker
         logger.info("   ✅ Kraken registered for background connection retry")
     
+    def _get_total_capital_across_all_accounts(self) -> float:
+        """
+        Get total capital summed across ALL accounts and brokers.
+        
+        ✅ CRITICAL (Jan 22, 2026): Capital must be fetched live and summed dynamically
+        - Coinbase Master: fetched live
+        - Kraken Master: fetched live  
+        - Kraken Users: fetched live
+        - OKX Master: fetched live (if available)
+        - Summed before every allocation cycle
+        
+        Returns:
+            Total capital in USD across all accounts
+        """
+        total_capital = 0.0
+        
+        try:
+            # 1. Sum all MASTER broker balances
+            if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
+                for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                    if broker and broker.connected:
+                        try:
+                            balance = broker.get_account_balance()
+                            total_capital += balance
+                            logger.debug(f"   Master {broker_type.value}: ${balance:.2f}")
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ Could not fetch {broker_type.value} master balance: {e}")
+                
+                # 2. Sum all USER broker balances
+                if self.multi_account_manager.user_brokers:
+                    for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
+                        for broker_type, broker in user_broker_dict.items():
+                            if broker and broker.connected:
+                                try:
+                                    balance = broker.get_account_balance()
+                                    total_capital += balance
+                                    logger.debug(f"   User {user_id} {broker_type.value}: ${balance:.2f}")
+                                except Exception as e:
+                                    logger.warning(f"   ⚠️ Could not fetch user {user_id} balance: {e}")
+            
+            # Fallback: use broker_manager if multi_account_manager not available
+            elif hasattr(self, 'broker_manager') and self.broker_manager:
+                total_capital = self.broker_manager.get_total_balance()
+                logger.debug(f"   Broker manager total: ${total_capital:.2f}")
+            
+            logger.info(f"💰 TOTAL CAPITAL (all accounts): ${total_capital:.2f}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error calculating total capital: {e}")
+            # Return 0 on error - better to halt trading than use stale data
+            total_capital = 0.0
+        
+        return total_capital
+    
     def _init_advanced_features(self):
         """Initialize progressive targets, exchange risk profiles, and capital allocation.
         
@@ -1501,6 +1555,28 @@ class TradingStrategy:
             else:
                 balance_data = {'trading_balance': active_broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
+            
+            # ✅ CRITICAL FIX (Jan 22, 2026): Update capital dynamically BEFORE allocation
+            # Capital must be fetched live, not stuck at initialization value
+            # This ensures failsafes and allocators use current real balance
+            
+            # Get total capital across ALL accounts (master + users)
+            total_capital = self._get_total_capital_across_all_accounts()
+            
+            # Update failsafes with current balance
+            if hasattr(self, 'failsafes') and self.failsafes:
+                try:
+                    self.failsafes.update_account_balance(account_balance)
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not update failsafe balance: {e}")
+            
+            # Update capital allocator with TOTAL capital (all accounts summed)
+            if hasattr(self, 'advanced_manager') and self.advanced_manager:
+                try:
+                    if hasattr(self.advanced_manager, 'capital_allocator'):
+                        self.advanced_manager.capital_allocator.update_total_capital(total_capital)
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not update capital allocator balance: {e}")
             
             # Update portfolio state (if available)
             if self.portfolio_manager and hasattr(self, 'master_portfolio') and self.master_portfolio:
