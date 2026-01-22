@@ -1,35 +1,38 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-## 🎯 **Official Trading Tiers - Five Levels for Every Trader**
+## 🎯 **Official Trading Tiers - Six Levels for Every Trader**
 
-**NIJA uses five official trading tiers** optimized for different capital levels and trading goals:
+**NIJA uses six official trading tiers** optimized for different capital levels and trading goals:
 
 | Tier | Capital | Risk/Trade | Trade Size | Max Positions | Goal |
 |------|---------|------------|------------|---------------|------|
-| **SAVER** | $25-$99 | 10-15% | $2-$5 | 1 | Learn the system |
-| **INVESTOR** | $100-$249 | 7-10% | $10+ | 2-3 | Build consistency (DEFAULT) |
-| **INCOME** ⭐ | $250-$999 | 4-7% | $15-$25 | 3-5 | Generate returns (Core Retail) |
-| **LIVABLE** | $1k-$5k | 2-4% | $25+ | 5-6 | Stable returns |
-| **BALLER** | $5k+ | 1-2% | $50+ | 6-8 | Scale capital |
+| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | Entry level learning |
+| **SAVER** | $100–$249 | 7-10% | $15-$40 | 2 | Capital preservation + learning |
+| **INVESTOR** | $250–$999 | 5-7% | $20-$75 | 3 | Consistent participation |
+| **INCOME** ⭐ | $1k–$4.9k | 3-5% | $30-$150 | 5 | Serious retail trading |
+| **LIVABLE** | $5k–$24.9k | 2-3% | $50-$300 | 6 | Professional-level execution |
+| **BALLER** | $25k+ | 1-2% | $100-$1k | 8 | Capital deployment |
 
 **Quick Setup:**
 ```bash
 # Add to .env - choose your tier:
-TRADING_TIER=SAVER       # For $25-$99 capital
-TRADING_TIER=INVESTOR    # For $100-$249 capital (default)
-TRADING_TIER=INCOME      # For $250-$999 capital ⭐ core retail tier
-TRADING_TIER=LIVABLE     # For $1k-$5k capital
-TRADING_TIER=BALLER      # For $5k+ capital
+TRADING_TIER=STARTER     # For $50-$99 capital
+TRADING_TIER=SAVER       # For $100-$249 capital
+TRADING_TIER=INVESTOR    # For $250-$999 capital
+TRADING_TIER=INCOME      # For $1k-$4.9k capital ⭐ serious retail trading
+TRADING_TIER=LIVABLE     # For $5k-$24.9k capital
+TRADING_TIER=BALLER      # For $25k+ capital
 TRADING_TIER=AUTO        # Auto-select based on balance
 ```
 
 **Or use preset templates:**
 ```bash
-cp .env.saver_tier .env      # SAVER tier ($25-$99)
-cp .env.investor_tier .env   # INVESTOR tier ($100-$249)
-cp .env.income_tier .env     # INCOME tier ($250-$999) ⭐
-cp .env.livable_tier .env    # LIVABLE tier ($1k-$5k)
-cp .env.baller_tier .env     # BALLER tier ($5k+)
+cp .env.starter_tier .env    # STARTER tier ($50-$99)
+cp .env.saver_tier .env      # SAVER tier ($100-$249)
+cp .env.investor_tier .env   # INVESTOR tier ($250-$999)
+cp .env.income_tier .env     # INCOME tier ($1k-$4.9k) ⭐
+cp .env.livable_tier .env    # LIVABLE tier ($5k-$24.9k)
+cp .env.baller_tier .env     # BALLER tier ($25k+)
 # Then edit .env and add your API credentials
 ```
 
@@ -39,7 +42,8 @@ cp .env.baller_tier .env     # BALLER tier ($5k+)
 
 **Key Notes:**
 - **INVESTOR** is the default tier if not specified
-- **INCOME** ($250-$999) is NIJA's **core retail power tier** ⭐
+- **STARTER** ($50-$99) is the entry level for new traders
+- **INCOME** ($1k-$4.9k) is NIJA's **serious retail trading tier** ⭐
 - **MASTER** is system authority only (NOT a user tier)
 - Start conservative and upgrade as capital and experience grow
 
@@ -219,11 +223,12 @@ STABLECOIN_POLICY=allow_all
 ```
 
 **Tier-Based Visibility**:
-- **SAVER**: Show all trades ($2+ visible)
-- **INVESTOR**: Filter micro-trades ($10+ visible)
-- **INCOME**: Focus on meaningful trades ($15+ visible)
-- **LIVABLE**: Professional filtering ($25+ visible)
-- **BALLER**: High-signal, low-noise ($50+ visible)
+- **STARTER**: Show all trades ($10+ visible)
+- **SAVER**: Show all trades ($15+ visible)
+- **INVESTOR**: Filter micro-trades ($20+ visible)
+- **INCOME**: Focus on meaningful trades ($30+ visible)
+- **LIVABLE**: Professional filtering ($50+ visible)
+- **BALLER**: High-signal, low-noise ($100+ visible)
 
 Trades below tier minimums are still executed but marked for easier filtering.
 

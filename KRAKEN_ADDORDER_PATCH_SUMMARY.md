@@ -123,11 +123,11 @@ logger.info(f"   Executed Cost: ${executed_cost:.2f}")
 
 | Tier | Balance Range | Min Trade | Max Trade | Purpose |
 |------|---------------|-----------|-----------|---------|
-| **SAVER** | $25-$99 | $2 | $5 | Learning mode |
-| **INVESTOR** | $100-$249 | $10 | $25 | Building consistency |
-| **INCOME** | $250-$999 | $15 | $50 | Core power tier |
-| **LIVABLE** | $1k-$5k | $25 | $100 | Stable returns |
-| **BALLER** | $5k+ | $50 | $500 | Scale capital |
+| **SAVER** | $100–$249 | $15 | $40 | Capital preservation + learning |
+| **INVESTOR** | $250–$999 | $20 | $75 | Consistent participation |
+| **INCOME** | $1k–$4.9k | $30 | $150 | Serious retail trading |
+| **LIVABLE** | $5k–$24.9k | $50 | $300 | Professional-level execution |
+| **BALLER** | $25k+ | $100 | $1k | Capital deployment |
 
 **Enforcement Points**:
 

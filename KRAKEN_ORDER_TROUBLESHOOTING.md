@@ -88,11 +88,11 @@ Your trade was below the tier minimum for your account balance.
 ### Tier Minimums:
 | Balance | Tier | Minimum Trade |
 |---------|------|---------------|
-| $25-$99 | SAVER | $2 |
-| $100-$249 | INVESTOR | $10 |
-| $250-$999 | INCOME | $15 |
-| $1k-$4.9k | LIVABLE | $25 |
-| $5k+ | BALLER | $50 |
+| $100–$249 | SAVER | $15 |
+| $250–$999 | INVESTOR | $20 |
+| $1k–$4.9k | INCOME | $30 |
+| $5k–$24.9k | LIVABLE | $50 |
+| $25k+ | BALLER | $100 |
 
 ### Solutions:
 1. ✅ **Deposit more** to reach next tier (more flexibility)
@@ -228,15 +228,15 @@ For slower fills:
 ```
 
 ### What It Means:
-Your Kraken balance is below **$25**, the absolute minimum for NIJA trading.
+Your Kraken balance is below **$100**, the absolute minimum for NIJA trading.
 
 ### Solutions:
 
 #### Option 1: Deposit More (Recommended)
 Deposit at least:
-- **$25** → SAVER tier (minimum to trade)
-- **$100** → INVESTOR tier (first profitable tier) ⭐
-- **$250** → INCOME tier (optimal small account size)
+- **$100** → SAVER tier (minimum to trade)
+- **$250** → INVESTOR tier (consistent participation) ⭐
+- **$1,000** → INCOME tier (serious retail trading)
 
 #### Option 2: Transfer from Another Exchange
 If you have funds on Coinbase:

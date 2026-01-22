@@ -247,15 +247,16 @@ NIJA shows trades differently based on your trading tier:
 
 | Tier | Min Visible Size | Why? |
 |------|-----------------|------|
-| **SAVER** | $2 | Show all trades for learning |
-| **INVESTOR** | $10 | Filter out micro-adjustments |
-| **INCOME** | $15 | Focus on meaningful trades |
-| **LIVABLE** | $25 | Professional-level filtering |
-| **BALLER** | $50 | High-signal, low-noise |
+| **STARTER** | $10 | Show all trades for entry level |
+| **SAVER** | $15 | Show all trades for learning |
+| **INVESTOR** | $20 | Filter out micro-adjustments |
+| **INCOME** | $30 | Focus on meaningful trades |
+| **LIVABLE** | $50 | Professional-level filtering |
+| **BALLER** | $100 | High-signal, low-noise |
 
 Trades below your tier's minimum are **still executed** but shown as:
 ```
-📏 MIN SIZE BLOCK: SOL/USD - $8.50 < $15.00 (tier: INCOME)
+📏 MIN SIZE BLOCK: SOL/USD - $18.50 < $30.00 (tier: INCOME)
 ```
 
 This reduces noise in the Activity Feed while preserving full execution history.

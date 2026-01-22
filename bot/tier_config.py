@@ -3,16 +3,17 @@ NIJA Tier Configuration and Trade Size Minimums
 
 This module defines tier-based minimum trade sizes and stablecoin routing policies.
 
-Tier Structure (Updated Jan 22, 2026):
-- SAVER/Starter ($10-$25): Learn system, Coinbase-only (Kraken minimum is $10)
-- INVESTOR ($25-$100): Build consistency (DEFAULT)
-- INCOME ($100-$500): Core retail power tier
-- LIVABLE ($500-$2,500): Stable returns, serious users
-- BALLER ($2,500+): Scale capital, precision deployment
+Tier Structure (OFFICIAL - Updated Jan 22, 2026):
+- STARTER ($50-$99): Entry level learning
+- SAVER ($100-$249): Capital preservation + learning
+- INVESTOR ($250-$999): Consistent participation
+- INCOME ($1,000-$4,999): Serious retail trading
+- LIVABLE ($5,000-$24,999): Professional-level execution
+- BALLER ($25,000+): Capital deployment
 
 Author: NIJA Trading Systems
-Version: 2.0
-Date: January 2026
+Version: 4.0 (OFFICIAL FUNDING TIERS - 6 TIERS)
+Date: January 22, 2026
 """
 
 from enum import Enum
@@ -25,6 +26,7 @@ logger = logging.getLogger("nija.tier_config")
 
 class TradingTier(Enum):
     """User trading tiers with associated capital ranges."""
+    STARTER = "STARTER"
     SAVER = "SAVER"
     INVESTOR = "INVESTOR"
     INCOME = "INCOME"
@@ -50,63 +52,74 @@ class TierConfig:
 
 
 # Tier configurations based on RISK_PROFILES_GUIDE.md
-# Updated (Jan 22, 2026): SAVER tier renamed to Starter, restricted to Coinbase or $10+ minimum
-# Kraken minimum trade size is $10, so SAVER tier ($10-$25) should be Coinbase-only or disabled
+# OFFICIAL FUNDING TIERS (Final Version - Jan 22, 2026)
+# These are the official capital ranges to be used everywhere in NIJA
 TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
-    TradingTier.SAVER: TierConfig(
-        name="SAVER (Starter - Coinbase-only)",
-        capital_min=10.0,
-        capital_max=25.0,
+    TradingTier.STARTER: TierConfig(
+        name="STARTER",
+        capital_min=50.0,
+        capital_max=99.0,
         risk_per_trade_pct=(10.0, 15.0),
-        trade_size_min=10.0,  # $10 minimum (Coinbase recommended for better capital utilization)
+        trade_size_min=10.0,
         trade_size_max=25.0,
         max_positions=1,
-        description="Learn the system, protect capital (Coinbase recommended)",
-        min_visible_size=10.0  # Show all trades for learning
+        description="Entry level learning",
+        min_visible_size=10.0
+    ),
+    TradingTier.SAVER: TierConfig(
+        name="SAVER",
+        capital_min=100.0,
+        capital_max=249.0,
+        risk_per_trade_pct=(7.0, 10.0),
+        trade_size_min=15.0,
+        trade_size_max=40.0,
+        max_positions=2,
+        description="Capital preservation + learning",
+        min_visible_size=15.0
     ),
     TradingTier.INVESTOR: TierConfig(
         name="INVESTOR",
-        capital_min=25.0,  # Updated from $100 to $25 (was SAVER tier cap)
-        capital_max=100.0,  # Updated to align with new tier structure
-        risk_per_trade_pct=(7.0, 10.0),
-        trade_size_min=10.0,
-        trade_size_max=25.0,
+        capital_min=250.0,
+        capital_max=999.0,
+        risk_per_trade_pct=(5.0, 7.0),
+        trade_size_min=20.0,
+        trade_size_max=75.0,
         max_positions=3,
-        description="Build consistency, reduce randomness",
-        min_visible_size=10.0  # Default tier - show all trades
+        description="Consistent participation",
+        min_visible_size=20.0
     ),
     TradingTier.INCOME: TierConfig(
         name="INCOME",
-        capital_min=100.0,  # Updated from $250 to $100
-        capital_max=500.0,  # Updated from $999.99 to $500
-        risk_per_trade_pct=(4.0, 7.0),
-        trade_size_min=15.0,
-        trade_size_max=50.0,
+        capital_min=1000.0,
+        capital_max=4999.0,
+        risk_per_trade_pct=(3.0, 5.0),
+        trade_size_min=30.0,
+        trade_size_max=150.0,
         max_positions=5,
-        description="Core retail power tier - generate returns",
-        min_visible_size=15.0  # Show trades >= $15
+        description="Serious retail trading",
+        min_visible_size=30.0
     ),
     TradingTier.LIVABLE: TierConfig(
         name="LIVABLE",
-        capital_min=500.0,  # Updated from $1000 to $500
-        capital_max=2500.0,  # Updated from $4999.99 to $2500
-        risk_per_trade_pct=(2.0, 4.0),
-        trade_size_min=25.0,
-        trade_size_max=100.0,
+        capital_min=5000.0,
+        capital_max=24999.0,
+        risk_per_trade_pct=(2.0, 3.0),
+        trade_size_min=50.0,
+        trade_size_max=300.0,
         max_positions=6,
-        description="Stable returns, serious users",
-        min_visible_size=25.0  # Show trades >= $25
+        description="Professional-level execution",
+        min_visible_size=50.0
     ),
     TradingTier.BALLER: TierConfig(
         name="BALLER",
-        capital_min=2500.0,  # Updated from $5000 to $2500
+        capital_min=25000.0,
         capital_max=float('inf'),
         risk_per_trade_pct=(1.0, 2.0),
-        trade_size_min=50.0,
-        trade_size_max=500.0,
+        trade_size_min=100.0,
+        trade_size_max=1000.0,
         max_positions=8,
-        description="Scale capital, precision deployment",
-        min_visible_size=50.0  # Show trades >= $50
+        description="Capital deployment",
+        min_visible_size=100.0
     ),
 }
 
@@ -136,18 +149,18 @@ def get_tier_from_balance(balance: float) -> TradingTier:
     Returns:
         TradingTier enum
     """
-    if balance < TIER_CONFIGS[TradingTier.SAVER].capital_min:
-        logger.warning(f"Balance ${balance:.2f} below minimum for SAVER tier (${TIER_CONFIGS[TradingTier.SAVER].capital_min:.2f})")
-        return TradingTier.SAVER
+    if balance < TIER_CONFIGS[TradingTier.STARTER].capital_min:
+        logger.warning(f"Balance ${balance:.2f} below minimum for STARTER tier (${TIER_CONFIGS[TradingTier.STARTER].capital_min:.2f})")
+        return TradingTier.STARTER
     
     # Check tiers in reverse order (highest first) to handle boundaries correctly
-    # This ensures $5000 exactly goes to BALLER tier
     tier_order = [
         TradingTier.BALLER,
         TradingTier.LIVABLE,
         TradingTier.INCOME,
         TradingTier.INVESTOR,
-        TradingTier.SAVER
+        TradingTier.SAVER,
+        TradingTier.STARTER
     ]
     
     for tier in tier_order:
@@ -156,7 +169,7 @@ def get_tier_from_balance(balance: float) -> TradingTier:
             return tier
     
     # Fallback (should not reach here)
-    return TradingTier.SAVER
+    return TradingTier.STARTER
 
 
 def get_tier_config(tier: TradingTier) -> TierConfig:
