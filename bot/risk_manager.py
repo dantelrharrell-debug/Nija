@@ -451,7 +451,11 @@ class AdaptiveRiskManager:
         
         if TIER_AWARE_MODE:
             try:
-                # Determine tier based on balance
+                # Determine tier based on sizing_base (total account value)
+                # Note: sizing_base represents total account value in all modes:
+                # - portfolio_state mode: total_equity (cash + positions)
+                # - PRO MODE: total_capital (free balance + position values)
+                # - Normal mode: account_balance (which is total equity per v71 strategy)
                 tier = get_tier_from_balance(sizing_base)
                 tier_config = get_tier_config(tier)
                 

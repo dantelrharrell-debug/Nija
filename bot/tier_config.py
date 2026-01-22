@@ -482,9 +482,13 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
         # In this case, allow $9.37 as it's the maximum allowed by risk limits
         max_risk_by_pct = balance * (config.risk_per_trade_pct[1] / 100.0)
         
+        logger.debug(f"Tier validation: balance=${balance:.2f}, trade=${trade_size:.2f}, "
+                    f"tier_min=${tier_min:.2f}, max_risk={config.risk_per_trade_pct[1]:.1f}% (${max_risk_by_pct:.2f})")
+        
         # If the max allowed risk is less than tier minimum, use that instead
         # This ensures small accounts aren't blocked from trading entirely
-        if max_risk_by_pct < tier_min and trade_size <= max_risk_by_pct:
+        # Use same 0.01% tolerance as percentage check for consistency
+        if max_risk_by_pct < tier_min and trade_size <= max_risk_by_pct + 0.01:
             # Trade is within risk limits but below tier minimum - allow it
             logger.debug(f"Small balance exception: Allowing ${trade_size:.2f} < ${tier_min:.2f} tier minimum (max risk: ${max_risk_by_pct:.2f})")
             effective_min = exchange_min  # Only enforce exchange minimum
