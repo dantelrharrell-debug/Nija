@@ -4,15 +4,17 @@
 
 NIJA uses **five official trading tiers** optimized for different capital levels, experience, and trading goals. Each tier is precisely calibrated with appropriate risk parameters, position limits, and capital requirements.
 
-**Official Tiers:**
-1. **SAVER** ($25-$99) - Learn the system, protect capital
-2. **INVESTOR** ($100-$249) - DEFAULT tier for new users
-3. **INCOME** ($250-$999) - ⭐ **NIJA's core retail power tier**
-4. **LIVABLE** ($1k-$5k) - Stable returns, serious users
-5. **BALLER** ($5k+) - Scale capital, precision deployment
+**Official Tiers (Updated Jan 22, 2026):**
+1. **SAVER/Starter** ($10-$25) - Learn the system (Coinbase-only or disabled on Kraken)
+2. **INVESTOR** ($25-$100) - DEFAULT tier for new users
+3. **INCOME** ($100-$500) - ⭐ **NIJA's core retail power tier**
+4. **LIVABLE** ($500-$2,500) - Stable returns, serious users
+5. **BALLER** ($2,500+) - Scale capital, precision deployment
 
 **System Authority:**
 - **MASTER** - Strategy governance and execution authority (NOT a user tier)
+
+**Important Note on Kraken:** Kraken enforces a $10 minimum trade size. The SAVER tier is recommended for Coinbase only, or users should upgrade to INVESTOR tier ($25+) when using Kraken.
 
 Each tier has been carefully tuned to maximize performance while managing risk appropriately for the capital level.
 
@@ -20,43 +22,48 @@ Each tier has been carefully tuned to maximize performance while managing risk a
 
 ## 📊 Tier Comparison Table
 
-| Parameter | SAVER | INVESTOR | INCOME ⭐ | LIVABLE | BALLER |
-|-----------|-------|----------|----------|---------|--------|
-| **Capital Range** | $25-$99 | $100-$249 | $250-$999 | $1k-$5k | $5k+ |
+| Parameter | SAVER/Starter | INVESTOR | INCOME ⭐ | LIVABLE | BALLER |
+|-----------|---------------|----------|----------|---------|--------|
+| **Capital Range** | $10-$25 | $25-$100 | $100-$500 | $500-$2,500 | $2,500+ |
 | **Risk Per Trade** | 10-15% | 7-10% | 4-7% | 2-4% | 1-2% |
-| **Trade Size** | $2-$5 | $10+ | $15-$25 | $25+ | $50+ |
+| **Trade Size** | $10-$25 | $10-$25 | $15-$50 | $25-$100 | $50-$500 |
 | **Max Positions** | 1 | 2-3 | 3-5 | 5-6 | 6-8 |
 | **Trading Frequency** | Low | Moderate | Active | Selective | Precision |
 | **Experience Level** | Beginner | Intermediate | Active Trader | Serious User | Capital Deployer |
 | **Primary Goal** | Learn System | Build Consistency | Generate Returns | Stable Returns | Preserve Dominance |
+| **Exchange Support** | Coinbase** | All | All | All | All |
 
-**Default Tier**: **INVESTOR** ($100-$249) - "Where NIJA starts to feel 'real'"
+**Default Tier**: **INVESTOR** ($25-$100) - "Where NIJA starts to feel 'real'"
+
+** SAVER tier: Coinbase-only recommended due to Kraken $10 minimum
 
 ---
 
-## 🌱 TIER 1: SAVER ($25-$99)
+## 🌱 TIER 1: SAVER/Starter ($10-$25)
 
 ### Goal
 **"Protect capital. Learn the system."**
 
 ### When to Use
-✅ You have **$25-$99 capital**  
+✅ You have **$10-$25 capital**  
 ✅ You are **new to algorithmic trading**  
 ✅ You want to **validate system execution** before scaling  
 ✅ You prioritize **learning over profits**  
 ✅ You understand this tier is **not for income generation**
+⚠️ **You are using Coinbase** (Kraken minimum is $10, limiting trade options)
 
 ### Tier Specifications
 - **Risk Per Trade**: 10-15%
-- **Trade Size**: $2-$5
+- **Trade Size**: $10-$25
 - **Max Positions**: 1
 - **Trading Frequency**: Low (selective only)
 - **Experience Required**: Beginner
+- **Recommended Exchange**: Coinbase (Kraken has $10 minimum trade size)
 
 ### Key Features
 - **Capital preservation focus**: Validates execution without risking significant capital
 - **Single position limit**: Keeps risk extremely concentrated and manageable
-- **Small trade sizes**: Minimum viable positions to learn system behavior
+- **Exchange-aware sizing**: Minimum trade sizes respect Kraken $10 minimum
 - **Low frequency**: Only highest-conviction setups
 - **Learning mode**: Understand NIJA's behavior before committing more capital
 
@@ -64,12 +71,15 @@ Each tier has been carefully tuned to maximize performance while managing risk a
 > ⚠️ **NOT FOR INCOME**: This tier validates execution and teaches the system. Don't expect meaningful profits.
 > 
 > ✅ **VALIDATION TIER**: Learn how NIJA executes, manages positions, and handles risk before upgrading.
+>
+> ⚠️ **KRAKEN LIMITATION**: Kraken enforces a $10 minimum trade size. With $10-$25 capital and $10-$25 trade sizes, you'll be limited to a single trade at a time. Consider using Coinbase for more flexibility in this tier, or upgrade to INVESTOR tier ($25+) for better capital utilization.
 
 ### Who Should Use This
 - Complete beginners to crypto trading
 - Users validating NIJA before depositing more capital
-- Anyone with $25-$99 who wants to start small
+- Anyone with $10-$25 who wants to start small
 - Traders learning algorithmic execution
+- Users with Coinbase accounts (recommended over Kraken for this tier)
 
 ### Configuration
 ```bash
@@ -85,13 +95,13 @@ cp .env.saver_tier .env
 
 ---
 
-## 📊 TIER 2: INVESTOR ($100-$249) - DEFAULT
+## 📊 TIER 2: INVESTOR ($25-$100) - DEFAULT
 
 ### Goal
 **"Build consistency. Reduce randomness."**
 
 ### When to Use
-✅ You have **$100-$249 capital**  
+✅ You have **$25-$100 capital**  
 ✅ You are **learning systematic trading**  
 ✅ You want **NIJA to feel 'real'** without huge risk  
 ✅ You can monitor positions **once or twice daily**  
@@ -99,10 +109,11 @@ cp .env.saver_tier .env
 
 ### Tier Specifications
 - **Risk Per Trade**: 7-10%
-- **Trade Size**: $10+
+- **Trade Size**: $10-$25
 - **Max Positions**: 2-3
 - **Trading Frequency**: Moderate
 - **Experience Required**: Beginner to Intermediate
+- **Exchange Support**: All exchanges (meets Kraken $10 minimum)
 
 ### Key Features
 - **Balanced approach**: Enough capital to see meaningful results
@@ -110,6 +121,7 @@ cp .env.saver_tier .env
 - **Real execution**: Trade sizes feel substantial, not trivial
 - **Moderate frequency**: Active enough to build experience
 - **Default tier**: This is where most users start
+- **Exchange flexibility**: Works with all exchanges including Kraken
 
 ### Important Notes
 > ✅ **DEFAULT TIER**: If you don't specify a tier, you get INVESTOR.
@@ -119,10 +131,11 @@ cp .env.saver_tier .env
 > 🎯 **CONSISTENCY FOCUS**: Build repeatable results, reduce random outcomes.
 
 ### Who Should Use This
-- New NIJA users with $100-$249
+- New NIJA users with $25-$100
 - Traders learning systematic approaches
 - Users upgrading from SAVER tier
 - Anyone wanting to see NIJA perform without major risk
+- Users with Kraken accounts (meets $10 minimum)
 
 ### Configuration
 ```bash
@@ -140,13 +153,13 @@ cp .env.investor_tier .env
 
 ---
 
-## ⭐ TIER 3: INCOME ($250-$999) - CORE RETAIL POWER TIER
+## ⭐ TIER 3: INCOME ($100-$500) - CORE RETAIL POWER TIER
 
 ### Goal
 **"Generate repeatable returns."**
 
 ### When to Use
-✅ You have **$250-$999 capital**  
+✅ You have **$100-$500 capital**  
 ✅ You want **meaningful income generation**  
 ✅ You are an **active retail trader**  
 ✅ You can monitor positions **regularly**  
@@ -154,7 +167,7 @@ cp .env.investor_tier .env
 
 ### Tier Specifications
 - **Risk Per Trade**: 4-7%
-- **Trade Size**: $15-$25
+- **Trade Size**: $15-$50
 - **Max Positions**: 3-5
 - **Trading Frequency**: Active but selective
 - **Experience Required**: Intermediate to Advanced
@@ -163,7 +176,7 @@ cp .env.investor_tier .env
 - **⭐ CORE RETAIL POWER TIER**: This is where NIJA delivers maximum retail performance
 - **Income generation**: Capital sufficient for repeatable, meaningful returns
 - **Active diversification**: 3-5 positions for balanced exposure
-- **Optimal trade sizes**: $15-$25 positions hit the sweet spot
+- **Optimal trade sizes**: $15-$50 positions hit the sweet spot
 - **Selective activity**: High-confidence setups with active execution
 - **Professional feel**: This tier operates like a small trading account
 
@@ -178,7 +191,7 @@ cp .env.investor_tier .env
 - Active retail traders with proven experience
 - Users upgrading from INVESTOR tier
 - Traders seeking income from algorithmic trading
-- Anyone with $250-$999 wanting optimal NIJA performance
+- Anyone with $100-$500 wanting optimal NIJA performance
 
 ### Performance Expectations
 - **Monthly Return Target**: 8-15%
@@ -200,13 +213,13 @@ cp .env.income_tier .env
 
 ---
 
-## 💼 TIER 4: LIVABLE ($1k-$5k)
+## 💼 TIER 4: LIVABLE ($500-$2,500)
 
 ### Goal
 **"Stable returns. Capital protection."**
 
 ### When to Use
-✅ You have **$1,000-$5,000 capital**  
+✅ You have **$500-$2,500 capital**  
 ✅ You are a **serious trader**, not a gambler  
 ✅ You want **consistent, stable returns**  
 ✅ You prioritize **capital protection** over aggressive growth  
@@ -214,13 +227,13 @@ cp .env.income_tier .env
 
 ### Tier Specifications
 - **Risk Per Trade**: 2-4%
-- **Trade Size**: $25+
+- **Trade Size**: $25-$100
 - **Max Positions**: 5-6
 - **Trading Frequency**: Selective, high-confidence only
 - **Experience Required**: Advanced
 
 ### Key Features
-- **Serious capital deployment**: $1k+ requires professional approach
+- **Serious capital deployment**: $500+ requires professional approach
 - **Capital protection focus**: Preserve account, generate stable returns
 - **Lower risk per trade**: 2-4% ensures longevity
 - **Diversified positions**: 5-6 concurrent positions spread risk
@@ -236,7 +249,7 @@ cp .env.income_tier .env
 
 ### Who Should Use This
 - Serious retail traders with proven track records
-- Users with $1k-$5k seeking stable returns
+- Users with $500-$2,500 seeking stable returns
 - Traders upgrading from INCOME tier
 - Anyone prioritizing capital preservation over aggressive growth
 
@@ -260,13 +273,13 @@ cp .env.livable_tier .env
 
 ---
 
-## 🏆 TIER 5: BALLER ($5k+)
+## 🏆 TIER 5: BALLER ($2,500+)
 
 ### Goal
 **"Scale capital. Preserve dominance."**
 
 ### When to Use
-✅ You have **$5,000+ capital**  
+✅ You have **$2,500+ capital**  
 ✅ You are **deploying capital**, not speculating  
 ✅ You want **precision execution** with minimal risk  
 ✅ You can **manage large positions** professionally  
@@ -274,7 +287,7 @@ cp .env.livable_tier .env
 
 ### Tier Specifications
 - **Risk Per Trade**: 1-2%
-- **Trade Size**: $50+
+- **Trade Size**: $50-$500
 - **Max Positions**: 6-8
 - **Trading Frequency**: Precision-only (highest conviction)
 - **Experience Required**: Professional
@@ -295,7 +308,7 @@ cp .env.livable_tier .env
 > 🎯 **PRECISION-ONLY**: Ultra-selective execution. Quality over quantity.
 
 ### Who Should Use This
-- Professional traders with $5k+ accounts
+- Professional traders with $2,500+ accounts
 - Funded accounts requiring institutional risk management
 - Traders scaling from LIVABLE tier
 - Anyone deploying significant capital systematically
