@@ -87,6 +87,10 @@ class TradeLedgerDB:
                 )
             """)
             
+            # CRITICAL FIX (Jan 22, 2026): Ensure master_trade_id column exists in existing databases
+            # This migration is idempotent and safe to run multiple times
+            self._migrate_add_master_trade_id(cursor)
+            
             # Open positions table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS open_positions (
@@ -203,6 +207,41 @@ class TradeLedgerDB:
             """)
             
             logger.info("✅ Database schema initialized")
+    
+    def _migrate_add_master_trade_id(self, cursor):
+        """
+        Migration: Add master_trade_id column to trade_ledger table if it doesn't exist.
+        
+        CRITICAL FIX (Jan 22, 2026): Ensure existing databases have master_trade_id column.
+        This is required for copy trading visibility and trade attribution.
+        
+        Args:
+            cursor: SQLite cursor
+        """
+        try:
+            # Check if column exists by querying table info
+            cursor.execute("PRAGMA table_info(trade_ledger)")
+            columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'master_trade_id' not in columns:
+                logger.info("🔧 Running migration: Adding master_trade_id column to trade_ledger")
+                cursor.execute("""
+                    ALTER TABLE trade_ledger 
+                    ADD COLUMN master_trade_id TEXT
+                """)
+                
+                # Add index for performance
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_ledger_master_trade 
+                    ON trade_ledger(master_trade_id)
+                """)
+                
+                logger.info("✅ Migration complete: master_trade_id column added")
+            else:
+                logger.debug("✓ master_trade_id column already exists")
+        except Exception as e:
+            # Log but don't fail - column might already exist from CREATE TABLE
+            logger.debug(f"Migration check for master_trade_id: {e}")
     
     def record_buy(self, symbol: str, price: float, quantity: float, 
                    size_usd: float, fee: float = 0.0, 

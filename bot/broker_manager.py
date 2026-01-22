@@ -7298,6 +7298,46 @@ class BrokerManager:
         """
         return self.active_broker
     
+    def select_primary_master_broker(self):
+        """
+        Select the primary master broker with intelligent fallback logic.
+        
+        CRITICAL FIX: Promote Kraken to primary when Coinbase is in exit_only mode.
+        
+        Priority rules:
+        1. If current primary is in exit_only mode, promote Kraken (if available and not exit_only)
+        2. Otherwise, keep current primary broker
+        
+        This ensures the master portfolio uses the correct broker for new entries.
+        """
+        if not self.active_broker:
+            logger.warning("⚠️ No primary broker set - cannot select primary master")
+            return
+        
+        # Check if current primary is in exit_only mode
+        if hasattr(self.active_broker, 'exit_only_mode') and self.active_broker.exit_only_mode:
+            current_primary = self.active_broker.broker_type.value
+            logger.info(f"🔍 Current primary broker ({current_primary}) is in EXIT_ONLY mode")
+            
+            # Try to promote Kraken
+            if BrokerType.KRAKEN in self.brokers:
+                kraken = self.brokers[BrokerType.KRAKEN]
+                if kraken.connected and not getattr(kraken, 'exit_only_mode', False):
+                    logger.info("=" * 70)
+                    logger.info("🔄 PROMOTING KRAKEN TO PRIMARY MASTER BROKER")
+                    logger.info("=" * 70)
+                    logger.info(f"   Reason: {current_primary} is in EXIT_ONLY mode")
+                    logger.info("   Kraken will handle new entries for master portfolio")
+                    logger.info("=" * 70)
+                    self.set_primary_broker(BrokerType.KRAKEN)
+                    return
+                else:
+                    logger.warning(f"⚠️ Kraken broker not available for promotion (connected={kraken.connected})")
+            else:
+                logger.warning("⚠️ Kraken broker not configured - cannot promote")
+        else:
+            logger.debug(f"✅ Primary broker ({self.active_broker.broker_type.value}) is ready for entries")
+    
     def connect_all(self):
         """Connect to all configured brokers"""
         logger.info("")

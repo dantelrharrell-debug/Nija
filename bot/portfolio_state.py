@@ -209,8 +209,11 @@ class PortfolioStateManager:
         """
         Initialize or update master portfolio.
         
+        CRITICAL FIX (Jan 22, 2026): Prevent overwriting existing master portfolio.
+        Only updates cash balance if portfolio already exists.
+        
         Args:
-            available_cash: Available cash in master account
+            available_cash: Available cash in master account (should be sum of ALL master brokers)
             
         Returns:
             PortfolioState: Master portfolio state
@@ -219,7 +222,10 @@ class PortfolioStateManager:
             self.master_portfolio = PortfolioState(available_cash=available_cash)
             logger.info(f"Master portfolio initialized with ${available_cash:.2f}")
         else:
+            # Portfolio already exists - only update cash balance, preserve positions
+            old_cash = self.master_portfolio.available_cash
             self.master_portfolio.update_cash(available_cash)
+            logger.debug(f"Master portfolio cash updated: ${old_cash:.2f} → ${available_cash:.2f}")
         return self.master_portfolio
     
     def initialize_user_portfolio(self, user_id: str, broker_type: str, available_cash: float) -> UserPortfolioState:
