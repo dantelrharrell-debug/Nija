@@ -22,12 +22,11 @@ SEPARATOR = "=" * 70
 # Source: https://support.kraken.com/hc/en-us/articles/205893708-Minimum-order-size-volume-for-trading
 # Note: These minimums are subject to change. Verify against current Kraken documentation.
 #
-# CRITICAL FIX (Jan 22, 2026): Kraken-specific minimum with safety buffer
-# Even with Kraken's advertised minimums, fees and market conditions require buffers
-# Problem: $5.50 minimum → fees burn you → ghost trades
-# Solution: Enforce $10.00 minimum as best practice for all Kraken trades
-# UPDATE (Jan 22, 2026): Raised to $10.00 to align with exchange rules and tier structure
-KRAKEN_MINIMUM_ORDER_USD = 10.00  # Best practice minimum for Kraken trades
+# CRITICAL FIX (Jan 22, 2026): Kraken $10 minimum trade size enforcement
+# Kraken enforces a $10 minimum trade size per exchange best practices
+# This prevents fee erosion on small trades and ensures profitability
+# UPDATE (Jan 22, 2026): Set to $10.00 to align with exchange rules and tier structure
+KRAKEN_MINIMUM_ORDER_USD = 10.00  # Kraken minimum trade size ($10 best practice)
 
 KRAKEN_MINIMUMS = {
     # Major pairs

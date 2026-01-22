@@ -72,7 +72,7 @@ Each tier has been carefully tuned to maximize performance while managing risk a
 > 
 > ✅ **VALIDATION TIER**: Learn how NIJA executes, manages positions, and handles risk before upgrading.
 >
-> ⚠️ **KRAKEN LIMITATION**: Kraken enforces a $10 minimum trade size. With $10-$25 capital and $10-$25 trade sizes, you may be limited to 1-2 trades max. Consider using Coinbase for more flexibility in this tier, or upgrade to INVESTOR tier ($25+).
+> ⚠️ **KRAKEN LIMITATION**: Kraken enforces a $10 minimum trade size. With $10-$25 capital and $10-$25 trade sizes, you'll be limited to a single trade at a time. Consider using Coinbase for more flexibility in this tier, or upgrade to INVESTOR tier ($25+) for better capital utilization.
 
 ### Who Should Use This
 - Complete beginners to crypto trading
