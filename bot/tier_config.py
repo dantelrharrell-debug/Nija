@@ -476,8 +476,23 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
         # Also check exchange minimum for regular users
         tier_min = max(config.trade_size_min, exchange_min)
         
-        if trade_size < tier_min:
-            if tier_min == exchange_min and exchange_min > config.trade_size_min:
+        # SMALL BALANCE EXCEPTION: For balances where max risk% < tier minimum,
+        # allow trades at the max risk% even if below tier minimum
+        # Example: $62.49 balance, 15% max = $9.37, but tier min is $10.00
+        # In this case, allow $9.37 as it's the maximum allowed by risk limits
+        max_risk_by_pct = balance * (config.risk_per_trade_pct[1] / 100.0)
+        
+        # If the max allowed risk is less than tier minimum, use that instead
+        # This ensures small accounts aren't blocked from trading entirely
+        if max_risk_by_pct < tier_min and trade_size <= max_risk_by_pct:
+            # Trade is within risk limits but below tier minimum - allow it
+            logger.debug(f"Small balance exception: Allowing ${trade_size:.2f} < ${tier_min:.2f} tier minimum (max risk: ${max_risk_by_pct:.2f})")
+            effective_min = exchange_min  # Only enforce exchange minimum
+        else:
+            effective_min = tier_min
+        
+        if trade_size < effective_min:
+            if effective_min == exchange_min and exchange_min > config.trade_size_min:
                 return (False, f"Trade size ${trade_size:.2f} below {exchange} minimum ${exchange_min:.2f}")
             else:
                 return (False, f"Trade size ${trade_size:.2f} below tier minimum ${config.trade_size_min:.2f}")
@@ -490,7 +505,8 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
     max_risk_pct = 25.0 if (is_master and balance < 1000.0) else config.risk_per_trade_pct[1]
     
     risk_pct = (trade_size / balance) * 100 if balance > 0 else 0
-    if risk_pct > max_risk_pct:
+    # Add small tolerance (0.01%) for floating point precision
+    if risk_pct > max_risk_pct + 0.01:
         return (False, f"Trade size {risk_pct:.1f}% of balance exceeds max risk {max_risk_pct:.1f}%")
     
     return (True, "valid")
