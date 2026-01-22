@@ -618,7 +618,20 @@ class NIJAApexStrategyV71:
                         'current_price': current_price
                     }
                 
-                # Check take profit levels
+                # PRIORITY 1: Check stepped profit exits (more aggressive, fee-aware)
+                # This takes profits gradually as position becomes profitable
+                stepped_exit = self.execution_engine.check_stepped_profit_exits(symbol, current_price)
+                if stepped_exit:
+                    return {
+                        'action': 'partial_exit',
+                        'reason': f"Stepped profit exit at {stepped_exit['profit_level']} (NET: {stepped_exit['net_profit_pct']*100:.1f}%)",
+                        'position': position,
+                        'exit_size': stepped_exit['exit_size'],
+                        'exit_pct': stepped_exit['exit_pct'],
+                        'current_price': current_price
+                    }
+                
+                # PRIORITY 2: Check traditional take profit levels (backup)
                 tp_level = self.execution_engine.check_take_profit_hit(symbol, current_price)
                 if tp_level:
                     return {
@@ -807,6 +820,19 @@ class NIJAApexStrategyV71:
                     size_pct=1.0,
                     reason=action_data['reason']
                 )
+                return success
+            
+            elif action == 'partial_exit':
+                # Stepped profit exit (fee-aware gradual profit-taking)
+                success = self.execution_engine.execute_exit(
+                    symbol=symbol,
+                    exit_price=action_data.get('current_price'),
+                    size_pct=action_data['exit_pct'],
+                    reason=action_data['reason']
+                )
+                if success:
+                    logger.info(f"✅ Partial exit executed: {symbol} - {action_data['exit_pct']*100:.0f}% @ ${action_data['current_price']:.4f}")
+                    logger.info(f"   Reason: {action_data['reason']}")
                 return success
             
             elif action.startswith('take_profit_'):

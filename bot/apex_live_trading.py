@@ -189,6 +189,22 @@ class ApexLiveTrader:
             if df is None:
                 continue
             
+            current_price = df['close'].iloc[-1]
+            
+            # PRIORITY 1: Check stepped profit exits (fee-aware gradual profit-taking)
+            profit_exit = self._check_stepped_profit_exits(symbol, position, current_price)
+            if profit_exit:
+                logger.info(f"✅ Stepped profit exit for {symbol}: {profit_exit['reason']}")
+                self.close_position(symbol, profit_exit['exit_pct'])
+                
+                # Update position size after partial exit
+                if profit_exit['exit_pct'] < 1.0:
+                    position['size'] *= (1.0 - profit_exit['exit_pct'])
+                    position['remaining_pct'] = position.get('remaining_pct', 1.0) * (1.0 - profit_exit['exit_pct'])
+                else:
+                    positions_to_close.append(symbol)
+                continue
+            
             # Update position
             update_result = self.strategy.update_position(
                 position['id'],
@@ -220,6 +236,88 @@ class ApexLiveTrader:
         # Remove closed positions
         for symbol in positions_to_close:
             del self.open_positions[symbol]
+    
+    def _check_stepped_profit_exits(self, symbol: str, position: dict, current_price: float) -> dict:
+        """
+        Check if position should execute stepped profit-taking exits
+        
+        Fee-Aware Profitability Mode - Stepped exits adjusted for exchange fees
+        
+        Exit Schedule (assuming ~1.4% round-trip fees for Coinbase):
+        - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees (PROFITABLE)
+        - Exit 15% at 2.5% gross profit → ~1.1% NET profit after fees (PROFITABLE)
+        - Exit 25% at 3.0% gross profit → ~1.6% NET profit after fees (PROFITABLE)
+        - Exit 50% at 4.0% gross profit → ~2.6% NET profit after fees (PROFITABLE)
+        
+        This dramatically reduces average hold time while ensuring ALL exits are NET PROFITABLE.
+        
+        Args:
+            symbol: Trading symbol
+            position: Position dictionary
+            current_price: Current market price
+        
+        Returns:
+            Dictionary with exit details if triggered, None otherwise
+        """
+        entry_price = position.get('entry_price')
+        side = position.get('side')
+        
+        if not entry_price or not side:
+            return None
+        
+        # Calculate GROSS profit percentage (before fees)
+        if side == 'long':
+            gross_profit_pct = (current_price - entry_price) / entry_price
+        else:  # short
+            gross_profit_pct = (entry_price - current_price) / entry_price
+        
+        # Only take profits on winning positions
+        if gross_profit_pct <= 0:
+            return None
+        
+        # Default round-trip fee (Coinbase: ~0.6% entry + ~0.6% exit + ~0.2% spread = ~1.4%)
+        DEFAULT_ROUND_TRIP_FEE = 0.014
+        
+        # FEE-AWARE profit thresholds (GROSS profit needed for NET profitability)
+        # Each threshold ensures NET profit after round-trip fees
+        exit_levels = [
+            (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~0.6% NET
+            (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~1.1% NET
+            (0.030, 0.25, 'tp_exit_3.0pct'),   # Exit 25% at 3.0% gross → ~1.6% NET
+            (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~2.6% NET
+        ]
+        
+        for gross_threshold, exit_pct, exit_flag in exit_levels:
+            # Skip if already executed
+            if position.get(exit_flag, False):
+                continue
+            
+            # Check if GROSS profit target hit (net will be profitable)
+            if gross_profit_pct >= gross_threshold:
+                # Mark as executed
+                position[exit_flag] = True
+                
+                # Calculate expected NET profit for this exit
+                expected_net_pct = gross_threshold - DEFAULT_ROUND_TRIP_FEE
+                
+                logger.info(f"✅ FEE-AWARE profit exit triggered: {symbol} {side}")
+                logger.info(f"  Gross profit: {gross_profit_pct*100:.2f}% ≥ {gross_threshold*100:.1f}% threshold")
+                logger.info(f"  Est. fees: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%")
+                logger.info(f"  NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
+                logger.info(f"  Exiting: {exit_pct*100:.0f}% of position")
+                
+                remaining_pct = position.get('remaining_pct', 1.0) * (1.0 - exit_pct)
+                logger.info(f"  Remaining: {remaining_pct*100:.0f}% for trailing stop")
+                
+                return {
+                    'exit_pct': exit_pct,
+                    'profit_level': f"{gross_threshold*100:.1f}%",
+                    'gross_profit_pct': gross_profit_pct,
+                    'net_profit_pct': expected_net_pct,
+                    'reason': f"Stepped profit exit at {gross_threshold*100:.1f}% (NET: {expected_net_pct*100:.1f}%)"
+                }
+        
+        return None
     
     def close_position(self, symbol: str, exit_percentage: float):
         """
