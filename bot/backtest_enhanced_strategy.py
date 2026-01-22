@@ -460,10 +460,10 @@ def generate_sample_data(symbol: str, days: int = 90) -> pd.DataFrame:
     """
     logger.info(f"Generating sample data for {symbol} ({days} days)")
     
-    # Generate timestamps (1-hour candles)
+    # Generate timestamps (1-hour candles) - use lowercase 'h' for newer pandas versions
     end_time = datetime.now()
     start_time = end_time - timedelta(days=days)
-    timestamps = pd.date_range(start=start_time, end=end_time, freq='1H')
+    timestamps = pd.date_range(start=start_time, end=end_time, freq='1h')
     
     # Generate synthetic price data with trend
     np.random.seed(42)
