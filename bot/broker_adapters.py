@@ -457,6 +457,243 @@ class AlpacaAdapter(BrokerAdapter):
         return symbol.upper()
 
 
+class BinanceAdapter(BrokerAdapter):
+    """
+    Binance-specific execution adapter.
+    
+    Enforces:
+    - Minimum notional per pair (varies, typically $10-15)
+    - Precision rules (8 decimals for most pairs)
+    - Pair availability (1000+ pairs)
+    - Symbol format: BTCUSDT, ETHUSDT (no separator)
+    - Fee awareness (0.10% maker/taker with BNB discount)
+    """
+    
+    # Binance minimum notional values
+    MIN_NOTIONAL_DEFAULT = 10.0  # $10 minimum for most pairs
+    MIN_NOTIONAL_BTC = 10.0  # $10 minimum for BTC pairs
+    
+    # Binance fee structure (with BNB discount)
+    MAKER_FEE_PCT = 0.10  # 0.10% maker fee (0.075% with BNB)
+    TAKER_FEE_PCT = 0.10  # 0.10% taker fee (0.075% with BNB)
+    TOTAL_FEE_PCT = 0.28  # 0.28% combined round-trip cost (with spread)
+    
+    def __init__(self):
+        """Initialize Binance adapter."""
+        super().__init__("binance")
+    
+    def validate_and_adjust(self, intent: TradeIntent) -> ValidatedOrder:
+        """
+        Validate trade intent for Binance.
+        
+        Checks:
+        1. Symbol format is correct (no separator)
+        2. Order size meets minimum notional
+        3. Fees are acceptable
+        """
+        # Normalize symbol
+        normalized_symbol = self.normalize_symbol(intent.symbol)
+        
+        # If force_execute (stop-loss), bypass size checks
+        if intent.force_execute:
+            return ValidatedOrder(
+                symbol=normalized_symbol,
+                side=intent.intent_type.value if intent.intent_type != OrderIntent.STOP_LOSS else "sell",
+                quantity=intent.quantity,
+                size_type=intent.size_type,
+                valid=True,
+                warnings=["FORCE EXECUTE: Bypassing minimum size checks for stop-loss"]
+            )
+        
+        # Get minimum order size
+        min_size, min_size_type = self.get_min_order_size(normalized_symbol)
+        
+        # Calculate order size in USD for validation
+        order_size_usd = intent.size_usd if intent.size_usd > 0 else intent.quantity
+        
+        # Check minimum notional
+        if order_size_usd < min_size:
+            return ValidatedOrder(
+                symbol=normalized_symbol,
+                side=intent.intent_type.value if intent.intent_type != OrderIntent.STOP_LOSS else "sell",
+                quantity=intent.quantity,
+                size_type=intent.size_type,
+                valid=False,
+                error_message=f"Order size ${order_size_usd:.2f} below Binance minimum ${min_size:.2f}"
+            )
+        
+        # Fee awareness check for sells
+        warnings = []
+        if intent.intent_type in [OrderIntent.SELL, OrderIntent.STOP_LOSS]:
+            fee_cost = order_size_usd * (self.TOTAL_FEE_PCT / 100)
+            if fee_cost > order_size_usd * 0.5:  # Fees > 50% of order value
+                warnings.append(f"High fee impact: ${fee_cost:.2f} ({self.TOTAL_FEE_PCT}% of order)")
+        
+        return ValidatedOrder(
+            symbol=normalized_symbol,
+            side=intent.intent_type.value if intent.intent_type != OrderIntent.STOP_LOSS else "sell",
+            quantity=intent.quantity,
+            size_type=intent.size_type,
+            valid=True,
+            warnings=warnings
+        )
+    
+    def get_min_order_size(self, symbol: str) -> Tuple[float, str]:
+        """Get Binance minimum order size."""
+        # BTC pairs have same minimums as others on Binance
+        return (self.MIN_NOTIONAL_DEFAULT, "quote")
+    
+    def normalize_symbol(self, symbol: str) -> str:
+        """
+        Normalize to Binance format (no separators: BTCUSDT, ETHUSDT).
+        
+        Binance uses no separators and USDT as the primary quote currency.
+        """
+        if not symbol:
+            return symbol
+        
+        # Remove all separators
+        symbol = symbol.replace("-", "").replace("/", "").replace(".", "").upper()
+        
+        # Convert USD to USDT (Binance uses USDT, not USD)
+        # Be careful not to convert USDT to USDTT
+        if symbol.endswith("USD") and not symbol.endswith("USDT"):
+            symbol = symbol[:-3] + "USDT"
+        
+        # Handle common base currencies if no separator found
+        if len(symbol) >= 6:
+            for base in ["BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOT", "AVAX"]:
+                if symbol.startswith(base) and not symbol.endswith("USDT"):
+                    # Assume USDT quote if not already specified
+                    rest = symbol[len(base):]
+                    if rest in ["USD", "BUSD"]:
+                        return f"{base}USDT"
+        
+        return symbol
+
+
+class OKXAdapter(BrokerAdapter):
+    """
+    OKX-specific execution adapter.
+    
+    Enforces:
+    - Minimum order size per pair (typically $10)
+    - Precision rules (varies by pair)
+    - Symbol format: BTC-USDT, ETH-USDT (dash separator)
+    - Fee awareness (0.08% maker/0.10% taker for VIP tier)
+    - Futures and perpetuals support
+    """
+    
+    # OKX minimum order sizes
+    MIN_ORDER_DEFAULT = 10.0  # $10 minimum for most pairs
+    MIN_ORDER_BTC = 10.0  # $10 minimum for BTC pairs
+    
+    # OKX fee structure (VIP tier)
+    MAKER_FEE_PCT = 0.08  # 0.08% maker fee
+    TAKER_FEE_PCT = 0.10  # 0.10% taker fee
+    TOTAL_FEE_PCT = 0.20  # 0.20% combined round-trip cost (with spread)
+    
+    def __init__(self):
+        """Initialize OKX adapter."""
+        super().__init__("okx")
+    
+    def validate_and_adjust(self, intent: TradeIntent) -> ValidatedOrder:
+        """
+        Validate trade intent for OKX.
+        
+        Checks:
+        1. Symbol format is correct (XXX-YYY with dash)
+        2. Order size meets minimum
+        3. Fees are acceptable
+        """
+        # Normalize symbol
+        normalized_symbol = self.normalize_symbol(intent.symbol)
+        
+        # If force_execute (stop-loss), bypass size checks
+        if intent.force_execute:
+            return ValidatedOrder(
+                symbol=normalized_symbol,
+                side=intent.intent_type.value if intent.intent_type != OrderIntent.STOP_LOSS else "sell",
+                quantity=intent.quantity,
+                size_type=intent.size_type,
+                valid=True,
+                warnings=["FORCE EXECUTE: Bypassing minimum size checks for stop-loss"]
+            )
+        
+        # Get minimum order size
+        min_size, min_size_type = self.get_min_order_size(normalized_symbol)
+        
+        # Calculate order size in USD for validation
+        order_size_usd = intent.size_usd if intent.size_usd > 0 else intent.quantity
+        
+        # Check minimum order size
+        if order_size_usd < min_size:
+            return ValidatedOrder(
+                symbol=normalized_symbol,
+                side=intent.intent_type.value if intent.intent_type != OrderIntent.STOP_LOSS else "sell",
+                quantity=intent.quantity,
+                size_type=intent.size_type,
+                valid=False,
+                error_message=f"Order size ${order_size_usd:.2f} below OKX minimum ${min_size:.2f}"
+            )
+        
+        # Fee awareness check
+        warnings = []
+        if intent.intent_type in [OrderIntent.SELL, OrderIntent.STOP_LOSS]:
+            fee_cost = order_size_usd * (self.TOTAL_FEE_PCT / 100)
+            if fee_cost > order_size_usd * 0.5:  # Fees > 50% of order value
+                warnings.append(f"High fee impact: ${fee_cost:.2f} ({self.TOTAL_FEE_PCT}% of order)")
+        
+        return ValidatedOrder(
+            symbol=normalized_symbol,
+            side=intent.intent_type.value if intent.intent_type != OrderIntent.STOP_LOSS else "sell",
+            quantity=intent.quantity,
+            size_type=intent.size_type,
+            valid=True,
+            warnings=warnings
+        )
+    
+    def get_min_order_size(self, symbol: str) -> Tuple[float, str]:
+        """Get OKX minimum order size."""
+        return (self.MIN_ORDER_DEFAULT, "quote")
+    
+    def normalize_symbol(self, symbol: str) -> str:
+        """
+        Normalize to OKX format (XXX-YYY with dash separator).
+        
+        OKX uses dash separators and USDT as the primary quote currency.
+        """
+        if not symbol:
+            return symbol
+        
+        # Replace slash with dash
+        symbol = symbol.replace("/", "-")
+        
+        # Replace dot with dash
+        symbol = symbol.replace(".", "-")
+        
+        # Uppercase
+        symbol = symbol.upper()
+        
+        # Convert USD to USDT (OKX prefers USDT)
+        if symbol.endswith("-USD"):
+            symbol = symbol[:-4] + "-USDT"
+        elif symbol.endswith("USD") and "-" not in symbol:
+            # No separator case: BTCUSD -> BTC-USDT
+            for base in ["BTC", "ETH", "SOL", "XRP", "ADA", "DOT", "AVAX", "BNB"]:
+                if symbol.startswith(base) and symbol.endswith("USD"):
+                    return f"{base}-USDT"
+        
+        # Handle no separator case (BTCUSDT -> BTC-USDT)
+        if "-" not in symbol and len(symbol) >= 6:
+            for base in ["BTC", "ETH", "SOL", "XRP", "ADA", "DOT", "AVAX", "BNB"]:
+                if symbol.startswith(base):
+                    quote = symbol[len(base):]
+                    return f"{base}-{quote}"
+        
+        return symbol
+
+
 class BrokerAdapterFactory:
     """Factory for creating broker-specific adapters."""
     
@@ -466,7 +703,7 @@ class BrokerAdapterFactory:
         Create a broker adapter.
         
         Args:
-            broker_type: Broker type (coinbase, kraken, alpaca, etc.)
+            broker_type: Broker type (coinbase, kraken, alpaca, binance, okx, etc.)
             **kwargs: Broker-specific arguments
             
         Returns:
@@ -484,6 +721,10 @@ class BrokerAdapterFactory:
         elif broker_type_lower == "alpaca":
             account_value = kwargs.get('account_value', 0.0)
             return AlpacaAdapter(account_value=account_value)
+        elif broker_type_lower == "binance":
+            return BinanceAdapter()
+        elif broker_type_lower == "okx":
+            return OKXAdapter()
         else:
             raise ValueError(f"Unsupported broker type: {broker_type}")
 
