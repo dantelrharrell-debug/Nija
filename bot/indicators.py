@@ -1,6 +1,10 @@
 # indicators.py
 import pandas as pd
 
+# Division-by-zero guard constant
+# Used throughout to prevent division by zero in indicator calculations
+EPSILON = 1e-6  # Small value to prevent division by zero
+
 
 def scalar(x):
     """
@@ -231,7 +235,9 @@ def calculate_stochastic(df, k_period=14, d_period=3):
     
     # Calculate %K (fast stochastic)
     # %K = 100 * (Current Close - Lowest Low) / (Highest High - Lowest Low)
-    stoch_k = 100 * ((df['close'] - low_min) / (high_max - low_min))
+    # Add EPSILON to denominator to prevent division by zero when range is 0
+    range_diff = high_max - low_min
+    stoch_k = 100 * ((df['close'] - low_min) / (range_diff + EPSILON))
     
     # Calculate %D (slow stochastic - SMA of %K)
     stoch_d = stoch_k.rolling(window=d_period, min_periods=d_period).mean()
@@ -269,13 +275,14 @@ def calculate_vwap_bands(df, std_dev=2):
     # Calculate typical price
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     
-    # Calculate VWAP
-    vwap = (typical_price * df['volume']).cumsum() / df['volume'].cumsum()
+    # Calculate VWAP - add EPSILON to prevent division by zero
+    cumulative_volume = df['volume'].cumsum()
+    vwap = (typical_price * df['volume']).cumsum() / (cumulative_volume + EPSILON)
     
     # Calculate variance for VWAP bands
     # Variance = cumsum((price - vwap)^2 * volume) / cumsum(volume)
     price_deviation_squared = ((typical_price - vwap) ** 2) * df['volume']
-    variance = price_deviation_squared.cumsum() / df['volume'].cumsum()
+    variance = price_deviation_squared.cumsum() / (cumulative_volume + EPSILON)
     std = variance ** 0.5
     
     # Calculate bands
@@ -559,7 +566,9 @@ def calculate_multi_indicator_score(df):
     
     # Bollinger Band position (0-2 points)
     # Long: Price near lower band (oversold) or breaking above middle
-    price_to_lower = (current_price - bb_lower.iloc[-1]) / (bb_middle.iloc[-1] - bb_lower.iloc[-1] + 1e-6)
+    # Prevent division by zero when bands collapse
+    band_range = bb_middle.iloc[-1] - bb_lower.iloc[-1] + EPSILON
+    price_to_lower = (current_price - bb_lower.iloc[-1]) / band_range
     if price_to_lower < 0.3:  # Near lower band
         long_score += 2
         breakdown['long']['bollinger'] = 2
@@ -570,7 +579,9 @@ def calculate_multi_indicator_score(df):
         breakdown['long']['bollinger'] = 0
     
     # Short: Price near upper band (overbought) or breaking below middle
-    price_to_upper = (current_price - bb_middle.iloc[-1]) / (bb_upper.iloc[-1] - bb_middle.iloc[-1] + 1e-6)
+    # Prevent division by zero when bands collapse
+    band_range_upper = bb_upper.iloc[-1] - bb_middle.iloc[-1] + EPSILON
+    price_to_upper = (current_price - bb_middle.iloc[-1]) / band_range_upper
     if price_to_upper > 0.7:  # Near upper band
         short_score += 2
         breakdown['short']['bollinger'] = 2
@@ -619,7 +630,8 @@ def check_no_trade_zones(df, rsi):
     close = df['close'].iloc[-1]
     wick_size = max(high - close, close - low)
     body_size = abs(close - open_)
-    wick_to_body = wick_size / (body_size + 1e-6)
+    # Prevent division by zero when candle has no body
+    wick_to_body = wick_size / (body_size + EPSILON)
 
     # Extreme RSI
     if current_rsi > 90 or current_rsi < 10:

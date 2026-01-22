@@ -15,9 +15,10 @@ Research Source: STRATEGY_RESEARCH_2026.md
 
 # Minimum score required to enter a trade (0-10 scale)
 # Research shows 73% win rate with score >= 7 vs 45-50% with single indicators
+# These values are validated against calculate_multi_indicator_score() which returns 0-10
 MIN_ENTRY_SCORE = 5  # Conservative: Require at least 5/10 points
 OPTIMAL_ENTRY_SCORE = 7  # Optimal: Target 7/10 points for best trades
-MAX_ENTRY_SCORE = 10  # Maximum possible score
+MAX_ENTRY_SCORE = 10  # Maximum possible score from multi-indicator system
 
 # Score-based position sizing
 # Higher confidence = larger position size
@@ -229,7 +230,7 @@ RISK_CONFIG = {
     # Per-trade risk limits
     'max_risk_per_trade_pct': 2.0,         # Never risk more than 2% per trade
     'max_position_size_pct': 20.0,          # Never exceed 20% of capital
-    'min_position_size_usd': 2.0,           # Minimum $2 position (lowered from $5)
+    'min_position_size_usd': 2.0,           # Minimum $2 position
     
     # Portfolio risk limits
     'max_total_exposure_pct': 50.0,         # Max 50% of capital in positions

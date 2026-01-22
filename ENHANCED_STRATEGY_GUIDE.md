@@ -3,7 +3,7 @@
 ## Optimized for 24/7 Cryptocurrency Day Trading
 
 **Version:** 1.0  
-**Date:** January 22, 2026  
+**Created:** January 2026  
 **Based on:** Comprehensive 2026 cryptocurrency trading research
 
 ---
@@ -25,11 +25,20 @@ The NIJA Enhanced Strategy implements research-backed improvements specifically 
 - **3x more trading time = 3x more opportunities than human day traders**
 - Perfect consistency at 3 AM same as 3 PM (zero fatigue)
 
-**Expected Results:**
-- Win Rate: 70-80% (vs 55-60% baseline)
-- Daily Returns: 1.5-3.5% (with 24/7 opportunities)
-- Monthly Returns: 30-70% (compounding around the clock)
-- **Annual Returns: 800-2500% (with proper risk management)**
+**Expected Results (Conservative Estimates):**
+⚠️ **IMPORTANT DISCLAIMER**: Trading involves substantial risk of loss. Past performance and research findings do not guarantee future results. These are theoretical projections based on research and backtesting, not guaranteed returns.
+
+- Win Rate: 70-80% (vs 55-60% baseline) - Based on multi-indicator research
+- Daily Returns: 1.5-3.5% (with 24/7 opportunities) - Theoretical best case
+- Monthly Returns: 30-70% (compounding around the clock) - Requires perfect execution
+- **Annual Returns: 100-500% with conservative risk management**
+
+All projections assume:
+- Proper risk management (2% max per trade)
+- Market conditions remain favorable
+- No major black swan events
+- Continuous monitoring and adjustment
+- Starting with adequate capital ($500+)
 
 ---
 
