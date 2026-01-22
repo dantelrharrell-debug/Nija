@@ -217,6 +217,9 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
     'password', 'PASSWORD'
 ]
 
+# Logging constants
+LOG_SEPARATOR = "=" * 70
+
 
 # ============================================================================
 # BROKER-AWARE SYMBOL NORMALIZATION (FIX #1 - Jan 19, 2026)
@@ -6264,17 +6267,21 @@ class KrakenBroker(BaseBroker):
                         current_balance = balance_info.get('trading_balance', 0.0)
                         
                         # Check if balance meets minimum tier requirement ($25 SAVER tier minimum)
-                        if current_balance < 25.0:
-                            logging.error("=" * 70)
+                        # Use tier config to get the minimum balance
+                        saver_tier_config = get_tier_config(get_tier_from_balance(25.0))
+                        min_balance_required = saver_tier_config.capital_min
+                        
+                        if current_balance < min_balance_required:
+                            logging.error(LOG_SEPARATOR)
                             logging.error("❌ TIER ENFORCEMENT: BUY ORDER BLOCKED")
-                            logging.error("=" * 70)
+                            logging.error(LOG_SEPARATOR)
                             logging.error(f"   Account balance: ${current_balance:.2f}")
-                            logging.error(f"   Minimum required: $25.00 (SAVER tier minimum)")
+                            logging.error(f"   Minimum required: ${min_balance_required:.2f} (SAVER tier minimum)")
                             logging.error("   ⚠️  Cannot execute trades below tier minimum")
-                            logging.error("=" * 70)
+                            logging.error(LOG_SEPARATOR)
                             return {
                                 "status": "error",
-                                "error": f"Account balance ${current_balance:.2f} below minimum tier requirement $25.00"
+                                "error": f"Account balance ${current_balance:.2f} below minimum tier requirement ${min_balance_required:.2f}"
                             }
                         
                         # Determine user's tier based on balance
@@ -6288,15 +6295,15 @@ class KrakenBroker(BaseBroker):
                         is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
                         
                         if not is_valid:
-                            logging.error("=" * 70)
+                            logging.error(LOG_SEPARATOR)
                             logging.error("❌ TIER ENFORCEMENT: TRADE SIZE BLOCKED")
-                            logging.error("=" * 70)
+                            logging.error(LOG_SEPARATOR)
                             logging.error(f"   Tier: {user_tier.value}")
                             logging.error(f"   Account balance: ${current_balance:.2f}")
                             logging.error(f"   Trade size: ${order_size_usd:.2f}")
                             logging.error(f"   Reason: {reason}")
                             logging.error("   ⚠️  Trade blocked to prevent fee destruction")
-                            logging.error("=" * 70)
+                            logging.error(LOG_SEPARATOR)
                             return {
                                 "status": "error",
                                 "error": f"[{user_tier.value} Tier] {reason}"
@@ -6326,13 +6333,13 @@ class KrakenBroker(BaseBroker):
             # DO NOT allow rejected orders to be recorded as successful trades
             if result and 'error' in result and result['error']:
                 error_msgs = ', '.join(result['error'])
-                logging.error("=" * 70)
+                logging.error(LOG_SEPARATOR)
                 logging.error("❌ KRAKEN ORDER REJECTED - ABORTING")
-                logging.error("=" * 70)
+                logging.error(LOG_SEPARATOR)
                 logging.error(f"   Symbol: {kraken_symbol}, Side: {order_type}, Quantity: {quantity}")
                 logging.error(f"   Rejection Reason: {error_msgs}")
                 logging.error("   ⚠️  ORDER REJECTED - DO NOT RECORD TRADE")
-                logging.error("=" * 70)
+                logging.error(LOG_SEPARATOR)
                 # Return error status to prevent recording this as a successful trade
                 return {"status": "error", "error": error_msgs}
             
@@ -6346,14 +6353,14 @@ class KrakenBroker(BaseBroker):
                 # If no txid → trade not executed → return error
                 if not order_id:
                     account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "UNKNOWN"
-                    logging.error("=" * 70)
+                    logging.error(LOG_SEPARATOR)
                     logging.error(f"❌ KRAKEN ORDER FAILED - NO TXID RETURNED")
-                    logging.error("=" * 70)
+                    logging.error(LOG_SEPARATOR)
                     logging.error(f"   Account: {account_label}")
                     logging.error(f"   Symbol: {kraken_symbol}, Side: {order_type}, Quantity: {quantity}")
                     logging.error(f"   API Response: {result}")
                     logging.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
-                    logging.error("=" * 70)
+                    logging.error(LOG_SEPARATOR)
                     # Return error status to prevent recording this as a successful trade
                     return {"status": "error", "error": "No txid returned from Kraken - order did not execute"}
                 
@@ -6362,9 +6369,9 @@ class KrakenBroker(BaseBroker):
                 # Enhanced trade confirmation logging with account identification
                 account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "UNKNOWN"
                 
-                logging.info("=" * 70)
+                logging.info(LOG_SEPARATOR)
                 logging.info(f"✅ TRADE CONFIRMATION - {account_label}")
-                logging.info("=" * 70)
+                logging.info(LOG_SEPARATOR)
                 logging.info(f"   Exchange: Kraken")
                 logging.info(f"   Order Type: {order_type.upper()}")
                 logging.info(f"   Symbol: {kraken_symbol}")
@@ -6372,7 +6379,7 @@ class KrakenBroker(BaseBroker):
                 logging.info(f"   Order ID: {order_id}")
                 logging.info(f"   Account: {account_label}")
                 logging.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
-                logging.info("=" * 70)
+                logging.info(LOG_SEPARATOR)
                 
                 # Flush logs immediately to ensure confirmation is visible
                 if _root_logger.handlers:

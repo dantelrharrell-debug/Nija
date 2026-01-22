@@ -10,6 +10,10 @@ import logging
 
 logger = logging.getLogger("nija")
 
+# Constants
+VALID_ORDER_STATUSES = ['open', 'closed', 'filled', 'pending']
+LOG_SEPARATOR = "=" * 70
+
 # Import fee-aware configuration for profit calculations
 try:
     from fee_aware_config import MARKET_ORDER_ROUND_TRIP
@@ -164,15 +168,15 @@ class ExecutionEngine:
                 # ✅ REQUIREMENT: Confirm status=open or closed
                 # BLOCK ledger writes until order status is confirmed
                 order_status = result.get('status', '')
-                if order_status not in ['open', 'closed', 'filled', 'pending']:
-                    logger.error("=" * 70)
+                if order_status not in VALID_ORDER_STATUSES:
+                    logger.error(LOG_SEPARATOR)
                     logger.error("❌ INVALID ORDER STATUS - CANNOT RECORD POSITION")
-                    logger.error("=" * 70)
+                    logger.error(LOG_SEPARATOR)
                     logger.error(f"   Symbol: {symbol}, Side: {side}")
                     logger.error(f"   Order ID: {order_id}")
-                    logger.error(f"   Status: {order_status} (expected: open/closed/filled)")
+                    logger.error(f"   Status: {order_status} (expected: {'/'.join(VALID_ORDER_STATUSES)})")
                     logger.error("   ⚠️  Order status must be confirmed before recording position")
-                    logger.error("=" * 70)
+                    logger.error(LOG_SEPARATOR)
                     return None
                 
                 # CRITICAL: Validate filled price to prevent accepting immediate losers
@@ -223,9 +227,9 @@ class ExecutionEngine:
                 executed_cost = (final_entry_price * filled_volume) + entry_fee
                 
                 # Log master trade verification data
-                logger.info("=" * 70)
+                logger.info(LOG_SEPARATOR)
                 logger.info("✅ MASTER TRADE VERIFICATION")
-                logger.info("=" * 70)
+                logger.info(LOG_SEPARATOR)
                 logger.info(f"   Kraken Order ID: {order_id}")
                 logger.info(f"   Fill Time: {fill_time}")
                 logger.info(f"   Executed Cost: ${executed_cost:.2f}")
@@ -233,7 +237,7 @@ class ExecutionEngine:
                 logger.info(f"   Filled Volume: {filled_volume:.8f}")
                 logger.info(f"   Entry Fee: ${entry_fee:.2f}")
                 logger.info(f"   Order Status: {order_status}")
-                logger.info("=" * 70)
+                logger.info(LOG_SEPARATOR)
                 
                 # Generate unique position ID
                 position_id = f"{symbol}_{int(datetime.now().timestamp())}"
