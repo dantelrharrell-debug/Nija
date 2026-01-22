@@ -4,17 +4,15 @@
 
 NIJA uses **five official trading tiers** optimized for different capital levels, experience, and trading goals. Each tier is precisely calibrated with appropriate risk parameters, position limits, and capital requirements.
 
-**Official Tiers (Updated Jan 22, 2026):**
-1. **SAVER/Starter** ($10-$25) - Learn the system (Coinbase-only or disabled on Kraken)
-2. **INVESTOR** ($25-$100) - DEFAULT tier for new users
-3. **INCOME** ($100-$500) - ⭐ **NIJA's core retail power tier**
-4. **LIVABLE** ($500-$2,500) - Stable returns, serious users
-5. **BALLER** ($2,500+) - Scale capital, precision deployment
+**Official Tiers (FINAL VERSION - Updated Jan 22, 2026):**
+1. **SAVER/Starter** ($100–$249) - Capital preservation + learning
+2. **INVESTOR** ($250–$999) - Consistent participation
+3. **INCOME** ($1,000–$4,999) - Serious retail trading
+4. **LIVABLE** ($5,000–$24,999) - Professional-level execution
+5. **BALLER** ($25,000+) - Capital deployment
 
 **System Authority:**
 - **MASTER** - Strategy governance and execution authority (NOT a user tier)
-
-**Important Note on Kraken:** Kraken enforces a $10 minimum trade size. The SAVER tier is recommended for Coinbase only, or users should upgrade to INVESTOR tier ($25+) when using Kraken.
 
 Each tier has been carefully tuned to maximize performance while managing risk appropriately for the capital level.
 
@@ -22,64 +20,56 @@ Each tier has been carefully tuned to maximize performance while managing risk a
 
 ## 📊 Tier Comparison Table
 
-| Parameter | SAVER/Starter | INVESTOR | INCOME ⭐ | LIVABLE | BALLER |
-|-----------|---------------|----------|----------|---------|--------|
-| **Capital Range** | $10-$25 | $25-$100 | $100-$500 | $500-$2,500 | $2,500+ |
-| **Risk Per Trade** | 10-15% | 7-10% | 4-7% | 2-4% | 1-2% |
-| **Trade Size** | $10-$25 | $10-$25 | $15-$50 | $25-$100 | $50-$500 |
-| **Max Positions** | 1 | 2-3 | 3-5 | 5-6 | 6-8 |
-| **Trading Frequency** | Low | Moderate | Active | Selective | Precision |
+| Parameter | SAVER/Starter | INVESTOR | INCOME | LIVABLE | BALLER |
+|-----------|---------------|----------|--------|---------|--------|
+| **Capital Range** | $100–$249 | $250–$999 | $1k–$4.9k | $5k–$24.9k | $25k+ |
+| **Risk Per Trade** | 7-10% | 5-7% | 3-5% | 2-3% | 1-2% |
+| **Trade Size** | $15-$40 | $20-$75 | $30-$150 | $50-$300 | $100-$1k |
+| **Max Positions** | 2 | 3 | 5 | 6 | 8 |
+| **Trading Frequency** | Moderate | Active | Very Active | Selective | Precision |
 | **Experience Level** | Beginner | Intermediate | Active Trader | Serious User | Capital Deployer |
-| **Primary Goal** | Learn System | Build Consistency | Generate Returns | Stable Returns | Preserve Dominance |
-| **Exchange Support** | Coinbase** | All | All | All | All |
+| **Primary Goal** | Learn & Preserve | Build Consistency | Serious Trading | Professional Execution | Capital Deployment |
+| **Exchange Support** | All | All | All | All | All |
 
-**Default Tier**: **INVESTOR** ($25-$100) - "Where NIJA starts to feel 'real'"
-
-** SAVER tier: Coinbase-only recommended due to Kraken $10 minimum
+**Default Tier**: **INVESTOR** ($250–$999) - "Where NIJA starts to feel 'real'"
 
 ---
 
-## 🌱 TIER 1: SAVER/Starter ($10-$25)
+## 🌱 TIER 1: SAVER/Starter ($100–$249)
 
 ### Goal
-**"Protect capital. Learn the system."**
+**"Capital preservation + learning"**
 
 ### When to Use
-✅ You have **$10-$25 capital**  
+✅ You have **$100–$249 capital**  
 ✅ You are **new to algorithmic trading**  
 ✅ You want to **validate system execution** before scaling  
-✅ You prioritize **learning over profits**  
-✅ You understand this tier is **not for income generation**
-⚠️ **You are using Coinbase** (Kraken minimum is $10, limiting trade options)
+✅ You prioritize **learning and preservation**  
+✅ You understand this tier focuses on **capital preservation**
 
 ### Tier Specifications
-- **Risk Per Trade**: 10-15%
-- **Trade Size**: $10-$25
-- **Max Positions**: 1
-- **Trading Frequency**: Low (selective only)
+- **Risk Per Trade**: 7-10%
+- **Trade Size**: $15-$40
+- **Max Positions**: 2
+- **Trading Frequency**: Moderate
 - **Experience Required**: Beginner
-- **Recommended Exchange**: Coinbase (Kraken has $10 minimum trade size)
 
 ### Key Features
-- **Capital preservation focus**: Validates execution without risking significant capital
-- **Single position limit**: Keeps risk extremely concentrated and manageable
-- **Exchange-aware sizing**: Minimum trade sizes respect Kraken $10 minimum
-- **Low frequency**: Only highest-conviction setups
+- **Capital preservation focus**: Validates execution while protecting capital
+- **Conservative position sizing**: Manages risk appropriately for smaller accounts
 - **Learning mode**: Understand NIJA's behavior before committing more capital
+- **Gradual participation**: Build confidence with real trades
 
 ### Important Notes
-> ⚠️ **NOT FOR INCOME**: This tier validates execution and teaches the system. Don't expect meaningful profits.
+> ✅ **PRESERVATION FOCUS**: This tier emphasizes capital preservation while you learn the system.
 > 
-> ✅ **VALIDATION TIER**: Learn how NIJA executes, manages positions, and handles risk before upgrading.
->
-> ⚠️ **KRAKEN LIMITATION**: Kraken enforces a $10 minimum trade size. With $10-$25 capital and $10-$25 trade sizes, you'll be limited to a single trade at a time. Consider using Coinbase for more flexibility in this tier, or upgrade to INVESTOR tier ($25+) for better capital utilization.
+> ✅ **STARTER TIER**: Perfect entry point for new algorithmic traders.
 
 ### Who Should Use This
 - Complete beginners to crypto trading
 - Users validating NIJA before depositing more capital
-- Anyone with $10-$25 who wants to start small
+- Anyone with $100–$249 who wants to start safely
 - Traders learning algorithmic execution
-- Users with Coinbase accounts (recommended over Kraken for this tier)
 
 ### Configuration
 ```bash
@@ -95,33 +85,33 @@ cp .env.saver_tier .env
 
 ---
 
-## 📊 TIER 2: INVESTOR ($25-$100) - DEFAULT
+## 📊 TIER 2: INVESTOR ($250–$999) - DEFAULT
 
 ### Goal
-**"Build consistency. Reduce randomness."**
+**"Consistent participation"**
 
 ### When to Use
-✅ You have **$25-$100 capital**  
+✅ You have **$250–$999 capital**  
 ✅ You are **learning systematic trading**  
 ✅ You want **NIJA to feel 'real'** without huge risk  
 ✅ You can monitor positions **once or twice daily**  
 ✅ You're building **trading consistency**
 
 ### Tier Specifications
-- **Risk Per Trade**: 7-10%
-- **Trade Size**: $10-$25
-- **Max Positions**: 2-3
-- **Trading Frequency**: Moderate
-- **Experience Required**: Beginner to Intermediate
-- **Exchange Support**: All exchanges (meets Kraken $10 minimum)
+- **Risk Per Trade**: 5-7%
+- **Trade Size**: $20-$75
+- **Max Positions**: 3
+- **Trading Frequency**: Active
+- **Experience Required**: Intermediate
+- **Exchange Support**: All exchanges
 
 ### Key Features
-- **Balanced approach**: Enough capital to see meaningful results
-- **Multiple positions**: 2-3 concurrent trades for diversification
+- **Balanced approach**: Enough capital for meaningful results
+- **Multiple positions**: 3 concurrent trades for diversification
 - **Real execution**: Trade sizes feel substantial, not trivial
-- **Moderate frequency**: Active enough to build experience
+- **Active frequency**: Build experience through participation
 - **Default tier**: This is where most users start
-- **Exchange flexibility**: Works with all exchanges including Kraken
+- **Exchange flexibility**: Works with all exchanges
 
 ### Important Notes
 > ✅ **DEFAULT TIER**: If you don't specify a tier, you get INVESTOR.
@@ -131,11 +121,11 @@ cp .env.saver_tier .env
 > 🎯 **CONSISTENCY FOCUS**: Build repeatable results, reduce random outcomes.
 
 ### Who Should Use This
-- New NIJA users with $25-$100
+- New NIJA users with $250–$999
 - Traders learning systematic approaches
 - Users upgrading from SAVER tier
 - Anyone wanting to see NIJA perform without major risk
-- Users with Kraken accounts (meets $10 minimum)
+- Users seeking consistent participation
 
 ### Configuration
 ```bash
@@ -153,51 +143,51 @@ cp .env.investor_tier .env
 
 ---
 
-## ⭐ TIER 3: INCOME ($100-$500) - CORE RETAIL POWER TIER
+## ⭐ TIER 3: INCOME ($1,000–$4,999) - SERIOUS RETAIL TRADING
 
 ### Goal
-**"Generate repeatable returns."**
+**"Serious retail trading"**
 
 ### When to Use
-✅ You have **$100-$500 capital**  
-✅ You want **meaningful income generation**  
-✅ You are an **active retail trader**  
+✅ You have **$1,000–$4,999 capital**  
+✅ You are a **serious retail trader**  
+✅ You want **active market engagement**  
 ✅ You can monitor positions **regularly**  
-✅ You understand this is **NIJA's sweet spot**
+✅ You want **meaningful trading activity**
 
 ### Tier Specifications
-- **Risk Per Trade**: 4-7%
-- **Trade Size**: $15-$50
-- **Max Positions**: 3-5
-- **Trading Frequency**: Active but selective
+- **Risk Per Trade**: 3-5%
+- **Trade Size**: $30-$150
+- **Max Positions**: 5
+- **Trading Frequency**: Very active
 - **Experience Required**: Intermediate to Advanced
 
 ### Key Features
-- **⭐ CORE RETAIL POWER TIER**: This is where NIJA delivers maximum retail performance
-- **Income generation**: Capital sufficient for repeatable, meaningful returns
-- **Active diversification**: 3-5 positions for balanced exposure
-- **Optimal trade sizes**: $15-$50 positions hit the sweet spot
-- **Selective activity**: High-confidence setups with active execution
-- **Professional feel**: This tier operates like a small trading account
+- **⭐ SERIOUS RETAIL TRADING**: This tier is for committed retail traders
+- **Active engagement**: Capital sufficient for meaningful market participation
+- **Strong diversification**: 5 positions for balanced exposure
+- **Optimal trade sizes**: $30-$150 positions for serious trading
+- **Very active**: High-quality setups with frequent execution
+- **Professional approach**: This tier operates like a real trading account
 
 ### Important Notes
-> ⭐ **NIJA'S CORE RETAIL POWER TIER**: This is the sweet spot for retail algorithmic trading.
+> ⭐ **SERIOUS RETAIL TIER**: This is where serious retail algorithmic trading happens.
 > 
-> 💰 **INCOME GENERATION**: First tier designed to generate repeatable returns, not just learn or test.
+> 💰 **MEANINGFUL ACTIVITY**: Capital level designed for significant trading activity.
 > 
-> 🎯 **ACTIVE RETAIL FOCUS**: Perfect balance of capital, frequency, and position management.
+> 🎯 **ACTIVE TRADING FOCUS**: Perfect balance of capital, frequency, and position management.
 
 ### Who Should Use This
-- Active retail traders with proven experience
+- Serious retail traders with proven experience
 - Users upgrading from INVESTOR tier
-- Traders seeking income from algorithmic trading
-- Anyone with $100-$500 wanting optimal NIJA performance
+- Traders committed to active market participation
+- Anyone with $1k-$4.9k wanting serious trading
 
 ### Performance Expectations
-- **Monthly Return Target**: 8-15%
+- **Monthly Return Target**: 6-12%
 - **Win Rate Target**: 60-70%
-- **Drawdown Tolerance**: Moderate (5-8%)
-- **Trading Style**: Active, selective, high-conviction
+- **Drawdown Tolerance**: Moderate (4-7%)
+- **Trading Style**: Very active, selective, high-conviction
 
 ### Configuration
 ```bash
@@ -213,50 +203,50 @@ cp .env.income_tier .env
 
 ---
 
-## 💼 TIER 4: LIVABLE ($500-$2,500)
+## 💼 TIER 4: LIVABLE ($5,000–$24,999)
 
 ### Goal
-**"Stable returns. Capital protection."**
+**"Professional-level execution"**
 
 ### When to Use
-✅ You have **$500-$2,500 capital**  
-✅ You are a **serious trader**, not a gambler  
-✅ You want **consistent, stable returns**  
-✅ You prioritize **capital protection** over aggressive growth  
-✅ You understand **professional risk management**
+✅ You have **$5,000–$24,999 capital**  
+✅ You are a **professional-level trader**  
+✅ You want **precision execution**  
+✅ You prioritize **professional standards**  
+✅ You understand **advanced risk management**
 
 ### Tier Specifications
-- **Risk Per Trade**: 2-4%
-- **Trade Size**: $25-$100
-- **Max Positions**: 5-6
-- **Trading Frequency**: Selective, high-confidence only
+- **Risk Per Trade**: 2-3%
+- **Trade Size**: $50-$300
+- **Max Positions**: 6
+- **Trading Frequency**: Selective, high-precision
 - **Experience Required**: Advanced
 
 ### Key Features
-- **Serious capital deployment**: $500+ requires professional approach
-- **Capital protection focus**: Preserve account, generate stable returns
-- **Lower risk per trade**: 2-4% ensures longevity
-- **Diversified positions**: 5-6 concurrent positions spread risk
-- **Selective execution**: Only high-confidence setups
-- **Professional management**: This tier is for serious users
+- **Professional capital deployment**: $5k+ requires professional approach
+- **Precision focus**: Execute with professional standards
+- **Lower risk per trade**: 2-3% ensures disciplined management
+- **Diversified positions**: 6 concurrent positions spread risk
+- **Selective execution**: Only highest-quality setups
+- **Professional management**: This tier is for serious professionals
 
 ### Important Notes
-> 💼 **SERIOUS USERS, NOT GAMBLERS**: This tier is for traders who respect capital and understand risk.
+> 💼 **PROFESSIONAL-LEVEL EXECUTION**: This tier operates at professional standards.
 > 
-> 🛡️ **CAPITAL PROTECTION FIRST**: Stable, repeatable returns prioritized over aggressive speculation.
+> 🛡️ **PRECISION FIRST**: Professional execution prioritized over volume.
 > 
-> 📊 **PROFESSIONAL APPROACH**: Disciplined, selective, and systematic execution.
+> 📊 **ADVANCED APPROACH**: Disciplined, selective, and systematic execution.
 
 ### Who Should Use This
-- Serious retail traders with proven track records
-- Users with $500-$2,500 seeking stable returns
+- Professional retail traders with proven track records
+- Users with $5k-$24.9k seeking professional execution
 - Traders upgrading from INCOME tier
-- Anyone prioritizing capital preservation over aggressive growth
+- Anyone operating at professional standards
 
 ### Performance Expectations
-- **Monthly Return Target**: 5-10%
+- **Monthly Return Target**: 4-8%
 - **Win Rate Target**: 65-75%
-- **Drawdown Tolerance**: Low (3-5%)
+- **Drawdown Tolerance**: Low (2-4%)
 - **Trading Style**: Selective, precision-focused, systematic
 
 ### Configuration
@@ -273,51 +263,51 @@ cp .env.livable_tier .env
 
 ---
 
-## 🏆 TIER 5: BALLER ($2,500+)
+## 🏆 TIER 5: BALLER ($25,000+)
 
 ### Goal
-**"Scale capital. Preserve dominance."**
+**"Capital deployment"**
 
 ### When to Use
-✅ You have **$2,500+ capital**  
-✅ You are **deploying capital**, not speculating  
-✅ You want **precision execution** with minimal risk  
+✅ You have **$25,000+ capital**  
+✅ You are **deploying capital** at scale  
+✅ You want **institutional-grade execution**  
 ✅ You can **manage large positions** professionally  
-✅ You understand this is **capital deployment, not gambling**
+✅ You understand this is **capital deployment**
 
 ### Tier Specifications
 - **Risk Per Trade**: 1-2%
-- **Trade Size**: $50-$500
-- **Max Positions**: 6-8
+- **Trade Size**: $100-$1,000
+- **Max Positions**: 8
 - **Trading Frequency**: Precision-only (highest conviction)
 - **Experience Required**: Professional
 
 ### Key Features
 - **Capital deployment**: Scale large sums systematically
 - **Ultra-low risk**: 1-2% per trade preserves capital at scale
-- **High diversification**: 6-8 positions spread risk across markets
+- **High diversification**: 8 positions spread risk across markets
 - **Precision execution**: Only absolute highest-conviction setups
-- **Professional-grade**: Institutional-quality risk management
-- **Dominance preservation**: Protect and grow significant capital
+- **Institutional-grade**: Professional-quality risk management
+- **Capital preservation**: Protect and grow significant capital
 
 ### Important Notes
-> 🏆 **CAPITAL DEPLOYMENT, NOT SPECULATION**: This tier is for scaling capital, not chasing returns.
+> 🏆 **CAPITAL DEPLOYMENT**: This tier is for scaling capital systematically.
 > 
-> 💎 **PRESERVE DOMINANCE**: Protect large capital while generating consistent returns.
+> 💎 **CAPITAL PRESERVATION**: Protect large capital while generating consistent returns.
 > 
 > 🎯 **PRECISION-ONLY**: Ultra-selective execution. Quality over quantity.
 
 ### Who Should Use This
-- Professional traders with $2,500+ accounts
+- Professional traders with $25k+ accounts
 - Funded accounts requiring institutional risk management
 - Traders scaling from LIVABLE tier
 - Anyone deploying significant capital systematically
 
 ### Performance Expectations
-- **Monthly Return Target**: 3-8%
+- **Monthly Return Target**: 3-7%
 - **Win Rate Target**: 70-80%
-- **Drawdown Tolerance**: Minimal (2-3%)
-- **Trading Style**: Precision, systematic, professional-grade
+- **Drawdown Tolerance**: Minimal (1-2%)
+- **Trading Style**: Precision, systematic, institutional-grade
 
 ### Configuration
 ```bash
@@ -373,11 +363,11 @@ Add to your `.env` file:
 
 ```env
 # Choose your tier:
-TRADING_TIER=SAVER       # For $25-$99 capital
-TRADING_TIER=INVESTOR    # For $100-$249 capital (default)
-TRADING_TIER=INCOME      # For $250-$999 capital (⭐ core retail tier)
-TRADING_TIER=LIVABLE     # For $1k-$5k capital
-TRADING_TIER=BALLER      # For $5k+ capital
+TRADING_TIER=SAVER       # For $100-$249 capital
+TRADING_TIER=INVESTOR    # For $250-$999 capital (default)
+TRADING_TIER=INCOME      # For $1k-$4.9k capital (serious retail trading)
+TRADING_TIER=LIVABLE     # For $5k-$24.9k capital
+TRADING_TIER=BALLER      # For $25k+ capital
 ```
 
 ### Option 2: Use Preset Templates
@@ -385,19 +375,19 @@ TRADING_TIER=BALLER      # For $5k+ capital
 Copy the appropriate template for your tier:
 
 ```bash
-# SAVER tier ($25-$99)
+# SAVER tier ($100-$249)
 cp .env.saver_tier .env
 
-# INVESTOR tier ($100-$249)
+# INVESTOR tier ($250-$999)
 cp .env.investor_tier .env
 
-# INCOME tier ($250-$999) ⭐
+# INCOME tier ($1k-$4.9k) ⭐
 cp .env.income_tier .env
 
-# LIVABLE tier ($1k-$5k)
+# LIVABLE tier ($5k-$24.9k)
 cp .env.livable_tier .env
 
-# BALLER tier ($5k+)
+# BALLER tier ($25k+)
 cp .env.baller_tier .env
 ```
 
@@ -413,11 +403,11 @@ ACCOUNT_BALANCE=500.00     # Your current balance
 ```
 
 **Auto-Selection Logic:**
-- Balance < $100 → **SAVER** tier
-- Balance $100-$249 → **INVESTOR** tier (default)
-- Balance $250-$999 → **INCOME** tier
-- Balance $1k-$5k → **LIVABLE** tier
-- Balance >= $5k → **BALLER** tier
+- Balance < $250 → **SAVER** tier
+- Balance $250-$999 → **INVESTOR** tier (default)
+- Balance $1k-$4,999 → **INCOME** tier
+- Balance $5k-$24,999 → **LIVABLE** tier
+- Balance >= $25k → **BALLER** tier
 
 ### Option 4: No Configuration (Uses Default)
 
@@ -427,45 +417,45 @@ If you don't set `TRADING_TIER`, the system defaults to **INVESTOR** tier.
 
 ## 📈 Performance Expectations by Tier
 
-### SAVER Tier ($25-$99)
-**Target Returns**: Validation mode - not income-focused  
-**Expected Win Rate**: Learning phase  
-**Expected Drawdowns**: Minimal due to small positions  
-**Trading Frequency**: Very low (selective only)  
-**Monitoring Required**: Weekly check-ins  
-**Primary Focus**: Learning system behavior
-
-### INVESTOR Tier ($100-$249)
-**Target Returns**: 5-10% monthly  
+### SAVER Tier ($100–$249)
+**Target Returns**: 4-8% monthly  
 **Expected Win Rate**: 55-65%  
-**Expected Drawdowns**: 5-8%  
-**Trading Frequency**: Moderate (several trades weekly)  
+**Expected Drawdowns**: 4-7%  
+**Trading Frequency**: Moderate  
 **Monitoring Required**: Daily check-ins  
-**Primary Focus**: Building consistency
+**Primary Focus**: Capital preservation + learning
 
-### INCOME Tier ($250-$999) ⭐
-**Target Returns**: 8-15% monthly  
-**Expected Win Rate**: 60-70%  
-**Expected Drawdowns**: 5-8%  
-**Trading Frequency**: Active (daily trades)  
-**Monitoring Required**: Multiple daily check-ins  
-**Primary Focus**: Repeatable income generation
-
-### LIVABLE Tier ($1k-$5k)
+### INVESTOR Tier ($250–$999)
 **Target Returns**: 5-10% monthly  
-**Expected Win Rate**: 65-75%  
-**Expected Drawdowns**: 3-5%  
-**Trading Frequency**: Selective (high-confidence only)  
-**Monitoring Required**: Daily monitoring  
-**Primary Focus**: Stable, consistent returns
+**Expected Win Rate**: 60-70%  
+**Expected Drawdowns**: 4-6%  
+**Trading Frequency**: Active (several trades weekly)  
+**Monitoring Required**: Daily check-ins  
+**Primary Focus**: Consistent participation
 
-### BALLER Tier ($5k+)
-**Target Returns**: 3-8% monthly  
+### INCOME Tier ($1k–$4.9k) ⭐
+**Target Returns**: 6-12% monthly  
+**Expected Win Rate**: 60-70%  
+**Expected Drawdowns**: 4-7%  
+**Trading Frequency**: Very active (daily trades)  
+**Monitoring Required**: Multiple daily check-ins  
+**Primary Focus**: Serious retail trading
+
+### LIVABLE Tier ($5k–$24.9k)
+**Target Returns**: 4-8% monthly  
+**Expected Win Rate**: 65-75%  
+**Expected Drawdowns**: 2-4%  
+**Trading Frequency**: Selective (high-precision)  
+**Monitoring Required**: Daily monitoring  
+**Primary Focus**: Professional-level execution
+
+### BALLER Tier ($25k+)
+**Target Returns**: 3-7% monthly  
 **Expected Win Rate**: 70-80%  
-**Expected Drawdowns**: 2-3%  
+**Expected Drawdowns**: 1-2%  
 **Trading Frequency**: Precision-only (ultra-selective)  
 **Monitoring Required**: Regular professional monitoring  
-**Primary Focus**: Capital preservation and systematic growth
+**Primary Focus**: Capital deployment
 
 ---
 
@@ -474,15 +464,15 @@ If you don't set `TRADING_TIER`, the system defaults to **INVESTOR** tier.
 ### Recommended Progression
 
 ```
-SAVER ($25-$99)
-    ↓ [Validate system, learn execution]
-INVESTOR ($100-$249)
-    ↓ [Build consistency, prove profitability]
-INCOME ($250-$999) ⭐
-    ↓ [Generate repeatable returns, scale capital]
-LIVABLE ($1k-$5k)
-    ↓ [Stable returns, professional management]
-BALLER ($5k+)
+SAVER ($100–$249)
+    ↓ [Learn system, preserve capital]
+INVESTOR ($250–$999)
+    ↓ [Build consistency, active participation]
+INCOME ($1k–$4.9k) ⭐
+    ↓ [Serious retail trading, scale activity]
+LIVABLE ($5k–$24.9k)
+    ↓ [Professional execution, precision focus]
+BALLER ($25k+)
 ```
 
 ### When to Upgrade
@@ -490,25 +480,25 @@ BALLER ($5k+)
 **SAVER → INVESTOR**
 - ✅ You understand how NIJA executes
 - ✅ You've validated the system works
-- ✅ You're ready to increase capital to $100+
-- ✅ You want to see meaningful results
+- ✅ You're ready to increase capital to $250+
+- ✅ You want consistent participation
 
 **INVESTOR → INCOME**
 - ✅ You've built consistency (60%+ win rate)
-- ✅ Your account has grown to $250+
-- ✅ You want to generate actual income
+- ✅ Your account has grown to $1,000+
+- ✅ You want serious retail trading
 - ✅ You can monitor positions actively
 
 **INCOME → LIVABLE**
-- ✅ You have $1,000+ capital
+- ✅ You have $5,000+ capital
 - ✅ You've proven profitability in INCOME tier
-- ✅ You want lower risk, stable returns
-- ✅ You prioritize capital protection
+- ✅ You want professional-level execution
+- ✅ You prioritize precision and discipline
 
 **LIVABLE → BALLER**
-- ✅ You have $5,000+ capital
+- ✅ You have $25,000+ capital
 - ✅ You have a proven long-term track record
-- ✅ You understand professional risk management
+- ✅ You understand institutional risk management
 - ✅ You want to deploy significant capital systematically
 
 ### How to Upgrade
@@ -575,11 +565,11 @@ All tiers include built-in circuit breakers for protection:
 
 | Tier | Minimum | Recommended | Optimal |
 |------|---------|-------------|---------|
-| **SAVER** | $25 | $50-$99 | $75-$99 |
-| **INVESTOR** | $100 | $150-$249 | $200-$249 |
-| **INCOME** ⭐ | $250 | $400-$999 | $600-$999 |
-| **LIVABLE** | $1,000 | $2,000-$5,000 | $3,000-$5,000 |
-| **BALLER** | $5,000 | $10,000+ | $15,000+ |
+| **SAVER** | $100 | $150-$249 | $200-$249 |
+| **INVESTOR** | $250 | $400-$999 | $600-$999 |
+| **INCOME** ⭐ | $1,000 | $2,000-$4,999 | $3,000-$4,999 |
+| **LIVABLE** | $5,000 | $10,000-$24,999 | $15,000-$24,999 |
+| **BALLER** | $25,000 | $50,000+ | $75,000+ |
 
 ---
 
@@ -767,13 +757,13 @@ Test any tier change in paper trading mode before going live.
 ## ❓ Frequently Asked Questions
 
 **Q: Which tier should I start with?**  
-A: Start with **INVESTOR** tier ($100-$249) if you have the capital. If not, start with **SAVER** ($25-$99) to validate the system.
+A: Start with **INVESTOR** tier ($250-$999) if you have the capital. If not, start with **SAVER** ($100-$249) to validate the system.
 
-**Q: Can I use BALLER tier with $500?**  
-A: No. BALLER tier requires $5,000+ for proper diversification and position management. Use INCOME tier for $500.
+**Q: Can I use BALLER tier with $5,000?**  
+A: No. BALLER tier requires $25,000+ for proper diversification and position management. Use LIVABLE tier for $5k-$24.9k.
 
 **Q: What's the difference between INCOME and LIVABLE tiers?**  
-A: **INCOME** is the active retail tier for generating returns. **LIVABLE** is more conservative, focusing on capital protection and stable returns for serious users.
+A: **INCOME** is for serious retail trading with very active participation. **LIVABLE** is for professional-level execution with precision focus.
 
 **Q: Is MASTER a user tier?**  
 A: No. **MASTER** is system authority for strategy governance and execution coordination. Users choose from SAVER, INVESTOR, INCOME, LIVABLE, or BALLER.
@@ -782,10 +772,10 @@ A: No. **MASTER** is system authority for strategy governance and execution coor
 A: Yes, but it only affects **new positions**. Existing positions follow their original tier parameters.
 
 **Q: Which tier is safest?**  
-A: **SAVER** is the most conservative with smallest positions and lowest frequency. **INVESTOR** is the conservative default for regular trading.
+A: **SAVER** is the most conservative with capital preservation focus. **INVESTOR** is the default for consistent participation.
 
-**Q: What tier is best for income generation?**  
-A: **INCOME** tier ($250-$999) is specifically designed for repeatable income generation. It's NIJA's core retail power tier.
+**Q: What tier is best for serious retail trading?**  
+A: **INCOME** tier ($1k-$4.9k) is specifically designed for serious retail trading with very active market participation.
 
 **Q: Can I create a custom tier?**  
 A: Advanced users can modify `bot/apex_config.py`, but we strongly recommend using built-in tiers first and proving profitability before customizing.
@@ -793,7 +783,7 @@ A: Advanced users can modify `bot/apex_config.py`, but we strongly recommend usi
 **Q: Do tiers affect copy trading?**  
 A: Yes - follower accounts use their own tiers, so positions are scaled appropriately to each account's balance and tier.
 
-**Q: What if I have $2,000 but I'm a beginner?**  
+**Q: What if I have $10,000 but I'm a beginner?**  
 A: Start with **INVESTOR** tier despite higher capital. Build experience and consistency, then upgrade to LIVABLE tier after proving profitability.
 
 **Q: How long should I stay in each tier before upgrading?**  
