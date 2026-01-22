@@ -29,7 +29,9 @@ class AlpacaConfig:
     broker_display_name: str = "Alpaca Trading"
     
     # Fee structure (ZERO commission trading)
-    # Only spread costs apply
+    # Only spread costs apply (bid-ask spread on both entry and exit)
+    # Fee calculation: 2 × spread_cost = 2 × 0.10% = 0.20%
+    # Round-trip assumes spread impact on both entry (buy at ask) and exit (sell at bid)
     taker_fee: float = 0.0  # 0% commission
     maker_fee: float = 0.0  # 0% commission
     spread_cost: float = 0.0010  # ~0.10% average spread (market impact)

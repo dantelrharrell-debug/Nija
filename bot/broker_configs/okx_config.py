@@ -29,6 +29,8 @@ class OKXConfig:
     broker_display_name: str = "OKX Exchange"
     
     # Fee structure (LOWEST fees of all major exchanges)
+    # Fee calculation: (taker_fee + maker_fee + spread) = (0.08% + 0.06% + 0.06%) = 0.20%
+    # Round-trip assumes one taker order (entry/exit) and spread impact on both sides
     taker_fee: float = 0.0008  # 0.08% taker fee (VIP tier, ultra-low)
     maker_fee: float = 0.0006  # 0.06% maker fee (VIP tier, ultra-low)
     spread_cost: float = 0.0006  # ~0.06% average spread (very tight)

@@ -29,7 +29,11 @@ class BinanceConfig:
     broker_display_name: str = "Binance Exchange"
     
     # Fee structure (LOW fees, BNB discount applied)
-    # Note: With BNB holdings, fees reduced by 25% (0.075% vs 0.10%)
+    # Note: Base fees are 0.10% taker/maker, reduced to 0.075% with BNB holdings
+    # This configuration uses conservative (non-discounted) fees for safety
+    # Fee calculation: (taker_fee + maker_fee + spread) = (0.10% + 0.10% + 0.08%) = 0.28%
+    # Round-trip assumes taker order on both entry and exit plus spread impact
+    # With BNB discount: actual cost could be as low as 0.23% (0.075% + 0.075% + 0.08%)
     taker_fee: float = 0.0010  # 0.10% taker fee (0.075% with BNB)
     maker_fee: float = 0.0010  # 0.10% maker fee (0.075% with BNB)
     spread_cost: float = 0.0008  # ~0.08% average spread (tight due to high volume)

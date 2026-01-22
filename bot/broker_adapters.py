@@ -556,19 +556,17 @@ class BinanceAdapter(BrokerAdapter):
         symbol = symbol.replace("-", "").replace("/", "").replace(".", "").upper()
         
         # Convert USD to USDT (Binance uses USDT, not USD)
-        # Be careful not to convert USDT to USDTT
-        if symbol.endswith("USD") and not symbol.endswith("USDT"):
-            symbol = symbol[:-3] + "USDT"
+        # Only convert if it's a crypto quote currency (ends with USD but not USDT/BUSD)
+        # Common crypto base currencies that should use USDT quote
+        CRYPTO_BASES = ["BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOT", "AVAX", 
+                        "MATIC", "LINK", "UNI", "ATOM", "LTC", "BCH", "ETC", "XLM"]
         
-        # Handle common base currencies if no separator found
-        if len(symbol) >= 6:
-            for base in ["BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOT", "AVAX"]:
-                if symbol.startswith(base) and not symbol.endswith("USDT"):
-                    # Assume USDT quote if not already specified
-                    rest = symbol[len(base):]
-                    if rest in ["USD", "BUSD"]:
-                        return f"{base}USDT"
+        # Check if this looks like a crypto pair with USD quote
+        for base in CRYPTO_BASES:
+            if symbol.startswith(base) and symbol.endswith("USD") and not symbol.endswith("USDT"):
+                return symbol[:-3] + "USDT"
         
+        # If already has USDT or other quote, return as-is
         return symbol
 
 
@@ -675,20 +673,24 @@ class OKXAdapter(BrokerAdapter):
         # Uppercase
         symbol = symbol.upper()
         
-        # Convert USD to USDT (OKX prefers USDT)
-        if symbol.endswith("-USD"):
-            symbol = symbol[:-4] + "-USDT"
-        elif symbol.endswith("USD") and "-" not in symbol:
-            # No separator case: BTCUSD -> BTC-USDT
-            for base in ["BTC", "ETH", "SOL", "XRP", "ADA", "DOT", "AVAX", "BNB"]:
-                if symbol.startswith(base) and symbol.endswith("USD"):
-                    return f"{base}-USDT"
+        # Common crypto base currencies
+        CRYPTO_BASES = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOT", "AVAX", "BNB",
+                        "MATIC", "LINK", "UNI", "ATOM", "LTC", "BCH", "ETC", "XLM"]
         
-        # Handle no separator case (BTCUSDT -> BTC-USDT)
+        # Convert USD to USDT (OKX prefers USDT) for known crypto bases
+        if symbol.endswith("-USD"):
+            base = symbol[:-4]
+            if base in CRYPTO_BASES:
+                return f"{base}-USDT"
+        
+        # Handle no separator case (BTCUSD -> BTC-USDT)
         if "-" not in symbol and len(symbol) >= 6:
-            for base in ["BTC", "ETH", "SOL", "XRP", "ADA", "DOT", "AVAX", "BNB"]:
+            for base in CRYPTO_BASES:
                 if symbol.startswith(base):
                     quote = symbol[len(base):]
+                    # Convert USD to USDT for crypto pairs
+                    if quote == "USD":
+                        quote = "USDT"
                     return f"{base}-{quote}"
         
         return symbol
