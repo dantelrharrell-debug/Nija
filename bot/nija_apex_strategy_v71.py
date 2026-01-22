@@ -484,6 +484,21 @@ class NIJAApexStrategyV71:
         
         return True, 'All smart filters passed'
     
+    def _get_risk_score(self, score: float, metadata: Dict) -> float:
+        """
+        Get the appropriate score for risk calculations
+        
+        Args:
+            score: Enhanced score (if available) or legacy score
+            metadata: Metadata dictionary from enhanced scoring
+            
+        Returns:
+            Score to use for risk calculations (legacy 0-5 scale)
+        """
+        if self.use_enhanced_scoring and metadata:
+            return metadata.get('legacy_score', score)
+        return score
+    
     def check_entry_with_enhanced_scoring(self, df: pd.DataFrame, indicators: Dict, 
                                          side: str, account_balance: float) -> Tuple[bool, float, str, Dict]:
         """
@@ -826,8 +841,9 @@ class NIJAApexStrategyV71:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
+                    risk_score = self._get_risk_score(score, metadata)
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
-                        account_balance, adx, score if not self.use_enhanced_scoring else metadata.get('legacy_score', score)
+                        account_balance, adx, risk_score
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
@@ -845,7 +861,7 @@ class NIJAApexStrategyV71:
                         }
                     
                     # Validate trade quality (position size and confidence)
-                    validation = self._validate_trade_quality(position_size, score if not self.use_enhanced_scoring else metadata.get('legacy_score', score))
+                    validation = self._validate_trade_quality(position_size, risk_score)
                     if not validation['valid']:
                         return {
                             'action': 'hold',
@@ -899,8 +915,9 @@ class NIJAApexStrategyV71:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
+                    risk_score = self._get_risk_score(score, metadata)
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
-                        account_balance, adx, score if not self.use_enhanced_scoring else metadata.get('legacy_score', score)
+                        account_balance, adx, risk_score
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
@@ -918,7 +935,7 @@ class NIJAApexStrategyV71:
                         }
                     
                     # Validate trade quality (position size and confidence)
-                    validation = self._validate_trade_quality(position_size, score if not self.use_enhanced_scoring else metadata.get('legacy_score', score))
+                    validation = self._validate_trade_quality(position_size, risk_score)
                     if not validation['valid']:
                         return {
                             'action': 'hold',

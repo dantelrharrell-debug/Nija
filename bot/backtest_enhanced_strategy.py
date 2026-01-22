@@ -456,14 +456,17 @@ def generate_sample_data(symbol: str, days: int = 90) -> pd.DataFrame:
     """
     Generate sample OHLCV data for backtesting
     
-    In production, this should fetch real historical data from exchange API
+    ⚠️  WARNING: This generates SYNTHETIC DATA for testing purposes only.
+    For production backtesting, replace this with real market data from your exchange API.
+    Results from synthetic data DO NOT represent actual trading performance.
     """
+    logger.warning("⚠️  Using SYNTHETIC data - replace with real market data for production!")
     logger.info(f"Generating sample data for {symbol} ({days} days)")
     
-    # Generate timestamps (1-hour candles) - use lowercase 'h' for newer pandas versions
+    # Generate timestamps (1-hour candles)
     end_time = datetime.now()
     start_time = end_time - timedelta(days=days)
-    timestamps = pd.date_range(start=start_time, end=end_time, freq='1h')
+    timestamps = pd.date_range(start=start_time, end=end_time, freq='h')  # Use 'h' for pandas compatibility
     
     # Generate synthetic price data with trend
     np.random.seed(42)

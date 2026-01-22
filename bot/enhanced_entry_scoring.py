@@ -195,8 +195,9 @@ class EnhancedEntryScorer:
         score = 0.0
         
         # RSI scoring (0-10 points)
-        rsi = scalar(indicators.get('rsi', pd.Series([50])).iloc[-1])
-        rsi_prev = scalar(indicators.get('rsi', pd.Series([50])).iloc[-2]) if len(indicators.get('rsi', pd.Series())) >= 2 else rsi
+        rsi_series = indicators.get('rsi', pd.Series([50]))
+        rsi = scalar(rsi_series.iloc[-1])
+        rsi_prev = scalar(rsi_series.iloc[-2]) if len(rsi_series) >= 2 else rsi
         
         if side == 'long':
             # RSI in bullish range (40-70) and rising
@@ -224,8 +225,9 @@ class EnhancedEntryScorer:
                 score += 2.0
         
         # MACD histogram scoring (0-10 points)
-        macd_hist = indicators.get('histogram', pd.Series([0])).iloc[-1]
-        macd_hist_prev = indicators.get('histogram', pd.Series([0])).iloc[-2] if len(indicators.get('histogram', pd.Series())) >= 2 else macd_hist
+        macd_hist_series = indicators.get('histogram', pd.Series([0]))
+        macd_hist = macd_hist_series.iloc[-1]
+        macd_hist_prev = macd_hist_series.iloc[-2] if len(macd_hist_series) >= 2 else macd_hist
         
         if side == 'long':
             if macd_hist > 0:  # Positive histogram
