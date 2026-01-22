@@ -946,9 +946,9 @@ class KrakenBrokerAdapter(BrokerInterface):
                     current_balance = balance_info.get('total_balance', 0.0)
                     
                     # Check if balance meets minimum tier requirement
-                    if current_balance < 25.0:  # Minimum SAVER tier
+                    if current_balance < 10.0:  # Minimum SAVER tier (updated from $25)
                         return (False, kraken_symbol,
-                                f"Account balance ${current_balance:.2f} below minimum tier requirement $25.00. Cannot execute trades.")
+                                f"Account balance ${current_balance:.2f} below minimum tier requirement $10.00. Cannot execute trades.")
                     
                     # Determine user's tier
                     user_tier = get_tier_from_balance(current_balance)

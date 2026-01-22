@@ -6311,9 +6311,9 @@ class KrakenBroker(BaseBroker):
                     if balance_info and not balance_info.get('error', False):
                         current_balance = balance_info.get('trading_balance', 0.0)
                         
-                        # Check if balance meets minimum tier requirement ($25 SAVER tier minimum)
+                        # Check if balance meets minimum tier requirement ($10 SAVER tier minimum)
                         # Use tier config to get the minimum balance
-                        saver_tier_config = get_tier_config(get_tier_from_balance(25.0))
+                        saver_tier_config = get_tier_config(get_tier_from_balance(10.0))
                         min_balance_required = saver_tier_config.capital_min
                         
                         if current_balance < min_balance_required:

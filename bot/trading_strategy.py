@@ -69,7 +69,7 @@ except ImportError:
             USER = "user"
         
         # Also need MINIMUM_TRADING_BALANCE fallback
-        MINIMUM_TRADING_BALANCE = 25.0  # Default minimum
+        MINIMUM_TRADING_BALANCE = 10.0  # Default minimum (updated from $25 for new tier structure)
 
 # FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
 # XRP-USD is PERMANENTLY DISABLED due to negative profitability
