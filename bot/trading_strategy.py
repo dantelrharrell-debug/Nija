@@ -399,7 +399,7 @@ class TradingStrategy:
         
         # Initialize advanced trading features placeholder
         # NOTE: Advanced modules will be initialized AFTER first live balance fetch
-        # and only if LIVE_CAPITAL_VERIFIED=true is set (see below after broker connections)
+        # and only if LIVE_CAPITAL_VERIFIED=true is set
         self.advanced_manager = None
         self.rotation_manager = None
         self.pro_mode_enabled = False
