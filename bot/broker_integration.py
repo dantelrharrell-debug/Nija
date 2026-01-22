@@ -161,8 +161,12 @@ except ImportError:
 logger = logging.getLogger("nija.broker")
 
 # ✅ REQUIREMENT 2: KRAKEN MINIMUM ORDER COST
-# Kraken's actual minimum order cost for any trade
-KRAKEN_MIN_ORDER_COST = 5.00  # USD
+# FIX #3: Kraken hard minimum enforcement with safety buffer
+# Even with $5.50 global min, Kraken needs $7.00 to prevent:
+# - Fee erosion on small orders
+# - False "position opened" logs
+# - User copy mismatches
+KRAKEN_MIN_ORDER_COST = 7.00  # USD (increased from $5.00 for safety buffer)
 
 # ✅ REQUIREMENT 3: DUST EXCLUSION - Positions below this value are IGNORED COMPLETELY
 # ✅ FIX (MANDATORY): Dust threshold for position tracking
@@ -921,20 +925,13 @@ class KrakenBrokerAdapter(BrokerInterface):
         else:
             order_size_usd = size  # Assume it's in USD if we can't calculate
         
-        # Kraken minimum order size - use module constant or fallback
-        if BrokerAdapterFactory:
-            try:
-                # Get minimum from KrakenAdapter if it differs from our constant
-                from bot.broker_adapters import KrakenAdapter
-                KRAKEN_MIN_ORDER_USD = KrakenAdapter.MIN_VOLUME_DEFAULT
-            except (ImportError, AttributeError):
-                KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant
-        else:
-            KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant
+        # FIX #3: Kraken minimum order size enforcement with $7.00 safety buffer
+        # Always enforce our FIX #3 constant ($7.00), regardless of KrakenAdapter setting
+        KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($7.00)
         
         if order_size_usd < KRAKEN_MIN_ORDER_USD:
             return (False, kraken_symbol, 
-                    f"Order size ${order_size_usd:.2f} below Kraken minimum ${KRAKEN_MIN_ORDER_USD:.2f}")
+                    f"Order size ${order_size_usd:.2f} below Kraken minimum ${KRAKEN_MIN_ORDER_USD:.2f} (FIX #3 safety buffer)")
         
         # ✅ REQUIREMENT #4: Tier-based minimum enforcement
         # Check if user's balance tier allows this trade size
@@ -1078,7 +1075,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                 current_price = 0.0
             
             # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
-            # ✅ REQUIREMENT 2B: Check minimum order cost before AddOrder
+            # FIX #3: Kraken hard minimum enforcement ($7.00 safety buffer)
+            # Even with $5.50 global min, Kraken needs $7.00 to prevent fee erosion
             if current_price > 0:
                 # Calculate order cost in USD
                 if size_type == 'quote':
@@ -1089,11 +1087,11 @@ class KrakenBrokerAdapter(BrokerInterface):
                 # Check if order meets Kraken's minimum cost requirement
                 if order_cost_usd < KRAKEN_MIN_ORDER_COST:
                     logger.error("=" * 70)
-                    logger.error("❌ Kraken order blocked: Below minimum order cost")
+                    logger.error("❌ FIX #3: Kraken order blocked (safety buffer)")
                     logger.error("=" * 70)
                     logger.error(f"   Order Cost: ${order_cost_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
                     logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
-                    logger.error("   ⚠️  Increase position size or skip this trade")
+                    logger.error("   ⚠️  $7.00 minimum prevents fee erosion and ghost trades")
                     logger.error("=" * 70)
                     return {
                         'order_id': None,
@@ -1102,7 +1100,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                         'size': size,
                         'filled_price': 0.0,
                         'status': 'skipped',
-                        'error': f'Below Kraken minimum: ${order_cost_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f}',
+                        'error': f'FIX #3: Below Kraken $7.00 minimum (${order_cost_usd:.2f})',
                         'timestamp': datetime.now()
                     }
                 
@@ -1380,17 +1378,18 @@ class KrakenBrokerAdapter(BrokerInterface):
                 }
             
             # ✅ COMPREHENSIVE ORDER VALIDATION (REQUIREMENT #1)
+            # FIX #3: Kraken hard minimum enforcement ($7.00 safety buffer)
             # Calculate USD size for validation (limit orders use price)
             order_size_usd = size * price if size_type == 'base' else size
             
-            # ✅ REQUIREMENT 2B: Check minimum order cost before AddOrder
+            # Check minimum order cost before AddOrder
             if order_size_usd < KRAKEN_MIN_ORDER_COST:
                 logger.error("=" * 70)
-                logger.error("❌ Kraken order blocked: Below minimum order cost")
+                logger.error("❌ FIX #3: Kraken order blocked (safety buffer)")
                 logger.error("=" * 70)
                 logger.error(f"   Order Cost: ${order_size_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
                 logger.error(f"   Symbol: {symbol}, Side: {side}, Size: {size}, Price: {price}")
-                logger.error("   ⚠️  Increase position size or skip this trade")
+                logger.error("   ⚠️  $7.00 minimum prevents fee erosion and ghost trades")
                 logger.error("=" * 70)
                 return {
                     'order_id': None,
@@ -1399,7 +1398,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'size': size,
                     'filled_price': 0.0,
                     'status': 'skipped',
-                    'error': f'Below Kraken minimum: ${order_size_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f}',
+                    'error': f'FIX #3: Below Kraken $7.00 minimum (${order_size_usd:.2f})',
                     'timestamp': datetime.now()
                 }
             
