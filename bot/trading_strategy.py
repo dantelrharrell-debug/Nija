@@ -2646,6 +2646,10 @@ class TradingStrategy:
                 logger.info(f"🔴 CONCURRENT EXIT: Selling {len(positions_to_exit)} positions NOW")
                 logger.info(f"="*80)
                 
+                # Track sell results to provide accurate summary
+                successful_sells = []
+                failed_sells = []
+                
                 for i, pos_data in enumerate(positions_to_exit, 1):
                     symbol = pos_data['symbol']
                     quantity = pos_data['quantity']
@@ -2657,6 +2661,8 @@ class TradingStrategy:
                     # Prevents "ProductID is invalid" errors
                     if not symbol or not isinstance(symbol, str):
                         logger.error(f"  ❌ SKIPPING: Invalid symbol (value: {symbol}, type: {type(symbol)})")
+                        # Store descriptive string for logging - will be displayed in summary
+                        failed_sells.append(f"INVALID_SYMBOL({symbol})")
                         continue
                     
                     try:
@@ -2678,11 +2684,13 @@ class TradingStrategy:
                             # Remove from unsellable dict if it was there (position grew and became sellable)
                             if symbol in self.unsellable_positions:
                                 del self.unsellable_positions[symbol]
+                            successful_sells.append(symbol)
                         else:
                             error_msg = result.get('error', result.get('message', 'Unknown')) if result else 'No response'
                             error_code = result.get('error') if result else None
                             logger.error(f"  ❌ {symbol} sell failed: {error_msg}")
                             logger.error(f"     Full result: {result}")
+                            failed_sells.append(symbol)
                             
                             # CRITICAL FIX (Jan 10, 2026): Handle INVALID_SYMBOL errors
                             # These indicate the symbol format is wrong or the product doesn't exist
@@ -2713,6 +2721,8 @@ class TradingStrategy:
                         logger.error(f"  ❌ {symbol} exception during sell: {sell_err}")
                         logger.error(f"     Error type: {type(sell_err).__name__}")
                         logger.error(f"     Traceback: {traceback.format_exc()}")
+                        # Convert symbol to string for consistent logging - prevents join() errors
+                        failed_sells.append(str(symbol) if symbol else "UNKNOWN_SYMBOL")
                     
                     # Rate limiting: Add delay after each sell order (except the last one)
                     if i < len(positions_to_exit):
@@ -2720,7 +2730,18 @@ class TradingStrategy:
                         time.sleep(SELL_ORDER_DELAY + jitter)
                 
                 logger.info(f"="*80)
-                logger.info(f"✅ Concurrent exit complete: {len(positions_to_exit)} positions processed")
+                # CRITICAL FIX (Jan 22, 2026): Provide accurate exit summary with success/failure counts
+                # Previous version logged "positions processed" which was misleading - users thought all sells succeeded
+                logger.info(f"🔴 CONCURRENT EXIT SUMMARY:")
+                logger.info(f"   ✅ Successfully sold: {len(successful_sells)} positions")
+                if successful_sells:
+                    logger.info(f"      {', '.join(successful_sells)}")
+                logger.info(f"   ❌ Failed to sell: {len(failed_sells)} positions")
+                if failed_sells:
+                    logger.error(f"      {', '.join(failed_sells)}")
+                    logger.error(f"   🚨 WARNING: {len(failed_sells)} position(s) still open on exchange!")
+                    logger.error(f"   💡 Check Coinbase manually and retry or sell manually if needed")
+                logger.info(f"="*80)
                 logger.info(f"")
             
             # STEP 2: Look for new entry opportunities (only if entries allowed)
