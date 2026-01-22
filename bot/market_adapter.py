@@ -250,8 +250,30 @@ class MarketAdapter:
         
         return True, "Options filters passed"
     
-    def supports_shorting(self, symbol: str) -> bool:
-        """Check if market supports shorting"""
+    def supports_shorting(self, symbol: str, broker: str = None) -> bool:
+        """
+        Check if market supports shorting.
+        
+        DEPRECATED: This method is being replaced by exchange_capabilities.py
+        which provides more accurate broker + symbol-specific capability checking.
+        
+        Args:
+            symbol: Trading symbol
+            broker: Optional broker name for exchange-specific checking
+            
+        Returns:
+            True if shorting is supported
+        """
+        # If broker provided, use new capability matrix
+        if broker:
+            try:
+                from exchange_capabilities import can_short
+                return can_short(broker, symbol)
+            except ImportError:
+                # Fallback to legacy logic if exchange_capabilities not available
+                pass
+        
+        # Legacy logic (less accurate, doesn't consider exchange differences)
         market_type = self.detect_market_type(symbol)
         
         # Crypto (Coinbase spot) typically doesn't support shorting

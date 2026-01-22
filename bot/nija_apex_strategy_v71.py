@@ -1024,6 +1024,26 @@ class NIJAApexStrategyV71:
                     return True
             
             elif action == 'enter_short':
+                # EXCHANGE CAPABILITY CHECK: Verify broker supports shorting for this symbol
+                # This prevents SHORT entries on exchanges that don't support them (e.g., Kraken spot)
+                broker_name = 'unknown'
+                if self.broker_client and hasattr(self.broker_client, 'broker_type'):
+                    broker_name = self.broker_client.broker_type.value.lower()
+                
+                # Check if this broker/symbol combination supports shorting
+                try:
+                    from exchange_capabilities import can_short
+                    if not can_short(broker_name, symbol):
+                        logger.warning(f"⚠️  SHORT entry BLOCKED: {broker_name} does not support shorting for {symbol}")
+                        logger.warning(f"   Strategy signal: enter_short @ {action_data['entry_price']:.2f}")
+                        logger.warning(f"   Exchange: {broker_name} (spot markets don't support shorting)")
+                        logger.warning(f"   Symbol: {symbol}")
+                        logger.warning(f"   ℹ️  Note: SHORT works on futures/perpetuals (e.g., BTC-PERP)")
+                        return False
+                except ImportError:
+                    logger.warning(f"⚠️  Exchange capability check unavailable - allowing SHORT (risky!)")
+                
+                # Execute SHORT entry
                 position = self.execution_engine.execute_entry(
                     symbol=symbol,
                     side='short',
@@ -1033,7 +1053,7 @@ class NIJAApexStrategyV71:
                     take_profit_levels=action_data['take_profit']
                 )
                 if position:
-                    logger.info(f"Short entry executed: {symbol} @ {action_data['entry_price']:.2f}")
+                    logger.info(f"✅ Short entry executed: {symbol} @ {action_data['entry_price']:.2f} (broker: {broker_name})")
                     return True
             
             elif action == 'exit':
