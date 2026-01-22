@@ -645,11 +645,11 @@ def get_active_risk_config():
     3. Default to INVESTOR if not specified
     
     NIJA User Trading Tiers:
-    - SAVER: $25-$99 (Capital preservation + learning)
-    - INVESTOR: $100-$249 (Build consistency) - DEFAULT
-    - INCOME: $250-$999 (Core retail power tier)
-    - LIVABLE: $1,000-$4,999 (Serious users)
-    - BALLER: $5,000+ (Capital deployment)
+    - SAVER: $100-$249 (Capital preservation + learning)
+    - INVESTOR: $250-$999 (Consistent participation) - DEFAULT
+    - INCOME: $1,000-$4,999 (Serious retail trading)
+    - LIVABLE: $5,000-$24,999 (Professional-level execution)
+    - BALLER: $25,000+ (Capital deployment)
     - MASTER: System authority only (not for users)
     
     Returns:
@@ -677,23 +677,23 @@ def get_active_risk_config():
         try:
             balance_str = os.getenv('ACCOUNT_BALANCE', '0')
             balance = float(balance_str)
-            if balance >= 5000:
+            if balance >= 25000:
                 logger.info(f"AUTO mode: Selected BALLER tier (balance: ${balance:.2f})")
                 return RISK_CONFIG_BALLER
-            elif balance >= 1000:
+            elif balance >= 5000:
                 logger.info(f"AUTO mode: Selected LIVABLE tier (balance: ${balance:.2f})")
                 return RISK_CONFIG_LIVABLE
-            elif balance >= 250:
+            elif balance >= 1000:
                 logger.info(f"AUTO mode: Selected INCOME tier (balance: ${balance:.2f})")
                 return RISK_CONFIG_INCOME
-            elif balance >= 100:
+            elif balance >= 250:
                 logger.info(f"AUTO mode: Selected INVESTOR tier (balance: ${balance:.2f})")
                 return RISK_CONFIG_INVESTOR
-            elif balance >= 25:
+            elif balance >= 100:
                 logger.info(f"AUTO mode: Selected SAVER tier (balance: ${balance:.2f})")
                 return RISK_CONFIG_SAVER
             else:
-                logger.warning(f"AUTO mode: Balance ${balance:.2f} below minimum ($25), defaulting to SAVER tier")
+                logger.warning(f"AUTO mode: Balance ${balance:.2f} below minimum ($100), defaulting to SAVER tier")
                 return RISK_CONFIG_SAVER
         except (ValueError, TypeError) as e:
             # Default to INVESTOR if balance unavailable or invalid
