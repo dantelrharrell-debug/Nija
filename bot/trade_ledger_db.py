@@ -239,9 +239,19 @@ class TradeLedgerDB:
                 logger.info("✅ Migration complete: master_trade_id column added")
             else:
                 logger.debug("✓ master_trade_id column already exists")
+        except sqlite3.OperationalError as e:
+            # Expected error: column already exists from a previous migration
+            # This can happen if ALTER TABLE was run but column check failed
+            if 'duplicate column name' in str(e).lower():
+                logger.debug(f"Column already exists (duplicate column error): {e}")
+            else:
+                # Unexpected operational error - re-raise
+                logger.error(f"Unexpected operational error during migration: {e}")
+                raise
         except Exception as e:
-            # Log but don't fail - column might already exist from CREATE TABLE
-            logger.debug(f"Migration check for master_trade_id: {e}")
+            # Unexpected error - re-raise for visibility
+            logger.error(f"Unexpected error during migration: {e}")
+            raise
     
     def record_buy(self, symbol: str, price: float, quantity: float, 
                    size_usd: float, fee: float = 0.0, 

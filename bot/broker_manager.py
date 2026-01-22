@@ -7315,14 +7315,15 @@ class BrokerManager:
             return
         
         # Check if current primary is in exit_only mode
-        if hasattr(self.active_broker, 'exit_only_mode') and self.active_broker.exit_only_mode:
+        # Note: exit_only_mode is defined in BaseBroker, so all brokers have this attribute
+        if self.active_broker.exit_only_mode:
             current_primary = self.active_broker.broker_type.value
             logger.info(f"🔍 Current primary broker ({current_primary}) is in EXIT_ONLY mode")
             
             # Try to promote Kraken
             if BrokerType.KRAKEN in self.brokers:
                 kraken = self.brokers[BrokerType.KRAKEN]
-                if kraken.connected and not getattr(kraken, 'exit_only_mode', False):
+                if kraken.connected and not kraken.exit_only_mode:
                     logger.info("=" * 70)
                     logger.info("🔄 PROMOTING KRAKEN TO PRIMARY MASTER BROKER")
                     logger.info("=" * 70)

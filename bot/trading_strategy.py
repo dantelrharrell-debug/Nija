@@ -677,9 +677,10 @@ class TradingStrategy:
                 
                 # FIX #1: Select primary master broker with Kraken promotion logic
                 # CRITICAL: If Coinbase is in exit_only mode, promote Kraken to primary
+                # Only call this after all brokers are connected to make an informed decision
                 self.broker_manager.select_primary_master_broker()
                 
-                # Get the primary broker from broker_manager (auto-set when brokers were added)
+                # Get the primary broker from broker_manager
                 # This is used for master account trading
                 self.broker = self.broker_manager.get_primary_broker()
                 if self.broker:
@@ -699,29 +700,31 @@ class TradingStrategy:
                     # Do NOT just use primary broker's balance - this ignores capital in other brokers
                     if self.portfolio_manager:
                         try:
-                            # Calculate total equity across ALL connected master brokers
-                            total_master_equity = 0.0
+                            # Calculate total cash/balance across ALL connected master brokers
+                            total_master_cash = 0.0
                             master_broker_balances = []
                             
                             for broker_type, broker in self.multi_account_manager.master_brokers.items():
                                 if broker and broker.connected:
                                     try:
                                         broker_balance = broker.get_account_balance()
-                                        total_master_equity += broker_balance
+                                        total_master_cash += broker_balance
                                         master_broker_balances.append(f"{broker_type.value}: ${broker_balance:.2f}")
                                         logger.info(f"   💰 Master broker {broker_type.value}: ${broker_balance:.2f}")
                                     except Exception as broker_err:
                                         logger.warning(f"   ⚠️ Could not get balance from {broker_type.value}: {broker_err}")
                             
-                            if total_master_equity > 0:
-                                # Initialize/update master portfolio with TOTAL equity from all brokers
-                                self.master_portfolio = self.portfolio_manager.initialize_master_portfolio(total_master_equity)
+                            if total_master_cash > 0:
+                                # Initialize/update master portfolio with TOTAL cash from all brokers
+                                # Note: portfolio.total_equity will be cash + position values
+                                self.master_portfolio = self.portfolio_manager.initialize_master_portfolio(total_master_cash)
                                 logger.info("=" * 70)
                                 logger.info("✅ MASTER PORTFOLIO INITIALIZED")
                                 logger.info("=" * 70)
                                 for balance_str in master_broker_balances:
                                     logger.info(f"   {balance_str}")
-                                logger.info(f"   TOTAL MASTER EQUITY: ${total_master_equity:.2f}")
+                                logger.info(f"   TOTAL MASTER CASH: ${total_master_cash:.2f}")
+                                logger.info(f"   TOTAL MASTER EQUITY: ${self.master_portfolio.total_equity:.2f}")
                                 logger.info("=" * 70)
                             else:
                                 logger.warning("⚠️ No master broker balances available - portfolio not initialized")

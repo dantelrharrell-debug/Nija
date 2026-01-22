@@ -14,8 +14,8 @@ import logging
 import sqlite3
 from pathlib import Path
 
-# Add bot directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+# Add bot directory to path - this file is already in bot/ directory
+sys.path.insert(0, os.path.dirname(__file__))
 
 logging.basicConfig(
     level=logging.INFO,
