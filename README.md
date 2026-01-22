@@ -1,5 +1,9 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
+🎯 **[PROFIT-TAKING GUARANTEE](PROFIT_TAKING_GUARANTEE.md)**: NIJA takes profits 24/7 on ALL accounts, ALL brokerages, ALL tiers - ALWAYS ENABLED.
+
+---
+
 ## 🎯 **Official Trading Tiers - Six Levels for Every Trader**
 
 **NIJA uses six official trading tiers** optimized for different capital levels and trading goals:
