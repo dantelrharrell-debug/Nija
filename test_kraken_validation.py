@@ -22,19 +22,23 @@ def test_tier_detection():
     print("="*60)
     
     test_cases = [
-        (10, "Below minimum"),
-        (25, TradingTier.SAVER),
-        (75, TradingTier.SAVER),
-        (100, TradingTier.INVESTOR),
-        (250, TradingTier.INCOME),
+        (5, "Below minimum"),
+        (10, TradingTier.SAVER),
+        (20, TradingTier.SAVER),
+        (25, TradingTier.INVESTOR),
+        (50, TradingTier.INVESTOR),
+        (100, TradingTier.INCOME),
+        (300, TradingTier.INCOME),
+        (500, TradingTier.LIVABLE),
         (1000, TradingTier.LIVABLE),
+        (2500, TradingTier.BALLER),
         (5000, TradingTier.BALLER),
         (10000, TradingTier.BALLER),
     ]
     
     for balance, expected in test_cases:
         tier = get_tier_from_balance(balance)
-        status = "✅" if tier == expected or (balance < 25 and expected == "Below minimum") else "❌"
+        status = "✅" if tier == expected or (balance < 10 and expected == "Below minimum") else "❌"
         print(f"{status} Balance ${balance:>6.2f} → {tier.value:>8} (expected: {expected if isinstance(expected, str) else expected.value})")
 
 
@@ -46,17 +50,20 @@ def test_tier_validation():
     
     test_cases = [
         # (balance, trade_size, should_pass)
-        (50, 1.0, False),   # SAVER: below $2 min
-        (50, 2.0, True),    # SAVER: at $2 min
-        (50, 10.0, False),  # SAVER: above $5 max (too risky)
-        (150, 5.0, False),  # INVESTOR: below $10 min
-        (150, 10.0, True),  # INVESTOR: at $10 min
-        (150, 50.0, False), # INVESTOR: above $25 max (too risky)
-        (500, 15.0, True),  # INCOME: at $15 min
-        (500, 34.0, True),  # INCOME: $34 is 6.8% of $500 (below max risk)
-        (500, 50.0, False), # INCOME: $50 is 10% of $500 (exceeds 7% max risk)
-        (2000, 25.0, True), # LIVABLE: at $25 min
-        (10000, 50.0, True),# BALLER: at $50 min
+        # Test minimum trade sizes per tier
+        (15, 5.0, False),   # SAVER: below $10 Kraken minimum
+        (20, 25.0, False),  # SAVER: $25 trade exceeds max for $20 balance
+        (50, 5.0, False),   # INVESTOR: below $10 minimum
+        (50, 25.0, False),  # INVESTOR: $25 is 50% of $50 (exceeds 10% max risk)
+        (200, 10.0, False), # INCOME: below $15 tier minimum
+        (300, 15.0, True),  # INCOME: $15 is 5% of $300 (within limits)
+        (200, 50.0, False), # INCOME: $50 is 25% of $200 (exceeds 7% max risk)
+        (1000, 20.0, False),# LIVABLE: below $25 tier minimum
+        (1000, 25.0, True), # LIVABLE: $25 is 2.5% of $1000 (within limits)
+        (1000, 100.0, False),# LIVABLE: $100 is 10% of $1000 (exceeds 4% max risk)
+        (5000, 40.0, False),# BALLER: below $50 tier minimum
+        (5000, 50.0, True), # BALLER: $50 is 1% of $5000 (within limits)
+        (5000, 500.0, False),# BALLER: $500 is 10% of $5000 (exceeds 2% max risk)
     ]
     
     for balance, trade_size, should_pass in test_cases:
