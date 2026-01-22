@@ -21,23 +21,30 @@ SEPARATOR = "=" * 70
 # Kraken minimum order sizes
 # Source: https://support.kraken.com/hc/en-us/articles/205893708-Minimum-order-size-volume-for-trading
 # Note: These minimums are subject to change. Verify against current Kraken documentation.
+#
+# CRITICAL FIX (Jan 22, 2026): Kraken-specific minimum with safety buffer
+# Even with Kraken's advertised minimums, fees and market conditions require buffers
+# Problem: $5.50 minimum → fees burn you → ghost trades
+# Solution: Enforce $7.00 minimum as safety buffer for all Kraken trades
+KRAKEN_MINIMUM_ORDER_USD = 7.00  # Safety buffer above Kraken's $5-10 minimums
+
 KRAKEN_MINIMUMS = {
     # Major pairs
-    'XXBTZUSD': {'min_base': 0.0001, 'min_quote': 10.0},  # BTC/USD
-    'XETHZUSD': {'min_base': 0.01, 'min_quote': 10.0},    # ETH/USD
-    'XXBTZUSDT': {'min_base': 0.0001, 'min_quote': 10.0}, # BTC/USDT
-    'XETHZUSDT': {'min_base': 0.01, 'min_quote': 10.0},   # ETH/USDT
+    'XXBTZUSD': {'min_base': 0.0001, 'min_quote': KRAKEN_MINIMUM_ORDER_USD},  # BTC/USD
+    'XETHZUSD': {'min_base': 0.01, 'min_quote': KRAKEN_MINIMUM_ORDER_USD},    # ETH/USD
+    'XXBTZUSDT': {'min_base': 0.0001, 'min_quote': KRAKEN_MINIMUM_ORDER_USD}, # BTC/USDT
+    'XETHZUSDT': {'min_base': 0.01, 'min_quote': KRAKEN_MINIMUM_ORDER_USD},   # ETH/USDT
     
     # Additional major pairs
-    'ADAUSD': {'min_base': 10.0, 'min_quote': 10.0},
-    'SOLUSD': {'min_base': 0.5, 'min_quote': 10.0},
-    'DOTUSD': {'min_base': 1.0, 'min_quote': 10.0},
-    'AVAXUSD': {'min_base': 0.5, 'min_quote': 10.0},
-    'MATICUSD': {'min_base': 10.0, 'min_quote': 10.0},
-    'LINKUSD': {'min_base': 1.0, 'min_quote': 10.0},
+    'ADAUSD': {'min_base': 10.0, 'min_quote': KRAKEN_MINIMUM_ORDER_USD},
+    'SOLUSD': {'min_base': 0.5, 'min_quote': KRAKEN_MINIMUM_ORDER_USD},
+    'DOTUSD': {'min_base': 1.0, 'min_quote': KRAKEN_MINIMUM_ORDER_USD},
+    'AVAXUSD': {'min_base': 0.5, 'min_quote': KRAKEN_MINIMUM_ORDER_USD},
+    'MATICUSD': {'min_base': 10.0, 'min_quote': KRAKEN_MINIMUM_ORDER_USD},
+    'LINKUSD': {'min_base': 1.0, 'min_quote': KRAKEN_MINIMUM_ORDER_USD},
     
-    # Default for unknown pairs
-    'DEFAULT': {'min_base': 0.001, 'min_quote': 10.0}
+    # Default for unknown pairs - use safety buffer
+    'DEFAULT': {'min_base': 0.001, 'min_quote': KRAKEN_MINIMUM_ORDER_USD}
 }
 
 # Kraken fee structure
@@ -296,6 +303,44 @@ def verify_per_api_key_execution(api_key: str, account_type: str = "unknown") ->
     return True
 
 
+def validate_exchange_minimum(exchange: str, order_value_usd: float) -> Tuple[bool, Optional[str]]:
+    """
+    Validate order meets exchange-specific minimum requirements.
+    
+    CRITICAL: Per-exchange enforcement prevents order rejections and wasted fees.
+    
+    Args:
+        exchange: Exchange name ('coinbase', 'kraken', 'okx', etc.)
+        order_value_usd: Order value in USD
+        
+    Returns:
+        tuple: (is_valid: bool, error_message: Optional[str])
+    """
+    exchange = exchange.lower()
+    
+    if exchange == "kraken":
+        # Kraken requires $7.00 minimum with safety buffer
+        # Even with $5.50 official minimum, fees will burn you
+        if order_value_usd < KRAKEN_MINIMUM_ORDER_USD:
+            return False, (
+                f"Kraken order ${order_value_usd:.2f} below ${KRAKEN_MINIMUM_ORDER_USD:.2f} "
+                f"safety buffer (fees + market conditions require buffer above official minimums)"
+            )
+    elif exchange == "coinbase":
+        # Coinbase typically has $1-2 minimum
+        COINBASE_MIN = 1.00
+        if order_value_usd < COINBASE_MIN:
+            return False, f"Coinbase order ${order_value_usd:.2f} below ${COINBASE_MIN:.2f} minimum"
+    elif exchange == "okx":
+        # OKX varies by pair, typically $1-5
+        OKX_MIN = 1.00
+        if order_value_usd < OKX_MIN:
+            return False, f"OKX order ${order_value_usd:.2f} below ${OKX_MIN:.2f} minimum"
+    
+    # Order meets minimum requirements
+    return True, None
+
+
 # Export public API
 __all__ = [
     'get_pair_minimums',
@@ -305,7 +350,9 @@ __all__ = [
     'log_order_validation',
     'verify_txid_returned',
     'verify_per_api_key_execution',
+    'validate_exchange_minimum',
     'KRAKEN_MINIMUMS',
+    'KRAKEN_MINIMUM_ORDER_USD',
     'KRAKEN_TAKER_FEE',
     'KRAKEN_MAKER_FEE'
 ]

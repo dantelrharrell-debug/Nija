@@ -65,14 +65,20 @@ class BrokerFailsafes:
     5. Emergency shutdown (multi-breach protection)
     """
     
-    def __init__(self, broker_name: str = "coinbase", account_balance: float = 100.0):
+    def __init__(self, broker_name: str = "coinbase", account_balance: float = None):
         """
         Initialize failsafe system for specific broker
         
         Args:
             broker_name: Name of broker (coinbase, binance, kraken, okx)
-            account_balance: Current account balance in USD
+            account_balance: Current account balance in USD (MUST be provided - no defaults)
         """
+        if account_balance is None or account_balance <= 0:
+            raise ValueError(
+                f"Account balance must be provided and > 0 for {broker_name}. "
+                f"Got: {account_balance}. Capital must be fetched live from exchange."
+            )
+        
         self.broker_name = broker_name.lower()
         self.account_balance = account_balance
         
@@ -159,6 +165,23 @@ class BrokerFailsafes:
                 json.dump(self.state.to_dict(), f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save failsafe state: {e}")
+    
+    def update_account_balance(self, new_balance: float) -> None:
+        """
+        Update account balance dynamically (called before each allocation cycle).
+        
+        Args:
+            new_balance: New account balance fetched live from exchange
+        """
+        if new_balance is None or new_balance < 0:
+            logger.warning(f"⚠️ Invalid balance update: {new_balance}, keeping current: ${self.account_balance:.2f}")
+            return
+        
+        old_balance = self.account_balance
+        self.account_balance = new_balance
+        
+        if abs(new_balance - old_balance) / old_balance > 0.01:  # Log if >1% change
+            logger.info(f"💰 Account balance updated: ${old_balance:.2f} → ${new_balance:.2f}")
     
     def _check_daily_reset(self):
         """Reset daily counters at start of new day"""
@@ -437,8 +460,8 @@ if __name__ == "__main__":
         format='%(asctime)s | %(levelname)s | %(message)s'
     )
     
-    # Example: Coinbase with $100 balance
-    failsafe = create_failsafe_for_broker("coinbase", 100.0)
+    # Example: Coinbase with $1000 balance (always use live fetched balance)
+    failsafe = create_failsafe_for_broker("coinbase", 1000.0)
     
     # Validate a trade
     status, message = failsafe.validate_trade(
