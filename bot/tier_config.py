@@ -3,15 +3,15 @@ NIJA Tier Configuration and Trade Size Minimums
 
 This module defines tier-based minimum trade sizes and stablecoin routing policies.
 
-Tier Structure:
-- SAVER ($25-$99): Learn system, protect capital
-- INVESTOR ($100-$249): Build consistency (DEFAULT)
-- INCOME ($250-$999): Core retail power tier
-- LIVABLE ($1k-$5k): Stable returns, serious users
-- BALLER ($5k+): Scale capital, precision deployment
+Tier Structure (Updated Jan 22, 2026):
+- SAVER/Starter ($10-$25): Learn system, Coinbase-only (Kraken minimum is $10)
+- INVESTOR ($25-$100): Build consistency (DEFAULT)
+- INCOME ($100-$500): Core retail power tier
+- LIVABLE ($500-$2,500): Stable returns, serious users
+- BALLER ($2,500+): Scale capital, precision deployment
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 2.0
 Date: January 2026
 """
 
@@ -50,22 +50,24 @@ class TierConfig:
 
 
 # Tier configurations based on RISK_PROFILES_GUIDE.md
+# Updated (Jan 22, 2026): SAVER tier renamed to Starter, restricted to Coinbase or $10+ minimum
+# Kraken minimum trade size is $10, so SAVER tier ($10-$25) should be Coinbase-only or disabled
 TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
     TradingTier.SAVER: TierConfig(
-        name="SAVER",
-        capital_min=25.0,
-        capital_max=99.0,
+        name="SAVER (Starter - Coinbase-only)",
+        capital_min=10.0,
+        capital_max=25.0,
         risk_per_trade_pct=(10.0, 15.0),
-        trade_size_min=2.0,
-        trade_size_max=5.0,
+        trade_size_min=10.0,  # Aligned with Kraken $10 minimum
+        trade_size_max=25.0,
         max_positions=1,
-        description="Learn the system, protect capital",
-        min_visible_size=2.0  # Show all trades for learning
+        description="Learn the system, protect capital (Coinbase recommended)",
+        min_visible_size=10.0  # Show all trades for learning
     ),
     TradingTier.INVESTOR: TierConfig(
         name="INVESTOR",
-        capital_min=100.0,
-        capital_max=249.99,  # Up to but not including $250 (INCOME starts at $250)
+        capital_min=25.0,  # Updated from $100 to $25 (was SAVER tier cap)
+        capital_max=100.0,  # Updated to align with new tier structure
         risk_per_trade_pct=(7.0, 10.0),
         trade_size_min=10.0,
         trade_size_max=25.0,
@@ -75,8 +77,8 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
     ),
     TradingTier.INCOME: TierConfig(
         name="INCOME",
-        capital_min=250.0,
-        capital_max=999.99,  # Up to but not including $1k (LIVABLE starts at $1k)
+        capital_min=100.0,  # Updated from $250 to $100
+        capital_max=500.0,  # Updated from $999.99 to $500
         risk_per_trade_pct=(4.0, 7.0),
         trade_size_min=15.0,
         trade_size_max=50.0,
@@ -86,8 +88,8 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
     ),
     TradingTier.LIVABLE: TierConfig(
         name="LIVABLE",
-        capital_min=1000.0,
-        capital_max=4999.99,  # Up to but not including $5k (BALLER starts at $5k)
+        capital_min=500.0,  # Updated from $1000 to $500
+        capital_max=2500.0,  # Updated from $4999.99 to $2500
         risk_per_trade_pct=(2.0, 4.0),
         trade_size_min=25.0,
         trade_size_max=100.0,
@@ -97,7 +99,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
     ),
     TradingTier.BALLER: TierConfig(
         name="BALLER",
-        capital_min=5000.0,
+        capital_min=2500.0,  # Updated from $5000 to $2500
         capital_max=float('inf'),
         risk_per_trade_pct=(1.0, 2.0),
         trade_size_min=50.0,

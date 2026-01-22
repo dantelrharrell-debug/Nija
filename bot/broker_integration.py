@@ -162,11 +162,12 @@ logger = logging.getLogger("nija.broker")
 
 # ✅ REQUIREMENT 2: KRAKEN MINIMUM ORDER COST
 # FIX #3: Kraken hard minimum enforcement with safety buffer
-# Even with $5.50 global min, Kraken needs $7.00 to prevent:
+# UPDATE (Jan 22, 2026): Raised to $10.00 to align with exchange rules
+# Even with $5.50 global min, Kraken needs $10.00 to prevent:
 # - Fee erosion on small orders
 # - False "position opened" logs
 # - User copy mismatches
-KRAKEN_MIN_ORDER_COST = 7.00  # USD (increased from $5.00 for safety buffer)
+KRAKEN_MIN_ORDER_COST = 10.00  # USD (updated to $10.00 best practice minimum)
 
 # ✅ REQUIREMENT 3: DUST EXCLUSION - Positions below this value are IGNORED COMPLETELY
 # ✅ FIX (MANDATORY): Dust threshold for position tracking
@@ -925,9 +926,9 @@ class KrakenBrokerAdapter(BrokerInterface):
         else:
             order_size_usd = size  # Assume it's in USD if we can't calculate
         
-        # FIX #3: Kraken minimum order size enforcement with $7.00 safety buffer
-        # Always enforce our FIX #3 constant ($7.00), regardless of KrakenAdapter setting
-        KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($7.00)
+        # FIX #3: Kraken minimum order size enforcement with $10.00 best practice
+        # Always enforce our FIX #3 constant ($10.00), regardless of KrakenAdapter setting
+        KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($10.00)
         
         if order_size_usd < KRAKEN_MIN_ORDER_USD:
             return (False, kraken_symbol, 
@@ -1075,8 +1076,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                 current_price = 0.0
             
             # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
-            # FIX #3: Kraken hard minimum enforcement ($7.00 safety buffer)
-            # Even with $5.50 global min, Kraken needs $7.00 to prevent fee erosion
+            # FIX #3: Kraken hard minimum enforcement ($10.00 best practice)
+            # Kraken requires $10.00 minimum to prevent fee erosion
             if current_price > 0:
                 # Calculate order cost in USD
                 if size_type == 'quote':
@@ -1091,7 +1092,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("=" * 70)
                     logger.error(f"   Order Cost: ${order_cost_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
                     logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
-                    logger.error("   ⚠️  $7.00 minimum prevents fee erosion and ghost trades")
+                    logger.error("   ⚠️  $10.00 minimum prevents fee erosion and ghost trades")
                     logger.error("=" * 70)
                     return {
                         'order_id': None,
@@ -1100,7 +1101,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                         'size': size,
                         'filled_price': 0.0,
                         'status': 'skipped',
-                        'error': f'FIX #3: Below Kraken $7.00 minimum (${order_cost_usd:.2f})',
+                        'error': f'FIX #3: Below Kraken $10.00 minimum (${order_cost_usd:.2f})',
                         'timestamp': datetime.now()
                     }
                 
@@ -1378,7 +1379,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 }
             
             # ✅ COMPREHENSIVE ORDER VALIDATION (REQUIREMENT #1)
-            # FIX #3: Kraken hard minimum enforcement ($7.00 safety buffer)
+            # FIX #3: Kraken hard minimum enforcement ($10.00 best practice)
             # Calculate USD size for validation (limit orders use price)
             order_size_usd = size * price if size_type == 'base' else size
             
@@ -1389,7 +1390,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.error("=" * 70)
                 logger.error(f"   Order Cost: ${order_size_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
                 logger.error(f"   Symbol: {symbol}, Side: {side}, Size: {size}, Price: {price}")
-                logger.error("   ⚠️  $7.00 minimum prevents fee erosion and ghost trades")
+                logger.error("   ⚠️  $10.00 minimum prevents fee erosion and ghost trades")
                 logger.error("=" * 70)
                 return {
                     'order_id': None,
@@ -1398,7 +1399,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'size': size,
                     'filled_price': 0.0,
                     'status': 'skipped',
-                    'error': f'FIX #3: Below Kraken $7.00 minimum (${order_size_usd:.2f})',
+                    'error': f'FIX #3: Below Kraken $10.00 minimum (${order_size_usd:.2f})',
                     'timestamp': datetime.now()
                 }
             

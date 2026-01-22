@@ -277,9 +277,10 @@ MIN_POSITION_SIZE_USD = BASE_MIN_POSITION_SIZE_USD  # Legacy fallback (use get_d
 MIN_BALANCE_TO_TRADE_USD = 2.0  # Minimum account balance to allow trading (lowered from $5 to support small accounts)
 
 # FIX #3 (Jan 20, 2026): Kraken-specific minimum thresholds
-# Kraken WILL NOT trade if balance < $25 OR min order size not met OR fees make position < min notional
-MIN_KRAKEN_BALANCE = 25.0  # Minimum balance for Kraken to allow trading
-MIN_POSITION_SIZE = 1.25   # 5% of $25 - minimum position size for Kraken
+# UPDATE (Jan 22, 2026): Aligned with new tier structure and $10 minimum trade size
+# Kraken enforces $10 minimum trade size per exchange rules
+MIN_KRAKEN_BALANCE = 10.0   # Minimum balance for Kraken to allow trading (updated from $25)
+MIN_POSITION_SIZE = 10.0    # Minimum position size for Kraken ($10 minimum trade)
 
 # BROKER PRIORITY SYSTEM (Jan 22, 2025)
 # Define entry broker priority for BUY orders
@@ -293,9 +294,10 @@ ENTRY_BROKER_PRIORITY = [
 ]
 
 # Minimum balance thresholds for broker eligibility
+# UPDATE (Jan 22, 2026): Aligned with new tier structure and $10 Kraken minimum
 BROKER_MIN_BALANCE = {
-    BrokerType.COINBASE: 25.0,  # Coinbase requires $25 minimum for new entries
-    BrokerType.KRAKEN: 25.0,    # Kraken requires $25 minimum
+    BrokerType.COINBASE: 10.0,  # Coinbase minimum lowered to support SAVER tier
+    BrokerType.KRAKEN: 10.0,    # Kraken minimum is $10 per exchange rules
     BrokerType.OKX: 10.0,       # Lower minimum for OKX
     BrokerType.BINANCE: 10.0,   # Lower minimum for Binance
 }

@@ -25,8 +25,9 @@ SEPARATOR = "=" * 70
 # CRITICAL FIX (Jan 22, 2026): Kraken-specific minimum with safety buffer
 # Even with Kraken's advertised minimums, fees and market conditions require buffers
 # Problem: $5.50 minimum → fees burn you → ghost trades
-# Solution: Enforce $7.00 minimum as safety buffer for all Kraken trades
-KRAKEN_MINIMUM_ORDER_USD = 7.00  # Safety buffer above Kraken's $5-10 minimums
+# Solution: Enforce $10.00 minimum as best practice for all Kraken trades
+# UPDATE (Jan 22, 2026): Raised to $10.00 to align with exchange rules and tier structure
+KRAKEN_MINIMUM_ORDER_USD = 10.00  # Best practice minimum for Kraken trades
 
 KRAKEN_MINIMUMS = {
     # Major pairs
