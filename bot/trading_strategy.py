@@ -1563,10 +1563,11 @@ class TradingStrategy:
             # Get total capital across ALL accounts (master + users)
             total_capital = self._get_total_capital_across_all_accounts()
             
-            # Update failsafes with current balance
+            # Update failsafes with TOTAL capital (all accounts summed)
+            # Note: Failsafes protect the ENTIRE trading operation, not just one broker
             if hasattr(self, 'failsafes') and self.failsafes:
                 try:
-                    self.failsafes.update_account_balance(account_balance)
+                    self.failsafes.update_account_balance(total_capital)
                 except Exception as e:
                     logger.warning(f"⚠️ Could not update failsafe balance: {e}")
             

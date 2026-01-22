@@ -54,6 +54,12 @@ KRAKEN_MINIMUMS = {
 KRAKEN_TAKER_FEE = 0.0016  # 0.16% (volume tier 0-50k)
 KRAKEN_MAKER_FEE = 0.0010  # 0.10% (volume tier 0-50k)
 
+# Exchange-specific minimum order values (USD)
+# These are safety buffers above official minimums to prevent fee-burn
+COINBASE_MINIMUM_ORDER_USD = 1.00  # Coinbase typically has $1-2 minimum
+OKX_MINIMUM_ORDER_USD = 1.00       # OKX varies by pair, typically $1-5
+BINANCE_MINIMUM_ORDER_USD = 1.00   # Binance varies by pair
+
 
 def get_pair_minimums(pair: str) -> Dict[str, float]:
     """
@@ -327,15 +333,14 @@ def validate_exchange_minimum(exchange: str, order_value_usd: float) -> Tuple[bo
                 f"safety buffer (fees + market conditions require buffer above official minimums)"
             )
     elif exchange == "coinbase":
-        # Coinbase typically has $1-2 minimum
-        COINBASE_MIN = 1.00
-        if order_value_usd < COINBASE_MIN:
-            return False, f"Coinbase order ${order_value_usd:.2f} below ${COINBASE_MIN:.2f} minimum"
+        if order_value_usd < COINBASE_MINIMUM_ORDER_USD:
+            return False, f"Coinbase order ${order_value_usd:.2f} below ${COINBASE_MINIMUM_ORDER_USD:.2f} minimum"
     elif exchange == "okx":
-        # OKX varies by pair, typically $1-5
-        OKX_MIN = 1.00
-        if order_value_usd < OKX_MIN:
-            return False, f"OKX order ${order_value_usd:.2f} below ${OKX_MIN:.2f} minimum"
+        if order_value_usd < OKX_MINIMUM_ORDER_USD:
+            return False, f"OKX order ${order_value_usd:.2f} below ${OKX_MINIMUM_ORDER_USD:.2f} minimum"
+    elif exchange == "binance":
+        if order_value_usd < BINANCE_MINIMUM_ORDER_USD:
+            return False, f"Binance order ${order_value_usd:.2f} below ${BINANCE_MINIMUM_ORDER_USD:.2f} minimum"
     
     # Order meets minimum requirements
     return True, None
@@ -354,6 +359,9 @@ __all__ = [
     'KRAKEN_MINIMUMS',
     'KRAKEN_MINIMUM_ORDER_USD',
     'KRAKEN_TAKER_FEE',
-    'KRAKEN_MAKER_FEE'
+    'KRAKEN_MAKER_FEE',
+    'COINBASE_MINIMUM_ORDER_USD',
+    'OKX_MINIMUM_ORDER_USD',
+    'BINANCE_MINIMUM_ORDER_USD'
 ]
 
