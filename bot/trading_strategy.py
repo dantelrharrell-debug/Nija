@@ -798,6 +798,8 @@ class TradingStrategy:
                 logger.info(f"   • Tania (Alpaca): ${tania_alpaca:,.2f}")
                 
                 # Show grand total
+                # Note: This should match total_capital (master) + user_total_balance from above
+                # This provides a cross-check of the balance calculations
                 grand_total = master_total + daivon_total + tania_total
                 logger.info("")
                 logger.info(f"   🏦 TOTAL CAPITAL UNDER MANAGEMENT: ${grand_total:,.2f}")
