@@ -11,9 +11,11 @@ Hard Controls:
 4. Per-user kill switch
 5. Strategy locking (users cannot modify core logic)
 6. Auto-disable on errors/API abuse
+7. LIVE CAPITAL VERIFIED - Explicit verification required for live trading
 """
 
 import logging
+import os
 from typing import Dict, Optional, List
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -74,11 +76,28 @@ class HardControls:
         self.user_error_counts: Dict[str, int] = {}
         self.strategy_locked = True  # Strategy is always locked
         
+        # CRITICAL SAFETY: LIVE CAPITAL VERIFIED kill-switch
+        # This is the MASTER safety switch that must be explicitly enabled
+        # to allow live trading with real capital. Defaults to False (disabled).
+        # Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading.
+        self.live_capital_verified = self._check_live_capital_verification()
+        
         # Enable trading for master account and all user accounts
         self._initialize_trading_accounts()
         
         logger.info("Hard controls initialized")
         logger.info(f"Position limits: {self.MIN_POSITION_PCT*100:.0f}% - {self.MAX_POSITION_PCT*100:.0f}%")
+        
+        # Log verification status prominently
+        if self.live_capital_verified:
+            logger.warning("=" * 80)
+            logger.warning("🔴 LIVE CAPITAL VERIFIED: TRUE - REAL MONEY TRADING ENABLED")
+            logger.warning("=" * 80)
+        else:
+            logger.info("=" * 80)
+            logger.info("🟢 LIVE CAPITAL VERIFIED: FALSE - TRADING DISABLED (SAFE MODE)")
+            logger.info("   To enable live trading, set LIVE_CAPITAL_VERIFIED=true in .env")
+            logger.info("=" * 80)
     
     def _initialize_trading_accounts(self):
         """
@@ -128,6 +147,24 @@ class HardControls:
             self._log_fallback_to_master(f"Unexpected error loading user accounts: {e}")
         
         logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
+    
+    def _check_live_capital_verification(self) -> bool:
+        """
+        Check if LIVE CAPITAL VERIFIED is enabled.
+        
+        This is the MASTER kill-switch that must be explicitly set to 'true'
+        in the environment variables to allow live trading.
+        
+        Returns:
+            bool: True if live capital trading is verified and enabled
+        """
+        # Check environment variable (must be explicitly set to 'true')
+        verified_str = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower().strip()
+        
+        # Only accept explicit 'true', '1', 'yes', or 'enabled'
+        verified = verified_str in ['true', '1', 'yes', 'enabled']
+        
+        return verified
     
     def _log_fallback_to_master(self, reason: str):
         """Log warning message when falling back to master-only mode."""
@@ -261,6 +298,10 @@ class HardControls:
         Returns:
             (can_trade, error_message)
         """
+        # CRITICAL: Check LIVE CAPITAL VERIFIED first (master kill-switch)
+        if not self.live_capital_verified:
+            return False, "🔴 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading."
+        
         # Check global kill switch
         if self.global_kill_switch == KillSwitchStatus.TRIGGERED:
             return False, "Global trading halted (kill switch triggered)"
@@ -310,6 +351,30 @@ class HardControls:
     def is_strategy_locked(self) -> bool:
         """Check if strategy modification is locked."""
         return self.strategy_locked
+    
+    def is_live_capital_verified(self) -> bool:
+        """
+        Check if LIVE CAPITAL VERIFIED is enabled.
+        
+        Returns:
+            bool: True if live capital trading is verified and enabled
+        """
+        return self.live_capital_verified
+    
+    def get_verification_status(self) -> Dict[str, any]:
+        """
+        Get detailed verification status for dashboard display.
+        
+        Returns:
+            Dict with verification details
+        """
+        return {
+            'live_capital_verified': self.live_capital_verified,
+            'global_kill_switch': self.global_kill_switch.value,
+            'can_trade': self.live_capital_verified and self.global_kill_switch == KillSwitchStatus.ACTIVE,
+            'env_var_name': 'LIVE_CAPITAL_VERIFIED',
+            'env_var_value': os.getenv('LIVE_CAPITAL_VERIFIED', 'not set'),
+        }
     
     def record_trade_loss(self, user_id: str, loss_usd: float):
         """
