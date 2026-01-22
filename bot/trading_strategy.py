@@ -43,10 +43,10 @@ logger = logging.getLogger("nija")
 # Import BrokerType and AccountType at module level for use throughout the class
 # These are needed in _register_kraken_for_retry and other methods outside __init__
 try:
-    from broker_manager import BrokerType, AccountType
+    from broker_manager import BrokerType, AccountType, MINIMUM_TRADING_BALANCE
 except ImportError:
     try:
-        from bot.broker_manager import BrokerType, AccountType
+        from bot.broker_manager import BrokerType, AccountType, MINIMUM_TRADING_BALANCE
     except ImportError:
         # If broker_manager is not available, define placeholder enums
         # This allows the module to load even if broker_manager is missing
@@ -67,6 +67,9 @@ except ImportError:
         class AccountType(Enum):
             MASTER = "master"
             USER = "user"
+        
+        # Also need MINIMUM_TRADING_BALANCE fallback
+        MINIMUM_TRADING_BALANCE = 25.0  # Default minimum
 
 # FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
 # XRP-USD is PERMANENTLY DISABLED due to negative profitability
@@ -78,10 +81,10 @@ DISABLED_PAIRS = ["XRP-USD", "XRPUSD", "XRP-USDT"] + _additional_disabled  # Blo
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
-# FIX #1: Minimal placeholder capital for advanced manager initialization
+# FIX #1: Removed default capital - MUST be set from live broker balance
 # This placeholder is replaced with live multi-broker balance after connection
-# Set to $1 instead of fake $100 to make it obvious it's a placeholder
-PLACEHOLDER_CAPITAL = 1.0  # Minimal placeholder (replaced with live balance)
+# Set to $0 to prevent any trading until real balance is loaded
+PLACEHOLDER_CAPITAL = 0.0  # No default capital - MUST be set from live balance
 
 # OPTIMIZED EXIT FOR LOSING TRADES - Aggressive capital protection
 # Exit losing trades after 15 minutes to minimize capital erosion
@@ -701,22 +704,64 @@ class TradingStrategy:
                     logger.info(f"   👥 USER ACCOUNTS (INDEPENDENT): ${user_total_balance:,.2f}")
                 logger.info("=" * 70)
                 
-                # FIX #1: Update advanced manager with LIVE multi-broker capital
-                # Inject into Capital Allocator, Advanced Trading Manager, and Progressive Target Manager
-                if self.advanced_manager and master_balance > 0:
+                # FIX #2: Force capital re-hydration after broker connections
+                # Use the already-calculated master_balance from above (avoids duplication)
+                total_capital = master_balance
+                
+                # Build list of active exchanges for logging
+                active_exchanges = []
+                for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                    if broker and broker.connected:
+                        active_exchanges.append(broker_type.value)
+                
+                # Update capital allocator with live total
+                if self.advanced_manager and total_capital > 0:
                     try:
-                        # Update capital allocator with live total
-                        self.advanced_manager.capital_allocator.update_total_capital(master_balance)
+                        self.advanced_manager.capital_allocator.update_total_capital(total_capital)
                         
                         # Update progressive target manager if available
                         if hasattr(self.advanced_manager, 'target_manager') and self.advanced_manager.target_manager:
                             # Progressive targets scale with available capital
-                            logger.info(f"   ✅ Progressive targets adjusted for ${master_balance:,.2f} capital")
+                            logger.info(f"   ✅ Progressive targets adjusted for ${total_capital:,.2f} capital")
                         
-                        logger.info(f"   ✅ Capital Allocator: ${master_balance:,.2f} (LIVE multi-broker total)")
+                        logger.info(f"   ✅ Capital Allocator: ${total_capital:,.2f} (LIVE multi-broker total)")
                         logger.info(f"   ✅ Advanced Trading Manager: Using live capital")
                     except Exception as e:
                         logger.warning(f"   Failed to update capital allocation: {e}")
+                
+                # Update portfolio state manager with total equity
+                if self.portfolio_manager and total_capital > 0:
+                    try:
+                        # Initialize/update master portfolio with total capital
+                        self.master_portfolio = self.portfolio_manager.initialize_master_portfolio(total_capital)
+                        logger.info(f"   ✅ Portfolio State Manager updated with ${total_capital:,.2f}")
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ Could not update portfolio manager: {e}")
+                
+                # FIX #2: Explicit confirmation log (CRITICAL - must see this log)
+                if total_capital > 0:
+                    logger.info("=" * 70)
+                    logger.info(f"💰 LIVE CAPITAL SYNC COMPLETE: ${total_capital:.2f}")
+                    logger.info(f"   Active exchanges: {', '.join(active_exchanges)}")
+                    logger.info("=" * 70)
+                    
+                    # FIX #3: Hard fail if capital below minimum (non-negotiable)
+                    if total_capital < MINIMUM_TRADING_BALANCE:
+                        logger.error("=" * 70)
+                        logger.error("❌ FATAL: Capital below minimum — trading disabled")
+                        logger.error("=" * 70)
+                        logger.error(f"   Current capital: ${total_capital:.2f}")
+                        logger.error(f"   Minimum required: ${MINIMUM_TRADING_BALANCE:.2f}")
+                        logger.error(f"   Shortfall: ${MINIMUM_TRADING_BALANCE - total_capital:.2f}")
+                        logger.error("")
+                        logger.error("   🛑 Bot cannot trade with insufficient capital")
+                        logger.error("   💵 Fund your account to continue trading")
+                        logger.error("=" * 70)
+                        raise RuntimeError(f"Capital below minimum — trading disabled (${total_capital:.2f} < ${MINIMUM_TRADING_BALANCE:.2f})")
+                else:
+                    logger.error("❌ LIVE CAPITAL SYNC FAILED: No capital detected from exchanges")
+                    logger.error("   Trading will remain frozen until capital is detected")
+                    raise RuntimeError("Capital sync failed — no capital detected from exchanges")
                 
                 # FIX #1: Select primary master broker with Kraken promotion logic
                 # CRITICAL: If Coinbase is in exit_only mode or has insufficient balance, promote Kraken to primary
