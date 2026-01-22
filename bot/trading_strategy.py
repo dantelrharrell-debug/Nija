@@ -2661,6 +2661,7 @@ class TradingStrategy:
                     # Prevents "ProductID is invalid" errors
                     if not symbol or not isinstance(symbol, str):
                         logger.error(f"  ❌ SKIPPING: Invalid symbol (value: {symbol}, type: {type(symbol)})")
+                        # Store descriptive string for logging - will be displayed in summary
                         failed_sells.append(f"INVALID_SYMBOL({symbol})")
                         continue
                     
@@ -2720,7 +2721,7 @@ class TradingStrategy:
                         logger.error(f"  ❌ {symbol} exception during sell: {sell_err}")
                         logger.error(f"     Error type: {type(sell_err).__name__}")
                         logger.error(f"     Traceback: {traceback.format_exc()}")
-                        # Ensure symbol is valid string before appending
+                        # Convert symbol to string for consistent logging - prevents join() errors
                         failed_sells.append(str(symbol) if symbol else "UNKNOWN_SYMBOL")
                     
                     # Rate limiting: Add delay after each sell order (except the last one)
