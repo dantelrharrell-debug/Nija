@@ -92,10 +92,11 @@ class PositionCapEnforcer:
                     
                     usd_value = balance * price
 
+                    # ✅ REQUIREMENT 3: DUST EXCLUSION - If usd_value < MIN_POSITION_USD, IGNORE COMPLETELY
                     # CRITICAL FIX: Only skip TRUE dust to match broker.get_positions()
                     # Small positions like $0.04-$0.15 MUST be counted and managed
                     if balance <= 0 or usd_value < DUST_THRESHOLD_USD:
-                        logger.info(f"Skipping dust position {symbol}: balance={balance}, usd_value={usd_value:.4f}")
+                        logger.info(f"🗑️  Excluding dust position {symbol}: balance={balance}, usd_value={usd_value:.4f} (below ${DUST_THRESHOLD_USD} threshold)")
                         continue
                     
                     result.append({

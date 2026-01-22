@@ -37,3 +37,17 @@ class InvalidFillPriceError(ExecutionError):
 class OrderRejectedError(ExecutionError):
     """Raised when attempting to record a rejected order"""
     pass
+
+
+class ExecutionFailed(ExecutionError):
+    """
+    Raised when Kraken does not confirm order execution.
+    
+    This exception is raised when Kraken fails to return:
+    - txid (transaction ID)
+    - descr.order (order description)
+    - cost > 0 (order cost)
+    
+    Prevents ledger writes and position increments for unconfirmed orders.
+    """
+    pass

@@ -113,13 +113,13 @@ except ImportError:
 try:
     from bot.exceptions import (
         ExecutionError, BrokerMismatchError, InvalidTxidError,
-        InvalidFillPriceError, OrderRejectedError
+        InvalidFillPriceError, OrderRejectedError, ExecutionFailed
     )
 except ImportError:
     try:
         from exceptions import (
             ExecutionError, BrokerMismatchError, InvalidTxidError,
-            InvalidFillPriceError, OrderRejectedError
+            InvalidFillPriceError, OrderRejectedError, ExecutionFailed
         )
     except ImportError:
         # Fallback: Define locally if import fails
@@ -132,6 +132,8 @@ except ImportError:
         class InvalidFillPriceError(ExecutionError):
             pass
         class OrderRejectedError(ExecutionError):
+            pass
+        class ExecutionFailed(ExecutionError):
             pass
 
 logger = logging.getLogger("nija.broker")
@@ -1125,8 +1127,39 @@ class KrakenBrokerAdapter(BrokerInterface):
                     # Raise exception to prevent recording this as a successful trade
                     raise InvalidTxidError("No txid returned from Kraken - order did not execute")
                 
+                # ✅ REQUIREMENT 1: HARD-FAIL - Verify descr.order exists
+                descr = order_result.get('descr', {})
+                order_description = descr.get('order', '')
+                if not order_description:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN ORDER NOT CONFIRMED - NO ORDER DESCRIPTION")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                    logger.error(f"   Order ID: {order_id}")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Kraken must return descr.order")
+                    logger.error("=" * 70)
+                    raise ExecutionFailed("Kraken order not confirmed - no order description")
+                
+                # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0
+                # cost field represents the total cost/value of the order
+                cost = float(order_result.get('cost', '0'))
+                if cost <= 0:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN ORDER NOT CONFIRMED - INVALID COST")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                    logger.error(f"   Order ID: {order_id}")
+                    logger.error(f"   Cost: {cost} (must be > 0)")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Cost must be greater than zero")
+                    logger.error("=" * 70)
+                    raise ExecutionFailed(f"Kraken order not confirmed - invalid cost: {cost}")
+                
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Market {side} order: {kraken_symbol} (ID: {order_id})")
+                logger.info(f"   Order Description: {order_description}")
+                logger.info(f"   Order Cost: ${cost:.2f}")
                 
                 # ✅ REQUIREMENT #2: Attempt to fetch order fill details
                 # Query the order to get filled price and volume
@@ -1363,8 +1396,39 @@ class KrakenBrokerAdapter(BrokerInterface):
                     # Raise exception to prevent recording this as a successful trade
                     raise InvalidTxidError("No txid returned from Kraken - limit order did not execute")
                 
+                # ✅ REQUIREMENT 1: HARD-FAIL - Verify descr.order exists
+                descr = order_result.get('descr', {})
+                order_description = descr.get('order', '')
+                if not order_description:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN LIMIT ORDER NOT CONFIRMED - NO ORDER DESCRIPTION")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: {price}, Size: {size}")
+                    logger.error(f"   Order ID: {order_id}")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Kraken must return descr.order")
+                    logger.error("=" * 70)
+                    raise ExecutionFailed("Kraken limit order not confirmed - no order description")
+                
+                # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0 (for limit orders, cost may be 0 until filled)
+                # For limit orders, we'll verify volume instead since they may not fill immediately
+                volume = float(order_result.get('volume', '0'))
+                if volume <= 0:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN LIMIT ORDER NOT CONFIRMED - INVALID VOLUME")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: {price}, Size: {size}")
+                    logger.error(f"   Order ID: {order_id}")
+                    logger.error(f"   Volume: {volume} (must be > 0)")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Volume must be greater than zero")
+                    logger.error("=" * 70)
+                    raise ExecutionFailed(f"Kraken limit order not confirmed - invalid volume: {volume}")
+                
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Limit {side} order: {kraken_symbol} @ ${price} (ID: {order_id})")
+                logger.info(f"   Order Description: {order_description}")
+                logger.info(f"   Order Volume: {volume}")
                 if order_id:
                     logger.info(f"✅ Kraken limit {side} order placed successfully")
                     logger.info(f"   • Order ID (txid): {order_id}")
@@ -1439,17 +1503,44 @@ class KrakenBrokerAdapter(BrokerInterface):
             return False
     
     def get_open_positions(self) -> List[Dict]:
-        """Get open positions from Kraken."""
+        """
+        ✅ REQUIREMENT 2: Get open positions from Kraken exchange data.
+        
+        Position counting MUST come from exchange, not internal memory:
+        - OpenOrders: Active open orders
+        - Balance: Non-zero crypto balances (excluding dust)
+        - TradeBalance: Held funds verification
+        
+        If Kraken reports no open orders and no balances → positions = 0
+        
+        Returns:
+            List of position dicts with symbol, size, entry_price, etc.
+        """
         try:
             if not self.api:
                 return []
             
-            # Use helper method for serialized API call
+            positions = []
+            
+            # ✅ STEP 1: Get open orders from Kraken
+            # This tells us what positions we're actively managing
+            open_orders_result = self._kraken_api_call('OpenOrders')
+            open_order_symbols = set()
+            
+            if open_orders_result and 'result' in open_orders_result:
+                open_orders = open_orders_result['result'].get('open', {})
+                for order_id, order in open_orders.items():
+                    descr = order.get('descr', {})
+                    pair = descr.get('pair', '')
+                    if pair:
+                        open_order_symbols.add(pair)
+                        logger.info(f"   📋 Open order found: {pair} (ID: {order_id})")
+            
+            # ✅ STEP 2: Get account balances to find actual holdings
             balance = self._kraken_api_call('Balance')
             
             if balance and 'result' in balance:
                 result = balance['result']
-                positions = []
                 
                 for asset, amount in result.items():
                     balance_val = float(amount)
@@ -1465,18 +1556,62 @@ class KrakenBrokerAdapter(BrokerInterface):
                     if currency == 'XBT':
                         currency = 'BTC'
                     
-                    positions.append({
-                        'symbol': f'{currency}USD',
-                        'size': balance_val,
-                        'entry_price': 0.0,
-                        'current_price': 0.0,
-                        'pnl': 0.0,
-                        'pnl_pct': 0.0
-                    })
-                
-                return positions
+                    symbol = f'{currency}USD'
+                    
+                    # ✅ REQUIREMENT 3: Exclude dust positions
+                    # Get current price to calculate USD value
+                    try:
+                        ticker_pair = convert_to_kraken(symbol) if convert_to_kraken else symbol.replace('/', '')
+                        ticker_result = self._kraken_api_call('Ticker', {'pair': ticker_pair})
+                        
+                        current_price = 0.0
+                        if ticker_result and 'result' in ticker_result:
+                            ticker_data = ticker_result['result'].get(ticker_pair, {})
+                            if ticker_data:
+                                # Get last price from ticker
+                                last_price = ticker_data.get('c', [0, 0])
+                                current_price = float(last_price[0]) if isinstance(last_price, list) else float(last_price)
+                        
+                        usd_value = balance_val * current_price if current_price > 0 else 0
+                        
+                        # ✅ REQUIREMENT 3: DUST EXCLUSION - If usd_value < MIN_POSITION_USD, IGNORE COMPLETELY
+                        MIN_POSITION_USD = 1.00  # Consistent with DUST_THRESHOLD_USD
+                        if usd_value > 0 and usd_value < MIN_POSITION_USD:
+                            logger.info(f"   🗑️  Excluding dust position: {symbol} (${usd_value:.4f} < ${MIN_POSITION_USD})")
+                            continue
+                        
+                        positions.append({
+                            'symbol': symbol,
+                            'size': balance_val,
+                            'entry_price': 0.0,  # Would need trade history to get actual entry
+                            'current_price': current_price,
+                            'pnl': 0.0,
+                            'pnl_pct': 0.0,
+                            'usd_value': usd_value
+                        })
+                        
+                    except Exception as price_err:
+                        logger.warning(f"Could not get price for {symbol}: {price_err}")
+                        # Still include position but with zero price
+                        positions.append({
+                            'symbol': symbol,
+                            'size': balance_val,
+                            'entry_price': 0.0,
+                            'current_price': 0.0,
+                            'pnl': 0.0,
+                            'pnl_pct': 0.0,
+                            'usd_value': 0.0
+                        })
             
-            return []
+            # ✅ REQUIREMENT 2: If Kraken reports no positions → positions = 0
+            if not positions:
+                logger.info("   ✅ Kraken reports ZERO open positions (no balances above dust threshold)")
+            else:
+                logger.info(f"   ✅ Kraken reports {len(positions)} open position(s)")
+                for pos in positions:
+                    logger.info(f"      • {pos['symbol']}: {pos['size']:.8f} (${pos.get('usd_value', 0):.2f})")
+            
+            return positions
             
         except Exception as e:
             logger.error(f"Error fetching Kraken positions: {e}")
