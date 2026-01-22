@@ -6388,13 +6388,13 @@ class KrakenBroker(BaseBroker):
                         # Return unfilled status to prevent API call
                         return {
                             "status": "unfilled",
-                            "error": "INSUFFICIENT_FUNDS",
+                            "error": "INSUFFICIENT_FUND",
                             "message": error_msg,
                             "partial_fill": False,
                             "filled_pct": 0.0
                         }
                     else:
-                        logging.info(f"   ✅ Balance sufficient: ${trading_balance:.2f} available > ${required_with_buffer:.2f} required")
+                        logging.info(f"   ✅ Balance sufficient: ${trading_balance:.2f} available >= ${required_with_buffer:.2f} required")
             
             # Place market order using serialized API call
             # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
