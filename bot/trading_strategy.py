@@ -747,15 +747,72 @@ class TradingStrategy:
                     logger.info(f"💰 LIVE CAPITAL SYNC COMPLETE: ${total_capital:.2f}")
                     logger.info(f"   Active exchanges: {', '.join(active_exchanges)}")
                     logger.info("=" * 70)
-                    
-                    # Initialize advanced trading features AFTER first live balance fetch
-                    # This ensures advanced modules have access to real capital data
-                    # Gated by LIVE_CAPITAL_VERIFIED environment variable
-                    logger.info("🔧 Initializing advanced trading modules with live capital...")
-                    self._init_advanced_features()
-                    
-                    # FIX #3: Hard fail if capital below minimum (non-negotiable)
-                    if total_capital < MINIMUM_TRADING_BALANCE:
+                
+                # USER BALANCE SNAPSHOT - Visual certainty of all account balances
+                # Added per Jan 2026 requirement for absolute visual confirmation
+                logger.info("")
+                logger.info("=" * 70)
+                logger.info("💰 USER BALANCE SNAPSHOT")
+                logger.info("=" * 70)
+                
+                # Get all balances from multi_account_manager
+                all_balances = self.multi_account_manager.get_all_balances()
+                
+                # Master account
+                master_balances = all_balances.get('master', {})
+                master_total = sum(master_balances.values())
+                logger.info(f"   • Master: ${master_total:,.2f}")
+                for broker, balance in master_balances.items():
+                    logger.info(f"      - {broker.upper()}: ${balance:,.2f}")
+                
+                # User accounts - specifically Daivon and Tania
+                users_balances = all_balances.get('users', {})
+                
+                # Find and display Daivon's balance
+                daivon_total = 0.0
+                daivon_brokers = {}
+                for user_id, balances in users_balances.items():
+                    if 'daivon' in user_id.lower():
+                        daivon_total = sum(balances.values())
+                        daivon_brokers = balances
+                        break
+                
+                logger.info(f"   • Daivon: ${daivon_total:,.2f}")
+                for broker, balance in daivon_brokers.items():
+                    logger.info(f"      - {broker.upper()}: ${balance:,.2f}")
+                
+                # Find and display Tania's balance
+                tania_total = 0.0
+                tania_brokers = {}
+                for user_id, balances in users_balances.items():
+                    if 'tania' in user_id.lower():
+                        tania_total = sum(balances.values())
+                        tania_brokers = balances
+                        break
+                
+                # Display Tania's balance, breaking down by broker type
+                # Based on config and README, Tania may have Kraken and/or Alpaca
+                tania_kraken = tania_brokers.get('kraken', 0.0)
+                tania_alpaca = tania_brokers.get('alpaca', 0.0)
+                logger.info(f"   • Tania (Kraken): ${tania_kraken:,.2f}")
+                logger.info(f"   • Tania (Alpaca): ${tania_alpaca:,.2f}")
+                
+                # Show grand total
+                # Note: This should match total_capital (master) + user_total_balance from above
+                # This provides a cross-check of the balance calculations
+                grand_total = master_total + daivon_total + tania_total
+                logger.info("")
+                logger.info(f"   🏦 TOTAL CAPITAL UNDER MANAGEMENT: ${grand_total:,.2f}")
+                logger.info("=" * 70)
+                
+                # Initialize advanced trading features AFTER first live balance fetch
+                # This ensures advanced modules have access to real capital data
+                # Gated by LIVE_CAPITAL_VERIFIED environment variable
+                logger.info("🔧 Initializing advanced trading modules with live capital...")
+                self._init_advanced_features()
+                
+                # FIX #3: Hard fail if capital below minimum (non-negotiable)
+                if total_capital < MINIMUM_TRADING_BALANCE:
                         logger.error("=" * 70)
                         logger.error("❌ FATAL: Capital below minimum — trading disabled")
                         logger.error("=" * 70)
