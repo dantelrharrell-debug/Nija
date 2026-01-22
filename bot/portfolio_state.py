@@ -52,6 +52,7 @@ class PortfolioState:
     """
     available_cash: float
     open_positions: Dict[str, Position] = field(default_factory=dict)
+    min_reserve_pct: float = 0.10  # Minimum 10% reserve to keep as cash
     
     @property
     def total_position_value(self) -> float:
@@ -86,6 +87,86 @@ class PortfolioState:
         if self.total_equity <= 0:
             return 0.0
         return (self.total_position_value / self.total_equity) * 100
+    
+    def calculate_deployable_capital(self, min_reserve_pct: Optional[float] = None) -> float:
+        """
+        Calculate effective deployable capital.
+        
+        This is the maximum amount of capital that can be deployed in new positions,
+        accounting for:
+        - Total equity (cash + positions)
+        - Minimum cash reserve requirements
+        - Capital already deployed in open positions
+        
+        Formula:
+            deployable_capital = total_equity * (1 - min_reserve_pct) - total_position_value
+        
+        Args:
+            min_reserve_pct: Minimum percentage of total equity to keep as reserve (default: self.min_reserve_pct)
+            
+        Returns:
+            float: Amount of capital available for deployment in USD
+        """
+        if min_reserve_pct is None:
+            min_reserve_pct = self.min_reserve_pct
+        
+        # Calculate minimum reserve that must be maintained
+        min_reserve_amount = self.total_equity * min_reserve_pct
+        
+        # Maximum deployable is total equity minus reserve requirement
+        max_deployable = self.total_equity - min_reserve_amount
+        
+        # Subtract what's already deployed in positions
+        effective_deployable = max_deployable - self.total_position_value
+        
+        # Cannot deploy more than available cash
+        effective_deployable = min(effective_deployable, self.available_cash)
+        
+        # Cannot be negative
+        effective_deployable = max(0.0, effective_deployable)
+        
+        return effective_deployable
+    
+    def calculate_max_position_size(
+        self, 
+        max_position_pct: float = 0.15,
+        min_reserve_pct: Optional[float] = None
+    ) -> float:
+        """
+        Calculate maximum position size for a single trade.
+        
+        This accounts for:
+        - Total equity (not just available cash)
+        - Maximum position size as percentage of total equity
+        - Minimum reserve requirements
+        - Available deployable capital
+        
+        Args:
+            max_position_pct: Maximum position size as % of total equity (default: 0.15 = 15%)
+            min_reserve_pct: Minimum percentage of total equity to keep as reserve (default: self.min_reserve_pct)
+            
+        Returns:
+            float: Maximum position size in USD
+        """
+        if min_reserve_pct is None:
+            min_reserve_pct = self.min_reserve_pct
+        
+        # Calculate max based on percentage of total equity
+        max_by_percentage = self.total_equity * max_position_pct
+        
+        # Calculate effective deployable capital
+        deployable = self.calculate_deployable_capital(min_reserve_pct)
+        
+        # Take the minimum of the two (most conservative)
+        max_position = min(max_by_percentage, deployable)
+        
+        # Cannot exceed available cash
+        max_position = min(max_position, self.available_cash)
+        
+        # Cannot be negative
+        max_position = max(0.0, max_position)
+        
+        return max_position
     
     def add_position(self, symbol: str, quantity: float, entry_price: float, current_price: Optional[float] = None):
         """
@@ -158,6 +239,8 @@ class PortfolioState:
             'total_equity': self.total_equity,
             'position_count': self.position_count,
             'cash_utilization_pct': self.cash_utilization_pct,
+            'deployable_capital': self.calculate_deployable_capital(),
+            'max_position_size': self.calculate_max_position_size(),
             'positions': {
                 symbol: {
                     'quantity': pos.quantity,
@@ -169,6 +252,62 @@ class PortfolioState:
                 }
                 for symbol, pos in self.open_positions.items()
             }
+        }
+    
+    def get_capital_breakdown(
+        self, 
+        max_position_pct: float = 0.15,
+        min_reserve_pct: Optional[float] = None
+    ) -> Dict:
+        """
+        Get detailed breakdown of capital allocation and capacity.
+        
+        This provides a comprehensive view of:
+        - How much capital is currently deployed
+        - How much is available for deployment
+        - What the maximum position size can be
+        - Reserve requirements
+        
+        Args:
+            max_position_pct: Maximum position size as % of total equity
+            min_reserve_pct: Minimum reserve percentage (default: self.min_reserve_pct)
+            
+        Returns:
+            Dict with detailed capital breakdown
+        """
+        if min_reserve_pct is None:
+            min_reserve_pct = self.min_reserve_pct
+        
+        deployable = self.calculate_deployable_capital(min_reserve_pct)
+        max_position = self.calculate_max_position_size(max_position_pct, min_reserve_pct)
+        min_reserve_amount = self.total_equity * min_reserve_pct
+        max_deployable_total = self.total_equity - min_reserve_amount
+        
+        return {
+            # Core balances
+            'total_equity': self.total_equity,
+            'available_cash': self.available_cash,
+            'total_position_value': self.total_position_value,
+            'unrealized_pnl': self.unrealized_pnl,
+            
+            # Position metrics
+            'position_count': self.position_count,
+            'cash_utilization_pct': self.cash_utilization_pct,
+            
+            # Capital deployment
+            'min_reserve_pct': min_reserve_pct * 100,  # As percentage
+            'min_reserve_amount': min_reserve_amount,
+            'max_deployable_total': max_deployable_total,
+            'current_deployed': self.total_position_value,
+            'deployable_capital': deployable,
+            
+            # Position sizing
+            'max_position_pct': max_position_pct * 100,  # As percentage
+            'max_position_size': max_position,
+            
+            # Capacity metrics
+            'deployment_capacity_used_pct': (self.total_position_value / max_deployable_total * 100) if max_deployable_total > 0 else 0,
+            'remaining_capacity': max_deployable_total - self.total_position_value if max_deployable_total > self.total_position_value else 0
         }
 
 
