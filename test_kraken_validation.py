@@ -53,7 +53,8 @@ def test_tier_validation():
         (150, 10.0, True),  # INVESTOR: at $10 min
         (150, 50.0, False), # INVESTOR: above $25 max (too risky)
         (500, 15.0, True),  # INCOME: at $15 min
-        (500, 50.0, True),  # INCOME: at $50 max
+        (500, 34.0, True),  # INCOME: $34 is 6.8% of $500 (below max risk)
+        (500, 50.0, False), # INCOME: $50 is 10% of $500 (exceeds 7% max risk)
         (2000, 25.0, True), # LIVABLE: at $25 min
         (10000, 50.0, True),# BALLER: at $50 min
     ]
