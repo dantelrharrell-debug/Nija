@@ -317,37 +317,37 @@ RISK_LIMITS = {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# RISK MANAGEMENT - NIJA USER TRADING TIERS (OFFICIAL)
+# RISK MANAGEMENT - NIJA USER TRADING TIERS (OFFICIAL - FINAL VERSION)
 # ═══════════════════════════════════════════════════════════════════
 #
 # Five official user trading tiers based on capital and goals:
-# 1. SAVER ($25-$99) - Protect capital, learn the system
-# 2. INVESTOR ($100-$249) - Build consistency, reduce randomness
-# 3. INCOME ($250-$999) - Generate repeatable returns (core retail)
-# 4. LIVABLE ($1,000-$4,999) - Stable returns, capital protection
-# 5. BALLER ($5,000+) - Scale capital, preserve dominance
+# 1. SAVER ($100-$249) - Capital preservation + learning
+# 2. INVESTOR ($250-$999) - Consistent participation
+# 3. INCOME ($1,000-$4,999) - Serious retail trading
+# 4. LIVABLE ($5,000-$24,999) - Professional-level execution
+# 5. BALLER ($25,000+) - Capital deployment
 #
 # MASTER (System Authority) - Not a user tier, system governance only
 #
 # To use a specific tier, set RISK_PROFILE environment variable:
-#   export RISK_PROFILE=SAVER      # For learning ($25-$99)
-#   export RISK_PROFILE=INVESTOR   # For consistency ($100-$249)
-#   export RISK_PROFILE=INCOME     # For income ($250-$999)
-#   export RISK_PROFILE=LIVABLE    # For serious traders ($1k-$5k)
-#   export RISK_PROFILE=BALLER     # For capital deployment ($5k+)
+#   export RISK_PROFILE=SAVER      # For learning ($100-$249)
+#   export RISK_PROFILE=INVESTOR   # For consistency ($250-$999)
+#   export RISK_PROFILE=INCOME     # For serious trading ($1k-$4.9k)
+#   export RISK_PROFILE=LIVABLE    # For professional execution ($5k-$24.9k)
+#   export RISK_PROFILE=BALLER     # For capital deployment ($25k+)
 #   export RISK_PROFILE=AUTO       # Auto-select based on balance
 #
 # Default tier is INVESTOR if not specified
 # ═══════════════════════════════════════════════════════════════════
 
-# TIER 1: SAVER - "Protect capital. Learn the system."
-# Target Balance: $25 – $99
-# Reality Check: Not designed for income. Validates execution, not performance.
+# TIER 1: SAVER - "Capital preservation + learning"
+# Target Balance: $100 – $249
+# Focus: Capital preservation while learning the system
 RISK_CONFIG_SAVER = {
     # Per-Trade Risk Limits
-    'max_risk_per_trade': 0.15,  # 15% maximum risk per trade (high for small capital)
-    'min_risk_per_trade': 0.10,  # 10% minimum risk per trade (dynamic)
-    'min_risk_reward': 3.0,  # Minimum 3:1 risk/reward ratio (quality only)
+    'max_risk_per_trade': 0.10,  # 10% maximum risk per trade
+    'min_risk_per_trade': 0.07,  # 7% minimum risk per trade (dynamic)
+    'min_risk_reward': 2.5,  # Minimum 2.5:1 risk/reward ratio
     
     # Account-Level Risk Limits
     'max_daily_loss': 0.08,  # 8% maximum daily loss (very defensive)
@@ -383,20 +383,20 @@ RISK_CONFIG_SAVER = {
     # Profile Metadata
     'profile_name': 'SAVER',
     'tier_number': 1,
-    'balance_range': (25.0, 99.0),
+    'balance_range': (100.0, 249.0),
     'primary_goal': 'Capital preservation + learning',
-    'trade_frequency': 'Low',
+    'trade_frequency': 'Moderate',
     'experience_required': 'Beginner',
 }
 
-# TIER 2: INVESTOR - "Build consistency. Reduce randomness."
-# Target Balance: $100 – $249
-# "This is where NIJA starts to feel 'real'."
+# TIER 2: INVESTOR - "Consistent participation"
+# Target Balance: $250 – $999
+# "Default tier for consistent market participation"
 RISK_CONFIG_INVESTOR = {
     # Per-Trade Risk Limits
-    'max_risk_per_trade': 0.10,  # 10% maximum risk per trade
-    'min_risk_per_trade': 0.07,  # 7% minimum risk per trade
-    'min_risk_reward': 2.5,  # Minimum 2.5:1 risk/reward ratio
+    'max_risk_per_trade': 0.07,  # 7% maximum risk per trade
+    'min_risk_per_trade': 0.05,  # 5% minimum risk per trade
+    'min_risk_reward': 2.0,  # Minimum 2.0:1 risk/reward ratio
     
     # Account-Level Risk Limits
     'max_daily_loss': 0.05,  # 5% maximum daily loss
@@ -432,19 +432,19 @@ RISK_CONFIG_INVESTOR = {
     # Profile Metadata
     'profile_name': 'INVESTOR',
     'tier_number': 2,
-    'balance_range': (100.0, 249.0),
-    'primary_goal': 'Consistent growth',
-    'trade_frequency': 'Moderate',
+    'balance_range': (250.0, 999.0),
+    'primary_goal': 'Consistent participation',
+    'trade_frequency': 'Active',
     'experience_required': 'Intermediate',
 }
 
-# TIER 3: INCOME - "Generate repeatable returns."
-# Target Balance: $250 – $999
-# "This is NIJA's core retail power tier."
+# TIER 3: INCOME - "Serious retail trading"
+# Target Balance: $1,000 – $4,999
+# "For serious retail traders with active participation"
 RISK_CONFIG_INCOME = {
     # Per-Trade Risk Limits
-    'max_risk_per_trade': 0.07,  # 7% maximum risk per trade
-    'min_risk_per_trade': 0.04,  # 4% minimum risk per trade
+    'max_risk_per_trade': 0.05,  # 5% maximum risk per trade
+    'min_risk_per_trade': 0.03,  # 3% minimum risk per trade
     'min_risk_reward': 2.0,  # Minimum 2:1 risk/reward ratio
     
     # Account-Level Risk Limits
@@ -481,18 +481,18 @@ RISK_CONFIG_INCOME = {
     # Profile Metadata
     'profile_name': 'INCOME',
     'tier_number': 3,
-    'balance_range': (250.0, 999.0),
-    'primary_goal': 'Supplemental income',
-    'trade_frequency': 'Active but selective',
+    'balance_range': (1000.0, 4999.0),
+    'primary_goal': 'Serious retail trading',
+    'trade_frequency': 'Very active',
     'experience_required': 'Intermediate-Advanced',
 }
 
-# TIER 4: LIVABLE - "Stable returns. Capital protection."
-# Target Balance: $1,000 – $4,999
-# "Designed for serious users, not gamblers."
+# TIER 4: LIVABLE - "Professional-level execution"
+# Target Balance: $5,000 – $24,999
+# "For professional-level traders with precision focus"
 RISK_CONFIG_LIVABLE = {
     # Per-Trade Risk Limits
-    'max_risk_per_trade': 0.04,  # 4% maximum risk per trade
+    'max_risk_per_trade': 0.03,  # 3% maximum risk per trade
     'min_risk_per_trade': 0.02,  # 2% minimum risk per trade
     'min_risk_reward': 2.0,  # Minimum 2:1 risk/reward ratio
     
@@ -530,15 +530,15 @@ RISK_CONFIG_LIVABLE = {
     # Profile Metadata
     'profile_name': 'LIVABLE',
     'tier_number': 4,
-    'balance_range': (1000.0, 4999.0),
-    'primary_goal': 'Reliable monthly performance',
-    'trade_frequency': 'Selective, high-confidence only',
+    'balance_range': (5000.0, 24999.0),
+    'primary_goal': 'Professional-level execution',
+    'trade_frequency': 'Selective, high-precision',
     'experience_required': 'Advanced',
 }
 
-# TIER 5: BALLER - "Scale capital. Preserve dominance."
-# Target Balance: $5,000+
-# "This is capital deployment, not speculation."
+# TIER 5: BALLER - "Capital deployment"
+# Target Balance: $25,000+
+# "Institutional-grade capital deployment"
 RISK_CONFIG_BALLER = {
     # Per-Trade Risk Limits
     'max_risk_per_trade': 0.02,  # 2% maximum risk per trade (capital preservation)
@@ -580,8 +580,8 @@ RISK_CONFIG_BALLER = {
     # Profile Metadata
     'profile_name': 'BALLER',
     'tier_number': 5,
-    'balance_range': (5000.0, float('inf')),
-    'primary_goal': 'Capital growth + wealth preservation',
+    'balance_range': (25000.0, float('inf')),
+    'primary_goal': 'Capital deployment',
     'trade_frequency': 'Precision-only',
     'experience_required': 'Expert',
 }
