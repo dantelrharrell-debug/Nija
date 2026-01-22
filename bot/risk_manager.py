@@ -51,6 +51,15 @@ except ImportError:
     MICRO_ACCOUNT_THRESHOLD = 5.0
     logger.warning("⚠️ Fee-aware config not found - using legacy mode")
 
+# Import tier configuration for tier-aware risk management
+try:
+    from tier_config import get_tier_from_balance, get_tier_config
+    TIER_AWARE_MODE = True
+    logger.info("✅ Tier configuration loaded - TIER-AWARE RISK MANAGEMENT ACTIVE")
+except ImportError:
+    TIER_AWARE_MODE = False
+    logger.warning("⚠️ Tier config not found - tier enforcement disabled")
+
 
 class AdaptiveRiskManager:
     """
@@ -436,8 +445,52 @@ class AdaptiveRiskManager:
             final_pct = (base_pct * strength_multiplier * confidence_multiplier * 
                         streak_multiplier * volatility_multiplier)
         
-        # Clamp to min/max
-        final_pct = max(self.min_position_pct, min(final_pct, self.max_position_pct))
+        # TIER-AWARE RISK MANAGEMENT: Respect tier max risk percentage
+        # This ensures position sizes don't exceed tier limits (e.g., STARTER tier = 15% max)
+        # EXCEPTION: Master account should NOT be limited by tier constraints
+        tier_max_pct = self.max_position_pct  # Default to configured max
+        
+        if TIER_AWARE_MODE:
+            try:
+                # Determine tier based on sizing_base (total account value)
+                # Note: sizing_base represents total account value in all modes:
+                # - portfolio_state mode: total_equity (cash + positions)
+                # - PRO MODE: total_capital (free balance + position values)
+                # - Normal mode: account_balance (which is total equity per v71 strategy)
+                
+                # Check if this is the master account via environment variable
+                import os
+                is_master_account = os.getenv('MASTER_ACCOUNT_TIER', '').upper() in ('BALLER', 'MASTER')
+                
+                tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
+                tier_config = get_tier_config(tier)
+                
+                # MASTER ACCOUNT EXCEPTION: Master uses configured max, not tier max
+                # Master needs flexibility to trade optimally while staying profitable
+                if is_master_account:
+                    logger.info(f"🎯 Master account detected: Using configured max {self.max_position_pct*100:.1f}% (tier: {tier.value})")
+                    tier_max_pct = self.max_position_pct  # Keep configured max for master
+                    breakdown['is_master'] = True
+                    breakdown['tier'] = tier.value
+                else:
+                    # Regular user: Apply tier limits
+                    # Get tier's max risk percentage (second element of risk_per_trade_pct tuple)
+                    tier_max_risk_pct = tier_config.risk_per_trade_pct[1] / 100.0  # Convert from percentage to decimal
+                    
+                    # Use the more restrictive of tier max or configured max
+                    tier_max_pct = min(self.max_position_pct, tier_max_risk_pct)
+                    
+                    breakdown['tier'] = tier.value
+                    breakdown['tier_max_risk_pct'] = tier_max_risk_pct
+                    
+                    if tier_max_risk_pct < self.max_position_pct:
+                        logger.debug(f"📊 Tier-aware limit: {tier.value} tier restricts to {tier_max_risk_pct*100:.1f}% (configured max: {self.max_position_pct*100:.1f}%)")
+            except Exception as e:
+                logger.warning(f"⚠️ Tier-aware sizing failed, using configured max: {e}")
+                tier_max_pct = self.max_position_pct
+        
+        # Clamp to min/max (tier-aware)
+        final_pct = max(self.min_position_pct, min(final_pct, tier_max_pct))
         
         # Check total exposure limit
         if self.current_exposure + final_pct > self.max_total_exposure:
