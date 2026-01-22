@@ -65,16 +65,16 @@ class AdaptiveRiskManager:
     - EXCHANGE-SPECIFIC PROFILES (OPTIONAL - uses exchange risk profiles if available)
     """
     
-    def __init__(self, min_position_pct=0.02, max_position_pct=0.20,
+    def __init__(self, min_position_pct=0.02, max_position_pct=0.15,
                  max_total_exposure=0.80, use_exchange_profiles=False,
                  pro_mode=False, min_free_reserve_pct=0.15):
         """
         Initialize Adaptive Risk Manager - OPTIMAL PROFITABILITY MODE v7.3
-        Updated Jan 21, 2026: OPTION 2 - Increased max_position_pct to 20% for better trade sizes
+        Updated Jan 22, 2026: Reduced max_position_pct to 15% for better risk management
         
         Args:
             min_position_pct: Minimum position size as % of account (default 2% - conservative for weak trends)
-            max_position_pct: Maximum position size as % of account (default 20% - OPTION 2: Increased from 10% to 20% for better trade sizing)
+            max_position_pct: Maximum position size as % of account (default 15% - reduced for better risk control)
             max_total_exposure: Maximum total exposure across all positions (default 80% - allows multiple positions)
             use_exchange_profiles: If True, uses exchange-specific risk profiles (default False)
             pro_mode: If True, enables PRO MODE with position rotation (default False)

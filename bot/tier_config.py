@@ -139,9 +139,39 @@ class StablecoinPolicy(Enum):
 DEFAULT_STABLECOIN_POLICY = StablecoinPolicy.ROUTE_TO_KRAKEN
 
 
-def get_tier_from_balance(balance: float) -> TradingTier:
+def get_tier_from_balance(balance: float, override_tier: str = None) -> TradingTier:
     """
     Determine trading tier based on account balance.
+    
+    Can be overridden by setting MASTER_ACCOUNT_TIER environment variable.
+    This is useful for small accounts that need higher tier risk management.
+    
+    Args:
+        balance: Account balance in USD
+        override_tier: Optional tier name to force (e.g., "INVESTOR")
+    
+    Returns:
+        TradingTier enum
+    """
+    import os
+    
+    # Check for environment variable override first
+    env_tier = override_tier or os.getenv('MASTER_ACCOUNT_TIER', '').upper()
+    if env_tier:
+        try:
+            forced_tier = TradingTier[env_tier]
+            logger.info(f"🎯 Tier override active: Using {env_tier} tier (balance: ${balance:.2f})")
+            logger.info(f"   Note: Balance-based tier would be {get_tier_from_balance_internal(balance).value}")
+            return forced_tier
+        except KeyError:
+            logger.warning(f"⚠️ Invalid MASTER_ACCOUNT_TIER: {env_tier}. Using balance-based tier.")
+    
+    return get_tier_from_balance_internal(balance)
+
+
+def get_tier_from_balance_internal(balance: float) -> TradingTier:
+    """
+    Internal function to determine trading tier based on account balance only.
     
     Args:
         balance: Account balance in USD
