@@ -70,6 +70,10 @@ class NIJAApexStrategyV71:
         self.broker_client = broker_client
         self.config = config or {}
         
+        # PROFIT-TAKING ENFORCEMENT: Always enabled, cannot be disabled
+        # This ensures profit-taking works 24/7 on all accounts, brokerages, and tiers
+        self.config['enable_take_profit'] = True
+        
         # Initialize components
         self.risk_manager = RiskManager(
             min_position_pct=self.config.get('min_position_pct', 0.02),
@@ -90,7 +94,12 @@ class NIJAApexStrategyV71:
         # Track last candle time for timing filter
         self.last_candle_time = None
         
+        logger.info("=" * 70)
         logger.info("NIJA Apex Strategy v7.1 initialized")
+        logger.info("✅ PROFIT-TAKING: ALWAYS ENABLED (cannot be disabled)")
+        logger.info("✅ Multi-broker support: Coinbase, Kraken, Binance, OKX, Alpaca")
+        logger.info("✅ All tiers supported: SAVER, INVESTOR, INCOME, LIVABLE, BALLER")
+        logger.info("=" * 70)
     
     def _validate_trade_quality(self, position_size: float, score: float) -> Dict:
         """

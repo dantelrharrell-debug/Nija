@@ -506,6 +506,8 @@ class ExecutionEngine:
         """
         Check which take profit level (if any) has been hit
         
+        This is ALWAYS ACTIVE - ensures profit-taking 24/7 on all accounts, brokerages, and tiers
+        
         Args:
             symbol: Trading symbol
             current_price: Current market price
@@ -518,12 +520,20 @@ class ExecutionEngine:
         
         position = self.positions[symbol]
         side = position['side']
+        entry_price = position.get('entry_price', 0)
+        
+        # Calculate current profit/loss
+        if side == 'long':
+            pnl_pct = (current_price - entry_price) / entry_price if entry_price > 0 else 0
+        else:
+            pnl_pct = (entry_price - current_price) / entry_price if entry_price > 0 else 0
         
         # Check TP3 first (highest level)
         if not position.get('tp3_hit', False):
             if (side == 'long' and current_price >= position['tp3']) or \
                (side == 'short' and current_price <= position['tp3']):
                 position['tp3_hit'] = True
+                logger.info(f"🎯 TAKE PROFIT TP3 HIT: {symbol} at ${current_price:.2f} (PnL: {pnl_pct*100:+.1f}%)")
                 return 'tp3'
         
         # Check TP2
@@ -531,6 +541,7 @@ class ExecutionEngine:
             if (side == 'long' and current_price >= position['tp2']) or \
                (side == 'short' and current_price <= position['tp2']):
                 position['tp2_hit'] = True
+                logger.info(f"🎯 TAKE PROFIT TP2 HIT: {symbol} at ${current_price:.2f} (PnL: {pnl_pct*100:+.1f}%)")
                 return 'tp2'
         
         # Check TP1
@@ -538,6 +549,7 @@ class ExecutionEngine:
             if (side == 'long' and current_price >= position['tp1']) or \
                (side == 'short' and current_price <= position['tp1']):
                 position['tp1_hit'] = True
+                logger.info(f"🎯 TAKE PROFIT TP1 HIT: {symbol} at ${current_price:.2f} (PnL: {pnl_pct*100:+.1f}%)")
                 return 'tp1'
         
         return None
@@ -612,12 +624,14 @@ class ExecutionEngine:
                 # Calculate expected NET profit for this exit
                 expected_net_pct = gross_threshold - DEFAULT_ROUND_TRIP_FEE
                 
-                logger.info(f"✅ FEE-AWARE profit exit triggered: {symbol} {side}")
-                logger.info(f"  Gross profit: {gross_profit_pct*100:.2f}% ≥ {gross_threshold*100:.1f}% threshold")
-                logger.info(f"  Est. fees: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%")
-                logger.info(f"  NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
-                logger.info(f"  Exiting: {exit_pct*100:.0f}% of position (${exit_size:.2f})")
-                logger.info(f"  Remaining: {(position['remaining_size'] * (1.0 - exit_pct))*100:.0f}% for trailing stop")
+                logger.info(f"💰 STEPPED PROFIT EXIT TRIGGERED: {symbol}")
+                logger.info(f"   Gross profit: {gross_profit_pct*100:.1f}% | Net profit: {net_profit_pct*100:.1f}%")
+                logger.info(f"   Exit level: {exit_flag} | Exit size: {exit_pct*100:.0f}% of position")
+                logger.info(f"   Current price: ${current_price:.2f} | Entry: ${entry_price:.2f}")
+                logger.info(f"   Est. fees: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%")
+                logger.info(f"   NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
+                logger.info(f"   Exiting: {exit_pct*100:.0f}% of position (${exit_size:.2f})")
+                logger.info(f"   Remaining: {(position['remaining_size'] * (1.0 - exit_pct))*100:.0f}% for trailing stop")
                 
                 # Update position
                 position['remaining_size'] *= (1.0 - exit_pct)
@@ -627,7 +641,9 @@ class ExecutionEngine:
                     'profit_level': f"{gross_threshold*100:.1f}%",
                     'exit_pct': exit_pct,
                     'gross_profit_pct': gross_profit_pct,
-                    'net_profit_pct': expected_net_pct
+                    'net_profit_pct': expected_net_pct,
+                    'current_price': current_price,
+                    'entry_price': entry_price
                 }
         
         return None
