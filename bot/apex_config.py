@@ -321,7 +321,7 @@ RISK_LIMITS = {
 # ═══════════════════════════════════════════════════════════════════
 #
 # Five official user trading tiers based on capital and goals:
-# 1. SAVER ($100-$249) - Capital preservation + learning
+# 1. SAVER ($100-$249) - Capital preservation + learning (STARTER LEVEL)
 # 2. INVESTOR ($250-$999) - Consistent participation
 # 3. INCOME ($1,000-$4,999) - Serious retail trading
 # 4. LIVABLE ($5,000-$24,999) - Professional-level execution
@@ -330,7 +330,7 @@ RISK_LIMITS = {
 # MASTER (System Authority) - Not a user tier, system governance only
 #
 # To use a specific tier, set RISK_PROFILE environment variable:
-#   export RISK_PROFILE=SAVER      # For learning ($100-$249)
+#   export RISK_PROFILE=SAVER      # For learning ($100-$249) - STARTER LEVEL
 #   export RISK_PROFILE=INVESTOR   # For consistency ($250-$999)
 #   export RISK_PROFILE=INCOME     # For serious trading ($1k-$4.9k)
 #   export RISK_PROFILE=LIVABLE    # For professional execution ($5k-$24.9k)
@@ -340,7 +340,7 @@ RISK_LIMITS = {
 # Default tier is INVESTOR if not specified
 # ═══════════════════════════════════════════════════════════════════
 
-# TIER 1: SAVER - "Capital preservation + learning"
+# TIER 1: SAVER - "Capital preservation + learning" (STARTER LEVEL)
 # Target Balance: $100 – $249
 # Focus: Capital preservation while learning the system
 RISK_CONFIG_SAVER = {
@@ -360,14 +360,14 @@ RISK_CONFIG_SAVER = {
     'drawdown_stop_trading_at': 0.10,  # Stop trading at 10% drawdown
     
     # Position Management
-    'max_concurrent_positions': 1,  # Only 1 position (strict focus)
+    'max_concurrent_positions': 2,  # Up to 2 positions
     'max_position_concentration': 0.15,  # 15% max per position
-    'min_trade_size_usd': 2.0,  # $2 minimum trade (dynamic)
-    'max_trade_size_usd': 5.0,  # $5 maximum trade (fee-aware)
+    'min_trade_size_usd': 15.0,  # $15 minimum trade
+    'max_trade_size_usd': 40.0,  # $40 maximum trade
     
     # Circuit Breakers
     'consecutive_loss_limit': 2,  # Stop after 2 consecutive losses
-    'daily_trade_limit': 5,  # Maximum 5 trades per day (very low frequency)
+    'daily_trade_limit': 10,  # Maximum 10 trades per day
     'min_time_between_trades_sec': 600,  # 10 minutes minimum
     
     # Performance-Based Adjustments
@@ -645,7 +645,7 @@ def get_active_risk_config():
     3. Default to INVESTOR if not specified
     
     NIJA User Trading Tiers:
-    - SAVER: $100-$249 (Capital preservation + learning)
+    - SAVER: $100-$249 (Capital preservation + learning) - STARTER LEVEL
     - INVESTOR: $250-$999 (Consistent participation) - DEFAULT
     - INCOME: $1,000-$4,999 (Serious retail trading)
     - LIVABLE: $5,000-$24,999 (Professional-level execution)
