@@ -265,34 +265,45 @@ def get_max_trade_size(tier: TradingTier, balance: float, is_master: bool = Fals
     return config.trade_size_max
 
 
-def get_min_trade_size(tier: TradingTier, balance: float, is_master: bool = False) -> float:
+def get_min_trade_size(tier: TradingTier, balance: float, is_master: bool = False, 
+                       exchange: str = 'coinbase') -> float:
     """
     Get minimum trade size for a tier based on balance.
     
     MASTER ACCOUNT OVERRIDE:
     Master accounts with BALLER tier get flexible minimums at low balances.
     
+    EXCHANGE-SPECIFIC MINIMUMS:
+    - Kraken: $10.50 (accounts for $10 minimum + fees)
+    - Coinbase: $2.00
+    
     Args:
         tier: Trading tier
         balance: Account balance
         is_master: If True, applies master account rules
+        exchange: Exchange name for minimum validation
     
     Returns:
         Minimum trade size in USD
     """
     config = get_tier_config(tier)
     
+    # Get exchange-specific minimum
+    from position_sizer import get_exchange_min_trade_size
+    exchange_min = get_exchange_min_trade_size(exchange)
+    
     # MASTER BALLER tier with low balance: use dynamic minimums
     if is_master and tier == TradingTier.BALLER and balance < 25000.0:
         if balance < 100.0:
-            flexible_min = max(balance * 0.15, 2.0)  # 15% min or $2
+            flexible_min = max(balance * 0.15, exchange_min)  # 15% or exchange min
         elif balance < 1000.0:
-            flexible_min = balance * 0.10  # 10% min
+            flexible_min = max(balance * 0.10, exchange_min)  # 10% or exchange min
         else:
-            flexible_min = balance * 0.05  # 5% min
+            flexible_min = max(balance * 0.05, exchange_min)  # 5% or exchange min
         return min(flexible_min, config.trade_size_min)
     
-    return config.trade_size_min
+    # For regular users, use the greater of tier min or exchange min
+    return max(config.trade_size_min, exchange_min)
 
 
 def get_min_visible_size(tier: TradingTier) -> float:
@@ -399,7 +410,7 @@ def get_tier_summary() -> Dict[str, Dict]:
 
 
 def validate_trade_size(trade_size: float, tier: TradingTier, balance: float, 
-                       is_master: bool = False) -> Tuple[bool, str]:
+                       is_master: bool = False, exchange: str = 'coinbase') -> Tuple[bool, str]:
     """
     Validate if a trade size is appropriate for the tier.
     
@@ -407,16 +418,26 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
     Master accounts using BALLER tier can trade with lower minimums when balance is low.
     This allows master to maintain full control even with small funded accounts.
     
+    EXCHANGE-SPECIFIC MINIMUMS:
+    - Kraken: $10.50 minimum (accounts for $10 Kraken minimum + fees)
+    - Coinbase: $2.00 minimum
+    - Other exchanges: $2.00 default
+    
     Args:
         trade_size: Proposed trade size in USD
         tier: Trading tier
         balance: Account balance
         is_master: If True, applies master account flexibility rules
+        exchange: Exchange name (kraken, coinbase, etc.) for minimum validation
     
     Returns:
         Tuple of (is_valid, reason)
     """
     config = get_tier_config(tier)
+    
+    # Get exchange-specific minimum
+    from position_sizer import get_exchange_min_trade_size
+    exchange_min = get_exchange_min_trade_size(exchange)
     
     # MASTER ACCOUNT SPECIAL HANDLING FOR BALLER TIER
     # If master account with BALLER tier and low balance, use dynamic minimums
@@ -427,32 +448,39 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
         # At low balances, allow 15-50% position sizing for master control
         if balance < 100.0:
             # Very small balances: 15-50% range
-            effective_min = max(balance * 0.15, 2.0)  # 15% min or $2
+            effective_min = max(balance * 0.15, exchange_min)  # Use exchange min or 15%
             effective_max = balance * 0.50  # 50% max
         elif balance < 1000.0:
             # Small balances: 10-40% range  
-            effective_min = balance * 0.10  # 10% min
+            effective_min = max(balance * 0.10, exchange_min)  # Use exchange min or 10%
             effective_max = balance * 0.40  # 40% max
         else:
             # Larger balances approaching tier minimum: 5-25% range
-            effective_min = balance * 0.05  # 5% min
+            effective_min = max(balance * 0.05, exchange_min)  # Use exchange min or 5%
             effective_max = balance * 0.25  # 25% max
         
         # Ensure we don't exceed tier absolute maximums
         effective_max = min(effective_max, config.trade_size_max)
         
         logger.info(f"🎯 MASTER BALLER tier with low balance (${balance:.2f})")
+        logger.info(f"   Exchange: {exchange} (min: ${exchange_min:.2f})")
         logger.info(f"   Adjusted limits: ${effective_min:.2f} - ${effective_max:.2f}")
         
         if trade_size < effective_min:
-            return (False, f"Trade size ${trade_size:.2f} below minimum ${effective_min:.2f}")
+            return (False, f"Trade size ${trade_size:.2f} below minimum ${effective_min:.2f} ({exchange} minimum)")
         
         if trade_size > effective_max:
             return (False, f"Trade size ${trade_size:.2f} exceeds maximum ${effective_max:.2f}")
     else:
         # Standard tier validation for non-master or properly funded accounts
-        if trade_size < config.trade_size_min:
-            return (False, f"Trade size ${trade_size:.2f} below tier minimum ${config.trade_size_min:.2f}")
+        # Also check exchange minimum for regular users
+        tier_min = max(config.trade_size_min, exchange_min)
+        
+        if trade_size < tier_min:
+            if tier_min == exchange_min and exchange_min > config.trade_size_min:
+                return (False, f"Trade size ${trade_size:.2f} below {exchange} minimum ${exchange_min:.2f}")
+            else:
+                return (False, f"Trade size ${trade_size:.2f} below tier minimum ${config.trade_size_min:.2f}")
         
         if trade_size > config.trade_size_max:
             return (False, f"Trade size ${trade_size:.2f} exceeds tier maximum ${config.trade_size_max:.2f}")
