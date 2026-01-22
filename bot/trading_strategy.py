@@ -802,15 +802,15 @@ class TradingStrategy:
                 logger.info("")
                 logger.info(f"   🏦 TOTAL CAPITAL UNDER MANAGEMENT: ${grand_total:,.2f}")
                 logger.info("=" * 70)
-                    
-                    # Initialize advanced trading features AFTER first live balance fetch
-                    # This ensures advanced modules have access to real capital data
-                    # Gated by LIVE_CAPITAL_VERIFIED environment variable
-                    logger.info("🔧 Initializing advanced trading modules with live capital...")
-                    self._init_advanced_features()
-                    
-                    # FIX #3: Hard fail if capital below minimum (non-negotiable)
-                    if total_capital < MINIMUM_TRADING_BALANCE:
+                
+                # Initialize advanced trading features AFTER first live balance fetch
+                # This ensures advanced modules have access to real capital data
+                # Gated by LIVE_CAPITAL_VERIFIED environment variable
+                logger.info("🔧 Initializing advanced trading modules with live capital...")
+                self._init_advanced_features()
+                
+                # FIX #3: Hard fail if capital below minimum (non-negotiable)
+                if total_capital < MINIMUM_TRADING_BALANCE:
                         logger.error("=" * 70)
                         logger.error("❌ FATAL: Capital below minimum — trading disabled")
                         logger.error("=" * 70)
