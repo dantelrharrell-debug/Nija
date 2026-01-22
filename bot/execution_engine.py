@@ -14,19 +14,25 @@ logger = logging.getLogger("nija")
 
 # Import hard controls for LIVE CAPITAL VERIFIED check
 try:
-    # Add controls directory to path for import
-    controls_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'controls')
-    if controls_path not in sys.path:
-        sys.path.insert(0, controls_path)
-    
+    # Try standard import first (when running as package)
     from controls import get_hard_controls
     HARD_CONTROLS_AVAILABLE = True
     logger.info("✅ Hard controls module loaded for LIVE CAPITAL VERIFIED checks")
-except ImportError as e:
-    HARD_CONTROLS_AVAILABLE = False
-    logger.warning(f"⚠️ Hard controls not available: {e}")
-    logger.warning("   LIVE CAPITAL VERIFIED check will be skipped")
-    get_hard_controls = None
+except ImportError:
+    try:
+        # Fallback: Add controls directory to path if needed
+        controls_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'controls')
+        if controls_path not in sys.path:
+            sys.path.insert(0, controls_path)
+        
+        from controls import get_hard_controls
+        HARD_CONTROLS_AVAILABLE = True
+        logger.info("✅ Hard controls module loaded for LIVE CAPITAL VERIFIED checks")
+    except ImportError as e:
+        HARD_CONTROLS_AVAILABLE = False
+        logger.warning(f"⚠️ Hard controls not available: {e}")
+        logger.warning("   LIVE CAPITAL VERIFIED check will be skipped")
+        get_hard_controls = None
 
 # Constants
 VALID_ORDER_STATUSES = ['open', 'closed', 'filled', 'pending']
