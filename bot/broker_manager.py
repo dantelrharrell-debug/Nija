@@ -6363,6 +6363,39 @@ class KrakenBroker(BaseBroker):
                     # Don't block trade if tier validation fails - just log warning
                     logging.warning(f"⚠️  Tier validation error (allowing trade): {tier_err}")
             
+            # ✅ PRE-FLIGHT BALANCE CHECK: Verify sufficient funds BEFORE sending to Kraken API
+            # This prevents "EOrder:Insufficient funds" rejections from the API
+            # Same pattern as Coinbase broker (lines 2550-2580)
+            if side.lower() == 'buy' and not (force_liquidate or ignore_balance):
+                balance_data = self.get_account_balance_detailed()
+                if balance_data and not balance_data.get('error', False):
+                    trading_balance = float(balance_data.get('trading_balance', 0.0))
+                    
+                    logging.info(f"💰 Pre-flight balance check for {symbol}:")
+                    logging.info(f"   Available: ${trading_balance:.2f}")
+                    logging.info(f"   Required:  ${quantity:.2f}")
+                    
+                    # Add 2% safety buffer for fees/rounding (Kraken typically takes 0.16-0.26%)
+                    safety_buffer = quantity * 0.02  # 2% buffer
+                    required_with_buffer = quantity + safety_buffer
+                    
+                    if trading_balance < required_with_buffer:
+                        error_msg = f"Insufficient funds: ${trading_balance:.2f} available, ${required_with_buffer:.2f} required (with 2% fee buffer)"
+                        logging.error(f"❌ PRE-FLIGHT CHECK FAILED: {error_msg}")
+                        logging.error(f"   Bot detected ${trading_balance:.2f} but needs ${required_with_buffer:.2f} for this order")
+                        logging.error(f"   This prevents 'EOrder:Insufficient funds' rejection from Kraken API")
+                        
+                        # Return unfilled status to prevent API call
+                        return {
+                            "status": "unfilled",
+                            "error": "INSUFFICIENT_FUNDS",
+                            "message": error_msg,
+                            "partial_fill": False,
+                            "filled_pct": 0.0
+                        }
+                    else:
+                        logging.info(f"   ✅ Balance sufficient: ${trading_balance:.2f} available > ${required_with_buffer:.2f} required")
+            
             # Place market order using serialized API call
             # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
             order_params = {
