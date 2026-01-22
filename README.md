@@ -49,6 +49,52 @@ cp .env.baller_tier .env     # BALLER tier ($25k+)
 
 ---
 
+## 💰 **CAPITAL CAPACITY CALCULATORS**
+
+**Know exactly how much capital you can deploy and your maximum position size for any account.**
+
+NIJA includes powerful calculators that analyze your total equity (cash + positions) to determine:
+- **Deployable Capital** - How much you can still deploy in new positions
+- **Max Position Size** - Largest position you can safely open
+- **Capacity Metrics** - Utilization, reserves, and remaining capacity
+
+### Calculate for Single Account
+
+```bash
+# Account with $10,000 balance and $2,000 in open positions
+python calculate_capital_capacity.py --balance 10000 --positions 2000
+
+# Small account with no positions
+python calculate_capital_capacity.py --balance 500
+
+# Custom reserve (15%) and max position (20%)
+python calculate_capital_capacity.py --balance 10000 --positions 2000 --reserve-pct 15 --max-position-pct 20
+```
+
+### Calculate for ALL Accounts (Master + Users)
+
+```bash
+# Display all accounts from portfolio manager
+python calculate_all_accounts_capital.py
+
+# Run with simulated example accounts
+python calculate_all_accounts_capital.py --simulate
+```
+
+**Key Features:**
+- ✅ **Portfolio-First Accounting** - Uses total equity, not just cash
+- ✅ **Reserve Protection** - Maintains minimum cash reserves (default 10%)
+- ✅ **Position Size Limits** - Enforces max position % of equity (default 15%)
+- ✅ **Multi-Account Support** - Analyzes master + all user accounts
+- ✅ **Aggregate Summaries** - Portfolio-wide capacity views
+
+**Learn More:**
+- 📚 [CAPITAL_CAPACITY_GUIDE.md](CAPITAL_CAPACITY_GUIDE.md) - Complete usage guide and examples
+- 🔧 [calculate_capital_capacity.py](calculate_capital_capacity.py) - Single account calculator
+- 🔧 [calculate_all_accounts_capital.py](calculate_all_accounts_capital.py) - All accounts calculator
+
+---
+
 ## 🎯 **SAFE SMALL-ACCOUNT PRESET ($20-$100)**
 
 **Turnkey configuration for small accounts** - Just add your API key and start trading safely!
