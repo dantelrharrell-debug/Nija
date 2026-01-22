@@ -6,7 +6,7 @@ import queue
 import logging
 import traceback
 from threading import Thread
-from typing import Dict
+from typing import Dict, Optional, Tuple
 from datetime import datetime
 from dotenv import load_dotenv
 import pandas as pd
@@ -272,6 +272,25 @@ MIN_BALANCE_TO_TRADE_USD = 2.0  # Minimum account balance to allow trading (lowe
 # Kraken WILL NOT trade if balance < $25 OR min order size not met OR fees make position < min notional
 MIN_KRAKEN_BALANCE = 25.0  # Minimum balance for Kraken to allow trading
 MIN_POSITION_SIZE = 1.25   # 5% of $25 - minimum position size for Kraken
+
+# BROKER PRIORITY SYSTEM (Jan 22, 2025)
+# Define entry broker priority for BUY orders
+# Brokers will be selected in this order if eligible (not in EXIT_ONLY mode and balance >= minimum)
+# Coinbase automatically falls to bottom priority if balance < $25
+ENTRY_BROKER_PRIORITY = [
+    BrokerType.KRAKEN,
+    BrokerType.OKX,
+    BrokerType.BINANCE,
+    BrokerType.COINBASE,
+]
+
+# Minimum balance thresholds for broker eligibility
+BROKER_MIN_BALANCE = {
+    BrokerType.COINBASE: 25.0,  # Coinbase requires $25 minimum for new entries
+    BrokerType.KRAKEN: 25.0,    # Kraken requires $25 minimum
+    BrokerType.OKX: 10.0,       # Lower minimum for OKX
+    BrokerType.BINANCE: 10.0,   # Lower minimum for Binance
+}
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
@@ -1071,6 +1090,78 @@ class TradingStrategy:
             str: Broker name (e.g., 'coinbase', 'kraken') or 'unknown'
         """
         return broker.broker_type.value if broker and hasattr(broker, 'broker_type') else 'unknown'
+    
+    def _is_broker_eligible_for_entry(self, broker: Optional[object]) -> Tuple[bool, str]:
+        """
+        Check if a broker is eligible for new entry (BUY) orders.
+        
+        A broker is eligible if:
+        1. It's connected
+        2. It's not in EXIT_ONLY mode
+        3. Account balance meets minimum threshold
+        
+        Args:
+            broker: Broker instance to check (uses duck typing to avoid circular imports)
+            
+        Returns:
+            tuple: (is_eligible: bool, reason: str)
+        """
+        if not broker:
+            return False, "Broker not available"
+        
+        if not broker.connected:
+            return False, f"{self._get_broker_name(broker).upper()} not connected"
+        
+        # Check if broker is in EXIT_ONLY mode
+        if hasattr(broker, 'exit_only_mode') and broker.exit_only_mode:
+            return False, f"{self._get_broker_name(broker).upper()} in EXIT-ONLY mode"
+        
+        # Check if account balance meets minimum threshold
+        try:
+            balance = broker.get_account_balance()
+            broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
+            min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
+            
+            if balance < min_balance:
+                return False, f"{self._get_broker_name(broker).upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+            
+            return True, "Eligible"
+        except Exception as e:
+            return False, f"{self._get_broker_name(broker).upper()} balance check failed: {e}"
+    
+    def _select_entry_broker(self, all_brokers: Dict[BrokerType, object]) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
+        """
+        Select the best broker for new entry (BUY) orders based on priority.
+        
+        Checks brokers in ENTRY_BROKER_PRIORITY order and returns the first eligible one.
+        Coinbase is automatically deprioritized if balance < $25.
+        
+        Args:
+            all_brokers: Dict of {BrokerType: broker_instance} for all available brokers
+            
+        Returns:
+            tuple: (broker_instance, broker_name, eligibility_reasons) or (None, None, reasons)
+        """
+        eligibility_status = {}
+        
+        # Check each broker in priority order
+        for broker_type in ENTRY_BROKER_PRIORITY:
+            broker = all_brokers.get(broker_type)
+            
+            if not broker:
+                eligibility_status[broker_type.value] = "Not configured"
+                continue
+            
+            is_eligible, reason = self._is_broker_eligible_for_entry(broker)
+            eligibility_status[broker_type.value] = reason
+            
+            if is_eligible:
+                broker_name = self._get_broker_name(broker)
+                logger.info(f"✅ Selected {broker_name.upper()} for entry (priority: {ENTRY_BROKER_PRIORITY.index(broker_type) + 1})")
+                return broker, broker_name, eligibility_status
+        
+        # No eligible broker found
+        return None, None, eligibility_status
     
     def _is_zombie_position(self, pnl_percent: float, entry_time_available: bool, position_age_hours: float) -> bool:
         """
@@ -2308,10 +2399,10 @@ class TradingStrategy:
             # Only MASTER accounts scan markets and generate buy signals
             # PROFITABILITY FIX: Use module-level constants for consistency
             
-            # ENHANCED LOGGING (Jan 18, 2026): Show condition checklist for trade execution
+            # ENHANCED LOGGING (Jan 22, 2025): Show broker-aware condition checklist for trade execution
             logger.info("")
             logger.info("═" * 80)
-            logger.info("🎯 TRADE EXECUTION CONDITION CHECKLIST")
+            logger.info("🎯 TRADE EXECUTION CONDITION CHECKLIST (BROKER-AWARE)")
             logger.info("═" * 80)
             
             if user_mode:
@@ -2353,38 +2444,59 @@ class TradingStrategy:
                     skip_reasons.append(f"Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
                     logger.warning(f"   ❌ CONDITION FAILED: Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
                 else:
-                    # FIX #3 (Jan 20, 2026): Additional Kraken-specific balance check
-                    # Kraken requires minimum $25 balance to trade effectively
-                    broker_name = self._get_broker_name(active_broker)
-                    if broker_name == 'kraken' and account_balance < MIN_KRAKEN_BALANCE:
-                        can_enter = False
-                        skip_reasons.append(f"Kraken minimum balance not met (${account_balance:.2f} < ${MIN_KRAKEN_BALANCE:.2f})")
-                        logger.warning(f"   ❌ CONDITION FAILED: Kraken minimum balance not met (${account_balance:.2f} < ${MIN_KRAKEN_BALANCE:.2f})")
-                        logger.warning(f"      💡 Kraken requires ${MIN_KRAKEN_BALANCE:.2f} minimum to trade (fees make smaller positions unprofitable)")
+                    logger.info(f"   ✅ CONDITION PASSED: Sufficient balance (${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f})")
+                
+                # BROKER-AWARE ENTRY GATING (Jan 22, 2025)
+                # Check broker eligibility - must not be in EXIT_ONLY mode and meet balance requirements
+                logger.info("")
+                logger.info("   🏦 BROKER ELIGIBILITY CHECK:")
+                
+                # Get all available brokers for selection
+                all_brokers = {}
+                if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
+                    all_brokers = getattr(self.multi_account_manager, 'master_brokers', {})
+                
+                # Add current active broker if not in multi_account_manager
+                if active_broker and hasattr(active_broker, 'broker_type'):
+                    all_brokers[active_broker.broker_type] = active_broker
+                
+                # Select best broker for entry based on priority
+                entry_broker, entry_broker_name, broker_eligibility = self._select_entry_broker(all_brokers)
+                
+                # Log broker eligibility status for all brokers
+                for broker_name, status in broker_eligibility.items():
+                    if "Eligible" in status:
+                        logger.info(f"      ✅ {broker_name.upper()}: {status}")
+                    elif "Not configured" in status:
+                        logger.debug(f"      ⚪ {broker_name.upper()}: {status}")
                     else:
-                        logger.info(f"   ✅ CONDITION PASSED: Sufficient balance (${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f})")
+                        logger.warning(f"      ❌ {broker_name.upper()}: {status}")
+                
+                if not entry_broker:
+                    can_enter = False
+                    skip_reasons.append("No eligible broker for entry (all in EXIT_ONLY or below minimum balance)")
+                    logger.warning(f"   ❌ CONDITION FAILED: No eligible broker for entry")
+                    logger.warning(f"      💡 All brokers are either in EXIT-ONLY mode or below minimum balance")
+                else:
+                    logger.info(f"   ✅ CONDITION PASSED: {entry_broker_name.upper()} available for entry")
+                    # Update active_broker to use the selected entry broker
+                    active_broker = entry_broker
                 
                 logger.info("")
                 logger.info("═" * 80)
                 
                 if can_enter:
-                    logger.info("🟢 RESULT: ALL CONDITIONS PASSED - WILL SCAN MARKETS FOR TRADES")
+                    logger.info(f"🟢 RESULT: CONDITIONS PASSED FOR {entry_broker_name.upper()}")
                     logger.info("═" * 80)
                     logger.info("")
                 else:
-                    logger.warning("🔴 RESULT: CONDITIONS NOT MET - SKIPPING MARKET SCAN")
+                    logger.warning("🔴 RESULT: CONDITIONS FAILED - SKIPPING MARKET SCAN")
                     logger.warning(f"   Reasons: {', '.join(skip_reasons)}")
                     logger.warning("═" * 80)
                     logger.warning("")
             
             # Continue with market scanning if conditions passed
-            # FIX #3 (Jan 20, 2026): Additional Kraken balance check for market scanning
-            broker_name = self._get_broker_name(active_broker)
-            kraken_balance_ok = True
-            if broker_name == 'kraken':
-                kraken_balance_ok = account_balance >= MIN_KRAKEN_BALANCE
-            
-            if not user_mode and not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD and kraken_balance_ok:
+            if not user_mode and not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD and can_enter:
                 logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
                 
                 # Get top market candidates (limit scan to prevent timeouts)
