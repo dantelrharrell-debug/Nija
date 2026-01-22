@@ -262,6 +262,78 @@ class MultiBrokerProfitMonitor:
         """Initialize multi-broker profit monitor"""
         self.broker_profit_stats = {}  # broker_name -> {checks, profits}
         logger.info("✅ Multi-Broker Profit Monitor initialized")
+        logger.info("   Supports: Coinbase, Kraken, Binance, OKX, Alpaca")
+
+
+class MultiAccountProfitMonitor:
+    """
+    Monitors profit-taking across all account types
+    
+    Tracks profit-taking for:
+    - Individual accounts
+    - Master accounts  
+    - Copy trading followers
+    - Multi-account setups
+    """
+    
+    def __init__(self):
+        """Initialize multi-account profit monitor"""
+        self.account_profit_stats = {}  # account_id -> {checks, profits, account_type}
+        logger.info("✅ Multi-Account Profit Monitor initialized")
+        logger.info("   Supports: Individual, Master, Followers, Multi-Account")
+    
+    def record_profit_check(self, account_id: str, account_type: str = "individual"):
+        """Record a profit check for an account"""
+        if account_id not in self.account_profit_stats:
+            self.account_profit_stats[account_id] = {
+                'checks': 0, 
+                'profits': 0,
+                'account_type': account_type
+            }
+        self.account_profit_stats[account_id]['checks'] += 1
+    
+    def record_profit_taken(self, account_id: str, account_type: str = "individual"):
+        """Record profit taken on an account"""
+        if account_id not in self.account_profit_stats:
+            self.account_profit_stats[account_id] = {
+                'checks': 0, 
+                'profits': 0,
+                'account_type': account_type
+            }
+        self.account_profit_stats[account_id]['profits'] += 1
+        logger.info(f"✅ Profit taken on {account_type} account: {account_id}")
+    
+    def get_account_statistics(self) -> Dict:
+        """Get profit statistics by account"""
+        return self.account_profit_stats.copy()
+    
+    def log_account_status(self):
+        """Log profit-taking status for all accounts"""
+        if not self.account_profit_stats:
+            logger.info("No account profit statistics available yet")
+            return
+        
+        logger.info("=" * 70)
+        logger.info("📊 PROFIT MONITORING BY ACCOUNT")
+        logger.info("=" * 70)
+        
+        # Group by account type
+        by_type = {}
+        for account_id, stats in self.account_profit_stats.items():
+            acc_type = stats.get('account_type', 'unknown')
+            if acc_type not in by_type:
+                by_type[acc_type] = []
+            by_type[acc_type].append((account_id, stats))
+        
+        for acc_type, accounts in sorted(by_type.items()):
+            logger.info(f"\n{acc_type.upper()} ACCOUNTS:")
+            for account_id, stats in accounts:
+                checks = stats['checks']
+                profits = stats['profits']
+                rate = (profits / checks * 100) if checks > 0 else 0
+                logger.info(f"  {account_id:>20}: {profits:>4} profits / {checks:>6} checks ({rate:>5.1f}%)")
+        
+        logger.info("=" * 70)
     
     def record_profit_check(self, broker_name: str):
         """Record a profit check for a broker"""

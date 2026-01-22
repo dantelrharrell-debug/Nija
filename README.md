@@ -2,6 +2,10 @@
 
 🎯 **[PROFIT-TAKING GUARANTEE](PROFIT_TAKING_GUARANTEE.md)**: NIJA takes profits 24/7 on ALL accounts, ALL brokerages, ALL tiers - ALWAYS ENABLED.
 
+💹 **[BIDIRECTIONAL TRADING](BIDIRECTIONAL_TRADING_GUIDE.md)**: Profit in UP and DOWN markets - Long + Short positions fully supported.
+
+👥 **[ALL ACCOUNTS SUPPORTED](ALL_ACCOUNTS_PROFIT_GUIDE.md)**: Individual, Master, Followers, Multi-Account - profit-taking works everywhere.
+
 ---
 
 ## 🎯 **Official Trading Tiers - Six Levels for Every Trader**
