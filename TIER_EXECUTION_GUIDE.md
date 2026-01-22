@@ -36,42 +36,42 @@ Your tier is automatically determined by your **account balance**:
 
 | Tier | Balance Range | Min Trade Size | Max Trade Size | Max Positions | Status |
 |------|---------------|----------------|----------------|---------------|--------|
-| **SAVER** | $25-$99 | $2 | $5 | 1 | Learning mode |
-| **INVESTOR** | $100-$249 | $10 | $25 | 3 | Building consistency |
-| **INCOME** | $250-$999 | $15 | $50 | 5 | Core power tier |
-| **LIVABLE** | $1k-$4.9k | $25 | $100 | 6 | Stable returns |
-| **BALLER** | $5k+ | $50 | $500 | 8 | Scale capital |
+| **SAVER** | $100–$249 | $15 | $40 | 2 | Capital preservation + learning |
+| **INVESTOR** | $250–$999 | $20 | $75 | 3 | Consistent participation |
+| **INCOME** | $1k–$4.9k | $30 | $150 | 5 | Serious retail trading |
+| **LIVABLE** | $5k–$24.9k | $50 | $300 | 6 | Professional-level execution |
+| **BALLER** | $25k+ | $100 | $1k | 8 | Capital deployment |
 
 ### What Each Tier Means
 
-#### SAVER Tier ($25-$99)
-- **Purpose**: Learn the system without risking much capital
-- **Execution**: Limited to 1 position at a time
-- **Min Trade**: $2 (allows learning on Kraken's lower fees)
-- **⚠️ WARNING**: This tier is for **learning only**. Profitability is difficult due to fees.
+#### SAVER Tier ($100–$249)
+- **Purpose**: Capital preservation while learning the system
+- **Execution**: Up to 2 positions
+- **Min Trade**: $15 (fee-efficient on most exchanges)
+- **✅ RECOMMENDED**: Good starting tier for new traders
 
-#### INVESTOR Tier ($100-$249) [DEFAULT]
-- **Purpose**: Build consistency and reduce randomness
+#### INVESTOR Tier ($250–$999) [DEFAULT]
+- **Purpose**: Consistent participation in markets
 - **Execution**: Normal execution, up to 3 positions
-- **Min Trade**: $10 (profitable after fees on Kraken)
-- **✅ RECOMMENDED**: First tier where consistent profits are achievable
+- **Min Trade**: $20 (profitable after fees)
+- **✅ RECOMMENDED**: Default tier for active trading
 
-#### INCOME Tier ($250-$999)
-- **Purpose**: Core retail power tier - generate real returns
+#### INCOME Tier ($1k–$4.9k)
+- **Purpose**: Serious retail trading with active participation
 - **Execution**: Optimized execution, up to 5 positions
-- **Min Trade**: $15 (well above fee thresholds)
-- **💎 SWEET SPOT**: Best balance of safety and profitability
+- **Min Trade**: $30 (well above fee thresholds)
+- **💎 SERIOUS TRADING**: For committed retail traders
 
-#### LIVABLE Tier ($1k-$4.9k)
-- **Purpose**: Stable returns for serious users
-- **Execution**: Aggressive execution, up to 6 positions
-- **Min Trade**: $25 (fees become negligible)
-- **🚀 SCALING**: Where profits can sustain lifestyle expenses
+#### LIVABLE Tier ($5k–$24.9k)
+- **Purpose**: Professional-level execution
+- **Execution**: Precision execution, up to 6 positions
+- **Min Trade**: $50 (fees become negligible)
+- **🚀 PROFESSIONAL**: Where professional execution matters
 
-#### BALLER Tier ($5k+)
-- **Purpose**: Scale capital with precision deployment
+#### BALLER Tier ($25k+)
+- **Purpose**: Capital deployment at scale
 - **Execution**: Full deployment, up to 8 positions
-- **Min Trade**: $50 (institutional-level sizing)
+- **Min Trade**: $100 (institutional-level sizing)
 - **💰 ELITE**: Maximum profit potential and portfolio flexibility
 
 ---
@@ -186,12 +186,12 @@ Your tier is automatically determined by your **account balance**:
 ### 1. **Understand Your Tier**
 
 Check your current tier based on balance:
-- < $25: ❌ Cannot trade (deposit more)
-- $25-$99: SAVER (learning only)
-- $100-$249: INVESTOR (first profitable tier)
-- $250-$999: INCOME ⭐ (recommended)
-- $1k-$4.9k: LIVABLE (scaling up)
-- $5k+: BALLER (maximum flexibility)
+- < $100: ❌ Cannot trade (deposit more)
+- $100–$249: SAVER (capital preservation + learning)
+- $250–$999: INVESTOR (consistent participation - default)
+- $1k–$4.9k: INCOME ⭐ (serious retail trading)
+- $5k–$24.9k: LIVABLE (professional-level execution)
+- $25k+: BALLER (capital deployment)
 
 ### 2. **Deposit to Reach Next Tier**
 

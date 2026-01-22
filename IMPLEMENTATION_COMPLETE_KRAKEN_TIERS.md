@@ -71,16 +71,16 @@ This implementation addresses the **two critical requirements** from the problem
 
 | Tier | Balance Range | Min Trade | Max Trade | Max Positions | Purpose |
 |------|---------------|-----------|-----------|---------------|---------|
-| **SAVER** | $25-$99 | $2 | $5 | 1 | Learning mode |
-| **INVESTOR** | $100-$249 | $10 | $25 | 3 | Building consistency |
-| **INCOME** | $250-$999 | $15 | $50 | 5 | Core power tier |
-| **LIVABLE** | $1k-$4.9k | $25 | $100 | 6 | Stable returns |
-| **BALLER** | $5k+ | $50 | $500 | 8 | Scale capital |
+| **SAVER** | $100–$249 | $15 | $40 | 2 | Capital preservation + learning |
+| **INVESTOR** | $250–$999 | $20 | $75 | 3 | Consistent participation |
+| **INCOME** | $1k–$4.9k | $30 | $150 | 5 | Serious retail trading |
+| **LIVABLE** | $5k–$24.9k | $50 | $300 | 6 | Professional-level execution |
+| **BALLER** | $25k+ | $100 | $1k | 8 | Capital deployment |
 
 ### Hard-Stop Rules
 
-1. **Account Balance < $25**: Cannot execute trades
-   - Error: "Account balance $XX.XX below minimum tier requirement $25.00"
+1. **Account Balance < $100**: Cannot execute trades
+   - Error: "Account balance $XX.XX below minimum tier requirement $100.00"
 
 2. **Trade Size < Tier Minimum**: Order blocked
    - Error: "[TIER] Trade size $XX.XX below tier minimum $YY.YY"
