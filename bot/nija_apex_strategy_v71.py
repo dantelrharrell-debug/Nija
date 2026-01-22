@@ -6,6 +6,11 @@ Unified algorithmic trading strategy with advanced market filters and risk manag
 Author: NIJA Trading Systems
 Version: 7.1
 Date: December 2024
+
+ENHANCEMENTS:
+- Enhanced entry scoring system (0-100 weighted score)
+- Market regime detection and adaptive strategy switching
+- Regime-based position sizing and thresholds
 """
 
 import pandas as pd
@@ -45,6 +50,15 @@ except ImportError:
     EMERGENCY_LIQUIDATION_AVAILABLE = False
     logger.warning("Emergency liquidation module not available")
 
+# Import enhanced entry scoring and regime detection
+try:
+    from enhanced_entry_scoring import EnhancedEntryScorer
+    from market_regime_detector import RegimeDetector, MarketRegime
+    ENHANCED_SCORING_AVAILABLE = True
+except ImportError:
+    ENHANCED_SCORING_AVAILABLE = False
+    logger.warning("Enhanced scoring and regime detection modules not available - using basic scoring")
+
 
 class NIJAApexStrategyV71:
     """
@@ -53,10 +67,13 @@ class NIJAApexStrategyV71:
     Features:
     1. Market Filter (uptrend/downtrend using VWAP, EMA9/21/50, MACD, ADX>20, Volume)
     2. Entry Logic (pullback to EMA21/VWAP, RSI, candlestick patterns, MACD tick, volume)
-    3. Dynamic Risk Management (ADX-based position sizing 2-10%, ATR stop loss)
-    4. Exit Logic (opposite signal, trailing stop, trend break)
-    5. Smart Filters (news, volume, candle timing)
-    6. Optional: AI Momentum Scoring (skeleton)
+    3. Enhanced Entry Scoring (0-100 weighted multi-factor scoring)
+    4. Market Regime Detection (trending/ranging/volatile)
+    5. Adaptive Strategy Switching (regime-based parameters)
+    6. Dynamic Risk Management (ADX-based position sizing 2-10%, ATR stop loss)
+    7. Exit Logic (opposite signal, trailing stop, trend break)
+    8. Smart Filters (news, volume, candle timing)
+    9. Optional: AI Momentum Scoring (skeleton)
     """
     
     def __init__(self, broker_client=None, config: Optional[Dict] = None):
@@ -81,6 +98,18 @@ class NIJAApexStrategyV71:
         )
         self.execution_engine = ExecutionEngine(broker_client)
         
+        # Initialize enhanced scoring and regime detection
+        if ENHANCED_SCORING_AVAILABLE:
+            self.entry_scorer = EnhancedEntryScorer(self.config)
+            self.regime_detector = RegimeDetector(self.config)
+            self.use_enhanced_scoring = True
+            logger.info("✅ Enhanced entry scoring and regime detection enabled")
+        else:
+            self.entry_scorer = None
+            self.regime_detector = None
+            self.use_enhanced_scoring = False
+            logger.warning("⚠️  Enhanced scoring not available - using legacy scoring")
+        
         # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
         self.min_adx = self.config.get('min_adx', 20)  # Industry standard for crypto - strong enough to avoid chop
         self.volume_threshold = self.config.get('volume_threshold', 0.5)  # 50% of 5-candle avg - reasonable liquidity
@@ -94,11 +123,17 @@ class NIJAApexStrategyV71:
         # Track last candle time for timing filter
         self.last_candle_time = None
         
+        # Track current regime for logging
+        self.current_regime = None
+        
         logger.info("=" * 70)
         logger.info("NIJA Apex Strategy v7.1 initialized")
         logger.info("✅ PROFIT-TAKING: ALWAYS ENABLED (cannot be disabled)")
         logger.info("✅ Multi-broker support: Coinbase, Kraken, Binance, OKX, Alpaca")
         logger.info("✅ All tiers supported: SAVER, INVESTOR, INCOME, LIVABLE, BALLER")
+        if self.use_enhanced_scoring:
+            logger.info("✅ Enhanced entry scoring: ENABLED (0-100 weighted scoring)")
+            logger.info("✅ Regime detection: ENABLED (trending/ranging/volatile)")
         logger.info("=" * 70)
     
     def _validate_trade_quality(self, position_size: float, score: float) -> Dict:
@@ -449,6 +484,116 @@ class NIJAApexStrategyV71:
         
         return True, 'All smart filters passed'
     
+    def check_entry_with_enhanced_scoring(self, df: pd.DataFrame, indicators: Dict, 
+                                         side: str, account_balance: float) -> Tuple[bool, float, str, Dict]:
+        """
+        Check entry conditions using enhanced scoring system
+        
+        This method combines:
+        - Legacy 5-point entry logic (for backward compatibility)
+        - Enhanced 0-100 weighted scoring system
+        - Market regime detection and adaptive thresholds
+        
+        Args:
+            df: Price DataFrame
+            indicators: Dictionary of calculated indicators
+            side: 'long' or 'short'
+            account_balance: Current account balance
+            
+        Returns:
+            Tuple of (should_enter, score, reason, metadata)
+        """
+        # Get legacy score first (0-5 points)
+        if side == 'long':
+            legacy_signal, legacy_score, legacy_reason = self.check_long_entry(df, indicators)
+        else:
+            legacy_signal, legacy_score, legacy_reason = self.check_short_entry(df, indicators)
+        
+        # If enhanced scoring not available, use legacy only
+        if not self.use_enhanced_scoring:
+            return legacy_signal, legacy_score, legacy_reason, {'legacy_score': legacy_score}
+        
+        # Calculate enhanced score (0-100)
+        enhanced_score, score_breakdown = self.entry_scorer.calculate_entry_score(df, indicators, side)
+        
+        # Detect market regime
+        regime, regime_metrics = self.regime_detector.detect_regime(df, indicators)
+        self.current_regime = regime
+        
+        # Get regime-specific parameters
+        regime_params = self.regime_detector.get_regime_parameters(regime)
+        
+        # Adjust score threshold based on regime
+        should_enter_enhanced = self.entry_scorer.should_enter_trade(enhanced_score)
+        
+        # Combined decision: Both legacy and enhanced must agree
+        should_enter = legacy_signal and should_enter_enhanced
+        
+        # Build comprehensive reason
+        reason = f"{side.upper()} | Regime:{regime.value} | Legacy:{legacy_score}/5 | Enhanced:{enhanced_score:.1f}/100 | {score_breakdown['quality']}"
+        
+        # Metadata for logging and analysis
+        metadata = {
+            'legacy_score': legacy_score,
+            'enhanced_score': enhanced_score,
+            'score_breakdown': score_breakdown,
+            'regime': regime.value,
+            'regime_confidence': regime_metrics['confidence'],
+            'regime_params': regime_params,
+            'should_enter_legacy': legacy_signal,
+            'should_enter_enhanced': should_enter_enhanced,
+            'combined_decision': should_enter
+        }
+        
+        if should_enter:
+            logger.info(f"  ✅ {reason}")
+            logger.info(f"     Trend:{score_breakdown['trend_strength']:.1f} "
+                       f"Momentum:{score_breakdown['momentum']:.1f} "
+                       f"Price:{score_breakdown['price_action']:.1f} "
+                       f"Volume:{score_breakdown['volume']:.1f} "
+                       f"Structure:{score_breakdown['market_structure']:.1f}")
+        else:
+            logger.debug(f"  ❌ {reason}")
+        
+        return should_enter, enhanced_score, reason, metadata
+    
+    def adjust_position_size_for_regime(self, base_position_size: float, 
+                                       regime: 'MarketRegime', score: float) -> float:
+        """
+        Adjust position size based on market regime and entry score
+        
+        Args:
+            base_position_size: Base position size from risk manager
+            regime: Current market regime
+            score: Enhanced entry score (0-100)
+            
+        Returns:
+            Adjusted position size
+        """
+        if not self.use_enhanced_scoring:
+            return base_position_size
+        
+        # Regime-based adjustment
+        regime_adjusted = self.regime_detector.adjust_position_size(regime, base_position_size)
+        
+        # Score-based adjustment (higher scores = larger positions)
+        if score >= 80:  # Excellent setup
+            score_multiplier = 1.2
+        elif score >= 70:  # Good setup
+            score_multiplier = 1.0
+        elif score >= 60:  # Fair setup
+            score_multiplier = 0.9
+        else:  # Marginal setup
+            score_multiplier = 0.7
+        
+        # Combine adjustments
+        final_size = regime_adjusted * score_multiplier
+        
+        logger.debug(f"Position size adjustment: ${base_position_size:.2f} -> ${final_size:.2f} "
+                    f"(regime:{regime.value}, score:{score:.1f})")
+        
+        return final_size
+    
     def check_exit_conditions(self, symbol: str, df: pd.DataFrame, 
                              indicators: Dict, current_price: float) -> Tuple[bool, str]:
         """
@@ -668,16 +813,30 @@ class NIJAApexStrategyV71:
             adx = scalar(indicators['adx'].iloc[-1])
             
             if trend == 'uptrend':
-                long_signal, score, reason = self.check_long_entry(df, indicators)
+                # Use enhanced scoring if available, otherwise legacy
+                if self.use_enhanced_scoring:
+                    long_signal, score, reason, metadata = self.check_entry_with_enhanced_scoring(
+                        df, indicators, 'long', account_balance
+                    )
+                else:
+                    long_signal, score, reason = self.check_long_entry(df, indicators)
+                    metadata = {}
+                
                 if long_signal:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
-                        account_balance, adx, score
+                        account_balance, adx, score if not self.use_enhanced_scoring else metadata.get('legacy_score', score)
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
+                    
+                    # Adjust position size based on regime and score
+                    if self.use_enhanced_scoring and self.current_regime:
+                        position_size = self.adjust_position_size_for_regime(
+                            position_size, self.current_regime, score
+                        )
                     
                     if float(position_size) == 0:
                         return {
@@ -686,7 +845,7 @@ class NIJAApexStrategyV71:
                         }
                     
                     # Validate trade quality (position size and confidence)
-                    validation = self._validate_trade_quality(position_size, score)
+                    validation = self._validate_trade_quality(position_size, score if not self.use_enhanced_scoring else metadata.get('legacy_score', score))
                     if not validation['valid']:
                         return {
                             'action': 'hold',
@@ -703,7 +862,13 @@ class NIJAApexStrategyV71:
                         current_price, stop_loss, 'long'
                     )
                     
-                    return {
+                    # Adjust TP levels based on regime if enhanced scoring is enabled
+                    if self.use_enhanced_scoring and self.current_regime:
+                        tp_levels = self.regime_detector.adjust_take_profit_levels(
+                            self.current_regime, tp_levels
+                        )
+                    
+                    result = {
                         'action': 'enter_long',
                         'reason': reason,
                         'entry_price': current_price,
@@ -713,18 +878,38 @@ class NIJAApexStrategyV71:
                         'score': score,
                         'adx': adx
                     }
+                    
+                    # Add metadata if available
+                    if metadata:
+                        result['metadata'] = metadata
+                    
+                    return result
             
             elif trend == 'downtrend':
-                short_signal, score, reason = self.check_short_entry(df, indicators)
+                # Use enhanced scoring if available, otherwise legacy
+                if self.use_enhanced_scoring:
+                    short_signal, score, reason, metadata = self.check_entry_with_enhanced_scoring(
+                        df, indicators, 'short', account_balance
+                    )
+                else:
+                    short_signal, score, reason = self.check_short_entry(df, indicators)
+                    metadata = {}
+                
                 if short_signal:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
-                        account_balance, adx, score
+                        account_balance, adx, score if not self.use_enhanced_scoring else metadata.get('legacy_score', score)
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
+                    
+                    # Adjust position size based on regime and score
+                    if self.use_enhanced_scoring and self.current_regime:
+                        position_size = self.adjust_position_size_for_regime(
+                            position_size, self.current_regime, score
+                        )
                     
                     if float(position_size) == 0:
                         return {
@@ -733,7 +918,7 @@ class NIJAApexStrategyV71:
                         }
                     
                     # Validate trade quality (position size and confidence)
-                    validation = self._validate_trade_quality(position_size, score)
+                    validation = self._validate_trade_quality(position_size, score if not self.use_enhanced_scoring else metadata.get('legacy_score', score))
                     if not validation['valid']:
                         return {
                             'action': 'hold',
@@ -750,7 +935,13 @@ class NIJAApexStrategyV71:
                         current_price, stop_loss, 'short'
                     )
                     
-                    return {
+                    # Adjust TP levels based on regime if enhanced scoring is enabled
+                    if self.use_enhanced_scoring and self.current_regime:
+                        tp_levels = self.regime_detector.adjust_take_profit_levels(
+                            self.current_regime, tp_levels
+                        )
+                    
+                    result = {
                         'action': 'enter_short',
                         'reason': reason,
                         'entry_price': current_price,
@@ -760,6 +951,12 @@ class NIJAApexStrategyV71:
                         'score': score,
                         'adx': adx
                     }
+                    
+                    # Add metadata if available
+                    if metadata:
+                        result['metadata'] = metadata
+                    
+                    return result
             
             return {
                 'action': 'hold',
