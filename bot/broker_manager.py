@@ -99,6 +99,18 @@ except ImportError:
         validate_kraken_symbol = None
         convert_to_kraken = None
 
+# Import Tier Configuration for minimum enforcement
+try:
+    from bot.tier_config import get_tier_from_balance, get_tier_config, validate_trade_size
+except ImportError:
+    try:
+        from tier_config import get_tier_from_balance, get_tier_config, validate_trade_size
+    except ImportError:
+        # Fallback: Tier config not available
+        get_tier_from_balance = None
+        get_tier_config = None
+        validate_trade_size = None
+
 # Configure logger for broker operations
 logger = logging.getLogger('nija.broker')
 
@@ -6241,6 +6253,63 @@ class KrakenBroker(BaseBroker):
             
             # Determine order type
             order_type = side.lower()  # 'buy' or 'sell'
+            
+            # ✅ TIER LOCK ENFORCEMENT: Validate trade size against tier minimums
+            # This prevents small trades that will be eaten by fees
+            if side.lower() == 'buy' and get_tier_from_balance and validate_trade_size:
+                try:
+                    # Get current balance
+                    balance_info = self.get_account_balance_detailed()
+                    if balance_info and not balance_info.get('error', False):
+                        current_balance = balance_info.get('trading_balance', 0.0)
+                        
+                        # Check if balance meets minimum tier requirement ($25 SAVER tier minimum)
+                        if current_balance < 25.0:
+                            logging.error("=" * 70)
+                            logging.error("❌ TIER ENFORCEMENT: BUY ORDER BLOCKED")
+                            logging.error("=" * 70)
+                            logging.error(f"   Account balance: ${current_balance:.2f}")
+                            logging.error(f"   Minimum required: $25.00 (SAVER tier minimum)")
+                            logging.error("   ⚠️  Cannot execute trades below tier minimum")
+                            logging.error("=" * 70)
+                            return {
+                                "status": "error",
+                                "error": f"Account balance ${current_balance:.2f} below minimum tier requirement $25.00"
+                            }
+                        
+                        # Determine user's tier based on balance
+                        user_tier = get_tier_from_balance(current_balance)
+                        tier_config = get_tier_config(user_tier)
+                        
+                        # Calculate order size in USD (quantity is already in USD for buy orders)
+                        order_size_usd = quantity
+                        
+                        # Validate trade size for tier
+                        is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
+                        
+                        if not is_valid:
+                            logging.error("=" * 70)
+                            logging.error("❌ TIER ENFORCEMENT: TRADE SIZE BLOCKED")
+                            logging.error("=" * 70)
+                            logging.error(f"   Tier: {user_tier.value}")
+                            logging.error(f"   Account balance: ${current_balance:.2f}")
+                            logging.error(f"   Trade size: ${order_size_usd:.2f}")
+                            logging.error(f"   Reason: {reason}")
+                            logging.error("   ⚠️  Trade blocked to prevent fee destruction")
+                            logging.error("=" * 70)
+                            return {
+                                "status": "error",
+                                "error": f"[{user_tier.value} Tier] {reason}"
+                            }
+                        
+                        # Log tier validation success
+                        logging.info(f"✅ Tier validation passed: [{user_tier.value}] ${order_size_usd:.2f} trade")
+                        logging.info(f"   Account balance: ${current_balance:.2f}")
+                        logging.info(f"   Tier range: ${tier_config.trade_size_min:.2f}-${tier_config.trade_size_max:.2f}")
+                        
+                except Exception as tier_err:
+                    # Don't block trade if tier validation fails - just log warning
+                    logging.warning(f"⚠️  Tier validation error (allowing trade): {tier_err}")
             
             # Place market order using serialized API call
             # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
