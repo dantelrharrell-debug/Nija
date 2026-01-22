@@ -275,19 +275,22 @@ class ExchangeCapabilityMatrix:
         broker_lower = broker.lower()
         
         if broker_lower not in self._capabilities:
-            logger.warning(f"Unknown broker: {broker} - assuming spot with no shorting")
+            logger.warning(f"⚠️  Unknown broker: {broker} - using conservative defaults (no shorting)")
+            logger.warning(f"   Add {broker} to exchange_capabilities.py for proper support")
+            # Conservative default: no shorting allowed for unknown brokers
+            # This is safer than allowing shorts on untested exchanges
             return ExchangeCapabilities(
                 broker_name=broker_lower,
                 market_mode=MarketMode.SPOT,
                 supports_long=True,
-                supports_short=False  # Safe default: no shorting
+                supports_short=False  # Safe default: no shorting on unknown exchanges
             )
         
         broker_caps = self._capabilities[broker_lower]
         
         if market_mode not in broker_caps:
             # Fallback to SPOT if specific mode not found
-            logger.warning(f"{broker} does not support {market_mode.value} - using SPOT capabilities")
+            logger.debug(f"{broker} does not support {market_mode.value} - using SPOT capabilities")
             return broker_caps.get(MarketMode.SPOT)
         
         return broker_caps[market_mode]

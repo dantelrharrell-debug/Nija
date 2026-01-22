@@ -7,15 +7,21 @@ This script verifies that:
 2. SHORT entries are allowed on Kraken futures (BTC-PERP, ETH-PERP)
 3. SHORT entries are blocked on Coinbase (all symbols)
 4. SHORT entries are allowed on Alpaca (stocks)
+
+Note: Run from repository root:
+    python test_short_blocking.py
 """
 
 import sys
 import os
 
-# Add bot directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
-
-from exchange_capabilities import can_short, EXCHANGE_CAPABILITIES
+# Import from bot package
+try:
+    from bot.exchange_capabilities import can_short, EXCHANGE_CAPABILITIES
+except ImportError:
+    # If not installed as package, try relative import
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+    from exchange_capabilities import can_short, EXCHANGE_CAPABILITIES
 
 
 def test_kraken_spot():

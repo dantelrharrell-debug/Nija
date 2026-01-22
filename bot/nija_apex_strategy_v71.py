@@ -1,4 +1,3 @@
-# nija_apex_strategy_v71.py
 """
 NIJA APEX STRATEGY v7.1
 Unified algorithmic trading strategy with advanced market filters and risk management
@@ -29,6 +28,14 @@ from execution_engine import ExecutionEngine
 
 # Initialize logger before any imports that might fail
 logger = logging.getLogger("nija")
+
+# Import exchange capabilities for SHORT entry validation
+try:
+    from exchange_capabilities import can_short
+    EXCHANGE_CAPABILITIES_AVAILABLE = True
+except ImportError:
+    EXCHANGE_CAPABILITIES_AVAILABLE = False
+    logger.warning("Exchange capabilities module not available - SHORT validation disabled")
 
 # Import position sizer for minimum position validation
 try:
@@ -1028,11 +1035,20 @@ class NIJAApexStrategyV71:
                 # This prevents SHORT entries on exchanges that don't support them (e.g., Kraken spot)
                 broker_name = 'unknown'
                 if self.broker_client and hasattr(self.broker_client, 'broker_type'):
-                    broker_name = self.broker_client.broker_type.value.lower()
+                    # Handle both Enum and string broker_type
+                    broker_type = self.broker_client.broker_type
+                    if hasattr(broker_type, 'value'):
+                        # It's an Enum
+                        broker_name = broker_type.value.lower()
+                    elif isinstance(broker_type, str):
+                        # It's already a string
+                        broker_name = broker_type.lower()
+                    else:
+                        # Fallback to string representation
+                        broker_name = str(broker_type).lower()
                 
                 # Check if this broker/symbol combination supports shorting
-                try:
-                    from exchange_capabilities import can_short
+                if EXCHANGE_CAPABILITIES_AVAILABLE:
                     if not can_short(broker_name, symbol):
                         logger.warning(f"⚠️  SHORT entry BLOCKED: {broker_name} does not support shorting for {symbol}")
                         logger.warning(f"   Strategy signal: enter_short @ {action_data['entry_price']:.2f}")
@@ -1040,7 +1056,7 @@ class NIJAApexStrategyV71:
                         logger.warning(f"   Symbol: {symbol}")
                         logger.warning(f"   ℹ️  Note: SHORT works on futures/perpetuals (e.g., BTC-PERP)")
                         return False
-                except ImportError:
+                else:
                     logger.warning(f"⚠️  Exchange capability check unavailable - allowing SHORT (risky!)")
                 
                 # Execute SHORT entry

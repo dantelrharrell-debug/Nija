@@ -254,8 +254,20 @@ class MarketAdapter:
         """
         Check if market supports shorting.
         
-        DEPRECATED: This method is being replaced by exchange_capabilities.py
+        DEPRECATED (Jan 2026): This method is being replaced by exchange_capabilities.py
         which provides more accurate broker + symbol-specific capability checking.
+        
+        Migration Timeline:
+        - Jan 2026: New exchange_capabilities.py module introduced
+        - Feb 2026: All call sites should migrate to using can_short(broker, symbol)
+        - Mar 2026: This method will be removed
+        
+        Migration Instructions:
+        Instead of:
+            market_adapter.supports_shorting(symbol)
+        Use:
+            from exchange_capabilities import can_short
+            can_short(broker_name, symbol)
         
         Args:
             symbol: Trading symbol
@@ -271,7 +283,7 @@ class MarketAdapter:
                 return can_short(broker, symbol)
             except ImportError:
                 # Fallback to legacy logic if exchange_capabilities not available
-                pass
+                logger.warning("exchange_capabilities module not available, using legacy logic")
         
         # Legacy logic (less accurate, doesn't consider exchange differences)
         market_type = self.detect_market_type(symbol)
