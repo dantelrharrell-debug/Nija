@@ -2810,6 +2810,33 @@ class TradingStrategy:
                     logger.info(f"   ✅ CONDITION PASSED: {entry_broker_name.upper()} available for entry")
                     # Update active_broker to use the selected entry broker
                     active_broker = entry_broker
+                    
+                    # CRITICAL FIX (Jan 22, 2026): Update account_balance from selected entry broker
+                    # When switching brokers, we must re-fetch the balance from the NEW broker
+                    # Otherwise position sizing uses the wrong broker's balance (e.g., Coinbase $20 instead of Kraken $28)
+                    if hasattr(active_broker, 'get_account_balance_detailed'):
+                        balance_data = active_broker.get_account_balance_detailed()
+                    else:
+                        balance_data = {'trading_balance': active_broker.get_account_balance()}
+                    account_balance = balance_data.get('trading_balance', 0.0)
+                    
+                    # Also update position values and total capital from the new broker
+                    held_funds = balance_data.get('total_held', 0.0)
+                    total_funds = balance_data.get('total_funds', account_balance)
+                    
+                    if hasattr(active_broker, 'get_total_capital'):
+                        try:
+                            capital_data = active_broker.get_total_capital(include_positions=True)
+                            position_value = capital_data.get('position_value', 0.0)
+                            position_count = capital_data.get('position_count', 0)
+                            total_capital = capital_data.get('total_capital', account_balance)
+                        except Exception as e:
+                            logger.debug(f"⚠️ Could not calculate position values from entry broker: {e}")
+                            total_capital = account_balance
+                    else:
+                        total_capital = account_balance
+                    
+                    logger.info(f"   💰 {entry_broker_name.upper()} balance updated: ${account_balance:.2f} (total capital: ${total_capital:.2f})")
                 
                 logger.info("")
                 logger.info("═" * 80)
