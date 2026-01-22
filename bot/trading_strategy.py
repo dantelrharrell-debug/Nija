@@ -1735,12 +1735,15 @@ class TradingStrategy:
             # CRITICAL FIX: Filter out unsellable positions (dust, unsupported symbols)
             # These positions can't be traded so they shouldn't count toward position cap
             # This prevents dust positions from blocking new entries
+            # Note: After timeout expires (24h), positions will be included and retry attempted
             if current_positions and hasattr(self, 'unsellable_positions'):
                 tradable_positions = []
                 for pos in current_positions:
                     symbol = pos.get('symbol')
                     if symbol and symbol in self.unsellable_positions:
                         # Check if the unsellable timeout is still active (position still marked as unsellable)
+                        # When timeout expires, position will be included in count and exit will be retried
+                        # (in case position grew above minimum or API error was temporary)
                         marked_time = self.unsellable_positions[symbol]
                         time_since_marked = time.time() - marked_time
                         if time_since_marked < self.unsellable_retry_timeout:
