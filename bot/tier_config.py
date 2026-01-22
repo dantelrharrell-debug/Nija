@@ -16,6 +16,7 @@ Version: 4.0 (OFFICIAL FUNDING TIERS - 6 TIERS)
 Date: January 22, 2026
 """
 
+import os
 from enum import Enum
 from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
@@ -153,8 +154,6 @@ def get_tier_from_balance(balance: float, override_tier: str = None) -> TradingT
     Returns:
         TradingTier enum
     """
-    import os
-    
     # Check for environment variable override first
     env_tier = override_tier or os.getenv('MASTER_ACCOUNT_TIER', '').upper()
     if env_tier:

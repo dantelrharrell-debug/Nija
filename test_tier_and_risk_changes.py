@@ -143,10 +143,17 @@ def test_investor_tier_benefits():
     print(f"  ├─ Trade size: ${investor_config.trade_size_min:.2f}-${investor_config.trade_size_max:.2f}")
     print(f"  └─ Max positions: {investor_config.max_positions}")
     
-    print(f"\n📊 Key improvements with INVESTOR tier:")
+    print(f"\n📊 Key differences (INVESTOR vs STARTER):")
     print(f"  ✅ Lower max risk: {investor_config.risk_per_trade_pct[1]:.0f}% vs {starter_config.risk_per_trade_pct[1]:.0f}%")
     print(f"  ✅ Higher min trade: ${investor_config.trade_size_min:.2f} vs ${starter_config.trade_size_min:.2f}")
     print(f"  ✅ More positions: {investor_config.max_positions} vs {starter_config.max_positions}")
+    
+    print(f"\n⚠️  WARNING for ${balance:.2f} balance:")
+    max_with_15_pct = balance * 0.15
+    print(f"  • 15% cap limits trades to ${max_with_15_pct:.2f}")
+    print(f"  • INVESTOR tier minimum is ${investor_config.trade_size_min:.2f}")
+    print(f"  • This configuration would BLOCK ALL TRADES (${max_with_15_pct:.2f} < ${investor_config.trade_size_min:.2f})")
+    print(f"  • Use STARTER tier for balances under $250")
     
     return True
 
@@ -197,12 +204,17 @@ def main():
     if passed == total:
         print("\n✅ All tests passed!")
         print("\n📝 Configuration instructions:")
-        print("  To enable INVESTOR tier, add to .env file:")
+        print("  For accounts with balance ≥ $250, add to .env file:")
         print("  MASTER_ACCOUNT_TIER=INVESTOR")
-        print("\n  This will:")
-        print("  • Use INVESTOR tier risk parameters (5-7% max risk)")
-        print("  • Enforce max trade size of 15% of balance")
-        print("  • Allow trade sizes between $20-$75")
+        print("\n  ⚠️  WARNING: DO NOT use INVESTOR tier override for accounts under $250")
+        print("  • 15% of $62.49 = $9.37 (max trade size)")
+        print("  • INVESTOR tier minimum = $20")
+        print("  • This would BLOCK ALL TRADES")
+        print("\n  ✅ For accounts under $250, use auto-detection (STARTER tier)")
+        print("\n  Benefits with appropriate tier:")
+        print("  • Proper risk management aligned with account size")
+        print("  • Max trade size capped at 15% of balance")
+        print("  • Trade sizes that can actually execute")
         return 0
     else:
         print("\n❌ Some tests failed")

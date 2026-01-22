@@ -114,7 +114,7 @@ MASTER_ACCOUNT_TIER=INVESTOR
 - With 15% risk limit: max $9.37 per trade
 - Actual trades will be smaller based on signal strength
 
-### Example 2: Small Account with INVESTOR Tier (Override)
+### Example 2: Small Account with INVESTOR Tier (Override) - ⚠️ NOT RECOMMENDED
 
 ```bash
 # .env file
@@ -132,8 +132,12 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 **Position Sizing:**
 - With 15% risk limit: max $9.37 per trade
-- However, tier minimum is $20
-- ⚠️ This means NO TRADES will execute (balance too small for INVESTOR tier)
+- **⚠️ CRITICAL ISSUE:** Tier minimum is $20
+- **Result: NO TRADES will execute** (balance too small for INVESTOR tier minimums)
+
+**Recommendation:** DO NOT use this configuration. The 15% cap ($9.37) is below the INVESTOR tier minimum ($20), preventing all trades. Either:
+1. Use auto-detection (STARTER tier) for accounts under $250
+2. Deposit at least $250 to naturally qualify for INVESTOR tier
 
 ### Example 3: Medium Account with Auto-Detection
 
@@ -160,17 +164,23 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 ### For Accounts Under $100
 
-**Option 1: Use Auto-Detection (STARTER tier)**
+**Option 1: Use Auto-Detection (STARTER tier) - RECOMMENDED**
 ```bash
 # Leave MASTER_ACCOUNT_TIER commented out
 ```
 - ✅ Allows trading with small balances
 - ✅ Trades as small as $10 are permitted
-- ⚠️ Higher risk per trade (10-15%)
+- ✅ 15% cap ($9.37 for $62.49) still applies
+- ⚠️ Higher max risk per tier guidelines (10-15%, but actual trades limited by 15% cap)
 
-**Option 2: Deposit More Funds**
+**Option 2: DO NOT Override to Higher Tiers**
+- ❌ INVESTOR tier has $20 minimum trade size
+- ❌ 15% of $62.49 is only $9.37 (below minimum)
+- ❌ This configuration will BLOCK ALL TRADES
+
+**Option 3: Deposit More Funds - BEST LONG-TERM**
 - Deposit to at least $250 to qualify for INVESTOR tier naturally
-- ✅ Best option for long-term trading success
+- ✅ Best option for sustainable trading success
 
 ### For Accounts $100-$249
 
