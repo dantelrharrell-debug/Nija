@@ -229,6 +229,55 @@ Trades below tier minimums are still executed but marked for easier filtering.
 
 ---
 
+## 💰 **User Balance Snapshot - Success Checkpoint**
+
+**Every time NIJA starts, you'll see a complete balance snapshot after the 45-second startup delay.** This provides absolute visual certainty of all account balances before trading begins.
+
+### What You'll See
+
+After the bot completes its startup sequence and broker connections, look for this log block:
+
+```
+======================================================================
+💰 USER BALANCE SNAPSHOT
+======================================================================
+   • Master: $X,XXX.XX
+      - COINBASE: $XXX.XX
+      - KRAKEN: $XXX.XX
+   • Daivon: $XXX.XX
+      - KRAKEN: $XXX.XX
+   • Tania (Kraken): $XXX.XX
+   • Tania (Alpaca): $XXX.XX
+   
+   🏦 TOTAL CAPITAL UNDER MANAGEMENT: $X,XXX.XX
+======================================================================
+```
+
+### How to Use This Checkpoint
+
+This balance snapshot represents a **verified success point** in the startup sequence:
+
+1. ✅ **All broker connections established** - Master and user accounts connected
+2. ✅ **Balances confirmed** - Live capital verified from exchange APIs
+3. ✅ **Ready to trade** - System is fully initialized and operational
+
+**To return to this success point:**
+- Simply restart the bot using `./start.sh` or your deployment platform's restart button
+- The snapshot will appear in logs approximately 45-60 seconds after startup
+- All balances are fetched live from exchange APIs (Coinbase, Kraken, Alpaca)
+
+**Troubleshooting:**
+- If balances show $0.00, check that API credentials are correctly configured
+- If a user is missing, verify their config in `config/users/*.json`
+- If a broker shows $0.00, check the specific broker's API key environment variables
+
+**See Also:**
+- 📚 [USER_MANAGEMENT.md](USER_MANAGEMENT.md) - Managing user accounts
+- 📚 [USER_BALANCE_GUIDE.md](USER_BALANCE_GUIDE.md) - Balance tracking details
+- 📚 [RESTART_GUIDE.md](RESTART_GUIDE.md) - Restarting and recovery procedures
+
+---
+
 **What is NIJA?** NIJA is a sophisticated, AI-powered autonomous trading platform that goes far beyond simple cryptocurrency trading. It's a comprehensive algorithmic trading system featuring:
 
 - 🤖 **Multi-Asset Trading**: Cryptocurrencies (732+ pairs) AND traditional stocks via Alpaca
