@@ -231,7 +231,7 @@ _FIRST_TRADE_LOCK = threading.Lock()
 # ============================================================================
 # Each exchange uses different symbol formats:
 # - Coinbase:  ETH-USD, ETH-USDT, ETH-USDC (dash separator)
-# - Kraken:    ETH/USD, ETH/USDT, XETHZUSD (slash or no separator)
+# - Kraken:    ETH-USD, ETH-USDT (dash separator, internally XETHZUSD/XXBTZUSD)
 # - Binance:   ETHUSDT, ETHBUSD (no separator, includes BUSD)
 # - OKX:       ETH-USDT (dash separator, prefers USDT over USD)
 #
@@ -257,8 +257,8 @@ def normalize_symbol_for_broker(symbol: str, broker_name: str) -> str:
         Normalized symbol in broker-specific format
         
     Examples:
-        normalize_symbol_for_broker("ETH.BUSD", "kraken") → "ETH/USD"
-        normalize_symbol_for_broker("ETH-USD", "kraken") → "ETH/USD"
+        normalize_symbol_for_broker("ETH.BUSD", "kraken") → "ETH-USD"
+        normalize_symbol_for_broker("ETH-USD", "kraken") → "ETH-USD"
         normalize_symbol_for_broker("ETHUSDT", "coinbase") → "ETH-USD"
         normalize_symbol_for_broker("BTC-USD", "binance") → "BTCUSDT"
     """
@@ -318,10 +318,8 @@ def normalize_symbol_for_broker(symbol: str, broker_name: str) -> str:
     
     # Broker-specific formatting
     if broker_name == 'kraken':
-        # Kraken format: ETH/USD, BTC/USDT, XETHZUSD (slash separator)
-        # Note: Kraken internally uses X prefix for some assets (XETH, XXBT)
-        # but the slash format is more standard
-        return f"{base}/{quote}"
+        # Kraken: ETH-USD (dash separator, matches kraken_symbol_mapper expectations)
+        return f"{base}-{quote}"
         
     elif broker_name == 'coinbase':
         # Coinbase format: ETH-USD, BTC-USDT (dash separator)
@@ -6099,7 +6097,7 @@ class KrakenBroker(BaseBroker):
                     return None
             else:
                 # Fallback: Manual conversion if symbol mapper not available
-                kraken_symbol = normalized_symbol.replace('/', '').upper()
+                kraken_symbol = normalized_symbol.replace('-', '').upper()
                 if kraken_symbol.startswith('BTC'):
                     kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
             
@@ -6267,7 +6265,7 @@ class KrakenBroker(BaseBroker):
                 logger.warning(f"   💡 TIP: This symbol contains unsupported quote currency for Kraken (e.g., BUSD)")
                 return {"status": "error", "error": error_msg}
             
-            # Normalize to Kraken format (ETH/USD, BTC/USDT, etc.)
+            # Normalize to standard format for Kraken (ETH-USD, BTC-USDT, etc.)
             normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
             
             # SYMBOL VALIDATION FIX (Jan 20, 2026): Use symbol mapper to validate and convert
@@ -6291,11 +6289,11 @@ class KrakenBroker(BaseBroker):
                 logger.debug(f"✅ Symbol validated: {normalized_symbol} -> {kraken_symbol}")
             
             # Fallback: Manual conversion if symbol mapper not available
-            # Convert symbol format to Kraken internal format
-            # Kraken uses XBTUSD, ETHUSD, etc. (no slash)
-            # ETH/USD -> ETHUSD, BTC/USD -> XBTUSD
+            # Convert from standard format (ETH-USD) to Kraken internal format (XETHZUSD)
+            # Kraken internal format: no separator, X prefix for some assets
+            # Examples: ETH-USD -> XETHZUSD, BTC-USD -> XXBTZUSD
             if not kraken_symbol:
-                kraken_symbol = normalized_symbol.replace('/', '').upper()
+                kraken_symbol = normalized_symbol.replace('-', '').upper()
                 
                 # Kraken uses X prefix for BTC
                 if kraken_symbol.startswith('BTC'):
@@ -6641,7 +6639,7 @@ class KrakenBroker(BaseBroker):
                     return []
             else:
                 # Fallback: Manual conversion if symbol mapper not available
-                kraken_symbol = normalized_symbol.replace('/', '').upper()
+                kraken_symbol = normalized_symbol.replace('-', '').upper()
                 if kraken_symbol.startswith('BTC'):
                     kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
             
