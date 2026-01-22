@@ -6,7 +6,7 @@ import queue
 import logging
 import traceback
 from threading import Thread
-from typing import Dict
+from typing import Dict, Optional, Tuple
 from datetime import datetime
 from dotenv import load_dotenv
 import pandas as pd
@@ -273,7 +273,7 @@ MIN_BALANCE_TO_TRADE_USD = 2.0  # Minimum account balance to allow trading (lowe
 MIN_KRAKEN_BALANCE = 25.0  # Minimum balance for Kraken to allow trading
 MIN_POSITION_SIZE = 1.25   # 5% of $25 - minimum position size for Kraken
 
-# BROKER PRIORITY SYSTEM (Jan 22, 2026)
+# BROKER PRIORITY SYSTEM (Jan 22, 2025)
 # Define entry broker priority for BUY orders
 # Brokers will be selected in this order if eligible (not in EXIT_ONLY mode and balance >= minimum)
 # Coinbase automatically falls to bottom priority if balance < $25
@@ -1091,7 +1091,7 @@ class TradingStrategy:
         """
         return broker.broker_type.value if broker and hasattr(broker, 'broker_type') else 'unknown'
     
-    def _is_broker_eligible_for_entry(self, broker) -> tuple[bool, str]:
+    def _is_broker_eligible_for_entry(self, broker: Optional[object]) -> Tuple[bool, str]:
         """
         Check if a broker is eligible for new entry (BUY) orders.
         
@@ -1129,7 +1129,7 @@ class TradingStrategy:
         except Exception as e:
             return False, f"{self._get_broker_name(broker).upper()} balance check failed: {e}"
     
-    def _select_entry_broker(self, all_brokers: Dict) -> tuple:
+    def _select_entry_broker(self, all_brokers: Dict) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
         """
         Select the best broker for new entry (BUY) orders based on priority.
         
@@ -2399,7 +2399,7 @@ class TradingStrategy:
             # Only MASTER accounts scan markets and generate buy signals
             # PROFITABILITY FIX: Use module-level constants for consistency
             
-            # ENHANCED LOGGING (Jan 22, 2026): Show broker-aware condition checklist for trade execution
+            # ENHANCED LOGGING (Jan 22, 2025): Show broker-aware condition checklist for trade execution
             logger.info("")
             logger.info("═" * 80)
             logger.info("🎯 TRADE EXECUTION CONDITION CHECKLIST (BROKER-AWARE)")
@@ -2446,7 +2446,7 @@ class TradingStrategy:
                 else:
                     logger.info(f"   ✅ CONDITION PASSED: Sufficient balance (${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f})")
                 
-                # BROKER-AWARE ENTRY GATING (Jan 22, 2026)
+                # BROKER-AWARE ENTRY GATING (Jan 22, 2025)
                 # Check broker eligibility - must not be in EXIT_ONLY mode and meet balance requirements
                 logger.info("")
                 logger.info("   🏦 BROKER ELIGIBILITY CHECK:")
