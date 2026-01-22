@@ -339,28 +339,24 @@ class KrakenAdapter(BrokerAdapter):
         return (self.MIN_VOLUME_DEFAULT, "quote")
     
     def normalize_symbol(self, symbol: str) -> str:
-        """Normalize to Kraken format (XXX/YYY)."""
+        """
+        Normalize to Kraken format (no separators: BTCUSD, ETHUSD).
+        
+        Uses the centralized kraken_adapter module for symbol normalization.
+        """
         if not symbol:
             return symbol
         
-        # Replace dash with slash
-        symbol = symbol.replace("-", "/")
-        
-        # Replace BUSD with USD (Kraken doesn't support BUSD)
-        symbol = symbol.replace("BUSD", "USD")
-        
-        # Replace dot with slash
-        symbol = symbol.replace(".", "/")
-        
-        # Handle no separator case (BTCUSD -> BTC/USD)
-        if "/" not in symbol and len(symbol) >= 6:
-            # Common base currencies
-            for base in ["BTC", "ETH", "SOL", "XRP", "ADA", "DOT"]:
-                if symbol.startswith(base):
-                    quote = symbol[len(base):]
-                    return f"{base}/{quote}"
-        
-        return symbol.upper()
+        # Use kraken_adapter module for normalization
+        try:
+            from bot.kraken_adapter import normalize_kraken_symbol
+            return normalize_kraken_symbol(symbol)
+        except ImportError:
+            # Fallback: Remove separators and uppercase
+            symbol = symbol.replace("-", "").replace("/", "").upper()
+            # Replace BUSD with USD (Kraken doesn't support BUSD)
+            symbol = symbol.replace("BUSD", "USD")
+            return symbol
 
 
 class AlpacaAdapter(BrokerAdapter):
