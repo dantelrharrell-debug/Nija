@@ -7378,11 +7378,12 @@ class BrokerManager:
         """
         Select the primary master broker with intelligent fallback logic.
         
-        CRITICAL FIX: Promote Kraken to primary when Coinbase is in exit_only mode or has insufficient balance.
+        FIX #2: Make Kraken the PRIMARY broker for entries when Coinbase is in exit_only mode.
         
         Priority rules:
-        1. If current primary is in exit_only mode or balance < MINIMUM_TRADING_BALANCE, promote Kraken
-        2. Otherwise, keep current primary broker
+        1. If Coinbase is in exit_only mode → Kraken becomes PRIMARY for all new entries
+        2. If current primary has insufficient balance → Promote Kraken to PRIMARY
+        3. Coinbase exists ONLY for: Emergency exits, Position closures, Legacy compatibility
         
         This ensures the master portfolio uses the correct broker for new entries.
         """
@@ -7392,42 +7393,46 @@ class BrokerManager:
         
         current_primary = self.active_broker.broker_type.value.upper()
         
-        # Check if current primary is in exit_only mode OR has insufficient balance
+        # FIX #2: Check if Coinbase is in exit_only mode (Kraken becomes PRIMARY)
         should_promote_kraken = False
         promotion_reason = ""
         
+        # Primary check: Is the current broker in EXIT_ONLY mode?
         if self.active_broker.exit_only_mode:
             should_promote_kraken = True
-            promotion_reason = f"{current_primary} EXIT-ONLY"
-            logger.info(f"🔍 Current primary broker ({current_primary}) is in EXIT_ONLY mode")
+            promotion_reason = f"{current_primary} in EXIT-ONLY mode"
+            logger.info(f"🔍 {current_primary} is in EXIT_ONLY mode → Kraken will become PRIMARY for entries")
         else:
-            # Also check balance to determine if we should promote Kraken
+            # Secondary check: Does current broker have sufficient balance?
             try:
                 balance = self.active_broker.get_account_balance()
                 if balance < MINIMUM_TRADING_BALANCE:
                     should_promote_kraken = True
                     promotion_reason = f"{current_primary} balance (${balance:.2f}) < minimum (${MINIMUM_TRADING_BALANCE:.2f})"
-                    logger.info(f"🔍 Current primary broker ({current_primary}) has insufficient balance: ${balance:.2f} < ${MINIMUM_TRADING_BALANCE:.2f}")
+                    logger.info(f"🔍 {current_primary} has insufficient balance: ${balance:.2f} < ${MINIMUM_TRADING_BALANCE:.2f}")
             except Exception as e:
                 logger.warning(f"⚠️ Could not check balance for {current_primary}: {e}")
         
         if should_promote_kraken:
-            # Try to promote Kraken
+            # FIX #2: Promote Kraken to PRIMARY broker for all new entries
             if BrokerType.KRAKEN in self.brokers:
                 kraken = self.brokers[BrokerType.KRAKEN]
                 if kraken.connected and not kraken.exit_only_mode:
                     logger.info("=" * 70)
-                    logger.info("🔄 PROMOTING KRAKEN TO PRIMARY MASTER BROKER")
+                    logger.info("🔄 KRAKEN PROMOTED TO PRIMARY BROKER (FIX #2)")
                     logger.info("=" * 70)
                     logger.info(f"   Reason: {promotion_reason}")
-                    logger.info("   Kraken will handle new entries for master portfolio")
+                    logger.info(f"   ✅ Kraken: PRIMARY for all new entries")
+                    logger.info(f"   ✅ Coinbase: EXIT-ONLY (emergency sells, position closures)")
                     logger.info("=" * 70)
                     self.set_primary_broker(BrokerType.KRAKEN)
                     return
                 else:
-                    logger.warning(f"⚠️ Kraken broker not available for promotion (connected={kraken.connected}, exit_only={getattr(kraken, 'exit_only_mode', 'unknown')})")
+                    logger.warning(f"⚠️ Kraken not available for promotion")
+                    logger.warning(f"   Connected: {kraken.connected}, Exit-Only: {getattr(kraken, 'exit_only_mode', 'unknown')}")
             else:
-                logger.warning("⚠️ Kraken broker not configured - cannot promote")
+                logger.warning("⚠️ Kraken broker not configured - cannot promote to PRIMARY")
+                logger.warning("   Add Kraken credentials to enable PRIMARY broker fallback")
         else:
             logger.debug(f"✅ Primary broker ({current_primary}) is ready for entries")
     

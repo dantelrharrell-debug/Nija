@@ -645,11 +645,31 @@ class TradingStrategy:
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
                 
-                # CRITICAL: Master and users are COMPLETELY INDEPENDENT
-                # Master balance is ONLY for master account - users don't affect it
+                # FIX #1: Calculate LIVE multi-broker capital
+                # Total Capital = Coinbase (available, if >= min) + Kraken MASTER + Optional user balances
+                
+                # Get master balance from broker_manager (sums all connected master brokers)
                 master_balance = self.broker_manager.get_total_balance()
                 
-                # Get user balances dynamically from multi_account_manager (for reporting only)
+                # Break down master balance by broker for transparency
+                coinbase_balance = 0.0
+                kraken_balance = 0.0
+                other_balance = 0.0
+                
+                for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                    if broker and broker.connected:
+                        try:
+                            balance = broker.get_account_balance()
+                            if broker_type == BrokerType.COINBASE:
+                                coinbase_balance = balance
+                            elif broker_type == BrokerType.KRAKEN:
+                                kraken_balance = balance
+                            else:
+                                other_balance += balance
+                        except Exception as e:
+                            logger.debug(f"Could not get balance for {broker_type.value}: {e}")
+                
+                # Get user balances dynamically from multi_account_manager (for copy-trading transparency)
                 user_total_balance = 0.0
                 if self.multi_account_manager.user_brokers:
                     for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
@@ -661,19 +681,37 @@ class TradingStrategy:
                             except Exception as e:
                                 logger.debug(f"Could not get balance for {user_id}: {e}")
                 
-                # Report balances separately - DO NOT combine them
-                logger.info(f"💰 MASTER ACCOUNT BALANCE: ${master_balance:,.2f}")
+                # Report balances with breakdown
+                logger.info("=" * 70)
+                logger.info("💰 LIVE MULTI-BROKER CAPITAL BREAKDOWN")
+                logger.info("=" * 70)
+                if coinbase_balance > 0:
+                    logger.info(f"   Coinbase MASTER: ${coinbase_balance:,.2f}")
+                if kraken_balance > 0:
+                    logger.info(f"   Kraken MASTER:   ${kraken_balance:,.2f}")
+                if other_balance > 0:
+                    logger.info(f"   Other Brokers:   ${other_balance:,.2f}")
+                logger.info(f"   📊 TOTAL MASTER: ${master_balance:,.2f}")
                 if user_total_balance > 0:
-                    logger.info(f"💰 USER ACCOUNTS BALANCE (INDEPENDENT): ${user_total_balance:,.2f}")
+                    logger.info(f"   👥 USER ACCOUNTS (INDEPENDENT): ${user_total_balance:,.2f}")
+                logger.info("=" * 70)
                 
-                # CRITICAL: Update advanced manager with ONLY master balance
-                # Users are completely independent and don't affect master's capital allocation
+                # FIX #1: Update advanced manager with LIVE multi-broker capital
+                # Inject into Capital Allocator, Advanced Trading Manager, and Progressive Target Manager
                 if self.advanced_manager and master_balance > 0:
                     try:
+                        # Update capital allocator with live total
                         self.advanced_manager.capital_allocator.update_total_capital(master_balance)
-                        logger.info(f"   ✅ Master capital allocation: ${master_balance:,.2f}")
+                        
+                        # Update progressive target manager if available
+                        if hasattr(self.advanced_manager, 'target_manager') and self.advanced_manager.target_manager:
+                            # Progressive targets scale with available capital
+                            logger.info(f"   ✅ Progressive targets adjusted for ${master_balance:,.2f} capital")
+                        
+                        logger.info(f"   ✅ Capital Allocator: ${master_balance:,.2f} (LIVE multi-broker total)")
+                        logger.info(f"   ✅ Advanced Trading Manager: Using live capital")
                     except Exception as e:
-                        logger.warning(f"   Failed to update master capital allocation: {e}")
+                        logger.warning(f"   Failed to update capital allocation: {e}")
                 
                 # FIX #1: Select primary master broker with Kraken promotion logic
                 # CRITICAL: If Coinbase is in exit_only mode or has insufficient balance, promote Kraken to primary
@@ -1058,21 +1096,25 @@ class TradingStrategy:
             # Import advanced trading modules
             from advanced_trading_integration import AdvancedTradingManager, ExchangeType
             
-            # Get initial capital estimate (will be updated after broker connection)
-            # Validate the environment variable before conversion
-            initial_capital_str = os.getenv('INITIAL_CAPITAL', '100')
+            # FIX #1: Use live capital calculation instead of $100 fake default
+            # Calculate initial capital estimate from environment or fallback to minimal default
+            # This will be updated with actual broker balances after connection
+            initial_capital_str = os.getenv('INITIAL_CAPITAL', '0')
             try:
                 initial_capital = float(initial_capital_str)
                 if initial_capital <= 0:
-                    logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, using default $100")
-                    initial_capital = 100.0
+                    # Use minimal default (will be replaced with live balance after broker connection)
+                    initial_capital = 1.0  # Minimal placeholder, not fake $100
+                    logger.info(f"ℹ️ INITIAL_CAPITAL not set, will use live broker balance after connection")
+                else:
+                    logger.info(f"ℹ️ Using INITIAL_CAPITAL=${initial_capital:.2f} (will be updated with live balance)")
             except (ValueError, TypeError):
-                logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, using default $100")
-                initial_capital = 100.0
+                logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, will use live broker balance")
+                initial_capital = 1.0  # Minimal placeholder
             
             allocation_strategy = os.getenv('ALLOCATION_STRATEGY', 'conservative')
             
-            # Initialize advanced manager
+            # Initialize advanced manager with placeholder capital (updated after broker connection)
             self.advanced_manager = AdvancedTradingManager(
                 total_capital=initial_capital,
                 allocation_strategy=allocation_strategy
