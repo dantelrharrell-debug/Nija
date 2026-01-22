@@ -676,7 +676,7 @@ class TradingStrategy:
                         logger.warning(f"   Failed to update master capital allocation: {e}")
                 
                 # FIX #1: Select primary master broker with Kraken promotion logic
-                # CRITICAL: If Coinbase is in exit_only mode, promote Kraken to primary
+                # CRITICAL: If Coinbase is in exit_only mode or has insufficient balance, promote Kraken to primary
                 # Only call this after all brokers are connected to make an informed decision
                 self.broker_manager.select_primary_master_broker()
                 
@@ -684,7 +684,20 @@ class TradingStrategy:
                 # This is used for master account trading
                 self.broker = self.broker_manager.get_primary_broker()
                 if self.broker:
-                    logger.info(f"📌 Primary master broker: {self.broker.broker_type.value}")
+                    # Log the primary master broker with explicit reason if it was switched
+                    broker_name = self.broker.broker_type.value.upper()
+                    
+                    # Check if any other broker is in exit_only mode (indicates a switch happened)
+                    exit_only_brokers = []
+                    for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                        if broker and broker.connected and broker.exit_only_mode:
+                            exit_only_brokers.append(broker_type.value.upper())
+                    
+                    if exit_only_brokers and broker_name == "KRAKEN":
+                        # Kraken was promoted because another broker is exit-only
+                        logger.info(f"📌 Primary master broker: {broker_name} ({', '.join(exit_only_brokers)} EXIT-ONLY)")
+                    else:
+                        logger.info(f"📌 Primary master broker: {broker_name}")
                     
                     # FIX #2: Initialize forced stop-loss with the connected broker
                     if self.forced_stop_loss is None:
