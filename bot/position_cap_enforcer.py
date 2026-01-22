@@ -16,7 +16,9 @@ from typing import List, Dict, Tuple, Optional
 logger = logging.getLogger("nija.enforcer")
 
 # Constants
+# ✅ REQUIREMENT 3: DUST EXCLUSION - If usd_value < MIN_POSITION_USD, IGNORE COMPLETELY
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with broker)
+MIN_POSITION_USD = DUST_THRESHOLD_USD  # Alias for clarity - positions below this are ignored
 
 # Add bot dir to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
