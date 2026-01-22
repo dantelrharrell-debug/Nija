@@ -3134,7 +3134,7 @@ class CoinbaseBroker(BaseBroker):
             
             logger.info(LOG_SEPARATOR)
             logger.info(f"✅ TRADE CONFIRMATION - {account_label}")
-            logger.info("=" * 70)
+            logger.info(LOG_SEPARATOR)
             logger.info(f"   Exchange: Coinbase")
             logger.info(f"   Order Type: {side.upper()}")
             logger.info(f"   Symbol: {symbol}")
@@ -3142,7 +3142,7 @@ class CoinbaseBroker(BaseBroker):
             logger.info(f"   Size Type: {size_type}")
             logger.info(f"   Account: {account_label}")
             logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
-            logger.info("=" * 70)
+            logger.info(LOG_SEPARATOR)
             
             # Flush logs immediately to ensure confirmation is visible
             if _root_logger.handlers:
@@ -3991,7 +3991,7 @@ class AlpacaBroker(BaseBroker):
             
             logger.info(LOG_SEPARATOR)
             logger.info(f"✅ TRADE CONFIRMATION - {account_label}")
-            logger.info("=" * 70)
+            logger.info(LOG_SEPARATOR)
             logger.info(f"   Exchange: Alpaca (Stocks)")
             logger.info(f"   Order Type: {side.upper()}")
             logger.info(f"   Symbol: {symbol}")
@@ -3999,7 +3999,7 @@ class AlpacaBroker(BaseBroker):
             logger.info(f"   Order ID: {order.id if hasattr(order, 'id') else 'N/A'}")
             logger.info(f"   Account: {account_label}")
             logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
-            logger.info("=" * 70)
+            logger.info(LOG_SEPARATOR)
             
             # Flush logs immediately to ensure confirmation is visible
             if _root_logger.handlers:
