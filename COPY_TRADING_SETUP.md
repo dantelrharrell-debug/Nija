@@ -106,6 +106,8 @@ User Position Size = Master Position Size × (User Balance / Master Balance)
 ### Trade Execution Flow
 
 1. **Master Account** places a trade (BUY or SELL)
+   - **BUY orders** = Entry positions
+   - **SELL orders** = Profit-taking, stop-loss, or position exits
 2. **Trade Signal** is emitted to the copy trading engine
 3. **Copy Engine** receives the signal and processes it:
    - Identifies all active user accounts
@@ -115,6 +117,12 @@ User Position Size = Master Position Size × (User Balance / Master Balance)
      - Places the same trade (BUY/SELL) on user's exchange
      - Logs execution results
 4. **User Accounts** execute the trade automatically
+
+**✅ PROFIT-TAKING SYNCHRONIZATION**
+- When master takes profit (sells), **all users take profit simultaneously**
+- When master exits a position (stop-loss), **all users exit simultaneously**
+- Users maintain proportional position sizes throughout entry AND exit
+- This ensures users **never hold positions after master has exited**
 
 ### Safety Features
 
@@ -134,6 +142,12 @@ User Position Size = Master Position Size × (User Balance / Master Balance)
 - Same stop-loss and take-profit rules as master
 - Respects maximum position limits
 - Daily loss limits apply to each account independently
+
+✅ **Synchronized Exits (Profit-Taking & Stop-Loss)**
+- Users automatically exit when master exits
+- Profit-taking orders are copied identically to entry orders
+- Stop-loss exits are replicated to protect all accounts
+- No manual intervention needed for exits
 
 ## Supported Trading Pairs
 
@@ -167,6 +181,20 @@ User accounts are configured in JSON files:
 
 ## Monitoring Copy Trading
 
+### Understanding Entry and Exit Signals
+
+**Entry Signals (BUY)**
+- Master opens new positions
+- Users receive BUY signals
+- Example: Master buys $100 BTC → User buys $5 BTC (proportional)
+
+**Exit Signals (SELL)** 
+- Master takes profit or hits stop-loss
+- Users receive SELL signals
+- Example: Master sells 0.001 BTC → User sells 0.00005 BTC (proportional)
+
+**✅ Critical Feature: Both BUY and SELL orders are copied identically**
+
 ### Check Copy Engine Status
 
 Look for these log messages on startup:
@@ -182,7 +210,7 @@ Look for these log messages on startup:
 
 ### Monitor Trade Execution
 
-When the master places a trade, you'll see:
+**When the master ENTERS a trade (BUY):**
 
 ```
 🔔 RECEIVED MASTER TRADE SIGNAL
@@ -203,6 +231,30 @@ When the master places a trade, you'll see:
          Symbol: BTC-USD
          Side: BUY
          Size: 0.00005 (crypto)
+```
+
+**When the master EXITS a trade (SELL - Profit-Taking):**
+
+```
+🔔 RECEIVED MASTER TRADE SIGNAL
+   Symbol: BTC-USD
+   Side: SELL
+   Size: 0.001 (crypto)
+   Broker: coinbase
+
+🔄 Copying trade to 2 user account(s)...
+   🔄 Copying to user: user_001
+      User Balance: $50.00
+      Master Balance: $1000.00
+      Calculated Size: 0.00005 (crypto)
+      Scale Factor: 0.0500 (5.00%)
+      📤 Placing SELL order...
+      🟢 COPY TRADE SUCCESS
+         Order ID: def456
+         Symbol: BTC-USD
+         Side: SELL
+         Size: 0.00005 (crypto)
+         ✅ PROFIT TAKEN IN SYNC WITH MASTER
 ```
 
 ## Troubleshooting
