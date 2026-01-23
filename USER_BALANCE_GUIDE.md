@@ -1,5 +1,10 @@
 # User Balance Visibility Guide
 
+**✨ LATEST UPDATE (Jan 23, 2026):** User account visibility has been significantly improved! 
+All configured user accounts and their brokers are now visible in balance reports, even when 
+they are not connected or don't have credentials configured. This ensures maximum transparency 
+and helps users understand their account status.
+
 This guide explains how to view and monitor user account balances in the NIJA copy trading system.
 
 ## Quick Start
@@ -243,14 +248,35 @@ To force a fresh balance fetch, restart the bot or wait for cache expiration.
 ### Balance shows $0.00
 
 **Causes:**
-- Broker not connected
+- Broker not connected (most common - check credentials and SDK installation)
 - Account actually has $0 balance
 - API error retrieving balance
 
 **Solution:**
-1. Check connection status: `multi_account_broker_manager.get_status_report()`
+1. Check connection status: `multi_account_broker_manager.get_all_balances_with_status()`
 2. Verify credentials in `.env` or user config files
 3. Check broker logs for connection errors
+4. Ensure required SDKs are installed (krakenex, alpaca-py, etc.)
+
+**IMPORTANT (Jan 23, 2026):** As of the latest update, ALL configured users and their brokers 
+are now visible in balance reports, even if:
+- No credentials are configured
+- Connection failed due to missing SDK
+- Broker is temporarily unavailable
+
+This ensures maximum visibility. A balance of $0.00 typically indicates the broker is disconnected
+or credentials are not configured. Use `get_all_balances_with_status()` to see detailed status.
+
+### User accounts not appearing
+
+**FIXED (Jan 23, 2026):** This issue has been resolved. All configured users now appear in balance
+reports regardless of connection status.
+
+If users still don't appear:
+1. Verify user config files exist in `config/users/`
+2. Ensure users have `"enabled": true`
+3. Check that `connect_users_from_config()` is being called
+4. Restart the system to reload configurations
 
 ### Slow balance retrieval
 
