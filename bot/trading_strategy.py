@@ -2269,12 +2269,18 @@ class TradingStrategy:
                                     # Check if position has ever been profitable enough to activate protection
                                     if peak_profit_pct >= protection_min_profit:
                                         # Calculate maximum allowed pullback from peak
+                                        # IMPORTANT: Pullback is 5% OF the gain, not 5 percentage points
+                                        # Examples:
+                                        #   - 10% gain → 5% of 10% = 0.5% allowed pullback → exit at 9.5%
+                                        #   - 20% gain → 5% of 20% = 1.0% allowed pullback → exit at 19.0%
+                                        #   - 5% gain → 5% of 5% = 0.25% allowed pullback → exit at 4.75%
                                         max_pullback = peak_profit_pct * PROFIT_PROTECTION_PULLBACK_PCT
                                         min_allowed_profit = peak_profit_pct - max_pullback
                                         
                                         # RULE 1: 5% Pullback Protection
-                                        # If current profit < (peak - 5% of peak), exit to lock gains
-                                        if pnl_percent < min_allowed_profit:
+                                        # If current profit <= (peak - 5% of peak), exit to lock gains
+                                        # Example: +10% peak drops to +9.5% (0.5% pullback = 5% of 10%) → EXIT
+                                        if pnl_percent <= min_allowed_profit:
                                             logger.warning(f"   💎 PROFIT PROTECTION: {symbol} pulled back from peak")
                                             logger.warning(f"      Peak profit: {peak_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
                                             logger.warning(f"      Pullback: {(peak_profit_pct - pnl_percent)*100:.2f}% (max allowed: {max_pullback*100:.2f}%)")
