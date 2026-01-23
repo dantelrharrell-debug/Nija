@@ -2252,43 +2252,12 @@ class TradingStrategy:
                                     continue
                                 
                                 # 💎 PROFIT PROTECTION: Never Break Even, Never Loss (Jan 23, 2026)
-                                # NIJA is for PROFIT ONLY - once profitable, protect gains with trailing stop
-                                # Maximum 5% of gain allowed as pullback - NIJA can take profit at 1% if desired
-                                # Peak is ALWAYS tracked, protection ALWAYS active
+                                # NIJA is for PROFIT ONLY - take profit immediately when profit starts decreasing
+                                # No peak tracking needed - just exit when profit goes down from last check
+                                # Learning and adjusting: exit as soon as NIJA starts to lose profit
                                 if PROFIT_PROTECTION_ENABLED:
-                                    peak_profit_pct = pnl_data.get('peak_profit_pct', 0.0)
+                                    previous_profit_pct = pnl_data.get('previous_profit_pct', 0.0)
                                     
-                                    # ALWAYS track peak and apply protection (no minimum threshold for tracking)
-                                    # Peak is tracked from any profit level
-                                    if peak_profit_pct > 0:
-                                        # Maximum 5% of the gain as pullback
-                                        # Examples:
-                                        #   - 10% gain → 5% of 10% = 0.5% max pullback → exit at 9.5%
-                                        #   - 20% gain → 5% of 20% = 1.0% max pullback → exit at 19.0%
-                                        #   - 1% gain → 5% of 1% = 0.05% max pullback → exit at 0.95%
-                                        #   - 0.6% gain → 5% of 0.6% = 0.03% max pullback → exit at 0.57%
-                                        max_pullback = peak_profit_pct * PROFIT_PROTECTION_PULLBACK_PCT
-                                        min_allowed_profit = peak_profit_pct - max_pullback
-                                        
-                                        # RULE 1: Maximum 5% Pullback Protection
-                                        # If current profit <= (peak - 5% of peak), exit to lock gains
-                                        # Example: +10% peak drops to +9.5% (0.5% pullback = 5% of 10%) → EXIT
-                                        if pnl_percent <= min_allowed_profit:
-                                            logger.warning(f"   💎 PROFIT PROTECTION: {symbol} pulled back from peak")
-                                            logger.warning(f"      Peak profit: {peak_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
-                                            logger.warning(f"      Pullback: {(peak_profit_pct - pnl_percent)*100:.2f}% (max allowed: {max_pullback*100:.2f}%)")
-                                            logger.warning(f"   🔒 LOCKING PROFIT at {pnl_percent*100:+.2f}% - NIJA GIVES BACK MAX 5% OF GAIN!")
-                                            positions_to_exit.append({
-                                                'symbol': symbol,
-                                                'quantity': quantity,
-                                                'reason': f'Profit protection: pulled back {(peak_profit_pct - pnl_percent)*100:.2f}% from peak {peak_profit_pct*100:.2f}%'
-                                            })
-                                            continue
-                                        
-                                        # Log protection status for monitoring
-                                        logger.debug(f"   💎 Profit protected: {symbol} at {pnl_percent*100:+.2f}% (peak: {peak_profit_pct*100:+.2f}%, cushion: {(pnl_percent - min_allowed_profit)*100:.2f}%)")
-                                    
-                                    # RULE 2: Never Break Even Protection (only if peak was above minimum threshold)
                                     # Determine minimum profit threshold based on broker
                                     try:
                                         broker_type = getattr(active_broker, 'broker_type', None)
@@ -2297,15 +2266,37 @@ class TradingStrategy:
                                     
                                     protection_min_profit = PROFIT_PROTECTION_MIN_PROFIT_KRAKEN if broker_type == BrokerType.KRAKEN else PROFIT_PROTECTION_MIN_PROFIT
                                     
+                                    # RULE 1: Immediate Exit on Profit Decrease
+                                    # If position is profitable AND profit is decreasing, exit immediately
+                                    # This allows NIJA to learn and adjust - no waiting for peaks
+                                    if pnl_percent >= protection_min_profit and previous_profit_pct >= protection_min_profit:
+                                        # Check if profit is decreasing
+                                        if pnl_percent < previous_profit_pct:
+                                            profit_decrease = (previous_profit_pct - pnl_percent) * 100
+                                            logger.warning(f"   💎 PROFIT PROTECTION: {symbol} profit decreasing")
+                                            logger.warning(f"      Previous profit: {previous_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
+                                            logger.warning(f"      Decrease: {profit_decrease:.3f}%")
+                                            logger.warning(f"   🔒 TAKING PROFIT NOW - NIJA EXITS WHEN PROFIT STARTS DECREASING!")
+                                            positions_to_exit.append({
+                                                'symbol': symbol,
+                                                'quantity': quantity,
+                                                'reason': f'Profit decreasing: was {previous_profit_pct*100:.2f}%, now {pnl_percent*100:.2f}%'
+                                            })
+                                            continue
+                                        
+                                        # Log protection status
+                                        logger.debug(f"   💎 Profit increasing: {symbol} at {pnl_percent*100:+.2f}% (previous: {previous_profit_pct*100:+.2f}%)")
+                                    
+                                    # RULE 2: Never Break Even Protection
                                     # If position was profitable above minimum threshold and current profit approaches breakeven, exit immediately
-                                    if PROFIT_PROTECTION_NEVER_BREAKEVEN and peak_profit_pct >= protection_min_profit and pnl_percent < protection_min_profit:
+                                    if PROFIT_PROTECTION_NEVER_BREAKEVEN and previous_profit_pct >= protection_min_profit and pnl_percent < protection_min_profit:
                                         logger.warning(f"   🚫 NEVER BREAK EVEN: {symbol} approaching breakeven after being profitable")
-                                        logger.warning(f"      Peak profit: {peak_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
+                                        logger.warning(f"      Previous profit: {previous_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
                                         logger.warning(f"   🔒 EXITING NOW - NIJA NEVER BREAKS EVEN!")
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Never break even: was {peak_profit_pct*100:+.2f}%, now {pnl_percent*100:+.2f}%'
+                                            'reason': f'Never break even: was {previous_profit_pct*100:+.2f}%, now {pnl_percent*100:+.2f}%'
                                         })
                                         continue
                                 

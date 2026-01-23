@@ -107,7 +107,7 @@ class PositionTracker:
                         'last_entry_time': datetime.now().isoformat(),
                         'strategy': strategy,
                         'num_adds': existing.get('num_adds', 0) + 1,
-                        'peak_profit_pct': existing.get('peak_profit_pct', 0.0)  # Preserve peak profit tracking
+                        'previous_profit_pct': existing.get('previous_profit_pct', 0.0)  # Preserve previous profit tracking
                     }
                     logger.info(f"Updated position {symbol}: avg_entry=${avg_price:.2f}, qty={total_qty:.8f}")
                 else:
@@ -120,7 +120,7 @@ class PositionTracker:
                         'last_entry_time': datetime.now().isoformat(),
                         'strategy': strategy,
                         'num_adds': 0,
-                        'peak_profit_pct': 0.0  # Initialize peak profit tracking
+                        'previous_profit_pct': 0.0  # Initialize previous profit tracking
                     }
                     logger.info(f"Tracking new position {symbol}: entry=${entry_price:.2f}, qty={quantity:.8f}")
                 
@@ -196,7 +196,7 @@ class PositionTracker:
             current_price: Current market price
         
         Returns:
-            Dict with pnl_dollars, pnl_percent, current_value, peak_profit_pct, or None if not tracked
+            Dict with pnl_dollars, pnl_percent, current_value, previous_profit_pct, or None if not tracked
         """
         position = self.get_position(symbol)
         if not position:
@@ -217,16 +217,14 @@ class PositionTracker:
         if abs(pnl_pct) >= 1.0:
             logger.warning(f"⚠️ Large PnL detected for {symbol}: {pnl_pct*100:.2f}% - this is unusual but valid for extreme moves")
         
-        # Track peak profit for trailing profit protection
-        # NIJA is for PROFIT - we track the highest profit achieved to prevent giving back too much
+        # Track previous profit for immediate exit on profit decrease
+        # NIJA takes profit as soon as profit starts to decrease
         with self.lock:
-            peak_profit = position.get('peak_profit_pct', 0.0)
-            if pnl_pct > peak_profit:
-                position['peak_profit_pct'] = pnl_pct
-                peak_profit = pnl_pct
-                # Save updated peak profit
-                self._save_positions()
-                logger.debug(f"📈 New peak profit for {symbol}: {peak_profit*100:.2f}%")
+            previous_profit = position.get('previous_profit_pct', 0.0)
+            # Update previous profit for next check
+            position['previous_profit_pct'] = pnl_pct
+            # Save updated previous profit
+            self._save_positions()
         
         return {
             'symbol': symbol,
@@ -237,7 +235,7 @@ class PositionTracker:
             'current_value': current_value,
             'pnl_dollars': pnl_dollars,
             'pnl_percent': pnl_pct,  # FRACTIONAL: -0.01 = -1%, -0.12 = -12%
-            'peak_profit_pct': peak_profit  # Highest profit achieved
+            'previous_profit_pct': previous_profit  # Profit from previous check
         }
     
     def get_all_positions(self) -> List[str]:
