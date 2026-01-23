@@ -99,6 +99,35 @@ except ImportError:
         validate_kraken_symbol = None
         convert_to_kraken = None
 
+# Import Kraken Rate Profiles for separate entry/exit API budgets (Jan 23, 2026)
+try:
+    from bot.kraken_rate_profiles import (
+        KrakenRateMode, 
+        KrakenAPICategory,
+        get_kraken_rate_profile,
+        get_category_for_method,
+        calculate_min_interval,
+        get_rate_profile_summary
+    )
+except ImportError:
+    try:
+        from kraken_rate_profiles import (
+            KrakenRateMode,
+            KrakenAPICategory,
+            get_kraken_rate_profile,
+            get_category_for_method,
+            calculate_min_interval,
+            get_rate_profile_summary
+        )
+    except ImportError:
+        # Fallback: Rate profiles not available
+        KrakenRateMode = None
+        KrakenAPICategory = None
+        get_kraken_rate_profile = None
+        get_category_for_method = None
+        calculate_min_interval = None
+        get_rate_profile_summary = None
+
 # Import Tier Configuration for minimum enforcement and auto-resize
 try:
     from bot.tier_config import get_tier_from_balance, get_tier_config, validate_trade_size, auto_resize_trade
@@ -4915,8 +4944,17 @@ class KrakenBroker(BaseBroker):
         # CRITICAL FIX (Jan 18, 2026): Increased from 200ms to 1000ms to prevent nonce errors
         # The short 200ms interval was causing "Invalid nonce" errors when balance was checked
         # immediately after connection test. Kraken's API needs more time between requests.
+        #
+        # NEW (Jan 23, 2026): Per-category rate limiting with separate entry/exit budgets
+        # Track last call time per API category for fine-grained rate control
         self._last_api_call_time = 0.0
-        self._min_call_interval = 1.0  # 1000ms (1 second) minimum between calls
+        self._min_call_interval = 1.0  # 1000ms (1 second) minimum between calls (fallback)
+        self._last_call_by_category = {}  # Per-category call tracking: {category: timestamp}
+        
+        # Kraken rate profile configuration
+        # Will be set during connect() based on account balance
+        self._kraken_rate_mode = None  # KrakenRateMode enum
+        self._kraken_rate_profile = None  # Rate profile dict
     
     def _immediate_nonce_jump(self):
         """
@@ -4955,13 +4993,13 @@ class KrakenBroker(BaseBroker):
             logger.debug(f"   ⚡ Global nonce manager in use (fallback path) - timestamp-based, no jump needed")
             return
     
-    def _kraken_private_call(self, method: str, params: Optional[Dict] = None):
+    def _kraken_private_call(self, method: str, params: Optional[Dict] = None, category: Optional['KrakenAPICategory'] = None):
         """
         CRITICAL: Serialized wrapper for Kraken private API calls.
         
         This method ensures:
         1. Only ONE private API call happens at a time (prevents nonce collisions)
-        2. Minimum delay between calls (200ms safety margin)
+        2. Category-specific rate limiting (separate budgets for entry/exit/monitoring)
         3. Thread-safe execution using locks
         4. GLOBAL serialization across MASTER + ALL USERS (Option B)
         
@@ -4970,10 +5008,12 @@ class KrakenBroker(BaseBroker):
         - Rapid consecutive calls generating duplicate nonces
         - Race conditions in nonce generation
         - Nonce collisions between MASTER and USER accounts
+        - Different API budgets for entry vs exit vs monitoring operations
         
         Args:
             method: Kraken API method name (e.g., 'Balance', 'AddOrder')
             params: Optional parameters dict for the API call
+            category: Optional KrakenAPICategory to override auto-detection
             
         Returns:
             API response dict
@@ -4984,6 +5024,11 @@ class KrakenBroker(BaseBroker):
         if not self.api:
             raise Exception("Kraken API not initialized - call connect() first")
         
+        # Determine API category for rate limiting
+        if category is None and KrakenAPICategory is not None:
+            # Auto-detect category from method name
+            category = get_category_for_method(method) if get_category_for_method else KrakenAPICategory.MONITORING
+        
         # Use GLOBAL API lock to serialize calls across ALL accounts (Option B)
         # This ensures only ONE Kraken API call happens at a time across MASTER + ALL USERS
         if get_kraken_api_lock is not None:
@@ -4993,18 +5038,41 @@ class KrakenBroker(BaseBroker):
         
         # Serialize API calls - only one call at a time across ALL accounts
         with global_lock:
-            # Enforce minimum delay between calls (per-account tracking)
+            # Enforce minimum delay between calls (per-category tracking)
             with self._api_call_lock:
                 current_time = time.time()
-                time_since_last_call = current_time - self._last_api_call_time
                 
-                if time_since_last_call < self._min_call_interval:
+                # Get category-specific rate limit or fallback to default
+                if category and self._kraken_rate_profile and calculate_min_interval:
+                    # Use category-specific rate limit from profile
+                    min_interval = calculate_min_interval(category, self._kraken_rate_mode)
+                    # Extract category key safely - check if it's an enum first
+                    if KrakenAPICategory and isinstance(category, type(KrakenAPICategory.ENTRY)):
+                        category_key = category.value
+                    else:
+                        category_key = str(category)
+                    last_call = self._last_call_by_category.get(category_key, 0)
+                    
+                    logger.debug(f"   📊 Rate limit for {method} ({category_key}): {min_interval:.1f}s")
+                else:
+                    # Fallback to global rate limit
+                    min_interval = self._min_call_interval
+                    last_call = self._last_api_call_time
+                    category_key = 'global'
+                
+                time_since_last_call = current_time - last_call
+                
+                if time_since_last_call < min_interval:
                     # Sleep to maintain minimum interval
-                    sleep_time = self._min_call_interval - time_since_last_call
-                    logger.debug(f"   🛡️  Rate limiting: sleeping {sleep_time*1000:.0f}ms between Kraken calls")
+                    sleep_time = min_interval - time_since_last_call
+                    logger.debug(f"   🛡️  Rate limiting ({category_key}): sleeping {sleep_time*1000:.0f}ms between Kraken calls")
                     time.sleep(sleep_time)
                 
-                # Update last call time BEFORE making the call
+                # Update last call time for this category
+                if category and self._kraken_rate_profile:
+                    self._last_call_by_category[category_key] = time.time()
+                
+                # Also update global last call time
                 self._last_api_call_time = time.time()
             
             # Make the API call (nonce is generated by _nonce_monotonic function)
@@ -5389,7 +5457,9 @@ class KrakenBroker(BaseBroker):
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
                     # It will be called automatically by krakenex when query_private() is invoked.
                     # CRITICAL: Use _kraken_private_call() wrapper to serialize API calls
-                    balance = self._kraken_private_call('Balance')
+                    # Use MONITORING category for balance checks (conservative rate limiting)
+                    balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+                    balance = self._kraken_private_call('Balance', category=balance_category)
                     
                     if balance and 'error' in balance:
                         if balance['error']:
@@ -5542,6 +5612,22 @@ class KrakenBroker(BaseBroker):
                         logger.info(f"   USD Balance: ${usd_balance:.2f}")
                         logger.info(f"   USDT Balance: ${usdt_balance:.2f}")
                         logger.info(f"   Total: ${total:.2f}")
+                        
+                        # Initialize Kraken rate profile based on account balance (Jan 23, 2026)
+                        # Separate entry/exit/monitoring API budgets for optimal performance
+                        if get_kraken_rate_profile is not None and KrakenRateMode is not None:
+                            # Auto-select rate mode based on account balance
+                            self._kraken_rate_profile = get_kraken_rate_profile(account_balance=total)
+                            self._kraken_rate_mode = (
+                                KrakenRateMode.LOW_CAPITAL if total < 100.0 
+                                else KrakenRateMode.STANDARD if total < 1000.0 
+                                else KrakenRateMode.AGGRESSIVE
+                            )
+                            logger.info(f"   📊 Rate Profile: {self._kraken_rate_profile['name']}")
+                            logger.info(f"      Entry: {self._kraken_rate_profile['entry']['min_interval_seconds']:.1f}s interval")
+                            logger.info(f"      Monitoring: {self._kraken_rate_profile['monitoring']['min_interval_seconds']:.1f}s interval")
+                        else:
+                            logger.debug(f"   ⚠️  Kraken rate profiles not available, using default rate limiting")
                         
                         # Check minimum balance requirement for Kraken
                         # Kraken is PRIMARY engine for small accounts ($25+)
@@ -5828,7 +5914,9 @@ class KrakenBroker(BaseBroker):
                     return 0.0
             
             # Get account balance using serialized API call
-            balance = self._kraken_private_call('Balance')
+            # Use MONITORING category for balance checks (conservative rate limiting)
+            balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+            balance = self._kraken_private_call('Balance', category=balance_category)
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
@@ -5863,7 +5951,9 @@ class KrakenBroker(BaseBroker):
                 total = usd_balance + usdt_balance
                 
                 # Also get TradeBalance to see held funds
-                trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'})
+                # Use MONITORING category for balance checks (conservative rate limiting)
+                balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+                trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
                 held_amount = 0.0
                 
                 if trade_balance and 'result' in trade_balance:
@@ -5989,7 +6079,9 @@ class KrakenBroker(BaseBroker):
                 return {**default_balance, 'error_message': error_msg}
             
             # Get account balance using serialized API call
-            balance = self._kraken_private_call('Balance')
+            # Use MONITORING category for balance checks (conservative rate limiting)
+            balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+            balance = self._kraken_private_call('Balance', category=balance_category)
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
@@ -6014,7 +6106,9 @@ class KrakenBroker(BaseBroker):
                 trading_balance = usd_balance + usdt_balance
                 
                 # Get TradeBalance to calculate held funds
-                trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'})
+                # Use MONITORING category for balance checks (conservative rate limiting)
+                balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+                trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
                 usd_held = 0.0
                 usdt_held = 0.0
                 total_held = 0.0
@@ -6464,6 +6558,7 @@ class KrakenBroker(BaseBroker):
             
             # Place market order using serialized API call
             # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
+            # Use category-specific rate limiting for entry vs exit operations
             order_params = {
                 'pair': kraken_symbol,
                 'type': order_type,
@@ -6471,7 +6566,13 @@ class KrakenBroker(BaseBroker):
                 'volume': str(quantity)
             }
             
-            result = self._kraken_private_call('AddOrder', order_params)
+            # Determine API category: ENTRY for buy, EXIT for sell
+            if KrakenAPICategory is not None:
+                api_category = KrakenAPICategory.ENTRY if side.lower() == 'buy' else KrakenAPICategory.EXIT
+            else:
+                api_category = None
+            
+            result = self._kraken_private_call('AddOrder', order_params, category=api_category)
             
             # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
             # DO NOT allow rejected orders to be recorded as successful trades
@@ -6666,7 +6767,9 @@ class KrakenBroker(BaseBroker):
                 return []
             
             # Get account balance using serialized API call
-            balance = self._kraken_private_call('Balance')
+            # Use MONITORING category for balance checks (conservative rate limiting)
+            balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+            balance = self._kraken_private_call('Balance', category=balance_category)
             
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
