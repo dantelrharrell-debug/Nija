@@ -65,16 +65,39 @@ def get_pair_minimums(pair: str) -> Dict[str, float]:
     """
     Get minimum order requirements for a Kraken trading pair.
     
+    First tries to get dynamic data from Kraken API cache, then falls back
+    to static hardcoded minimums.
+    
     Args:
-        pair: Kraken pair symbol (e.g., 'XXBTZUSD', 'XETHZUSDT')
+        pair: Kraken pair symbol (e.g., 'XXBTZUSD', 'XETHZUSDT', 'GLMRUSD')
         
     Returns:
         dict: {'min_base': float, 'min_quote': float}
     """
     # Normalize pair format
-    pair = pair.upper().replace('/', '')
+    pair = pair.upper().replace('/', '').replace('-', '')
     
-    # Return specific minimums or default
+    # Try to get dynamic minimum from market data cache
+    try:
+        from bot.kraken_market_data import get_kraken_market_data
+        market_data = get_kraken_market_data()
+        
+        # Get minimum volume from Kraken API data
+        min_base = market_data.get_minimum_volume(pair)
+        min_cost = market_data.get_minimum_cost(pair)
+        
+        if min_base is not None:
+            # Use Kraken's actual minimum, but enforce our $10 USD floor for profitability
+            return {
+                'min_base': min_base,
+                'min_quote': max(min_cost or 0.0, KRAKEN_MINIMUM_ORDER_USD)
+            }
+    except ImportError:
+        logger.debug("Market data module not available, using static minimums")
+    except Exception as e:
+        logger.debug(f"Could not fetch dynamic minimum for {pair}: {e}")
+    
+    # Fallback to static minimums
     return KRAKEN_MINIMUMS.get(pair, KRAKEN_MINIMUMS['DEFAULT'])
 
 
