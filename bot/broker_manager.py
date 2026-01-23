@@ -5085,7 +5085,7 @@ class KrakenBroker(BaseBroker):
             
             return result
     
-    def _kraken_api_call(self, method: str, params: Optional[Dict] = None):
+    def _kraken_api_call(self, method: str, params: Optional[Dict] = None, category: Optional['KrakenAPICategory'] = None):
         """
         Compatibility wrapper for _kraken_private_call().
         
@@ -5096,11 +5096,12 @@ class KrakenBroker(BaseBroker):
         Args:
             method: Kraken API method name (e.g., 'Balance', 'OpenOrders')
             params: Optional parameters dict for the API call
+            category: Optional KrakenAPICategory for rate limiting (usually auto-detected)
             
         Returns:
             API response dict
         """
-        return self._kraken_private_call(method, params)
+        return self._kraken_private_call(method, params, category)
     
     def connect(self) -> bool:
         """
