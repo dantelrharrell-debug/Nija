@@ -2700,6 +2700,16 @@ class TradingStrategy:
                             quantity=quantity,
                             size_type='base'
                         )
+                        
+                        # Handle dust positions separately from actual failures
+                        if result and result.get('status') == 'skipped_dust':
+                            logger.info(f"  💨 {symbol} SKIPPED (dust position - too small to sell)")
+                            logger.info(f"     Will automatically retry in 24h if position grows")
+                            # Mark as unsellable for 24h retry window
+                            self.unsellable_positions[symbol] = time.time()
+                            # Don't add to failed_sells - this is expected behavior for dust
+                            continue
+                        
                         if result and result.get('status') not in ['error', 'unfilled']:
                             logger.info(f"  ✅ {symbol} SOLD successfully!")
                             # ✅ FIX #3: EXPLICIT SELL CONFIRMATION LOG
