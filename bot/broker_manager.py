@@ -5085,6 +5085,25 @@ class KrakenBroker(BaseBroker):
             
             return result
     
+    def _kraken_api_call(self, method: str, params: Optional[Dict] = None, category: Optional['KrakenAPICategory'] = None):
+        """
+        Compatibility wrapper for _kraken_private_call().
+        
+        This method provides compatibility with code that expects _kraken_api_call()
+        (like KrakenOrderCleanup) while delegating to the actual implementation
+        in _kraken_private_call().
+        
+        Args:
+            method: Kraken API method name (e.g., 'Balance', 'OpenOrders')
+            params: Optional parameters dict for the API call
+            category: Optional KrakenAPICategory for rate limiting. If None, the category
+                     is auto-detected by _kraken_private_call based on the method name.
+            
+        Returns:
+            API response dict
+        """
+        return self._kraken_private_call(method, params, category)
+    
     def connect(self) -> bool:
         """
         Connect to Kraken Pro API with retry logic.
