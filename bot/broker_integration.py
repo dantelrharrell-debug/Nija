@@ -1118,8 +1118,15 @@ class KrakenBrokerAdapter(BrokerInterface):
                 # Calculate order cost in USD
                 if size_type == 'quote':
                     order_cost_usd = size
+                    # Convert to base currency volume for validation
+                    volume_to_validate = size / current_price
+                    logger.info(f"📊 USD to Volume Conversion:")
+                    logger.info(f"   USD amount: ${size:.2f}")
+                    logger.info(f"   Price: ${current_price:.8f}")
+                    logger.info(f"   Volume (base): {volume_to_validate:.8f}")
                 else:  # base
                     order_cost_usd = size * current_price
+                    volume_to_validate = size
                 
                 # Check if order meets Kraken's minimum cost requirement
                 if order_cost_usd < KRAKEN_MIN_ORDER_COST:
@@ -1128,6 +1135,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("=" * 70)
                     logger.error(f"   Order Cost: ${order_cost_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
                     logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                    if size_type == 'quote':
+                        logger.error(f"   Volume (base): {volume_to_validate:.8f}")
                     logger.error("   ⚠️  $10.00 minimum prevents fee erosion and ghost trades")
                     logger.error("=" * 70)
                     return {
@@ -1141,15 +1150,16 @@ class KrakenBrokerAdapter(BrokerInterface):
                         'timestamp': datetime.now()
                     }
                 
-                is_valid, adjusted_size, error_msg = validate_and_adjust_order(
+                # Validate using base currency volume
+                is_valid, adjusted_volume, error_msg = validate_and_adjust_order(
                     pair=kraken_symbol,
-                    volume=size,
+                    volume=volume_to_validate,
                     price=current_price,
                     side=side,
                     ordertype='market'
                 )
                 
-                log_order_validation(kraken_symbol, size, current_price, side, is_valid, error_msg)
+                log_order_validation(kraken_symbol, volume_to_validate, current_price, side, is_valid, error_msg)
                 
                 if not is_valid:
                     logger.error(f"❌ Order rejected - fails Kraken minimums: {error_msg}")
@@ -1164,9 +1174,9 @@ class KrakenBrokerAdapter(BrokerInterface):
                         'timestamp': datetime.now()
                     }
                 
-                # Use adjusted size (fee-adjusted)
-                size = adjusted_size
-                logger.info(f"   Using fee-adjusted size: {size:.8f}")
+                # Use adjusted volume (fee-adjusted, already in base currency)
+                size = adjusted_volume
+                logger.info(f"   Using fee-adjusted volume: {size:.8f}")
             else:
                 # If we can't get price, log warning and skip validation
                 # Order will still be submitted but without pre-validation
@@ -1175,6 +1185,28 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.warning(f"   Kraken will reject if order doesn't meet minimums")
                 minimums = get_pair_minimums(kraken_symbol)
                 logger.info(f"   Expected pair minimums: {minimums}")
+                
+                # ✅ CRITICAL FIX: Convert USD to base currency volume when price unavailable
+                # Even without validation, we must convert quote to base for Kraken API
+                if size_type == 'quote':
+                    error_msg = f"Cannot convert USD to volume: price unavailable for {kraken_symbol}"
+                    logger.error(f"❌ {error_msg}")
+                    return {
+                        'order_id': None,
+                        'symbol': symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': 0.0,
+                        'status': 'error',
+                        'error': 'PRICE_UNAVAILABLE',
+                        'message': error_msg,
+                        'timestamp': datetime.now()
+                    }
+            
+            # Note: At this point, 'size' variable is in base currency:
+            # - If price was available: converted and validated above
+            # - If size_type was 'base': already in base currency
+            # - If size_type was 'quote' and no price: we returned early above
             
             # Place market order
             # ✅ REQUIREMENT #2: Build order parameters with proper format
@@ -1183,7 +1215,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'pair': kraken_symbol,
                 'type': side.lower(),  # 'buy' or 'sell'
                 'ordertype': 'market',
-                'volume': str(size)  # Must be string format
+                'volume': str(size)  # Must be string format, in base currency
             }
             
             # ✅ REQUIREMENT #3: Execute order via serialized API call
