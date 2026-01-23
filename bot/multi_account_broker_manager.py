@@ -523,8 +523,10 @@ class MultiAccountBrokerManager:
             if user_id not in result['users']:
                 result['users'][user_id] = {}
             
-            # Only update if we don't already have a non-zero balance for this broker
-            if broker_type.value not in result['users'][user_id] or result['users'][user_id][broker_type.value] == 0.0:
+            # Only update if broker is not already in results (avoid overwriting connected broker balances)
+            # CRITICAL: Check if broker_type exists in result, not if balance is 0.0
+            # This prevents overwriting legitimate $0.00 balances from connected brokers
+            if broker_type.value not in result['users'][user_id]:
                 try:
                     if broker.connected:
                         result['users'][user_id][broker_type.value] = broker.get_account_balance()
@@ -534,6 +536,18 @@ class MultiAccountBrokerManager:
                     # Keep the $0.00 default
         
         return result
+    
+    def _get_broker_credentials_status(self, broker: BaseBroker) -> bool:
+        """
+        Helper to safely check if broker has credentials configured.
+        
+        Args:
+            broker: Broker instance to check
+            
+        Returns:
+            True if credentials are configured, False otherwise
+        """
+        return getattr(broker, 'credentials_configured', False)
     
     def get_all_balances_with_status(self) -> Dict:
         """
@@ -584,7 +598,7 @@ class MultiAccountBrokerManager:
                 result['users'][user_id][broker_type.value] = {
                     'balance': broker.get_account_balance() if broker.connected else 0.0,
                     'connected': broker.connected,
-                    'credentials_configured': getattr(broker, 'credentials_configured', False)
+                    'credentials_configured': self._get_broker_credentials_status(broker)
                 }
         
         # Finally from _all_user_brokers (disconnected users)
@@ -596,7 +610,7 @@ class MultiAccountBrokerManager:
                 result['users'][user_id][broker_type.value] = {
                     'balance': 0.0,  # Disconnected, so balance is 0 or unknown
                     'connected': broker.connected,
-                    'credentials_configured': getattr(broker, 'credentials_configured', False)
+                    'credentials_configured': self._get_broker_credentials_status(broker)
                 }
         
         return result
