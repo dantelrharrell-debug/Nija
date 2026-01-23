@@ -4,18 +4,18 @@ NIJA Tier Configuration and Trade Size Minimums
 This module defines tier-based minimum trade sizes and stablecoin routing policies.
 
 Tier Structure (OFFICIAL - Updated Jan 23, 2026):
-- STARTER ($50-$99): DEPRECATED - Copy trading only, NOT for live independent trading
+- STARTER ($50-$99): Entry level learning (copy trading recommended)
 - SAVER ($100-$249): Absolute minimum where fees, min order size, and risk cap coexist
 - INVESTOR ($250-$999): Allows multi-position rotation without hitting risk blocks
 - INCOME ($1,000-$4,999): First tier where NIJA trades as designed
 - LIVABLE ($5,000-$24,999): Enables pro-style scaling + streak logic
 - BALLER ($25,000+): Capital deployment mode (institutional behavior)
 
-⚠️ HARD RULE: Accounts below $100 should NOT be used for live trading.
-Below $100: Fees dominate, Kraken rejects orders, tier enforcement blocks entries.
+⚠️ HARD RULE: Accounts below $100 should use copy trading mode for best results.
+Below $100: Fees dominate, exchanges may reject orders, tier enforcement blocks entries.
 
 Author: NIJA Trading Systems
-Version: 4.1 (OFFICIAL FUNDING TIERS - $100 MINIMUM ENFORCEMENT)
+Version: 4.1 (OFFICIAL FUNDING TIERS - $100 MINIMUM RECOMMENDED)
 Date: January 23, 2026
 """
 
@@ -67,7 +67,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
         trade_size_min=10.0,
         trade_size_max=25.0,
         max_positions=1,
-        description="DEPRECATED - Copy trading only (below $100 NOT recommended for live trading)",
+        description="Entry level learning (copy trading recommended)",
         min_visible_size=10.0
     ),
     TradingTier.SAVER: TierConfig(

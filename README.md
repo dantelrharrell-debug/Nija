@@ -17,7 +17,7 @@
 
 | Tier | Capital | Risk/Trade | Trade Size | Max Positions | Goal |
 |------|---------|------------|------------|---------------|------|
-| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | ⚠️ Copy trading only - NOT for live independent trading |
+| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | Entry level learning (copy trading recommended) |
 | **SAVER** | $100–$249 | 10% | $10-$40 | 1 | Absolute minimum where fees/minimums/risk coexist ✅ |
 | **INVESTOR** | $250–$999 | 5-7% | $20-$75 | 3 | Allows multi-position rotation without risk blocks |
 | **INCOME** ⭐ | $1k–$4.9k | 3-5% | $30-$150 | 5 | First tier where NIJA trades as designed |
@@ -27,6 +27,7 @@
 **Quick Setup:**
 ```bash
 # Add to .env - choose your tier:
+TRADING_TIER=STARTER     # For $50-$99 capital (entry level)
 TRADING_TIER=SAVER       # For $100-$249 capital ✅ RECOMMENDED MINIMUM
 TRADING_TIER=INVESTOR    # For $250-$999 capital
 TRADING_TIER=INCOME      # For $1k-$4.9k capital ⭐ where NIJA trades as designed
@@ -37,6 +38,7 @@ TRADING_TIER=AUTO        # Auto-select based on balance
 
 **Or use preset templates:**
 ```bash
+cp .env.starter_tier .env    # STARTER tier ($50-$99) - entry level
 cp .env.saver_tier .env      # SAVER tier ($100-$249) ✅ START HERE
 cp .env.investor_tier .env   # INVESTOR tier ($250-$999)
 cp .env.income_tier .env     # INCOME tier ($1k-$4.9k) ⭐
@@ -51,10 +53,10 @@ cp .env.baller_tier .env     # BALLER tier ($25k+)
 - ⚙️ [bot/tier_config.py](bot/tier_config.py) - Tier configuration details
 
 **Key Notes:**
-- **$100 MINIMUM** for live trading - below this, fees dominate and exchanges reject orders ⚠️
+- **$100 MINIMUM** for optimal live trading - below this, fees dominate and exchanges may reject orders ⚠️
 - **SAVER** ($100-$249) is the recommended starting tier ✅
+- **STARTER** ($50-$99) is entry level with copy trading recommended
 - **INCOME** ($1k-$4.9k) is where **NIJA trades as designed** ⭐
-- **STARTER** ($50-$99) is for copy trading only, NOT independent live trading
 - **PRO MODE** is enabled by default on all tiers (invisible to users)
 - Start conservative and upgrade as capital and experience grow
 
