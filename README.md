@@ -10,24 +10,26 @@
 
 ## 🎯 **Official Trading Tiers - Six Levels for Every Trader**
 
+> **💡 IMPORTANT:** NIJA AI Trading is designed for accounts starting at **$100**.  
+> Smaller balances may connect, but full trading performance begins at **SAVER tier** ($100+).
+
 **NIJA uses six official trading tiers** optimized for different capital levels and trading goals:
 
 | Tier | Capital | Risk/Trade | Trade Size | Max Positions | Goal |
 |------|---------|------------|------------|---------------|------|
-| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | Entry level learning |
-| **SAVER** | $100–$249 | 7-10% | $15-$40 | 2 | Capital preservation + learning |
-| **INVESTOR** | $250–$999 | 5-7% | $20-$75 | 3 | Consistent participation |
-| **INCOME** ⭐ | $1k–$4.9k | 3-5% | $30-$150 | 5 | Serious retail trading |
-| **LIVABLE** | $5k–$24.9k | 2-3% | $50-$300 | 6 | Professional-level execution |
-| **BALLER** | $25k+ | 1-2% | $100-$1k | 8 | Capital deployment |
+| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | ⚠️ Copy trading only - NOT for live independent trading |
+| **SAVER** | $100–$249 | 10% | $10-$40 | 1 | Absolute minimum where fees/minimums/risk coexist ✅ |
+| **INVESTOR** | $250–$999 | 5-7% | $20-$75 | 3 | Allows multi-position rotation without risk blocks |
+| **INCOME** ⭐ | $1k–$4.9k | 3-5% | $30-$150 | 5 | First tier where NIJA trades as designed |
+| **LIVABLE** | $5k–$24.9k | 2-3% | $50-$300 | 6 | Enables pro-style scaling + streak logic |
+| **BALLER** | $25k+ | 1-2% | $100-$1k | 8 | Capital deployment mode (institutional behavior) |
 
 **Quick Setup:**
 ```bash
 # Add to .env - choose your tier:
-TRADING_TIER=STARTER     # For $50-$99 capital
-TRADING_TIER=SAVER       # For $100-$249 capital
+TRADING_TIER=SAVER       # For $100-$249 capital ✅ RECOMMENDED MINIMUM
 TRADING_TIER=INVESTOR    # For $250-$999 capital
-TRADING_TIER=INCOME      # For $1k-$4.9k capital ⭐ serious retail trading
+TRADING_TIER=INCOME      # For $1k-$4.9k capital ⭐ where NIJA trades as designed
 TRADING_TIER=LIVABLE     # For $5k-$24.9k capital
 TRADING_TIER=BALLER      # For $25k+ capital
 TRADING_TIER=AUTO        # Auto-select based on balance
@@ -35,8 +37,7 @@ TRADING_TIER=AUTO        # Auto-select based on balance
 
 **Or use preset templates:**
 ```bash
-cp .env.starter_tier .env    # STARTER tier ($50-$99)
-cp .env.saver_tier .env      # SAVER tier ($100-$249)
+cp .env.saver_tier .env      # SAVER tier ($100-$249) ✅ START HERE
 cp .env.investor_tier .env   # INVESTOR tier ($250-$999)
 cp .env.income_tier .env     # INCOME tier ($1k-$4.9k) ⭐
 cp .env.livable_tier .env    # LIVABLE tier ($5k-$24.9k)
@@ -45,14 +46,16 @@ cp .env.baller_tier .env     # BALLER tier ($25k+)
 ```
 
 **Learn More:**
+- 📚 [STARTER_SAFE_PROFILE.md](STARTER_SAFE_PROFILE.md) - $100 minimum explained
 - 📚 [RISK_PROFILES_GUIDE.md](RISK_PROFILES_GUIDE.md) - Complete tier guide and specifications
-- ⚙️ [bot/apex_config.py](bot/apex_config.py) - Tier configuration details
+- ⚙️ [bot/tier_config.py](bot/tier_config.py) - Tier configuration details
 
 **Key Notes:**
-- **INVESTOR** is the default tier if not specified
-- **STARTER** ($50-$99) is the entry level for new traders
-- **INCOME** ($1k-$4.9k) is NIJA's **serious retail trading tier** ⭐
-- **MASTER** is system authority only (NOT a user tier)
+- **$100 MINIMUM** for live trading - below this, fees dominate and exchanges reject orders ⚠️
+- **SAVER** ($100-$249) is the recommended starting tier ✅
+- **INCOME** ($1k-$4.9k) is where **NIJA trades as designed** ⭐
+- **STARTER** ($50-$99) is for copy trading only, NOT independent live trading
+- **PRO MODE** is enabled by default on all tiers (invisible to users)
 - Start conservative and upgrade as capital and experience grow
 
 ---

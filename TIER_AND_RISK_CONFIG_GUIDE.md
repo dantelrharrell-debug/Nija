@@ -4,49 +4,73 @@
 
 This guide explains the account tier management and trade size limits in the NIJA trading bot.
 
-**⚠️ CRITICAL: Master account is ALWAYS BALLER tier regardless of balance.**
+**⚠️ CRITICAL: Accounts below $100 should NOT be used for live independent trading.**
 
-## Changes Made (Jan 22, 2026)
+**💡 PUBLIC-FACING MESSAGE:**
+> "NIJA AI Trading is designed for accounts starting at $100.  
+> Smaller balances may connect, but full trading performance begins at Starter tier."
 
-### 1. Reduced Maximum Trade Size to 15%
+## Changes Made (Jan 23, 2026)
+
+### 1. Enforced $100 Minimum for Live Trading
+
+**Changed:** `bot/tier_config.py`
+- Added `MINIMUM_LIVE_TRADING_BALANCE = 100.0`
+- Added `can_trade_live()` function to validate balances
+- Updated tier descriptions to reflect engineering requirements
+
+**Why $100 Minimum?**
+- Fees dominate below $100 (~1.4% round-trip on Coinbase)
+- Kraken requires $10 minimum order size
+- Tier enforcement blocks entries
+- Users think bot is broken (it's not, it's protecting them)
+
+### 2. Implemented PRO MODE + TIER_LOCK
 
 **Changed:** `bot/risk_manager.py`
-- Previous: `max_position_pct = 0.20` (20%)
-- New: `max_position_pct = 0.15` (15%)
+- Added `tier_lock` parameter to `AdaptiveRiskManager`
+- Tier lock overrides balance-based tier detection
+- PRO MODE provides smart execution with tier-capped risk
+- **PRO MODE is invisible to users** - they don't toggle it
 
-This ensures that individual trades cannot exceed 15% of the account balance, providing better risk management for all accounts.
+**How It Works:**
+```
+PRO MODE (smart execution) + TIER_LOCK (risk cap) = Protected retail trading
+```
 
-**Example:**
-- Balance: $62.49
-- Max trade size (15%): $9.37
-- Previous max (20%): $12.50
+Users get sophisticated execution without over-leveraging small accounts.
 
-### 2. Master Account Always Uses BALLER Tier
+### 3. Updated All Tier Environment Files
 
-**Changed:** `bot/tier_config.py`
-- Master account is hardcoded to BALLER tier
-- Provides best risk management parameters (1-2% max risk per tier guidelines)
-- 15% max trade size cap still applies globally
-
-### 3. Added Account Tier Override for User Accounts
-
-**Changed:** `bot/tier_config.py`
-- Added `MASTER_ACCOUNT_TIER` environment variable support
-- Allows forcing a specific tier for user accounts
-- Set to `BALLER` or `MASTER` to enforce BALLER tier
+**Changed:** All `.env.*_tier` files
+- Added `INITIAL_CAPITAL` with correct minimums
+- Enabled `PRO_MODE=true` by default
+- Added `TIER_LOCK=<TIER_NAME>` for risk management
+- Updated minimum balance thresholds
+- Updated descriptions to match problem statement
 
 ## Account Tiers
 
 NIJA uses 6 trading tiers based on account balance:
 
-| Tier | Balance Range | Max Risk % | Trade Size Range | Max Positions |
-|------|---------------|------------|------------------|---------------|
-| STARTER | $50-$99 | 10-15% | $10-$25 | 1 |
-| SAVER | $100-$249 | 7-10% | $15-$40 | 2 |
-| INVESTOR | $250-$999 | 5-7% | $20-$75 | 3 |
-| INCOME | $1,000-$4,999 | 3-5% | $30-$150 | 5 |
-| LIVABLE | $5,000-$24,999 | 2-3% | $50-$300 | 6 |
-| BALLER | $25,000+ | 1-2% | $100-$1,000 | 8 |
+| Tier | Balance Range | Max Risk % | Trade Size Range | Max Positions | Description |
+|------|---------------|------------|------------------|---------------|-------------|
+| STARTER | $50-$99 | 10-15% | $10-$25 | 1 | ⚠️ DEPRECATED - Copy trading only |
+| SAVER | $100-$249 | 10% | $10-$40 | 1 | ✅ Absolute minimum (fees/minimums/risk coexist) |
+| INVESTOR | $250-$999 | 5-7% | $20-$75 | 3 | Multi-position rotation without risk blocks |
+| INCOME | $1,000-$4,999 | 3-5% | $30-$150 | 5 | First tier where NIJA trades as designed ⭐ |
+| LIVABLE | $5,000-$24,999 | 2-3% | $50-$300 | 6 | Pro-style scaling + streak logic |
+| BALLER | $25,000+ | 1-2% | $100-$1,000 | 8 | Capital deployment (institutional behavior) |
+
+### Hard Rule (Do Not Violate Publicly)
+
+**Accounts below $100 should NOT be advertised as "live trading."**
+
+Below $100:
+- ❌ Fees dominate (1.4% round-trip eats tiny accounts)
+- ❌ Kraken rejects orders ($10 minimum can't be met)
+- ❌ Tier enforcement blocks entries
+- ❌ Users think bot is broken (it's not, it's protecting them)
 
 ## Configuration
 
