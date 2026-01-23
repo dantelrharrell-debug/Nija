@@ -200,10 +200,10 @@ MIN_PROFIT_THRESHOLD = 0.016  # 1.6% minimum profit (spread + fees + buffer)
 
 # PROFIT PROTECTION: Never Break Even, Never Loss (Jan 23, 2026)
 # NIJA is for PROFIT ONLY - once profitable, protect gains with trailing stop
-# FIXED 0.5% pullback allowed - no matter the position gains
-# Peak is always tracked, and NIJA only allows 0.5 percentage point pullback
+# Maximum 5% of gain allowed as pullback - NIJA can take profit earlier if desired
+# Peak is always tracked, and NIJA only allows maximum 5% OF THE GAIN as pullback
 PROFIT_PROTECTION_ENABLED = True  # Enable profit protection system
-PROFIT_PROTECTION_PULLBACK_FIXED = 0.005  # Fixed 0.5% pullback allowed (0.005 = 0.5 percentage points)
+PROFIT_PROTECTION_PULLBACK_PCT = 0.05  # Maximum 5% of gain as pullback (0.05 = 5% of the profit)
 PROFIT_PROTECTION_MIN_PROFIT = 0.016  # Must exceed min threshold (1.6% for Coinbase) before protection activates
 PROFIT_PROTECTION_MIN_PROFIT_KRAKEN = 0.005  # Must exceed min threshold (0.5% for Kraken) before protection activates
 PROFIT_PROTECTION_NEVER_BREAKEVEN = True  # Never allow profitable positions to break even
@@ -2253,30 +2253,31 @@ class TradingStrategy:
                                 
                                 # 💎 PROFIT PROTECTION: Never Break Even, Never Loss (Jan 23, 2026)
                                 # NIJA is for PROFIT ONLY - once profitable, protect gains with trailing stop
-                                # FIXED 0.5% pullback allowed - no matter the position gains
+                                # Maximum 5% of gain allowed as pullback - NIJA can take profit at 1% if desired
                                 # Peak is ALWAYS tracked, protection ALWAYS active
                                 if PROFIT_PROTECTION_ENABLED:
                                     peak_profit_pct = pnl_data.get('peak_profit_pct', 0.0)
                                     
-                                    # ALWAYS track peak and apply protection (no minimum threshold)
+                                    # ALWAYS track peak and apply protection (no minimum threshold for tracking)
                                     # Peak is tracked from any profit level
                                     if peak_profit_pct > 0:
-                                        # Fixed 0.5% pullback allowed - NOT percentage-based
+                                        # Maximum 5% of the gain as pullback
                                         # Examples:
-                                        #   - 10% gain → 0.5% pullback allowed → exit at 9.5%
-                                        #   - 20% gain → 0.5% pullback allowed → exit at 19.5%
-                                        #   - 1% gain → 0.5% pullback allowed → exit at 0.5%
-                                        #   - 0.6% gain → 0.5% pullback allowed → exit at 0.1%
-                                        min_allowed_profit = peak_profit_pct - PROFIT_PROTECTION_PULLBACK_FIXED
+                                        #   - 10% gain → 5% of 10% = 0.5% max pullback → exit at 9.5%
+                                        #   - 20% gain → 5% of 20% = 1.0% max pullback → exit at 19.0%
+                                        #   - 1% gain → 5% of 1% = 0.05% max pullback → exit at 0.95%
+                                        #   - 0.6% gain → 5% of 0.6% = 0.03% max pullback → exit at 0.57%
+                                        max_pullback = peak_profit_pct * PROFIT_PROTECTION_PULLBACK_PCT
+                                        min_allowed_profit = peak_profit_pct - max_pullback
                                         
-                                        # RULE 1: Fixed 0.5% Pullback Protection
-                                        # If current profit <= (peak - 0.5%), exit to lock gains
-                                        # Example: +10% peak drops to +9.5% (0.5% pullback) → EXIT
+                                        # RULE 1: Maximum 5% Pullback Protection
+                                        # If current profit <= (peak - 5% of peak), exit to lock gains
+                                        # Example: +10% peak drops to +9.5% (0.5% pullback = 5% of 10%) → EXIT
                                         if pnl_percent <= min_allowed_profit:
                                             logger.warning(f"   💎 PROFIT PROTECTION: {symbol} pulled back from peak")
                                             logger.warning(f"      Peak profit: {peak_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
-                                            logger.warning(f"      Pullback: {(peak_profit_pct - pnl_percent)*100:.2f}% (max allowed: 0.5%)")
-                                            logger.warning(f"   🔒 LOCKING PROFIT at {pnl_percent*100:+.2f}% - NIJA ONLY GIVES BACK 0.5%!")
+                                            logger.warning(f"      Pullback: {(peak_profit_pct - pnl_percent)*100:.2f}% (max allowed: {max_pullback*100:.2f}%)")
+                                            logger.warning(f"   🔒 LOCKING PROFIT at {pnl_percent*100:+.2f}% - NIJA GIVES BACK MAX 5% OF GAIN!")
                                             positions_to_exit.append({
                                                 'symbol': symbol,
                                                 'quantity': quantity,
