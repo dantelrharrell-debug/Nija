@@ -15,11 +15,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import math
 
+# Test constants
+TEST_COIN_PRICE_USD = 600.0  # Assumed price for BNB in tests
+
 
 def calculate_rounded_size(quantity, base_increment):
     """
-    Simulates the rounding logic from broker_manager.py
-    This is the core logic that determines if a position is dust.
+    Simulates the rounding logic from broker_manager.py for testing purposes.
+    
+    This duplicates the logic from broker_manager.py lines 2850-2898
+    to validate dust detection without requiring full broker initialization.
+    
+    If broker_manager.py rounding logic changes, this test must be updated.
     """
     # Calculate precision from increment
     if base_increment >= 1:
@@ -28,7 +35,7 @@ def calculate_rounded_size(quantity, base_increment):
         precision = int(abs(math.floor(math.log10(base_increment))))
     
     # Apply safety margin for small positions
-    position_usd_value = quantity * 600  # Assume $600/coin
+    position_usd_value = quantity * TEST_COIN_PRICE_USD
     if position_usd_value < 10.0:
         safety_margin = 1e-8
     else:
@@ -141,10 +148,12 @@ def test_status_return_values():
     print("=" * 70)
     
     # Simulate the logic from broker_manager.py lines 2914-2929
+    # This duplicates the exact return value logic to validate status codes
     def get_status_for_position(quantity, base_increment):
         rounded, increment, precision = calculate_rounded_size(quantity, base_increment)
         
         if rounded <= 0 or rounded < base_increment:
+            # This matches the return dict from broker_manager.py line 2923
             return {
                 "status": "skipped_dust",
                 "error": "INVALID_SIZE",
