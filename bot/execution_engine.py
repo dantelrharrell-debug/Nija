@@ -452,8 +452,7 @@ class ExecutionEngine:
                 
                 logger.info(f"Position closed: {symbol}")
                 
-                # CRITICAL FIX: Remove closed position from tracking to free up slot for new trades
-                # This allows the bot to immediately scan for and enter new profitable opportunities
+                # Remove closed position from tracking to free slot for new trades
                 self.close_position(symbol)
             else:
                 logger.info(f"Partial exit: {symbol} ({position['remaining_size']*100:.0f}% remaining)")
@@ -653,7 +652,7 @@ class ExecutionEngine:
         return None
     
     def get_position(self, symbol: str) -> Optional[Dict]:
-        """Get position for symbol - only returns open positions"""
+        """Get open position for symbol. Returns None if position doesn't exist or is closed."""
         position = self.positions.get(symbol)
         # Only return positions that are still open
         if position and position.get('status') == 'open':
