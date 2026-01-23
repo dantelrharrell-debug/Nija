@@ -106,7 +106,8 @@ class PositionTracker:
                         'first_entry_time': existing['first_entry_time'],
                         'last_entry_time': datetime.now().isoformat(),
                         'strategy': strategy,
-                        'num_adds': existing.get('num_adds', 0) + 1
+                        'num_adds': existing.get('num_adds', 0) + 1,
+                        'previous_profit_pct': existing.get('previous_profit_pct', 0.0)  # Preserve previous profit tracking
                     }
                     logger.info(f"Updated position {symbol}: avg_entry=${avg_price:.2f}, qty={total_qty:.8f}")
                 else:
@@ -118,7 +119,8 @@ class PositionTracker:
                         'first_entry_time': datetime.now().isoformat(),
                         'last_entry_time': datetime.now().isoformat(),
                         'strategy': strategy,
-                        'num_adds': 0
+                        'num_adds': 0,
+                        'previous_profit_pct': 0.0  # Initialize previous profit tracking
                     }
                     logger.info(f"Tracking new position {symbol}: entry=${entry_price:.2f}, qty={quantity:.8f}")
                 
@@ -194,7 +196,7 @@ class PositionTracker:
             current_price: Current market price
         
         Returns:
-            Dict with pnl_dollars, pnl_percent, current_value, or None if not tracked
+            Dict with pnl_dollars, pnl_percent, current_value, previous_profit_pct, or None if not tracked
         """
         position = self.get_position(symbol)
         if not position:
@@ -215,6 +217,15 @@ class PositionTracker:
         if abs(pnl_pct) >= 1.0:
             logger.warning(f"⚠️ Large PnL detected for {symbol}: {pnl_pct*100:.2f}% - this is unusual but valid for extreme moves")
         
+        # Track previous profit for immediate exit on profit decrease
+        # NIJA takes profit as soon as profit starts to decrease
+        with self.lock:
+            previous_profit = position.get('previous_profit_pct', 0.0)
+            # Update previous profit for next check
+            position['previous_profit_pct'] = pnl_pct
+            # Save updated previous profit
+            self._save_positions()
+        
         return {
             'symbol': symbol,
             'entry_price': entry_price,
@@ -223,7 +234,8 @@ class PositionTracker:
             'entry_value': entry_value,
             'current_value': current_value,
             'pnl_dollars': pnl_dollars,
-            'pnl_percent': pnl_pct  # FRACTIONAL: -0.01 = -1%, -0.12 = -12%
+            'pnl_percent': pnl_pct,  # FRACTIONAL: -0.01 = -1%, -0.12 = -12%
+            'previous_profit_pct': previous_profit  # Profit from previous check
         }
     
     def get_all_positions(self) -> List[str]:
