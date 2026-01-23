@@ -288,6 +288,7 @@ example_*.py
 !example_user_management_integration.py  # Keep example integration
 test_*.py
 !bot/test_*.py  # Keep bot tests
+!bot/tests/test_*.py  # Keep bot/tests directory tests
 
 # Temporary text/config files
 *.txt.bak
