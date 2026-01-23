@@ -162,19 +162,24 @@ PROFIT_TARGETS = [
     (1.0, "Profit target +1.0% (Net ~-0.4% after fees) - EMERGENCY"),    # Emergency exit to prevent larger loss
 ]
 
-# BROKER-SPECIFIC PROFIT TARGETS (Jan 19, 2026)
+# BROKER-SPECIFIC PROFIT TARGETS (Jan 23, 2026 - OPTIMIZED)
 # Different brokers have different fee structures, requiring different profit targets
 # These ensure NET profitability after fees for each broker
+# PHILOSOPHY: "Little loss, major profit" - tight stops, wide profit targets
 PROFIT_TARGETS_KRAKEN = [
-    (1.0, "Profit target +1.0% (Net +0.64% after 0.36% fees) - EXCELLENT"),  # Kraken: Net positive
-    (0.7, "Profit target +0.7% (Net +0.34% after fees) - GOOD"),             # Still profitable
-    (0.5, "Profit target +0.5% (Net +0.14% after fees) - MINIMAL"),          # Tight margin
+    (3.0, "Profit target +3.0% (Net +2.64% after 0.36% fees) - MAJOR PROFIT"),  # Major profit - let winners run
+    (2.0, "Profit target +2.0% (Net +1.64% after fees) - EXCELLENT"),           # Excellent profit
+    (1.0, "Profit target +1.0% (Net +0.64% after 0.36% fees) - GOOD"),          # Good profit
+    (0.7, "Profit target +0.7% (Net +0.34% after fees) - ACCEPTABLE"),          # Still profitable
+    (0.5, "Profit target +0.5% (Net +0.14% after fees) - MINIMAL"),             # Tight margin but profitable
 ]
 
 PROFIT_TARGETS_COINBASE = [
-    (1.5, "Profit target +1.5% (Net +0.1% after 1.4% fees) - GOOD"),         # Coinbase: Barely profitable
-    (1.2, "Profit target +1.2% (Net -0.2% after fees) - ACCEPTABLE"),        # Accept small loss vs reversal
-    (1.0, "Profit target +1.0% (Net -0.4% after fees) - EMERGENCY"),         # Better than -1% stop
+    (3.0, "Profit target +3.0% (Net +1.6% after 1.4% fees) - MAJOR PROFIT"),    # Major profit - let winners run
+    (2.0, "Profit target +2.0% (Net +0.6% after fees) - EXCELLENT"),            # Excellent profit
+    (1.5, "Profit target +1.5% (Net +0.1% after 1.4% fees) - GOOD"),            # Barely profitable
+    (1.2, "Profit target +1.2% (Net -0.2% after fees) - ACCEPTABLE"),           # Accept small loss vs reversal
+    (1.0, "Profit target +1.0% (Net -0.4% after fees) - EMERGENCY"),            # Better than -1% stop
 ]
 
 # CRITICAL FIX (Jan 13, 2026): Tightened profit targets to lock gains faster
@@ -385,6 +390,9 @@ class TradingStrategy:
         # Track failed broker connections for error reporting
         self.failed_brokers = {}  # Dict of BrokerType -> broker instance for failed connections
         
+        # Kraken order cleanup manager (initialized after Kraken connection)
+        self.kraken_cleanup = None
+        
         # Market rotation state (prevents scanning same markets every cycle)
         self.market_rotation_offset = 0  # Tracks which batch of markets to scan next
         self.all_markets_cache = []      # Cache of all available markets
@@ -514,6 +522,23 @@ class TradingStrategy:
                         logger.error(f"   ❌ Kraken copy trading setup error: {copy_err}")
                         import traceback
                         logger.error(traceback.format_exc())
+                    
+                    # KRAKEN ORDER CLEANUP: Initialize automatic stale order cleanup
+                    # This frees up capital tied in unfilled limit orders
+                    try:
+                        from kraken_order_cleanup import create_kraken_cleanup
+                        self.kraken_cleanup = create_kraken_cleanup(kraken, max_order_age_minutes=5)
+                        if self.kraken_cleanup:
+                            logger.info("   ✅ Kraken order cleanup initialized (max age: 5 minutes)")
+                        else:
+                            logger.warning("   ⚠️  Kraken order cleanup not available")
+                            self.kraken_cleanup = None
+                    except ImportError as import_err:
+                        logger.warning(f"   ⚠️  Kraken order cleanup module not available: {import_err}")
+                        self.kraken_cleanup = None
+                    except Exception as cleanup_err:
+                        logger.error(f"   ❌ Kraken order cleanup setup error: {cleanup_err}")
+                        self.kraken_cleanup = None
                 else:
                     # Connection test failed, but still register broker for background retry
                     # The trading loop will handle the disconnected state and retry automatically
@@ -1882,6 +1907,27 @@ class TradingStrategy:
                     logger.info(f"   📈 Cash allocation: {allocation_pct:.1f}% available, {deployed_pct:.1f}% deployed")
                 else:
                     logger.info(f"   📈 Cash allocation: 0.0% available, 0.0% deployed")
+            
+            # KRAKEN ORDER CLEANUP: Cancel stale limit orders to free capital
+            # This runs every cycle if Kraken cleanup is available and broker is Kraken
+            if self.kraken_cleanup and hasattr(active_broker, 'broker_type') and active_broker.broker_type == BrokerType.KRAKEN:
+                try:
+                    # Only run cleanup if enough time has passed (default: 5 minutes)
+                    if self.kraken_cleanup.should_run_cleanup(min_interval_minutes=5):
+                        logger.info("")
+                        cancelled_count, capital_freed = self.kraken_cleanup.cleanup_stale_orders(dry_run=False)
+                        if cancelled_count > 0:
+                            logger.info(f"   🧹 Kraken cleanup: Freed ${capital_freed:.2f} by cancelling {cancelled_count} stale order(s)")
+                            # Update balance after freeing capital
+                            try:
+                                new_balance = active_broker.get_account_balance()
+                                if new_balance > account_balance:
+                                    logger.info(f"   💰 Balance increased: ${account_balance:.2f} → ${new_balance:.2f} (+${new_balance - account_balance:.2f})")
+                                    account_balance = new_balance
+                            except Exception as balance_err:
+                                logger.debug(f"   Could not refresh balance: {balance_err}")
+                except Exception as cleanup_err:
+                    logger.warning(f"⚠️ Kraken order cleanup error: {cleanup_err}")
             
             # Small delay after balance check to avoid rapid-fire API calls
             time.sleep(0.5)
