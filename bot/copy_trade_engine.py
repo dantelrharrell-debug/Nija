@@ -172,14 +172,21 @@ class CopyTradeEngine:
                     # No signal available, continue waiting
                     continue
                 
+                # Determine signal type for enhanced logging
+                is_exit = signal.side.lower() == 'sell'
+                signal_type = "EXIT/PROFIT-TAKING" if is_exit else "ENTRY"
+                
                 # Process the signal
                 logger.info("=" * 70)
-                logger.info("🔔 RECEIVED MASTER TRADE SIGNAL")
+                logger.info(f"🔔 RECEIVED MASTER {signal_type} SIGNAL")
                 logger.info("=" * 70)
                 logger.info(f"   Symbol: {signal.symbol}")
                 logger.info(f"   Side: {signal.side.upper()}")
                 logger.info(f"   Size: {signal.size} ({signal.size_type})")
                 logger.info(f"   Broker: {signal.broker}")
+                if is_exit:
+                    logger.info(f"   ✅ PROFIT-TAKING: Master is exiting position")
+                    logger.info(f"   📤 Users will exit simultaneously")
                 logger.info("=" * 70)
                 
                 if self.observe_only:
