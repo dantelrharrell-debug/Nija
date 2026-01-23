@@ -10,7 +10,25 @@ This simple message protects:
 - ✅ Your support inbox (no "why isn't it trading?" tickets)
 - ✅ Your users' money (fees won't destroy tiny accounts)
 
-## Why $100 Minimum?
+## Master Account Tiers (Updated Jan 23, 2026)
+
+NIJA now enforces **hard minimum funding rules** for master accounts to prevent lockouts and ensure reliable operation.
+
+### Master Funding Tiers
+
+| Tier | Balance Range | Hard Minimum | Description |
+|------|---------------|--------------|-------------|
+| **MICRO_MASTER** | $25-$49 | $25 | Ultra-minimal, Coinbase only, learning mode |
+| **STARTER** | $50-$99 | $50 | Entry level, copy trading recommended |
+| **SAVER** | $100-$249 | $100 | Minimum viable master account |
+| **INVESTOR** | $250-$999 | $250 | Multi-position support, rotation enabled |
+| **INCOME** | $1,000-$4,999 | $1,000 | Professional-grade master |
+| **LIVABLE** | $5,000-$24,999 | $5,000 | Pro-style scaling |
+| **BALLER** | $25,000+ | $25,000 | Institutional-quality master |
+
+**NEW:** See **MICRO_MASTER_GUIDE.md** for detailed instructions on operating with $25-$50 capital.
+
+## Why $100 Minimum for Regular Users?
 
 Below $100, several critical issues emerge:
 

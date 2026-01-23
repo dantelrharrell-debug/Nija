@@ -55,6 +55,50 @@ class TierConfig:
     min_visible_size: float = 10.0
 
 
+@dataclass
+class MasterFundingRules:
+    """
+    Hard minimum funding requirements for master accounts per tier.
+    
+    These rules ensure master accounts have sufficient capital to:
+    - Execute trades without hitting exchange minimums
+    - Maintain position management without lockouts
+    - Provide stable signals to copy traders
+    - Handle fees and slippage appropriately
+    
+    Unlike regular tier minimums (which are balance-based), master funding rules
+    define the ABSOLUTE MINIMUM capital a master account needs at each tier to
+    function safely without locking out users.
+    """
+    tier: TradingTier
+    absolute_minimum: float  # Hard floor - master CANNOT operate below this
+    recommended_minimum: float  # Recommended minimum for stable operation
+    micro_master_mode: bool  # If True, enables special micro-master optimizations
+    max_trade_size_pct: float  # Maximum % of balance per trade
+    min_trade_size_usd: float  # Minimum trade size in USD
+    max_positions: int  # Maximum concurrent positions
+    requires_copy_trading: bool  # If True, best used with copy trading
+    warning_message: str  # Warning to display for this tier
+    
+    def validate_funding(self, balance: float) -> Tuple[bool, str]:
+        """
+        Validate if balance meets minimum funding requirements.
+        
+        Args:
+            balance: Master account balance
+            
+        Returns:
+            Tuple of (is_valid, message)
+        """
+        if balance < self.absolute_minimum:
+            return (False, f"Balance ${balance:.2f} below absolute minimum ${self.absolute_minimum:.2f} for {self.tier.value} tier")
+        
+        if balance < self.recommended_minimum:
+            return (True, f"Balance ${balance:.2f} meets minimum but below recommended ${self.recommended_minimum:.2f}")
+        
+        return (True, f"Balance ${balance:.2f} meets all requirements for {self.tier.value} tier")
+
+
 # Tier configurations based on RISK_PROFILES_GUIDE.md
 # OFFICIAL FUNDING TIERS (Final Version - Jan 23, 2026)
 # These are the official capital ranges to be used everywhere in NIJA
@@ -124,6 +168,145 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
         max_positions=8,
         description="Capital deployment mode (institutional behavior)",
         min_visible_size=100.0
+    ),
+}
+
+
+# ============================================================================
+# MASTER ACCOUNT FUNDING RULES
+# ============================================================================
+# Hard minimum funding requirements for master accounts
+# These ensure master accounts have enough capital to:
+# - Execute meaningful trades
+# - Avoid exchange rejection (e.g., Kraken $10 minimum)
+# - Provide stable copy trading signals
+# - Handle fees without position lockouts
+#
+# Design Philosophy:
+# - MICRO_MASTER ($25-$50): Ultra-safe, single position, copy trading optimized
+# - STARTER ($50-$99): Learning mode, copy trading recommended
+# - SAVER+ ($100+): Full feature operation
+# ============================================================================
+
+MASTER_FUNDING_RULES: Dict[str, MasterFundingRules] = {
+    # MICRO_MASTER: Special tier for $25-$50 accounts
+    # Optimized for copy trading with minimal capital
+    'MICRO_MASTER': MasterFundingRules(
+        tier=TradingTier.STARTER,
+        absolute_minimum=25.0,  # Absolute floor: $25
+        recommended_minimum=50.0,  # Recommended: $50 for safety
+        micro_master_mode=True,  # Enable micro-master optimizations
+        max_trade_size_pct=40.0,  # Max 40% per trade (conservative)
+        min_trade_size_usd=5.0,  # Minimum $5 trades (below Kraken min, Coinbase only)
+        max_positions=1,  # Single position only
+        requires_copy_trading=False,  # Can operate independently with care
+        warning_message=(
+            "⚠️ MICRO-MASTER MODE ($25-$50): "
+            "Use Coinbase (not Kraken). Single position only. "
+            "Best for copy trading. Fees will impact profitability."
+        )
+    ),
+    
+    # STARTER: $50-$99 learning tier
+    'STARTER': MasterFundingRules(
+        tier=TradingTier.STARTER,
+        absolute_minimum=50.0,  # Hard minimum: $50
+        recommended_minimum=100.0,  # Recommended: $100 for stable operation
+        micro_master_mode=False,
+        max_trade_size_pct=30.0,  # Max 30% per trade
+        min_trade_size_usd=10.0,  # Minimum $10 (Kraken compatible)
+        max_positions=1,  # Single position
+        requires_copy_trading=True,  # Copy trading highly recommended
+        warning_message=(
+            "⚠️ STARTER MASTER ($50-$99): "
+            "Below $100 impacts reliability. Copy trading recommended. "
+            "Consider upgrading to SAVER tier ($100+)."
+        )
+    ),
+    
+    # SAVER: $100-$249 minimum viable master
+    'SAVER': MasterFundingRules(
+        tier=TradingTier.SAVER,
+        absolute_minimum=100.0,  # Hard minimum: $100
+        recommended_minimum=100.0,  # Same as absolute (this is the floor)
+        micro_master_mode=False,
+        max_trade_size_pct=25.0,  # Max 25% per trade
+        min_trade_size_usd=10.0,  # Minimum $10
+        max_positions=1,  # Single position for safety
+        requires_copy_trading=False,  # Can operate independently
+        warning_message=(
+            "✅ SAVER MASTER ($100-$249): "
+            "Minimum viable master account. Single position trading. "
+            "Suitable for small-scale copy trading."
+        )
+    ),
+    
+    # INVESTOR: $250-$999 multi-position master
+    'INVESTOR': MasterFundingRules(
+        tier=TradingTier.INVESTOR,
+        absolute_minimum=250.0,  # Hard minimum: $250
+        recommended_minimum=250.0,
+        micro_master_mode=False,
+        max_trade_size_pct=20.0,  # Max 20% per trade
+        min_trade_size_usd=20.0,  # Minimum $20
+        max_positions=3,  # Can handle rotation
+        requires_copy_trading=False,
+        warning_message=(
+            "✅ INVESTOR MASTER ($250-$999): "
+            "Full multi-position support. Rotation enabled. "
+            "Stable for copy trading."
+        )
+    ),
+    
+    # INCOME: $1,000-$4,999 designed operation
+    'INCOME': MasterFundingRules(
+        tier=TradingTier.INCOME,
+        absolute_minimum=1000.0,  # Hard minimum: $1,000
+        recommended_minimum=1000.0,
+        micro_master_mode=False,
+        max_trade_size_pct=15.0,  # Max 15% per trade
+        min_trade_size_usd=30.0,  # Minimum $30
+        max_positions=5,
+        requires_copy_trading=False,
+        warning_message=(
+            "✅ INCOME MASTER ($1,000-$4,999): "
+            "First tier where NIJA operates as designed. "
+            "Professional-grade master account."
+        )
+    ),
+    
+    # LIVABLE: $5,000-$24,999 pro-style master
+    'LIVABLE': MasterFundingRules(
+        tier=TradingTier.LIVABLE,
+        absolute_minimum=5000.0,  # Hard minimum: $5,000
+        recommended_minimum=5000.0,
+        micro_master_mode=False,
+        max_trade_size_pct=10.0,  # Max 10% per trade
+        min_trade_size_usd=50.0,  # Minimum $50
+        max_positions=6,
+        requires_copy_trading=False,
+        warning_message=(
+            "✅ LIVABLE MASTER ($5,000-$24,999): "
+            "Pro-style scaling and streak logic. "
+            "Institutional-quality master account."
+        )
+    ),
+    
+    # BALLER: $25,000+ institutional master
+    'BALLER': MasterFundingRules(
+        tier=TradingTier.BALLER,
+        absolute_minimum=25000.0,  # Hard minimum: $25,000
+        recommended_minimum=25000.0,
+        micro_master_mode=False,
+        max_trade_size_pct=5.0,  # Max 5% per trade (very conservative)
+        min_trade_size_usd=100.0,  # Minimum $100
+        max_positions=8,
+        requires_copy_trading=False,
+        warning_message=(
+            "✅ BALLER MASTER ($25,000+): "
+            "Capital deployment mode. Institutional behavior. "
+            "Elite-tier master account."
+        )
     ),
 }
 
@@ -661,6 +844,188 @@ def can_trade_live(balance: float, allow_copy_trading: bool = False) -> Tuple[bo
     return (True, "sufficient_balance")
 
 
+# ============================================================================
+# MASTER ACCOUNT FUNDING VALIDATION
+# ============================================================================
+
+def get_master_funding_tier(balance: float) -> str:
+    """
+    Determine the appropriate master funding tier based on balance.
+    
+    This is different from regular tier assignment. Master funding tiers
+    determine what operational capabilities the master account has.
+    
+    Args:
+        balance: Master account balance in USD
+        
+    Returns:
+        Master funding tier name: 'MICRO_MASTER', 'STARTER', 'SAVER', etc.
+    """
+    if balance < 25.0:
+        logger.error(f"❌ Master balance ${balance:.2f} below absolute minimum $25.00")
+        return None
+    elif balance < 50.0:
+        return 'MICRO_MASTER'
+    elif balance < 100.0:
+        return 'STARTER'
+    elif balance < 250.0:
+        return 'SAVER'
+    elif balance < 1000.0:
+        return 'INVESTOR'
+    elif balance < 5000.0:
+        return 'INCOME'
+    elif balance < 25000.0:
+        return 'LIVABLE'
+    else:
+        return 'BALLER'
+
+
+def validate_master_minimum_funding(balance: float, log_warnings: bool = True) -> Tuple[bool, str, Optional[MasterFundingRules]]:
+    """
+    Validate if master account meets minimum funding requirements.
+    
+    This enforces HARD MINIMUMS for master accounts to prevent:
+    - Exchange order rejections
+    - Position lockouts
+    - Unreliable copy trading signals
+    - Fee-dominated trading
+    
+    Args:
+        balance: Master account balance in USD
+        log_warnings: If True, logs warnings for funding issues
+        
+    Returns:
+        Tuple of (is_valid, message, funding_rules)
+        - is_valid: True if balance meets absolute minimum
+        - message: Explanation of funding status
+        - funding_rules: MasterFundingRules object for this tier (or None if invalid)
+    """
+    # Get master funding tier
+    funding_tier_name = get_master_funding_tier(balance)
+    
+    if funding_tier_name is None:
+        msg = f"❌ CRITICAL: Master balance ${balance:.2f} below absolute minimum $25.00. Cannot operate."
+        if log_warnings:
+            logger.error(msg)
+            logger.error("   Master accounts require at least $25 to function.")
+            logger.error("   Recommended: $50+ for STARTER, $100+ for stable operation")
+        return (False, msg, None)
+    
+    # Get funding rules for this tier
+    funding_rules = MASTER_FUNDING_RULES[funding_tier_name]
+    
+    # Validate against funding rules
+    is_valid, validation_msg = funding_rules.validate_funding(balance)
+    
+    if log_warnings:
+        if not is_valid:
+            logger.error(f"❌ {validation_msg}")
+            logger.error(f"   {funding_rules.warning_message}")
+        elif balance < funding_rules.recommended_minimum:
+            logger.warning(f"⚠️  {validation_msg}")
+            logger.warning(f"   {funding_rules.warning_message}")
+            if funding_rules.requires_copy_trading:
+                logger.warning(f"   💡 This tier works best with copy trading enabled")
+        else:
+            logger.info(f"✅ {validation_msg}")
+            logger.info(f"   {funding_rules.warning_message}")
+            
+        # Log operational constraints
+        logger.info(f"📋 Master Operational Limits ({funding_tier_name}):")
+        logger.info(f"   Max Trade Size: {funding_rules.max_trade_size_pct:.1f}% of balance")
+        logger.info(f"   Min Trade Size: ${funding_rules.min_trade_size_usd:.2f}")
+        logger.info(f"   Max Positions: {funding_rules.max_positions}")
+        if funding_rules.micro_master_mode:
+            logger.info(f"   🔧 MICRO-MASTER MODE ACTIVE")
+            logger.info(f"      - Use Coinbase only (Kraken $10 min not compatible)")
+            logger.info(f"      - Single position enforced")
+            logger.info(f"      - Best used for copy trading")
+    
+    return (is_valid, validation_msg, funding_rules)
+
+
+def get_master_trade_limits(balance: float, exchange: str = 'coinbase') -> Dict:
+    """
+    Get master account trade limits based on balance and funding tier.
+    
+    Returns conservative limits that prevent lockouts and ensure stable operation.
+    
+    Args:
+        balance: Master account balance in USD
+        exchange: Exchange name for minimum validation
+        
+    Returns:
+        Dictionary with:
+            - tier_name: Master funding tier name
+            - min_trade_size: Minimum trade size in USD
+            - max_trade_size: Maximum trade size in USD
+            - max_positions: Maximum concurrent positions
+            - micro_master_mode: Whether micro-master optimizations are active
+            - warning_message: Important operational warnings
+    """
+    is_valid, msg, funding_rules = validate_master_minimum_funding(balance, log_warnings=False)
+    
+    if not is_valid or funding_rules is None:
+        # Return ultra-conservative limits for invalid/below minimum
+        return {
+            'tier_name': 'INVALID',
+            'min_trade_size': 10.0,
+            'max_trade_size': 0.0,  # Cannot trade
+            'max_positions': 0,
+            'micro_master_mode': False,
+            'warning_message': msg,
+            'is_valid': False
+        }
+    
+    # Calculate max trade size based on percentage limit
+    max_trade_size = balance * (funding_rules.max_trade_size_pct / 100.0)
+    
+    # Get exchange minimum
+    try:
+        from bot.position_sizer import get_exchange_min_trade_size
+        exchange_min = get_exchange_min_trade_size(exchange)
+    except ImportError:
+        try:
+            from position_sizer import get_exchange_min_trade_size
+            exchange_min = get_exchange_min_trade_size(exchange)
+        except ImportError:
+            # Fallback
+            exchange_min = 10.50 if exchange.lower() == 'kraken' else 2.00
+    
+    # Use the greater of funding rule minimum or exchange minimum
+    min_trade_size = max(funding_rules.min_trade_size_usd, exchange_min)
+    
+    # For micro-master mode on Kraken, warn about incompatibility
+    warning = funding_rules.warning_message
+    if funding_rules.micro_master_mode and exchange.lower() == 'kraken':
+        warning += " ⚠️ KRAKEN NOT COMPATIBLE WITH MICRO-MASTER (use Coinbase)."
+        min_trade_size = 10.50  # Kraken enforces this
+    
+    return {
+        'tier_name': get_master_funding_tier(balance),
+        'min_trade_size': min_trade_size,
+        'max_trade_size': max_trade_size,
+        'max_positions': funding_rules.max_positions,
+        'micro_master_mode': funding_rules.micro_master_mode,
+        'warning_message': warning,
+        'is_valid': is_valid
+    }
+
+
+def is_micro_master(balance: float) -> bool:
+    """
+    Check if master account is in micro-master mode ($25-$49).
+    
+    Args:
+        balance: Master account balance
+        
+    Returns:
+        True if micro-master mode should be active
+    """
+    tier = get_master_funding_tier(balance)
+    return tier == 'MICRO_MASTER' if tier else False
+
+
 # Example usage logger
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
@@ -690,3 +1055,30 @@ if __name__ == "__main__":
     print("\n\nTier Summary:")
     import json
     print(json.dumps(get_tier_summary(), indent=2))
+    
+    # Test master funding validation
+    print("\n\n" + "="*70)
+    print("MASTER ACCOUNT FUNDING VALIDATION TESTS")
+    print("="*70)
+    
+    test_master_balances = [20, 30, 55, 95, 120, 300, 1500, 30000]
+    for master_balance in test_master_balances:
+        print(f"\n{'='*70}")
+        print(f"Testing Master Balance: ${master_balance:.2f}")
+        print(f"{'='*70}")
+        
+        # Validate funding
+        is_valid, msg, funding_rules = validate_master_minimum_funding(
+            master_balance, 
+            log_warnings=True
+        )
+        
+        # Get trade limits
+        limits = get_master_trade_limits(master_balance, exchange='kraken')
+        print(f"\n📊 Trade Limits:")
+        print(f"   Min Trade: ${limits['min_trade_size']:.2f}")
+        print(f"   Max Trade: ${limits['max_trade_size']:.2f}")
+        print(f"   Max Positions: {limits['max_positions']}")
+        print(f"   Micro-Master: {limits['micro_master_mode']}")
+        print(f"   Valid: {limits['is_valid']}")
+
