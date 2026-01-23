@@ -3331,6 +3331,12 @@ class CoinbaseBroker(BaseBroker):
                     balance_data = self._get_account_balance_detailed()
                     master_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
                     
+                    # CRITICAL: Log if master balance fetch failed
+                    if not balance_data or master_balance <= 0:
+                        logger.warning("⚠️  Master balance could not be retrieved for copy trading")
+                        logger.warning(f"   Balance data: {balance_data}")
+                        logger.warning("   Position sizing for users may fail without valid master balance")
+                    
                     # Get execution price
                     exec_price = fill_price if (fill_price and fill_price > 0) else self.get_current_price(symbol)
                     
@@ -3338,9 +3344,22 @@ class CoinbaseBroker(BaseBroker):
                     broker_name = self.broker_type.value.lower() if hasattr(self, 'broker_type') else 'coinbase'
                     
                     # ✅ FIX 5: VERIFY COPY ENGINE SIGNAL EMISSION
-                    logger.info("📡 Emitting trade signal to copy engine")
+                    logger.info("=" * 70)
+                    logger.info("📡 EMITTING TRADE SIGNAL TO COPY ENGINE")
+                    logger.info("=" * 70)
+                    logger.info(f"   Master Account: {self.account_identifier}")
+                    logger.info(f"   Broker: {broker_name.upper()}")
+                    logger.info(f"   Symbol: {symbol}")
+                    logger.info(f"   Side: {side.upper()}")
+                    logger.info(f"   Size: {quantity} ({size_type})")
+                    logger.info(f"   Price: ${exec_price:.2f}" if exec_price else "   Price: N/A")
+                    logger.info(f"   Master Balance: ${master_balance:.2f}")
+                    logger.info("=" * 70)
                     
                     # Emit signal
+                    # CRITICAL FIX (Jan 23, 2026): Add order_status parameter
+                    # Without this, the signal emitter defaults to checking order status
+                    # which may fail for some brokers, blocking copy trading
                     signal_emitted = emit_trade_signal(
                         broker=broker_name,
                         symbol=symbol,
@@ -3349,15 +3368,23 @@ class CoinbaseBroker(BaseBroker):
                         size=quantity,
                         size_type=size_type,
                         order_id=order_dict.get('order_id', client_order_id),
-                        master_balance=master_balance
+                        master_balance=master_balance,
+                        order_status="FILLED"  # Order already confirmed filled at this point
                     )
                     
                     # ✅ FIX 5: CONFIRM SIGNAL EMISSION STATUS
                     if signal_emitted:
-                        logger.info(f"✅ Trade signal emitted successfully for {symbol} {side}")
+                        logger.info("✅ Trade signal emitted successfully")
+                        logger.info(f"   🔔 Users will now receive this trade")
+                        logger.info(f"   📊 Check copy_trade_engine logs for user execution results")
                     else:
-                        logger.error(f"❌ Trade signal emission FAILED for {symbol} {side}")
-                        logger.error("   ⚠️ User accounts will NOT copy this trade!")
+                        logger.error("=" * 70)
+                        logger.error("❌ CRITICAL: TRADE SIGNAL EMISSION FAILED")
+                        logger.error("=" * 70)
+                        logger.error(f"   Symbol: {symbol}, Side: {side}")
+                        logger.error("   ⚠️  User accounts will NOT copy this trade!")
+                        logger.error("   🔧 Check trade_signal_emitter.py logs for error details")
+                        logger.error("=" * 70)
             except Exception as signal_err:
                 # Don't fail the trade if signal emission fails
                 logger.warning(f"   ⚠️ Trade signal emission failed: {signal_err}")
