@@ -250,6 +250,34 @@ class CopyTradeEngine:
             logger.error(f"❌ Unknown broker type: {signal.broker}")
             return results
         
+        # 🔥 CRITICAL: VALIDATE MASTER REQUIREMENTS (non-negotiable)
+        # Copy trading will NOT work unless ALL 4 master requirements are met:
+        # 1. MASTER PRO_MODE=true
+        # 2. LIVE_TRADING=true
+        # 3. MASTER_BROKER=KRAKEN (connected)
+        # 4. MASTER_CONNECTED=true
+        try:
+            from bot.copy_trading_requirements import check_master_requirements
+        except ImportError:
+            from copy_trading_requirements import check_master_requirements
+        
+        master_reqs = check_master_requirements(self.multi_account_manager)
+        if not master_reqs.all_met():
+            unmet = master_reqs.get_unmet_requirements()
+            logger.warning("=" * 70)
+            logger.warning("❌ COPY TRADING BLOCKED - MASTER REQUIREMENTS NOT MET")
+            logger.warning("=" * 70)
+            for req in unmet:
+                logger.warning(f"   ❌ {req}")
+            logger.warning("")
+            logger.warning("🔧 FIX: Ensure these are set:")
+            logger.warning("   PRO_MODE=true")
+            logger.warning("   LIVE_TRADING=1")
+            logger.warning("   KRAKEN_MASTER_API_KEY=<key>")
+            logger.warning("   KRAKEN_MASTER_API_SECRET=<secret>")
+            logger.warning("=" * 70)
+            return results  # Block copy trading when master requirements not met
+        
         # ✅ FIX 5: Copy Trading Should Be Optional
         # CRITICAL CHECK: Verify master account is still connected before copying
         # When master is offline, copy trading is disabled but users can still:
@@ -375,6 +403,45 @@ class CopyTradeEngine:
             user_balance = balance_data.get('trading_balance', 0.0)
             logger.info(f"      User Balance: ${user_balance:.2f}")
             logger.info(f"      Master Balance: ${signal.master_balance:.2f}")
+            
+            # 🔥 CRITICAL: VALIDATE USER REQUIREMENTS (non-negotiable)
+            # User will NOT receive copy trades unless ALL 5 requirements are met:
+            # 1. USER PRO_MODE=true
+            # 2. COPY_TRADING=true (COPY_TRADING_MODE=MASTER_FOLLOW)
+            # 3. STANDALONE=false
+            # 4. TIER >= STARTER ($50 minimum)
+            # 5. INITIAL_CAPITAL >= 100 (for non-STARTER tiers)
+            try:
+                from bot.copy_trading_requirements import check_user_requirements
+            except ImportError:
+                from copy_trading_requirements import check_user_requirements
+            
+            # Get copy_from_master setting from user config
+            # Default to True if not specified
+            copy_from_master = True
+            if hasattr(user_broker, 'copy_from_master'):
+                copy_from_master = user_broker.copy_from_master
+            
+            user_reqs = check_user_requirements(
+                user_id=user_id,
+                user_balance=user_balance,
+                user_broker=user_broker,
+                copy_from_master=copy_from_master
+            )
+            
+            if not user_reqs.all_met():
+                unmet = user_reqs.get_unmet_requirements()
+                error_msg = f"User requirements not met: {', '.join(unmet)}"
+                logger.warning(f"      ⚠️  {error_msg}")
+                logger.warning(f"      🔧 FIX: Ensure PRO_MODE=true, COPY_TRADING_MODE=MASTER_FOLLOW, balance >= $50")
+                return CopyTradeResult(
+                    user_id=user_id,
+                    success=False,
+                    order_id=None,
+                    error_message=error_msg,
+                    size=0,
+                    size_type=signal.size_type
+                )
             
             # Calculate scaled position size for user
             sizing_result = calculate_user_position_size(
