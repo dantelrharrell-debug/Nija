@@ -5085,7 +5085,7 @@ class KrakenBroker(BaseBroker):
             
             return result
     
-    def _kraken_api_call(self, method: str, params: dict = None):
+    def _kraken_api_call(self, method: str, params: Optional[Dict] = None):
         """
         Compatibility wrapper for _kraken_private_call().
         
