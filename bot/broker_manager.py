@@ -5631,18 +5631,19 @@ class KrakenBroker(BaseBroker):
                         # FIX (Jan 23, 2026): Calculate held funds to get total account equity
                         # This ensures EXIT-ONLY mode is based on total funds (available + held)
                         # not just available balance, matching the logic in get_account_balance()
+                        # Note: get_account_balance() also fetches TradeBalance to calculate held funds
                         balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                         trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
                         held_amount = 0.0
                         
                         if trade_balance and 'result' in trade_balance:
                             tb_result = trade_balance['result']
-                            # eb = equivalent balance (total balance including held orders)
-                            # tb = trade balance (free margin available)
-                            # held = eb - tb
-                            eb = float(tb_result.get('eb', 0))
-                            tb = float(tb_result.get('tb', 0))
-                            held_amount = eb - tb if eb > tb else 0.0
+                            # equivalent_balance = total balance including held orders
+                            # trade_balance_free = free margin available
+                            # held = equivalent_balance - trade_balance_free
+                            equivalent_balance = float(tb_result.get('eb', 0))
+                            trade_balance_free = float(tb_result.get('tb', 0))
+                            held_amount = equivalent_balance - trade_balance_free if equivalent_balance > trade_balance_free else 0.0
                         
                         # Calculate total funds (available + held) for minimum balance check
                         total_funds = total + held_amount
