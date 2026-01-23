@@ -125,6 +125,8 @@ XRP*.md
 YOUR*.md
 ZOMBIE*.md
 COPY_TRADING*.md
+!COPY_TRADING_SETUP.md  # Core copy trading setup guide
+!COPY_TRADING_ACTIVATION_CHECKLIST.md  # Core activation checklist
 LOSING*.md
 STOP_LOSS*.md
 THREE_TIER*.md
