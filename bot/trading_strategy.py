@@ -3147,7 +3147,8 @@ class TradingStrategy:
                                     filter_stats['position_too_small'] += 1
                                     logger.info(f"   ❌ Entry rejected for {symbol}")
                                     logger.info(f"      Reason: Kraken position size ${position_size:.2f} < ${MIN_POSITION_SIZE} minimum")
-                                    logger.info(f"      💡 Kraken requires ${MIN_POSITION_SIZE} minimum (5% of ${MIN_KRAKEN_BALANCE} balance)")
+                                    logger.info(f"      💡 Kraken requires ${MIN_POSITION_SIZE} minimum trade size per exchange rules")
+                                    logger.info(f"      📊 Current balance: ${account_balance:.2f}")
                                     continue
                                 
                                 # Warn if position is very small but allowed
