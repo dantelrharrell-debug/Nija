@@ -2,20 +2,60 @@
 
 ## Overview
 
-NIJA supports full copy trading functionality where user accounts automatically mirror trades from the master account. This guide explains how to activate and configure copy trading for small accounts.
+NIJA supports full copy trading functionality where user accounts automatically mirror trades from the master account. This guide explains how copy trading works and how to configure it.
 
-## Quick Start: Activate Full Copy Trading
+## ✅ Copy Trading is NOW ENABLED BY DEFAULT
 
-### Step 1: Enable Copy Trading Mode
+**Good News:** As of this update, copy trading is **enabled by default** in all environment templates!
+
+### Quick Check: Is Copy Trading Active?
+
+When you start the bot, look for these log messages:
+
+```
+🔄 Starting copy trade engine in MASTER_FOLLOW MODE...
+   📋 Mode: MASTER_FOLLOW (mirror master trades)
+   📊 Allocation: Proportional (auto-scaled by balance)
+   ✅ Copy trade engine started in ACTIVE MODE
+   📡 Users will receive and execute copy trades from master accounts
+   💰 User position sizes will be scaled based on account balance ratios
+```
+
+If you see these messages, copy trading is **ACTIVE** ✅
+
+### To Disable Copy Trading (Optional)
+
+If you want users to trade independently instead of copying the master:
 
 Add to your `.env` file:
+
+```bash
+# Disable copy trading - users trade independently
+COPY_TRADING_MODE=INDEPENDENT
+```
+
+## Configuration Details
+
+### Step 1: Copy Trading Mode (Already Enabled in Templates)
+
+The `.env` templates now include:
 
 ```bash
 # Enable copy trading - users mirror master trades
 COPY_TRADING_MODE=MASTER_FOLLOW
 ```
 
-### Step 2: Enable PRO MODE (For Small Accounts)
+**This is already set in all templates:**
+- `.env.example`
+- `.env.copy_trading_example`
+- `.env.small_account_preset`
+- `.env.saver_tier`
+- `.env.investor_tier`
+- `.env.income_tier`
+- `.env.livable_tier`
+- `.env.baller_tier`
+
+### Step 2: Enable PRO MODE (For Small Accounts - Optional)
 
 PRO MODE enables:
 - ✅ Faster entries
@@ -23,14 +63,16 @@ PRO MODE enables:
 - ✅ Allows scalps that beat fees slightly
 - ⚠️ More aggressive trading (but with safety limits)
 
-Add to your `.env` file:
+Add to your `.env` file (if not already present):
 
 ```bash
 # Enable PRO MODE for faster trading
 PRO_MODE=true
 ```
 
-### Step 3: Lower Minimum Balance Requirements
+**Note:** Many templates already have PRO_MODE=true enabled.
+
+### Step 3: Lower Minimum Balance Requirements (For Small Accounts - Optional)
 
 For small accounts under $25, you can lower the minimum balance requirements:
 

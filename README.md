@@ -151,23 +151,35 @@ PRO_MODE_MIN_RESERVE_PCT=0.15
 
 ---
 
-## 🔄 **COPY TRADING - Mirror Master Trades**
+## 🔄 **COPY TRADING - Mirror Master Trades (ENABLED BY DEFAULT)**
 
-Enable full copy trading to automatically mirror master account trades to user accounts with proportional position sizing:
+**✅ Copy trading is now active by default in all environment templates!**
+
+Full copy trading automatically mirrors master account trades to user accounts with proportional position sizing:
 
 - ✅ **Automatic Trade Mirroring** - Users copy all master trades instantly
 - ✅ **Proportional Sizing** - Positions scaled by account balance ratio
 - ✅ **Small Account Support** - Works with accounts as low as $15
 - ✅ **Safety Built-in** - Risk management applies to all accounts
+- ✅ **Pre-Configured** - Enabled in all `.env` templates
 
-**Quick Enable (Small Accounts $15-$50):**
+**Quick Start:**
+1. Copy any `.env` template (e.g., `.env.example` or `.env.small_account_preset`)
+2. Add your API credentials
+3. Start the bot - copy trading is automatically active!
+
+**Optional Settings (Small Accounts $15-$50):**
 ```bash
-# Add to .env
-COPY_TRADING_MODE=MASTER_FOLLOW
-PRO_MODE=true
-MINIMUM_TRADING_BALANCE=15.0
-MIN_CASH_TO_BUY=5.0
-DISABLED_PAIRS=XRP-USD
+# These are optional - copy trading works with defaults
+PRO_MODE=true                    # Faster entries, smaller targets
+MINIMUM_TRADING_BALANCE=15.0     # Lower minimum balance (default: 25.0)
+MIN_CASH_TO_BUY=5.0              # Lower minimum order (default: 5.50)
+```
+
+**To Disable Copy Trading:**
+```bash
+# Only needed if you want users to trade independently
+COPY_TRADING_MODE=INDEPENDENT
 ```
 
 **Learn More:**
