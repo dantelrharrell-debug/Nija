@@ -99,6 +99,16 @@ except ImportError:
         validate_kraken_symbol = None
         convert_to_kraken = None
 
+# Import Kraken Order Validator for order size validation
+try:
+    from bot.kraken_order_validator import validate_order_size
+except ImportError:
+    try:
+        from kraken_order_validator import validate_order_size
+    except ImportError:
+        # Fallback: Order validator not available
+        validate_order_size = None
+
 # Import Kraken Rate Profiles for separate entry/exit API budgets (Jan 23, 2026)
 try:
     from bot.kraken_rate_profiles import (
@@ -6688,6 +6698,72 @@ class KrakenBroker(BaseBroker):
                     else:
                         logging.info(f"   ✅ Balance sufficient: ${trading_balance:.2f} available >= ${required_with_buffer:.2f} required")
             
+            # ✅ CRITICAL FIX: Convert USD quantity to base currency volume for Kraken
+            # Kraken's AddOrder API expects 'volume' in base currency (e.g., number of tokens)
+            # not in quote currency (USD). When size_type='quote', we need to convert.
+            # 
+            # Example: To buy $9.16 worth of FIDA at $0.97/FIDA:
+            #   volume = $9.16 / $0.97 = 9.44 FIDA (base currency)
+            # 
+            # This fixes "volume minimum not met" errors when trades are auto-resized
+            # to tier limits but the USD amount is too small to meet minimum volume requirements.
+            volume_for_order = quantity  # Default: use quantity as-is
+            
+            if size_type == 'quote' and side.lower() == 'buy':
+                # For BUY orders with quote currency (USD), convert to base currency
+                logging.debug(f"🔄 Converting USD quantity to base currency volume for Kraken")
+                logging.debug(f"   Quote amount (USD): ${quantity:.2f}")
+                
+                # Get current market price for conversion
+                current_price = self.get_current_price(symbol)
+                
+                if not current_price or current_price <= 0:
+                    error_msg = f"Cannot convert USD to volume: price unavailable for {symbol}"
+                    logging.error(f"❌ {error_msg}")
+                    logging.error(f"   USD amount: ${quantity:.2f}")
+                    logging.error(f"   Price: {current_price}")
+                    return {
+                        "status": "error",
+                        "error": "PRICE_UNAVAILABLE",
+                        "message": error_msg
+                    }
+                
+                # Convert USD to base currency volume
+                volume_for_order = quantity / current_price
+                logging.info(f"📊 USD to Volume Conversion:")
+                logging.info(f"   USD amount: ${quantity:.2f}")
+                logging.info(f"   Price: ${current_price:.8f}")
+                logging.info(f"   Volume (base): {volume_for_order:.8f}")
+                
+                # ✅ VALIDATION: Check if converted volume meets Kraken minimums
+                # This prevents "volume minimum not met" rejections
+                if validate_order_size:
+                    is_valid, validation_error = validate_order_size(
+                        pair=kraken_symbol,
+                        volume=volume_for_order,
+                        price=current_price,
+                        side=side
+                    )
+                    
+                    if not is_valid:
+                        logging.error(LOG_SEPARATOR)
+                        logging.error("❌ KRAKEN ORDER VALIDATION FAILED")
+                        logging.error(LOG_SEPARATOR)
+                        logging.error(f"   Symbol: {kraken_symbol}")
+                        logging.error(f"   USD amount: ${quantity:.2f}")
+                        logging.error(f"   Converted volume: {volume_for_order:.8f}")
+                        logging.error(f"   Price: ${current_price:.8f}")
+                        logging.error(f"   Validation error: {validation_error}")
+                        logging.error("   ⚠️  Trade size too small after conversion")
+                        logging.error(LOG_SEPARATOR)
+                        return {
+                            "status": "error",
+                            "error": "VOLUME_TOO_SMALL",
+                            "message": validation_error
+                        }
+                    
+                    logging.info(f"   ✅ Volume validation passed: {volume_for_order:.8f} meets Kraken minimums")
+            
             # Place market order using serialized API call
             # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
             # Use category-specific rate limiting for entry vs exit operations
@@ -6695,7 +6771,7 @@ class KrakenBroker(BaseBroker):
                 'pair': kraken_symbol,
                 'type': order_type,
                 'ordertype': 'market',
-                'volume': str(quantity)
+                'volume': str(volume_for_order)
             }
             
             # Determine API category: ENTRY for buy, EXIT for sell
@@ -6713,7 +6789,9 @@ class KrakenBroker(BaseBroker):
                 logging.error(LOG_SEPARATOR)
                 logging.error("❌ KRAKEN ORDER REJECTED - ABORTING")
                 logging.error(LOG_SEPARATOR)
-                logging.error(f"   Symbol: {kraken_symbol}, Side: {order_type}, Quantity: {quantity}")
+                logging.error(f"   Symbol: {kraken_symbol}, Side: {order_type}, Volume: {volume_for_order:.8f}")
+                if size_type == 'quote' and side.lower() == 'buy':
+                    logging.error(f"   Original USD amount: ${quantity:.2f}")
                 logging.error(f"   Rejection Reason: {error_msgs}")
                 logging.error("   ⚠️  ORDER REJECTED - DO NOT RECORD TRADE")
                 logging.error(LOG_SEPARATOR)
