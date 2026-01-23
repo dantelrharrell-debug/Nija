@@ -1,8 +1,10 @@
-# NIJA PRO MODE - Position Rotation Trading
+# NIJA PRO MODE - Position Rotation Trading + Tier Locking
 
 ## Overview
 
 PRO MODE transforms NIJA into a hedge-fund style trading system that counts open position values as available capital and can rotate positions to capture better opportunities.
+
+**NEW (v4.1, Jan 2026):** PRO MODE now supports **TIER_LOCK** - providing sophisticated execution logic with tier-based risk caps. This is the **GOLD STANDARD** for retail accounts.
 
 ## What is PRO MODE?
 
@@ -13,6 +15,36 @@ In standard mode, NIJA can only open new positions when it has free USD balance 
 - ✅ Enabling position-to-position rotation
 - ✅ Closing weak positions to fund better opportunities
 - ✅ Never "starving" by having all capital locked
+- ✅ **NEW:** TIER_LOCK prevents over-leveraging on small accounts
+
+## What is TIER_LOCK?
+
+**TIER_LOCK** is a new feature that combines PRO MODE's smart execution with tier-based risk caps.
+
+### Without TIER_LOCK
+- PRO MODE could potentially over-leverage small accounts
+- Users might exceed safe risk limits
+- Requires manual risk management
+
+### With TIER_LOCK
+- PRO MODE uses tier-specific risk limits
+- SAVER tier locked to 10% max risk
+- INVESTOR tier locked to 7% max risk
+- Automatic, invisible protection
+- Users get PRO logic without chaos
+
+### Example
+```bash
+# In .env file
+PRO_MODE=true
+TIER_LOCK=SAVER  # Locks risk to SAVER tier limits (10% max)
+```
+
+With this configuration:
+- Account has PRO MODE's smart execution
+- Risk automatically capped at 10% (SAVER tier limit)
+- No manual intervention needed
+- Users don't even know TIER_LOCK exists (invisible)
 
 ## How It Works
 
@@ -84,25 +116,52 @@ Positions are scored for rotation priority (higher score = more likely to close)
 
 ### Enable PRO MODE
 
-**Option 1: Environment Variable**
+**Option 1: Standard PRO MODE (No Tier Lock)**
 ```bash
 # In your .env file
 PRO_MODE=true
 PRO_MODE_MIN_RESERVE_PCT=0.15  # 15% minimum free balance
 ```
 
-**Option 2: Railway/Render Deployment**
+**Option 2: PRO MODE + TIER_LOCK (Recommended for Retail)**
+```bash
+# In your .env file
+PRO_MODE=true
+TIER_LOCK=SAVER  # Lock to SAVER tier risk limits (10% max)
+PRO_MODE_MIN_RESERVE_PCT=0.15  # 15% minimum free balance
+```
+
+**Option 3: Railway/Render Deployment**
 ```
 Add environment variables:
 - PRO_MODE = true
+- TIER_LOCK = SAVER (or INVESTOR, INCOME, LIVABLE, BALLER)
 - PRO_MODE_MIN_RESERVE_PCT = 0.15
 ```
+
+### TIER_LOCK Options
+
+| Tier Lock Value | Max Risk % | Best For |
+|-----------------|------------|----------|
+| SAVER | 10% | $100-$249 accounts - Starter-Safe profile ✅ |
+| INVESTOR | 7% | $250-$999 accounts - Multi-position trading |
+| INCOME | 5% | $1,000-$4,999 accounts - Where NIJA trades as designed |
+| LIVABLE | 3% | $5,000-$24,999 accounts - Professional execution |
+| BALLER | 2% | $25,000+ accounts - Institutional deployment |
+
+**Why Use TIER_LOCK?**
+- ✅ Prevents over-leveraging on small accounts
+- ✅ Automatic risk management (users don't toggle it)
+- ✅ PRO execution with retail safety
+- ✅ No manual intervention required
+- ✅ Invisible to end users
 
 ### Configuration Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `PRO_MODE` | false | Enable/disable PRO MODE |
+| `TIER_LOCK` | none | Lock to specific tier risk limits (SAVER, INVESTOR, etc.) |
 | `PRO_MODE_MIN_RESERVE_PCT` | 0.15 | Minimum free balance % (15% default) |
 
 ### Reserve Percentage Guide

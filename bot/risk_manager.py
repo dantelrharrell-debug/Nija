@@ -71,15 +71,16 @@ class AdaptiveRiskManager:
     - Market volatility
     - Total portfolio exposure
     - FEE AWARENESS (NEW - prevents unprofitable small trades)
+    - TIER LOCKING (v4.1 - Jan 2026 - enforces tier limits in PRO MODE)
     - EXCHANGE-SPECIFIC PROFILES (OPTIONAL - uses exchange risk profiles if available)
     """
     
     def __init__(self, min_position_pct=0.02, max_position_pct=0.15,
                  max_total_exposure=0.80, use_exchange_profiles=False,
-                 pro_mode=False, min_free_reserve_pct=0.15):
+                 pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None):
         """
-        Initialize Adaptive Risk Manager - OPTIMAL PROFITABILITY MODE v7.3
-        Updated Jan 22, 2026: Reduced max_position_pct to 15% for better risk management
+        Initialize Adaptive Risk Manager - OPTIMAL PROFITABILITY MODE v7.4
+        Updated Jan 23, 2026: Added tier_lock parameter for PRO MODE + tier enforcement
         
         Args:
             min_position_pct: Minimum position size as % of account (default 2% - conservative for weak trends)
@@ -88,12 +89,14 @@ class AdaptiveRiskManager:
             use_exchange_profiles: If True, uses exchange-specific risk profiles (default False)
             pro_mode: If True, enables PRO MODE with position rotation (default False)
             min_free_reserve_pct: Minimum free balance % to maintain in PRO MODE (default 15%)
+            tier_lock: If set, locks risk to specific tier limits (e.g., 'SAVER', 'INVESTOR')
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct
         self.max_total_exposure = max_total_exposure
         self.pro_mode = pro_mode
         self.min_free_reserve_pct = min_free_reserve_pct
+        self.tier_lock = tier_lock  # NEW: Tier locking for PRO MODE
         
         # Track recent trades for streak analysis
         self.recent_trades: List[Dict] = []
@@ -123,7 +126,11 @@ class AdaptiveRiskManager:
                 logger.warning("⚠️ Exchange risk profiles not available, using standard mode")
                 self.use_exchange_profiles = False
         
-        if self.pro_mode:
+        if self.tier_lock:
+            logger.info(f"✅ Adaptive Risk Manager initialized - PRO MODE with TIER LOCK: {self.tier_lock}")
+            logger.info(f"   Tier-locked risk management active")
+            logger.info(f"   Users get PRO logic with tier-capped risk")
+        elif self.pro_mode:
             logger.info(f"✅ Adaptive Risk Manager initialized - PRO MODE ACTIVE")
             logger.info(f"   Position rotation enabled")
             logger.info(f"   Minimum free reserve: {min_free_reserve_pct*100:.0f}%")
@@ -462,18 +469,37 @@ class AdaptiveRiskManager:
                 import os
                 is_master_account = os.getenv('MASTER_ACCOUNT_TIER', '').upper() in ('BALLER', 'MASTER')
                 
-                tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
+                # TIER LOCK: If set, override tier detection with locked tier
+                # This allows PRO MODE with tier-specific risk caps
+                if self.tier_lock:
+                    # Use locked tier instead of balance-based detection
+                    try:
+                        from tier_config import TradingTier
+                        # Ensure tier_lock is a string before calling upper()
+                        if isinstance(self.tier_lock, str):
+                            tier = TradingTier[self.tier_lock.upper()]
+                            logger.debug(f"🔒 TIER_LOCK active: Using {self.tier_lock} tier (balance: ${sizing_base:.2f})")
+                        else:
+                            logger.warning(f"⚠️ Invalid TIER_LOCK type: {type(self.tier_lock)}. Falling back to balance-based tier.")
+                            tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
+                    except (KeyError, AttributeError) as e:
+                        logger.warning(f"⚠️ Invalid TIER_LOCK: {self.tier_lock}. Falling back to balance-based tier. Error: {e}")
+                        tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
+                else:
+                    # Standard balance-based tier detection
+                    tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
+                
                 tier_config = get_tier_config(tier)
                 
                 # MASTER ACCOUNT EXCEPTION: Master uses configured max, not tier max
                 # Master needs flexibility to trade optimally while staying profitable
-                if is_master_account:
+                if is_master_account and not self.tier_lock:
                     logger.info(f"🎯 Master account detected: Using configured max {self.max_position_pct*100:.1f}% (tier: {tier.value})")
                     tier_max_pct = self.max_position_pct  # Keep configured max for master
                     breakdown['is_master'] = True
                     breakdown['tier'] = tier.value
                 else:
-                    # Regular user: Apply tier limits
+                    # Regular user OR tier-locked PRO MODE: Apply tier limits
                     # Get tier's max risk percentage (second element of risk_per_trade_pct tuple)
                     tier_max_risk_pct = tier_config.risk_per_trade_pct[1] / 100.0  # Convert from percentage to decimal
                     
@@ -483,7 +509,9 @@ class AdaptiveRiskManager:
                     breakdown['tier'] = tier.value
                     breakdown['tier_max_risk_pct'] = tier_max_risk_pct
                     
-                    if tier_max_risk_pct < self.max_position_pct:
+                    if self.tier_lock:
+                        logger.debug(f"🔒 TIER_LOCK: {tier.value} tier restricts to {tier_max_risk_pct*100:.1f}%")
+                    elif tier_max_risk_pct < self.max_position_pct:
                         logger.debug(f"📊 Tier-aware limit: {tier.value} tier restricts to {tier_max_risk_pct*100:.1f}% (configured max: {self.max_position_pct*100:.1f}%)")
             except Exception as e:
                 logger.warning(f"⚠️ Tier-aware sizing failed, using configured max: {e}")

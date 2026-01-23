@@ -3,17 +3,20 @@ NIJA Tier Configuration and Trade Size Minimums
 
 This module defines tier-based minimum trade sizes and stablecoin routing policies.
 
-Tier Structure (OFFICIAL - Updated Jan 22, 2026):
-- STARTER ($50-$99): Entry level learning
-- SAVER ($100-$249): Capital preservation + learning
-- INVESTOR ($250-$999): Consistent participation
-- INCOME ($1,000-$4,999): Serious retail trading
-- LIVABLE ($5,000-$24,999): Professional-level execution
-- BALLER ($25,000+): Capital deployment
+Tier Structure (OFFICIAL - Updated Jan 23, 2026):
+- STARTER ($50-$99): Entry level learning (copy trading recommended)
+- SAVER ($100-$249): Absolute minimum where fees, min order size, and risk cap coexist
+- INVESTOR ($250-$999): Allows multi-position rotation without hitting risk blocks
+- INCOME ($1,000-$4,999): First tier where NIJA trades as designed
+- LIVABLE ($5,000-$24,999): Enables pro-style scaling + streak logic
+- BALLER ($25,000+): Capital deployment mode (institutional behavior)
+
+⚠️ HARD RULE: Accounts below $100 should use copy trading mode for best results.
+Below $100: Fees dominate, exchanges may reject orders, tier enforcement blocks entries.
 
 Author: NIJA Trading Systems
-Version: 4.0 (OFFICIAL FUNDING TIERS - 6 TIERS)
-Date: January 22, 2026
+Version: 4.1 (OFFICIAL FUNDING TIERS - $100 MINIMUM RECOMMENDED)
+Date: January 23, 2026
 """
 
 import os
@@ -53,7 +56,7 @@ class TierConfig:
 
 
 # Tier configurations based on RISK_PROFILES_GUIDE.md
-# OFFICIAL FUNDING TIERS (Final Version - Jan 22, 2026)
+# OFFICIAL FUNDING TIERS (Final Version - Jan 23, 2026)
 # These are the official capital ranges to be used everywhere in NIJA
 TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
     TradingTier.STARTER: TierConfig(
@@ -64,19 +67,19 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
         trade_size_min=10.0,
         trade_size_max=25.0,
         max_positions=1,
-        description="Entry level learning",
+        description="Entry level learning (copy trading recommended)",
         min_visible_size=10.0
     ),
     TradingTier.SAVER: TierConfig(
         name="SAVER",
         capital_min=100.0,
         capital_max=249.0,
-        risk_per_trade_pct=(7.0, 10.0),
-        trade_size_min=15.0,
+        risk_per_trade_pct=(10.0, 10.0),  # Fixed at 10% for "Starter-Safe" profile (min=max for tier lock)
+        trade_size_min=10.0,  # Minimum $10 (matches Kraken + fee requirements)
         trade_size_max=40.0,
-        max_positions=2,
-        description="Capital preservation + learning",
-        min_visible_size=15.0
+        max_positions=1,  # Single position focus for small accounts
+        description="Absolute minimum where fees, min order size, and risk cap coexist",
+        min_visible_size=10.0
     ),
     TradingTier.INVESTOR: TierConfig(
         name="INVESTOR",
@@ -86,7 +89,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
         trade_size_min=20.0,
         trade_size_max=75.0,
         max_positions=3,
-        description="Consistent participation",
+        description="Allows multi-position rotation without hitting risk blocks",
         min_visible_size=20.0
     ),
     TradingTier.INCOME: TierConfig(
@@ -97,7 +100,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
         trade_size_min=30.0,
         trade_size_max=150.0,
         max_positions=5,
-        description="Serious retail trading",
+        description="First tier where NIJA trades as designed",
         min_visible_size=30.0
     ),
     TradingTier.LIVABLE: TierConfig(
@@ -108,7 +111,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
         trade_size_min=50.0,
         trade_size_max=300.0,
         max_positions=6,
-        description="Professional-level execution",
+        description="Enables pro-style scaling + streak logic",
         min_visible_size=50.0
     ),
     TradingTier.BALLER: TierConfig(
@@ -119,7 +122,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
         trade_size_min=100.0,
         trade_size_max=1000.0,
         max_positions=8,
-        description="Capital deployment",
+        description="Capital deployment mode (institutional behavior)",
         min_visible_size=100.0
     ),
 }
@@ -127,6 +130,10 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
 
 # Stablecoin routing policy
 STABLECOIN_PAIRS = ["USDT", "USDC", "DAI", "BUSD"]
+
+# HARD MINIMUM BALANCE FOR LIVE TRADING
+# Below this amount, fees dominate and Kraken/Coinbase may reject orders
+MINIMUM_LIVE_TRADING_BALANCE = 100.0
 
 
 class StablecoinPolicy(Enum):
@@ -612,6 +619,46 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
         return (False, f"Trade size {risk_pct:.1f}% of balance exceeds max risk {max_risk_pct:.1f}%")
     
     return (True, "valid")
+
+
+def can_trade_live(balance: float, allow_copy_trading: bool = False) -> Tuple[bool, str]:
+    """
+    Validate if an account can trade live based on balance.
+    
+    CRITICAL RULE: Accounts below $100 should NOT trade live independently.
+    
+    Below $100:
+    - Fees dominate (1.4% round-trip on Coinbase)
+    - Kraken rejects orders (minimum $10 + fees)
+    - Tier enforcement blocks entries
+    - Users think bot is broken (it's not)
+    
+    Args:
+        balance: Account balance in USD
+        allow_copy_trading: If True, allows balances below $100 for copy trading mode
+    
+    Returns:
+        Tuple of (can_trade, reason)
+        - can_trade: True if account can trade live
+        - reason: Explanation of decision
+    """
+    if balance < MINIMUM_LIVE_TRADING_BALANCE:
+        if allow_copy_trading:
+            # Copy trading mode allows lower balances with proper risk management
+            logger.warning(f"⚠️ Balance ${balance:.2f} below recommended ${MINIMUM_LIVE_TRADING_BALANCE:.2f}")
+            logger.warning(f"   Copy trading mode enabled - proceeding with caution")
+            return (True, f"copy_trading_mode_enabled")
+        else:
+            # Independent trading requires minimum balance
+            logger.error(f"❌ INSUFFICIENT BALANCE: ${balance:.2f} < ${MINIMUM_LIVE_TRADING_BALANCE:.2f} minimum")
+            logger.error(f"   Below $100:")
+            logger.error(f"   - Fees dominate (1.4% round-trip)")
+            logger.error(f"   - Kraken rejects orders")
+            logger.error(f"   - Tier enforcement blocks entries")
+            logger.error(f"   Please fund account to at least ${MINIMUM_LIVE_TRADING_BALANCE:.2f}")
+            return (False, f"balance_below_minimum")
+    
+    return (True, "sufficient_balance")
 
 
 # Example usage logger
