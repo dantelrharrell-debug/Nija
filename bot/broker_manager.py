@@ -6707,6 +6707,9 @@ class KrakenBroker(BaseBroker):
             # 
             # This fixes "volume minimum not met" errors when trades are auto-resized
             # to tier limits but the USD amount is too small to meet minimum volume requirements.
+            # 
+            # NOTE: SELL orders always use size_type='base' (selling specific token quantity),
+            # so this conversion is only needed for BUY orders with size_type='quote'.
             volume_for_order = quantity  # Default: use quantity as-is
             
             if size_type == 'quote' and side.lower() == 'buy':
