@@ -474,6 +474,10 @@ class MultiAccountBrokerManager:
         """
         Get balances for all accounts.
         
+        CRITICAL FIX (Jan 23, 2026): Include ALL configured users and their brokers,
+        even if credentials are not configured or connection failed.
+        This ensures maximum visibility - users can see all accounts that are supposed to exist.
+        
         Returns:
             dict with structure: {
                 'master': {broker_type: balance, ...},
@@ -490,12 +494,124 @@ class MultiAccountBrokerManager:
             if broker.connected:
                 result['master'][broker_type.value] = broker.get_account_balance()
         
-        # User balances
+        # User balances - include ALL users from metadata with ALL their brokers
+        # CRITICAL FIX: Use metadata as source of truth for which users/brokers should exist
+        for user_id, metadata in self._user_metadata.items():
+            if user_id not in result['users']:
+                result['users'][user_id] = {}
+            
+            # Add all brokers from metadata for this user
+            for broker_type in metadata.get('brokers', {}).keys():
+                broker_name = broker_type.value
+                # Initialize with $0.00 - will be updated if we can get actual balance
+                result['users'][user_id][broker_name] = 0.0
+        
+        # Then update with actual balances for connected users
         for user_id, user_brokers in self.user_brokers.items():
-            result['users'][user_id] = {}
+            if user_id not in result['users']:
+                result['users'][user_id] = {}
             for broker_type, broker in user_brokers.items():
                 if broker.connected:
-                    result['users'][user_id][broker_type.value] = broker.get_account_balance()
+                    try:
+                        result['users'][user_id][broker_type.value] = broker.get_account_balance()
+                    except Exception as e:
+                        logger.debug(f"Could not get balance for {user_id}/{broker_type.value}: {e}")
+                        # Keep the $0.00 default
+        
+        # Also try to get balances from _all_user_brokers (in case some are connected but not in user_brokers)
+        for (user_id, broker_type), broker in self._all_user_brokers.items():
+            if user_id not in result['users']:
+                result['users'][user_id] = {}
+            
+            # Only update if broker is not already in results (avoid overwriting connected broker balances)
+            # CRITICAL: Check if broker_type exists in result, not if balance is 0.0
+            # This prevents overwriting legitimate $0.00 balances from connected brokers
+            if broker_type.value not in result['users'][user_id]:
+                try:
+                    if broker.connected:
+                        result['users'][user_id][broker_type.value] = broker.get_account_balance()
+                    # If not connected, keep $0.00 (already set above or default)
+                except Exception as e:
+                    logger.debug(f"Could not get balance for {user_id}/{broker_type.value}: {e}")
+                    # Keep the $0.00 default
+        
+        return result
+    
+    def _get_broker_credentials_status(self, broker: BaseBroker) -> bool:
+        """
+        Helper to safely check if broker has credentials configured.
+        
+        Args:
+            broker: Broker instance to check
+            
+        Returns:
+            True if credentials are configured, False otherwise
+        """
+        return getattr(broker, 'credentials_configured', False)
+    
+    def get_all_balances_with_status(self) -> Dict:
+        """
+        Get balances for all accounts with connection and credential status.
+        
+        CRITICAL FIX (Jan 23, 2026): Provide detailed status for all users to improve visibility.
+        This helps users understand why they can't see their account balances.
+        
+        Returns:
+            dict with structure: {
+                'master': {broker_type: {'balance': float, 'connected': bool}, ...},
+                'users': {
+                    user_id: {
+                        broker_type: {
+                            'balance': float,
+                            'connected': bool,
+                            'credentials_configured': bool
+                        },
+                        ...
+                    },
+                    ...
+                }
+            }
+        """
+        result = {
+            'master': {},
+            'users': {}
+        }
+        
+        # Master balances with status
+        for broker_type, broker in self.master_brokers.items():
+            result['master'][broker_type.value] = {
+                'balance': broker.get_account_balance() if broker.connected else 0.0,
+                'connected': broker.connected
+            }
+        
+        # User balances with status - include ALL users
+        # First from metadata
+        for user_id in self._user_metadata.keys():
+            if user_id not in result['users']:
+                result['users'][user_id] = {}
+        
+        # Then from connected users
+        for user_id, user_brokers in self.user_brokers.items():
+            if user_id not in result['users']:
+                result['users'][user_id] = {}
+            for broker_type, broker in user_brokers.items():
+                result['users'][user_id][broker_type.value] = {
+                    'balance': broker.get_account_balance() if broker.connected else 0.0,
+                    'connected': broker.connected,
+                    'credentials_configured': self._get_broker_credentials_status(broker)
+                }
+        
+        # Finally from _all_user_brokers (disconnected users)
+        for (user_id, broker_type), broker in self._all_user_brokers.items():
+            if user_id not in result['users']:
+                result['users'][user_id] = {}
+            
+            if broker_type.value not in result['users'][user_id]:
+                result['users'][user_id][broker_type.value] = {
+                    'balance': 0.0,  # Disconnected, so balance is 0 or unknown
+                    'connected': broker.connected,
+                    'credentials_configured': self._get_broker_credentials_status(broker)
+                }
         
         return result
     

@@ -3341,6 +3341,12 @@ class CoinbaseBroker(BaseBroker):
                     balance_data = self._get_account_balance_detailed()
                     master_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
                     
+                    # CRITICAL: Log if master balance fetch failed
+                    if not balance_data or master_balance <= 0:
+                        logger.warning("⚠️  Master balance could not be retrieved for copy trading")
+                        logger.warning(f"   Balance data: {balance_data}")
+                        logger.warning("   Position sizing for users may fail without valid master balance")
+                    
                     # Get execution price
                     exec_price = fill_price if (fill_price and fill_price > 0) else self.get_current_price(symbol)
                     
@@ -3348,9 +3354,29 @@ class CoinbaseBroker(BaseBroker):
                     broker_name = self.broker_type.value.lower() if hasattr(self, 'broker_type') else 'coinbase'
                     
                     # ✅ FIX 5: VERIFY COPY ENGINE SIGNAL EMISSION
-                    logger.info("📡 Emitting trade signal to copy engine")
+                    logger.info("=" * 70)
+                    logger.info("📡 EMITTING TRADE SIGNAL TO COPY ENGINE")
+                    logger.info("=" * 70)
+                    logger.info(f"   Master Account: {self.account_identifier}")
+                    logger.info(f"   Broker: {broker_name.upper()}")
+                    logger.info(f"   Symbol: {symbol}")
+                    logger.info(f"   Side: {side.upper()}")
+                    logger.info(f"   Size: {quantity} ({size_type})")
+                    logger.info(f"   Price: ${exec_price:.2f}" if exec_price else "   Price: N/A")
+                    logger.info(f"   Master Balance: ${master_balance:.2f}")
+                    logger.info("=" * 70)
                     
                     # Emit signal
+                    # CRITICAL FIX (Jan 23, 2026): Add order_status parameter
+                    # Use actual order status from order_dict if available, otherwise assume FILLED
+                    # This is accurate because this code runs after fill confirmation
+                    actual_status = order_dict.get('status', 'FILLED').upper() if order_dict else 'FILLED'
+                    # Map partial fills to PARTIALLY_FILLED for consistency
+                    if actual_status in ['PARTIAL_FILL', 'PARTIAL', 'PARTIALLY_FILLED']:
+                        signal_status = 'PARTIALLY_FILLED'
+                    else:
+                        signal_status = actual_status
+                    
                     signal_emitted = emit_trade_signal(
                         broker=broker_name,
                         symbol=symbol,
@@ -3359,15 +3385,23 @@ class CoinbaseBroker(BaseBroker):
                         size=quantity,
                         size_type=size_type,
                         order_id=order_dict.get('order_id', client_order_id),
-                        master_balance=master_balance
+                        master_balance=master_balance,
+                        order_status=signal_status  # Use actual order status
                     )
                     
                     # ✅ FIX 5: CONFIRM SIGNAL EMISSION STATUS
                     if signal_emitted:
-                        logger.info(f"✅ Trade signal emitted successfully for {symbol} {side}")
+                        logger.info("✅ Trade signal emitted successfully")
+                        logger.info(f"   🔔 Users will now receive this trade")
+                        logger.info(f"   📊 Check copy_trade_engine logs for user execution results")
                     else:
-                        logger.error(f"❌ Trade signal emission FAILED for {symbol} {side}")
-                        logger.error("   ⚠️ User accounts will NOT copy this trade!")
+                        logger.error("=" * 70)
+                        logger.error("❌ CRITICAL: TRADE SIGNAL EMISSION FAILED")
+                        logger.error("=" * 70)
+                        logger.error(f"   Symbol: {symbol}, Side: {side}")
+                        logger.error("   ⚠️  User accounts will NOT copy this trade!")
+                        logger.error("   🔧 Check trade_signal_emitter.py logs for error details")
+                        logger.error("=" * 70)
             except Exception as signal_err:
                 # Don't fail the trade if signal emission fails
                 logger.warning(f"   ⚠️ Trade signal emission failed: {signal_err}")
@@ -5052,6 +5086,31 @@ class KrakenBroker(BaseBroker):
         self._kraken_rate_mode = None  # KrakenRateMode enum
         self._kraken_rate_profile = None  # Rate profile dict
     
+    def _initialize_kraken_market_data(self):
+        """
+        Initialize Kraken market data for dynamic minimum volumes.
+        
+        This fetches trading pair information from Kraken API and caches it.
+        Called after successful connection to ensure API is available.
+        """
+        try:
+            from bot.kraken_market_data import get_kraken_market_data
+            market_data = get_kraken_market_data()
+            if market_data.fetch_and_cache(self.kraken_api):
+                pair_count = len(market_data.get_all_pairs())
+                logger.info(f"   ✅ Market data loaded: {pair_count} trading pairs with minimum volumes")
+                return True
+            else:
+                logger.debug("   Market data will use fallback to static minimums")
+                return False
+        except ImportError:
+            logger.debug("   Market data module not available, using static minimums")
+            return False
+        except Exception as e:
+            logger.warning(f"   ⚠️  Could not load market data: {e}")
+            logger.warning("   Will use static minimum volumes as fallback")
+            return False
+    
     def _immediate_nonce_jump(self):
         """
         Immediately jump nonce forward when a nonce error is detected.
@@ -5801,6 +5860,10 @@ class KrakenBroker(BaseBroker):
                             self.exit_only_mode = False
                         
                         logger.info("=" * 70)
+                        
+                        # CRITICAL FIX (Jan 23, 2026): Initialize market data right after connection
+                        # Fetch minimum volumes for all trading pairs to prevent order rejections
+                        self._initialize_kraken_market_data()
                         
                         # CRITICAL FIX (Jan 18, 2026): Add post-connection delay
                         # After successful connection test, wait before allowing next API call
@@ -7147,6 +7210,10 @@ class KrakenBroker(BaseBroker):
                     logging.debug("✅ Symbol mapper initialized with Kraken API data")
                 except Exception as mapper_err:
                     logging.warning(f"⚠️  Could not initialize symbol mapper: {mapper_err}")
+            
+            # CRITICAL FIX (Jan 23, 2026): Initialize market data for dynamic minimum volumes
+            # This prevents "volume minimum not met" rejections by fetching actual pair minimums
+            self._initialize_kraken_market_data()
             
             # Get all tradable asset pairs (returns pandas DataFrame)
             # Suppress pykrakenapi's print() statements
