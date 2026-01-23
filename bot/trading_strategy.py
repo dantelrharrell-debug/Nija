@@ -199,11 +199,11 @@ MIN_PROFIT_BUFFER = 0.002  # 0.2% safety buffer
 MIN_PROFIT_THRESHOLD = 0.016  # 1.6% minimum profit (spread + fees + buffer)
 
 # PROFIT PROTECTION: Never Break Even, Never Loss (Jan 23, 2026)
-# NIJA is for PROFIT ONLY - once profitable, protect gains with trailing stop
-# Maximum 5% of gain allowed as pullback - NIJA can take profit earlier if desired
-# Peak is always tracked, and NIJA only allows maximum 5% OF THE GAIN as pullback
+# NIJA is for PROFIT ONLY - take profit when profit decreases more than 0.5%
+# Fixed 0.5% pullback allowed - exit when profit drops 0.5%+ from previous check
+# Learning and adjusting: exit when pullback exceeds 0.5 percentage points
 PROFIT_PROTECTION_ENABLED = True  # Enable profit protection system
-PROFIT_PROTECTION_PULLBACK_PCT = 0.05  # Maximum 5% of gain as pullback (0.05 = 5% of the profit)
+PROFIT_PROTECTION_PULLBACK_FIXED = 0.005  # Fixed 0.5% pullback allowed (0.005 = 0.5 percentage points)
 PROFIT_PROTECTION_MIN_PROFIT = 0.016  # Must exceed min threshold (1.6% for Coinbase) before protection activates
 PROFIT_PROTECTION_MIN_PROFIT_KRAKEN = 0.005  # Must exceed min threshold (0.5% for Kraken) before protection activates
 PROFIT_PROTECTION_NEVER_BREAKEVEN = True  # Never allow profitable positions to break even
@@ -2252,9 +2252,9 @@ class TradingStrategy:
                                     continue
                                 
                                 # 💎 PROFIT PROTECTION: Never Break Even, Never Loss (Jan 23, 2026)
-                                # NIJA is for PROFIT ONLY - take profit immediately when profit starts decreasing
-                                # No peak tracking needed - just exit when profit goes down from last check
-                                # Learning and adjusting: exit as soon as NIJA starts to lose profit
+                                # NIJA is for PROFIT ONLY - exit when profit decreases more than 0.5%
+                                # Fixed 0.5% pullback allowed - exit when profit drops 0.5%+ from previous check
+                                # Learning and adjusting: allow small pullback but exit on larger decrease
                                 if PROFIT_PROTECTION_ENABLED:
                                     previous_profit_pct = pnl_data.get('previous_profit_pct', 0.0)
                                     
@@ -2266,26 +2266,34 @@ class TradingStrategy:
                                     
                                     protection_min_profit = PROFIT_PROTECTION_MIN_PROFIT_KRAKEN if broker_type == BrokerType.KRAKEN else PROFIT_PROTECTION_MIN_PROFIT
                                     
-                                    # RULE 1: Immediate Exit on Profit Decrease
-                                    # If position is profitable AND profit is decreasing, exit immediately
-                                    # This allows NIJA to learn and adjust - no waiting for peaks
+                                    # RULE 1: Exit on Profit Decrease > 0.5%
+                                    # If position is profitable AND profit decreases by more than 0.5%, exit
+                                    # Example: 3.0% → 2.9% (0.1% decrease) = HOLD
+                                    #          3.0% → 2.5% (0.5% decrease) = EXIT
+                                    #          3.0% → 2.4% (0.6% decrease) = EXIT
                                     if pnl_percent >= protection_min_profit and previous_profit_pct >= protection_min_profit:
-                                        # Check if profit is decreasing
-                                        if pnl_percent < previous_profit_pct:
-                                            profit_decrease = (previous_profit_pct - pnl_percent) * 100
-                                            logger.warning(f"   💎 PROFIT PROTECTION: {symbol} profit decreasing")
+                                        # Calculate decrease from previous profit
+                                        profit_decrease = previous_profit_pct - pnl_percent
+                                        
+                                        # Exit if decrease exceeds 0.5%
+                                        if profit_decrease >= PROFIT_PROTECTION_PULLBACK_FIXED:
+                                            logger.warning(f"   💎 PROFIT PROTECTION: {symbol} profit pullback exceeded")
                                             logger.warning(f"      Previous profit: {previous_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
-                                            logger.warning(f"      Decrease: {profit_decrease:.3f}%")
-                                            logger.warning(f"   🔒 TAKING PROFIT NOW - NIJA EXITS WHEN PROFIT STARTS DECREASING!")
+                                            logger.warning(f"      Pullback: {profit_decrease*100:.3f}% (max allowed: 0.5%)")
+                                            logger.warning(f"   🔒 TAKING PROFIT NOW - PULLBACK EXCEEDS 0.5%!")
                                             positions_to_exit.append({
                                                 'symbol': symbol,
                                                 'quantity': quantity,
-                                                'reason': f'Profit decreasing: was {previous_profit_pct*100:.2f}%, now {pnl_percent*100:.2f}%'
+                                                'reason': f'Profit pullback {profit_decrease*100:.2f}% exceeded 0.5% limit'
                                             })
                                             continue
                                         
                                         # Log protection status
-                                        logger.debug(f"   💎 Profit increasing: {symbol} at {pnl_percent*100:+.2f}% (previous: {previous_profit_pct*100:+.2f}%)")
+                                        if profit_decrease > 0:
+                                            cushion = (PROFIT_PROTECTION_PULLBACK_FIXED - profit_decrease) * 100
+                                            logger.debug(f"   💎 Profit pullback within limit: {symbol} at {pnl_percent*100:+.2f}% (pullback: {profit_decrease*100:.3f}%, cushion: {cushion:.3f}%)")
+                                        else:
+                                            logger.debug(f"   💎 Profit increasing: {symbol} at {pnl_percent*100:+.2f}% (previous: {previous_profit_pct*100:+.2f}%)")
                                     
                                     # RULE 2: Never Break Even Protection
                                     # If position was profitable above minimum threshold and current profit approaches breakeven, exit immediately
