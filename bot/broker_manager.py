@@ -2909,21 +2909,21 @@ class CoinbaseBroker(BaseBroker):
                     
                     logger.info(f"   Derived base_increment={base_increment} precision={precision} → rounded={base_size_rounded}")
                     
-                    # FINAL CHECK: If still too small, log detailed error and try anyway
-                    # Coinbase may accept it or provide better error message
+                    # FINAL CHECK: If still too small, mark as dust and skip
+                    # This is expected behavior for very small positions, not an error
                     if base_size_rounded <= 0 or base_size_rounded < base_increment:
-                        logger.error(f"   ❌ Position too small to sell with current precision rules")
-                        logger.error(f"   Symbol: {symbol}, Base: {base_currency}")
-                        logger.error(f"   Available: {available_base:.8f}" if skip_preflight else f"   Available: (preflight skipped)")
-                        logger.error(f"   Requested: {requested_qty}")
-                        logger.error(f"   Increment: {base_increment}, Precision: {precision}")
-                        logger.error(f"   Rounded: {base_size_rounded}")
-                        logger.error(f"   ⚠️ This position cannot be sold via API and may need manual intervention")
+                        logger.warning(f"   💡 Position too small to sell - marking as dust")
+                        logger.info(f"   Symbol: {symbol}, Base: {base_currency}")
+                        logger.info(f"   Available: {available_base:.8f}" if not skip_preflight else f"   Available: (preflight skipped)")
+                        logger.info(f"   Requested: {requested_qty}")
+                        logger.info(f"   Increment: {base_increment}, Precision: {precision}")
+                        logger.info(f"   Rounded: {base_size_rounded}")
+                        logger.info(f"   💡 This dust position will be retried in 24h in case it grows")
                         
                         return {
-                            "status": "unfilled",
+                            "status": "skipped_dust",
                             "error": "INVALID_SIZE",
-                            "message": f"Position too small: {symbol} rounded to {base_size_rounded} (min: {base_increment}). Manual sell may be required.",
+                            "message": f"Position too small (dust): {symbol} rounded to {base_size_rounded} (min: {base_increment}). Will retry later.",
                             "partial_fill": False,
                             "filled_pct": 0.0
                         }
