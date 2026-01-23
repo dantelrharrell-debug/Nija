@@ -58,7 +58,7 @@ Add these to your `.env` file:
 COPY_TRADING_MODE=MASTER_FOLLOW
 
 # Set initial capital tracking (RECOMMENDED)
-INITIAL_CAPITAL=LIVE
+INITIAL_CAPITAL=auto
 ```
 
 ### Step 3: Verify User Accounts
@@ -191,7 +191,7 @@ KRAKEN_MASTER_API_SECRET=<secret>         # MANDATORY
 
 # User Requirements
 COPY_TRADING_MODE=MASTER_FOLLOW           # MANDATORY
-INITIAL_CAPITAL=LIVE                      # RECOMMENDED
+INITIAL_CAPITAL=auto                      # RECOMMENDED
 
 # User Credentials (for each user)
 KRAKEN_USER_<FIRSTNAME>_API_KEY=<key>     # MANDATORY

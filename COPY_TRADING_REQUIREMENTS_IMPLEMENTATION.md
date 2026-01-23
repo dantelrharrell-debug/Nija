@@ -63,7 +63,7 @@ if not user_reqs.all_met():
 Updated with:
 - `PRO_MODE=true` - Marked as MANDATORY for copy trading
 - `COPY_TRADING_MODE=MASTER_FOLLOW` - Marked as MANDATORY with clear documentation
-- `INITIAL_CAPITAL=LIVE` - Added as RECOMMENDED setting
+- `INITIAL_CAPITAL=auto` - Added as RECOMMENDED setting (supports "auto" and "LIVE")
 - Comprehensive inline documentation explaining each requirement
 
 ### 4. Startup Logging
@@ -203,7 +203,7 @@ $ codeql_checker
 PRO_MODE=true
 LIVE_TRADING=1
 COPY_TRADING_MODE=MASTER_FOLLOW
-INITIAL_CAPITAL=LIVE
+INITIAL_CAPITAL=auto
 ```
 
 **Step 2:** Verify Kraken credentials

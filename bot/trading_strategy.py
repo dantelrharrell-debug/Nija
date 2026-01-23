@@ -1258,18 +1258,25 @@ class TradingStrategy:
             # FIX #1: Use live capital calculation instead of $100 fake default
             # Calculate initial capital estimate from environment or fallback to minimal default
             # This will be updated with actual broker balances after connection
-            initial_capital_str = os.getenv('INITIAL_CAPITAL', '0')
-            try:
-                initial_capital = float(initial_capital_str)
-                if initial_capital <= 0:
-                    # Use minimal placeholder (will be replaced with live balance after broker connection)
-                    initial_capital = PLACEHOLDER_CAPITAL
-                    logger.info(f"ℹ️ INITIAL_CAPITAL not set, will use live broker balance after connection")
-                else:
-                    logger.info(f"ℹ️ Using INITIAL_CAPITAL=${initial_capital:.2f} (will be updated with live balance)")
-            except (ValueError, TypeError):
-                logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, will use live broker balance")
+            initial_capital_str = os.getenv('INITIAL_CAPITAL', 'auto').strip().upper()
+            
+            # Support "auto" and "LIVE" as aliases for automatic balance detection
+            if initial_capital_str in ('AUTO', 'LIVE'):
                 initial_capital = PLACEHOLDER_CAPITAL
+                logger.info(f"ℹ️ INITIAL_CAPITAL={initial_capital_str.lower()} mode enabled - will use live broker balance after connection")
+            else:
+                # Try to parse as numeric value
+                try:
+                    initial_capital = float(initial_capital_str)
+                    if initial_capital <= 0:
+                        # Use minimal placeholder (will be replaced with live balance after broker connection)
+                        initial_capital = PLACEHOLDER_CAPITAL
+                        logger.info(f"ℹ️ INITIAL_CAPITAL not set or zero, will use live broker balance after connection")
+                    else:
+                        logger.info(f"ℹ️ Using INITIAL_CAPITAL=${initial_capital:.2f} (will be updated with live balance)")
+                except (ValueError, TypeError):
+                    logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, defaulting to auto mode (live broker balance)")
+                    initial_capital = PLACEHOLDER_CAPITAL
             
             allocation_strategy = os.getenv('ALLOCATION_STRATEGY', 'conservative')
             

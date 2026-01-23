@@ -35,19 +35,26 @@ logger.info(f"💰 MASTER ACCOUNT BALANCE: ${master_balance:,.2f}")
 ### ✅ AFTER (Fixed)
 ```python
 # bot/trading_strategy.py (NEW)
-PLACEHOLDER_CAPITAL = 1.0  # ✅ Named constant
+PLACEHOLDER_CAPITAL = 0.0  # ✅ No default capital - MUST be set from live balance
 
-initial_capital_str = os.getenv('INITIAL_CAPITAL', '0')  # ✅ Default to 0
-try:
-    initial_capital = float(initial_capital_str)
-    if initial_capital <= 0:
+initial_capital_str = os.getenv('INITIAL_CAPITAL', 'auto').strip().upper()  # ✅ Default to auto
+
+# Support "auto" and "LIVE" as aliases for automatic balance detection
+if initial_capital_str in ('AUTO', 'LIVE'):
+    initial_capital = PLACEHOLDER_CAPITAL
+    logger.info(f"ℹ️ INITIAL_CAPITAL={initial_capital_str.lower()} mode enabled - will use live broker balance after connection")
+else:
+    # Try to parse as numeric value
+    try:
+        initial_capital = float(initial_capital_str)
+        if initial_capital <= 0:
+            initial_capital = PLACEHOLDER_CAPITAL  # ✅ Obvious placeholder
+            logger.info("ℹ️ INITIAL_CAPITAL not set or zero, will use live broker balance after connection")
+        else:
+            logger.info(f"ℹ️ Using INITIAL_CAPITAL=${initial_capital:.2f} (will be updated)")
+    except (ValueError, TypeError):
+        logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, defaulting to auto mode (live broker balance)")
         initial_capital = PLACEHOLDER_CAPITAL  # ✅ Obvious placeholder
-        logger.info("ℹ️ Will use live broker balance after connection")
-    else:
-        logger.info(f"ℹ️ Using INITIAL_CAPITAL=${initial_capital:.2f} (will be updated)")
-except (ValueError, TypeError):
-    logger.warning(f"⚠️ Invalid INITIAL_CAPITAL, will use live broker balance")
-    initial_capital = PLACEHOLDER_CAPITAL  # ✅ Obvious placeholder
 
 # Calculate LIVE multi-broker capital
 coinbase_balance = 0.0
