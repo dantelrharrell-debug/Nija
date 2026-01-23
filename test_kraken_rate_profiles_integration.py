@@ -10,6 +10,8 @@ import sys
 import os
 
 # Add bot directory to path FIRST to avoid bot/__init__.py
+# The bot/__init__.py imports many dependencies (coinbase, etc.) which may not be installed
+# in the test environment. We only need kraken_rate_profiles.py which has no external deps.
 bot_dir = os.path.join(os.path.dirname(__file__), 'bot')
 sys.path.insert(0, bot_dir)
 

@@ -5046,7 +5046,11 @@ class KrakenBroker(BaseBroker):
                 if category and self._kraken_rate_profile and calculate_min_interval:
                     # Use category-specific rate limit from profile
                     min_interval = calculate_min_interval(category, self._kraken_rate_mode)
-                    category_key = category.value if hasattr(category, 'value') else str(category)
+                    # Extract category key safely - check if it's an enum first
+                    if KrakenAPICategory and isinstance(category, type(KrakenAPICategory.ENTRY)):
+                        category_key = category.value
+                    else:
+                        category_key = str(category)
                     last_call = self._last_call_by_category.get(category_key, 0)
                     
                     logger.debug(f"   📊 Rate limit for {method} ({category_key}): {min_interval:.1f}s")
