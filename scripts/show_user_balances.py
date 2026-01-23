@@ -35,6 +35,12 @@ def show_balances_table():
     print(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
     
+    # CRITICAL FIX: Connect users from config before displaying balances
+    # This ensures user accounts are loaded and visible
+    print("\n🔄 Loading user accounts from configuration...")
+    multi_account_broker_manager.connect_users_from_config()
+    print("")
+    
     # Get all balances
     balances = multi_account_broker_manager.get_all_balances()
     
@@ -69,6 +75,7 @@ def show_balances_table():
             user_total = 0.0
             if brokers:
                 for broker, balance in brokers.items():
+                    # Show balance, even if $0.00 (indicates disconnected but configured broker)
                     print(f"      {broker.upper():13} {format_currency(balance):>15}")
                     user_total += balance
                 print("   " + "-" * 76)
@@ -97,6 +104,10 @@ def show_balances_table():
 
 def show_balances_json():
     """Display balances as JSON"""
+    # CRITICAL FIX: Connect users from config before displaying balances
+    # This ensures user accounts are loaded and visible
+    multi_account_broker_manager.connect_users_from_config()
+    
     balances = multi_account_broker_manager.get_all_balances()
     
     # Add metadata
