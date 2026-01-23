@@ -5627,19 +5627,43 @@ class KrakenBroker(BaseBroker):
                         usdt_balance = float(result.get('USDT', 0))
                         
                         total = usd_balance + usdt_balance
+                        
+                        # FIX (Jan 23, 2026): Calculate held funds to get total account equity
+                        # This ensures EXIT-ONLY mode is based on total funds (available + held)
+                        # not just available balance, matching the logic in get_account_balance()
+                        balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+                        trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
+                        held_amount = 0.0
+                        
+                        if trade_balance and 'result' in trade_balance:
+                            tb_result = trade_balance['result']
+                            # eb = equivalent balance (total balance including held orders)
+                            # tb = trade balance (free margin available)
+                            # held = eb - tb
+                            eb = float(tb_result.get('eb', 0))
+                            tb = float(tb_result.get('tb', 0))
+                            held_amount = eb - tb if eb > tb else 0.0
+                        
+                        # Calculate total funds (available + held) for minimum balance check
+                        total_funds = total + held_amount
+                        
                         logger.info(f"   Account: {self.account_identifier}")
                         logger.info(f"   USD Balance: ${usd_balance:.2f}")
                         logger.info(f"   USDT Balance: ${usdt_balance:.2f}")
-                        logger.info(f"   Total: ${total:.2f}")
+                        logger.info(f"   Total Available: ${total:.2f}")
+                        if held_amount > 0:
+                            logger.info(f"   Held in Orders: ${held_amount:.2f}")
+                            logger.info(f"   Total Funds: ${total_funds:.2f}")
                         
                         # Initialize Kraken rate profile based on account balance (Jan 23, 2026)
                         # Separate entry/exit/monitoring API budgets for optimal performance
+                        # Use total_funds for rate profile selection to match actual capital capacity
                         if get_kraken_rate_profile is not None and KrakenRateMode is not None:
                             # Auto-select rate mode based on account balance
-                            self._kraken_rate_profile = get_kraken_rate_profile(account_balance=total)
+                            self._kraken_rate_profile = get_kraken_rate_profile(account_balance=total_funds)
                             self._kraken_rate_mode = (
-                                KrakenRateMode.LOW_CAPITAL if total < 100.0 
-                                else KrakenRateMode.STANDARD if total < 1000.0 
+                                KrakenRateMode.LOW_CAPITAL if total_funds < 100.0 
+                                else KrakenRateMode.STANDARD if total_funds < 1000.0 
                                 else KrakenRateMode.AGGRESSIVE
                             )
                             logger.info(f"   📊 Rate Profile: {self._kraken_rate_profile['name']}")
@@ -5652,11 +5676,13 @@ class KrakenBroker(BaseBroker):
                         # Kraken is PRIMARY engine for small accounts ($25+)
                         # FIX 2: FORCED EXIT OVERRIDES - Allow connection even when balance < minimum
                         # This enables emergency sells to close losing positions
-                        if total < KRAKEN_MINIMUM_BALANCE:
+                        # FIX (Jan 23, 2026): Use total_funds (available + held) for minimum check
+                        if total_funds < KRAKEN_MINIMUM_BALANCE:
                             logger.warning("=" * 70)
                             logger.warning("⚠️ KRAKEN: Account balance below minimum for NEW ENTRIES")
                             logger.warning("=" * 70)
-                            logger.warning(f"   Your balance: ${total:.2f}")
+                            logger.warning(f"   Available balance: ${total:.2f}")
+                            logger.warning(f"   Total funds (incl. held): ${total_funds:.2f}")
                             logger.warning(f"   Minimum for entries: ${KRAKEN_MINIMUM_BALANCE:.2f}")
                             logger.warning(f"   ")
                             logger.warning(f"   📋 Trading Mode: EXIT-ONLY")
