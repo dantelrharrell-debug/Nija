@@ -8,12 +8,31 @@ Kraken Pro characteristics:
 - Market dynamics: Professional-grade trading platform
 - Liquidity: Excellent for major pairs, good for derivatives
 
+⚠️  CRITICAL: SHORT SELLING SUPPORT
+Kraken supports shorting ONLY on specific market types:
+- ❌ SPOT MARKETS (BTC-USD, ETH-USD, etc.): NO SHORTING SUPPORTED
+  - These are regular crypto trades (buy/sell assets you own)
+  - Cannot borrow assets to short sell on spot markets
+  - Strategy will generate SHORT signals, but execution blocks them
+  
+- ✅ FUTURES/PERPETUALS (BTC-PERP, ETH-PERP, etc.): SHORTING SUPPORTED
+  - Derivative contracts with built-in long/short capabilities
+  - Can profit from both rising and falling prices
+  - Leveraged positions (up to 50x on Kraken Futures)
+  - Strategy SHORT signals are executed on these markets
+
 Strategy Focus:
-- Bidirectional trading (profit from both directions)
+- Bidirectional trading (profit from both directions ON FUTURES)
 - Lower profit targets possible (0.5%+) due to low fees
 - Can hold positions longer (lower fee pressure)
 - Support for futures and options strategies
-- More aggressive short selling (profitable with low fees)
+- Short selling only on futures/perpetuals (not spot)
+
+Exchange Capability Enforcement:
+- exchange_capabilities.py defines what Kraken actually supports
+- APEX strategy generates signals based on market conditions
+- Execution layer blocks shorts on spot, allows on futures
+- See bot/exchange_capabilities.py for full capability matrix
 """
 
 from dataclasses import dataclass
@@ -270,7 +289,10 @@ Kraken Trading Configuration:
     - Futures: {futures_status}
     - Stocks: ✅ Available via AlpacaBroker integration
     - Options: {options_status}
-  Short Selling: PROFITABLE (vs unprofitable on Coinbase)
+  Short Selling:
+    - Spot Markets (BTC-USD, ETH-USD): ❌ NOT SUPPORTED
+    - Futures/Perpetuals (BTC-PERP): ✅ SUPPORTED (profitable with low fees)
+    - Note: Strategy generates signals, execution blocks spot shorts
   Multi-Asset: ENABLED for master and all users
 """
 

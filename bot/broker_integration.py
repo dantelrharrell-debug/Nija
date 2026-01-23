@@ -52,20 +52,21 @@ except ImportError:
         ValidatedOrder = None
         OrderIntent = None
 
-# Import tier configuration for minimum enforcement
+# Import tier configuration for minimum enforcement and auto-resize
 try:
     from bot.tier_config import (
-        get_tier_from_balance, get_tier_config, validate_trade_size, TradingTier
+        get_tier_from_balance, get_tier_config, validate_trade_size, auto_resize_trade, TradingTier
     )
 except ImportError:
     try:
         from tier_config import (
-            get_tier_from_balance, get_tier_config, validate_trade_size, TradingTier
+            get_tier_from_balance, get_tier_config, validate_trade_size, auto_resize_trade, TradingTier
         )
     except ImportError:
         get_tier_from_balance = None
         get_tier_config = None
         validate_trade_size = None
+        auto_resize_trade = None
         TradingTier = None
 
 # Import Kraken symbol mapper
@@ -963,15 +964,34 @@ class KrakenBrokerAdapter(BrokerInterface):
                     user_tier = get_tier_from_balance(current_balance)
                     tier_config = get_tier_config(user_tier)
                     
-                    # Validate trade size for tier
-                    is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
-                    
-                    if not is_valid:
-                        return (False, kraken_symbol,
-                                f"[{user_tier.value} Tier] {reason}. Account balance: ${current_balance:.2f}")
-                    
-                    # Store validation success for logging outside try-except
-                    tier_validation_result = (user_tier.value, order_size_usd)
+                    # AUTO-RESIZE trade instead of rejecting (smarter approach)
+                    if auto_resize_trade:
+                        resized_size, resize_reason = auto_resize_trade(order_size_usd, user_tier, current_balance)
+                        
+                        if resized_size == 0.0:
+                            # Trade is below minimum
+                            return (False, kraken_symbol,
+                                    f"[{user_tier.value} Tier] {resize_reason}")
+                        elif resized_size != order_size_usd:
+                            # Trade was auto-resized
+                            logger.info(f"📏 AUTO-RESIZE: ${order_size_usd:.2f} → ${resized_size:.2f} ({resize_reason})")
+                            # Update size to resized amount
+                            size = resized_size
+                            order_size_usd = resized_size
+                            tier_validation_result = (user_tier.value, resized_size, True)  # True = was resized
+                        else:
+                            # Trade is within limits
+                            tier_validation_result = (user_tier.value, order_size_usd, False)  # False = no resize
+                    else:
+                        # Fallback to old validation
+                        is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
+                        
+                        if not is_valid:
+                            return (False, kraken_symbol,
+                                    f"[{user_tier.value} Tier] {reason}. Account balance: ${current_balance:.2f}")
+                        
+                        # Store validation success for logging outside try-except
+                        tier_validation_result = (user_tier.value, order_size_usd, False)
                     
             except Exception as tier_err:
                 # Don't block trade if tier validation fails - just log warning
@@ -979,8 +999,15 @@ class KrakenBrokerAdapter(BrokerInterface):
         
         # Log tier validation success (outside try-except for performance)
         if tier_validation_result:
-            tier_name, validated_size = tier_validation_result
-            logger.info(f"✅ Tier validation passed: [{tier_name}] ${validated_size:.2f} trade")
+            if len(tier_validation_result) == 3:
+                tier_name, validated_size, was_resized = tier_validation_result
+                if was_resized:
+                    logger.info(f"📏 Trade auto-resized: [{tier_name}] ${validated_size:.2f}")
+                else:
+                    logger.info(f"✅ Tier validation passed: [{tier_name}] ${validated_size:.2f} trade")
+            else:
+                tier_name, validated_size = tier_validation_result
+                logger.info(f"✅ Tier validation passed: [{tier_name}] ${validated_size:.2f} trade")
         
         # ✅ REQUIREMENT #5: Broker adapter validation (if available)
         if BrokerAdapterFactory and TradeIntent and OrderIntent:

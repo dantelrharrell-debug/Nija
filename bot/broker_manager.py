@@ -99,17 +99,18 @@ except ImportError:
         validate_kraken_symbol = None
         convert_to_kraken = None
 
-# Import Tier Configuration for minimum enforcement
+# Import Tier Configuration for minimum enforcement and auto-resize
 try:
-    from bot.tier_config import get_tier_from_balance, get_tier_config, validate_trade_size
+    from bot.tier_config import get_tier_from_balance, get_tier_config, validate_trade_size, auto_resize_trade
 except ImportError:
     try:
-        from tier_config import get_tier_from_balance, get_tier_config, validate_trade_size
+        from tier_config import get_tier_from_balance, get_tier_config, validate_trade_size, auto_resize_trade
     except ImportError:
         # Fallback: Tier config not available
         get_tier_from_balance = None
         get_tier_config = None
         validate_trade_size = None
+        auto_resize_trade = None
 
 # Configure logger for broker operations
 logger = logging.getLogger('nija.broker')
@@ -6361,28 +6362,68 @@ class KrakenBroker(BaseBroker):
                         # Calculate order size in USD (quantity is already in USD for buy orders)
                         order_size_usd = quantity
                         
-                        # Validate trade size for tier
-                        is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
-                        
-                        if not is_valid:
-                            logging.error(LOG_SEPARATOR)
-                            logging.error("❌ TIER ENFORCEMENT: TRADE SIZE BLOCKED")
-                            logging.error(LOG_SEPARATOR)
-                            logging.error(f"   Tier: {user_tier.value}")
-                            logging.error(f"   Account balance: ${current_balance:.2f}")
-                            logging.error(f"   Trade size: ${order_size_usd:.2f}")
-                            logging.error(f"   Reason: {reason}")
-                            logging.error("   ⚠️  Trade blocked to prevent fee destruction")
-                            logging.error(LOG_SEPARATOR)
-                            return {
-                                "status": "error",
-                                "error": f"[{user_tier.value} Tier] {reason}"
-                            }
-                        
-                        # Log tier validation success
-                        logging.info(f"✅ Tier validation passed: [{user_tier.value}] ${order_size_usd:.2f} trade")
-                        logging.info(f"   Account balance: ${current_balance:.2f}")
-                        logging.info(f"   Tier range: ${tier_config.trade_size_min:.2f}-${tier_config.trade_size_max:.2f}")
+                        # AUTO-RESIZE trade instead of rejecting (smarter approach)
+                        # If trade exceeds tier limits, resize to maximum safe size
+                        if auto_resize_trade:
+                            resized_size, resize_reason = auto_resize_trade(order_size_usd, user_tier, current_balance)
+                            
+                            if resized_size == 0.0:
+                                # Trade is below minimum - cannot resize
+                                logging.error(LOG_SEPARATOR)
+                                logging.error("❌ TIER ENFORCEMENT: TRADE SIZE TOO SMALL")
+                                logging.error(LOG_SEPARATOR)
+                                logging.error(f"   Tier: {user_tier.value}")
+                                logging.error(f"   Account balance: ${current_balance:.2f}")
+                                logging.error(f"   Trade size: ${order_size_usd:.2f}")
+                                logging.error(f"   Reason: {resize_reason}")
+                                logging.error(LOG_SEPARATOR)
+                                return {
+                                    "status": "error",
+                                    "error": f"[{user_tier.value} Tier] {resize_reason}"
+                                }
+                            elif resized_size != order_size_usd:
+                                # Trade was auto-resized
+                                logging.info(LOG_SEPARATOR)
+                                logging.info("📏 AUTO-RESIZE: Trade adjusted to tier limits")
+                                logging.info(LOG_SEPARATOR)
+                                logging.info(f"   Tier: {user_tier.value}")
+                                logging.info(f"   Requested: ${order_size_usd:.2f}")
+                                logging.info(f"   Allowed max: ${resized_size:.2f}")
+                                logging.info(f"   Executed size: ${resized_size:.2f}")
+                                logging.info(f"   Reason: {resize_reason}")
+                                logging.info(LOG_SEPARATOR)
+                                
+                                # Update quantity to resized amount
+                                quantity = resized_size
+                                order_size_usd = resized_size
+                            else:
+                                # Trade is within limits
+                                logging.info(f"✅ Tier validation passed: [{user_tier.value}] ${order_size_usd:.2f} trade")
+                                logging.info(f"   Account balance: ${current_balance:.2f}")
+                                logging.info(f"   Tier range: ${tier_config.trade_size_min:.2f}-${tier_config.trade_size_max:.2f}")
+                        else:
+                            # Fallback to old validation if auto_resize not available
+                            is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
+                            
+                            if not is_valid:
+                                logging.error(LOG_SEPARATOR)
+                                logging.error("❌ TIER ENFORCEMENT: TRADE SIZE BLOCKED")
+                                logging.error(LOG_SEPARATOR)
+                                logging.error(f"   Tier: {user_tier.value}")
+                                logging.error(f"   Account balance: ${current_balance:.2f}")
+                                logging.error(f"   Trade size: ${order_size_usd:.2f}")
+                                logging.error(f"   Reason: {reason}")
+                                logging.error("   ⚠️  Trade blocked to prevent fee destruction")
+                                logging.error(LOG_SEPARATOR)
+                                return {
+                                    "status": "error",
+                                    "error": f"[{user_tier.value} Tier] {reason}"
+                                }
+                            
+                            # Log tier validation success
+                            logging.info(f"✅ Tier validation passed: [{user_tier.value}] ${order_size_usd:.2f} trade")
+                            logging.info(f"   Account balance: ${current_balance:.2f}")
+                            logging.info(f"   Tier range: ${tier_config.trade_size_min:.2f}-${tier_config.trade_size_max:.2f}")
                         
                 except Exception as tier_err:
                     # Don't block trade if tier validation fails - just log warning
