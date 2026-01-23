@@ -35,7 +35,7 @@ logger.info(f"💰 MASTER ACCOUNT BALANCE: ${master_balance:,.2f}")
 ### ✅ AFTER (Fixed)
 ```python
 # bot/trading_strategy.py (NEW)
-PLACEHOLDER_CAPITAL = 1.0  # ✅ Named constant
+PLACEHOLDER_CAPITAL = 0.0  # ✅ No default capital - MUST be set from live balance
 
 initial_capital_str = os.getenv('INITIAL_CAPITAL', 'auto').strip().upper()  # ✅ Default to auto
 
