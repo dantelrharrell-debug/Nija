@@ -74,7 +74,7 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
         name="SAVER",
         capital_min=100.0,
         capital_max=249.0,
-        risk_per_trade_pct=(10.0, 10.0),  # Fixed at 10% for "Starter-Safe" profile
+        risk_per_trade_pct=(10.0, 10.0),  # Fixed at 10% for "Starter-Safe" profile (min=max for tier lock)
         trade_size_min=10.0,  # Minimum $10 (matches Kraken + fee requirements)
         trade_size_max=40.0,
         max_positions=1,  # Single position focus for small accounts

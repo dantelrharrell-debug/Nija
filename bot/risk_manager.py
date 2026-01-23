@@ -475,10 +475,15 @@ class AdaptiveRiskManager:
                     # Use locked tier instead of balance-based detection
                     try:
                         from tier_config import TradingTier
-                        tier = TradingTier[self.tier_lock.upper()]
-                        logger.debug(f"🔒 TIER_LOCK active: Using {self.tier_lock} tier (balance: ${sizing_base:.2f})")
-                    except (KeyError, AttributeError):
-                        logger.warning(f"⚠️ Invalid TIER_LOCK: {self.tier_lock}. Falling back to balance-based tier.")
+                        # Ensure tier_lock is a string before calling upper()
+                        if isinstance(self.tier_lock, str):
+                            tier = TradingTier[self.tier_lock.upper()]
+                            logger.debug(f"🔒 TIER_LOCK active: Using {self.tier_lock} tier (balance: ${sizing_base:.2f})")
+                        else:
+                            logger.warning(f"⚠️ Invalid TIER_LOCK type: {type(self.tier_lock)}. Falling back to balance-based tier.")
+                            tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
+                    except (KeyError, AttributeError) as e:
+                        logger.warning(f"⚠️ Invalid TIER_LOCK: {self.tier_lock}. Falling back to balance-based tier. Error: {e}")
                         tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
                 else:
                     # Standard balance-based tier detection
