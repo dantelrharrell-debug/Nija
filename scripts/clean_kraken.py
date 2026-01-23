@@ -34,6 +34,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'bot'))
 # Import required modules
 from broker_integration import KrakenBrokerAdapter
 
+# Import Kraken symbol mapper for proper symbol conversion
+try:
+    from kraken_symbol_mapper import convert_to_kraken
+except ImportError:
+    convert_to_kraken = None
+
+# Import Kraken adapter utilities for symbol normalization
+try:
+    from kraken_adapter import normalize_kraken_symbol
+except ImportError:
+    normalize_kraken_symbol = None
+
 # Constants
 DUST_THRESHOLD_USD = 1.00  # Ignore positions below $1.00 USD value
 KRAKEN_MIN_ORDER_COST = 10.00  # Kraken minimum order cost
@@ -123,7 +135,8 @@ def cancel_all_orders(adapter: KrakenBrokerAdapter, dry_run: bool = False) -> Tu
                 fail_count += 1
             
             # Rate limiting: small delay between cancellations
-            time.sleep(0.5)
+            # Kraken private API rate limit: ~15 requests per second
+            time.sleep(0.1)
             
         except Exception as e:
             print(f"   ❌ Error cancelling {order['pair']}: {e}")
@@ -131,6 +144,66 @@ def cancel_all_orders(adapter: KrakenBrokerAdapter, dry_run: bool = False) -> Tu
     
     print(f"\n📊 Cancellation Summary: {success_count} succeeded, {fail_count} failed")
     return (success_count, fail_count)
+
+
+def convert_asset_code(asset: str) -> str:
+    """
+    Convert Kraken asset code to standard currency symbol.
+    
+    Args:
+        asset: Kraken asset code (e.g., 'XXBT', 'XETH', 'ADA')
+        
+    Returns:
+        Standard currency symbol (e.g., 'BTC', 'ETH', 'ADA')
+    """
+    # Handle X-prefixed assets (common for major cryptocurrencies)
+    if asset.startswith('X') and len(asset) == 4:
+        # Remove X prefix: XXBT -> XBT, XETH -> ETH
+        asset = asset[1:]
+    
+    # Special case: XBT is Bitcoin
+    if asset == 'XBT':
+        return 'BTC'
+    
+    # Special case: XDG is Dogecoin
+    if asset == 'XDG':
+        return 'DOGE'
+    
+    # Special case: XLM is Stellar (not XMLM)
+    if asset == 'XLM':
+        return 'XLM'
+    
+    # For most other assets, return as-is
+    return asset
+
+
+def get_ticker_pair_for_asset(asset: str, currency: str) -> str:
+    """
+    Construct the correct Kraken ticker pair for an asset.
+    
+    This handles the various Kraken pair naming conventions:
+    - Major assets: XXBTZUSD, XETHZUSD
+    - Some altcoins: ADAUSD, DOTUSD (no X prefix)
+    - Others: varies by asset
+    
+    Args:
+        asset: Original Kraken asset code
+        currency: Converted currency symbol
+        
+    Returns:
+        Kraken ticker pair string
+    """
+    # Try different ticker pair formats
+    # Format 1: Original asset + USD (works for many altcoins)
+    candidates = [
+        f'{asset}USD',      # ADAUSD, DOTUSD
+        f'{asset}ZUSD',     # Some assets use ZUSD
+        f'X{currency}ZUSD', # X-prefixed format
+        f'{currency}USD',   # Simple format
+    ]
+    
+    # Return the first candidate (caller will try all via API)
+    return candidates[0]
 
 
 def get_all_crypto_balances(adapter: KrakenBrokerAdapter) -> List[Dict]:
@@ -153,38 +226,58 @@ def get_all_crypto_balances(adapter: KrakenBrokerAdapter) -> List[Dict]:
             balance_val = float(amount)
             
             # Skip USD/USDT and zero balances
-            if asset in ['ZUSD', 'USDT'] or balance_val <= 0:
+            if asset in ['ZUSD', 'USDT', 'USD'] or balance_val <= 0:
                 continue
             
-            # Convert Kraken asset codes (XXBT -> BTC, XETH -> ETH, etc.)
-            currency = asset
-            if currency.startswith('X') and len(currency) == 4:
-                currency = currency[1:]
-            if currency == 'XBT':
-                currency = 'BTC'
+            # Convert Kraken asset code to standard currency symbol
+            currency = convert_asset_code(asset)
             
-            # Get current price
+            # Get current price using multiple ticker pair attempts
+            current_price = 0.0
+            ticker_pair_used = None
+            
             try:
-                # Construct Kraken ticker pair
+                # Try multiple ticker pair formats
+                ticker_candidates = [
+                    f'{asset}USD',      # Direct format: ADAUSD
+                    f'{asset}ZUSD',     # Z-suffix format
+                    f'X{currency}ZUSD', # X-prefix format: XETHZUSD
+                    f'{currency}USD',   # Simple format: BTCUSD
+                ]
+                
+                # Add special cases for major coins
                 if currency == 'BTC':
-                    ticker_pair = 'XXBTZUSD'
+                    ticker_candidates.insert(0, 'XXBTZUSD')
+                    ticker_candidates.insert(1, 'XBTUSD')
                 elif currency == 'ETH':
-                    ticker_pair = 'XETHZUSD'
-                else:
-                    ticker_pair = f'X{currency}ZUSD'
+                    ticker_candidates.insert(0, 'XETHZUSD')
+                    ticker_candidates.insert(1, 'ETHUSD')
                 
-                ticker_result = adapter._kraken_api_call('Ticker', {'pair': ticker_pair})
-                current_price = 0.0
-                
-                if ticker_result and 'result' in ticker_result:
-                    # Try exact match first, then any available ticker
-                    ticker_data = ticker_result['result'].get(ticker_pair)
-                    if not ticker_data and ticker_result['result']:
-                        ticker_data = list(ticker_result['result'].values())[0]
-                    
-                    if ticker_data:
-                        last_price = ticker_data.get('c', [0, 0])
-                        current_price = float(last_price[0]) if isinstance(last_price, list) else float(last_price)
+                # Try each ticker pair format until one works
+                for ticker_pair in ticker_candidates:
+                    try:
+                        ticker_result = adapter._kraken_api_call('Ticker', {'pair': ticker_pair})
+                        
+                        if ticker_result and 'result' in ticker_result:
+                            # Kraken may return with a different key than requested
+                            ticker_data = None
+                            
+                            # Try exact match first
+                            if ticker_pair in ticker_result['result']:
+                                ticker_data = ticker_result['result'][ticker_pair]
+                            # Try any available ticker (first result)
+                            elif ticker_result['result']:
+                                ticker_data = list(ticker_result['result'].values())[0]
+                            
+                            if ticker_data:
+                                last_price = ticker_data.get('c', [0, 0])
+                                current_price = float(last_price[0]) if isinstance(last_price, list) else float(last_price)
+                                
+                                if current_price > 0:
+                                    ticker_pair_used = ticker_pair
+                                    break  # Success, stop trying
+                    except Exception:
+                        continue  # Try next ticker pair format
                 
                 usd_value = balance_val * current_price if current_price > 0 else 0
                 
@@ -194,12 +287,12 @@ def get_all_crypto_balances(adapter: KrakenBrokerAdapter) -> List[Dict]:
                     'balance': balance_val,
                     'current_price': current_price,
                     'usd_value': usd_value,
-                    'ticker_pair': ticker_pair
+                    'ticker_pair': ticker_pair_used
                 })
                 
             except Exception as price_err:
-                print(f"   ⚠️  Could not get price for {currency}: {price_err}")
-                # Add with unknown price
+                print(f"   ⚠️  Could not get price for {currency} (asset: {asset}): {price_err}")
+                # Add with unknown price - will be excluded from selling
                 balances.append({
                     'asset': asset,
                     'currency': currency,
@@ -281,12 +374,14 @@ def force_sell_all_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False
             continue
         
         try:
-            # Construct symbol (e.g., BTCUSD)
-            symbol = f"{currency}USD"
+            # Construct symbol in standard format (e.g., BTC-USD)
+            # The broker adapter will convert it to Kraken format
+            symbol = f"{currency}-USD"
             
             print(f"   🔴 Selling {currency}: {balance:.8f} (${usd_value:.2f})...")
             
             # Place market sell order
+            # Note: adapter._convert_to_kraken_symbol will handle format conversion
             result = adapter.place_market_order(
                 symbol=symbol,
                 side='sell',
@@ -303,8 +398,10 @@ def force_sell_all_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False
                 print(f"      ❌ FAILED: {currency} - {error}")
                 fail_count += 1
             
-            # Rate limiting: delay between orders
-            time.sleep(1.0)
+            # Rate limiting: delay between orders to avoid hitting API limits
+            # Kraken private API rate limit: ~15 requests per second
+            # Use 0.2s delay to be safe (5 requests/second)
+            time.sleep(0.2)
             
         except Exception as e:
             print(f"   ❌ Error selling {currency}: {e}")
