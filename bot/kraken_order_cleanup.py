@@ -80,18 +80,29 @@ class KrakenOrderCleanup:
                     # Parse order creation time (opentm is Unix timestamp)
                     opentm = order.get('opentm', 0)
                     
+                    # Calculate age, ensuring no negative values from clock skew
+                    age_seconds = max(0, time.time() - opentm) if opentm > 0 else 0
+                    
+                    # Calculate capital tied up in unfilled portion of order
+                    # For partially filled orders, only count the unfilled portion
+                    volume = float(order.get('vol', 0))
+                    vol_exec = float(order.get('vol_exec', 0))
+                    price = float(descr.get('price', 0))
+                    unfilled_volume = volume - vol_exec
+                    cost = unfilled_volume * price if price > 0 else float(order.get('cost', 0))
+                    
                     orders.append({
                         'order_id': order_id,
                         'pair': descr.get('pair', 'UNKNOWN'),
                         'type': descr.get('type', 'UNKNOWN'),  # 'buy' or 'sell'
                         'ordertype': descr.get('ordertype', 'UNKNOWN'),  # 'limit', 'market', etc.
-                        'price': float(descr.get('price', 0)),
-                        'volume': float(order.get('vol', 0)),
-                        'vol_exec': float(order.get('vol_exec', 0)),
-                        'cost': float(order.get('cost', 0)),
+                        'price': price,
+                        'volume': volume,
+                        'vol_exec': vol_exec,
+                        'cost': cost,
                         'status': order.get('status', 'unknown'),
                         'opentm': opentm,
-                        'age_seconds': time.time() - opentm if opentm > 0 else 0
+                        'age_seconds': age_seconds
                     })
                 
                 return orders

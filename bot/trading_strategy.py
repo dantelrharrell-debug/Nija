@@ -526,7 +526,7 @@ class TradingStrategy:
                     # KRAKEN ORDER CLEANUP: Initialize automatic stale order cleanup
                     # This frees up capital tied in unfilled limit orders
                     try:
-                        from kraken_order_cleanup import create_kraken_cleanup
+                        from bot.kraken_order_cleanup import create_kraken_cleanup
                         self.kraken_cleanup = create_kraken_cleanup(kraken, max_order_age_minutes=5)
                         if self.kraken_cleanup:
                             logger.info("   ✅ Kraken order cleanup initialized (max age: 5 minutes)")
@@ -1913,17 +1913,20 @@ class TradingStrategy:
             if self.kraken_cleanup and hasattr(active_broker, 'broker_type') and active_broker.broker_type == BrokerType.KRAKEN:
                 try:
                     # Only run cleanup if enough time has passed (default: 5 minutes)
-                    if self.kraken_cleanup.should_run_cleanup(min_interval_minutes=5):
+                    # Use slightly longer interval than order age to give orders time to fill
+                    if self.kraken_cleanup.should_run_cleanup(min_interval_minutes=6):
                         logger.info("")
                         cancelled_count, capital_freed = self.kraken_cleanup.cleanup_stale_orders(dry_run=False)
                         if cancelled_count > 0:
                             logger.info(f"   🧹 Kraken cleanup: Freed ${capital_freed:.2f} by cancelling {cancelled_count} stale order(s)")
                             # Update balance after freeing capital
                             try:
+                                old_balance = account_balance
                                 new_balance = active_broker.get_account_balance()
-                                if new_balance > account_balance:
-                                    logger.info(f"   💰 Balance increased: ${account_balance:.2f} → ${new_balance:.2f} (+${new_balance - account_balance:.2f})")
-                                    account_balance = new_balance
+                                # Always update balance regardless of whether it increased
+                                account_balance = new_balance
+                                if new_balance > old_balance:
+                                    logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${new_balance:.2f} (+${new_balance - old_balance:.2f})")
                             except Exception as balance_err:
                                 logger.debug(f"   Could not refresh balance: {balance_err}")
                 except Exception as cleanup_err:
