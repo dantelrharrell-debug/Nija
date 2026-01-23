@@ -499,6 +499,12 @@ def main():
             logger.info("   📊 Allocation: Proportional (auto-scaled by balance)")
             try:
                 from bot.copy_trade_engine import start_copy_engine
+                from bot.copy_trading_requirements import log_copy_trading_status
+                
+                # Log copy trading requirements status before starting engine
+                if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
+                    log_copy_trading_status(strategy.multi_account_manager)
+                
                 start_copy_engine(observe_only=False)  # CRITICAL: observe_only=False enables auto-trading
                 logger.info("   ✅ Copy trade engine started in ACTIVE MODE")
                 logger.info("   📡 Users will receive and execute copy trades from master accounts")
