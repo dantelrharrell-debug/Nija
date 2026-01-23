@@ -409,10 +409,95 @@ def get_tier_summary() -> Dict[str, Dict]:
     return summary
 
 
+def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
+                     is_master: bool = False, exchange: str = 'coinbase') -> Tuple[float, str]:
+    """
+    Auto-resize trade to fit within tier limits instead of rejecting.
+    
+    This is a smarter approach than blocking trades - instead of rejecting trades
+    that exceed limits, we automatically resize them to the maximum safe size.
+    
+    Example:
+        Requested: $11.25
+        Allowed max (15%): $9.37
+        Executed size: $9.37 (auto-resized)
+    
+    Args:
+        trade_size: Requested trade size in USD
+        tier: Trading tier
+        balance: Account balance
+        is_master: If True, applies master account flexibility rules
+        exchange: Exchange name for minimum validation
+    
+    Returns:
+        Tuple of (resized_trade_size, reason)
+        - If no resize needed: (original_size, "valid")
+        - If resized: (new_size, "resized from X to Y")
+        - If below minimum: (0.0, "below minimum")
+    """
+    config = get_tier_config(tier)
+    
+    # Get exchange-specific minimum
+    try:
+        from bot.position_sizer import get_exchange_min_trade_size
+        exchange_min = get_exchange_min_trade_size(exchange)
+    except ImportError:
+        try:
+            from position_sizer import get_exchange_min_trade_size
+            exchange_min = get_exchange_min_trade_size(exchange)
+        except ImportError:
+            # Fallback to hardcoded minimums
+            exchange_min = 10.50 if exchange.lower() == 'kraken' else 2.00
+    
+    # Calculate tier-based maximum
+    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+        # Master account with low balance - use flexible max
+        max_risk_pct = 50.0 if balance < 100.0 else 25.0
+        tier_max = balance * (max_risk_pct / 100.0)
+        tier_max = max(tier_max, exchange_min)
+    else:
+        # Standard tier maximum
+        tier_max = config.trade_size_max
+        
+        # Also check max risk percentage
+        max_risk_pct = 25.0 if (is_master and balance < 1000.0) else config.risk_per_trade_pct[1]
+        max_by_risk = balance * (max_risk_pct / 100.0)
+        
+        # Use the more restrictive limit
+        tier_max = min(tier_max, max_by_risk)
+    
+    # Calculate tier minimum
+    tier_min = max(config.trade_size_min, exchange_min)
+    
+    # Small balance exception - allow lower minimums if max risk < tier min
+    max_risk_by_pct = balance * (config.risk_per_trade_pct[1] / 100.0)
+    if max_risk_by_pct < tier_min and not is_master:
+        tier_min = max(exchange_min, max_risk_by_pct)
+    
+    original_size = trade_size
+    
+    # Check if trade is below minimum
+    if trade_size < tier_min:
+        return (0.0, f"Trade ${trade_size:.2f} below minimum ${tier_min:.2f} (cannot resize up)")
+    
+    # Check if trade exceeds maximum - AUTO-RESIZE
+    if trade_size > tier_max:
+        resized_size = tier_max
+        logger.info(f"📏 AUTO-RESIZE: ${original_size:.2f} → ${resized_size:.2f} (tier max: {tier.value})")
+        return (resized_size, f"Auto-resized from ${original_size:.2f} to ${resized_size:.2f} (tier limit)")
+    
+    # Trade is within limits
+    return (trade_size, "valid")
+
+
 def validate_trade_size(trade_size: float, tier: TradingTier, balance: float, 
                        is_master: bool = False, exchange: str = 'coinbase') -> Tuple[bool, str]:
     """
     Validate if a trade size is appropriate for the tier.
+    
+    DEPRECATED: Consider using auto_resize_trade() for smarter trade handling.
+    This function will reject trades that exceed limits, while auto_resize_trade()
+    will intelligently resize them to fit.
     
     MASTER ACCOUNT OVERRIDE:
     Master accounts using BALLER tier can trade with lower minimums when balance is low.
