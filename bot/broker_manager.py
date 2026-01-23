@@ -5096,7 +5096,8 @@ class KrakenBroker(BaseBroker):
         Args:
             method: Kraken API method name (e.g., 'Balance', 'OpenOrders')
             params: Optional parameters dict for the API call
-            category: Optional KrakenAPICategory for rate limiting (usually auto-detected)
+            category: Optional KrakenAPICategory for rate limiting. If None, the category
+                     is auto-detected by _kraken_private_call based on the method name.
             
         Returns:
             API response dict
