@@ -259,7 +259,12 @@ class CopyTradeEngine:
         try:
             from bot.copy_trading_requirements import check_master_requirements
         except ImportError:
-            from copy_trading_requirements import check_master_requirements
+            try:
+                from copy_trading_requirements import check_master_requirements
+            except ImportError as e:
+                logger.error(f"Failed to import copy trading requirements module: {e}")
+                logger.error("Cannot validate copy trading requirements - blocking all copy trades")
+                return results
         
         master_reqs = check_master_requirements(self.multi_account_manager)
         if not master_reqs.all_met():
@@ -414,7 +419,19 @@ class CopyTradeEngine:
             try:
                 from bot.copy_trading_requirements import check_user_requirements
             except ImportError:
-                from copy_trading_requirements import check_user_requirements
+                try:
+                    from copy_trading_requirements import check_user_requirements
+                except ImportError as e:
+                    logger.error(f"Failed to import copy trading requirements module: {e}")
+                    logger.error(f"Cannot validate requirements for {user_id} - skipping copy trade")
+                    return CopyTradeResult(
+                        user_id=user_id,
+                        success=False,
+                        order_id=None,
+                        error_message="Copy trading requirements module not available",
+                        size=0,
+                        size_type=signal.size_type
+                    )
             
             # Get copy_from_master setting from user config
             # Default to True if not specified

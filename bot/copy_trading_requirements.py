@@ -28,7 +28,7 @@ Date: January 23, 2026
 
 import os
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger('nija.copy_requirements')
@@ -121,10 +121,21 @@ def check_master_requirements(multi_account_manager) -> MasterRequirements:
     master_broker_kraken = False
     master_connected = False
     
+    # Import BrokerType - handle both bot.broker_manager and direct import
     try:
         from bot.broker_manager import BrokerType
     except ImportError:
-        from broker_manager import BrokerType
+        try:
+            from broker_manager import BrokerType
+        except ImportError as e:
+            logger.error(f"Failed to import BrokerType: {e}")
+            # Without BrokerType, we cannot validate broker requirements
+            return MasterRequirements(
+                pro_mode=pro_mode,
+                live_trading=live_trading,
+                master_broker_kraken=False,
+                master_connected=False
+            )
     
     if multi_account_manager:
         # Check if Kraken master broker exists and is connected
@@ -172,10 +183,26 @@ def check_user_requirements(
     standalone = not copy_trading_enabled
     
     # Check TIER >= STARTER (balance >= $50)
+    # Import tier config - handle both bot.tier_config and direct import
     try:
         from bot.tier_config import TIER_CONFIGS, TradingTier
     except ImportError:
-        from tier_config import TIER_CONFIGS, TradingTier
+        try:
+            from tier_config import TIER_CONFIGS, TradingTier
+        except ImportError as e:
+            logger.error(f"Failed to import tier config: {e}")
+            # Without tier config, we cannot validate tier requirements
+            # Default to safe values: assume insufficient tier
+            tier_sufficient = False
+            initial_capital_sufficient = False
+            return UserRequirements(
+                user_id=user_id,
+                pro_mode=pro_mode,
+                copy_trading_enabled=copy_trading_enabled,
+                standalone=standalone,
+                tier_sufficient=tier_sufficient,
+                initial_capital_sufficient=initial_capital_sufficient
+            )
     
     starter_min = TIER_CONFIGS[TradingTier.STARTER].capital_min
     tier_sufficient = user_balance >= starter_min
