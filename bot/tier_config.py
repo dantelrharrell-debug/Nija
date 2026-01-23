@@ -495,9 +495,22 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
     """
     Validate if a trade size is appropriate for the tier.
     
-    DEPRECATED: Consider using auto_resize_trade() for smarter trade handling.
-    This function will reject trades that exceed limits, while auto_resize_trade()
-    will intelligently resize them to fit.
+    DEPRECATED (v4.1, Jan 2026): Will be removed in v5.0 (March 2026)
+    
+    Migration Path:
+    ---------------
+    Use auto_resize_trade() instead for smarter trade handling:
+    
+    Old (rejects):
+        is_valid, reason = validate_trade_size(size, tier, balance)
+        if not is_valid:
+            return error
+    
+    New (auto-resizes):
+        resized_size, reason = auto_resize_trade(size, tier, balance)
+        if resized_size == 0.0:
+            return error  # Below minimum
+        # Use resized_size for trade execution
     
     MASTER ACCOUNT OVERRIDE:
     Master accounts using BALLER tier can trade with lower minimums when balance is low.

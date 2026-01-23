@@ -186,12 +186,11 @@ def evaluate_tier_upgrade(current_tier: TradingTier, metrics: PerformanceMetrics
     upgrade_rule = UPGRADE_RULES[current_tier]
     
     # PATH 1: Balance-based upgrade (traditional)
-    if allow_balance_only and upgrade_rule.min_balance:
-        if metrics.current_balance >= upgrade_rule.min_balance:
-            logger.info(f"✅ TIER UPGRADE (Balance): {current_tier.value} → {upgrade_rule.to_tier.value}")
-            logger.info(f"   Balance: ${metrics.current_balance:.2f} ≥ ${upgrade_rule.min_balance:.2f}")
-            return (upgrade_rule.to_tier, True, 
-                    f"Balance-based upgrade: ${metrics.current_balance:.2f} ≥ ${upgrade_rule.min_balance:.2f}")
+    if allow_balance_only and upgrade_rule.min_balance and metrics.current_balance >= upgrade_rule.min_balance:
+        logger.info(f"✅ TIER UPGRADE (Balance): {current_tier.value} → {upgrade_rule.to_tier.value}")
+        logger.info(f"   Balance: ${metrics.current_balance:.2f} ≥ ${upgrade_rule.min_balance:.2f}")
+        return (upgrade_rule.to_tier, True, 
+                f"Balance-based upgrade: ${metrics.current_balance:.2f} ≥ ${upgrade_rule.min_balance:.2f}")
     
     # PATH 2: Performance-based upgrade (dynamic)
     eligible, reason = upgrade_rule.check_eligibility(metrics)
