@@ -451,6 +451,9 @@ class ExecutionEngine:
                         logger.warning(f"Could not close position in ledger: {e}")
                 
                 logger.info(f"Position closed: {symbol}")
+                
+                # Remove closed position from tracking to free slot for new trades
+                self.close_position(symbol)
             else:
                 logger.info(f"Partial exit: {symbol} ({position['remaining_size']*100:.0f}% remaining)")
             
@@ -649,8 +652,12 @@ class ExecutionEngine:
         return None
     
     def get_position(self, symbol: str) -> Optional[Dict]:
-        """Get position for symbol"""
-        return self.positions.get(symbol)
+        """Get open position for symbol. Returns None if position doesn't exist or is closed."""
+        position = self.positions.get(symbol)
+        # Only return positions that are still open
+        if position and position.get('status') == 'open':
+            return position
+        return None
     
     def get_all_positions(self) -> Dict[str, Dict]:
         """Get all open positions"""
