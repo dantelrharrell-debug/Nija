@@ -2267,16 +2267,18 @@ class TradingStrategy:
                                     protection_min_profit = PROFIT_PROTECTION_MIN_PROFIT_KRAKEN if broker_type == BrokerType.KRAKEN else PROFIT_PROTECTION_MIN_PROFIT
                                     
                                     # RULE 1: Exit on Profit Decrease > 0.5%
-                                    # If position is profitable AND profit decreases by more than 0.5%, exit
+                                    # If position is profitable AND profit decreases by MORE than 0.5%, exit
+                                    # Hold up to 0.5% pullback, exit when it exceeds
                                     # Example: 3.0% → 2.9% (0.1% decrease) = HOLD
-                                    #          3.0% → 2.5% (0.5% decrease) = EXIT
+                                    #          3.0% → 2.5% (0.5% decrease) = HOLD
+                                    #          3.0% → 2.49% (0.51% decrease) = EXIT
                                     #          3.0% → 2.4% (0.6% decrease) = EXIT
                                     if pnl_percent >= protection_min_profit and previous_profit_pct >= protection_min_profit:
                                         # Calculate decrease from previous profit
                                         profit_decrease = previous_profit_pct - pnl_percent
                                         
-                                        # Exit if decrease exceeds 0.5%
-                                        if profit_decrease >= PROFIT_PROTECTION_PULLBACK_FIXED:
+                                        # Exit if decrease EXCEEDS 0.5% (> not >=)
+                                        if profit_decrease > PROFIT_PROTECTION_PULLBACK_FIXED:
                                             logger.warning(f"   💎 PROFIT PROTECTION: {symbol} profit pullback exceeded")
                                             logger.warning(f"      Previous profit: {previous_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
                                             logger.warning(f"      Pullback: {profit_decrease*100:.3f}% (max allowed: 0.5%)")
