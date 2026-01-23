@@ -5792,6 +5792,22 @@ class KrakenBroker(BaseBroker):
                         
                         logger.info("=" * 70)
                         
+                        # CRITICAL FIX (Jan 23, 2026): Initialize market data right after connection
+                        # Fetch minimum volumes for all trading pairs to prevent order rejections
+                        try:
+                            from bot.kraken_market_data import get_kraken_market_data
+                            market_data = get_kraken_market_data()
+                            if market_data.fetch_and_cache(self.kraken_api):
+                                pair_count = len(market_data.get_all_pairs())
+                                logger.info(f"   ✅ Market data loaded: {pair_count} trading pairs with minimum volumes")
+                            else:
+                                logger.debug("   Market data will use fallback to static minimums")
+                        except ImportError:
+                            logger.debug("   Market data module not available, using static minimums")
+                        except Exception as market_err:
+                            logger.warning(f"   ⚠️  Could not load market data: {market_err}")
+                            logger.warning("   Will use static minimum volumes as fallback")
+                        
                         # CRITICAL FIX (Jan 18, 2026): Add post-connection delay
                         # After successful connection test, wait before allowing next API call
                         # This prevents "Invalid nonce" when balance is checked immediately after
@@ -7066,6 +7082,21 @@ class KrakenBroker(BaseBroker):
                     logging.debug("✅ Symbol mapper initialized with Kraken API data")
                 except Exception as mapper_err:
                     logging.warning(f"⚠️  Could not initialize symbol mapper: {mapper_err}")
+            
+            # CRITICAL FIX (Jan 23, 2026): Initialize market data for dynamic minimum volumes
+            # This prevents "volume minimum not met" rejections by fetching actual pair minimums
+            # from Kraken API instead of relying on hardcoded values
+            try:
+                from bot.kraken_market_data import get_kraken_market_data
+                market_data = get_kraken_market_data()
+                if market_data.fetch_and_cache(self.kraken_api):
+                    logging.info("✅ Kraken market data initialized (minimum volumes cached)")
+                else:
+                    logging.debug("Market data will use fallback to static minimums")
+            except ImportError:
+                logging.debug("Market data module not available, using static minimums")
+            except Exception as market_err:
+                logging.warning(f"⚠️  Could not initialize market data: {market_err}")
             
             # Get all tradable asset pairs (returns pandas DataFrame)
             # Suppress pykrakenapi's print() statements
