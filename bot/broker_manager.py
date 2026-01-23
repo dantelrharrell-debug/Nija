@@ -919,7 +919,8 @@ class CoinbaseBroker(BaseBroker):
                     'get_fills': 12,    # Standard rate for fills fetching (5s between calls)
                 }
             )
-            logger.info("✅ Rate limiter initialized (12 req/min default, 8 req/min for candles, 5 req/min for get_all_products, 12 req/min for fills)")
+            logger.info("✅ Rate limiter initialized (12 req/min default)")
+            logger.info("   - get_candles: 8 req/min, get_all_products: 5 req/min, get_fills: 12 req/min")
         else:
             self._rate_limiter = None
             logger.warning("⚠️ RateLimiter not available - using manual delays only")
@@ -3794,6 +3795,10 @@ class CoinbaseBroker(BaseBroker):
         the actual entry price. This is used to recover entry prices for positions
         that weren't properly tracked during initial entry.
         
+        NOTE: For positions with multiple partial fills or round-trip trades,
+        this returns the most recent BUY fill price. For more accurate tracking
+        of complex positions, use position_tracker from the start.
+        
         Args:
             symbol: Trading symbol (e.g., 'BNB-USD')
             
@@ -3834,7 +3839,8 @@ class CoinbaseBroker(BaseBroker):
                 return None
             
             # Find the most recent BUY fill for this symbol
-            # Fills are typically returned in reverse chronological order (newest first)
+            # NOTE: Coinbase API returns fills in reverse chronological order (newest first)
+            # We look for the first BUY fill, which represents the most recent entry
             for fill in fills:
                 # Extract fill data (handle both object and dict formats)
                 if isinstance(fill, dict):
@@ -3848,10 +3854,14 @@ class CoinbaseBroker(BaseBroker):
                 
                 # We want BUY fills (entry) not SELL fills (exit)
                 if side == 'BUY' and price:
-                    entry_price = float(price)
-                    fill_size = float(size) if size else 0
-                    logger.info(f"✅ Found real entry price for {symbol}: ${entry_price:.2f} (size: {fill_size})")
-                    return entry_price
+                    try:
+                        entry_price = float(price)
+                        fill_size = float(size) if size else 0
+                        logger.info(f"✅ Found real entry price for {symbol}: ${entry_price:.2f} (size: {fill_size})")
+                        return entry_price
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Invalid price data for {symbol}: {price} - {e}")
+                        continue  # Try next fill
             
             # No buy fills found
             logger.debug(f"No BUY fills found for {symbol} in recent history")
