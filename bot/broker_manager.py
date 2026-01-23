@@ -916,9 +916,11 @@ class CoinbaseBroker(BaseBroker):
                     'get_candles': 8,   # Very conservative for candle fetching (7.5s between calls = 8 req/min)
                     'get_product': 15,  # Slightly faster for product queries (4s between calls)
                     'get_all_products': 5,  # Ultra conservative for bulk product fetching (12s between calls = 5 req/min)
+                    'get_fills': 12,    # Standard rate for fills fetching (5s between calls)
                 }
             )
-            logger.info("✅ Rate limiter initialized (12 req/min default, 8 req/min for candles, 5 req/min for get_all_products)")
+            logger.info("✅ Rate limiter initialized (12 req/min default)")
+            logger.info("   - get_candles: 8 req/min, get_all_products: 5 req/min, get_fills: 12 req/min")
         else:
             self._rate_limiter = None
             logger.warning("⚠️ RateLimiter not available - using manual delays only")
@@ -3784,6 +3786,90 @@ class CoinbaseBroker(BaseBroker):
                     return []
         
         return []
+    
+    def get_real_entry_price(self, symbol: str) -> Optional[float]:
+        """
+        ✅ FIX: Get real entry price from Coinbase order history.
+        
+        Fetches the most recent buy order fill for the given symbol to determine
+        the actual entry price. This is used to recover entry prices for positions
+        that weren't properly tracked during initial entry.
+        
+        NOTE: For positions with multiple partial fills or round-trip trades,
+        this returns the most recent BUY fill price. For more accurate tracking
+        of complex positions, use position_tracker from the start.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BNB-USD')
+            
+        Returns:
+            Real entry price if found, None otherwise
+        """
+        if not self.client:
+            logger.debug(f"Cannot get entry price for {symbol}: client not connected")
+            return None
+        
+        try:
+            # Fetch recent fills for the symbol using Coinbase Advanced Trade API
+            # list_fills returns all recent fills, can filter by product_id
+            logger.debug(f"Fetching order fills for {symbol} to recover entry price...")
+            
+            # Use rate limiter to prevent 429 errors
+            def _fetch_fills():
+                fills_resp = self.client.list_fills(
+                    product_id=symbol,
+                    limit=100  # Get last 100 fills to find recent buys
+                )
+                return fills_resp
+            
+            if self._rate_limiter:
+                fills_resp = self._rate_limiter.call('get_fills', _fetch_fills)
+            else:
+                fills_resp = _fetch_fills()
+            
+            # Parse fills response
+            fills = []
+            if hasattr(fills_resp, 'fills'):
+                fills = fills_resp.fills
+            elif isinstance(fills_resp, dict) and 'fills' in fills_resp:
+                fills = fills_resp['fills']
+            
+            if not fills:
+                logger.debug(f"No fills found for {symbol}")
+                return None
+            
+            # Find the most recent BUY fill for this symbol
+            # NOTE: Coinbase API returns fills in reverse chronological order (newest first)
+            # We look for the first BUY fill, which represents the most recent entry
+            for fill in fills:
+                # Extract fill data (handle both object and dict formats)
+                if isinstance(fill, dict):
+                    side = fill.get('side', '').upper()
+                    price = fill.get('price')
+                    size = fill.get('size')
+                else:
+                    side = getattr(fill, 'side', '').upper()
+                    price = getattr(fill, 'price', None)
+                    size = getattr(fill, 'size', None)
+                
+                # We want BUY fills (entry) not SELL fills (exit)
+                if side == 'BUY' and price:
+                    try:
+                        entry_price = float(price)
+                        fill_size = float(size) if size else 0
+                        logger.info(f"✅ Found real entry price for {symbol}: ${entry_price:.2f} (size: {fill_size})")
+                        return entry_price
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Invalid price data for {symbol}: {price} - {e}")
+                        continue  # Try next fill
+            
+            # No buy fills found
+            logger.debug(f"No BUY fills found for {symbol} in recent history")
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to fetch entry price for {symbol}: {e}")
+            return None
     
     def supports_asset_class(self, asset_class: str) -> bool:
         """Coinbase supports crypto only"""
