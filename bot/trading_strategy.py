@@ -116,6 +116,13 @@ MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 
                             # At 8.0s delay, we scan at ~0.125 req/s which prevents both 429 and 403 errors
                             # At 5-15 markets per cycle with 8.0s delay, scanning takes 40-120 seconds
                             # This conservative rate ensures API key never gets temporarily blocked
+
+# Broker balance fetch timeout constants (Jan 24, 2026)
+# Used in _is_broker_eligible_for_entry to prevent hanging on slow balance fetches
+KRAKEN_API_TIMEOUT = 30  # Kraken's internal API timeout (from broker_manager.py)
+NETWORK_BUFFER_TIMEOUT = 15  # Additional buffer for network overhead and retries
+BALANCE_FETCH_TIMEOUT = KRAKEN_API_TIMEOUT + NETWORK_BUFFER_TIMEOUT  # Total: 45 seconds
+CACHED_BALANCE_MAX_AGE_SECONDS = 300  # Use cached balance if fresh (5 minutes max staleness)
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
 # UPDATED (Jan 10, 2026): Adaptive batch sizing to prevent API rate limiting
@@ -1470,11 +1477,11 @@ class TradingStrategy:
         
         # Check if account balance meets minimum threshold
         # CRITICAL FIX (Jan 24, 2026): Use timeout to prevent hanging on slow balance fetches
-        # Updated timeout to 45s (increased from 15s) to accommodate Kraken's 30s API timeout plus network overhead
+        # Timeout configured to accommodate Kraken's API timeout plus network overhead
         try:
             # Call get_account_balance with timeout to prevent indefinite hanging
-            # 45s timeout allows for Kraken's 30s internal timeout + 15s network/retry buffer
-            balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=45)
+            # Uses BALANCE_FETCH_TIMEOUT (45s = 30s Kraken API + 15s network buffer)
+            balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=BALANCE_FETCH_TIMEOUT)
             
             # Check if timeout or error occurred
             # call_with_timeout returns (value, None) on success, (None, error) on failure
@@ -1482,18 +1489,29 @@ class TradingStrategy:
                 error_msg = balance_result[1]
                 logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance fetch timed out or failed: {error_msg}")
                 
-                # CRITICAL FIX (Jan 24, 2026): Use cached balance if available on timeout
-                # If broker has a cached balance, use it instead of marking as ineligible
+                # CRITICAL FIX (Jan 24, 2026): Use cached balance if available and fresh
+                # If broker has a cached balance, check its age and use it if recent
                 if hasattr(broker, '_last_known_balance') and broker._last_known_balance is not None:
                     cached_balance = broker._last_known_balance
-                    logger.warning(f"   ⚠️  Using cached balance for {broker_name}: ${cached_balance:.2f}")
-                    broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
-                    min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
                     
-                    if cached_balance >= min_balance:
-                        return True, f"Eligible (cached ${cached_balance:.2f} >= ${min_balance:.2f} min)"
-                    else:
-                        return False, f"{broker_name.upper()} cached balance ${cached_balance:.2f} < ${min_balance:.2f} minimum"
+                    # Check if cached balance has a timestamp (for staleness check)
+                    # If broker doesn't track timestamp, assume cache is valid (fail-safe)
+                    cache_is_fresh = True
+                    if hasattr(broker, '_balance_last_updated'):
+                        balance_age_seconds = time.time() - broker._balance_last_updated
+                        cache_is_fresh = balance_age_seconds <= CACHED_BALANCE_MAX_AGE_SECONDS
+                        if not cache_is_fresh:
+                            logger.warning(f"   ⚠️  Cached balance for {broker_name} is stale ({balance_age_seconds:.0f}s old > {CACHED_BALANCE_MAX_AGE_SECONDS}s max)")
+                    
+                    if cache_is_fresh:
+                        logger.warning(f"   ⚠️  Using cached balance for {broker_name}: ${cached_balance:.2f}")
+                        broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
+                        min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
+                        
+                        if cached_balance >= min_balance:
+                            return True, f"Eligible (cached ${cached_balance:.2f} >= ${min_balance:.2f} min)"
+                        else:
+                            return False, f"{broker_name.upper()} cached balance ${cached_balance:.2f} < ${min_balance:.2f} minimum"
                 
                 return False, f"{broker_name.upper()} balance fetch failed: timeout or error"
             

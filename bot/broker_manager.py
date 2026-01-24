@@ -233,9 +233,9 @@ DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent 
 KRAKEN_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Kraken is PRIMARY for small accounts
 # 🚑 FIX (Jan 24, 2026): Use environment variable for Coinbase minimum to support small accounts
 # Coinbase has higher fees than Kraken, but should still support small balances when needed
-# Can be overridden via MINIMUM_TRADING_BALANCE environment variable (e.g., $10-$15 for small accounts)
+# Can be overridden via COINBASE_MINIMUM_BALANCE or MINIMUM_TRADING_BALANCE environment variable
 # At $10 balance, can make smaller trades; at $25+ can make multiple concurrent trades
-COINBASE_MINIMUM_BALANCE = float(os.getenv('COINBASE_MINIMUM_BALANCE', str(STANDARD_MINIMUM_BALANCE)))  # Respects env override or uses STANDARD_MINIMUM_BALANCE
+COINBASE_MINIMUM_BALANCE = float(os.getenv('COINBASE_MINIMUM_BALANCE', STANDARD_MINIMUM_BALANCE))  # Respects env override or uses STANDARD_MINIMUM_BALANCE
 
 # Broker health monitoring constants
 # Maximum consecutive errors before marking broker unavailable
@@ -947,6 +947,7 @@ class CoinbaseBroker(BaseBroker):
         # Balance tracking for fail-closed behavior (Jan 19, 2026)
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
+        self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
         
@@ -2001,6 +2002,7 @@ class CoinbaseBroker(BaseBroker):
             
             # SUCCESS: Update last known balance and reset error count
             self._last_known_balance = result
+            self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
             self._balance_fetch_errors = 0
             self._is_available = True
             
@@ -4940,6 +4942,7 @@ class KrakenBroker(BaseBroker):
         # Balance tracking for fail-closed behavior (Fix 3)
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
+        self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
         
@@ -6193,6 +6196,7 @@ class KrakenBroker(BaseBroker):
                 # SUCCESS: Update last known balance and reset error count
                 # 🚑 FIX 4: Store and return total_funds instead of just available
                 self._last_known_balance = total_funds
+                self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
                 self._balance_fetch_errors = 0
                 self._is_available = True
                 
