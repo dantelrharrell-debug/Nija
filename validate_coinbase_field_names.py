@@ -5,7 +5,7 @@ Validation script for Coinbase Advanced Trade API field names
 This script documents the correct field names for the Coinbase Advanced Trade API
 get_portfolio_breakdown endpoint's spot_positions array.
 
-PROBLEM IDENTIFIED (Jan 24, 2026):
+PROBLEM IDENTIFIED (Jan 2026):
 The bot was using incorrect field names which caused it to not detect crypto balances,
 leading to positions being marked as "phantom" and cleared from tracker without selling.
 
@@ -43,10 +43,12 @@ Example response structure from get_portfolio_breakdown:
 }
 
 FIXES APPLIED:
-1. Updated _get_account_balance_detailed() in broker_manager.py (lines 1666-1691)
-2. Updated get_positions() in broker_manager.py (lines 3626-3650)
+1. Updated _get_account_balance_detailed() method in broker_manager.py
+2. Updated get_positions() method in broker_manager.py
 3. Now uses total_balance_crypto which includes both available AND held positions
 4. Added debug logging to show API field values for troubleshooting
+
+NOTE: Specific line numbers may change as the codebase evolves. Search for the method names above.
 
 WHY THIS MATTERS:
 - When field names are wrong, the API returns the data but we don't parse it correctly

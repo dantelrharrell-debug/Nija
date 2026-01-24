@@ -1716,13 +1716,13 @@ class CoinbaseBroker(BaseBroker):
                         if base_total_qty is not None and base_total_qty > 0:
                             # Use total balance in crypto units (e.g., BTC amount, not USD value)
                             crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + base_total_qty
-                            # Calculate held amount (total - available)
-                            base_held_qty = base_total_qty - base_avail_qty
+                            # Calculate held amount (total - available), ensure non-negative
+                            base_held_qty = max(0, base_total_qty - base_avail_qty)
                             if base_held_qty > 0:
                                 logging.debug(f"   {asset}: available={base_avail_qty:.8f}, held={base_held_qty:.8f}, total={base_total_qty:.8f}")
                             else:
                                 logging.debug(f"   {asset}: total={base_total_qty:.8f}")
-                        elif base_avail_qty is not None and base_avail_qty > 0:
+                        elif base_avail_qty > 0:
                             # Fallback: if only available_to_trade_crypto is present
                             crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + base_avail_qty
                             logging.debug(f"   {asset}: available={base_avail_qty:.8f} (total not available)")
