@@ -1838,6 +1838,21 @@ class TradingStrategy:
             current_positions = []
             positions_by_broker = {}  # Track which broker each position belongs to
             
+            # CRITICAL FIX (Jan 24, 2026): Periodic position tracker sync
+            # Sync every 10 cycles (~25 minutes) to proactively clear phantom positions
+            # Phantom positions = tracked internally but don't exist on exchange
+            # This prevents accumulation of stale position data
+            sync_interval = 10
+            if hasattr(self, 'cycle_count') and (self.cycle_count % sync_interval == 0):
+                if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                    try:
+                        broker_positions = active_broker.get_positions()
+                        removed = active_broker.position_tracker.sync_with_broker(broker_positions)
+                        if removed > 0:
+                            logger.info(f"🔄 Periodic sync: Cleared {removed} phantom position(s) from tracker")
+                    except Exception as sync_err:
+                        logger.debug(f"   ⚠️ Periodic position sync failed: {sync_err}")
+            
             if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
                 # Get positions from all connected master brokers
                 for broker_type, broker in self.multi_account_manager.master_brokers.items():
