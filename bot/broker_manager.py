@@ -938,7 +938,7 @@ class CoinbaseBroker(BaseBroker):
         # Initialize position tracker for profit-based exits
         try:
             from position_tracker import PositionTracker
-            self.position_tracker = PositionTracker(storage_file="positions.json")
+            self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
             logger.warning(f"⚠️ Position tracker initialization failed: {e}")

@@ -2501,18 +2501,27 @@ class TradingStrategy:
                                     logger.info(f"   🔴 Aggressive exits enabled: force_stop_loss=True, max_loss_pct=1.5%")
                                     
                                     # AUTO-IMPORTED LOSERS ARE EXITED FIRST
-                                    # If position is immediately losing, queue it for exit
+                                    # If position is immediately losing, queue it for exit NOW (not next cycle!)
                                     if immediate_pnl < 0:
                                         logger.warning(f"   🚨 AUTO-IMPORTED LOSER: {symbol} at {immediate_pnl:.2f}%")
-                                        logger.warning(f"   💥 Queuing for IMMEDIATE EXIT in next cycle")
+                                        logger.warning(f"   💥 Queuing for IMMEDIATE EXIT THIS CYCLE")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Auto-imported losing position ({immediate_pnl:+.2f}%)'
+                                        })
+                                        # Skip all remaining logic for this position since it's queued for exit
+                                        continue
                                     
                                     logger.info(f"      Position now tracked - will use profit targets in next cycle")
                                     logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0) | "
                                               f"⚠️  WARNING: This position may have been losing before auto-import! | "
                                               f"Position now tracked - will evaluate exit in next cycle")
                                     
-                                    # Mark that this position was just imported - skip exits this cycle
-                                    just_auto_imported = True
+                                    # CRITICAL FIX: Don't mark as just_auto_imported to allow stop-loss to execute
+                                    # Auto-imported positions should NOT skip stop-loss checks!
+                                    # Only skip profit-taking logic to avoid premature exits
+                                    just_auto_imported = False  # Changed from True - stop-loss must execute!
                                     
                                     # Re-fetch position data to get accurate tracking info
                                     # This ensures control flow variables reflect actual state
