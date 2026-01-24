@@ -1469,8 +1469,18 @@ class TradingStrategy:
             return False, f"{broker_name.upper()} in EXIT-ONLY mode"
         
         # Check if account balance meets minimum threshold
+        # CRITICAL FIX (Jan 24, 2026): Use timeout to prevent hanging on slow balance fetches
         try:
-            balance = broker.get_account_balance()
+            # Call get_account_balance with timeout to prevent indefinite hanging
+            balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=15)
+            
+            # Check if timeout occurred
+            if balance_result[1]:  # Error from call_with_timeout
+                error_msg = balance_result[1]
+                logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance fetch timed out or failed: {error_msg}")
+                return False, f"{broker_name.upper()} balance fetch failed: timeout or error"
+            
+            balance = balance_result[0] if balance_result[0] is not None else 0.0
             broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
             min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
             
@@ -1481,7 +1491,7 @@ class TradingStrategy:
             
             return True, f"Eligible (${balance:.2f} >= ${min_balance:.2f} min)"
         except Exception as e:
-            logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance check failed: {e}")
+            logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance check exception: {e}")
             return False, f"{broker_name.upper()} balance check failed: {e}"
     
     def _select_entry_broker(self, all_brokers: Dict[BrokerType, object]) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
