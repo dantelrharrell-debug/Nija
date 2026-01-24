@@ -221,7 +221,7 @@ class CopyTradeEngine:
                         logger.info("   ✅ USERS WHO RECEIVED THIS TRADE:")
                         for r in results:
                             if r.success:
-                                logger.info(f"      • {r.user_id}: ${r.size:.2f} {signal.size_type}")
+                                logger.info(f"      • {r.user_id}: ${r.size:.2f} {r.size_type}")
                     if failed > 0:
                         logger.info("")
                         logger.info("   ⚠️  USERS WHO DID NOT RECEIVE THIS TRADE:")
