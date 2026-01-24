@@ -2367,11 +2367,16 @@ python test_v2_balance.py
 # Run diagnostic to check all requirements
 python diagnose_kraken_trading.py
 
-# Quick fix guide
+# View quick fix guide (Unix/Linux/Mac)
 cat KRAKEN_QUICK_FIX.md
+# OR on Windows:
+# type KRAKEN_QUICK_FIX.md
 
-# Detailed troubleshooting
+# View detailed troubleshooting (Unix/Linux/Mac)
 cat KRAKEN_NO_TRADES_FIX.md
+# OR on Windows:
+# type KRAKEN_NO_TRADES_FIX.md
+# OR open files in any text editor
 ```
 
 **Common Kraken issues:**
