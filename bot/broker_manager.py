@@ -211,16 +211,17 @@ except ImportError:
             pass
 
 # Balance threshold constants
-# Note: Large gap between PROTECTION and TRADING thresholds is intentional:
+# Note: Gap between PROTECTION and TRADING thresholds allows small account operation:
 #   - PROTECTION ($0.50): Absolute minimum to allow bot to start (hard requirement)
-#   - TRADING ($25.00): Minimum for both Kraken and Coinbase (enforced per broker)
-#   This ensures both exchanges require $25 minimum while maintaining different roles
+#   - TRADING ($10.00): Default minimum for trading (can be raised via environment variable)
+#   This allows small accounts ($10-20) to trade while preventing dust-level trading
 # 
-# COPY TRADING MODE: For small accounts in copy trading mode, these can be lowered:
-#   - MINIMUM_TRADING_BALANCE can be set to $15 via environment variable
-#   - MIN_CASH_TO_BUY can be set to $5 via environment variable
+# ACCOUNT SIZE MODES: Can be customized via MINIMUM_TRADING_BALANCE environment variable:
+#   - Small accounts: $10-15 (default, suitable for testing and small capital)
+#   - Standard accounts: $25+ (better for fee efficiency and multiple positions)
+#   - Large accounts: See tier-specific env files (.env.saver_tier, .env.investor_tier, etc.)
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
-STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '25.00'))  # Can be overridden for copy trading
+STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '10.00'))  # Lowered default to $10 for small account support
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
 MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', '5.50'))  # Minimum cash required to place a buy order
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
