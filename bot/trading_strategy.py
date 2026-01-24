@@ -1843,7 +1843,7 @@ class TradingStrategy:
             # Phantom positions = tracked internally but don't exist on exchange
             # This prevents accumulation of stale position data
             sync_interval = 10
-            if hasattr(self, 'cycle_count') and (self.cycle_count % sync_interval == 0):
+            if hasattr(self, 'cycle_count') and self.cycle_count > 0 and (self.cycle_count % sync_interval == 0):
                 if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                     try:
                         broker_positions = active_broker.get_positions()

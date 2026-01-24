@@ -2950,7 +2950,7 @@ class CoinbaseBroker(BaseBroker):
                         # CRITICAL FIX (Jan 24, 2026): Clear phantom positions from tracker
                         # If available balance is essentially zero (< 1e-8) but position is tracked,
                         # this is a phantom position that needs to be cleared from tracker
-                        if not skip_preflight and available_base <= 1e-8 and self.position_tracker:
+                        if not skip_preflight and available_base <= 1e-8 and self.position_tracker and self.position_tracker.get_position(symbol):
                             logger.warning(f"   🧹 PHANTOM POSITION DETECTED: Zero balance but position tracked")
                             logger.warning(f"   Clearing {symbol} from position tracker (likely already sold/transferred)")
                             try:
