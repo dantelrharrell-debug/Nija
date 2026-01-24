@@ -6762,11 +6762,8 @@ class KrakenBroker(BaseBroker):
             # This prevents order rejections when auto-resized trades fall just below Kraken's $10 minimum
             # Example: $9.16 trade gets rounded up to $10.00 to meet exchange requirements
             if side.lower() == 'buy' and size_type == 'quote':
-                # Import Kraken minimum from validator module
-                if KRAKEN_MINIMUM_ORDER_USD is not None:
-                    kraken_min = KRAKEN_MINIMUM_ORDER_USD
-                else:
-                    kraken_min = 10.00  # Fallback to $10 minimum
+                # Use Kraken minimum from imported constant
+                kraken_min = KRAKEN_MINIMUM_ORDER_USD or 10.00
                 
                 if quantity < kraken_min:
                     original_quantity = quantity
