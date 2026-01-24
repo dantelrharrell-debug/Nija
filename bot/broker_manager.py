@@ -221,7 +221,7 @@ except ImportError:
 #   - Standard accounts: $25+ (better for fee efficiency and multiple positions)
 #   - Large accounts: See tier-specific env files (.env.saver_tier, .env.investor_tier, etc.)
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
-STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '10.00'))  # Lowered default to $10 for small account support
+STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '10.00'))  # Lowered default from $25.00 to $10.00 (Jan 24, 2026) for small account support
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
 MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', '5.50'))  # Minimum cash required to place a buy order
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)

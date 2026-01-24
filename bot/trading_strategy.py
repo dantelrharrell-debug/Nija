@@ -1495,13 +1495,16 @@ class TradingStrategy:
                     cached_balance = broker._last_known_balance
                     
                     # Check if cached balance has a timestamp (for staleness check)
-                    # If broker doesn't track timestamp, assume cache is valid (fail-safe)
-                    cache_is_fresh = True
-                    if hasattr(broker, '_balance_last_updated'):
+                    # If broker doesn't track timestamp, log warning and reject cached balance (conservative)
+                    cache_is_fresh = False
+                    if hasattr(broker, '_balance_last_updated') and broker._balance_last_updated is not None:
                         balance_age_seconds = time.time() - broker._balance_last_updated
                         cache_is_fresh = balance_age_seconds <= CACHED_BALANCE_MAX_AGE_SECONDS
                         if not cache_is_fresh:
                             logger.warning(f"   ⚠️  Cached balance for {broker_name} is stale ({balance_age_seconds:.0f}s old > {CACHED_BALANCE_MAX_AGE_SECONDS}s max)")
+                    else:
+                        # No timestamp tracking - be conservative and don't use cache
+                        logger.warning(f"   ⚠️  Cached balance for {broker_name} has no timestamp - rejecting for safety")
                     
                     if cache_is_fresh:
                         logger.warning(f"   ⚠️  Using cached balance for {broker_name}: ${cached_balance:.2f}")
