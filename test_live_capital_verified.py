@@ -15,8 +15,10 @@ try:
 except ImportError:
     print("⚠️  dotenv not available, using environment variables directly")
 
-# Add bot directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+# Add bot directory to path (using absolute path for reliability)
+bot_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bot')
+if bot_dir not in sys.path:
+    sys.path.insert(0, bot_dir)
 
 def test_environment_variable():
     """Test that LIVE_CAPITAL_VERIFIED is set in environment."""
@@ -79,7 +81,8 @@ def test_can_trade():
         from controls import get_hard_controls
         
         controls = get_hard_controls()
-        test_user_id = "test_user"
+        # Use a representative test user ID (matching typical user_id format in the system)
+        test_user_id = os.getenv("TEST_USER_ID", "master")
         
         can_trade, error_msg = controls.can_trade(test_user_id)
         

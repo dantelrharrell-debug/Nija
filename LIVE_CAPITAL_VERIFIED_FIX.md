@@ -64,7 +64,7 @@ def can_trade(user_id):
 ## Deployment Instructions
 
 ### For New Deployments
-1. Copy `.env.example` to `.env`
+1. Copy `.env.example` (or a tier-specific template like `.env.saver_tier`) to `.env`
 2. Set `LIVE_CAPITAL_VERIFIED=true` in `.env`
 3. Configure API credentials (Coinbase, Kraken, etc.)
 4. Run `python test_live_capital_verified.py` to verify
