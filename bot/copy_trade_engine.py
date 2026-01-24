@@ -221,6 +221,7 @@ class CopyTradeEngine:
                         logger.info("   ✅ USERS WHO RECEIVED THIS TRADE:")
                         for r in results:
                             if r.success:
+                                # Note: r.size_type comes from CopyTradeResult, which matches the signal's size_type
                                 logger.info(f"      • {r.user_id}: ${r.size:.2f} {r.size_type}")
                     if failed > 0:
                         logger.info("")
@@ -494,7 +495,7 @@ class CopyTradeEngine:
                 logger.warning("      🔧 TO ENABLE COPY TRADING FOR THIS USER:")
                 logger.warning("         1. Ensure PRO_MODE=true")
                 logger.warning("         2. Ensure COPY_TRADING_MODE=MASTER_FOLLOW")
-                logger.warning("         3. Ensure account balance >= $50")
+                logger.warning("         3. Ensure account balance meets tier minimum")
                 logger.warning("         4. Check user config: copy_from_master=true")
                 logger.warning("      " + "=" * 50)
                 

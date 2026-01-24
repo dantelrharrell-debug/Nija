@@ -59,8 +59,8 @@ When a master trade occurs, you'll see:
    Side: BUY
    Size: 638.56960000 (base)
    Broker: kraken
-   ✅ PROFIT-TAKING: This exit signal will be copied to all users
-   📤 Users will take profit simultaneously with master
+   ✅ PROFIT-TAKING: Master is exiting position
+   📤 Users will exit simultaneously
 ======================================================================
 ```
 
