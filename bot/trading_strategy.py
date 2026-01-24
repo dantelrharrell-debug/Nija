@@ -1303,7 +1303,7 @@ class TradingStrategy:
             # FIX #1: Use live capital passed from broker connections
             # This is the actual balance fetched from Coinbase, Kraken, and other brokers
             # Only fall back to environment variable if no capital was passed
-            if total_capital > 0:
+            if total_capital > 0.01:  # Use small threshold to avoid floating-point precision issues
                 # Use live capital from broker connections (PREFERRED)
                 initial_capital = total_capital
                 logger.info(f"ℹ️ Using LIVE capital from broker connections: ${initial_capital:.2f}")
@@ -1313,7 +1313,7 @@ class TradingStrategy:
                 
                 # Support "auto" and "LIVE" as aliases for automatic balance detection
                 if initial_capital_str in ('AUTO', 'LIVE'):
-                    # Can't initialize without capital - set to placeholder
+                    # Can't initialize without capital - skip initialization
                     logger.warning(f"⚠️ INITIAL_CAPITAL={initial_capital_str.lower()} but no live capital available")
                     logger.warning(f"   Advanced manager will not be initialized")
                     self.advanced_manager = None
