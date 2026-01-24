@@ -1832,8 +1832,39 @@ class TradingStrategy:
                     logger.warning(f"⚠️ Excess positions detected: {result['excess']} over cap")
                     logger.info(f"   Sold {result['sold']} positions")
             
-            # CRITICAL: Check if new entries are blocked
-            current_positions = active_broker.get_positions() if active_broker else []
+            # CRITICAL FIX (Jan 24, 2026): Get positions from ALL connected brokers, not just active_broker
+            # This ensures positions on all exchanges are monitored for stop-loss, profit-taking, etc.
+            # Previously, switching active_broker to Kraken would cause Coinbase positions to be ignored
+            current_positions = []
+            positions_by_broker = {}  # Track which broker each position belongs to
+            
+            if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
+                # Get positions from all connected master brokers
+                for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                    if broker and broker.connected:
+                        try:
+                            broker_positions = broker.get_positions()
+                            if broker_positions:
+                                # Tag each position with its broker for later management
+                                for pos in broker_positions:
+                                    pos['_broker'] = broker  # Store broker reference
+                                    pos['_broker_type'] = broker_type  # Store broker type for logging
+                                current_positions.extend(broker_positions)
+                                positions_by_broker[broker_type.value.upper()] = len(broker_positions)
+                                logger.debug(f"   Fetched {len(broker_positions)} positions from {broker_type.value.upper()}")
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ Could not fetch positions from {broker_type.value.upper()}: {e}")
+                
+                # Log positions by broker for visibility
+                if positions_by_broker:
+                    logger.info(f"   📊 Positions by broker: {', '.join([f'{name}={count}' for name, count in positions_by_broker.items()])}")
+            elif active_broker:
+                # Fallback: If multi_account_manager not available, use active_broker
+                current_positions = active_broker.get_positions() if active_broker else []
+                logger.debug(f"   Fetched {len(current_positions)} positions from active broker (fallback mode)")
+            else:
+                logger.warning("   ⚠️ No brokers available to fetch positions from")
+                current_positions = []
             
             # CRITICAL FIX: Filter out unsellable positions (dust, unsupported symbols)
             # These positions can't be traded so they shouldn't count toward position cap
@@ -2045,19 +2076,25 @@ class TradingStrategy:
                             # Remove from unsellable dict to allow full processing
                             del self.unsellable_positions[symbol]
                     
-                    logger.info(f"   Analyzing {symbol}...")
+                    # CRITICAL FIX (Jan 24, 2026): Use the correct broker for this position
+                    # Each position is tagged with its broker when fetched from multi_account_manager
+                    position_broker = position.get('_broker', active_broker)
+                    position_broker_type = position.get('_broker_type')
+                    broker_label = position_broker_type.value.upper() if position_broker_type else "UNKNOWN"
                     
-                    # Get current price
-                    current_price = active_broker.get_current_price(symbol)
+                    logger.info(f"   Analyzing {symbol} on {broker_label}...")
+                    
+                    # Get current price from the position's broker
+                    current_price = position_broker.get_current_price(symbol)
                     if not current_price or current_price == 0:
-                        logger.warning(f"   ⚠️ Could not get price for {symbol}")
+                        logger.warning(f"   ⚠️ Could not get price for {symbol} from {broker_label}")
                         continue
                     
                     # Get position value
                     quantity = position.get('quantity', 0)
                     position_value = current_price * quantity
                     
-                    logger.info(f"   {symbol}: {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
+                    logger.info(f"   {symbol} ({broker_label}): {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
                     
                     # PROFITABILITY MODE: Aggressive exit on weak markets
                     # Exit positions when market conditions deteriorate to prevent bleeding
