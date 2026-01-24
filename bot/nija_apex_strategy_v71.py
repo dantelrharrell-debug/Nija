@@ -143,6 +143,27 @@ class NIJAApexStrategyV71:
             logger.info("✅ Regime detection: ENABLED (trending/ranging/volatile)")
         logger.info("=" * 70)
     
+    def _get_broker_name(self) -> str:
+        """
+        Get broker name from broker_client.
+        
+        Returns:
+            str: Broker name (e.g., 'kraken', 'coinbase') or 'unknown'
+        """
+        if not self.broker_client or not hasattr(self.broker_client, 'broker_type'):
+            return 'unknown'
+        
+        broker_type = self.broker_client.broker_type
+        if hasattr(broker_type, 'value'):
+            # It's an Enum
+            return broker_type.value.lower()
+        elif isinstance(broker_type, str):
+            # It's already a string
+            return broker_type.lower()
+        else:
+            # Fallback to string representation
+            return str(broker_type).lower()
+    
     def _validate_trade_quality(self, position_size: float, score: float) -> Dict:
         """
         Validate trade quality based on position size and confidence threshold.
@@ -834,6 +855,25 @@ class NIJAApexStrategyV71:
             # No position - check for entry
             adx = scalar(indicators['adx'].iloc[-1])
             
+            # EARLY FILTER: Check if we can afford minimum position size for this broker
+            # This avoids wasting computation on trades that will be rejected anyway
+            broker_name = self._get_broker_name()
+            
+            # Kraken requires $10 minimum, others typically allow smaller sizes
+            min_required_balance = 10.0 if broker_name == 'kraken' else MIN_POSITION_USD
+            
+            # Calculate maximum possible position size (20% of balance)
+            # This is the absolute maximum we could ever allocate
+            max_position_size = account_balance * self.risk_manager.max_position_pct
+            
+            # If even our maximum possible position is below minimum, skip analysis entirely
+            if max_position_size < min_required_balance:
+                logger.debug(f"   {symbol}: Skipping analysis - max position ${max_position_size:.2f} < ${min_required_balance:.2f} minimum for {broker_name}")
+                return {
+                    'action': 'hold',
+                    'reason': f'Account too small for {broker_name} minimum (${min_required_balance:.2f})'
+                }
+            
             if trend == 'uptrend':
                 # Use enhanced scoring if available, otherwise legacy
                 if self.use_enhanced_scoring:
@@ -909,6 +949,16 @@ class NIJAApexStrategyV71:
                     return result
             
             elif trend == 'downtrend':
+                # EARLY FILTER: Check if this broker/symbol supports shorting
+                # Spot markets don't support shorting - only futures/perpetuals do
+                if EXCHANGE_CAPABILITIES_AVAILABLE:
+                    if not can_short(broker_name, symbol):
+                        logger.debug(f"   {symbol}: Skipping SHORT analysis - {broker_name} spot markets don't support shorting")
+                        return {
+                            'action': 'hold',
+                            'reason': f'{broker_name} does not support shorting for {symbol} (spot market)'
+                        }
+                
                 # Use enhanced scoring if available, otherwise legacy
                 if self.use_enhanced_scoring:
                     short_signal, score, reason, metadata = self.check_entry_with_enhanced_scoring(
