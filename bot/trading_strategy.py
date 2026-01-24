@@ -1457,25 +1457,43 @@ class TradingStrategy:
         if not broker:
             return False, "Broker not available"
         
+        broker_name = self._get_broker_name(broker)
+        
         if not broker.connected:
-            return False, f"{self._get_broker_name(broker).upper()} not connected"
+            logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} not connected")
+            return False, f"{broker_name.upper()} not connected"
         
         # Check if broker is in EXIT_ONLY mode
         if hasattr(broker, 'exit_only_mode') and broker.exit_only_mode:
-            return False, f"{self._get_broker_name(broker).upper()} in EXIT-ONLY mode"
+            logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} in EXIT_ONLY mode")
+            return False, f"{broker_name.upper()} in EXIT-ONLY mode"
         
         # Check if account balance meets minimum threshold
+        # CRITICAL FIX (Jan 24, 2026): Use timeout to prevent hanging on slow balance fetches
         try:
-            balance = broker.get_account_balance()
+            # Call get_account_balance with timeout to prevent indefinite hanging
+            balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=15)
+            
+            # Check if timeout or error occurred
+            # call_with_timeout returns (value, None) on success, (None, error) on failure
+            if balance_result[1] is not None:  # Error from call_with_timeout
+                error_msg = balance_result[1]
+                logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance fetch timed out or failed: {error_msg}")
+                return False, f"{broker_name.upper()} balance fetch failed: timeout or error"
+            
+            balance = balance_result[0] if balance_result[0] is not None else 0.0
             broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
             min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
             
-            if balance < min_balance:
-                return False, f"{self._get_broker_name(broker).upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+            logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} balance=${balance:.2f}, min=${min_balance:.2f}")
             
-            return True, "Eligible"
+            if balance < min_balance:
+                return False, f"{broker_name.upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+            
+            return True, f"Eligible (${balance:.2f} >= ${min_balance:.2f} min)"
         except Exception as e:
-            return False, f"{self._get_broker_name(broker).upper()} balance check failed: {e}"
+            logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance check exception: {e}")
+            return False, f"{broker_name.upper()} balance check failed: {e}"
     
     def _select_entry_broker(self, all_brokers: Dict[BrokerType, object]) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
         """
@@ -1492,16 +1510,21 @@ class TradingStrategy:
         """
         eligibility_status = {}
         
+        # CRITICAL FIX (Jan 24, 2026): Add debug logging to diagnose broker selection issues
+        logger.debug(f"_select_entry_broker called with {len(all_brokers)} brokers: {[bt.value for bt in all_brokers.keys()]}")
+        
         # Check each broker in priority order
         for broker_type in ENTRY_BROKER_PRIORITY:
             broker = all_brokers.get(broker_type)
             
             if not broker:
                 eligibility_status[broker_type.value] = "Not configured"
+                logger.debug(f"   {broker_type.value}: Not in all_brokers dict")
                 continue
             
             is_eligible, reason = self._is_broker_eligible_for_entry(broker)
             eligibility_status[broker_type.value] = reason
+            logger.debug(f"   {broker_type.value}: is_eligible={is_eligible}, reason={reason}")
             
             if is_eligible:
                 broker_name = self._get_broker_name(broker)
@@ -1509,6 +1532,7 @@ class TradingStrategy:
                 return broker, broker_name, eligibility_status
         
         # No eligible broker found
+        logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
         return None, None, eligibility_status
     
     def _is_zombie_position(self, pnl_percent: float, entry_time_available: bool, position_age_hours: float) -> bool:
@@ -2964,63 +2988,90 @@ class TradingStrategy:
                 logger.info("")
                 logger.info("   🏦 BROKER ELIGIBILITY CHECK:")
                 
-                # Get all available brokers for selection
-                all_brokers = {}
-                if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
-                    all_brokers = getattr(self.multi_account_manager, 'master_brokers', {})
-                
-                # Add current active broker if not in multi_account_manager
-                if active_broker and hasattr(active_broker, 'broker_type'):
-                    all_brokers[active_broker.broker_type] = active_broker
-                
-                # Select best broker for entry based on priority
-                entry_broker, entry_broker_name, broker_eligibility = self._select_entry_broker(all_brokers)
-                
-                # Log broker eligibility status for all brokers
-                for broker_name, status in broker_eligibility.items():
-                    if "Eligible" in status:
-                        logger.info(f"      ✅ {broker_name.upper()}: {status}")
-                    elif "Not configured" in status:
-                        logger.debug(f"      ⚪ {broker_name.upper()}: {status}")
+                # CRITICAL FIX (Jan 24, 2026): Wrap entire broker selection in try-catch
+                # to prevent silent failures that cause market scanning to never execute
+                try:
+                    # Get all available brokers for selection
+                    all_brokers = {}
+                    if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
+                        all_brokers = getattr(self.multi_account_manager, 'master_brokers', {})
+                    
+                    # Add current active broker if not in multi_account_manager
+                    if active_broker and hasattr(active_broker, 'broker_type'):
+                        all_brokers[active_broker.broker_type] = active_broker
+                    
+                    # CRITICAL FIX (Jan 24, 2026): Log if no brokers are available for selection
+                    # This helps diagnose why no trades are executing
+                    if not all_brokers:
+                        logger.warning(f"      ⚠️  No brokers available for selection!")
+                        logger.warning(f"      Multi-account manager: {'Yes' if self.multi_account_manager else 'No'}")
+                        logger.warning(f"      Active broker: {'Yes' if active_broker else 'No'}")
                     else:
-                        logger.warning(f"      ❌ {broker_name.upper()}: {status}")
-                
-                if not entry_broker:
-                    can_enter = False
-                    skip_reasons.append("No eligible broker for entry (all in EXIT_ONLY or below minimum balance)")
-                    logger.warning(f"   ❌ CONDITION FAILED: No eligible broker for entry")
-                    logger.warning(f"      💡 All brokers are either in EXIT-ONLY mode or below minimum balance")
-                else:
-                    logger.info(f"   ✅ CONDITION PASSED: {entry_broker_name.upper()} available for entry")
-                    # Update active_broker to use the selected entry broker
-                    active_broker = entry_broker
+                        logger.info(f"      Available brokers for selection: {', '.join([bt.value.upper() for bt in all_brokers.keys()])}")
                     
-                    # CRITICAL FIX (Jan 22, 2026): Update account_balance from selected entry broker
-                    # When switching brokers, we must re-fetch the balance from the NEW broker
-                    # Otherwise position sizing uses the wrong broker's balance (e.g., Coinbase $20 instead of Kraken $28)
-                    if hasattr(active_broker, 'get_account_balance_detailed'):
-                        balance_data = active_broker.get_account_balance_detailed()
+                    # Select best broker for entry based on priority
+                    entry_broker, entry_broker_name, broker_eligibility = self._select_entry_broker(all_brokers)
+                    
+                    # Log broker eligibility status for all brokers
+                    # CRITICAL FIX (Jan 24, 2026): Change "Not configured" from DEBUG to INFO level
+                    # This ensures all broker status is visible in logs to help diagnose trading issues
+                    for broker_name, status in broker_eligibility.items():
+                        if "Eligible" in status:
+                            logger.info(f"      ✅ {broker_name.upper()}: {status}")
+                        elif "Not configured" in status:
+                            logger.info(f"      ⚪ {broker_name.upper()}: {status}")  # Changed from logger.debug to logger.info
+                        else:
+                            logger.warning(f"      ❌ {broker_name.upper()}: {status}")
+                    
+                    if not entry_broker:
+                        can_enter = False
+                        skip_reasons.append("No eligible broker for entry (all in EXIT_ONLY or below minimum balance)")
+                        logger.warning(f"   ❌ CONDITION FAILED: No eligible broker for entry")
+                        logger.warning(f"      💡 All brokers are either in EXIT-ONLY mode or below minimum balance")
                     else:
-                        balance_data = {'trading_balance': active_broker.get_account_balance()}
-                    account_balance = balance_data.get('trading_balance', 0.0)
-                    
-                    # Also update position values and total capital from the new broker
-                    held_funds = balance_data.get('total_held', 0.0)
-                    total_funds = balance_data.get('total_funds', account_balance)
-                    
-                    if hasattr(active_broker, 'get_total_capital'):
-                        try:
-                            capital_data = active_broker.get_total_capital(include_positions=True)
-                            position_value = capital_data.get('position_value', 0.0)
-                            position_count = capital_data.get('position_count', 0)
-                            total_capital = capital_data.get('total_capital', account_balance)
-                        except Exception as e:
-                            logger.debug(f"⚠️ Could not calculate position values from entry broker: {e}")
+                        logger.info(f"   ✅ CONDITION PASSED: {entry_broker_name.upper()} available for entry")
+                        # Update active_broker to use the selected entry broker
+                        active_broker = entry_broker
+                        
+                        # CRITICAL FIX (Jan 22, 2026): Update account_balance from selected entry broker
+                        # When switching brokers, we must re-fetch the balance from the NEW broker
+                        # Otherwise position sizing uses the wrong broker's balance (e.g., Coinbase $20 instead of Kraken $28)
+                        if hasattr(active_broker, 'get_account_balance_detailed'):
+                            balance_data = active_broker.get_account_balance_detailed()
+                        else:
+                            balance_data = {'trading_balance': active_broker.get_account_balance()}
+                        account_balance = balance_data.get('trading_balance', 0.0)
+                        
+                        # Also update position values and total capital from the new broker
+                        held_funds = balance_data.get('total_held', 0.0)
+                        total_funds = balance_data.get('total_funds', account_balance)
+                        
+                        if hasattr(active_broker, 'get_total_capital'):
+                            try:
+                                capital_data = active_broker.get_total_capital(include_positions=True)
+                                position_value = capital_data.get('position_value', 0.0)
+                                position_count = capital_data.get('position_count', 0)
+                                total_capital = capital_data.get('total_capital', account_balance)
+                            except Exception as e:
+                                logger.debug(f"⚠️ Could not calculate position values from entry broker: {e}")
+                                total_capital = account_balance
+                        else:
                             total_capital = account_balance
-                    else:
-                        total_capital = account_balance
-                    
-                    logger.info(f"   💰 {entry_broker_name.upper()} balance updated: ${account_balance:.2f} (total capital: ${total_capital:.2f})")
+                        
+                        logger.info(f"   💰 {entry_broker_name.upper()} balance updated: ${account_balance:.2f} (total capital: ${total_capital:.2f})")
+                
+                except Exception as broker_check_error:
+                    # CRITICAL FIX (Jan 24, 2026): Log any exceptions that occur during broker selection
+                    # This prevents silent failures that cause the bot to skip market scanning
+                    logger.error(f"   ❌ ERROR during broker eligibility check: {broker_check_error}")
+                    logger.error(f"   Exception type: {type(broker_check_error).__name__}")
+                    import traceback
+                    logger.error(f"   Traceback: {traceback.format_exc()}")
+                    can_enter = False
+                    skip_reasons.append(f"Broker eligibility check failed: {broker_check_error}")
+                    # Set entry_broker to None to ensure it's defined for later code
+                    entry_broker = None
+                    entry_broker_name = "UNKNOWN"
                 
                 logger.info("")
                 logger.info("═" * 80)
