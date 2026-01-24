@@ -44,6 +44,9 @@ except ImportError:
     MIN_POSITION_USD = 2.0  # Default to $2 minimum (lowered from $5 on Jan 21, 2026)
     logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $2.00")
 
+# Broker-specific minimum position sizes (Jan 24, 2026)
+KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exchange rules
+
 # Trade quality thresholds (Jan 20, 2026)
 # Confidence threshold to filter weak entries and increase trade size quality
 MIN_CONFIDENCE = 0.60  # Minimum confidence score (0.0-1.0) to execute trade
@@ -181,7 +184,7 @@ class NIJAApexStrategyV71:
         # Check broker-specific minimum position size (FIX: Jan 24, 2026)
         # Kraken requires $10 minimum, others typically $2
         broker_name = self._get_broker_name()
-        broker_minimum = 10.0 if broker_name == 'kraken' else MIN_POSITION_USD
+        broker_minimum = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
         
         if float(position_size) < broker_minimum:
             logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below {broker_name} minimum ${broker_minimum:.2f}")
@@ -864,7 +867,7 @@ class NIJAApexStrategyV71:
             broker_name = self._get_broker_name()
             
             # Kraken requires $10 minimum, others typically allow smaller sizes
-            min_required_balance = 10.0 if broker_name == 'kraken' else MIN_POSITION_USD
+            min_required_balance = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
             
             # Calculate maximum possible position size (20% of balance)
             # This is the absolute maximum we could ever allocate
