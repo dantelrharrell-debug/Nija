@@ -1474,8 +1474,9 @@ class TradingStrategy:
             # Call get_account_balance with timeout to prevent indefinite hanging
             balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=15)
             
-            # Check if timeout occurred
-            if balance_result[1]:  # Error from call_with_timeout
+            # Check if timeout or error occurred
+            # call_with_timeout returns (value, None) on success, (None, error) on failure
+            if balance_result[1] is not None:  # Error from call_with_timeout
                 error_msg = balance_result[1]
                 logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance fetch timed out or failed: {error_msg}")
                 return False, f"{broker_name.upper()} balance fetch failed: timeout or error"
@@ -3068,10 +3069,9 @@ class TradingStrategy:
                     logger.error(f"   Traceback: {traceback.format_exc()}")
                     can_enter = False
                     skip_reasons.append(f"Broker eligibility check failed: {broker_check_error}")
-                    # Set entry_broker to None if exception occurred
-                    if 'entry_broker' not in locals():
-                        entry_broker = None
-                        entry_broker_name = "UNKNOWN"
+                    # Set entry_broker to None to ensure it's defined for later code
+                    entry_broker = None
+                    entry_broker_name = "UNKNOWN"
                 
                 logger.info("")
                 logger.info("═" * 80)
