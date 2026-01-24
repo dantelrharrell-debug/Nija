@@ -194,9 +194,9 @@ def main():
             try:
                 capital = float(value)
                 if capital < 100:
-                    warnings.append(f"INITIAL_CAPITAL={capital} < 100 may block SAVER+ tier users")
+                    warnings.append(f"INITIAL_CAPITAL={capital} < 100 may block SAVER+ tier users. Set INITIAL_CAPITAL=auto or ensure balances are in STARTER tier ($50-$99)")
             except ValueError:
-                warnings.append(f"INITIAL_CAPITAL={value} is not a valid number or 'auto'/'LIVE'")
+                warnings.append(f"INITIAL_CAPITAL={value} is not a valid number or 'auto'")
     else:
         logger.info(f"   ⚪ INITIAL_CAPITAL not set (will default to 'auto')")
     
@@ -301,4 +301,19 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("\n\n🛑 Diagnostic interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error("=" * 80)
+        logger.error("❌ DIAGNOSTIC ERROR")
+        logger.error("=" * 80)
+        logger.error(f"An unexpected error occurred: {e}")
+        logger.error("")
+        logger.error("Please report this error with the following details:")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error message: {str(e)}")
+        logger.error("=" * 80)
+        sys.exit(1)
