@@ -1832,8 +1832,43 @@ class TradingStrategy:
                     logger.warning(f"⚠️ Excess positions detected: {result['excess']} over cap")
                     logger.info(f"   Sold {result['sold']} positions")
             
-            # CRITICAL: Check if new entries are blocked
-            current_positions = active_broker.get_positions() if active_broker else []
+            # CRITICAL FIX (Jan 24, 2026): Get positions from ALL connected brokers, not just active_broker
+            # This ensures positions on all exchanges are monitored for stop-loss, profit-taking, etc.
+            # Previously, switching active_broker to Kraken would cause Coinbase positions to be ignored
+            current_positions = []
+            positions_by_broker = {}  # Track which broker each position belongs to
+            
+            if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
+                # Get positions from all connected master brokers
+                for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                    if broker and broker.connected:
+                        try:
+                            broker_positions = broker.get_positions()
+                            if broker_positions:
+                                # Tag each position with its broker for later management
+                                for pos in broker_positions:
+                                    pos['_broker'] = broker  # Store broker reference
+                                    pos['_broker_type'] = broker_type  # Store broker type for logging
+                                current_positions.extend(broker_positions)
+                                # Safely get broker name (handles both enum and string)
+                                broker_name = broker_type.value.upper() if hasattr(broker_type, 'value') else str(broker_type).upper()
+                                positions_by_broker[broker_name] = len(broker_positions)
+                                logger.debug(f"   Fetched {len(broker_positions)} positions from {broker_name}")
+                        except Exception as e:
+                            # Safely get broker name for error logging
+                            broker_name = broker_type.value.upper() if hasattr(broker_type, 'value') else str(broker_type).upper()
+                            logger.warning(f"   ⚠️ Could not fetch positions from {broker_name}: {e}")
+                
+                # Log positions by broker for visibility
+                if positions_by_broker:
+                    logger.info(f"   📊 Positions by broker: {', '.join([f'{name}={count}' for name, count in positions_by_broker.items()])}")
+            elif active_broker:
+                # Fallback: If multi_account_manager not available, use active_broker
+                current_positions = active_broker.get_positions() if active_broker else []
+                logger.debug(f"   Fetched {len(current_positions)} positions from active broker (fallback mode)")
+            else:
+                logger.warning("   ⚠️ No brokers available to fetch positions from")
+                current_positions = []
             
             # CRITICAL FIX: Filter out unsellable positions (dust, unsupported symbols)
             # These positions can't be traded so they shouldn't count toward position cap
@@ -2009,9 +2044,10 @@ class TradingStrategy:
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
             
-            # Get 3-tier stop-loss configuration for this broker and balance
-            primary_stop, micro_stop, catastrophic_stop, stop_description = self._get_stop_loss_tier(active_broker, account_balance)
-            logger.info(f"🛡️  Stop-loss tiers: {stop_description}")
+            # NOTE (Jan 24, 2026): Stop-loss tiers are now calculated PER-POSITION based on each position's broker
+            # This ensures correct stop-loss thresholds for positions on different exchanges (Kraken vs Coinbase)
+            # See line ~2169 where position_primary_stop, position_micro_stop are calculated for each position
+            # using self._get_stop_loss_tier(position_broker, position_broker_balance)
             
             # CRITICAL: If over position cap, prioritize selling weakest positions immediately
             # This ensures we get back under cap quickly to avoid further bleeding
@@ -2045,19 +2081,26 @@ class TradingStrategy:
                             # Remove from unsellable dict to allow full processing
                             del self.unsellable_positions[symbol]
                     
-                    logger.info(f"   Analyzing {symbol}...")
+                    # CRITICAL FIX (Jan 24, 2026): Use the correct broker for this position
+                    # Each position is tagged with its broker when fetched from multi_account_manager
+                    position_broker = position.get('_broker', active_broker)
+                    position_broker_type = position.get('_broker_type')
+                    # Safely get broker label (handles both enum and string)
+                    broker_label = position_broker_type.value.upper() if (position_broker_type and hasattr(position_broker_type, 'value')) else "UNKNOWN"
                     
-                    # Get current price
-                    current_price = active_broker.get_current_price(symbol)
+                    logger.info(f"   Analyzing {symbol} on {broker_label}...")
+                    
+                    # Get current price from the position's broker
+                    current_price = position_broker.get_current_price(symbol)
                     if not current_price or current_price == 0:
-                        logger.warning(f"   ⚠️ Could not get price for {symbol}")
+                        logger.warning(f"   ⚠️ Could not get price for {symbol} from {broker_label}")
                         continue
                     
                     # Get position value
                     quantity = position.get('quantity', 0)
                     position_value = current_price * quantity
                     
-                    logger.info(f"   {symbol}: {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
+                    logger.info(f"   {symbol} ({broker_label}): {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
                     
                     # PROFITABILITY MODE: Aggressive exit on weak markets
                     # Exit positions when market conditions deteriorate to prevent bleeding
@@ -2074,7 +2117,9 @@ class TradingStrategy:
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'Small position cleanup (${position_value:.2f})'
+                            'reason': f'Small position cleanup (${position_value:.2f})',
+                            'broker': position_broker,
+                            'broker_label': broker_label
                         })
                         continue
                     
@@ -2235,7 +2280,9 @@ class TradingStrategy:
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent*100:.2f}%)'
+                                            'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent*100:.2f}%)',
+                                            'broker': position_broker,
+                                            'broker_label': broker_label
                                         })
                                         continue
                                     elif not entry_time_available:
@@ -2246,7 +2293,9 @@ class TradingStrategy:
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Losing position without time tracking (P&L: {pnl_percent*100:.2f}%)'
+                                            'reason': f'Losing position without time tracking (P&L: {pnl_percent*100:.2f}%)',
+                                            'broker': position_broker,
+                                            'broker_label': broker_label
                                         })
                                         continue
                                 
@@ -2347,7 +2396,9 @@ class TradingStrategy:
                                             positions_to_exit.append({
                                                 'symbol': symbol,
                                                 'quantity': quantity,
-                                                'reason': f'Profit pullback {profit_decrease*100:.2f}% exceeded 0.5% limit'
+                                                'reason': f'Profit pullback {profit_decrease*100:.2f}% exceeded 0.5% limit',
+                                                'broker': position_broker,
+                                                'broker_label': broker_label
                                             })
                                             continue
                                         
@@ -2367,7 +2418,9 @@ class TradingStrategy:
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Never break even: was {previous_profit_pct*100:+.2f}%, now {pnl_percent*100:+.2f}%'
+                                            'reason': f'Never break even: was {previous_profit_pct*100:+.2f}%, now {pnl_percent*100:+.2f}%',
+                                            'broker': position_broker,
+                                            'broker_label': broker_label
                                         })
                                         continue
                                 
@@ -2402,7 +2455,9 @@ class TradingStrategy:
                                             positions_to_exit.append({
                                                 'symbol': symbol,
                                                 'quantity': quantity,
-                                                'reason': f'{reason} hit (actual: +{pnl_percent:.2f}%)'
+                                                'reason': f'{reason} hit (actual: +{pnl_percent:.2f}%)',
+                                                'broker': position_broker,
+                                                'broker_label': broker_label
                                             })
                                             break  # Exit the for loop, continue to next position
                                         else:
@@ -2419,7 +2474,9 @@ class TradingStrategy:
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Catastrophic protective exit at {STOP_LOSS_EMERGENCY*100:.0f}% (actual: {pnl_percent*100:.2f}%)'
+                                            'reason': f'Catastrophic protective exit at {STOP_LOSS_EMERGENCY*100:.0f}% (actual: {pnl_percent*100:.2f}%)',
+                                            'broker': position_broker,
+                                            'broker_label': broker_label
                                         })
                                     # STANDARD STOP LOSS: Normal stop-loss threshold
                                     # WITH MINIMUM LOSS FLOOR: Only trigger if loss is significant enough
@@ -2428,7 +2485,9 @@ class TradingStrategy:
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)'
+                                            'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)',
+                                            'broker': position_broker,
+                                            'broker_label': broker_label
                                         })
                                     # WARNING THRESHOLD: Approaching stop loss
                                     elif pnl_percent <= STOP_LOSS_WARNING:
@@ -2443,7 +2502,9 @@ class TradingStrategy:
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Zombie position exit (stuck at {pnl_percent:+.2f}% for {position_age_hours:.1f}h - likely masked loser)'
+                                            'reason': f'Zombie position exit (stuck at {pnl_percent:+.2f}% for {position_age_hours:.1f}h - likely masked loser)',
+                                            'broker': position_broker,
+                                            'broker_label': broker_label
                                         })
                                     else:
                                         # Position has entry price but not at any exit threshold
@@ -2463,7 +2524,9 @@ class TradingStrategy:
                                                 positions_to_exit.append({
                                                     'symbol': symbol,
                                                     'quantity': quantity,
-                                                    'reason': f'EMERGENCY time exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_EMERGENCY}h)'
+                                                    'reason': f'EMERGENCY time exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_EMERGENCY}h)',
+                                                    'broker': position_broker,
+                                                    'broker_label': broker_label
                                                 })
                                             # TIME-BASED EXIT: Auto-exit stale positions
                                             elif position_age_hours >= MAX_POSITION_HOLD_HOURS:
@@ -2471,7 +2534,9 @@ class TradingStrategy:
                                                 positions_to_exit.append({
                                                     'symbol': symbol,
                                                     'quantity': quantity,
-                                                    'reason': f'Time-based exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_HOURS}h)'
+                                                    'reason': f'Time-based exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_HOURS}h)',
+                                                    'broker': position_broker,
+                                                    'broker_label': broker_label
                                                 })
                                             elif position_age_hours >= STALE_POSITION_WARNING_HOURS:
                                                 logger.info(f"   ⚠️ Position aging: {symbol} held for {position_age_hours:.1f} hours")
@@ -2545,7 +2610,9 @@ class TradingStrategy:
                                         positions_to_exit.append({
                                             'symbol': symbol,
                                             'quantity': quantity,
-                                            'reason': f'Auto-imported losing position ({immediate_pnl:+.2f}%)'
+                                            'reason': f'Auto-imported losing position ({immediate_pnl:+.2f}%)',
+                                            'broker': position_broker,
+                                            'broker_label': broker_label
                                         })
                                         # Skip all remaining logic for this position since it's queued for exit
                                         continue
@@ -2608,7 +2675,9 @@ class TradingStrategy:
                                     positions_to_exit.append({
                                         'symbol': symbol,
                                         'quantity': quantity,
-                                        'reason': f'Time-based exit without entry price (held {position_age_hours:.1f}h)'
+                                        'reason': f'Time-based exit without entry price (held {position_age_hours:.1f}h)',
+                                        'broker': position_broker,
+                                        'broker_label': broker_label
                                     })
                                     continue
                             else:
@@ -2627,7 +2696,9 @@ class TradingStrategy:
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': 'Insufficient market data for analysis'
+                            'reason': 'Insufficient market data for analysis',
+                            'broker': position_broker,
+                            'broker_label': broker_label
                         })
                         continue
                     
@@ -2648,7 +2719,9 @@ class TradingStrategy:
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': 'No indicators available'
+                            'reason': 'No indicators available',
+                            'broker': position_broker,
+                            'broker_label': broker_label
                         })
                         continue
                     
@@ -2687,7 +2760,9 @@ class TradingStrategy:
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Orphaned position with weak RSI ({rsi:.1f}) - preventing loss'
+                                'reason': f'Orphaned position with weak RSI ({rsi:.1f}) - preventing loss',
+                                'broker': position_broker,
+                                'broker_label': broker_label
                             })
                             continue
                         
@@ -2698,7 +2773,9 @@ class TradingStrategy:
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Orphaned position below EMA9 - preventing loss'
+                                'reason': f'Orphaned position below EMA9 - preventing loss',
+                                'broker': position_broker,
+                                'broker_label': broker_label
                             })
                             continue
                         
@@ -2715,7 +2792,9 @@ class TradingStrategy:
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'RSI overbought ({rsi:.1f}) - locking gains'
+                            'reason': f'RSI overbought ({rsi:.1f}) - locking gains',
+                            'broker': position_broker,
+                            'broker_label': broker_label
                         })
                         continue
                     
@@ -2729,7 +2808,9 @@ class TradingStrategy:
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Momentum reversal (RSI={rsi:.1f}, price<EMA9) - locking gains'
+                                'reason': f'Momentum reversal (RSI={rsi:.1f}, price<EMA9) - locking gains',
+                                'broker': position_broker,
+                                'broker_label': broker_label
                             })
                             continue
                     
@@ -2745,7 +2826,9 @@ class TradingStrategy:
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Profit protection (RSI={rsi:.1f}, bearish cross) - locking gains'
+                                'reason': f'Profit protection (RSI={rsi:.1f}, bearish cross) - locking gains',
+                                'broker': position_broker,
+                                'broker_label': broker_label
                             })
                             continue
                     
@@ -2755,7 +2838,9 @@ class TradingStrategy:
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'RSI oversold ({rsi:.1f}) - cutting losses'
+                            'reason': f'RSI oversold ({rsi:.1f}) - cutting losses',
+                            'broker': position_broker,
+                            'broker_label': broker_label
                         })
                         continue
                     
@@ -2769,7 +2854,9 @@ class TradingStrategy:
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Downtrend exit (RSI={rsi:.1f}, price<EMA21) - cutting losses'
+                                'reason': f'Downtrend exit (RSI={rsi:.1f}, price<EMA21) - cutting losses',
+                                'broker': position_broker,
+                                'broker_label': broker_label
                             })
                             continue
                     
@@ -2784,7 +2871,9 @@ class TradingStrategy:
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': market_reason
+                            'reason': market_reason,
+                            'broker': position_broker,
+                            'broker_label': broker_label
                         })
                         continue
                     
@@ -2838,7 +2927,9 @@ class TradingStrategy:
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': 'Over position cap (price fetch failed - symbol mismatch)'
+                                'reason': 'Over position cap (price fetch failed - symbol mismatch)',
+                                'broker': position_broker,
+                                'broker_label': broker_label
                             })
                             continue
                         
@@ -2847,7 +2938,9 @@ class TradingStrategy:
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': f'Over position cap (${value:.2f})'
+                            'reason': f'Over position cap (${value:.2f})',
+                            'broker': position_broker,
+                            'broker_label': broker_label
                         })
                     except Exception as price_err:
                         # Still add even if price fetch fails
@@ -2855,7 +2948,9 @@ class TradingStrategy:
                         positions_to_exit.append({
                             'symbol': symbol,
                             'quantity': quantity,
-                            'reason': 'Over position cap'
+                            'reason': 'Over position cap',
+                            'broker': position_broker,
+                            'broker_label': broker_label
                         })
                     
                     # Rate limiting: Add delay after each price check (except last one)
@@ -2877,8 +2972,11 @@ class TradingStrategy:
                     symbol = pos_data['symbol']
                     quantity = pos_data['quantity']
                     reason = pos_data['reason']
+                    # CRITICAL FIX (Jan 24, 2026): Use the correct broker for each position
+                    exit_broker = pos_data.get('broker', active_broker)
+                    exit_broker_label = pos_data.get('broker_label', 'UNKNOWN')
                     
-                    logger.info(f"[{i}/{len(positions_to_exit)}] Selling {symbol} ({reason})")
+                    logger.info(f"[{i}/{len(positions_to_exit)}] Selling {symbol} on {exit_broker_label} ({reason})")
                     
                     # CRITICAL FIX (Jan 10, 2026): Validate symbol before placing order
                     # Prevents "ProductID is invalid" errors
@@ -2889,7 +2987,7 @@ class TradingStrategy:
                         continue
                     
                     try:
-                        result = active_broker.place_market_order(
+                        result = exit_broker.place_market_order(
                             symbol=symbol,
                             side='sell',
                             quantity=quantity,
@@ -2906,14 +3004,14 @@ class TradingStrategy:
                             continue
                         
                         if result and result.get('status') not in ['error', 'unfilled']:
-                            logger.info(f"  ✅ {symbol} SOLD successfully!")
+                            logger.info(f"  ✅ {symbol} SOLD successfully on {exit_broker_label}!")
                             # ✅ FIX #3: EXPLICIT SELL CONFIRMATION LOG
                             # If this was a stop-loss exit, log it clearly
                             if 'stop loss' in reason.lower():
                                 logger.info(f"  ✅ SOLD {symbol} @ market due to stop loss")
-                            # Track the exit in position tracker
-                            if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
-                                active_broker.position_tracker.track_exit(symbol, quantity)
+                            # Track the exit in position tracker (use the correct broker)
+                            if hasattr(exit_broker, 'position_tracker') and exit_broker.position_tracker:
+                                exit_broker.position_tracker.track_exit(symbol, quantity)
                             # Remove from unsellable dict if it was there (position grew and became sellable)
                             if symbol in self.unsellable_positions:
                                 del self.unsellable_positions[symbol]
