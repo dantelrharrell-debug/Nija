@@ -211,31 +211,31 @@ except ImportError:
             pass
 
 # Balance threshold constants
-# Note: Large gap between PROTECTION and TRADING thresholds is intentional:
+# Note: Gap between PROTECTION and TRADING thresholds allows small account operation:
 #   - PROTECTION ($0.50): Absolute minimum to allow bot to start (hard requirement)
-#   - TRADING ($25.00): Minimum for both Kraken and Coinbase (enforced per broker)
-#   This ensures both exchanges require $25 minimum while maintaining different roles
+#   - TRADING ($10.00): Default minimum for trading (can be raised via environment variable)
+#   This allows small accounts ($10-20) to trade while preventing dust-level trading
 # 
-# COPY TRADING MODE: For small accounts in copy trading mode, these can be lowered:
-#   - MINIMUM_TRADING_BALANCE can be set to $15 via environment variable
-#   - MIN_CASH_TO_BUY can be set to $5 via environment variable
+# ACCOUNT SIZE MODES: Can be customized via MINIMUM_TRADING_BALANCE environment variable:
+#   - Small accounts: $10-15 (default, suitable for testing and small capital)
+#   - Standard accounts: $25+ (better for fee efficiency and multiple positions)
+#   - Large accounts: See tier-specific env files (.env.saver_tier, .env.investor_tier, etc.)
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
-STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '25.00'))  # Can be overridden for copy trading
+STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '10.00'))  # Lowered default from $25.00 to $10.00 (Jan 24, 2026) for small account support
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
 MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', '5.50'))  # Minimum cash required to place a buy order
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 # Broker-specific minimum balance requirements
-# Both require the same amount ($25) but with different priority and strategy rules:
-# - Kraken: PRIMARY engine for small accounts ($25-$75 range)
-# - Coinbase: SECONDARY/selective (not for small accounts, uses Coinbase-specific strategy)
+# Both require the same amount (default $25, configurable via MINIMUM_TRADING_BALANCE env var) but with different priority and strategy rules:
+# - Kraken: PRIMARY engine for small accounts ($10-$75 range with low-capital mode)
+# - Coinbase: SECONDARY/selective (uses Coinbase-specific strategy, higher fees)
 KRAKEN_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Kraken is PRIMARY for small accounts
-COINBASE_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Coinbase is SECONDARY with adjusted rules
-# 🚑 FIX 2: Minimum balance for Coinbase to prevent fees eating small accounts
-# Coinbase has higher fees than Kraken, so small accounts should use Kraken instead
-# UNIFIED MINIMUM: $25 to match position sizing and adapter rules
-# At $25 balance, can make 1 full trade; at $50+ can make 2+ concurrent trades
-COINBASE_MINIMUM_BALANCE = 25.00  # Disable Coinbase for accounts below this threshold
+# 🚑 FIX (Jan 24, 2026): Use environment variable for Coinbase minimum to support small accounts
+# Coinbase has higher fees than Kraken, but should still support small balances when needed
+# Can be overridden via COINBASE_MINIMUM_BALANCE or MINIMUM_TRADING_BALANCE environment variable
+# At $10 balance, can make smaller trades; at $25+ can make multiple concurrent trades
+COINBASE_MINIMUM_BALANCE = float(os.getenv('COINBASE_MINIMUM_BALANCE', STANDARD_MINIMUM_BALANCE))  # Respects env override or uses STANDARD_MINIMUM_BALANCE
 
 # Broker health monitoring constants
 # Maximum consecutive errors before marking broker unavailable
@@ -947,6 +947,7 @@ class CoinbaseBroker(BaseBroker):
         # Balance tracking for fail-closed behavior (Jan 19, 2026)
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
+        self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
         
@@ -2001,6 +2002,7 @@ class CoinbaseBroker(BaseBroker):
             
             # SUCCESS: Update last known balance and reset error count
             self._last_known_balance = result
+            self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
             self._balance_fetch_errors = 0
             self._is_available = True
             
@@ -4940,6 +4942,7 @@ class KrakenBroker(BaseBroker):
         # Balance tracking for fail-closed behavior (Fix 3)
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
+        self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
         
@@ -6193,6 +6196,7 @@ class KrakenBroker(BaseBroker):
                 # SUCCESS: Update last known balance and reset error count
                 # 🚑 FIX 4: Store and return total_funds instead of just available
                 self._last_known_balance = total_funds
+                self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
                 self._balance_fetch_errors = 0
                 self._is_available = True
                 
