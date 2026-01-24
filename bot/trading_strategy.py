@@ -2511,8 +2511,10 @@ class TradingStrategy:
                                               f"⚠️  WARNING: This position may have been losing before auto-import! | "
                                               f"Position now tracked - will evaluate exit in next cycle")
                                     
-                                    # Mark that this position was just imported - skip exits this cycle
-                                    just_auto_imported = True
+                                    # CRITICAL FIX: Don't mark as just_auto_imported to allow stop-loss to execute
+                                    # Auto-imported positions should NOT skip stop-loss checks!
+                                    # Only skip profit-taking logic to avoid premature exits
+                                    just_auto_imported = False  # Changed from True - stop-loss must execute!
                                     
                                     # Re-fetch position data to get accurate tracking info
                                     # This ensures control flow variables reflect actual state
