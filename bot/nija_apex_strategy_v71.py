@@ -178,12 +178,16 @@ class NIJAApexStrategyV71:
         # Normalize position_size in case it's a tuple
         position_size = scalar(position_size)
         
-        # Check minimum position size
-        if float(position_size) < MIN_POSITION_USD:
-            logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below minimum ${MIN_POSITION_USD:.2f}")
+        # Check broker-specific minimum position size (FIX: Jan 24, 2026)
+        # Kraken requires $10 minimum, others typically $2
+        broker_name = self._get_broker_name()
+        broker_minimum = 10.0 if broker_name == 'kraken' else MIN_POSITION_USD
+        
+        if float(position_size) < broker_minimum:
+            logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below {broker_name} minimum ${broker_minimum:.2f}")
             return {
                 'valid': False,
-                'reason': f'Position too small: ${position_size:.2f} < ${MIN_POSITION_USD:.2f} minimum (increase account size for better trading)',
+                'reason': f'Position too small: ${position_size:.2f} < ${broker_minimum:.2f} minimum for {broker_name} (increase account size for better trading)',
                 'confidence': 0.0
             }
         
