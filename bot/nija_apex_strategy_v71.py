@@ -1083,19 +1083,7 @@ class NIJAApexStrategyV71:
             elif action == 'enter_short':
                 # EXCHANGE CAPABILITY CHECK: Verify broker supports shorting for this symbol
                 # This prevents SHORT entries on exchanges that don't support them (e.g., Kraken spot)
-                broker_name = 'unknown'
-                if self.broker_client and hasattr(self.broker_client, 'broker_type'):
-                    # Handle both Enum and string broker_type
-                    broker_type = self.broker_client.broker_type
-                    if hasattr(broker_type, 'value'):
-                        # It's an Enum
-                        broker_name = broker_type.value.lower()
-                    elif isinstance(broker_type, str):
-                        # It's already a string
-                        broker_name = broker_type.lower()
-                    else:
-                        # Fallback to string representation
-                        broker_name = str(broker_type).lower()
+                broker_name = self._get_broker_name()
                 
                 # Check if this broker/symbol combination supports shorting
                 if EXCHANGE_CAPABILITIES_AVAILABLE:
