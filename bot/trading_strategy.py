@@ -1470,15 +1470,31 @@ class TradingStrategy:
         
         # Check if account balance meets minimum threshold
         # CRITICAL FIX (Jan 24, 2026): Use timeout to prevent hanging on slow balance fetches
+        # Updated timeout to 45s (increased from 15s) to accommodate Kraken's 30s API timeout plus network overhead
         try:
             # Call get_account_balance with timeout to prevent indefinite hanging
-            balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=15)
+            # 45s timeout allows for Kraken's 30s internal timeout + 15s network/retry buffer
+            balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=45)
             
             # Check if timeout or error occurred
             # call_with_timeout returns (value, None) on success, (None, error) on failure
             if balance_result[1] is not None:  # Error from call_with_timeout
                 error_msg = balance_result[1]
                 logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance fetch timed out or failed: {error_msg}")
+                
+                # CRITICAL FIX (Jan 24, 2026): Use cached balance if available on timeout
+                # If broker has a cached balance, use it instead of marking as ineligible
+                if hasattr(broker, '_last_known_balance') and broker._last_known_balance is not None:
+                    cached_balance = broker._last_known_balance
+                    logger.warning(f"   ⚠️  Using cached balance for {broker_name}: ${cached_balance:.2f}")
+                    broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
+                    min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
+                    
+                    if cached_balance >= min_balance:
+                        return True, f"Eligible (cached ${cached_balance:.2f} >= ${min_balance:.2f} min)"
+                    else:
+                        return False, f"{broker_name.upper()} cached balance ${cached_balance:.2f} < ${min_balance:.2f} minimum"
+                
                 return False, f"{broker_name.upper()} balance fetch failed: timeout or error"
             
             balance = balance_result[0] if balance_result[0] is not None else 0.0

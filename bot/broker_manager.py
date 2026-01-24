@@ -226,16 +226,15 @@ MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', '5.50'))  # Minimum cash re
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 # Broker-specific minimum balance requirements
-# Both require the same amount ($25) but with different priority and strategy rules:
-# - Kraken: PRIMARY engine for small accounts ($25-$75 range)
-# - Coinbase: SECONDARY/selective (not for small accounts, uses Coinbase-specific strategy)
+# Both require the same amount (default $25, configurable via MINIMUM_TRADING_BALANCE env var) but with different priority and strategy rules:
+# - Kraken: PRIMARY engine for small accounts ($10-$75 range with low-capital mode)
+# - Coinbase: SECONDARY/selective (uses Coinbase-specific strategy, higher fees)
 KRAKEN_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Kraken is PRIMARY for small accounts
-COINBASE_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Coinbase is SECONDARY with adjusted rules
-# 🚑 FIX 2: Minimum balance for Coinbase to prevent fees eating small accounts
-# Coinbase has higher fees than Kraken, so small accounts should use Kraken instead
-# UNIFIED MINIMUM: $25 to match position sizing and adapter rules
-# At $25 balance, can make 1 full trade; at $50+ can make 2+ concurrent trades
-COINBASE_MINIMUM_BALANCE = 25.00  # Disable Coinbase for accounts below this threshold
+# 🚑 FIX (Jan 24, 2026): Use environment variable for Coinbase minimum to support small accounts
+# Coinbase has higher fees than Kraken, but should still support small balances when needed
+# Can be overridden via MINIMUM_TRADING_BALANCE environment variable (e.g., $10-$15 for small accounts)
+# At $10 balance, can make smaller trades; at $25+ can make multiple concurrent trades
+COINBASE_MINIMUM_BALANCE = float(os.getenv('COINBASE_MINIMUM_BALANCE', str(STANDARD_MINIMUM_BALANCE)))  # Respects env override or uses STANDARD_MINIMUM_BALANCE
 
 # Broker health monitoring constants
 # Maximum consecutive errors before marking broker unavailable
