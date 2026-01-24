@@ -345,4 +345,20 @@ def log_copy_trading_status(multi_account_manager):
         unmet = master_reqs.get_unmet_requirements()
         logger.warning(f"   Missing: {', '.join(unmet)}")
     
+    # Show configured user accounts
+    logger.info("")
+    logger.info("USER ACCOUNTS CONFIGURED:")
+    user_brokers = multi_account_manager.user_brokers if multi_account_manager else {}
+    if not user_brokers:
+        logger.warning("   ⚠️  NO USER ACCOUNTS CONFIGURED")
+        logger.warning("   Only MASTER will trade")
+        logger.warning("   💡 Add user accounts in config/users/ to enable copy trading")
+    else:
+        logger.info(f"   Total Users: {len(user_brokers)}")
+        for user_id in user_brokers.keys():
+            logger.info(f"      • {user_id}")
+        logger.info("")
+        logger.info("   💡 These users will receive copy trades when MASTER trades")
+        logger.info("   💡 Each user must also meet individual requirements (PRO_MODE, balance, etc.)")
+    
     logger.info("=" * 70)

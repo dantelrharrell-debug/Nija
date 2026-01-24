@@ -204,16 +204,31 @@ class CopyTradeEngine:
                     # NORMAL MODE: Copy trade to all users
                     results = self.copy_trade_to_users(signal)
                     
-                    # Log results
+                    # Log results with enhanced details
                     successful = sum(1 for r in results if r.success)
                     failed = len(results) - successful
                     
                     logger.info("=" * 70)
-                    logger.info("📊 COPY TRADE RESULTS")
+                    logger.info("📊 COPY TRADE EXECUTION SUMMARY")
                     logger.info("=" * 70)
-                    logger.info(f"   Total Users: {len(results)}")
-                    logger.info(f"   Successful: {successful}")
-                    logger.info(f"   Failed: {failed}")
+                    logger.info(f"   Symbol: {signal.symbol}")
+                    logger.info(f"   Side: {signal.side.upper()}")
+                    logger.info(f"   Total User Accounts: {len(results)}")
+                    logger.info(f"   ✅ Successfully Copied: {successful}")
+                    logger.info(f"   ❌ Failed/Blocked: {failed}")
+                    if successful > 0:
+                        logger.info("")
+                        logger.info("   ✅ USERS WHO RECEIVED THIS TRADE:")
+                        for r in results:
+                            if r.success:
+                                # Note: r.size_type comes from CopyTradeResult, which matches the signal's size_type
+                                logger.info(f"      • {r.user_id}: ${r.size:.2f} {r.size_type}")
+                    if failed > 0:
+                        logger.info("")
+                        logger.info("   ⚠️  USERS WHO DID NOT RECEIVE THIS TRADE:")
+                        for r in results:
+                            if not r.success:
+                                logger.info(f"      • {r.user_id}: {r.error_message}")
                     logger.info("=" * 70)
                 
             except Exception as e:
@@ -272,14 +287,18 @@ class CopyTradeEngine:
             logger.warning("=" * 70)
             logger.warning("❌ COPY TRADING BLOCKED - MASTER REQUIREMENTS NOT MET")
             logger.warning("=" * 70)
-            for req in unmet:
-                logger.warning(f"   ❌ {req}")
+            logger.warning("   Master account does not meet requirements for copy trading")
+            logger.warning("   Only MASTER will trade - users will NOT receive copy trades")
             logger.warning("")
-            logger.warning("🔧 FIX: Ensure these are set:")
-            logger.warning("   PRO_MODE=true")
-            logger.warning("   LIVE_TRADING=1")
-            logger.warning("   KRAKEN_MASTER_API_KEY=<key>")
-            logger.warning("   KRAKEN_MASTER_API_SECRET=<secret>")
+            logger.warning("   REQUIREMENTS NOT MET:")
+            for req in unmet:
+                logger.warning(f"      ❌ {req}")
+            logger.warning("")
+            logger.warning("   🔧 TO ENABLE COPY TRADING, SET THESE:")
+            logger.warning("      PRO_MODE=true")
+            logger.warning("      LIVE_TRADING=1")
+            logger.warning("      KRAKEN_MASTER_API_KEY=<key>")
+            logger.warning("      KRAKEN_MASTER_API_SECRET=<secret>")
             logger.warning("=" * 70)
             return results  # Block copy trading when master requirements not met
         
@@ -291,19 +310,33 @@ class CopyTradeEngine:
         # Copy trading is OPTIONAL, not required for user trading
         master_connected = self.multi_account_manager.is_master_connected(broker_type)
         if not master_connected:
-            logger.warning(f"⚠️  {signal.broker.upper()} MASTER offline - skipping copy trading")
-            logger.info(f"   ℹ️  Users can still trade independently (copy trading is optional)")
-            logger.info(f"   ℹ️  Copy trading will resume when MASTER reconnects")
+            logger.warning("=" * 70)
+            logger.warning(f"⚠️  {signal.broker.upper()} MASTER OFFLINE")
+            logger.warning("=" * 70)
+            logger.warning(f"   Master account is not connected - cannot copy trades")
+            logger.warning(f"   Only MASTER will trade when reconnected")
+            logger.warning("")
+            logger.warning(f"   ℹ️  Users can still trade independently if configured")
+            logger.warning(f"   ℹ️  Copy trading will resume when MASTER reconnects")
+            logger.warning("=" * 70)
             return results  # Skip copy trading when master offline (users trade independently)
         
         # Get all user accounts for this broker
         user_brokers = self.multi_account_manager.user_brokers
         
         if not user_brokers:
-            logger.warning("⚠️  No user accounts configured - no trades to copy")
+            logger.warning("=" * 70)
+            logger.warning("⚠️  NO USER ACCOUNTS CONFIGURED")
+            logger.warning("=" * 70)
+            logger.warning("   No user accounts are configured to receive copy trades")
+            logger.warning("   Only MASTER account will trade")
+            logger.warning("   💡 To enable copy trading, add user accounts in config/users/")
+            logger.warning("=" * 70)
             return results
         
-        logger.info(f"🔄 Copying trade to {len(user_brokers)} user account(s)...")
+        logger.info("=" * 70)
+        logger.info(f"🔄 COPY TRADING: Processing {len(user_brokers)} user account(s)")
+        logger.info("=" * 70)
         
         # Process each user account
         for user_id, user_broker_dict in user_brokers.items():
@@ -449,8 +482,38 @@ class CopyTradeEngine:
             if not user_reqs.all_met():
                 unmet = user_reqs.get_unmet_requirements()
                 error_msg = f"User requirements not met: {', '.join(unmet)}"
-                logger.warning(f"      ⚠️  {error_msg}")
-                logger.warning(f"      🔧 FIX: Ensure PRO_MODE=true, COPY_TRADING_MODE=MASTER_FOLLOW, balance >= $50")
+                logger.warning("      " + "=" * 50)
+                logger.warning(f"      ⚠️  COPY TRADE BLOCKED FOR {user_id.upper()}")
+                logger.warning("      " + "=" * 50)
+                logger.warning(f"      User: {user_id}")
+                logger.warning(f"      Balance: ${user_balance:.2f}")
+                logger.warning("")
+                logger.warning("      REQUIREMENTS NOT MET:")
+                for req in unmet:
+                    logger.warning(f"         ❌ {req}")
+                logger.warning("")
+                logger.warning("      🔧 TO ENABLE COPY TRADING FOR THIS USER:")
+                logger.warning("         1. Ensure PRO_MODE=true")
+                logger.warning("         2. Ensure COPY_TRADING_MODE=MASTER_FOLLOW")
+                logger.warning("         3. Ensure account balance meets tier minimum")
+                logger.warning("         4. Check user config: copy_from_master=true")
+                logger.warning("      " + "=" * 50)
+                
+                # P2: Record blocked trade in trade map
+                if self.trade_ledger:
+                    try:
+                        self.trade_ledger.record_copy_trade(
+                            master_trade_id=signal.master_trade_id or signal.order_id,
+                            master_symbol=signal.symbol,
+                            master_side=signal.side,
+                            master_order_id=signal.order_id,
+                            user_id=user_id,
+                            user_status='blocked',
+                            user_error=error_msg
+                        )
+                    except Exception as ledger_err:
+                        logger.debug(f"Could not record blocked trade: {ledger_err}")
+                
                 return CopyTradeResult(
                     user_id=user_id,
                     success=False,
