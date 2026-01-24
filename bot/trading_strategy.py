@@ -1457,12 +1457,16 @@ class TradingStrategy:
         if not broker:
             return False, "Broker not available"
         
+        broker_name = self._get_broker_name(broker)
+        
         if not broker.connected:
-            return False, f"{self._get_broker_name(broker).upper()} not connected"
+            logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} not connected")
+            return False, f"{broker_name.upper()} not connected"
         
         # Check if broker is in EXIT_ONLY mode
         if hasattr(broker, 'exit_only_mode') and broker.exit_only_mode:
-            return False, f"{self._get_broker_name(broker).upper()} in EXIT-ONLY mode"
+            logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} in EXIT_ONLY mode")
+            return False, f"{broker_name.upper()} in EXIT-ONLY mode"
         
         # Check if account balance meets minimum threshold
         try:
@@ -1470,12 +1474,15 @@ class TradingStrategy:
             broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
             min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
             
-            if balance < min_balance:
-                return False, f"{self._get_broker_name(broker).upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+            logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} balance=${balance:.2f}, min=${min_balance:.2f}")
             
-            return True, "Eligible"
+            if balance < min_balance:
+                return False, f"{broker_name.upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+            
+            return True, f"Eligible (${balance:.2f} >= ${min_balance:.2f} min)"
         except Exception as e:
-            return False, f"{self._get_broker_name(broker).upper()} balance check failed: {e}"
+            logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance check failed: {e}")
+            return False, f"{broker_name.upper()} balance check failed: {e}"
     
     def _select_entry_broker(self, all_brokers: Dict[BrokerType, object]) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
         """
@@ -1492,16 +1499,21 @@ class TradingStrategy:
         """
         eligibility_status = {}
         
+        # CRITICAL FIX (Jan 24, 2026): Add debug logging to diagnose broker selection issues
+        logger.debug(f"_select_entry_broker called with {len(all_brokers)} brokers: {[bt.value for bt in all_brokers.keys()]}")
+        
         # Check each broker in priority order
         for broker_type in ENTRY_BROKER_PRIORITY:
             broker = all_brokers.get(broker_type)
             
             if not broker:
                 eligibility_status[broker_type.value] = "Not configured"
+                logger.debug(f"   {broker_type.value}: Not in all_brokers dict")
                 continue
             
             is_eligible, reason = self._is_broker_eligible_for_entry(broker)
             eligibility_status[broker_type.value] = reason
+            logger.debug(f"   {broker_type.value}: is_eligible={is_eligible}, reason={reason}")
             
             if is_eligible:
                 broker_name = self._get_broker_name(broker)
@@ -1509,6 +1521,7 @@ class TradingStrategy:
                 return broker, broker_name, eligibility_status
         
         # No eligible broker found
+        logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
         return None, None, eligibility_status
     
     def _is_zombie_position(self, pnl_percent: float, entry_time_available: bool, position_age_hours: float) -> bool:
@@ -2973,15 +2986,26 @@ class TradingStrategy:
                 if active_broker and hasattr(active_broker, 'broker_type'):
                     all_brokers[active_broker.broker_type] = active_broker
                 
+                # CRITICAL FIX (Jan 24, 2026): Log if no brokers are available for selection
+                # This helps diagnose why no trades are executing
+                if not all_brokers:
+                    logger.warning(f"      ⚠️  No brokers available for selection!")
+                    logger.warning(f"      Multi-account manager: {'Yes' if self.multi_account_manager else 'No'}")
+                    logger.warning(f"      Active broker: {'Yes' if active_broker else 'No'}")
+                else:
+                    logger.info(f"      Available brokers for selection: {', '.join([bt.value.upper() for bt in all_brokers.keys()])}")
+                
                 # Select best broker for entry based on priority
                 entry_broker, entry_broker_name, broker_eligibility = self._select_entry_broker(all_brokers)
                 
                 # Log broker eligibility status for all brokers
+                # CRITICAL FIX (Jan 24, 2026): Change "Not configured" from DEBUG to INFO level
+                # This ensures all broker status is visible in logs to help diagnose trading issues
                 for broker_name, status in broker_eligibility.items():
                     if "Eligible" in status:
                         logger.info(f"      ✅ {broker_name.upper()}: {status}")
                     elif "Not configured" in status:
-                        logger.debug(f"      ⚪ {broker_name.upper()}: {status}")
+                        logger.info(f"      ⚪ {broker_name.upper()}: {status}")  # Changed from logger.debug to logger.info
                     else:
                         logger.warning(f"      ❌ {broker_name.upper()}: {status}")
                 
