@@ -873,7 +873,7 @@ class TradingStrategy:
                 # This ensures advanced modules have access to real capital data
                 # Gated by LIVE_CAPITAL_VERIFIED environment variable
                 logger.info("🔧 Initializing advanced trading modules with live capital...")
-                self._init_advanced_features()
+                self._init_advanced_features(total_capital)
                 
                 # FIX #3: Hard fail if capital below minimum (non-negotiable)
                 if total_capital < MINIMUM_TRADING_BALANCE:
@@ -1232,7 +1232,7 @@ class TradingStrategy:
         
         return total_capital
     
-    def _init_advanced_features(self):
+    def _init_advanced_features(self, total_capital: float = 0.0):
         """Initialize progressive targets, exchange risk profiles, and capital allocation.
         
         This is optional and will gracefully degrade if modules are not available.
@@ -1241,6 +1241,9 @@ class TradingStrategy:
         
         CRITICAL: This method is gated by LIVE_CAPITAL_VERIFIED environment variable.
         Advanced modules are only initialized if LIVE_CAPITAL_VERIFIED=true is set.
+        
+        Args:
+            total_capital: Live capital from broker connections (default: 0.0)
         """
         # CRITICAL SAFETY: Check LIVE_CAPITAL_VERIFIED first
         # This is the MASTER safety switch that must be explicitly enabled
@@ -1297,32 +1300,42 @@ class TradingStrategy:
             # Import advanced trading modules
             from advanced_trading_integration import AdvancedTradingManager, ExchangeType
             
-            # FIX #1: Use live capital calculation instead of $100 fake default
-            # Calculate initial capital estimate from environment or fallback to minimal default
-            # This will be updated with actual broker balances after connection
-            initial_capital_str = os.getenv('INITIAL_CAPITAL', 'auto').strip().upper()
-            
-            # Support "auto" and "LIVE" as aliases for automatic balance detection
-            if initial_capital_str in ('AUTO', 'LIVE'):
-                initial_capital = PLACEHOLDER_CAPITAL
-                logger.info(f"ℹ️ INITIAL_CAPITAL={initial_capital_str.lower()} mode enabled - will use live broker balance after connection")
+            # FIX #1: Use live capital passed from broker connections
+            # This is the actual balance fetched from Coinbase, Kraken, and other brokers
+            # Only fall back to environment variable if no capital was passed
+            if total_capital > 0.01:  # Use small threshold to avoid floating-point precision issues
+                # Use live capital from broker connections (PREFERRED)
+                initial_capital = total_capital
+                logger.info(f"ℹ️ Using LIVE capital from broker connections: ${initial_capital:.2f}")
             else:
-                # Try to parse as numeric value
-                try:
-                    initial_capital = float(initial_capital_str)
-                    if initial_capital <= 0:
-                        # Use minimal placeholder (will be replaced with live balance after broker connection)
-                        initial_capital = PLACEHOLDER_CAPITAL
-                        logger.info(f"ℹ️ INITIAL_CAPITAL not set or zero, will use live broker balance after connection")
-                    else:
-                        logger.info(f"ℹ️ Using INITIAL_CAPITAL=${initial_capital:.2f} (will be updated with live balance)")
-                except (ValueError, TypeError):
-                    logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, defaulting to auto mode (live broker balance)")
-                    initial_capital = PLACEHOLDER_CAPITAL
+                # Fallback: Try to get from environment variable
+                initial_capital_str = os.getenv('INITIAL_CAPITAL', 'auto').strip().upper()
+                
+                # Support "auto" and "LIVE" as aliases for automatic balance detection
+                if initial_capital_str in ('AUTO', 'LIVE'):
+                    # Can't initialize without capital - skip initialization
+                    logger.warning(f"⚠️ INITIAL_CAPITAL={initial_capital_str.lower()} but no live capital available")
+                    logger.warning(f"   Advanced manager will not be initialized")
+                    self.advanced_manager = None
+                    return
+                else:
+                    # Try to parse as numeric value
+                    try:
+                        initial_capital = float(initial_capital_str)
+                        if initial_capital <= 0:
+                            logger.warning(f"⚠️ INITIAL_CAPITAL not set or zero, cannot initialize advanced manager")
+                            self.advanced_manager = None
+                            return
+                        else:
+                            logger.info(f"ℹ️ Using INITIAL_CAPITAL from environment: ${initial_capital:.2f}")
+                    except (ValueError, TypeError):
+                        logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, cannot initialize advanced manager")
+                        self.advanced_manager = None
+                        return
             
             allocation_strategy = os.getenv('ALLOCATION_STRATEGY', 'conservative')
             
-            # Initialize advanced manager with placeholder capital (updated after broker connection)
+            # Initialize advanced manager with live capital from broker connections
             self.advanced_manager = AdvancedTradingManager(
                 total_capital=initial_capital,
                 allocation_strategy=allocation_strategy
