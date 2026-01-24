@@ -3627,18 +3627,25 @@ class CoinbaseBroker(BaseBroker):
                     if not asset or asset in ['USD', 'USDC']:
                         continue
 
-                    # Try to fetch base available to trade; if not present, derive from fiat value
+                    # CRITICAL FIX (Jan 24, 2026): Use CORRECT Coinbase API field names
+                    # Try to fetch base available to trade using correct field name
                     base_avail = None
+                    base_total = None
                     if isinstance(pos, dict):
-                        base_avail = pos.get('available_to_trade') or pos.get('available_to_trade_base')
+                        base_avail = pos.get('available_to_trade_crypto')
+                        base_total = pos.get('total_balance_crypto')
                         fiat_avail = pos.get('available_to_trade_fiat')
                     else:
-                        base_avail = getattr(pos, 'available_to_trade', None) or getattr(pos, 'available_to_trade_base', None)
+                        base_avail = getattr(pos, 'available_to_trade_crypto', None)
+                        base_total = getattr(pos, 'total_balance_crypto', None)
                         fiat_avail = getattr(pos, 'available_to_trade_fiat', None)
 
                     quantity = 0.0
                     try:
-                        if base_avail is not None:
+                        # Prefer total_balance_crypto (includes available + held)
+                        if base_total is not None:
+                            quantity = float(base_total or 0)
+                        elif base_avail is not None:
                             quantity = float(base_avail or 0)
                         else:
                             # Derive base qty from fiat using current price
