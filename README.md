@@ -2362,6 +2362,31 @@ python test_v2_balance.py
 - Ensure API_SECRET has proper newlines (`\n`)
 - Check Coinbase API key hasn't expired
 
+**If Kraken not trading (master or users):**
+```bash
+# Run diagnostic to check all requirements
+python diagnose_kraken_trading.py
+
+# View quick fix guide (Unix/Linux/Mac)
+cat KRAKEN_QUICK_FIX.md
+# OR on Windows:
+# type KRAKEN_QUICK_FIX.md
+
+# View detailed troubleshooting (Unix/Linux/Mac)
+cat KRAKEN_NO_TRADES_FIX.md
+# OR on Windows:
+# type KRAKEN_NO_TRADES_FIX.md
+# OR open files in any text editor
+```
+
+**Common Kraken issues:**
+- Missing `PRO_MODE=true` environment variable
+- Missing `LIVE_TRADING=1` environment variable
+- Missing `COPY_TRADING_MODE=MASTER_FOLLOW` environment variable
+- Kraken API credentials not set (KRAKEN_MASTER_API_KEY, KRAKEN_MASTER_API_SECRET)
+- User balance below $50 minimum
+- See [KRAKEN_NO_TRADES_FIX.md](KRAKEN_NO_TRADES_FIX.md) for complete guide
+
 ### Important Files
 
 - `.env` - API credentials (SECRET)
