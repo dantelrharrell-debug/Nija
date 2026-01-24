@@ -15,7 +15,7 @@ The `get_real_entry_price()` method was not implemented in `CoinbaseBroker`, cau
 
 ### Solution Implemented
 Added a fully functional `get_real_entry_price()` method to `CoinbaseBroker` that:
-1. Fetches recent fills from Coinbase using `client.list_fills()`
+1. Fetches recent fills from Coinbase using `client.get_fills()`
 2. Searches through the last 100 fills to find the most recent BUY order
 3. Returns the actual entry price from the order history
 4. Uses rate limiting to prevent API errors

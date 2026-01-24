@@ -3882,13 +3882,13 @@ class CoinbaseBroker(BaseBroker):
         
         try:
             # Fetch recent fills for the symbol using Coinbase Advanced Trade API
-            # list_fills returns all recent fills, can filter by product_id
+            # get_fills returns all recent fills, can filter by product_ids
             logger.debug(f"Fetching order fills for {symbol} to recover entry price...")
             
             # Use rate limiter to prevent 429 errors
             def _fetch_fills():
-                fills_resp = self.client.list_fills(
-                    product_id=symbol,
+                fills_resp = self.client.get_fills(
+                    product_ids=[symbol],  # product_ids expects a list
                     limit=100  # Get last 100 fills to find recent buys
                 )
                 return fills_resp
