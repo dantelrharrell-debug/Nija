@@ -181,12 +181,16 @@ PROFIT_TARGETS_KRAKEN = [
     (0.5, "Profit target +0.5% (Net +0.14% after fees) - MINIMAL"),             # Tight margin but profitable
 ]
 
+# 🚨 COINBASE LOCKDOWN (Jan 24, 2026) - AGGRESSIVE PROFIT-TAKING
+# Coinbase has been holding positions too long - take profits MUCH faster
+# Lower all profit targets to lock in gains before reversals
+# Added emergency lock at 0.8% to exit quickly even with fee loss
 PROFIT_TARGETS_COINBASE = [
-    (3.0, "Profit target +3.0% (Net +1.6% after 1.4% fees) - MAJOR PROFIT"),    # Major profit - let winners run
     (2.0, "Profit target +2.0% (Net +0.6% after fees) - EXCELLENT"),            # Excellent profit
     (1.5, "Profit target +1.5% (Net +0.1% after 1.4% fees) - GOOD"),            # Barely profitable
     (1.2, "Profit target +1.2% (Net -0.2% after fees) - ACCEPTABLE"),           # Accept small loss vs reversal
     (1.0, "Profit target +1.0% (Net -0.4% after fees) - EMERGENCY"),            # Better than -1% stop
+    (0.8, "Profit target +0.8% (Net -0.6% after fees) - EMERGENCY LOCK"),       # LOCKDOWN - exit fast
 ]
 
 # CRITICAL FIX (Jan 13, 2026): Tightened profit targets to lock gains faster
@@ -239,6 +243,13 @@ STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.008  # -0.8% maximum (conservative)
 STOP_LOSS_MICRO = -0.01  # -1% emergency micro-stop for logic failure prevention
 STOP_LOSS_WARNING = -0.01  # Same as micro-stop - warn immediately
 STOP_LOSS_THRESHOLD = -0.01  # Legacy threshold (same as micro-stop)
+
+# 🚨 COINBASE LOCKDOWN (Jan 24, 2026) - AGGRESSIVE EXIT ENFORCEMENT
+# Coinbase has been holding losing trades - tighten all exit triggers
+STOP_LOSS_PRIMARY_COINBASE = -0.005  # -0.5% primary stop for Coinbase (tightened from -1.0%)
+COINBASE_EXIT_ANY_LOSS = True  # Exit Coinbase positions on ANY loss (P&L < 0%)
+COINBASE_MAX_HOLD_MINUTES = 30  # Force exit Coinbase positions after 30 minutes max
+COINBASE_PROFIT_LOCK_ENABLED = True  # Enable aggressive profit-taking on Coinbase
 
 # TIER 3: CATASTROPHIC FAILSAFE
 # Last resort protection - should NEVER be reached in normal operation
@@ -1710,10 +1721,16 @@ class TradingStrategy:
             primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -0.6%
             description = f"Kraken (${account_balance:.2f}): Primary -0.6%, Micro -1.0%, Failsafe -5.0%"
         
-        # Coinbase or other exchanges: Use -1.0% primary stop (higher fees)
+        # 🚨 COINBASE LOCKDOWN (Jan 24, 2026) - TIGHTENED STOP-LOSS
+        # Coinbase has been holding losing trades - use AGGRESSIVE -0.5% stop
+        elif 'coinbase' in broker_name:
+            primary_stop = STOP_LOSS_PRIMARY_COINBASE  # -0.5% AGGRESSIVE (tightened from -1.0%)
+            description = f"COINBASE LOCKDOWN (${account_balance:.2f}): Primary -0.5% (AGGRESSIVE), Micro -1.0%, Failsafe -5.0%"
+        
+        # Other exchanges: Use -1.0% primary stop (conservative default)
         else:
             # Higher fees require wider stop-loss
-            primary_stop = -0.010  # -1.0% for Coinbase/other
+            primary_stop = -0.010  # -1.0% for other exchanges
             description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -1.0%, Micro -1.0%, Failsafe -5.0%"
         
         return (
@@ -2292,7 +2309,22 @@ class TradingStrategy:
                                     
                                     continue
                                 
-                                # ✅ LOSING TRADES: 15-MINUTE MAXIMUM HOLD TIME
+                                # 🚨 COINBASE LOCKDOWN (Jan 24, 2026) - EXIT ANY LOSS IMMEDIATELY
+                                # Coinbase has been holding losing trades - enforce ZERO TOLERANCE for losses
+                                # Exit ANY position showing ANY loss on Coinbase (no waiting period)
+                                if pnl_percent < 0 and 'coinbase' in broker_label.lower():
+                                    logger.warning(f"   🚨 COINBASE LOCKDOWN: {symbol} showing loss at {pnl_percent*100:.2f}%")
+                                    logger.warning(f"   💥 ZERO TOLERANCE MODE - exiting Coinbase loss immediately!")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Coinbase lockdown: ANY loss exit ({pnl_percent*100:.2f}%)',
+                                        'broker': position_broker,
+                                        'broker_label': broker_label
+                                    })
+                                    continue
+                                
+                                # ✅ LOSING TRADES: 15-MINUTE MAXIMUM HOLD TIME (for non-Coinbase)
                                 # For tracked positions with P&L < 0%, enforce STRICT 15-minute max hold time
                                 # This prevents capital erosion from positions held too long in a losing state
                                 # CRITICAL FIX (Jan 21, 2026): Also exit losing positions WITHOUT entry time tracking
@@ -2544,6 +2576,23 @@ class TradingStrategy:
                                         holding_msg = f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)"
                                         
                                         if entry_time_available:
+                                            # 🚨 COINBASE LOCKDOWN (Jan 24, 2026) - FORCE EXIT AFTER 30 MINUTES
+                                            # Coinbase positions MUST exit within 30 minutes (even if profitable)
+                                            # This prevents holding positions too long and missing exit opportunities
+                                            if 'coinbase' in broker_label.lower():
+                                                position_age_minutes = position_age_hours * MINUTES_PER_HOUR
+                                                if position_age_minutes >= COINBASE_MAX_HOLD_MINUTES:
+                                                    logger.warning(f"   🚨 COINBASE TIME LOCKDOWN: {symbol} held {position_age_minutes:.1f} min (max: {COINBASE_MAX_HOLD_MINUTES})")
+                                                    logger.warning(f"   💥 Force exiting to lock in current P&L: {pnl_percent*100:+.2f}%")
+                                                    positions_to_exit.append({
+                                                        'symbol': symbol,
+                                                        'quantity': quantity,
+                                                        'reason': f'Coinbase time lockdown (held {position_age_minutes:.1f}min at {pnl_percent*100:+.2f}%)',
+                                                        'broker': position_broker,
+                                                        'broker_label': broker_label
+                                                    })
+                                                    continue
+                                            
                                             # EMERGENCY TIME-BASED EXIT: Force exit ALL positions after 12 hours (FAILSAFE)
                                             # This is a last-resort failsafe for profitable positions that aren't hitting targets
                                             if position_age_hours >= MAX_POSITION_HOLD_EMERGENCY:
@@ -3015,11 +3064,23 @@ class TradingStrategy:
                         continue
                     
                     try:
+                        # 🚨 COINBASE LOCKDOWN (Jan 24, 2026) - FORCE LIQUIDATE MODE
+                        # Use force_liquidate for Coinbase sells to bypass ALL validation
+                        # This ensures stop-losses and profit-taking ALWAYS execute
+                        is_coinbase = 'coinbase' in exit_broker_label.lower()
+                        use_force_liquidate = is_coinbase and ('lockdown' in reason.lower() or 'loss' in reason.lower() or 'stop' in reason.lower())
+                        
+                        if use_force_liquidate:
+                            logger.info(f"  🛡️ PROTECTIVE MODE: Using force_liquidate for Coinbase exit")
+                        
                         result = exit_broker.place_market_order(
                             symbol=symbol,
                             side='sell',
                             quantity=quantity,
-                            size_type='base'
+                            size_type='base',
+                            force_liquidate=use_force_liquidate,  # Bypass ALL validation for Coinbase protective exits
+                            ignore_balance=use_force_liquidate,   # Skip balance checks
+                            ignore_min_trade=use_force_liquidate  # Skip minimum trade size checks
                         )
                         
                         # Handle dust positions separately from actual failures
