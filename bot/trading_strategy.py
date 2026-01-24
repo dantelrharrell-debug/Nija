@@ -2501,10 +2501,17 @@ class TradingStrategy:
                                     logger.info(f"   🔴 Aggressive exits enabled: force_stop_loss=True, max_loss_pct=1.5%")
                                     
                                     # AUTO-IMPORTED LOSERS ARE EXITED FIRST
-                                    # If position is immediately losing, queue it for exit
+                                    # If position is immediately losing, queue it for exit NOW (not next cycle!)
                                     if immediate_pnl < 0:
                                         logger.warning(f"   🚨 AUTO-IMPORTED LOSER: {symbol} at {immediate_pnl:.2f}%")
-                                        logger.warning(f"   💥 Queuing for IMMEDIATE EXIT in next cycle")
+                                        logger.warning(f"   💥 Queuing for IMMEDIATE EXIT THIS CYCLE")
+                                        positions_to_exit.append({
+                                            'symbol': symbol,
+                                            'quantity': quantity,
+                                            'reason': f'Auto-imported losing position ({immediate_pnl:+.2f}%)'
+                                        })
+                                        # Skip all remaining logic for this position since it's queued for exit
+                                        continue
                                     
                                     logger.info(f"      Position now tracked - will use profit targets in next cycle")
                                     logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0) | "
