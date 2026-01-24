@@ -1655,22 +1655,33 @@ class CoinbaseBroker(BaseBroker):
                 if isinstance(breakdown, dict):
                     spot_positions = breakdown.get('spot_positions', spot_positions)
 
+                logging.debug(f"💡 Portfolio breakdown: Found {len(spot_positions)} spot positions")
+
                 for pos in spot_positions:
                     asset = getattr(pos, 'asset', None) if not isinstance(pos, dict) else pos.get('asset')
                     available_val = getattr(pos, 'available_to_trade_fiat', None) if not isinstance(pos, dict) else pos.get('available_to_trade_fiat')
                     # Try to get held amount if available in the response
                     held_val = getattr(pos, 'hold_fiat', None) if not isinstance(pos, dict) else pos.get('hold_fiat')
                     
-                    # CRITICAL FIX: For crypto assets, we need BASE quantity (not fiat value) to properly handle sells
-                    # Get available_to_trade (base crypto amount) instead of just the fiat value
+                    # CRITICAL FIX (Jan 24, 2026): Use CORRECT Coinbase API field names
+                    # The Coinbase Advanced Trade API uses:
+                    # - available_to_trade_crypto (amount freely tradable in crypto units)
+                    # - total_balance_crypto (total balance in crypto units)
+                    # NOT the old field names: available_to_trade_base, hold_base, available_to_trade, hold
                     base_available = None
-                    base_held = None
+                    base_total = None
                     if isinstance(pos, dict):
-                        base_available = pos.get('available_to_trade_base') if pos.get('available_to_trade_base') is not None else pos.get('available_to_trade')
-                        base_held = pos.get('hold_base') if pos.get('hold_base') is not None else pos.get('hold')
+                        base_available = pos.get('available_to_trade_crypto')
+                        base_total = pos.get('total_balance_crypto')
+                        # Debug: log what fields are available in the response
+                        if asset and asset not in ['USD', 'USDC']:
+                            logging.debug(f"   📊 {asset} API fields: total_balance_crypto={base_total}, available_to_trade_crypto={base_available}")
                     else:
-                        base_available = getattr(pos, 'available_to_trade_base', None) if getattr(pos, 'available_to_trade_base', None) is not None else getattr(pos, 'available_to_trade', None)
-                        base_held = getattr(pos, 'hold_base', None) if getattr(pos, 'hold_base', None) is not None else getattr(pos, 'hold', None)
+                        base_available = getattr(pos, 'available_to_trade_crypto', None)
+                        base_total = getattr(pos, 'total_balance_crypto', None)
+                        # Debug: log what fields are available in the response
+                        if asset and asset not in ['USD', 'USDC']:
+                            logging.debug(f"   📊 {asset} API fields: total_balance_crypto={base_total}, available_to_trade_crypto={base_available}")
                     
                     try:
                         available = float(available_val or 0)
@@ -1688,9 +1699,9 @@ class CoinbaseBroker(BaseBroker):
                         base_avail_qty = 0.0
                     
                     try:
-                        base_held_qty = float(base_held or 0)
+                        base_total_qty = float(base_total or 0)
                     except Exception:
-                        base_held_qty = 0.0
+                        base_total_qty = 0.0
 
                     if asset == 'USD':
                         usd_balance += available
@@ -1699,18 +1710,26 @@ class CoinbaseBroker(BaseBroker):
                         usdc_balance += available
                         usdc_held += held
                     elif asset:
-                        # CRITICAL FIX: Store TOTAL crypto quantity (available + held in base units)
-                        # This ensures sells can find the full position, not just what's "available to trade"
-                        # Handle both zero and positive values (zero is valid and should be tracked)
-                        if base_avail_qty is not None or base_held_qty is not None:
-                            # Use base crypto quantity (e.g., BNB amount, not USD value)
-                            total_qty = (base_avail_qty if base_avail_qty is not None else 0.0) + (base_held_qty if base_held_qty is not None else 0.0)
-                            crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + total_qty
-                            if base_held_qty and base_held_qty > 0:
-                                logging.debug(f"   {asset}: available={base_avail_qty:.8f}, held={base_held_qty:.8f}, total={total_qty:.8f}")
+                        # CRITICAL FIX (Jan 24, 2026): Use total_balance_crypto which includes available + held
+                        # This ensures sells can find the FULL position on the exchange
+                        # The API provides total_balance_crypto which is the complete amount we own
+                        if base_total_qty is not None and base_total_qty > 0:
+                            # Use total balance in crypto units (e.g., BTC amount, not USD value)
+                            crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + base_total_qty
+                            # Calculate held amount (total - available), ensure non-negative
+                            base_held_qty = max(0, base_total_qty - base_avail_qty)
+                            if base_held_qty > 0:
+                                logging.debug(f"   {asset}: available={base_avail_qty:.8f}, held={base_held_qty:.8f}, total={base_total_qty:.8f}")
+                            else:
+                                logging.debug(f"   {asset}: total={base_total_qty:.8f}")
+                        elif base_avail_qty > 0:
+                            # Fallback: if only available_to_trade_crypto is present
+                            crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + base_avail_qty
+                            logging.debug(f"   {asset}: available={base_avail_qty:.8f} (total not available)")
                         else:
-                            # Fallback: if base quantities not available, calculate from fiat values
-                            crypto_holdings[asset] = crypto_holdings.get(asset, 0.0) + available
+                            # Last fallback: if base quantities not available, skip (don't use fiat values)
+                            # This prevents incorrect calculations
+                            logging.debug(f"   {asset}: No crypto quantity data available in API response")
 
                 trading_balance = usd_balance + usdc_balance
                 total_held = usd_held + usdc_held
@@ -3608,18 +3627,25 @@ class CoinbaseBroker(BaseBroker):
                     if not asset or asset in ['USD', 'USDC']:
                         continue
 
-                    # Try to fetch base available to trade; if not present, derive from fiat value
+                    # CRITICAL FIX (Jan 24, 2026): Use CORRECT Coinbase API field names
+                    # Try to fetch base available to trade using correct field name
                     base_avail = None
+                    base_total = None
                     if isinstance(pos, dict):
-                        base_avail = pos.get('available_to_trade') or pos.get('available_to_trade_base')
+                        base_avail = pos.get('available_to_trade_crypto')
+                        base_total = pos.get('total_balance_crypto')
                         fiat_avail = pos.get('available_to_trade_fiat')
                     else:
-                        base_avail = getattr(pos, 'available_to_trade', None) or getattr(pos, 'available_to_trade_base', None)
+                        base_avail = getattr(pos, 'available_to_trade_crypto', None)
+                        base_total = getattr(pos, 'total_balance_crypto', None)
                         fiat_avail = getattr(pos, 'available_to_trade_fiat', None)
 
                     quantity = 0.0
                     try:
-                        if base_avail is not None:
+                        # Prefer total_balance_crypto (includes available + held)
+                        if base_total is not None:
+                            quantity = float(base_total or 0)
+                        elif base_avail is not None:
                             quantity = float(base_avail or 0)
                         else:
                             # Derive base qty from fiat using current price
