@@ -1850,10 +1850,14 @@ class TradingStrategy:
                                     pos['_broker'] = broker  # Store broker reference
                                     pos['_broker_type'] = broker_type  # Store broker type for logging
                                 current_positions.extend(broker_positions)
-                                positions_by_broker[broker_type.value.upper()] = len(broker_positions)
-                                logger.debug(f"   Fetched {len(broker_positions)} positions from {broker_type.value.upper()}")
+                                # Safely get broker name (handles both enum and string)
+                                broker_name = broker_type.value.upper() if hasattr(broker_type, 'value') else str(broker_type).upper()
+                                positions_by_broker[broker_name] = len(broker_positions)
+                                logger.debug(f"   Fetched {len(broker_positions)} positions from {broker_name}")
                         except Exception as e:
-                            logger.warning(f"   ⚠️ Could not fetch positions from {broker_type.value.upper()}: {e}")
+                            # Safely get broker name for error logging
+                            broker_name = broker_type.value.upper() if hasattr(broker_type, 'value') else str(broker_type).upper()
+                            logger.warning(f"   ⚠️ Could not fetch positions from {broker_name}: {e}")
                 
                 # Log positions by broker for visibility
                 if positions_by_broker:
@@ -2040,9 +2044,10 @@ class TradingStrategy:
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
             
-            # NOTE (Jan 24, 2026): Stop-loss tiers are now calculated per-position based on each position's broker
+            # NOTE (Jan 24, 2026): Stop-loss tiers are now calculated PER-POSITION based on each position's broker
             # This ensures correct stop-loss thresholds for positions on different exchanges (Kraken vs Coinbase)
-            # See position analysis loop below where position_primary_stop is calculated for each position
+            # See line ~2169 where position_primary_stop, position_micro_stop are calculated for each position
+            # using self._get_stop_loss_tier(position_broker, position_broker_balance)
             
             # CRITICAL: If over position cap, prioritize selling weakest positions immediately
             # This ensures we get back under cap quickly to avoid further bleeding
@@ -2080,7 +2085,8 @@ class TradingStrategy:
                     # Each position is tagged with its broker when fetched from multi_account_manager
                     position_broker = position.get('_broker', active_broker)
                     position_broker_type = position.get('_broker_type')
-                    broker_label = position_broker_type.value.upper() if position_broker_type else "UNKNOWN"
+                    # Safely get broker label (handles both enum and string)
+                    broker_label = position_broker_type.value.upper() if (position_broker_type and hasattr(position_broker_type, 'value')) else "UNKNOWN"
                     
                     logger.info(f"   Analyzing {symbol} on {broker_label}...")
                     
