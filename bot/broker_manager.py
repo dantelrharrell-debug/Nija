@@ -101,13 +101,14 @@ except ImportError:
 
 # Import Kraken Order Validator for order size validation
 try:
-    from bot.kraken_order_validator import validate_order_size
+    from bot.kraken_order_validator import validate_order_size, KRAKEN_MINIMUM_ORDER_USD
 except ImportError:
     try:
-        from kraken_order_validator import validate_order_size
+        from kraken_order_validator import validate_order_size, KRAKEN_MINIMUM_ORDER_USD
     except ImportError:
         # Fallback: Order validator not available
         validate_order_size = None
+        KRAKEN_MINIMUM_ORDER_USD = None
 
 # Import Kraken Rate Profiles for separate entry/exit API budgets (Jan 23, 2026)
 try:
@@ -6756,6 +6757,25 @@ class KrakenBroker(BaseBroker):
                 except Exception as tier_err:
                     # Don't block trade if tier validation fails - just log warning
                     logging.warning(f"⚠️  Tier validation error (allowing trade): {tier_err}")
+            
+            # ✅ KRAKEN MINIMUM ENFORCEMENT: Round up to meet $10 minimum after auto-resize
+            # This prevents order rejections when auto-resized trades fall just below Kraken's $10 minimum
+            # Example: $9.16 trade gets rounded up to $10.00 to meet exchange requirements
+            if side.lower() == 'buy' and size_type == 'quote':
+                # Use Kraken minimum from imported constant
+                kraken_min = KRAKEN_MINIMUM_ORDER_USD or 10.00
+                
+                if quantity < kraken_min:
+                    original_quantity = quantity
+                    quantity = kraken_min
+                    logging.info(LOG_SEPARATOR)
+                    logging.info("💰 KRAKEN MINIMUM ENFORCEMENT: Trade rounded up")
+                    logging.info(LOG_SEPARATOR)
+                    logging.info(f"   Original size: ${original_quantity:.2f}")
+                    logging.info(f"   Kraken minimum: ${kraken_min:.2f}")
+                    logging.info(f"   Adjusted size: ${quantity:.2f}")
+                    logging.info(f"   Reason: Meeting Kraken's ${kraken_min:.2f} minimum order value")
+                    logging.info(LOG_SEPARATOR)
             
             # ✅ PRE-FLIGHT BALANCE CHECK: Verify sufficient funds BEFORE sending to Kraken API
             # This prevents "EOrder:Insufficient funds" rejections from the API
