@@ -2815,6 +2815,19 @@ class CoinbaseBroker(BaseBroker):
                                 )
                                 # DON'T RETURN - continue with sell attempt
                                 # The exchange will reject if there's truly no balance
+                                
+                                # CRITICAL FIX (Jan 24, 2026): Preemptively clear likely phantom positions
+                                # When balance is zero and we're being asked to sell, this is likely
+                                # a phantom position (already sold/transferred but still tracked)
+                                # We'll continue with the sell attempt (in case position exists on exchange)
+                                # but if it fails later, the position will already be marked for cleanup
+                                if quantity > epsilon and self.position_tracker:
+                                    logger.warning(
+                                        f"   ⚠️ LIKELY PHANTOM: Tracked {quantity:.8f} {base_currency} but balance is zero"
+                                    )
+                                    logger.warning(
+                                        f"   If sell fails, position will be auto-cleared from tracker"
+                                    )
                             
                             if available_base < quantity:
                                 diff = quantity - available_base
@@ -2933,6 +2946,18 @@ class CoinbaseBroker(BaseBroker):
                         logger.info(f"   Increment: {base_increment}, Precision: {precision}")
                         logger.info(f"   Rounded: {base_size_rounded}")
                         logger.info(f"   💡 This dust position will be retried in 24h in case it grows")
+                        
+                        # CRITICAL FIX (Jan 24, 2026): Clear phantom positions from tracker
+                        # If available balance is essentially zero (< 1e-8) but position is tracked,
+                        # this is a phantom position that needs to be cleared from tracker
+                        if not skip_preflight and available_base <= 1e-8 and self.position_tracker and self.position_tracker.get_position(symbol):
+                            logger.warning(f"   🧹 PHANTOM POSITION DETECTED: Zero balance but position tracked")
+                            logger.warning(f"   Clearing {symbol} from position tracker (likely already sold/transferred)")
+                            try:
+                                self.position_tracker.track_exit(symbol, exit_quantity=None)
+                                logger.info(f"   ✅ Phantom position cleared from tracker")
+                            except Exception as clear_err:
+                                logger.error(f"   ❌ Failed to clear phantom position: {clear_err}")
                         
                         return {
                             "status": "skipped_dust",
