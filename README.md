@@ -8,7 +8,8 @@ NIJA has achieved a critical milestone: **Master account and ALL user accounts s
 
 **Key Achievement**: 2/2 users successfully copied master's profit-taking exit with proper risk caps (10% max) and proportional sizing.
 
-📋 **[SUCCESS STATE CHECKPOINT](SUCCESS_STATE_2026_01_25.md)** - Full details on this verified working configuration
+📋 **[SUCCESS STATE CHECKPOINT](SUCCESS_STATE_2026_01_25.md)** - Full details on this verified working configuration  
+🔄 **[RECOVERY GUIDE](RECOVERY_GUIDE.md)** - Step-by-step instructions to restore this exact state
 
 ---
 
