@@ -98,7 +98,14 @@ class NIJAApexStrategyV71:
         self.config = config or {}
         
         # PROFIT OPTIMIZATION: Load enhanced configuration if not provided
-        if not config or len(config) < 5:  # If minimal/no config provided, use optimized defaults
+        # Check if a comprehensive config was provided by looking for key optimization settings
+        has_comprehensive_config = (
+            'use_enhanced_scoring' in config or 
+            'use_regime_detection' in config or 
+            'enable_stepped_exits' in config
+        )
+        
+        if not has_comprehensive_config:  # If basic/empty config, use optimized defaults
             try:
                 from profit_optimization_config import get_profit_optimization_config
                 self.config = get_profit_optimization_config()

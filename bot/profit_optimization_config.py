@@ -23,6 +23,15 @@ logger = logging.getLogger("nija.profit_optimization")
 
 
 # ============================================================================
+# VALIDATION CONSTANTS
+# ============================================================================
+
+# Tolerance for floating-point comparisons in validation
+WEIGHT_TOLERANCE = 0.01  # 1% tolerance for weight sum validation
+ALLOCATION_TOLERANCE = 0.01  # 1% tolerance for capital allocation sum validation
+
+
+# ============================================================================
 # ENHANCED ENTRY SCORING CONFIGURATION
 # ============================================================================
 
@@ -101,6 +110,8 @@ STEPPED_PROFIT_CONFIG = {
     },
     
     # Kraken has lower fees, so can take profits sooner
+    # Note: Exit levels are lower percentages to reflect the 53% fee savings
+    # (0.67% fees vs 1.4% on Coinbase allows for faster profit-taking)
     'kraken_exit_levels': {
         0.008: 0.10,  # Exit 10% at 0.8% profit (covers fees)
         0.015: 0.15,  # Exit 15% at 1.5% profit
@@ -295,14 +306,14 @@ def validate_config(config: Dict) -> bool:
         # Check scoring weights sum to 100
         if 'scoring_weights' in config:
             total_weight = sum(config['scoring_weights'].values())
-            if abs(total_weight - 100) > 0.01:
+            if abs(total_weight - 100) > WEIGHT_TOLERANCE:
                 logger.error(f"❌ Scoring weights must sum to 100 (got {total_weight})")
                 return False
         
         # Check capital allocation sums to 1.0
         if 'multi_exchange' in config:
             total_allocation = sum(config['multi_exchange']['capital_allocation'].values())
-            if abs(total_allocation - 1.0) > 0.01:
+            if abs(total_allocation - 1.0) > ALLOCATION_TOLERANCE:
                 logger.error(f"❌ Capital allocation must sum to 1.0 (got {total_allocation})")
                 return False
         
