@@ -6685,6 +6685,10 @@ class KrakenBroker(BaseBroker):
             
             # ✅ TIER LOCK ENFORCEMENT: Validate trade size against tier minimums
             # This prevents small trades that will be eaten by fees
+            # Track if tier auto-resize occurred (used for Kraken minimum enforcement later)
+            tier_was_auto_resized = False
+            tier_original_size = quantity
+            
             if side.lower() == 'buy' and get_tier_from_balance and validate_trade_size:
                 try:
                     # Get current balance
@@ -6751,6 +6755,8 @@ class KrakenBroker(BaseBroker):
                                 # Update quantity to resized amount
                                 quantity = resized_size
                                 order_size_usd = resized_size
+                                # Set flag for Kraken minimum enforcement below
+                                tier_was_auto_resized = True
                             else:
                                 # Trade is within limits
                                 logging.info(f"✅ Tier validation passed: [{user_tier.value}] ${order_size_usd:.2f} trade")
@@ -6793,18 +6799,8 @@ class KrakenBroker(BaseBroker):
                 
                 if quantity < kraken_min:
                     # Check if this trade was auto-resized down due to tier limits
-                    # Variables are available from tier validation block above (lines 6688-6785)
-                    tier_was_resized = False
-                    try:
-                        # If resized_size exists and is less than original order_size_usd,
-                        # then tier auto-resize reduced the trade size
-                        if 'resized_size' in locals() and 'order_size_usd' in locals():
-                            if resized_size < order_size_usd and resized_size == quantity:
-                                tier_was_resized = True
-                    except:
-                        pass
-                    
-                    if tier_was_resized:
+                    # using explicit flag set during tier validation above
+                    if tier_was_auto_resized:
                         # Trade was resized down by tier limits, and result is below Kraken minimum
                         # REJECT the trade to protect tier-based risk management
                         logging.error(LOG_SEPARATOR)
@@ -6813,8 +6809,9 @@ class KrakenBroker(BaseBroker):
                         try:
                             logging.error(f"   Tier: {user_tier.value}")
                             logging.error(f"   Account balance: ${current_balance:.2f}")
-                        except:
-                            pass
+                        except NameError:
+                            # Variables not available (tier validation didn't run)
+                            logging.warning("   Tier info unavailable")
                         logging.error(f"   Tier-adjusted size: ${quantity:.2f}")
                         logging.error(f"   Kraken minimum: ${kraken_min:.2f}")
                         logging.error(f"   ⚠️  Cannot meet Kraken minimum without violating tier limits")
