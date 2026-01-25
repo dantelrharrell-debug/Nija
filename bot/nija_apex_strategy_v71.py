@@ -100,9 +100,9 @@ class NIJAApexStrategyV71:
         # PROFIT OPTIMIZATION: Load enhanced configuration if not provided
         # Check if a comprehensive config was provided by looking for key optimization settings
         has_comprehensive_config = (
-            'use_enhanced_scoring' in config or 
-            'use_regime_detection' in config or 
-            'enable_stepped_exits' in config
+            'use_enhanced_scoring' in self.config or 
+            'use_regime_detection' in self.config or 
+            'enable_stepped_exits' in self.config
         )
         
         if not has_comprehensive_config:  # If basic/empty config, use optimized defaults
