@@ -97,19 +97,39 @@ class NIJAApexStrategyV71:
         self.broker_client = broker_client
         self.config = config or {}
         
+        # PROFIT OPTIMIZATION: Load enhanced configuration if not provided
+        # Check if a comprehensive config was provided by looking for key optimization settings
+        has_comprehensive_config = (
+            'use_enhanced_scoring' in config or 
+            'use_regime_detection' in config or 
+            'enable_stepped_exits' in config
+        )
+        
+        if not has_comprehensive_config:  # If basic/empty config, use optimized defaults
+            try:
+                from profit_optimization_config import get_profit_optimization_config
+                self.config = get_profit_optimization_config()
+                logger.info("🚀 Loaded profit optimization configuration")
+            except ImportError:
+                logger.warning("⚠️  Profit optimization config not available, using defaults")
+        
         # PROFIT-TAKING ENFORCEMENT: Always enabled, cannot be disabled
         # This ensures profit-taking works 24/7 on all accounts, brokerages, and tiers
         self.config['enable_take_profit'] = True
         
-        # Initialize components
+        # Initialize components with optimized parameters
         self.risk_manager = RiskManager(
             min_position_pct=self.config.get('min_position_pct', 0.02),
-            max_position_pct=self.config.get('max_position_pct', 0.20)  # UPDATED Jan 21, 2026: OPTION 2 - Increased to 20% for better trade sizing (was 10%)
+            max_position_pct=self.config.get('max_position_pct', 0.10)  # OPTIMIZED: 10% max for more positions (was 20%)
         )
         self.execution_engine = ExecutionEngine(broker_client)
         
         # Initialize enhanced scoring and regime detection
-        if ENHANCED_SCORING_AVAILABLE:
+        # PROFIT OPTIMIZATION: Enable by default if available
+        enable_enhanced = self.config.get('use_enhanced_scoring', True)  # Default to True
+        enable_regime = self.config.get('use_regime_detection', True)  # Default to True
+        
+        if ENHANCED_SCORING_AVAILABLE and (enable_enhanced or enable_regime):
             self.entry_scorer = EnhancedEntryScorer(self.config)
             self.regime_detector = RegimeDetector(self.config)
             self.use_enhanced_scoring = True
@@ -118,7 +138,10 @@ class NIJAApexStrategyV71:
             self.entry_scorer = None
             self.regime_detector = None
             self.use_enhanced_scoring = False
-            logger.warning("⚠️  Enhanced scoring not available - using legacy scoring")
+            if not ENHANCED_SCORING_AVAILABLE:
+                logger.warning("⚠️  Enhanced scoring modules not available - using legacy scoring")
+            else:
+                logger.info("ℹ️  Enhanced scoring disabled by configuration")
         
         # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
         self.min_adx = self.config.get('min_adx', 20)  # Industry standard for crypto - strong enough to avoid chop
@@ -126,6 +149,15 @@ class NIJAApexStrategyV71:
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.10)  # 10% minimum - avoid dead markets (lowered from 25% on Jan 25, 2026)
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
+        
+        # PROFIT OPTIMIZATION: Stepped profit-taking configuration
+        self.enable_stepped_exits = self.config.get('enable_stepped_exits', True)
+        self.stepped_exit_levels = self.config.get('stepped_exits', {
+            0.015: 0.10,  # Exit 10% at 1.5% profit
+            0.025: 0.15,  # Exit 15% at 2.5% profit
+            0.035: 0.25,  # Exit 25% at 3.5% profit
+            0.050: 0.50,  # Exit 50% at 5.0% profit
+        })
         
         # AI Momentum Scoring (optional, skeleton for future)
         self.ai_momentum_enabled = self.config.get('ai_momentum_enabled', False)
@@ -137,13 +169,19 @@ class NIJAApexStrategyV71:
         self.current_regime = None
         
         logger.info("=" * 70)
-        logger.info("NIJA Apex Strategy v7.1 initialized")
+        logger.info("NIJA Apex Strategy v7.1 - PROFIT OPTIMIZED")
         logger.info("✅ PROFIT-TAKING: ALWAYS ENABLED (cannot be disabled)")
         logger.info("✅ Multi-broker support: Coinbase, Kraken, Binance, OKX, Alpaca")
         logger.info("✅ All tiers supported: SAVER, INVESTOR, INCOME, LIVABLE, BALLER")
         if self.use_enhanced_scoring:
             logger.info("✅ Enhanced entry scoring: ENABLED (0-100 weighted scoring)")
             logger.info("✅ Regime detection: ENABLED (trending/ranging/volatile)")
+            min_score = self.config.get('min_score_threshold', 60)
+            logger.info(f"✅ Minimum entry score: {min_score}/100 (quality threshold)")
+        if self.enable_stepped_exits:
+            logger.info("✅ Stepped profit-taking: ENABLED (partial exits at multiple levels)")
+            logger.info(f"   Exit levels: {len(self.stepped_exit_levels)} profit targets")
+        logger.info(f"✅ Position sizing: {self.config.get('min_position_pct', 0.02)*100:.0f}%-{self.config.get('max_position_pct', 0.10)*100:.0f}% (capital efficient)")
         logger.info("=" * 70)
     
     def _get_broker_name(self) -> str:
