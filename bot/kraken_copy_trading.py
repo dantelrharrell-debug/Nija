@@ -648,7 +648,8 @@ def on_master_trade(trade: Dict[str, Any]):
     
     # Build master_trade object for copy_trade_to_kraken_users
     master_trade = {
-        "pair": kraken_pair,
+        "symbol": symbol,  # Original standard format (e.g., 'BCH-USD') for validation
+        "pair": kraken_pair,  # Kraken format (e.g., 'BCHUSD') for execution
         "side": trade.get('side', 'buy'),
         "volume": volume,
         "usd_size": size,
