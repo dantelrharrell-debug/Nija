@@ -6687,6 +6687,9 @@ class KrakenBroker(BaseBroker):
             # This prevents small trades that will be eaten by fees
             # Track if tier auto-resize occurred (used for Kraken minimum enforcement later)
             tier_was_auto_resized = False
+            # Determine if this is a master account (not subject to tier limits)
+            # Used in both tier validation and Kraken minimum enforcement
+            is_master_account = (self.account_type == AccountType.MASTER)
             
             if side.lower() == 'buy' and get_tier_from_balance and validate_trade_size:
                 try:
@@ -6712,9 +6715,6 @@ class KrakenBroker(BaseBroker):
                                 "status": "error",
                                 "error": f"Account balance ${current_balance:.2f} below minimum tier requirement ${min_balance_required:.2f}"
                             }
-                        
-                        # Determine if this is a master account (not subject to tier limits)
-                        is_master_account = (self.account_type == AccountType.MASTER)
                         
                         # Determine user's tier based on balance
                         # Master accounts always get BALLER tier regardless of balance
@@ -6809,7 +6809,7 @@ class KrakenBroker(BaseBroker):
                     # Check if this trade was auto-resized down due to tier limits
                     # using explicit flag set during tier validation above
                     # CRITICAL: Only enforce tier protection for USER accounts, not MASTER
-                    is_master_account = (self.account_type == AccountType.MASTER)
+                    # Note: is_master_account is defined at line 6691
                     
                     if tier_was_auto_resized and not is_master_account:
                         # USER account: Trade was resized down by tier limits, and result is below Kraken minimum
