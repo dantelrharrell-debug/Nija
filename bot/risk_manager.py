@@ -225,7 +225,9 @@ class AdaptiveRiskManager:
                                volatility_pct: float = 0.01, 
                                use_total_capital: bool = False,
                                position_value: float = 0.0,
-                               portfolio_state=None) -> Tuple[float, Dict]:
+                               portfolio_state=None,
+                               broker_name: str = None,
+                               broker_min_position: float = None) -> Tuple[float, Dict]:
         """
         Calculate adaptive position size based on multiple factors.
         
@@ -259,6 +261,8 @@ class AdaptiveRiskManager:
             use_total_capital: If True, uses account_balance + position_value as base (PRO MODE)
             position_value: Total value of open positions (only used if use_total_capital=True)
             portfolio_state: PortfolioState instance (preferred - uses total_equity for sizing)
+            broker_name: Name of broker (e.g., 'kraken', 'coinbase') for minimum adjustments
+            broker_min_position: Broker's minimum position size in USD for intelligent bumping
         
         Returns:
             Tuple of (position_size, breakdown_dict)
@@ -531,6 +535,43 @@ class AdaptiveRiskManager:
         
         # Calculate position size based on sizing_base (total capital in PRO MODE, free balance otherwise)
         position_size = sizing_base * final_pct
+        
+        # BROKER-AWARE MINIMUM POSITION ADJUSTMENT (Jan 25, 2026)
+        # Fix for edge case: When calculated position is just below broker minimum due to
+        # max position % cap, intelligently bump up to minimum if safe to do so.
+        # This enables trading on Kraken with balances in $50-$70 range where 15% max = $7.50-$10.50
+        # but broker minimum is $10.00
+        if broker_min_position and broker_name:
+            position_size_scalar = scalar(position_size)
+            if 0 < position_size_scalar < broker_min_position:
+                # Calculate what % would be needed to meet minimum
+                required_pct = broker_min_position / sizing_base
+                
+                # Only bump up if:
+                # 1. Required % is not too far above tier_max_pct (within 5 percentage points)
+                # 2. We have no other positions (current_exposure == 0)
+                # 3. The bump doesn't exceed a reasonable max (20% for safety)
+                pct_difference = (required_pct - tier_max_pct) * 100  # Convert to percentage points
+                
+                if (pct_difference <= 5.0 and 
+                    self.current_exposure == 0 and 
+                    required_pct <= 0.20):
+                    
+                    logger.info(f"🔧 Broker minimum adjustment for {broker_name}:")
+                    logger.info(f"   Calculated: ${position_size_scalar:.2f} ({final_pct*100:.1f}%)")
+                    logger.info(f"   Broker minimum: ${broker_min_position:.2f}")
+                    logger.info(f"   Adjusting to: ${broker_min_position:.2f} ({required_pct*100:.1f}%)")
+                    logger.info(f"   ✅ Safe: within 5pp of tier max, no other positions, under 20% cap")
+                    
+                    position_size = broker_min_position
+                    final_pct = required_pct
+                    breakdown['broker_minimum_bump'] = True
+                    breakdown['original_pct'] = breakdown['final_pct']
+                    breakdown['final_pct'] = final_pct
+                    breakdown['bump_reason'] = f'{broker_name} minimum ${broker_min_position:.2f}'
+                else:
+                    logger.debug(f"   Cannot bump to {broker_name} minimum: pct_diff={pct_difference:.1f}pp, exposure={self.current_exposure:.2f}, req_pct={required_pct:.2%}")
+                    breakdown['broker_minimum_blocked'] = True
         
         # PRO MODE: Additional check for free balance
         if use_total_capital and self.pro_mode:
