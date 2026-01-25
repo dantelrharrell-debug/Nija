@@ -128,6 +128,53 @@ class ExecutionEngine:
         else:
             self.trade_ledger = None
     
+    def _get_broker_round_trip_fee(self) -> float:
+        """
+        Get broker-specific round-trip fee for fee-aware profit calculations.
+        
+        CRITICAL FIX (Jan 25, 2026): Make profit-taking broker-aware
+        - Kraken: 0.36% round-trip (0.16% taker x2 + 0.04% spread)
+        - Coinbase: 1.4% round-trip (0.6% taker x2 + 0.2% spread)
+        - Binance: 0.28% round-trip (0.1% taker x2 + 0.08% spread)
+        - OKX: 0.30% round-trip (0.1% taker x2 + 0.1% spread)
+        
+        Returns:
+            Round-trip fee as decimal (e.g., 0.0036 for Kraken = 0.36%)
+        """
+        if not self.broker_client or not hasattr(self.broker_client, 'broker_type'):
+            # No broker client available - use Coinbase default (conservative)
+            return DEFAULT_ROUND_TRIP_FEE  # 1.4%
+        
+        broker_type = self.broker_client.broker_type
+        broker_name = None
+        
+        # Extract broker name from broker_type (handle both Enum and string)
+        if hasattr(broker_type, 'value'):
+            broker_name = broker_type.value.lower()
+        elif isinstance(broker_type, str):
+            broker_name = broker_type.lower()
+        else:
+            broker_name = str(broker_type).lower()
+        
+        # Return broker-specific fees
+        # PROFITABILITY FIX: Use actual broker fees instead of Coinbase default
+        broker_fees = {
+            'kraken': 0.0036,      # 0.36% - 4x cheaper than Coinbase
+            'coinbase': 0.014,     # 1.4% - baseline
+            'binance': 0.0028,     # 0.28% - cheapest
+            'okx': 0.0030,         # 0.30% - very cheap
+            'alpaca': 0.0000,      # 0% - stock trading (no crypto fees)
+        }
+        
+        fee = broker_fees.get(broker_name, DEFAULT_ROUND_TRIP_FEE)
+        
+        # Log on first call for debugging
+        if not hasattr(self, '_logged_broker_fee'):
+            self._logged_broker_fee = True
+            logger.info(f"🎯 Using {broker_name} round-trip fee: {fee*100:.2f}% for profit calculations")
+        
+        return fee
+    
     def execute_entry(self, symbol: str, side: str, position_size: float,
                      entry_price: float, stop_loss: float, 
                      take_profit_levels: Dict[str, float]) -> Optional[Dict]:
@@ -561,23 +608,29 @@ class ExecutionEngine:
         """
         Check if position should execute stepped profit-taking exits
         
-        PROFITABILITY_UPGRADE_V7.2 + FEE-AWARE: Stepped exits adjusted for Coinbase fees
+        PROFITABILITY_UPGRADE_V7.2 + FEE-AWARE + BROKER-AWARE (Jan 25, 2026)
+        Stepped exits now dynamically adjusted based on broker fees
         
-        Exit Schedule (Fee-Aware Profitability Mode):
-        Coinbase round-trip fees: ~1.4% (0.6% entry + 0.6% exit + 0.2% spread)
+        BROKER-SPECIFIC FEE STRUCTURE:
+        - Kraken: 0.36% round-trip (0.16% taker x2 + 0.04% spread)
+        - Coinbase: 1.4% round-trip (0.6% taker x2 + 0.2% spread)
+        - Binance: 0.28% round-trip (0.1% taker x2 + 0.08% spread)
+        - OKX: 0.30% round-trip (0.1% taker x2 + 0.1% spread)
         
-        CRITICAL FEE-AWARE ADJUSTMENT:
+        KRAKEN EXAMPLE (0.36% fees):
+        - Exit 10% at 0.7% gross profit → ~0.34% NET profit after fees (PROFITABLE)
+        - Exit 15% at 1.0% gross profit → ~0.64% NET profit after fees (PROFITABLE)
+        - Exit 25% at 1.5% gross profit → ~1.14% NET profit after fees (PROFITABLE)
+        - Exit 50% at 2.5% gross profit → ~2.14% NET profit after fees (PROFITABLE)
+        
+        COINBASE EXAMPLE (1.4% fees):
         - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees (PROFITABLE)
         - Exit 15% at 2.5% gross profit → ~1.1% NET profit after fees (PROFITABLE)
         - Exit 25% at 3.0% gross profit → ~1.6% NET profit after fees (PROFITABLE)
         - Exit 50% at 4.0% gross profit → ~2.6% NET profit after fees (PROFITABLE)
         
-        OLD BROKEN THRESHOLDS (resulted in losses):
-        - 0.5% profit → -0.9% NET (LOSS)
-        - 1.0% profit → -0.4% NET (LOSS)
-        - 2.0% profit → +0.6% NET (barely profitable)
-        
-        This dramatically reduces average hold time while ensuring ALL exits are NET PROFITABLE.
+        This ensures faster profit-taking on low-fee brokers (Kraken, Binance, OKX)
+        while maintaining profitability on high-fee brokers (Coinbase).
         
         Args:
             symbol: Trading symbol
@@ -599,17 +652,34 @@ class ExecutionEngine:
         else:  # short
             gross_profit_pct = (entry_price - current_price) / entry_price
         
+        # Get broker-specific round-trip fee (CRITICAL FIX: Jan 25, 2026)
+        broker_round_trip_fee = self._get_broker_round_trip_fee()
+        
         # Calculate NET profit after fees
-        net_profit_pct = gross_profit_pct - DEFAULT_ROUND_TRIP_FEE
+        net_profit_pct = gross_profit_pct - broker_round_trip_fee
         
         # FEE-AWARE profit thresholds (GROSS profit needed for NET profitability)
-        # Each threshold ensures NET profit after 1.4% round-trip fees
-        exit_levels = [
-            (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~0.6% NET
-            (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~1.1% NET
-            (0.030, 0.25, 'tp_exit_3.0pct'),   # Exit 25% at 3.0% gross → ~1.6% NET
-            (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~2.6% NET
-        ]
+        # Dynamically calculated based on broker fees
+        # Each threshold ensures NET profit after broker-specific round-trip fees
+        
+        # For low-fee brokers (Kraken 0.36%, Binance 0.28%, OKX 0.30%)
+        # Use aggressive profit-taking to lock in gains faster
+        if broker_round_trip_fee <= 0.005:  # <= 0.5% fees (Kraken, Binance, OKX)
+            exit_levels = [
+                (0.007, 0.10, 'tp_exit_0.7pct'),   # Exit 10% at 0.7% gross → ~0.34-0.42% NET
+                (0.010, 0.15, 'tp_exit_1.0pct'),   # Exit 15% at 1.0% gross → ~0.64-0.72% NET
+                (0.015, 0.25, 'tp_exit_1.5pct'),   # Exit 25% at 1.5% gross → ~1.14-1.22% NET
+                (0.025, 0.50, 'tp_exit_2.5pct'),   # Exit 50% at 2.5% gross → ~2.14-2.22% NET
+            ]
+        # For high-fee brokers (Coinbase 1.4%)
+        # Use conservative profit-taking to ensure profitability
+        else:
+            exit_levels = [
+                (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~0.6% NET
+                (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~1.1% NET
+                (0.030, 0.25, 'tp_exit_3.0pct'),   # Exit 25% at 3.0% gross → ~1.6% NET
+                (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~2.6% NET
+            ]
         
         for gross_threshold, exit_pct, exit_flag in exit_levels:
             # Skip if already executed
@@ -625,13 +695,13 @@ class ExecutionEngine:
                 exit_size = position['position_size'] * position['remaining_size'] * exit_pct
                 
                 # Calculate expected NET profit for this exit
-                expected_net_pct = gross_threshold - DEFAULT_ROUND_TRIP_FEE
+                expected_net_pct = gross_threshold - broker_round_trip_fee
                 
                 logger.info(f"💰 STEPPED PROFIT EXIT TRIGGERED: {symbol}")
                 logger.info(f"   Gross profit: {gross_profit_pct*100:.1f}% | Net profit: {net_profit_pct*100:.1f}%")
                 logger.info(f"   Exit level: {exit_flag} | Exit size: {exit_pct*100:.0f}% of position")
                 logger.info(f"   Current price: ${current_price:.2f} | Entry: ${entry_price:.2f}")
-                logger.info(f"   Est. fees: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%")
+                logger.info(f"   Broker fees: {broker_round_trip_fee*100:.1f}%")
                 logger.info(f"   NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
                 logger.info(f"   Exiting: {exit_pct*100:.0f}% of position (${exit_size:.2f})")
                 logger.info(f"   Remaining: {(position['remaining_size'] * (1.0 - exit_pct))*100:.0f}% for trailing stop")

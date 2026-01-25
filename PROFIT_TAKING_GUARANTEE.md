@@ -52,7 +52,15 @@ This is a **hard-coded guarantee** - profit-taking **CANNOT** be disabled throug
 NIJA uses **two independent** profit-taking systems for maximum reliability:
 
 #### 1. **Stepped Profit Exits** (Primary)
-More aggressive, takes profits gradually:
+More aggressive, takes profits gradually with **broker-aware thresholds**:
+
+**Kraken/Binance/OKX (low fees 0.28-0.36%):**
+- Exit 10% at 0.7% gross profit → ~0.34-0.42% NET (after fees)
+- Exit 15% at 1.0% gross profit → ~0.64-0.72% NET
+- Exit 25% at 1.5% gross profit → ~1.14-1.22% NET
+- Exit 50% at 2.5% gross profit → ~2.14-2.22% NET
+
+**Coinbase (high fees 1.4%):**
 - Exit 10% at 2.0% gross profit → ~0.6% NET (after fees)
 - Exit 15% at 2.5% gross profit → ~1.1% NET
 - Exit 25% at 3.0% gross profit → ~1.6% NET
@@ -74,16 +82,19 @@ Based on R-multiples (risk-reward ratio):
 
 ### Fee-Aware Calculations
 
-All profit targets are **adjusted for broker fees**:
+All profit targets are **dynamically adjusted for broker-specific fees** (updated Jan 25, 2026):
 
-| Broker | Round-Trip Fee | Minimum Profit Target |
-|--------|---------------|---------------------|
-| Coinbase | 1.4% | 2.0% gross (0.6% net) |
-| Kraken | 0.36% | 1.0% gross (0.64% net) |
-| Binance | 0.28% | 0.8% gross (0.52% net) |
-| OKX | 0.3% | 0.8% gross (0.5% net) |
+| Broker | Round-Trip Fee | Stepped Profit Exits | Net Profit After Fees |
+|--------|---------------|---------------------|----------------------|
+| Coinbase | 1.4% | 2.0%, 2.5%, 3.0%, 4.0% | 0.6%, 1.1%, 1.6%, 2.6% |
+| Kraken | 0.36% | 0.7%, 1.0%, 1.5%, 2.5% | 0.34%, 0.64%, 1.14%, 2.14% |
+| Binance | 0.28% | 0.7%, 1.0%, 1.5%, 2.5% | 0.42%, 0.72%, 1.22%, 2.22% |
+| OKX | 0.30% | 0.7%, 1.0%, 1.5%, 2.5% | 0.40%, 0.70%, 1.20%, 2.20% |
 
-This ensures **every profit-taking exit is NET PROFITABLE** after fees.
+**CRITICAL UPDATE (Jan 25, 2026)**: Profit-taking is now **broker-aware**!
+- Low-fee brokers (Kraken, Binance, OKX) take profits 60-70% faster
+- High-fee brokers (Coinbase) use conservative thresholds
+- Each exit level ensures **NET PROFITABILITY** after broker-specific fees
 
 ---
 
