@@ -123,7 +123,7 @@ class NIJAApexStrategyV71:
         # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
         self.min_adx = self.config.get('min_adx', 20)  # Industry standard for crypto - strong enough to avoid chop
         self.volume_threshold = self.config.get('volume_threshold', 0.5)  # 50% of 5-candle avg - reasonable liquidity
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.25)  # 25% minimum - avoid dead markets
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.10)  # 10% minimum - avoid dead markets (lowered from 25% on Jan 25, 2026)
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
@@ -896,8 +896,15 @@ class NIJAApexStrategyV71:
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
                     risk_score = self._get_risk_score(score, metadata)
+                    
+                    # Get broker context for intelligent minimum position adjustments
+                    broker_name = self._get_broker_name()
+                    broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
+                    
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
-                        account_balance, adx, risk_score
+                        account_balance, adx, risk_score,
+                        broker_name=broker_name,
+                        broker_min_position=broker_min
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
@@ -980,8 +987,15 @@ class NIJAApexStrategyV71:
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
                     risk_score = self._get_risk_score(score, metadata)
+                    
+                    # Get broker context for intelligent minimum position adjustments
+                    broker_name = self._get_broker_name()
+                    broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
+                    
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
-                        account_balance, adx, risk_score
+                        account_balance, adx, risk_score,
+                        broker_name=broker_name,
+                        broker_min_position=broker_min
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
