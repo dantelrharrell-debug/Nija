@@ -123,7 +123,7 @@ class NIJAApexStrategyV71:
         # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
         self.min_adx = self.config.get('min_adx', 20)  # Industry standard for crypto - strong enough to avoid chop
         self.volume_threshold = self.config.get('volume_threshold', 0.5)  # 50% of 5-candle avg - reasonable liquidity
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.25)  # 25% minimum - avoid dead markets
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.10)  # 10% minimum - avoid dead markets (lowered from 25% on Jan 25, 2026)
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
