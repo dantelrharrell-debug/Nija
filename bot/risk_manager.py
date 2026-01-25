@@ -564,10 +564,10 @@ class AdaptiveRiskManager:
                     logger.info(f"   ✅ Safe: within 5pp of tier max, no other positions, under 20% cap")
                     
                     position_size = broker_min_position
-                    final_pct = required_pct
                     breakdown['broker_minimum_bump'] = True
-                    breakdown['original_pct'] = breakdown['final_pct']
-                    breakdown['final_pct'] = final_pct
+                    breakdown['original_pct'] = final_pct  # Store original before bumping
+                    final_pct = required_pct  # Update to required percentage
+                    breakdown['final_pct'] = final_pct  # Store new final percentage
                     breakdown['bump_reason'] = f'{broker_name} minimum ${broker_min_position:.2f}'
                 else:
                     logger.debug(f"   Cannot bump to {broker_name} minimum: pct_diff={pct_difference:.1f}pp, exposure={self.current_exposure:.2f}, req_pct={required_pct:.2%}")
