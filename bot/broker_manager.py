@@ -7056,7 +7056,7 @@ class KrakenBroker(BaseBroker):
                         # ENHANCED COPY TRADING: Also trigger direct on_master_trade hook
                         # This provides a simplified interface for copy trading implementations
                         try:
-                            from kraken_copy_trading import on_master_trade
+                            from bot.kraken_copy_trading import on_master_trade
                             
                             # Build trade object for hook
                             trade_obj = {
