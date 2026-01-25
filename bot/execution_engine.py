@@ -701,7 +701,7 @@ class ExecutionEngine:
                 logger.info(f"   Gross profit: {gross_profit_pct*100:.1f}% | Net profit: {net_profit_pct*100:.1f}%")
                 logger.info(f"   Exit level: {exit_flag} | Exit size: {exit_pct*100:.0f}% of position")
                 logger.info(f"   Current price: ${current_price:.2f} | Entry: ${entry_price:.2f}")
-                logger.info(f"   Broker fees: {broker_round_trip_fee*100:.2f}%")
+                logger.info(f"   Broker fees: {broker_round_trip_fee*100:.1f}%")
                 logger.info(f"   NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
                 logger.info(f"   Exiting: {exit_pct*100:.0f}% of position (${exit_size:.2f})")
                 logger.info(f"   Remaining: {(position['remaining_size'] * (1.0 - exit_pct))*100:.0f}% for trailing stop")
