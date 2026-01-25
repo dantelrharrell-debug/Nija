@@ -6784,24 +6784,58 @@ class KrakenBroker(BaseBroker):
                     # Don't block trade if tier validation fails - just log warning
                     logging.warning(f"⚠️  Tier validation error (allowing trade): {tier_err}")
             
-            # ✅ KRAKEN MINIMUM ENFORCEMENT: Round up to meet $10 minimum after auto-resize
-            # This prevents order rejections when auto-resized trades fall just below Kraken's $10 minimum
-            # Example: $9.16 trade gets rounded up to $10.00 to meet exchange requirements
+            # ✅ KRAKEN MINIMUM ENFORCEMENT: Check if trade meets Kraken's minimum
+            # However, DO NOT bump up trades that were auto-resized down by tier limits
+            # This prevents violating tier-based risk management for profit protection
             if side.lower() == 'buy' and size_type == 'quote':
                 # Use Kraken minimum from imported constant
                 kraken_min = KRAKEN_MINIMUM_ORDER_USD or 10.00
                 
                 if quantity < kraken_min:
-                    original_quantity = quantity
-                    quantity = kraken_min
-                    logging.info(LOG_SEPARATOR)
-                    logging.info("💰 KRAKEN MINIMUM ENFORCEMENT: Trade rounded up")
-                    logging.info(LOG_SEPARATOR)
-                    logging.info(f"   Original size: ${original_quantity:.2f}")
-                    logging.info(f"   Kraken minimum: ${kraken_min:.2f}")
-                    logging.info(f"   Adjusted size: ${quantity:.2f}")
-                    logging.info(f"   Reason: Meeting Kraken's ${kraken_min:.2f} minimum order value")
-                    logging.info(LOG_SEPARATOR)
+                    # Check if this trade was auto-resized down due to tier limits
+                    # Variables are available from tier validation block above (lines 6688-6785)
+                    tier_was_resized = False
+                    try:
+                        # If resized_size exists and is less than original order_size_usd,
+                        # then tier auto-resize reduced the trade size
+                        if 'resized_size' in locals() and 'order_size_usd' in locals():
+                            if resized_size < order_size_usd and resized_size == quantity:
+                                tier_was_resized = True
+                    except:
+                        pass
+                    
+                    if tier_was_resized:
+                        # Trade was resized down by tier limits, and result is below Kraken minimum
+                        # REJECT the trade to protect tier-based risk management
+                        logging.error(LOG_SEPARATOR)
+                        logging.error("❌ TRADE REJECTED: Tier limit conflicts with Kraken minimum")
+                        logging.error(LOG_SEPARATOR)
+                        try:
+                            logging.error(f"   Tier: {user_tier.value}")
+                            logging.error(f"   Account balance: ${current_balance:.2f}")
+                        except:
+                            pass
+                        logging.error(f"   Tier-adjusted size: ${quantity:.2f}")
+                        logging.error(f"   Kraken minimum: ${kraken_min:.2f}")
+                        logging.error(f"   ⚠️  Cannot meet Kraken minimum without violating tier limits")
+                        logging.error(f"   💡 Tier limits protect small accounts from excessive risk")
+                        logging.error(LOG_SEPARATOR)
+                        return {
+                            "status": "error",
+                            "error": f"Trade size ${quantity:.2f} below Kraken minimum ${kraken_min:.2f} after tier adjustment. Cannot execute without violating tier risk limits."
+                        }
+                    else:
+                        # Trade wasn't tier-resized, safe to bump up to Kraken minimum
+                        original_quantity = quantity
+                        quantity = kraken_min
+                        logging.info(LOG_SEPARATOR)
+                        logging.info("💰 KRAKEN MINIMUM ENFORCEMENT: Trade rounded up")
+                        logging.info(LOG_SEPARATOR)
+                        logging.info(f"   Original size: ${original_quantity:.2f}")
+                        logging.info(f"   Kraken minimum: ${kraken_min:.2f}")
+                        logging.info(f"   Adjusted size: ${quantity:.2f}")
+                        logging.info(f"   Reason: Meeting Kraken's ${kraken_min:.2f} minimum order value")
+                        logging.info(LOG_SEPARATOR)
             
             # ✅ PRE-FLIGHT BALANCE CHECK: Verify sufficient funds BEFORE sending to Kraken API
             # This prevents "EOrder:Insufficient funds" rejections from the API
