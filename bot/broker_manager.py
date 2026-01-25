@@ -6687,7 +6687,6 @@ class KrakenBroker(BaseBroker):
             # This prevents small trades that will be eaten by fees
             # Track if tier auto-resize occurred (used for Kraken minimum enforcement later)
             tier_was_auto_resized = False
-            tier_original_size = quantity
             
             if side.lower() == 'buy' and get_tier_from_balance and validate_trade_size:
                 try:
@@ -6806,12 +6805,10 @@ class KrakenBroker(BaseBroker):
                         logging.error(LOG_SEPARATOR)
                         logging.error("❌ TRADE REJECTED: Tier limit conflicts with Kraken minimum")
                         logging.error(LOG_SEPARATOR)
-                        try:
+                        # Try to log tier details if available
+                        if 'user_tier' in locals() and 'current_balance' in locals():
                             logging.error(f"   Tier: {user_tier.value}")
                             logging.error(f"   Account balance: ${current_balance:.2f}")
-                        except NameError:
-                            # Variables not available (tier validation didn't run)
-                            logging.warning("   Tier info unavailable")
                         logging.error(f"   Tier-adjusted size: ${quantity:.2f}")
                         logging.error(f"   Kraken minimum: ${kraken_min:.2f}")
                         logging.error(f"   ⚠️  Cannot meet Kraken minimum without violating tier limits")
