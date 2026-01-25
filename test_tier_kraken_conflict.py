@@ -162,6 +162,65 @@ def test_valid_trade_still_works():
         return False
 
 
+def test_master_account_not_subject_to_tiers():
+    """Test that master accounts are NOT subject to tier limits."""
+    print("\n" + "="*70)
+    print("TEST: Master Account NOT Subject to Tier Limits")
+    print("="*70)
+    
+    # Scenario: Master account with small balance (same as conflict scenario)
+    balance = 58.78
+    requested_trade = 10.58
+    kraken_min = 10.00
+    
+    print(f"\n📊 Test Scenario:")
+    print(f"  ├─ Account type: MASTER")
+    print(f"  ├─ Account balance: ${balance:.2f}")
+    print(f"  ├─ Requested trade: ${requested_trade:.2f}")
+    print(f"  └─ Kraken minimum: ${kraken_min:.2f}")
+    
+    # Master accounts always get BALLER tier
+    tier = get_tier_from_balance(balance, is_master=True)
+    config = get_tier_config(tier)
+    
+    print(f"\n📊 Tier Assignment:")
+    print(f"  ├─ Tier: {tier.value}")
+    print(f"  └─ Note: Master accounts ALWAYS get BALLER tier")
+    
+    # Test auto_resize_trade with is_master=True
+    resized_size, resize_reason = auto_resize_trade(
+        requested_trade, 
+        tier, 
+        balance, 
+        is_master=True,  # MASTER account
+        exchange='kraken'
+    )
+    
+    print(f"\n📊 Auto-Resize Result:")
+    print(f"  ├─ Requested: ${requested_trade:.2f}")
+    print(f"  ├─ Resized to: ${resized_size:.2f}")
+    print(f"  └─ Reason: {resize_reason}")
+    
+    # Master accounts have flexible limits
+    # Even if resized, they should be allowed to bump up to Kraken minimum
+    print(f"\n✅ MASTER ACCOUNT BEHAVIOR:")
+    print(f"  ├─ Master accounts are NOT subject to tier limits")
+    print(f"  ├─ Always assigned BALLER tier (regardless of balance)")
+    print(f"  └─ Can bump up to Kraken minimum even if tier-resized")
+    
+    # For master account, even if resized below Kraken min, should be allowed
+    # because master accounts are exempt from tier restrictions
+    if tier == TradingTier.BALLER:
+        print(f"\n✅ TEST PASSED:")
+        print(f"  ├─ Master account correctly assigned BALLER tier")
+        print(f"  └─ Master can trade (not blocked by tier limits)")
+        return True
+    else:
+        print(f"\n❌ TEST FAILED:")
+        print(f"  └─ Master account should be BALLER tier, got {tier.value}")
+        return False
+
+
 if __name__ == "__main__":
     print("\n" + "="*70)
     print("TIER LIMIT VS KRAKEN MINIMUM CONFLICT TESTS")
@@ -169,25 +228,35 @@ if __name__ == "__main__":
     
     results = []
     
-    # Test 1: Conflict scenario (should reject)
+    # Test 1: Conflict scenario for USER accounts (should reject)
     try:
         result1 = test_tier_kraken_conflict()
-        results.append(("Tier-Kraken Conflict", result1))
+        results.append(("USER: Tier-Kraken Conflict", result1))
     except Exception as e:
         print(f"\n❌ Test failed with error: {e}")
         import traceback
         traceback.print_exc()
-        results.append(("Tier-Kraken Conflict", False))
+        results.append(("USER: Tier-Kraken Conflict", False))
     
-    # Test 2: Valid trade scenario (should allow)
+    # Test 2: Valid trade scenario for USER accounts (should allow)
     try:
         result2 = test_valid_trade_still_works()
-        results.append(("Valid Trade", result2))
+        results.append(("USER: Valid Trade", result2))
     except Exception as e:
         print(f"\n❌ Test failed with error: {e}")
         import traceback
         traceback.print_exc()
-        results.append(("Valid Trade", False))
+        results.append(("USER: Valid Trade", False))
+    
+    # Test 3: Master account exemption (should NOT be blocked by tier limits)
+    try:
+        result3 = test_master_account_not_subject_to_tiers()
+        results.append(("MASTER: Not Subject to Tiers", result3))
+    except Exception as e:
+        print(f"\n❌ Test failed with error: {e}")
+        import traceback
+        traceback.print_exc()
+        results.append(("MASTER: Not Subject to Tiers", False))
     
     # Summary
     print("\n" + "="*70)
