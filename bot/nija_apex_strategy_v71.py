@@ -144,9 +144,10 @@ class NIJAApexStrategyV71:
                 logger.info("ℹ️  Enhanced scoring disabled by configuration")
         
         # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
-        self.min_adx = self.config.get('min_adx', 20)  # Industry standard for crypto - strong enough to avoid chop
-        self.volume_threshold = self.config.get('volume_threshold', 0.5)  # 50% of 5-candle avg - reasonable liquidity
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.10)  # 10% minimum - avoid dead markets (lowered from 25% on Jan 25, 2026)
+        # RELAXED FILTERS (Jan 26, 2026): Lower thresholds to allow more trading opportunities in low-capital mode
+        self.min_adx = self.config.get('min_adx', 15)  # Lowered from 20 to 15 - allow weaker trends
+        self.volume_threshold = self.config.get('volume_threshold', 0.3)  # Lowered from 0.5 to 0.3 - 30% of 5-candle avg
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.05)  # Lowered from 0.10 to 0.05 - avoid only dead markets
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
@@ -327,16 +328,16 @@ class NIJAApexStrategyV71:
         logger.debug(f"  EMA sequence: {ema9:.4f} vs {ema21:.4f} vs {ema50:.4f}")
         logger.debug(f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, Vol ratio: {volume_ratio:.2f}")
         
-        # PROFITABILITY V7.2: Require 3/5 conditions for balanced quality
-        # This filters out weak setups (1-2/5) while allowing quality opportunities (3/5+)
-        # Too strict (4-5/5) misses profitable trades; too loose (1-2/5) takes junk
-        if uptrend_score >= 3:  # PROFITABILITY V7.2: 3/5 required - balanced quality filter (changed from 4/5)
+        # RELAXED FILTERS (Jan 26, 2026): Lower to 2/5 conditions to allow more trading opportunities
+        # Previous: 3/5 required was too strict for low-capital accounts in current market conditions
+        # 2/5 allows quality setups while still filtering out complete junk (0-1/5)
+        if uptrend_score >= 2:  # RELAXED: 2/5 required - allow more opportunities (changed from 3/5)
             return True, 'uptrend', f'Uptrend confirmed ({uptrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 3:  # PROFITABILITY V7.2: 3/5 required - balanced quality filter (changed from 4/5)
+        elif downtrend_score >= 2:  # RELAXED: 2/5 required - allow more opportunities (changed from 3/5)
             return True, 'downtrend', f'Downtrend confirmed ({downtrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
             logger.debug(f"  → Rejected: Insufficient confirmation")
-            return False, 'none', f'Insufficient trend confirmation (Up:{uptrend_score}/5, Down:{downtrend_score}/5 - need 3/5)'
+            return False, 'none', f'Insufficient trend confirmation (Up:{uptrend_score}/5, Down:{downtrend_score}/5 - need 2/5)'
     
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
@@ -521,12 +522,13 @@ class NIJAApexStrategyV71:
         # For now, this is a placeholder that always passes
         news_clear = True  # Stub: would check upcoming news events here
         
-        # Filter 2: Volume filter (< 20% avg = no trade) - Lowered threshold for better trade opportunities
+        # Filter 2: Volume filter (< 5% avg = no trade) - Lowered threshold for better trade opportunities
         avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
         
         if volume_ratio < self.volume_min_threshold:
+            logger.debug(f'   🔇 Smart filter (volume): {volume_ratio*100:.1f}% < {self.volume_min_threshold*100:.0f}% threshold')
             return False, f'Volume too low ({volume_ratio*100:.1f}% of avg) - threshold: {self.volume_min_threshold*100:.0f}%'
         
         # Filter 3: Candle timing filter (first 6 seconds)
@@ -553,6 +555,7 @@ class NIJAApexStrategyV71:
                     
                     # Block trade if we're in first N seconds of new candle
                     if time_since_candle < self.candle_exclusion_seconds:
+                        logger.debug(f'   🔇 Smart filter (candle timing): {time_since_candle:.0f}s < {self.candle_exclusion_seconds}s threshold')
                         return False, f'First {self.candle_exclusion_seconds}s of new candle - waiting for stability'
         
         return True, 'All smart filters passed'
