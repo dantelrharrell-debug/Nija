@@ -13,7 +13,7 @@
 #### Threshold Updates:
 - **MIN_CONFIDENCE**: 0.60 → 0.75 (+25%)
 - **min_score_threshold**: 60 → 75 (+25%)
-- **excellent_score_threshold**: 80 → 85 (+6%)
+- **excellent_score_threshold**: 80 → 85 (+6.25%)
 
 #### Regime-Specific Thresholds:
 - **Trending markets**: 60 → 75 (+25%)
