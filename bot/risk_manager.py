@@ -60,6 +60,11 @@ except ImportError:
     TIER_AWARE_MODE = False
     logger.warning("⚠️ Tier config not found - tier enforcement disabled")
 
+# Small account thresholds for broker minimum bumping (Jan 26, 2026)
+SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
+SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0  # Max percentage point difference for broker minimum bump on small accounts
+STANDARD_MAX_PCT_DIFF = 5.0  # Max percentage point difference for broker minimum bump on standard accounts
+
 
 class AdaptiveRiskManager:
     """
@@ -556,7 +561,7 @@ class AdaptiveRiskManager:
                 pct_difference = (required_pct - tier_max_pct) * 100  # Convert to percentage points
                 
                 # Determine max allowed difference based on account size
-                max_pct_diff = 10.0 if sizing_base < 100 else 5.0
+                max_pct_diff = SMALL_ACCOUNT_MAX_PCT_DIFF if sizing_base < SMALL_ACCOUNT_THRESHOLD else STANDARD_MAX_PCT_DIFF
                 
                 if (pct_difference <= max_pct_diff and 
                     self.current_exposure == 0 and 

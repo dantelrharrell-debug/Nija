@@ -47,6 +47,10 @@ except ImportError:
 # Broker-specific minimum position sizes (Jan 24, 2026)
 KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exchange rules
 
+# Small account thresholds (Jan 26, 2026)
+SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
+SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # 20% max position for small accounts to meet broker minimums
+
 # Trade quality thresholds (Jan 20, 2026)
 # Confidence threshold to filter weak entries and increase trade size quality
 MIN_CONFIDENCE = 0.60  # Minimum confidence score (0.0-1.0) to execute trade
@@ -914,8 +918,8 @@ class NIJAApexStrategyV71:
             # Calculate maximum possible position size
             # For small accounts (<$100), use 20% to meet broker minimums
             # For larger accounts, use configured max (typically 10%)
-            if account_balance < 100:
-                max_position_pct = 0.20  # 20% for small accounts to meet broker minimums
+            if account_balance < SMALL_ACCOUNT_THRESHOLD:
+                max_position_pct = SMALL_ACCOUNT_MAX_POSITION_PCT
             else:
                 max_position_pct = self.risk_manager.max_position_pct
             
