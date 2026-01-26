@@ -3289,6 +3289,14 @@ class TradingStrategy:
                         # Update active_broker to use the selected entry broker
                         active_broker = entry_broker
                         
+                        # CRITICAL FIX (Jan 26, 2026): Update apex strategy's broker reference
+                        # When switching brokers, we must update the execution engine's broker
+                        # Otherwise position sizing is calculated correctly but execution uses wrong broker
+                        # This was causing KRAKEN trades ($57.31) to be executed with COINBASE balance ($24.16)
+                        if self.apex and hasattr(self.apex, 'update_broker_client'):
+                            logger.info(f"   🔄 Updating apex strategy broker to {entry_broker_name.upper()}")
+                            self.apex.update_broker_client(active_broker)
+                        
                         # CRITICAL FIX (Jan 22, 2026): Update account_balance from selected entry broker
                         # When switching brokers, we must re-fetch the balance from the NEW broker
                         # Otherwise position sizing uses the wrong broker's balance (e.g., Coinbase $20 instead of Kraken $28)
