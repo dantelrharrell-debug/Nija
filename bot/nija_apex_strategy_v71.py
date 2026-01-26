@@ -863,6 +863,8 @@ class NIJAApexStrategyV71:
             
             if position:
                 # Manage existing position
+                logger.debug(f"📊 Managing position: {symbol} @ ${current_price:.4f}")
+                
                 should_exit, exit_reason = self.check_exit_conditions(
                     symbol, df, indicators, current_price
                 )
