@@ -659,9 +659,11 @@ class ExecutionEngine:
         net_profit_pct = gross_profit_pct - broker_round_trip_fee
         
         # Enhanced logging for profit-taking visibility (Jan 26, 2026)
-        logger.debug(f"💹 Profit check: {symbol} | Entry: ${entry_price:.4f} | Current: ${current_price:.4f} | " \
-                     f"Gross P&L: {gross_profit_pct*100:+.2f}% | Net P&L: {net_profit_pct*100:+.2f}% | " \
-                     f"Remaining: {position.get('remaining_size', 1.0)*100:.0f}%")
+        logger.debug(
+            f"💹 Profit check: {symbol} | Entry: ${entry_price:.4f} | Current: ${current_price:.4f} | "
+            f"Gross P&L: {gross_profit_pct*100:+.2f}% | Net P&L: {net_profit_pct*100:+.2f}% | "
+            f"Remaining: {position.get('remaining_size', 1.0)*100:.0f}%"
+        )
         
         # FEE-AWARE profit thresholds (GROSS profit needed for NET profitability)
         # Dynamically calculated based on broker fees
@@ -811,9 +813,11 @@ class ExecutionEngine:
             else:
                 status_emoji = "🟡"
             
-            logger.info(f"{status_emoji} {symbol:<12} | Entry: ${entry_price:8.4f} | Current: ${current_price:8.4f} | " \
-                       f"P&L: {gross_pnl*100:+6.2f}% (NET: {net_pnl*100:+6.2f}%) | " \
-                       f"Size: ${position_size * remaining_size:7.2f} ({remaining_size*100:.0f}%)")
+            logger.info(
+                f"{status_emoji} {symbol:<12} | Entry: ${entry_price:8.4f} | Current: ${current_price:8.4f} | "
+                f"P&L: {gross_pnl*100:+6.2f}% (NET: {net_pnl*100:+6.2f}%) | "
+                f"Size: ${position_size * remaining_size:7.2f} ({remaining_size*100:.0f}%)"
+            )
             
             if next_target:
                 logger.info(f"      ⏳ Next profit target: {next_target*100:.1f}% gross")

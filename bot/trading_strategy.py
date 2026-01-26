@@ -2110,7 +2110,7 @@ class TradingStrategy:
                     if hasattr(self, 'execution_engine') and self.execution_engine:
                         self.execution_engine.log_position_profit_status(current_prices_dict)
                 except Exception as log_err:
-                    logger.debug(f"Could not log position profit status: {log_err}")
+                    logger.debug(f"Could not log position profit status during position monitoring: {log_err}")
             
             # NOTE (Jan 24, 2026): Stop-loss tiers are now calculated PER-POSITION based on each position's broker
             # This ensures correct stop-loss thresholds for positions on different exchanges (Kraken vs Coinbase)
