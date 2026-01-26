@@ -61,7 +61,12 @@ MICRO_ACCOUNT_THRESHOLD = 5.0  # Accounts below this bypass quality multipliers
 # Kraken requires $10 minimum, Coinbase requires $2 minimum
 # With 10% max position, $58.76 balance → $5.88 max (below Kraken $10 min)
 # Solution: Allow 20% max position for small accounts + relaxed bump restrictions
+
+# Unified threshold for "small account" across broker minimum logic and position sizing
+# Used for both broker minimum bumping AND balance-based position sizing strategies
 SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
+SMALL_BALANCE_THRESHOLD = SMALL_ACCOUNT_THRESHOLD  # Alias for backward compatibility
+
 SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # 20% max position for small accounts (vs 10% standard)
 SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0  # Max percentage point difference for broker minimum bumps (vs 5pp standard)
 STANDARD_MAX_PCT_DIFF = 5.0  # Max percentage point difference for standard accounts
@@ -72,7 +77,6 @@ STANDARD_MAX_PCT_DIFF = 5.0  # Max percentage point difference for standard acco
 # - 10pp bump limit: Allows 17% positions on $58.76 balance (10% tier max + 7% bump)
 
 # For $50-100: Trade with 50% positions (leave 50% reserve for safety)
-SMALL_BALANCE_THRESHOLD = 100.0
 SMALL_BALANCE_POSITION_PCT = 0.50  # 50% max per position (leave 50% buffer)
 
 # For $100-500: Trade with 40% positions (leave 60% reserve)
