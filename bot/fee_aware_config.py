@@ -54,8 +54,28 @@ MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position
 # This enables "all-in" strategy for learning/testing with minimal capital
 MICRO_ACCOUNT_THRESHOLD = 5.0  # Accounts below this bypass quality multipliers
 
+# ============================================================================
+# SMALL ACCOUNT BROKER MINIMUM HANDLING (Jan 26, 2026)
+# ============================================================================
+# Accounts under $100 need special handling to meet broker minimums
+# Kraken requires $10 minimum, Coinbase requires $2 minimum
+# With 10% max position, $58.76 balance → $5.88 max (below Kraken $10 min)
+# Solution: Allow 20% max position for small accounts + relaxed bump restrictions
+
+# Unified threshold for "small account" across broker minimum logic and position sizing
+# Used for both broker minimum bumping AND balance-based position sizing strategies
+SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
+
+SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # 20% max position for small accounts (vs 10% standard)
+SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0  # Max percentage point difference for broker minimum bumps (vs 5pp standard)
+STANDARD_MAX_PCT_DIFF = 5.0  # Max percentage point difference for standard accounts
+
+# Why these values?
+# - $100 threshold: Small enough to help struggling accounts, large enough to avoid excessive risk
+# - 20% max: Allows $58.76 → $11.75 max position (meets Kraken $10 minimum)
+# - 10pp bump limit: Allows 17% positions on $58.76 balance (10% tier max + 7% bump)
+
 # For $50-100: Trade with 50% positions (leave 50% reserve for safety)
-SMALL_BALANCE_THRESHOLD = 100.0
 SMALL_BALANCE_POSITION_PCT = 0.50  # 50% max per position (leave 50% buffer)
 
 # For $100-500: Trade with 40% positions (leave 60% reserve)
@@ -161,7 +181,7 @@ def get_position_size_pct(account_balance: float) -> float:
         return 0.0  # Don't trade
     elif account_balance < MICRO_BALANCE_THRESHOLD:
         return MICRO_BALANCE_POSITION_PCT  # 50% for $2-50
-    elif account_balance < SMALL_BALANCE_THRESHOLD:
+    elif account_balance < SMALL_ACCOUNT_THRESHOLD:
         return SMALL_BALANCE_POSITION_PCT  # 50% for $50-100
     elif account_balance < MEDIUM_BALANCE_THRESHOLD:
         return MEDIUM_BALANCE_POSITION_PCT  # 40% for $100-500

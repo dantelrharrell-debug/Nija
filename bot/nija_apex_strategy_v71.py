@@ -44,6 +44,17 @@ except ImportError:
     MIN_POSITION_USD = 2.0  # Default to $2 minimum (lowered from $5 on Jan 21, 2026)
     logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $2.00")
 
+# Import small account constants from fee_aware_config
+try:
+    from fee_aware_config import (
+        SMALL_ACCOUNT_THRESHOLD,
+        SMALL_ACCOUNT_MAX_POSITION_PCT
+    )
+except ImportError:
+    SMALL_ACCOUNT_THRESHOLD = 100.0  # Fallback
+    SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # Fallback
+    logger.warning("Could not import small account constants from fee_aware_config, using defaults")
+
 # Broker-specific minimum position sizes (Jan 24, 2026)
 KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exchange rules
 
@@ -911,13 +922,27 @@ class NIJAApexStrategyV71:
             # Kraken requires $10 minimum, others typically allow smaller sizes
             min_required_balance = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
             
-            # Calculate maximum possible position size (20% of balance)
-            # This is the absolute maximum we could ever allocate
-            max_position_size = account_balance * self.risk_manager.max_position_pct
+            # Calculate maximum possible position size
+            # For small accounts (<$100), use 20% to meet broker minimums
+            # For larger accounts, use configured max (typically 10%)
+            if account_balance < SMALL_ACCOUNT_THRESHOLD:
+                max_position_pct = SMALL_ACCOUNT_MAX_POSITION_PCT
+            else:
+                max_position_pct = self.risk_manager.max_position_pct
+            
+            max_position_size = account_balance * max_position_pct
             
             # If even our maximum possible position is below minimum, skip analysis entirely
             if max_position_size < min_required_balance:
-                logger.debug(f"   {symbol}: Skipping analysis - max position ${max_position_size:.2f} < ${min_required_balance:.2f} minimum for {broker_name}")
+                logger.info(f"   ❌ {symbol}: Account too small for {broker_name}")
+                logger.info(f"      Balance: ${account_balance:.2f} | Max position: ${max_position_size:.2f} ({max_position_pct*100:.0f}%)")
+                logger.info(f"      Required minimum: ${min_required_balance:.2f}")
+                # Guard against division by zero
+                if max_position_pct > 0:
+                    min_balance_needed = min_required_balance / max_position_pct
+                    logger.info(f"      💡 Need ${min_balance_needed:.2f}+ balance to trade on {broker_name}")
+                else:
+                    logger.info(f"      💡 Need larger balance to trade on {broker_name}")
                 return {
                     'action': 'hold',
                     'reason': f'Account too small for {broker_name} minimum (${min_required_balance:.2f})'
