@@ -218,6 +218,27 @@ class NIJAApexStrategyV71:
             # Fallback to string representation
             return str(broker_type).lower()
     
+    def update_broker_client(self, new_broker_client):
+        """
+        Update the broker client for this strategy and its execution engine.
+        
+        This is critical when switching between multiple brokers (e.g., KRAKEN to COINBASE)
+        to ensure that the execution engine uses the correct broker for placing orders.
+        
+        CRITICAL FIX (Jan 26, 2026): Prevents broker mismatch where trades are calculated
+        for one broker's balance but executed on another broker. This was causing significant
+        losses when KRAKEN detected a trade with $57.31 balance but execution used COINBASE's
+        $24.16 balance instead.
+        
+        Args:
+            new_broker_client: The new broker client to use
+        """
+        if new_broker_client:
+            self.broker_client = new_broker_client
+            if hasattr(self, 'execution_engine') and self.execution_engine:
+                self.execution_engine.broker_client = new_broker_client
+                logger.debug(f"Updated execution engine broker to {self._get_broker_name()}")
+    
     def _validate_trade_quality(self, position_size: float, score: float) -> Dict:
         """
         Validate trade quality based on position size and confidence threshold.
