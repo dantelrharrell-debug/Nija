@@ -2,6 +2,13 @@
 NIJA Apex Strategy v7.1 - Configuration
 
 All configuration parameters for the Apex trading strategy.
+
+Note: ADX threshold is set to 15 across multiple sections for consistency.
+This value represents the minimum ADX for trend detection, optimized for
+crypto markets. If you need to adjust, change all three instances:
+- MARKET_FILTER['adx_threshold']
+- MARKET_FILTERING['min_adx']
+- SMART_FILTERS['chop_detection']['adx_threshold'] (set 1 lower to avoid edge cases)
 """
 
 import logging
@@ -13,9 +20,9 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 MARKET_FILTER = {
-    'adx_threshold': 20,  # ADX must be > 20 for trending market
+    'adx_threshold': 15,  # ADX must be > 15 for trending market - relaxed for profitability
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.5,  # Volume must be > 50% of recent average
+    'volume_threshold': 0.3,  # Volume must be > 30% of recent average - relaxed for profitability
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }
@@ -46,11 +53,11 @@ INDICATORS = {
 
 MARKET_FILTERING = {
     # ADX (Average Directional Index) - Trend Strength
-    'min_adx': 20,  # Minimum ADX for trend strength (< 20 = choppy)
+    'min_adx': 15,  # Minimum ADX for trend strength (< 15 = choppy) - relaxed for profitability
     'strong_adx': 30,  # ADX above this is strong trend
     
     # Volume Requirements
-    'min_volume_multiplier': 1.5,  # Min volume vs 20-period average
+    'min_volume_multiplier': 1.2,  # Min volume vs 20-period average - relaxed for profitability
     'strong_volume_multiplier': 2.0,  # Strong volume confirmation
     
     # ATR (Average True Range) - Volatility
@@ -65,7 +72,7 @@ MARKET_FILTERING = {
 
 ENTRY_CONFIG = {
     # Signal Scoring (6 possible confirmations)
-    'min_signal_score': 4,  # Minimum confirmations required (out of 6)
+    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - relaxed for profitability
     'a_plus_signal_score': 6,  # Perfect setup score
     
     # Required Conditions
@@ -218,7 +225,7 @@ SMART_FILTERS = {
     },
     'low_volume': {
         'enabled': True,
-        'threshold': 0.30,  # Block if volume < 30% of average
+        'threshold': 0.15,  # Block if volume < 15% of average - relaxed for profitability
     },
     'new_candle_timing': {
         'enabled': True,
@@ -227,7 +234,7 @@ SMART_FILTERS = {
     'chop_detection': {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
-        'adx_threshold': 20,  # ADX < 20 indicates chop
+        'adx_threshold': 14,  # ADX < 14 indicates chop - slightly below min_adx to avoid edge cases
     },
 }
 
