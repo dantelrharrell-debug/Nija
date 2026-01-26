@@ -80,6 +80,50 @@ cp .env.profit_optimized .env
 
 ---
 
+## 📊 **Profitability Monitoring - Is NIJA Making Money?**
+
+**Quickly determine if NIJA is making MORE profit than losses.**
+
+### Quick Check
+
+```bash
+# Run profitability analysis
+python analyze_profitability.py
+```
+
+**Possible Results:**
+- ✅ **PROFITABLE** - Making more profit than losses (everything is fine)
+- ❌ **LOSING MONEY** - Losing more than profiting (action required)
+- ⚪ **BREAK-EVEN** - No net profit or loss
+
+### Detailed Analysis
+
+```bash
+# Show all trades with details
+python analyze_profitability.py --detailed
+
+# Export to CSV for spreadsheet analysis
+python analyze_profitability.py --export-csv
+```
+
+### What You'll See
+
+- **Trade Summary**: Total trades, wins, losses, win rate
+- **Financial Summary**: Net P&L, fees paid, average wins/losses
+- **Recent Trades**: Last 10 trades with profit/loss indicators
+- **Actionable Recommendations**: If losing, what to fix
+
+### Complete Guide
+
+📚 **[PROFITABILITY ANALYSIS GUIDE](PROFITABILITY_ANALYSIS_GUIDE.md)** - Full documentation on monitoring and improving profitability
+
+**Key Metrics to Watch:**
+- **Win Rate**: Should be > 50% for consistent profits
+- **Profit Factor**: Ratio of wins to losses (should be > 1.5)
+- **Average Win vs Loss**: Wins should be larger than losses
+
+---
+
 ## 🎯 **Official Trading Tiers - Six Levels for Every Trader**
 
 > **💡 IMPORTANT:** NIJA AI Trading is designed for accounts starting at **$100**.  
