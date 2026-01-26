@@ -65,7 +65,6 @@ MICRO_ACCOUNT_THRESHOLD = 5.0  # Accounts below this bypass quality multipliers
 # Unified threshold for "small account" across broker minimum logic and position sizing
 # Used for both broker minimum bumping AND balance-based position sizing strategies
 SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
-SMALL_BALANCE_THRESHOLD = SMALL_ACCOUNT_THRESHOLD  # Alias for backward compatibility
 
 SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # 20% max position for small accounts (vs 10% standard)
 SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0  # Max percentage point difference for broker minimum bumps (vs 5pp standard)
@@ -182,7 +181,7 @@ def get_position_size_pct(account_balance: float) -> float:
         return 0.0  # Don't trade
     elif account_balance < MICRO_BALANCE_THRESHOLD:
         return MICRO_BALANCE_POSITION_PCT  # 50% for $2-50
-    elif account_balance < SMALL_BALANCE_THRESHOLD:
+    elif account_balance < SMALL_ACCOUNT_THRESHOLD:
         return SMALL_BALANCE_POSITION_PCT  # 50% for $50-100
     elif account_balance < MEDIUM_BALANCE_THRESHOLD:
         return MEDIUM_BALANCE_POSITION_PCT  # 40% for $100-500

@@ -937,7 +937,12 @@ class NIJAApexStrategyV71:
                 logger.info(f"   ❌ {symbol}: Account too small for {broker_name}")
                 logger.info(f"      Balance: ${account_balance:.2f} | Max position: ${max_position_size:.2f} ({max_position_pct*100:.0f}%)")
                 logger.info(f"      Required minimum: ${min_required_balance:.2f}")
-                logger.info(f"      💡 Need ${min_required_balance / max_position_pct:.2f}+ balance to trade on {broker_name}")
+                # Guard against division by zero
+                if max_position_pct > 0:
+                    min_balance_needed = min_required_balance / max_position_pct
+                    logger.info(f"      💡 Need ${min_balance_needed:.2f}+ balance to trade on {broker_name}")
+                else:
+                    logger.info(f"      💡 Need larger balance to trade on {broker_name}")
                 return {
                     'action': 'hold',
                     'reason': f'Account too small for {broker_name} minimum (${min_required_balance:.2f})'
