@@ -60,10 +60,19 @@ except ImportError:
     TIER_AWARE_MODE = False
     logger.warning("⚠️ Tier config not found - tier enforcement disabled")
 
-# Small account thresholds for broker minimum bumping (Jan 26, 2026)
-SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
-SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0  # Max percentage point difference for broker minimum bump on small accounts
-STANDARD_MAX_PCT_DIFF = 5.0  # Max percentage point difference for broker minimum bump on standard accounts
+# Import small account constants from fee_aware_config
+try:
+    from fee_aware_config import (
+        SMALL_ACCOUNT_THRESHOLD,
+        SMALL_ACCOUNT_MAX_PCT_DIFF,
+        STANDARD_MAX_PCT_DIFF
+    )
+except ImportError:
+    # Fallback values if import fails
+    SMALL_ACCOUNT_THRESHOLD = 100.0
+    SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0
+    STANDARD_MAX_PCT_DIFF = 5.0
+    logger.warning("Could not import small account constants from fee_aware_config, using defaults")
 
 
 class AdaptiveRiskManager:

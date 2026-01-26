@@ -44,12 +44,19 @@ except ImportError:
     MIN_POSITION_USD = 2.0  # Default to $2 minimum (lowered from $5 on Jan 21, 2026)
     logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $2.00")
 
+# Import small account constants from fee_aware_config
+try:
+    from fee_aware_config import (
+        SMALL_ACCOUNT_THRESHOLD,
+        SMALL_ACCOUNT_MAX_POSITION_PCT
+    )
+except ImportError:
+    SMALL_ACCOUNT_THRESHOLD = 100.0  # Fallback
+    SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # Fallback
+    logger.warning("Could not import small account constants from fee_aware_config, using defaults")
+
 # Broker-specific minimum position sizes (Jan 24, 2026)
 KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exchange rules
-
-# Small account thresholds (Jan 26, 2026)
-SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
-SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # 20% max position for small accounts to meet broker minimums
 
 # Trade quality thresholds (Jan 20, 2026)
 # Confidence threshold to filter weak entries and increase trade size quality
