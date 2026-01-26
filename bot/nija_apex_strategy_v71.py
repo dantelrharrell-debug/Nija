@@ -148,6 +148,7 @@ class NIJAApexStrategyV71:
         self.min_adx = self.config.get('min_adx', 15)  # Lowered from 20 to 15 - allow weaker trends
         self.volume_threshold = self.config.get('volume_threshold', 0.3)  # Lowered from 0.5 to 0.3 - 30% of 5-candle avg
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.05)  # Lowered from 0.10 to 0.05 - avoid only dead markets
+        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # Minimum trend conditions (out of 5) - lowered from 3 to 2
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
@@ -316,9 +317,9 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= self.volume_threshold
         }
         
-        # QUALITY FIX: Require 4 of 5 conditions (stricter approach to reduce losing trades)
-        # Raised from 3/5 to 4/5 to filter out marginal setups that lose money
-        # This improves win rate by only trading high-probability setups
+        # QUALITY FIX: Check trend conditions - configurable threshold via min_trend_confirmation
+        # Lowered from 4/5 to 2/5 (Jan 26, 2026) to allow more trading opportunities
+        # This filters out marginal setups (0-1/5) while still allowing quality trades (2+/5)
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
         
@@ -331,13 +332,13 @@ class NIJAApexStrategyV71:
         # RELAXED FILTERS (Jan 26, 2026): Lower to 2/5 conditions to allow more trading opportunities
         # Previous: 3/5 required was too strict for low-capital accounts in current market conditions
         # 2/5 allows quality setups while still filtering out complete junk (0-1/5)
-        if uptrend_score >= 2:  # RELAXED: 2/5 required - allow more opportunities (changed from 3/5)
+        if uptrend_score >= self.min_trend_confirmation:
             return True, 'uptrend', f'Uptrend confirmed ({uptrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= 2:  # RELAXED: 2/5 required - allow more opportunities (changed from 3/5)
+        elif downtrend_score >= self.min_trend_confirmation:
             return True, 'downtrend', f'Downtrend confirmed ({downtrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
         else:
             logger.debug(f"  → Rejected: Insufficient confirmation")
-            return False, 'none', f'Insufficient trend confirmation (Up:{uptrend_score}/5, Down:{downtrend_score}/5 - need 2/5)'
+            return False, 'none', f'Insufficient trend confirmation (Up:{uptrend_score}/5, Down:{downtrend_score}/5 - need {self.min_trend_confirmation}/5)'
     
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
@@ -522,7 +523,7 @@ class NIJAApexStrategyV71:
         # For now, this is a placeholder that always passes
         news_clear = True  # Stub: would check upcoming news events here
         
-        # Filter 2: Volume filter (< 5% avg = no trade) - Lowered threshold for better trade opportunities
+        # Filter 2: Volume filter - threshold is configurable via volume_min_threshold (default 5%)
         avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
