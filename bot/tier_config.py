@@ -671,7 +671,7 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
         
         # Small balance exception - allow lower minimums if max risk < tier min
         max_risk_by_pct = balance * (config.risk_per_trade_pct[1] / 100.0)
-        if max_risk_by_pct < tier_min:
+        if max_risk_by_pct < tier_min and not is_master:
             tier_min = max(exchange_min, max_risk_by_pct)
     
     original_size = trade_size
