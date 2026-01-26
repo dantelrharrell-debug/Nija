@@ -2,6 +2,13 @@
 NIJA Apex Strategy v7.1 - Configuration
 
 All configuration parameters for the Apex trading strategy.
+
+Note: ADX threshold is set to 15 across multiple sections for consistency.
+This value represents the minimum ADX for trend detection, optimized for
+crypto markets. If you need to adjust, change all three instances:
+- MARKET_FILTER['adx_threshold']
+- MARKET_FILTERING['min_adx']
+- SMART_FILTERS['chop_detection']['adx_threshold'] (set 1 lower to avoid edge cases)
 """
 
 import logging
@@ -227,7 +234,7 @@ SMART_FILTERS = {
     'chop_detection': {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
-        'adx_threshold': 15,  # ADX < 15 indicates chop - relaxed for profitability
+        'adx_threshold': 14,  # ADX < 14 indicates chop - slightly below min_adx to avoid edge cases
     },
 }
 
