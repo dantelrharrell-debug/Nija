@@ -58,9 +58,10 @@ except ImportError:
 # Broker-specific minimum position sizes (Jan 24, 2026)
 KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exchange rules
 
-# Trade quality thresholds (Jan 20, 2026)
-# Confidence threshold to filter weak entries and increase trade size quality
-MIN_CONFIDENCE = 0.60  # Minimum confidence score (0.0-1.0) to execute trade
+# Trade quality thresholds (Jan 26, 2026)
+# PROFITABILITY FIX: Increased thresholds to only take high-quality trades
+# Previous: 0.60 confidence allowed too many marginal trades that resulted in losses
+MIN_CONFIDENCE = 0.75  # Minimum confidence score (0.0-1.0) to execute trade - INCREASED for profitability
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Import emergency liquidation for capital preservation (FIX 3)
@@ -189,7 +190,7 @@ class NIJAApexStrategyV71:
         if self.use_enhanced_scoring:
             logger.info("✅ Enhanced entry scoring: ENABLED (0-100 weighted scoring)")
             logger.info("✅ Regime detection: ENABLED (trending/ranging/volatile)")
-            min_score = self.config.get('min_score_threshold', 60)
+            min_score = self.config.get('min_score_threshold', 75)
             logger.info(f"✅ Minimum entry score: {min_score}/100 (quality threshold)")
         if self.enable_stepped_exits:
             logger.info("✅ Stepped profit-taking: ENABLED (partial exits at multiple levels)")

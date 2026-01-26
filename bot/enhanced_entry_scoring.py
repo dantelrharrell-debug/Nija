@@ -50,8 +50,9 @@ class EnhancedEntryScorer:
         self.config = config or {}
         
         # Score thresholds (out of 100)
-        self.min_score_threshold = self.config.get('min_score_threshold', 60)  # Minimum to enter trade
-        self.excellent_score_threshold = self.config.get('excellent_score_threshold', 80)  # Excellent setup
+        # PROFITABILITY FIX (Jan 26, 2026): Increased from 60 to 75 to filter out marginal trades
+        self.min_score_threshold = self.config.get('min_score_threshold', 75)  # Minimum to enter trade
+        self.excellent_score_threshold = self.config.get('excellent_score_threshold', 85)  # Excellent setup
         
         # Weights for different factors (must sum to 100)
         self.weights = {

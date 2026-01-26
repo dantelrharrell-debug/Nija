@@ -40,9 +40,10 @@ ENHANCED_SCORING_CONFIG = {
     'use_enhanced_scoring': True,
     
     # Minimum score to enter trade (out of 100)
-    # 60 = good setup, 70 = very good, 80+ = excellent
-    'min_score_threshold': 60,  # Balanced - not too strict, not too loose
-    'excellent_score_threshold': 80,  # Increase position size on excellent setups
+    # PROFITABILITY FIX (Jan 26, 2026): Increased thresholds to only take high-quality trades
+    # 75 = very good setup, 85+ = excellent (filters out marginal 60-70 trades that caused losses)
+    'min_score_threshold': 75,  # Stricter threshold to improve win rate
+    'excellent_score_threshold': 85,  # Increase position size on excellent setups
     
     # Score weights (must sum to 100)
     'scoring_weights': {
@@ -69,21 +70,22 @@ REGIME_DETECTION_CONFIG = {
     'volatile_atr_threshold': 0.03, # 3% ATR/price = volatile
     
     # Regime-specific parameters
+    # PROFITABILITY FIX (Jan 26, 2026): Increased all min_entry_score thresholds by 15 points
     'regime_params': {
         'trending': {
-            'min_entry_score': 60,               # Standard threshold
+            'min_entry_score': 75,               # Stricter threshold (was 60)
             'position_size_multiplier': 1.2,     # Increase size by 20%
             'trailing_stop_distance': 1.5,       # Wider trailing stop
             'take_profit_multiplier': 1.5,       # Higher profit targets
         },
         'ranging': {
-            'min_entry_score': 65,               # Be more selective
+            'min_entry_score': 80,               # Very selective (was 65)
             'position_size_multiplier': 0.8,     # Reduce size by 20%
             'trailing_stop_distance': 1.0,       # Tighter trailing stop
             'take_profit_multiplier': 0.8,       # Take profits faster
         },
         'volatile': {
-            'min_entry_score': 70,               # Very selective
+            'min_entry_score': 85,               # Extremely selective (was 70)
             'position_size_multiplier': 0.7,     # Reduce size by 30%
             'trailing_stop_distance': 2.0,       # Much wider stops
             'take_profit_multiplier': 1.0,       # Normal profit targets
