@@ -911,13 +911,22 @@ class NIJAApexStrategyV71:
             # Kraken requires $10 minimum, others typically allow smaller sizes
             min_required_balance = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
             
-            # Calculate maximum possible position size (20% of balance)
-            # This is the absolute maximum we could ever allocate
-            max_position_size = account_balance * self.risk_manager.max_position_pct
+            # Calculate maximum possible position size
+            # For small accounts (<$100), use 20% to meet broker minimums
+            # For larger accounts, use configured max (typically 10%)
+            if account_balance < 100:
+                max_position_pct = 0.20  # 20% for small accounts to meet broker minimums
+            else:
+                max_position_pct = self.risk_manager.max_position_pct
+            
+            max_position_size = account_balance * max_position_pct
             
             # If even our maximum possible position is below minimum, skip analysis entirely
             if max_position_size < min_required_balance:
-                logger.debug(f"   {symbol}: Skipping analysis - max position ${max_position_size:.2f} < ${min_required_balance:.2f} minimum for {broker_name}")
+                logger.info(f"   ❌ {symbol}: Account too small for {broker_name}")
+                logger.info(f"      Balance: ${account_balance:.2f} | Max position: ${max_position_size:.2f} ({max_position_pct*100:.0f}%)")
+                logger.info(f"      Required minimum: ${min_required_balance:.2f}")
+                logger.info(f"      💡 Need ${min_required_balance / max_position_pct:.2f}+ balance to trade on {broker_name}")
                 return {
                     'action': 'hold',
                     'reason': f'Account too small for {broker_name} minimum (${min_required_balance:.2f})'

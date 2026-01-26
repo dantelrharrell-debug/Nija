@@ -548,12 +548,17 @@ class AdaptiveRiskManager:
                 required_pct = broker_min_position / sizing_base
                 
                 # Only bump up if:
-                # 1. Required % is not too far above tier_max_pct (within 5 percentage points)
+                # 1. Required % is not too far above tier_max_pct:
+                #    - For small accounts (<$100): within 10 percentage points (relaxed for viability)
+                #    - For larger accounts: within 5 percentage points (standard safety)
                 # 2. We have no other positions (current_exposure == 0)
                 # 3. The bump doesn't exceed a reasonable max (20% for safety)
                 pct_difference = (required_pct - tier_max_pct) * 100  # Convert to percentage points
                 
-                if (pct_difference <= 5.0 and 
+                # Determine max allowed difference based on account size
+                max_pct_diff = 10.0 if sizing_base < 100 else 5.0
+                
+                if (pct_difference <= max_pct_diff and 
                     self.current_exposure == 0 and 
                     required_pct <= 0.20):
                     
@@ -561,7 +566,7 @@ class AdaptiveRiskManager:
                     logger.info(f"   Calculated: ${position_size_scalar:.2f} ({final_pct*100:.1f}%)")
                     logger.info(f"   Broker minimum: ${broker_min_position:.2f}")
                     logger.info(f"   Adjusting to: ${broker_min_position:.2f} ({required_pct*100:.1f}%)")
-                    logger.info(f"   ✅ Safe: within 5pp of tier max, no other positions, under 20% cap")
+                    logger.info(f"   ✅ Safe: within {max_pct_diff}pp of tier max, no other positions, under 20% cap")
                     
                     position_size = broker_min_position
                     breakdown['broker_minimum_bump'] = True
