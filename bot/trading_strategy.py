@@ -2090,6 +2090,28 @@ class TradingStrategy:
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
             
+            # LOG POSITION PROFIT STATUS FOR VISIBILITY (Jan 26, 2026)
+            if current_positions:
+                try:
+                    # Get current prices for all open positions
+                    current_prices_dict = {}
+                    for pos in current_positions:
+                        try:
+                            symbol = pos.get('symbol')
+                            if symbol:
+                                # Fetch current price from broker
+                                candles = active_broker.get_market_data(symbol, limit=1)
+                                if candles and len(candles) > 0:
+                                    current_prices_dict[symbol] = candles[-1]['close']
+                        except Exception as price_err:
+                            logger.debug(f"Could not fetch price for {pos.get('symbol')}: {price_err}")
+                    
+                    # Log position profit status summary
+                    if hasattr(self, 'execution_engine') and self.execution_engine:
+                        self.execution_engine.log_position_profit_status(current_prices_dict)
+                except Exception as log_err:
+                    logger.debug(f"Could not log position profit status during position monitoring: {log_err}")
+            
             # NOTE (Jan 24, 2026): Stop-loss tiers are now calculated PER-POSITION based on each position's broker
             # This ensures correct stop-loss thresholds for positions on different exchanges (Kraken vs Coinbase)
             # See line ~2169 where position_primary_stop, position_micro_stop are calculated for each position

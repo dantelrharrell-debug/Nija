@@ -658,6 +658,13 @@ class ExecutionEngine:
         # Calculate NET profit after fees
         net_profit_pct = gross_profit_pct - broker_round_trip_fee
         
+        # Enhanced logging for profit-taking visibility (Jan 26, 2026)
+        logger.debug(
+            f"💹 Profit check: {symbol} | Entry: ${entry_price:.4f} | Current: ${current_price:.4f} | "
+            f"Gross P&L: {gross_profit_pct*100:+.2f}% | Net P&L: {net_profit_pct*100:+.2f}% | "
+            f"Remaining: {position.get('remaining_size', 1.0)*100:.0f}%"
+        )
+        
         # FEE-AWARE profit thresholds (GROSS profit needed for NET profitability)
         # Dynamically calculated based on broker fees
         # Each threshold ensures NET profit after broker-specific round-trip fees
@@ -719,6 +726,17 @@ class ExecutionEngine:
                     'entry_price': entry_price
                 }
         
+        # Log when no profit exit is triggered (for visibility)
+        next_threshold = None
+        for gross_threshold, exit_pct, exit_flag in exit_levels:
+            if not position.get(exit_flag, False):
+                next_threshold = gross_threshold
+                break
+        
+        if next_threshold:
+            progress_pct = (gross_profit_pct / next_threshold * 100) if next_threshold > 0 else 0
+            logger.debug(f"   ⏳ Next profit target: {next_threshold*100:.1f}% (currently {progress_pct:.0f}% of the way)")
+        
         return None
     
     def get_position(self, symbol: str) -> Optional[Dict]:
@@ -732,6 +750,79 @@ class ExecutionEngine:
     def get_all_positions(self) -> Dict[str, Dict]:
         """Get all open positions"""
         return {k: v for k, v in self.positions.items() if v['status'] == 'open'}
+    
+    def log_position_profit_status(self, current_prices: Dict[str, float] = None):
+        """
+        Log summary of all positions and their profit status
+        
+        Args:
+            current_prices: Optional dict of symbol -> current_price
+        """
+        open_positions = self.get_all_positions()
+        
+        if not open_positions:
+            logger.info("📊 No open positions - no profit-taking to monitor")
+            return
+        
+        logger.info("=" * 80)
+        logger.info(f"📊 POSITION PROFIT STATUS SUMMARY ({len(open_positions)} open)")
+        logger.info("=" * 80)
+        
+        broker_round_trip_fee = self._get_broker_round_trip_fee()
+        
+        for symbol, position in open_positions.items():
+            entry_price = position.get('entry_price', 0)
+            remaining_size = position.get('remaining_size', 1.0)
+            position_size = position.get('position_size', 0)
+            side = position.get('side', 'long')
+            
+            # Get current price
+            if current_prices and symbol in current_prices:
+                current_price = current_prices[symbol]
+            else:
+                current_price = entry_price  # Fallback
+            
+            # Calculate P&L
+            if entry_price > 0:
+                if side == 'long':
+                    gross_pnl = (current_price - entry_price) / entry_price
+                else:
+                    gross_pnl = (entry_price - current_price) / entry_price
+                net_pnl = gross_pnl - broker_round_trip_fee
+            else:
+                gross_pnl = 0
+                net_pnl = 0
+            
+            # Determine next profit target
+            if broker_round_trip_fee <= 0.005:  # Low-fee broker
+                next_targets = [0.007, 0.010, 0.015, 0.025]
+            else:  # High-fee broker
+                next_targets = [0.020, 0.025, 0.030, 0.040]
+            
+            next_target = None
+            for target in next_targets:
+                if gross_pnl < target:
+                    next_target = target
+                    break
+            
+            # Emoji indicator
+            if net_pnl > 0:
+                status_emoji = "🟢"
+            elif net_pnl < -0.01:  # -1% or worse
+                status_emoji = "🔴"
+            else:
+                status_emoji = "🟡"
+            
+            logger.info(
+                f"{status_emoji} {symbol:<12} | Entry: ${entry_price:8.4f} | Current: ${current_price:8.4f} | "
+                f"P&L: {gross_pnl*100:+6.2f}% (NET: {net_pnl*100:+6.2f}%) | "
+                f"Size: ${position_size * remaining_size:7.2f} ({remaining_size*100:.0f}%)"
+            )
+            
+            if next_target:
+                logger.info(f"      ⏳ Next profit target: {next_target*100:.1f}% gross")
+        
+        logger.info("=" * 80)
     
     def close_position(self, symbol: str):
         """Remove position from tracking"""
