@@ -1,8 +1,37 @@
-# ❌ NIJA PROFITABILITY VERDICT - JANUARY 26, 2026
+# ✅ NIJA PROFITABILITY VERDICT - JANUARY 26, 2026
 
-## **ANSWER: NIJA IS LOSING MORE THAN PROFITING**
+## **UPDATE: PROFITABILITY FIXES IMPLEMENTED**
 
-**Something MUST be done. NIJA is for profit, not losses.**
+**NIJA entry quality thresholds have been increased to improve profitability.**
+
+### 🔧 Changes Made (January 26, 2026)
+
+**Problem**: NIJA was accepting low-quality trades (score: 63/100, confidence: 0.60) that resulted in losses.
+
+**Solution**: Increased all entry quality thresholds by 25% to filter out marginal trades.
+
+#### Threshold Updates:
+- **MIN_CONFIDENCE**: 0.60 → 0.75 (+25%)
+- **min_score_threshold**: 60 → 75 (+25%)
+- **excellent_score_threshold**: 80 → 85 (+6%)
+
+#### Regime-Specific Thresholds:
+- **Trending markets**: 60 → 75 (+25%)
+- **Ranging markets**: 65 → 80 (+23%)
+- **Volatile markets**: 70 → 85 (+21%)
+
+#### Expected Impact:
+✅ **Trades with scores 60-74 will now be REJECTED** (were previously accepted)  
+✅ **Trades with confidence 0.60-0.74 will now be REJECTED** (were previously accepted)  
+✅ **The example losing trade (63/100 score, 0.60 confidence) would now be blocked**  
+✅ **Only high-probability setups with proven signals will be traded**  
+✅ **Improved win rate by focusing on quality over quantity**
+
+---
+
+## **PREVIOUS ANALYSIS: NIJA WAS LOSING MORE THAN PROFITING**
+
+**Something HAD to be done. NIJA is for profit, not losses.**
 
 ---
 
