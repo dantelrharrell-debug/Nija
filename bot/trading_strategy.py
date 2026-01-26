@@ -3300,22 +3300,94 @@ class TradingStrategy:
                         # CRITICAL FIX (Jan 22, 2026): Update account_balance from selected entry broker
                         # When switching brokers, we must re-fetch the balance from the NEW broker
                         # Otherwise position sizing uses the wrong broker's balance (e.g., Coinbase $20 instead of Kraken $28)
-                        if hasattr(active_broker, 'get_account_balance_detailed'):
-                            balance_data = active_broker.get_account_balance_detailed()
-                        else:
-                            balance_data = {'trading_balance': active_broker.get_account_balance()}
+                        # CRITICAL FIX (Jan 26, 2026): Wrap balance fetch in timeout to prevent hanging
+                        # Without timeout, slow Kraken API calls can block indefinitely, preventing market scanning
+                        balance_data = None
+                        balance_fetch_failed = False
+                        
+                        try:
+                            if hasattr(active_broker, 'get_account_balance_detailed'):
+                                # Use timeout to prevent hanging on slow balance fetches
+                                balance_result = call_with_timeout(
+                                    active_broker.get_account_balance_detailed,
+                                    timeout_seconds=BALANCE_FETCH_TIMEOUT
+                                )
+                                
+                                if balance_result[1] is not None:  # Timeout or error
+                                    logger.warning(f"   ⚠️  {entry_broker_name.upper()} detailed balance fetch timed out: {balance_result[1]}")
+                                    balance_fetch_failed = True
+                                else:
+                                    balance_data = balance_result[0]
+                            else:
+                                # Fallback to simple balance fetch with timeout
+                                balance_result = call_with_timeout(
+                                    active_broker.get_account_balance,
+                                    timeout_seconds=BALANCE_FETCH_TIMEOUT
+                                )
+                                
+                                if balance_result[1] is not None:  # Timeout or error
+                                    logger.warning(f"   ⚠️  {entry_broker_name.upper()} balance fetch timed out: {balance_result[1]}")
+                                    balance_fetch_failed = True
+                                else:
+                                    balance_data = {'trading_balance': balance_result[0]}
+                        except Exception as e:
+                            logger.warning(f"   ⚠️  {entry_broker_name.upper()} balance fetch exception: {e}")
+                            balance_fetch_failed = True
+                        
+                        # Use cached balance if fresh fetch failed
+                        if balance_fetch_failed or balance_data is None:
+                            if hasattr(active_broker, '_last_known_balance') and active_broker._last_known_balance is not None:
+                                cached_balance = active_broker._last_known_balance
+                                
+                                # Check if cached balance has a timestamp and is fresh
+                                cache_is_fresh = False
+                                if hasattr(active_broker, '_balance_last_updated') and active_broker._balance_last_updated is not None:
+                                    balance_age_seconds = time.time() - active_broker._balance_last_updated
+                                    cache_is_fresh = balance_age_seconds <= CACHED_BALANCE_MAX_AGE_SECONDS
+                                    if not cache_is_fresh:
+                                        logger.warning(f"   ⚠️  Cached balance for {entry_broker_name.upper()} is stale ({balance_age_seconds:.0f}s old > {CACHED_BALANCE_MAX_AGE_SECONDS}s max)")
+                                else:
+                                    # No timestamp - use cache anyway since fetch failed (better than nothing)
+                                    cache_is_fresh = True
+                                    logger.warning(f"   ⚠️  Cached balance for {entry_broker_name.upper()} has no timestamp, using anyway due to fetch failure")
+                                
+                                if cache_is_fresh:
+                                    logger.warning(f"   ⚠️  Using cached balance for {entry_broker_name.upper()}: ${cached_balance:.2f}")
+                                    balance_data = {'trading_balance': cached_balance, 'total_held': 0.0, 'total_funds': cached_balance}
+                                else:
+                                    # Stale cache and fresh fetch failed - use eligibility check balance
+                                    logger.error(f"   ❌ Cached balance too stale for {entry_broker_name.upper()}")
+                                    logger.warning(f"   ⚠️  Using balance from eligibility check as fallback: ${account_balance:.2f}")
+                                    balance_data = {'trading_balance': account_balance, 'total_held': 0.0, 'total_funds': account_balance}
+                            else:
+                                logger.error(f"   ❌ No cached balance available for {entry_broker_name.upper()}")
+                                # Use the balance from eligibility check as last resort
+                                logger.warning(f"   ⚠️  Using balance from eligibility check as fallback: ${account_balance:.2f}")
+                                balance_data = {'trading_balance': account_balance, 'total_held': 0.0, 'total_funds': account_balance}
+                        
                         account_balance = balance_data.get('trading_balance', 0.0)
                         
                         # Also update position values and total capital from the new broker
                         held_funds = balance_data.get('total_held', 0.0)
                         total_funds = balance_data.get('total_funds', account_balance)
                         
+                        # Fetch total capital with timeout protection
                         if hasattr(active_broker, 'get_total_capital'):
                             try:
-                                capital_data = active_broker.get_total_capital(include_positions=True)
-                                position_value = capital_data.get('position_value', 0.0)
-                                position_count = capital_data.get('position_count', 0)
-                                total_capital = capital_data.get('total_capital', account_balance)
+                                capital_result = call_with_timeout(
+                                    active_broker.get_total_capital,
+                                    kwargs={'include_positions': True},
+                                    timeout_seconds=BALANCE_FETCH_TIMEOUT
+                                )
+                                
+                                if capital_result[1] is not None:  # Timeout or error
+                                    logger.warning(f"   ⚠️  {entry_broker_name.upper()} capital fetch timed out: {capital_result[1]}")
+                                    total_capital = account_balance
+                                else:
+                                    capital_data = capital_result[0]
+                                    position_value = capital_data.get('position_value', 0.0)
+                                    position_count = capital_data.get('position_count', 0)
+                                    total_capital = capital_data.get('total_capital', account_balance)
                             except Exception as e:
                                 logger.debug(f"⚠️ Could not calculate position values from entry broker: {e}")
                                 total_capital = account_balance
