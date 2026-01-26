@@ -3338,11 +3338,31 @@ class TradingStrategy:
                         if balance_fetch_failed or balance_data is None:
                             if hasattr(active_broker, '_last_known_balance') and active_broker._last_known_balance is not None:
                                 cached_balance = active_broker._last_known_balance
-                                logger.warning(f"   ⚠️  Using cached balance for {entry_broker_name.upper()}: ${cached_balance:.2f}")
-                                balance_data = {'trading_balance': cached_balance, 'total_held': 0.0, 'total_funds': cached_balance}
+                                
+                                # Check if cached balance has a timestamp and is fresh
+                                cache_is_fresh = False
+                                if hasattr(active_broker, '_balance_last_updated') and active_broker._balance_last_updated is not None:
+                                    balance_age_seconds = time.time() - active_broker._balance_last_updated
+                                    cache_is_fresh = balance_age_seconds <= CACHED_BALANCE_MAX_AGE_SECONDS
+                                    if not cache_is_fresh:
+                                        logger.warning(f"   ⚠️  Cached balance for {entry_broker_name.upper()} is stale ({balance_age_seconds:.0f}s old > {CACHED_BALANCE_MAX_AGE_SECONDS}s max)")
+                                else:
+                                    # No timestamp - use cache anyway since fetch failed (better than nothing)
+                                    cache_is_fresh = True
+                                    logger.warning(f"   ⚠️  Cached balance for {entry_broker_name.upper()} has no timestamp, using anyway due to fetch failure")
+                                
+                                if cache_is_fresh:
+                                    logger.warning(f"   ⚠️  Using cached balance for {entry_broker_name.upper()}: ${cached_balance:.2f}")
+                                    balance_data = {'trading_balance': cached_balance, 'total_held': 0.0, 'total_funds': cached_balance}
+                                else:
+                                    # Stale cache and fresh fetch failed - use eligibility check balance
+                                    logger.error(f"   ❌ Cached balance too stale for {entry_broker_name.upper()}")
+                                    logger.warning(f"   ⚠️  Using balance from eligibility check as fallback: ${account_balance:.2f}")
+                                    balance_data = {'trading_balance': account_balance, 'total_held': 0.0, 'total_funds': account_balance}
                             else:
                                 logger.error(f"   ❌ No cached balance available for {entry_broker_name.upper()}")
                                 # Use the balance from eligibility check as last resort
+                                logger.warning(f"   ⚠️  Using balance from eligibility check as fallback: ${account_balance:.2f}")
                                 balance_data = {'trading_balance': account_balance, 'total_held': 0.0, 'total_funds': account_balance}
                         
                         account_balance = balance_data.get('trading_balance', 0.0)
@@ -3361,7 +3381,7 @@ class TradingStrategy:
                                 )
                                 
                                 if capital_result[1] is not None:  # Timeout or error
-                                    logger.debug(f"⚠️ {entry_broker_name.upper()} capital fetch timed out: {capital_result[1]}")
+                                    logger.warning(f"   ⚠️  {entry_broker_name.upper()} capital fetch timed out: {capital_result[1]}")
                                     total_capital = account_balance
                                 else:
                                     capital_data = capital_result[0]
