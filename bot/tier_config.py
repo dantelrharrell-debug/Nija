@@ -657,12 +657,22 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
         tier_max = min(tier_max, max_by_risk)
     
     # Calculate tier minimum
-    tier_min = max(config.trade_size_min, exchange_min)
-    
-    # Small balance exception - allow lower minimums if max risk < tier min
-    max_risk_by_pct = balance * (config.risk_per_trade_pct[1] / 100.0)
-    if max_risk_by_pct < tier_min and not is_master:
-        tier_min = max(exchange_min, max_risk_by_pct)
+    # MASTER BALLER tier with low balance: use flexible minimums (same logic as get_min_trade_size)
+    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+        if balance < 100.0:
+            flexible_min = max(balance * 0.15, exchange_min)  # 15% or exchange min
+        elif balance < 1000.0:
+            flexible_min = max(balance * 0.10, exchange_min)  # 10% or exchange min
+        else:
+            flexible_min = max(balance * 0.05, exchange_min)  # 5% or exchange min
+        tier_min = min(flexible_min, config.trade_size_min)
+    else:
+        tier_min = max(config.trade_size_min, exchange_min)
+        
+        # Small balance exception - allow lower minimums if max risk < tier min
+        max_risk_by_pct = balance * (config.risk_per_trade_pct[1] / 100.0)
+        if max_risk_by_pct < tier_min:
+            tier_min = max(exchange_min, max_risk_by_pct)
     
     original_size = trade_size
     
