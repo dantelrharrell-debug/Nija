@@ -13,6 +13,74 @@ NIJA has achieved a critical milestone: **Master account and ALL user accounts s
 
 ---
 
+## 📱 **NEW: API Gateway for Mobile & Web Apps** (January 27, 2026)
+
+**Control NIJA from iOS, Android, or Web with a clean REST API.**
+
+NIJA now includes a production-ready API Gateway that exposes trading controls, account balance, positions, and performance metrics through secure REST endpoints. Build mobile apps, web dashboards, or integrate NIJA into your existing systems.
+
+### 🎯 Available Endpoints
+
+- **POST /api/v1/start** - Start the trading engine
+- **POST /api/v1/stop** - Stop the trading engine  
+- **GET /api/v1/balance** - Get current account balance
+- **GET /api/v1/positions** - Get all active positions with P&L
+- **GET /api/v1/performance** - Get trading performance metrics
+
+### 🚀 Quick Start
+
+```bash
+# Start API Gateway (runs on port 8000 by default)
+./start_api_gateway.sh
+
+# Or specify custom port
+PORT=5000 python api_gateway.py
+
+# Access API documentation
+open http://localhost:8000/api/v1/docs
+```
+
+### 📚 Documentation
+
+- **[MOBILE_APP_SETUP.md](MOBILE_APP_SETUP.md)** - Complete mobile integration guide
+  - React Native examples
+  - Flutter examples
+  - API client implementations
+  - Authentication flow
+- **[api_gateway_openapi.json](api_gateway_openapi.json)** - OpenAPI specification
+- **[api_gateway.py](api_gateway.py)** - API Gateway source code
+
+### 🔒 Security Features
+
+- ✅ JWT-based authentication
+- ✅ CORS enabled for mobile apps
+- ✅ User isolation (multi-tenant ready)
+- ✅ Request validation via Pydantic
+- ✅ Strategy locked to v7.2 (no unauthorized changes)
+
+### 📦 Deployment
+
+```bash
+# Docker deployment (API Gateway only)
+docker build -f Dockerfile.gateway -t nija-api-gateway .
+docker run -p 8000:8000 -e JWT_SECRET_KEY=your-secret nija-api-gateway
+
+# Or deploy alongside main bot
+# API Gateway runs independently from trading engine
+```
+
+### 🎨 Example: React Native Dashboard
+
+See **[MOBILE_APP_SETUP.md](MOBILE_APP_SETUP.md)** for complete React Native and Flutter integration examples with:
+- Trading controls (start/stop)
+- Real-time balance display
+- Position cards with P&L
+- Performance metrics
+
+**Strategy Locked**: The API Gateway only exposes v7.2 profitability logic. No unauthorized strategy modifications possible.
+
+---
+
 ## 🚀 **NEW: Profit Optimization Features** (January 25, 2026)
 
 **Enhance your profits on Coinbase & Kraken with these new features:**

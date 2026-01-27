@@ -1,0 +1,32 @@
+# Dockerfile for NIJA API Gateway (Mobile/Web App Integration)
+# This deploys only the API Gateway layer, not the trading bot
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy only necessary files for API Gateway
+COPY api_gateway.py .
+COPY auth/ ./auth/
+COPY execution/ ./execution/
+COPY user_control.py .
+COPY vault/ ./vault/
+
+# Expose port
+EXPOSE 8000
+
+# Set environment variables
+ENV PORT=8000
+ENV PYTHONUNBUFFERED=1
+
+# Run API Gateway
+CMD ["python", "api_gateway.py"]
