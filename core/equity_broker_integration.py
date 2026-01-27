@@ -163,14 +163,25 @@ class AlpacaBroker(BaseEquityBroker):
             else "https://api.alpaca.markets"
         )
         
-        # Try to import alpaca-trade-api
+        # Try to import alpaca-py (modern Alpaca SDK)
         try:
-            import alpaca_trade_api as tradeapi
-            self.tradeapi = tradeapi
+            from alpaca.trading.client import TradingClient
+            from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
+            from alpaca.trading.enums import OrderSide as AlpacaOrderSide, TimeInForce
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockLatestTradeRequest
+            
+            self.TradingClient = TradingClient
+            self.MarketOrderRequest = MarketOrderRequest
+            self.LimitOrderRequest = LimitOrderRequest
+            self.AlpacaOrderSide = AlpacaOrderSide
+            self.TimeInForce = TimeInForce
+            self.StockHistoricalDataClient = StockHistoricalDataClient
+            self.StockLatestTradeRequest = StockLatestTradeRequest
             self.api = None  # Will be initialized in authenticate()
         except ImportError:
-            logger.warning("alpaca-trade-api not installed. Install with: pip install alpaca-trade-api")
-            self.tradeapi = None
+            logger.warning("alpaca-py not installed. Install with: pip install alpaca-py")
+            self.TradingClient = None
             self.api = None
     
     def authenticate(self) -> bool:
@@ -179,16 +190,15 @@ class AlpacaBroker(BaseEquityBroker):
             logger.error("Alpaca API credentials not provided")
             return False
         
-        if self.tradeapi is None:
-            logger.error("alpaca-trade-api library not available")
+        if self.TradingClient is None:
+            logger.error("alpaca-py library not available")
             return False
         
         try:
-            self.api = self.tradeapi.REST(
-                self.api_key,
-                self.api_secret,
-                self.base_url,
-                api_version='v2'
+            self.api = self.TradingClient(
+                api_key=self.api_key,
+                secret_key=self.api_secret,
+                paper=self.paper_trading
             )
             
             # Test authentication by getting account
@@ -254,29 +264,38 @@ class AlpacaBroker(BaseEquityBroker):
             return {"success": False, "error": "Not authenticated"}
         
         try:
-            # Convert enums to Alpaca format
-            alpaca_side = "buy" if side == OrderSide.BUY else "sell"
-            alpaca_type = "market" if order_type == OrderType.MARKET else "limit"
+            # Convert to Alpaca enums
+            alpaca_side = self.AlpacaOrderSide.BUY if side == OrderSide.BUY else self.AlpacaOrderSide.SELL
             
-            # Place order
-            order = self.api.submit_order(
-                symbol=symbol,
-                qty=quantity,
-                side=alpaca_side,
-                type=alpaca_type,
-                time_in_force='day',
-                limit_price=limit_price
-            )
+            # Create order request
+            if order_type == OrderType.MARKET:
+                order_request = self.MarketOrderRequest(
+                    symbol=symbol,
+                    qty=quantity,
+                    side=alpaca_side,
+                    time_in_force=self.TimeInForce.DAY
+                )
+            else:  # LIMIT
+                order_request = self.LimitOrderRequest(
+                    symbol=symbol,
+                    qty=quantity,
+                    side=alpaca_side,
+                    time_in_force=self.TimeInForce.DAY,
+                    limit_price=limit_price
+                )
             
-            logger.info(f"Alpaca order placed: {symbol} {alpaca_side} {quantity} @ {alpaca_type}")
+            # Submit order
+            order = self.api.submit_order(order_data=order_request)
+            
+            logger.info(f"Alpaca order placed: {symbol} {side.value} {quantity} @ {order_type.value}")
             
             return {
                 "success": True,
-                "order_id": order.id,
+                "order_id": str(order.id),
                 "symbol": symbol,
                 "side": side,
                 "quantity": quantity,
-                "status": order.status
+                "status": str(order.status)
             }
             
         except Exception as e:
@@ -302,7 +321,7 @@ class AlpacaBroker(BaseEquityBroker):
             return []
         
         try:
-            positions = self.api.list_positions()
+            positions = self.api.get_all_positions()
             
             return [
                 EquityPosition(
@@ -330,17 +349,22 @@ class AlpacaBroker(BaseEquityBroker):
     
     def get_quote(self, symbol: str) -> Dict:
         """Get current quote for a symbol."""
-        if not self.authenticated or not self.api:
+        if not self.authenticated:
             return {}
         
         try:
-            quote = self.api.get_latest_trade(symbol)
+            # Use data client for quotes
+            data_client = self.StockHistoricalDataClient(self.api_key, self.api_secret)
+            request_params = self.StockLatestTradeRequest(symbol_or_symbols=symbol)
+            latest_trade = data_client.get_stock_latest_trade(request_params)
+            
+            trade = latest_trade[symbol]
             
             return {
                 "symbol": symbol,
-                "price": float(quote.price),
-                "timestamp": quote.timestamp,
-                "size": float(quote.size)
+                "price": float(trade.price),
+                "timestamp": trade.timestamp,
+                "size": float(trade.size)
             }
         except Exception as e:
             logger.error(f"Failed to get Alpaca quote for {symbol}: {e}")

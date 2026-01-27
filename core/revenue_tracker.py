@@ -39,7 +39,7 @@ Date: January 27, 2026
 
 import logging
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
