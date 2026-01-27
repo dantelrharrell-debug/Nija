@@ -176,8 +176,8 @@ class NIJAApexStrategyV71:
         # AI Momentum Scoring (optional, skeleton for future)
         self.ai_momentum_enabled = self.config.get('ai_momentum_enabled', False)
         
-        # Track last candle time for timing filter
-        self.last_candle_time = None
+        # Track last candle time for timing filter (per-symbol to avoid cross-market contamination)
+        self.last_candle_times = {}  # symbol -> timestamp
         
         # Track current regime for logging
         self.current_regime = None
@@ -535,18 +535,19 @@ class NIJAApexStrategyV71:
         
         return signal, score, reason
     
-    def check_smart_filters(self, df: pd.DataFrame, current_time: datetime) -> Tuple[bool, str]:
+    def check_smart_filters(self, df: pd.DataFrame, current_time: datetime, symbol: str = None) -> Tuple[bool, str]:
         """
         Smart Filters to avoid bad trades
         
         Filters:
         1. No trades 5 min before/after major news (stub - placeholder for News API)
         2. No trades if volume < 30% avg
-        3. No trading during first 6 seconds of a new candle
+        3. No trading during first 6 seconds of a new candle (per-symbol tracking)
         
         Args:
             df: Price DataFrame
             current_time: Current datetime
+            symbol: Trading symbol (required for candle timing filter)
         
         Returns:
             Tuple of (allowed, reason)
@@ -567,20 +568,21 @@ class NIJAApexStrategyV71:
         
         # Filter 3: Candle timing filter (first 6 seconds)
         # Detect new candle by comparing timestamps
-        # CRITICAL FIX (Jan 27, 2025): Only apply candle timing filter if we have valid datetime index
-        # Previously this filter would default to blocking ALL trades when datetime index wasn't available
-        if len(df) >= 2:
+        # CRITICAL FIX (Jan 27, 2026): Use per-symbol tracking to avoid cross-market contamination
+        # Previously used single instance variable causing all markets to block each other
+        if len(df) >= 2 and symbol is not None:
             # Check if we have a proper datetime index
             if hasattr(df.index, 'to_pydatetime'):
                 # We have a datetime index - apply the candle timing filter
                 current_candle_time = df.index[-1]
+                last_candle_time = self.last_candle_times.get(symbol)
                 
                 # If we have timestamp data, check if we're in first 6 seconds
-                if self.last_candle_time != current_candle_time:
+                if last_candle_time != current_candle_time:
                     # New candle detected - store time and check elapsed time
-                    if self.last_candle_time is None:
-                        # First run - allow trade
-                        self.last_candle_time = current_candle_time
+                    if last_candle_time is None:
+                        # First run for this symbol - allow trade
+                        self.last_candle_times[symbol] = current_candle_time
                     else:
                         # Calculate time since candle started
                         # Normalize to timezone-naive datetime to avoid timezone mismatch issues
@@ -593,7 +595,7 @@ class NIJAApexStrategyV71:
                             current_time_naive = current_time
                         time_since_candle = (current_time_naive - candle_dt).total_seconds()
                         
-                        self.last_candle_time = current_candle_time
+                        self.last_candle_times[symbol] = current_candle_time
                         
                         # Block trade if we're in first N seconds of new candle
                         if time_since_candle < self.candle_exclusion_seconds:
@@ -603,6 +605,9 @@ class NIJAApexStrategyV71:
                 # No datetime index available - skip candle timing filter
                 # This prevents blocking all trades when timestamp data isn't in the DataFrame index
                 logger.debug('   ℹ️  Candle timing filter skipped (no datetime index available)')
+        elif symbol is None:
+            # No symbol provided - skip candle timing filter to avoid errors
+            logger.debug('   ℹ️  Candle timing filter skipped (no symbol provided)')
         
         return True, 'All smart filters passed'
     
@@ -874,7 +879,7 @@ class NIJAApexStrategyV71:
             
             # Check smart filters
             current_time = datetime.now()
-            filters_ok, filter_reason = self.check_smart_filters(df, current_time)
+            filters_ok, filter_reason = self.check_smart_filters(df, current_time, symbol)
             if not filters_ok:
                 logger.debug(f"   {symbol}: Smart filter blocked - {filter_reason}")
                 return {
