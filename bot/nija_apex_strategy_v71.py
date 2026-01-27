@@ -562,11 +562,8 @@ class NIJAApexStrategyV71:
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
         
-        # DIAGNOSTIC: Log volume stats for all markets to understand patterns
-        logger.info(f'   📊 Volume check: current={current_volume:.2f}, avg={avg_volume:.2f}, ratio={volume_ratio*100:.1f}%, threshold={self.volume_min_threshold*100:.0f}%')
-        
         if volume_ratio < self.volume_min_threshold:
-            logger.info(f'   🔇 Smart filter (volume): {volume_ratio*100:.1f}% < {self.volume_min_threshold*100:.0f}% threshold')
+            logger.debug(f'   🔇 Smart filter (volume): {volume_ratio*100:.1f}% < {self.volume_min_threshold*100:.0f}% threshold')
             return False, f'Volume too low ({volume_ratio*100:.1f}% of avg) - threshold: {self.volume_min_threshold*100:.0f}%'
         
         # Filter 3: Candle timing filter (first 6 seconds)
@@ -602,7 +599,7 @@ class NIJAApexStrategyV71:
                         
                         # Block trade if we're in first N seconds of new candle
                         if time_since_candle < self.candle_exclusion_seconds:
-                            logger.info(f'   🔇 Smart filter (candle timing): {time_since_candle:.0f}s < {self.candle_exclusion_seconds}s threshold')
+                            logger.debug(f'   🔇 Smart filter (candle timing): {time_since_candle:.0f}s < {self.candle_exclusion_seconds}s threshold')
                             return False, f'First {self.candle_exclusion_seconds}s of new candle - waiting for stability'
             else:
                 # No datetime index available - skip candle timing filter
