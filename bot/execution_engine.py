@@ -397,7 +397,8 @@ class ExecutionEngine:
                     'tp1_hit': False,
                     'tp2_hit': False,
                     'breakeven_moved': False,
-                    'remaining_size': 1.0  # 100%
+                    'remaining_size': 1.0,  # 100%
+                    'peak_profit_pct': 0.0  # Track peak profit for protection
                 }
                 
                 self.positions[symbol] = position
@@ -646,6 +647,20 @@ class ExecutionEngine:
         side = position['side']
         entry_price = position['entry_price']
         
+        # PROFITABILITY PROTECTION (Jan 27, 2026): Minimum hold time enforcement
+        # Prevent premature exits that don't allow trade to develop
+        # This ensures we give trades time to profit before closing
+        MIN_HOLD_TIME_SECONDS = 90  # 90 seconds (1.5 minutes) minimum hold
+        
+        if 'opened_at' in position:
+            hold_time = (datetime.now() - position['opened_at']).total_seconds()
+            if hold_time < MIN_HOLD_TIME_SECONDS:
+                logger.debug(
+                    f"⏳ Min hold time not met: {symbol} held for {hold_time:.0f}s "
+                    f"(min: {MIN_HOLD_TIME_SECONDS}s)"
+                )
+                return None  # Don't exit yet, need more time
+        
         # Calculate GROSS profit percentage (before fees)
         if side == 'long':
             gross_profit_pct = (current_price - entry_price) / entry_price
@@ -658,11 +673,48 @@ class ExecutionEngine:
         # Calculate NET profit after fees
         net_profit_pct = gross_profit_pct - broker_round_trip_fee
         
+        # PROFIT PROTECTION (Jan 27, 2026): Track peak profit and protect gains
+        # This prevents giving back all profits during temporary reversals
+        peak_profit = position.get('peak_profit_pct', 0.0)
+        if gross_profit_pct > peak_profit:
+            position['peak_profit_pct'] = gross_profit_pct
+            peak_profit = gross_profit_pct
+        
+        # If we've hit significant profit (>2% gross) but are now giving it back,
+        # protect at least 50% of peak profit
+        PROFIT_PROTECTION_THRESHOLD = 0.02  # Start protecting after 2% peak profit
+        PROFIT_PROTECTION_DRAWDOWN = 0.50   # Protect 50% of peak profit
+        
+        if peak_profit > PROFIT_PROTECTION_THRESHOLD:
+            min_acceptable_profit = peak_profit * (1.0 - PROFIT_PROTECTION_DRAWDOWN)
+            if gross_profit_pct < min_acceptable_profit and gross_profit_pct > broker_round_trip_fee:
+                # We're giving back too much profit - exit remaining position
+                logger.warning(
+                    f"⚠️ PROFIT PROTECTION TRIGGERED: {symbol} | "
+                    f"Peak: {peak_profit*100:.1f}% → Current: {gross_profit_pct*100:.1f}% | "
+                    f"Giving back {(peak_profit - gross_profit_pct)*100:.1f}% of profit"
+                )
+                logger.info(f"💰 Exiting remaining position to lock in {gross_profit_pct*100:.1f}% profit")
+                
+                exit_size = position['position_size'] * position['remaining_size']
+                position['remaining_size'] = 0.0
+                
+                return {
+                    'exit_size': exit_size,
+                    'profit_level': 'profit_protection',
+                    'exit_pct': 1.0,
+                    'gross_profit_pct': gross_profit_pct,
+                    'net_profit_pct': net_profit_pct,
+                    'current_price': current_price,
+                    'entry_price': entry_price,
+                    'reason': f'Protecting profit (peak: {peak_profit*100:.1f}%, current: {gross_profit_pct*100:.1f}%)'
+                }
+        
         # Enhanced logging for profit-taking visibility (Jan 26, 2026)
         logger.debug(
             f"💹 Profit check: {symbol} | Entry: ${entry_price:.4f} | Current: ${current_price:.4f} | "
             f"Gross P&L: {gross_profit_pct*100:+.2f}% | Net P&L: {net_profit_pct*100:+.2f}% | "
-            f"Remaining: {position.get('remaining_size', 1.0)*100:.0f}%"
+            f"Peak: {peak_profit*100:.1f}% | Remaining: {position.get('remaining_size', 1.0)*100:.0f}%"
         )
         
         # FEE-AWARE profit thresholds (GROSS profit needed for NET profitability)
