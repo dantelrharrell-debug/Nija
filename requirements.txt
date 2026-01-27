@@ -138,3 +138,8 @@ alpaca-py==0.36.0
 # Note: alpaca-trade-api removed due to websockets version conflict
 # alpaca-trade-api==3.2.0 requires websockets<11, conflicts with other dependencies
 # Use alpaca-py (above) for Alpaca integration - it's the newer, actively maintained library
+
+# PostgreSQL ORM and Database
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+alembic==1.13.1
