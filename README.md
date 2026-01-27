@@ -84,17 +84,38 @@ cp .env.profit_optimized .env
 
 **Quickly determine if NIJA is making MORE profit than losses.**
 
-### Quick Check
+### Quick Check (Recommended)
 
 ```bash
-# Run profitability analysis
+# Answer the question: "Is NIJA making a profit now?"
+python check_profit_status.py
+```
+
+**What you'll see:**
+- ✅ **YES - NIJA IS PROFITABLE** - Making more profit than losses
+- ❌ **NO - NIJA IS LOSING MONEY** - Losing more than profiting (action required)
+- ⚪ **BREAK-EVEN** - No net profit or loss
+
+**Features:**
+- Quick yes/no answer to profitability
+- Broker-by-broker breakdown (Kraken vs Coinbase)
+- Historical P&L from all completed trades
+- Win rate and fee analysis
+- Open positions tracking
+- Actionable recommendations when losing
+
+### Detailed Analysis
+
+```bash
+# Run detailed profitability analysis
 python analyze_profitability.py
 ```
 
-**Possible Results:**
-- ✅ **PROFITABLE** - Making more profit than losses (everything is fine)
-- ❌ **LOSING MONEY** - Losing more than profiting (action required)
-- ⚪ **BREAK-EVEN** - No net profit or loss
+**Includes:**
+- Individual trade breakdown
+- Profit factor calculation
+- Average win vs average loss
+- Recent trades summary
 
 ### Detailed Analysis
 
