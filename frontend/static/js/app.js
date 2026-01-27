@@ -388,3 +388,62 @@ setInterval(() => {
         loadTradingStatus();
     }
 }, 30000);
+
+// ========================================
+// Trading Control
+// ========================================
+
+async function handleTradingToggle() {
+    const toggle = document.getElementById('trading-toggle');
+    const statusText = document.getElementById('status-text');
+    const statusDot = document.getElementById('status-dot');
+    
+    const action = toggle.checked ? 'start' : 'stop';
+    
+    try {
+        await apiRequest('/api/trading/control', {
+            method: 'POST',
+            body: JSON.stringify({ action })
+        });
+        
+        // Update UI
+        statusText.textContent = toggle.checked ? 'Trading ON' : 'Trading OFF';
+        statusDot.style.background = toggle.checked ? '#10b981' : '#94a3b8';
+        
+        console.log(`✅ Trading ${toggle.checked ? 'enabled' : 'disabled'}`);
+        
+        // Reload status after a delay
+        setTimeout(loadTradingStatus, 1000);
+        
+    } catch (error) {
+        console.error('Failed to toggle trading:', error);
+        // Revert toggle state
+        toggle.checked = !toggle.checked;
+        alert('Failed to toggle trading. Please try again.');
+    }
+}
+
+// Enhanced loadTradingStatus to sync toggle state
+async function loadTradingStatus() {
+    try {
+        const status = await apiRequest('/api/trading/status');
+        
+        // Update toggle
+        const toggle = document.getElementById('trading-toggle');
+        if (toggle) {
+            toggle.checked = status.trading_enabled;
+        }
+        
+        document.getElementById('status-text').textContent = 
+            status.trading_enabled ? 'Trading ON' : 'Trading OFF';
+        document.getElementById('engine-status').textContent = status.engine_status;
+        document.getElementById('last-trade').textContent = 
+            status.last_trade_time ? new Date(status.last_trade_time).toLocaleString() : 'Never';
+        
+        // Update status dot color
+        const dotEl = document.getElementById('status-dot');
+        dotEl.style.background = status.trading_enabled ? '#10b981' : '#94a3b8';
+    } catch (error) {
+        console.error('Failed to load trading status:', error);
+    }
+}
