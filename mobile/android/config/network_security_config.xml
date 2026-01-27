@@ -10,6 +10,8 @@
     
     <!-- Development configuration (REMOVE for production) -->
     <!-- This allows HTTP connections to localhost for testing -->
+    <!-- IMPORTANT: Use build flavors or build configurations to automatically
+         exclude this section in release builds. See BUILD_GUIDE.md for details. -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">10.0.2.2</domain>

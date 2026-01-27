@@ -126,7 +126,6 @@ ISSUE*.md
 INVESTIGATION*.md
 MASTER*.md
 KRAKEN*.md
-NONCE*.md
 !KRAKEN_SYMBOL_MAPPER_IMPLEMENTATION.md  # Core implementation doc
 NONCE*.md
 OPTION*.md

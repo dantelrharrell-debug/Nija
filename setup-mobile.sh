@@ -68,6 +68,21 @@ echo "Syncing web assets with native projects..."
 npm run cap:sync
 echo "✅ Assets synced"
 
+# Check backend API availability (optional)
+echo ""
+echo "Checking backend API availability..."
+API_URL="${API_BASE_URL:-http://localhost:5000}"
+if command -v curl &> /dev/null; then
+    if curl -s -o /dev/null -w "%{http_code}" "$API_URL/health" | grep -q "200"; then
+        echo "✅ Backend API is reachable at $API_URL"
+    else
+        echo "⚠️  Warning: Backend API not reachable at $API_URL"
+        echo "   Make sure the backend is running before testing the mobile app"
+    fi
+else
+    echo "⚠️  curl not found - skipping API check"
+fi
+
 # Platform-specific instructions
 echo ""
 echo "======================================"

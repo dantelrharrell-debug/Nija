@@ -2,7 +2,7 @@
   "appId": "com.nija.trading",
   "appName": "NIJA",
   "webDir": "frontend",
-  "bundledWebRuntime": false,
+  "bundledWebRuntime": true,
   "server": {
     "androidScheme": "https",
     "iosScheme": "https",

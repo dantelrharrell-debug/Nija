@@ -6,6 +6,9 @@ This module extends the API server with mobile-specific functionality:
 - Real-time trading updates
 - Mobile-optimized responses
 - Device management
+
+SECURITY NOTE: This module requires proper authentication. All endpoints
+should be protected with JWT authentication in production.
 """
 
 import os
@@ -15,6 +18,10 @@ from flask import Flask, request, jsonify, Blueprint
 from functools import wraps
 from datetime import datetime
 
+# Import authentication decorator from api_server
+# NOTE: In production, uncomment and use require_auth decorator
+# from api_server import require_auth
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -22,7 +29,9 @@ logger = logging.getLogger(__name__)
 mobile_api = Blueprint('mobile_api', __name__, url_prefix='/api/mobile')
 
 
-# In-memory storage for push tokens (TODO: move to database)
+# WARNING: In-memory storage for push tokens - NOT SUITABLE FOR PRODUCTION
+# TODO: Replace with database storage (PostgreSQL, Redis, etc.)
+# This will lose all data on server restart!
 # Format: {user_id: [{"token": str, "platform": str, "device_id": str, "registered_at": datetime}]}
 push_tokens = {}
 
@@ -32,9 +41,15 @@ push_tokens = {}
 # ========================================
 
 @mobile_api.route('/device/register', methods=['POST'])
+# TODO: Add authentication in production - uncomment next line
+# @require_auth
 def register_device():
     """
     Register a mobile device for push notifications.
+    
+    SECURITY WARNING: This endpoint currently lacks authentication.
+    In production, this MUST be protected with JWT authentication
+    to prevent unauthorized device registration.
     
     Request body:
         {
@@ -60,6 +75,10 @@ def register_device():
             return jsonify({'error': f'Missing required field: {field}'}), 400
     
     user_id = data['user_id']
+    
+    # TODO: In production, verify user_id matches authenticated user
+    # if request.user_id != user_id:
+    #     return jsonify({'error': 'Unauthorized'}), 403
     push_token = data['push_token']
     platform = data['platform']
     device_id = data['device_id']
@@ -108,9 +127,13 @@ def register_device():
 
 
 @mobile_api.route('/device/unregister', methods=['POST'])
+# TODO: Add authentication in production - uncomment next line
+# @require_auth
 def unregister_device():
     """
     Unregister a mobile device.
+    
+    SECURITY WARNING: Requires authentication in production.
     
     Request body:
         {
@@ -124,6 +147,10 @@ def unregister_device():
         return jsonify({'error': 'user_id and device_id are required'}), 400
     
     user_id = data['user_id']
+    
+    # TODO: In production, verify user_id matches authenticated user
+    # if request.user_id != user_id:
+    #     return jsonify({'error': 'Unauthorized'}), 403
     device_id = data['device_id']
     
     if user_id not in push_tokens:
@@ -182,14 +209,23 @@ def send_push_notification(user_id: str, title: str, body: str, data: Optional[D
     """
     Send push notification to all devices registered for a user.
     
+    PLACEHOLDER IMPLEMENTATION: This function does not actually send notifications.
+    It requires Firebase Admin SDK (Android) or APNs (iOS) to be configured.
+    
     Args:
         user_id: User identifier
         title: Notification title
         body: Notification body
         data: Additional data payload
     
-    Note: This is a placeholder. Actual implementation requires Firebase Admin SDK
-    or APNs for iOS.
+    Returns:
+        False: Always returns False as this is not yet implemented
+        
+    TODO: Implement actual push notification sending:
+        - Set up Firebase Admin SDK for Android (FCM)
+        - Set up APNs for iOS
+        - Handle notification delivery status
+        - Implement retry logic
     """
     if user_id not in push_tokens:
         logger.warning(f"No devices registered for user {user_id}")
@@ -201,22 +237,41 @@ def send_push_notification(user_id: str, title: str, body: str, data: Optional[D
         try:
             if device['platform'] == 'android':
                 # TODO: Send via Firebase Cloud Messaging (FCM)
-                logger.info(f"Would send FCM notification to device {device['device_id']}: {title}")
-                pass
+                # Example:
+                # from firebase_admin import messaging
+                # message = messaging.Message(
+                #     notification=messaging.Notification(title=title, body=body),
+                #     data=data or {},
+                #     token=device['push_token']
+                # )
+                # response = messaging.send(message)
+                logger.info(f"[PLACEHOLDER] Would send FCM notification to device {device['device_id']}: {title}")
             elif device['platform'] == 'ios':
                 # TODO: Send via Apple Push Notification service (APNs)
-                logger.info(f"Would send APNs notification to device {device['device_id']}: {title}")
-                pass
+                # Requires APNs certificate and connection setup
+                logger.info(f"[PLACEHOLDER] Would send APNs notification to device {device['device_id']}: {title}")
         except Exception as e:
-            logger.error(f"Error sending push notification to device {device['device_id']}: {e}")
+            logger.error(f"Error in notification placeholder for device {device['device_id']}: {e}")
     
-    return True
+    # Return False to indicate notifications were not actually sent
+    return False
 
 
 @mobile_api.route('/notifications/send', methods=['POST'])
+# TODO: Add ADMIN authentication in production - this should be admin-only
+# @require_admin_auth
 def send_notification():
     """
-    Send a push notification to a user (admin/system use).
+    Send a push notification to a user.
+    
+    SECURITY WARNING: This endpoint should be protected with admin-level
+    authentication in production to prevent abuse. Regular users should
+    NOT be able to send notifications to other users.
+    
+    This endpoint is intended for:
+    - Internal system notifications
+    - Admin-triggered alerts
+    - Automated trading notifications from the backend
     
     Request body:
         {
@@ -254,8 +309,9 @@ def send_notification():
     else:
         return jsonify({
             'success': False,
-            'message': 'Failed to send notification (no devices registered)'
-        }), 404
+            'message': 'Push notification system not yet implemented or no devices registered',
+            'note': 'See mobile_api.py send_push_notification() for implementation details'
+        }), 501  # 501 Not Implemented
 
 
 # ========================================
@@ -303,9 +359,15 @@ def get_dashboard_summary():
 
 
 @mobile_api.route('/trading/quick-toggle', methods=['POST'])
+# TODO: Add authentication in production - uncomment next line
+# @require_auth
 def quick_toggle_trading():
     """
     Quick toggle trading on/off (mobile-optimized).
+    
+    SECURITY WARNING: This endpoint currently lacks authentication.
+    In production, this MUST be protected to prevent unauthorized
+    users from controlling other users' trading.
     
     Request body:
         {
@@ -320,6 +382,10 @@ def quick_toggle_trading():
     
     user_id = data['user_id']
     enabled = data['enabled']
+    
+    # TODO: In production, verify user_id matches authenticated user
+    # if request.user_id != user_id:
+    #     return jsonify({'error': 'Unauthorized: Cannot control other users\' trading'}), 403
     
     # TODO: Implement actual trading toggle
     # For now, return success
@@ -378,23 +444,39 @@ def get_lightweight_positions():
 
 
 @mobile_api.route('/trades/recent', methods=['GET'])
+# TODO: Add authentication in production
+# @require_auth
 def get_recent_trades():
     """
     Get recent trades optimized for mobile display.
+    
+    SECURITY WARNING: Requires authentication in production.
     
     Query params:
         user_id: User identifier
         limit: Number of trades to return (default: 10, max: 50)
     """
     user_id = request.args.get('user_id')
-    limit = int(request.args.get('limit', 10))
+    limit = request.args.get('limit', '10')
     
     if not user_id:
         return jsonify({'error': 'user_id is required'}), 400
     
-    # Validate limit
-    if limit < 1 or limit > 50:
-        limit = 10
+    # TODO: In production, verify user_id matches authenticated user
+    # if request.user_id != user_id:
+    #     return jsonify({'error': 'Unauthorized'}), 403
+    
+    # Validate and sanitize limit parameter
+    try:
+        limit = int(limit)
+        if limit < 1 or limit > 50:
+            return jsonify({
+                'error': f'Invalid limit: {limit}. Must be between 1 and 50'
+            }), 400
+    except ValueError:
+        return jsonify({
+            'error': f'Invalid limit: {limit}. Must be an integer'
+        }), 400
     
     # TODO: Fetch actual trades
     # For now, return empty array
