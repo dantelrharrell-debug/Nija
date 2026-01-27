@@ -295,6 +295,7 @@ example_*.py
 !example_apex_v71.py  # Keep example usage
 !example_usage.py  # Keep example usage
 !example_user_management_integration.py  # Keep example integration
+!test_mvp_components.py  # Keep MVP test suite
 test_*.py
 !bot/test_*.py  # Keep bot tests
 !bot/tests/test_*.py  # Keep bot/tests directory tests
