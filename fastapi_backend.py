@@ -14,7 +14,7 @@ Architecture:
   [ Exchanges ]
 """
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +29,8 @@ import os
 import logging
 
 from auth import get_api_key_manager, get_user_manager
+from auth.user_database import get_user_database
+from vault import get_vault
 from execution import get_permission_validator, UserPermissions
 from user_control import get_user_control_backend
 
@@ -65,6 +67,8 @@ JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
 # Get manager instances
 api_key_manager = get_api_key_manager()
 user_manager = get_user_manager()
+user_db = get_user_database()  # Database-backed user management
+vault = get_vault()  # Secure credential vault
 permission_validator = get_permission_validator()
 user_control = get_user_control_backend()
 
@@ -150,14 +154,7 @@ class Stats(BaseModel):
 # Helper Functions
 # ========================================
 
-def hash_password(password: str) -> str:
-    """Hash password using SHA256 (TODO: upgrade to bcrypt)."""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-
-def verify_password(password: str, password_hash: str) -> bool:
-    """Verify password against hash."""
-    return hash_password(password) == password_hash
+# Password hashing is now handled by user_db (Argon2)
 
 
 def create_access_token(user_id: str) -> str:
@@ -250,7 +247,7 @@ async def get_info():
 # ========================================
 
 @app.post("/api/auth/register", response_model=TokenResponse)
-async def register(user_data: UserRegister):
+async def register(user_data: UserRegister, request: Request):
     """
     Register a new user account.
     
@@ -259,7 +256,8 @@ async def register(user_data: UserRegister):
     email = user_data.email.lower().strip()
     
     # Check if user exists
-    if email in user_credentials:
+    existing_user = user_db.get_user_by_email(email)
+    if existing_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="User already exists"
@@ -268,14 +266,22 @@ async def register(user_data: UserRegister):
     # Create user ID
     user_id = f"user_{secrets.token_hex(8)}"
     
-    # Store credentials
-    user_credentials[email] = {
-        'password_hash': hash_password(user_data.password),
-        'user_id': user_id
-    }
+    # Create user in database with password hashing
+    success = user_db.create_user(
+        user_id=user_id,
+        email=email,
+        password=user_data.password,  # Will be hashed by user_db
+        subscription_tier=user_data.subscription_tier
+    )
     
-    # Create user profile
-    user_profile = user_manager.create_user(
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create user"
+        )
+    
+    # Create user profile in old manager (for backward compatibility)
+    user_manager.create_user(
         user_id=user_id,
         email=email,
         subscription_tier=user_data.subscription_tier
@@ -310,35 +316,38 @@ async def register(user_data: UserRegister):
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-async def login(credentials: UserLogin):
+async def login(credentials: UserLogin, request: Request):
     """
     Login user and return JWT token.
     """
     email = credentials.email.lower().strip()
     
-    # Check credentials
-    if email not in user_credentials:
+    # Get user from database
+    user_profile = user_db.get_user_by_email(email)
+    
+    if not user_profile:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials"
         )
     
-    user_creds = user_credentials[email]
+    # Get IP address for audit logging
+    ip_address = request.client.host if request.client else None
     
-    if not verify_password(credentials.password, user_creds['password_hash']):
+    # Verify password (uses Argon2)
+    if not user_db.verify_password(user_profile['user_id'], credentials.password, ip_address):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials"
         )
     
-    user_id = user_creds['user_id']
-    user_profile = user_manager.get_user(user_id)
-    
-    if not user_profile or not user_profile.get('enabled', True):
+    if not user_profile.get('enabled', True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account disabled"
         )
+    
+    user_id = user_profile['user_id']
     
     # Generate token
     token = create_access_token(user_id)
@@ -388,7 +397,7 @@ async def get_profile(user_id: str = Depends(get_current_user)):
 @app.get("/api/user/brokers")
 async def list_brokers(user_id: str = Depends(get_current_user)):
     """List all configured brokers for user."""
-    brokers = api_key_manager.list_user_brokers(user_id)
+    brokers = vault.list_user_brokers(user_id)
     return {"user_id": user_id, "brokers": brokers, "count": len(brokers)}
 
 
@@ -396,9 +405,10 @@ async def list_brokers(user_id: str = Depends(get_current_user)):
 async def add_broker(
     broker_name: str,
     credentials: BrokerCredentials,
+    request: Request,
     user_id: str = Depends(get_current_user)
 ):
-    """Add broker API credentials."""
+    """Add broker API credentials to secure vault."""
     supported_brokers = ['coinbase', 'kraken', 'binance', 'okx', 'alpaca']
     
     if broker_name.lower() not in supported_brokers:
@@ -407,7 +417,26 @@ async def add_broker(
             detail=f"Unsupported broker. Supported: {', '.join(supported_brokers)}"
         )
     
-    # Store encrypted credentials
+    # Get IP address for audit logging
+    ip_address = request.client.host if request.client else None
+    
+    # Store encrypted credentials in secure vault
+    success = vault.store_credentials(
+        user_id=user_id,
+        broker=broker_name.lower(),
+        api_key=credentials.api_key,
+        api_secret=credentials.api_secret,
+        additional_params=credentials.additional_params,
+        ip_address=ip_address
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to store credentials"
+        )
+    
+    # Also store in old manager for backward compatibility
     api_key_manager.store_user_api_key(
         user_id=user_id,
         broker=broker_name.lower(),
@@ -422,9 +451,19 @@ async def add_broker(
 
 
 @app.delete("/api/user/brokers/{broker_name}")
-async def remove_broker(broker_name: str, user_id: str = Depends(get_current_user)):
-    """Remove broker API credentials."""
-    success = api_key_manager.delete_user_api_key(user_id, broker_name.lower())
+async def remove_broker(
+    broker_name: str,
+    request: Request,
+    user_id: str = Depends(get_current_user)
+):
+    """Remove broker API credentials from secure vault."""
+    ip_address = request.client.host if request.client else None
+    
+    # Remove from vault
+    success = vault.delete_credentials(user_id, broker_name.lower(), ip_address)
+    
+    # Also remove from old manager
+    api_key_manager.delete_user_api_key(user_id, broker_name.lower())
     
     if not success:
         raise HTTPException(
