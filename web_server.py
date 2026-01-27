@@ -9,6 +9,12 @@ import os
 from flask import Flask, send_from_directory
 from api_server import app as api_app
 
+# Import mobile API blueprint
+from mobile_api import mobile_api
+
+# Register mobile API blueprint
+api_app.register_blueprint(mobile_api)
+
 # Configure frontend serving
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), 'frontend')
 STATIC_DIR = os.path.join(FRONTEND_DIR, 'static')
@@ -34,6 +40,7 @@ if __name__ == '__main__':
     print(f"Starting NIJA Platform on port {port}")
     print(f"Frontend: http://localhost:{port}/")
     print(f"API: http://localhost:{port}/api/")
+    print(f"Mobile API: http://localhost:{port}/api/mobile/")
     
     api_app.run(
         host='0.0.0.0',

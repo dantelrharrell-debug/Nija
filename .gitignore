@@ -359,3 +359,25 @@ bot/data/trade_ledger.db
 k8s/base/secrets.yaml
 k8s/overlays/*/secrets.yaml
 k8s/**/secrets.yaml
+
+# Mobile app build artifacts
+ios/
+android/
+node_modules/
+package-lock.json
+
+# Mobile app keystore and signing configs (NEVER commit these!)
+android/release.keystore
+android/key.properties
+android/app/google-services.json
+ios/App/GoogleService-Info.plist
+
+# Capacitor generated files
+.capacitor/
+capacitor.config.ts
+
+# Mobile app build outputs
+*.apk
+*.aab
+*.ipa
+*.dSYM.zip
