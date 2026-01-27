@@ -1,5 +1,42 @@
 # NIJA Apex Strategy v7.1 - Broker Integration Guide
 
+## 🚀 NEW: Unified Exchange Execution Layer
+
+**The game-changer for scaling NIJA across multiple exchanges!**
+
+We now have a unified interface that lets you execute trades across **all supported exchanges** with a single function:
+
+```python
+from bot.unified_execution_engine import execute_trade
+
+# One function for ALL exchanges!
+result = execute_trade(
+    exchange='coinbase',  # or 'kraken', 'binance', 'okx', 'alpaca'
+    symbol='BTC-USD',
+    side='buy',
+    size=100.0,
+    order_type='market'
+)
+```
+
+**Supported Exchanges:**
+- ✅ Kraken
+- ✅ Coinbase Advanced
+- ✅ Binance
+- ✅ OKX
+- ✅ Alpaca
+
+**Key Benefits:**
+- 🎯 **Strategies don't care where they trade** - they just trade!
+- 🔄 Symbol normalization (handles BTC-USD, BTC/USD, BTCUSDT automatically)
+- ✅ Exchange-specific validation (minimum order sizes, fees, etc.)
+- 🌐 Easy multi-exchange diversification
+- 📊 Consistent error handling across all exchanges
+
+**📖 See [UNIFIED_EXECUTION_LAYER.md](./UNIFIED_EXECUTION_LAYER.md) for complete documentation and examples.**
+
+---
+
 ## 🔌 Overview
 
 This guide explains how to integrate NIJA Apex Strategy v7.1 with various broker APIs. The strategy provides a unified interface that abstracts broker-specific details, making it easy to switch between exchanges or trade on multiple platforms simultaneously.
