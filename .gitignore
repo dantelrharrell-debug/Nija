@@ -57,6 +57,12 @@ data/risk_state_test_*.json
 data/risk_limits_test_*.json
 data/webhook_config_test_*.json
 
+# Secure vault database (contains encrypted credentials)
+vault.db
+vault.db-journal
+users.db
+users.db-journal
+
 # User YAML configuration files with API keys (should not be committed)
 config/users/*.yaml
 
@@ -289,6 +295,7 @@ example_*.py
 !example_apex_v71.py  # Keep example usage
 !example_usage.py  # Keep example usage
 !example_user_management_integration.py  # Keep example integration
+!test_mvp_components.py  # Keep MVP test suite
 test_*.py
 !bot/test_*.py  # Keep bot tests
 !bot/tests/test_*.py  # Keep bot/tests directory tests
