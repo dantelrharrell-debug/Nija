@@ -354,3 +354,8 @@ test_user_connection_status.py
 test_connection_error_handling.py
 data/test_trade_ledger.db
 bot/data/trade_ledger.db
+
+# Kubernetes secrets (NEVER commit these!)
+k8s/base/secrets.yaml
+k8s/overlays/*/secrets.yaml
+k8s/**/secrets.yaml
