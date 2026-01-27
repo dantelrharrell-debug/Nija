@@ -1,0 +1,30 @@
+# Kustomization file for NIJA Kubernetes deployment
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: nija-platform
+
+resources:
+- base/namespace.yaml
+- base/secrets.yaml
+- components/postgres/statefulset.yaml
+- components/redis/deployment.yaml
+- components/api/deployment.yaml
+- components/dashboard/deployment.yaml
+
+commonLabels:
+  app.kubernetes.io/name: nija
+  app.kubernetes.io/part-of: nija-platform
+
+configMapGenerator:
+- name: nija-config
+  literals:
+  - ENVIRONMENT=production
+  - LOG_LEVEL=INFO
+  - UPDATE_INTERVAL=5
+
+images:
+- name: nija-api
+  newTag: latest
+- name: nija-dashboard
+  newTag: latest
