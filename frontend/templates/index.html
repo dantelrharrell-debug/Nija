@@ -126,11 +126,17 @@
 
                 <!-- Trading Status -->
                 <div class="section">
-                    <h3>Trading Status</h3>
+                    <h3>Trading Control</h3>
                     <div class="status-card">
-                        <div class="status-indicator">
-                            <span class="status-dot" id="status-dot"></span>
-                            <span id="status-text">Checking...</span>
+                        <div class="trading-toggle-container">
+                            <div class="toggle-label">
+                                <span class="status-dot" id="status-dot"></span>
+                                <span id="status-text">Trading OFF</span>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="trading-toggle" onchange="handleTradingToggle()">
+                                <span class="toggle-slider"></span>
+                            </label>
                         </div>
                         <div class="status-details">
                             <p>Engine: <span id="engine-status">-</span></p>
