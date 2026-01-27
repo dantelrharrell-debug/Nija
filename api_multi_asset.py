@@ -23,6 +23,8 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging
 import os
+import hashlib
+import secrets
 
 # Import core modules
 from core.multi_asset_router import (
@@ -249,7 +251,7 @@ async def register(user: UserRegister, background_tasks: BackgroundTasks):
     
     users_db[user_id] = {
         "email": user.email,
-        "password_hash": user.password,  # Should hash in production
+        "password_hash": hash_password(user.password),  # Hash password before storage
         "tier": user.tier,
         "capital": user.initial_capital,
         "token": token,

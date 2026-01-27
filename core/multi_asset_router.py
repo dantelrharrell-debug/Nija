@@ -319,14 +319,11 @@ class MultiAssetRouter:
         elif tier == "BALLER":
             return allocation
         
-        # Unknown tier: default to crypto only
+        # Unknown tier: raise error instead of silently defaulting
         else:
-            logger.warning(f"Unknown tier {tier}, defaulting to crypto only")
-            return AssetAllocation(
-                crypto_pct=100.0,
-                equity_pct=0.0,
-                derivatives_pct=0.0,
-                cash_pct=0.0
+            raise ValueError(
+                f"Unknown tier '{tier}'. Valid tiers: STARTER, SAVER, INVESTOR, "
+                f"INCOME, LIVABLE, BALLER"
             )
     
     def get_capital_by_asset_class(

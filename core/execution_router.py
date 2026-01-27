@@ -23,6 +23,7 @@ Date: January 27, 2026
 """
 
 import logging
+import time
 from enum import Enum
 from typing import Dict, List, Optional
 from dataclasses import dataclass
@@ -373,8 +374,6 @@ class ExecutionOrchestrator:
         
         This runs continuously and processes orders based on priority.
         """
-        import time
-        
         while self.running:
             try:
                 # Get next order

@@ -1,12 +1,12 @@
 """
 Test Multi-Asset Platform Core Components
 
-This script tests the core multi-asset platform modules:
-- Multi-asset router
-- Asset engines
-- Tiered risk engine
-- Execution router
-- Revenue tracker
+This script tests the core multi-asset platform modules.
+Requires the core modules to be available in Python path.
+
+Prerequisites:
+- Install all dependencies: pip install -r requirements.txt
+- Ensure core/ directory is in Python path
 
 Run with: python test_multi_asset_platform.py
 """

@@ -47,6 +47,10 @@ from decimal import Decimal
 logger = logging.getLogger("nija.revenue")
 
 
+# Annual discount percentage for subscriptions (class-level constant)
+ANNUAL_SUBSCRIPTION_DISCOUNT_PCT = 20.0  # 20% off for annual vs monthly
+
+
 class SubscriptionTier(Enum):
     """Subscription tiers with pricing."""
     STARTER = ("STARTER", 19.00, "Entry level learning")
@@ -59,7 +63,7 @@ class SubscriptionTier(Enum):
     def __init__(self, tier_name: str, monthly_price: float, description: str):
         self.tier_name = tier_name
         self.monthly_price = monthly_price
-        self.annual_price = monthly_price * 12 * 0.80  # 20% discount
+        self.annual_price = monthly_price * 12 * (1.0 - ANNUAL_SUBSCRIPTION_DISCOUNT_PCT / 100.0)
         self.description = description
 
 
