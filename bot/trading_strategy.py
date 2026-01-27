@@ -173,13 +173,14 @@ PROFIT_TARGETS = [
 # Different brokers have different fee structures, requiring different profit targets
 # These ensure NET profitability after fees for each broker
 # PHILOSOPHY: "Little loss, major profit" - tight stops, wide profit targets
-# Kraken fees: 0.36% round-trip (0.18% entry + 0.18% exit maker, 0.26% taker)
+# Kraken fees: ~0.52% round-trip (0.26% taker fee x 2 sides)
+# Using 0.6% in calculations for safety margin (includes spread)
 PROFIT_TARGETS_KRAKEN = [
-    (4.0, "Profit target +4.0% (Net +3.6% after 0.4% fees) - MAJOR PROFIT"),    # Major profit - let winners run
-    (3.0, "Profit target +3.0% (Net +2.6% after 0.4% fees) - EXCELLENT"),       # Excellent profit
-    (2.0, "Profit target +2.0% (Net +1.6% after fees) - GOOD"),                 # Good profit (preferred target)
-    (1.5, "Profit target +1.5% (Net +1.1% after 0.4% fees) - ACCEPTABLE"),      # Acceptable profit
-    (1.0, "Profit target +1.0% (Net +0.6% after 0.4% fees) - MINIMAL"),         # Bare minimum profit
+    (4.0, "Profit target +4.0% (Net +3.4% after 0.6% fees) - MAJOR PROFIT"),    # Major profit - let winners run
+    (3.0, "Profit target +3.0% (Net +2.4% after 0.6% fees) - EXCELLENT"),       # Excellent profit
+    (2.0, "Profit target +2.0% (Net +1.4% after 0.6% fees) - GOOD"),            # Good profit (preferred target)
+    (1.5, "Profit target +1.5% (Net +0.9% after 0.6% fees) - ACCEPTABLE"),      # Acceptable profit
+    (1.0, "Profit target +1.0% (Net +0.4% after 0.6% fees) - MINIMAL"),         # Bare minimum profit
 ]
 
 # 🚨 COINBASE PROFIT FIX (Jan 2026) - ENSURE NET PROFITABILITY
