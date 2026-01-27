@@ -156,8 +156,8 @@ class NIJAApexStrategyV71:
                 logger.info("ℹ️  Enhanced scoring disabled by configuration")
         
         # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
-        # ULTRA RELAXED FILTERS (Jan 27, 2026): Further reduced to find trading opportunities
-        # Previous relaxation (Jan 26) still resulted in 0 signals - need more aggressive relaxation
+        # ULTRA RELAXED FILTERS (Jan 27, 2026 - SECOND RELAXATION): Further reduced to find trading opportunities
+        # First relaxation (Jan 26) still resulted in 0 signals - need more aggressive relaxation
         self.min_adx = self.config.get('min_adx', 12)  # Lowered from 15 to 12 - allow even weaker trends
         self.volume_threshold = self.config.get('volume_threshold', 0.2)  # Lowered from 0.3 to 0.2 - 20% of 5-candle avg
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.02)  # Lowered from 0.05 to 0.02 - only filter completely dead markets
@@ -299,7 +299,8 @@ class NIJAApexStrategyV71:
         - EMA sequence (9 > 21 > 50 for uptrend, 9 < 21 < 50 for downtrend)
         - MACD histogram alignment (positive for uptrend, negative for downtrend)
         - ADX > min_adx (configurable, default 12 - relaxed for signal generation)
-        - Volume > volume_threshold of 5-candle average (configurable, default 20%)
+        - Volume (market filter) > volume_threshold of 5-candle average (configurable, default 20%)
+        - Volume (smart filter) > volume_min_threshold of 20-candle average (configurable, default 2%)
         
         Args:
             df: Price DataFrame
@@ -542,7 +543,7 @@ class NIJAApexStrategyV71:
         
         Filters:
         1. No trades 5 min before/after major news (stub - placeholder for News API)
-        2. No trades if volume < 2% avg (ultra-relaxed to find opportunities)
+        2. No trades if volume < 2% avg (20-candle rolling average - ultra-relaxed to find opportunities)
         3. No trading during first 3 seconds of a new candle (per-symbol tracking)
         
         Args:
