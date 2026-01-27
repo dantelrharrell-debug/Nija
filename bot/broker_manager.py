@@ -1582,7 +1582,7 @@ class CoinbaseBroker(BaseBroker):
             logging.error(f"🔥 Error fetching all products: {e}")
             return []
 
-    def _get_account_balance_detailed(self):
+    def _get_account_balance_detailed(self, verbose: bool = True):
         """Return ONLY tradable Advanced Trade USD/USDC balances (detailed version).
 
         Coinbase frequently shows Consumer wallet balances that **cannot** be used
@@ -1595,6 +1595,9 @@ class CoinbaseBroker(BaseBroker):
         2. API permission validation - checks if we can see accounts
         3. Expanded account type matching - handles more Coinbase account types
         4. Caching - reuses accounts data from connect() to avoid redundant API calls
+
+        Args:
+            verbose: If True, logs detailed balance breakdown (default: True)
 
         Returns dict with: {"usdc", "usd", "trading_balance", "crypto", "consumer_*"}
         """
@@ -1615,7 +1618,8 @@ class CoinbaseBroker(BaseBroker):
 
         # Preferred path: portfolio breakdown (more reliable than get_accounts)
         try:
-            logging.info("💰 Fetching account balance via portfolio breakdown (preferred)...")
+            if verbose:
+                logging.info("💰 Fetching account balance via portfolio breakdown (preferred)...")
             
             # Use retry logic for portfolio API calls to handle rate limiting
             portfolios_resp = None
@@ -1735,17 +1739,18 @@ class CoinbaseBroker(BaseBroker):
                 total_held = usd_held + usdc_held
                 total_funds = trading_balance + total_held
                 
-                logging.info("-" * 70)
-                logging.info(f"   💰 Available USD (portfolio):  ${usd_balance:.2f}")
-                logging.info(f"   💰 Available USDC (portfolio): ${usdc_balance:.2f}")
-                logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
-                if total_held > 0:
-                    logging.info(f"   🔒 Held USD:  ${usd_held:.2f} (in open orders/positions)")
-                    logging.info(f"   🔒 Held USDC: ${usdc_held:.2f} (in open orders/positions)")
-                    logging.info(f"   🔒 Total Held: ${total_held:.2f}")
-                    logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
-                logging.info("   (Source: get_portfolio_breakdown)")
-                logging.info("-" * 70)
+                if verbose:
+                    logging.info("-" * 70)
+                    logging.info(f"   💰 Available USD (portfolio):  ${usd_balance:.2f}")
+                    logging.info(f"   💰 Available USDC (portfolio): ${usdc_balance:.2f}")
+                    logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
+                    if total_held > 0:
+                        logging.info(f"   🔒 Held USD:  ${usd_held:.2f} (in open orders/positions)")
+                        logging.info(f"   🔒 Held USDC: ${usdc_held:.2f} (in open orders/positions)")
+                        logging.info(f"   🔒 Total Held: ${total_held:.2f}")
+                        logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
+                    logging.info("   (Source: get_portfolio_breakdown)")
+                    logging.info("-" * 70)
 
                 result = {
                     "usdc": usdc_balance,
@@ -1783,7 +1788,8 @@ class CoinbaseBroker(BaseBroker):
                 logging.warning(f"⚠️  Portfolio breakdown failed, falling back to get_accounts(): {error_msg}")
 
         try:
-            logging.info("💰 Fetching account balance (Advanced Trade only)...")
+            if verbose:
+                logging.info("💰 Fetching account balance (Advanced Trade only)...")
 
             # Use cached accounts if available to avoid redundant API calls
             if self._accounts_cache and self._is_cache_valid(self._accounts_cache_time):
@@ -1799,24 +1805,26 @@ class CoinbaseBroker(BaseBroker):
 
             # IMPROVEMENT #2: Validate API permissions
             if not accounts:
-                logging.warning("=" * 70)
-                logging.warning("⚠️  API PERMISSION CHECK: Zero accounts returned")
-                logging.warning("=" * 70)
-                logging.warning("This usually means:")
-                logging.warning("  1. ❌ API key lacks 'View account details' permission")
-                logging.warning("  2. ❌ No Advanced Trade portfolio created yet")
-                logging.warning("  3. ❌ Wrong API credentials for this account")
-                logging.warning("")
-                logging.warning("FIX:")
-                logging.warning("  1. Go to: https://portal.cloud.coinbase.com/access/api")
-                logging.warning("  2. Edit your API key → Enable 'View' permission")
-                logging.warning("  3. Or create portfolio: https://www.coinbase.com/advanced-portfolio")
-                logging.warning("=" * 70)
+                if verbose:
+                    logging.warning("=" * 70)
+                    logging.warning("⚠️  API PERMISSION CHECK: Zero accounts returned")
+                    logging.warning("=" * 70)
+                    logging.warning("This usually means:")
+                    logging.warning("  1. ❌ API key lacks 'View account details' permission")
+                    logging.warning("  2. ❌ No Advanced Trade portfolio created yet")
+                    logging.warning("  3. ❌ Wrong API credentials for this account")
+                    logging.warning("")
+                    logging.warning("FIX:")
+                    logging.warning("  1. Go to: https://portal.cloud.coinbase.com/access/api")
+                    logging.warning("  2. Edit your API key → Enable 'View' permission")
+                    logging.warning("  3. Or create portfolio: https://www.coinbase.com/advanced-portfolio")
+                    logging.warning("=" * 70)
 
-            logging.info("=" * 70)
-            logging.info("📊 ACCOUNT BALANCES (v3 get_accounts)")
-            logging.info(f"📁 Total accounts returned: {len(accounts)}")
-            logging.info("=" * 70)
+            if verbose:
+                logging.info("=" * 70)
+                logging.info("📊 ACCOUNT BALANCES (v3 get_accounts)")
+                logging.info(f"📁 Total accounts returned: {len(accounts)}")
+                logging.info("=" * 70)
 
             for acc in accounts:
                 accounts_seen += 1
@@ -1895,38 +1903,41 @@ class CoinbaseBroker(BaseBroker):
             total_held = usd_held + usdc_held
             total_funds = trading_balance + total_held
 
-            logging.info("-" * 70)
-            logging.info(f"   💰 Available USD:  ${usd_balance:.2f}")
-            logging.info(f"   💰 Available USDC: ${usdc_balance:.2f}")
-            logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
-            if total_held > 0:
-                logging.info(f"   🔒 Held USD:  ${usd_held:.2f} (in open orders/positions)")
-                logging.info(f"   🔒 Held USDC: ${usdc_held:.2f} (in open orders/positions)")
-                logging.info(f"   🔒 Total Held: ${total_held:.2f}")
-                logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
-            logging.info(f"   🪙 Crypto Holdings: {len(crypto_holdings)} assets")
+            if verbose:
+                logging.info("-" * 70)
+                logging.info(f"   💰 Available USD:  ${usd_balance:.2f}")
+                logging.info(f"   💰 Available USDC: ${usdc_balance:.2f}")
+                logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
+                if total_held > 0:
+                    logging.info(f"   🔒 Held USD:  ${usd_held:.2f} (in open orders/positions)")
+                    logging.info(f"   🔒 Held USDC: ${usdc_held:.2f} (in open orders/positions)")
+                    logging.info(f"   🔒 Total Held: ${total_held:.2f}")
+                    logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
+                logging.info(f"   🪙 Crypto Holdings: {len(crypto_holdings)} assets")
             
             # IMPROVEMENT #1: Enhanced consumer wallet detection and diagnosis
             if consumer_usd > 0 or consumer_usdc > 0:
-                logging.warning("-" * 70)
-                logging.warning("⚠️  CONSUMER WALLET DETECTED:")
-                logging.warning(f"   🏦 Consumer USD:  ${consumer_usd:.2f}")
-                logging.warning(f"   🏦 Consumer USDC: ${consumer_usdc:.2f}")
-                logging.warning("")
-                logging.warning("These funds are in your Coinbase Consumer wallet and")
-                logging.warning("CANNOT be used for Advanced Trade API orders.")
-                logging.warning("")
-                logging.warning("TO FIX:")
-                logging.warning("  1. Go to: https://www.coinbase.com/advanced-portfolio")
-                logging.warning("  2. Click 'Deposit' on the Advanced Trade portfolio")
-                logging.warning(f"  3. Transfer ${consumer_usd + consumer_usdc:.2f} from Consumer wallet")
-                logging.warning("")
-                logging.warning("After transfer, bot will see funds and start trading! ✅")
-                logging.warning("-" * 70)
+                if verbose:
+                    logging.warning("-" * 70)
+                    logging.warning("⚠️  CONSUMER WALLET DETECTED:")
+                    logging.warning(f"   🏦 Consumer USD:  ${consumer_usd:.2f}")
+                    logging.warning(f"   🏦 Consumer USDC: ${consumer_usdc:.2f}")
+                    logging.warning("")
+                    logging.warning("These funds are in your Coinbase Consumer wallet and")
+                    logging.warning("CANNOT be used for Advanced Trade API orders.")
+                    logging.warning("")
+                    logging.warning("TO FIX:")
+                    logging.warning("  1. Go to: https://www.coinbase.com/advanced-portfolio")
+                    logging.warning("  2. Click 'Deposit' on the Advanced Trade portfolio")
+                    logging.warning(f"  3. Transfer ${consumer_usd + consumer_usdc:.2f} from Consumer wallet")
+                    logging.warning("")
+                    logging.warning("After transfer, bot will see funds and start trading! ✅")
+                    logging.warning("-" * 70)
             
-            logging.info(f"📊 API Status: Saw {accounts_seen} accounts, {tradeable_accounts} tradeable")
-            logging.info(f"   💎 Tradeable crypto holdings: {len(crypto_holdings)} assets")
-            logging.info("=" * 70)
+            if verbose:
+                logging.info(f"📊 API Status: Saw {accounts_seen} accounts, {tradeable_accounts} tradeable")
+                logging.info(f"   💎 Tradeable crypto holdings: {len(crypto_holdings)} assets")
+                logging.info("=" * 70)
 
             result = {
                 "usdc": usdc_balance,
@@ -1970,7 +1981,7 @@ class CoinbaseBroker(BaseBroker):
                 "consumer_usdc": consumer_usdc,
             }
     
-    def get_account_balance(self) -> float:
+    def get_account_balance(self, verbose: bool = True) -> float:
         """Get USD trading balance with fail-closed behavior (conforms to BaseBroker interface).
         
         🚑 FIX 4: BALANCE MUST INCLUDE LOCKED FUNDS
@@ -1982,12 +1993,15 @@ class CoinbaseBroker(BaseBroker):
         - Track consecutive errors to mark broker unavailable
         - Distinguish API errors from actual zero balance
         
+        Args:
+            verbose: If True, logs detailed balance breakdown (default: True)
+        
         Returns:
             float: TOTAL EQUITY (cash + positions) not just available cash
                    Returns last known balance on error (not 0)
         """
         try:
-            balance_data = self._get_account_balance_detailed()
+            balance_data = self._get_account_balance_detailed(verbose=verbose)
             
             if balance_data is None:
                 # API call failed - use last known balance if available

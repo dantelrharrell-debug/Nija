@@ -1003,8 +1003,8 @@ class IndependentBrokerTrader:
             for broker_type, broker in self.multi_account_manager.master_brokers.items():
                 if broker and broker.connected:
                     try:
-                        # Check if broker is funded
-                        balance = broker.get_account_balance()
+                        # Check if broker is funded (suppress verbose logging)
+                        balance = broker.get_account_balance(verbose=False)
                         if balance >= MINIMUM_FUNDED_BALANCE:
                             positions = broker.get_positions()
                             if positions:
@@ -1026,8 +1026,8 @@ class IndependentBrokerTrader:
                 for broker_type, broker in user_broker_dict.items():
                     if broker and broker.connected:
                         try:
-                            # Check if this user broker is funded
-                            balance = broker.get_account_balance()
+                            # Check if this user broker is funded (suppress verbose logging)
+                            balance = broker.get_account_balance(verbose=False)
                             if balance >= MINIMUM_FUNDED_BALANCE:
                                 positions = broker.get_positions()
                                 if positions:
