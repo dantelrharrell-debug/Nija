@@ -567,7 +567,7 @@ class NIJAApexStrategyV71:
         
         # Filter 3: Candle timing filter (first 6 seconds)
         # Detect new candle by comparing timestamps
-        # CRITICAL FIX (Jan 27, 2026): Only apply candle timing filter if we have valid datetime index
+        # CRITICAL FIX (Jan 27, 2025): Only apply candle timing filter if we have valid datetime index
         # Previously this filter would default to blocking ALL trades when datetime index wasn't available
         if len(df) >= 2:
             # Check if we have a proper datetime index
@@ -583,7 +583,15 @@ class NIJAApexStrategyV71:
                         self.last_candle_time = current_candle_time
                     else:
                         # Calculate time since candle started
-                        time_since_candle = (current_time - current_candle_time.to_pydatetime()).total_seconds()
+                        # Normalize to timezone-naive datetime to avoid timezone mismatch issues
+                        candle_dt = current_candle_time.to_pydatetime()
+                        if candle_dt.tzinfo is not None:
+                            candle_dt = candle_dt.replace(tzinfo=None)
+                        if current_time.tzinfo is not None:
+                            current_time_naive = current_time.replace(tzinfo=None)
+                        else:
+                            current_time_naive = current_time
+                        time_since_candle = (current_time_naive - candle_dt).total_seconds()
                         
                         self.last_candle_time = current_candle_time
                         
