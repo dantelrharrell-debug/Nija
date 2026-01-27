@@ -28,10 +28,11 @@ fastjsonschema==2.21.2
 Flask==2.3.3
 Flask-CORS==4.0.0
 # FastAPI stack (recommended for production)
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
+# Security: Using FastAPI 0.109.1+ to fix CVE ReDoS vulnerability in Content-Type header
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+pydantic==2.7.0
+pydantic-settings==2.2.1
 email-validator==2.3.0
 fqdn==1.5.1
 gitdb==4.0.12
