@@ -26,6 +26,8 @@ def test_secure_vault():
     print("TEST 1: Secure Vault")
     print("="*60)
     
+    temp_db = None  # Initialize to avoid NameError in except block
+    
     try:
         from vault import SecureVault
         from cryptography.fernet import Fernet
@@ -95,6 +97,8 @@ def test_user_authentication():
     print("\n" + "="*60)
     print("TEST 2: User Authentication & Identity")
     print("="*60)
+    
+    temp_db = None  # Initialize to avoid NameError in except block
     
     try:
         from auth.user_database import UserDatabase
@@ -244,6 +248,9 @@ def test_integration():
     print("TEST 4: Component Integration")
     print("="*60)
     
+    vault_db = None  # Initialize to avoid NameError in except block
+    user_db_path = None
+    
     try:
         from vault import SecureVault
         from auth.user_database import UserDatabase
@@ -326,7 +333,11 @@ def main():
     print("="*60)
     print(f"✅ Tests Passed: {tests_passed}")
     print(f"❌ Tests Failed: {tests_failed}")
-    print(f"📊 Success Rate: {tests_passed}/{tests_passed + tests_failed} ({(tests_passed/(tests_passed+tests_failed)*100):.1f}%)")
+    total = tests_passed + tests_failed
+    if total > 0:
+        print(f"📊 Success Rate: {tests_passed}/{total} ({(tests_passed/total*100):.1f}%)")
+    else:
+        print("📊 Success Rate: N/A (no tests run)")
     print("="*60)
     
     # Exit with appropriate code

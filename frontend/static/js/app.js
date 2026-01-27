@@ -423,9 +423,8 @@ async function handleTradingToggle() {
     }
 }
 
-// Update loadTradingStatus to sync toggle state
-const originalLoadTradingStatus = loadTradingStatus;
-loadTradingStatus = async function() {
+// Enhanced loadTradingStatus to sync toggle state
+async function loadTradingStatus() {
     try {
         const status = await apiRequest('/api/trading/status');
         
@@ -447,4 +446,4 @@ loadTradingStatus = async function() {
     } catch (error) {
         console.error('Failed to load trading status:', error);
     }
-};
+}

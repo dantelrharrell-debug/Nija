@@ -280,13 +280,6 @@ async def register(user_data: UserRegister, request: Request):
             detail="Failed to create user"
         )
     
-    # Create user profile in old manager (for backward compatibility)
-    user_manager.create_user(
-        user_id=user_id,
-        email=email,
-        subscription_tier=user_data.subscription_tier
-    )
-    
     # Register permissions based on tier
     max_position_size = {
         'basic': 100.0,
@@ -436,15 +429,6 @@ async def add_broker(
             detail="Failed to store credentials"
         )
     
-    # Also store in old manager for backward compatibility
-    api_key_manager.store_user_api_key(
-        user_id=user_id,
-        broker=broker_name.lower(),
-        api_key=credentials.api_key,
-        api_secret=credentials.api_secret,
-        additional_params=credentials.additional_params
-    )
-    
     logger.info(f"✅ User {user_id} added {broker_name} credentials")
     
     return {"message": f"{broker_name} credentials added successfully", "broker": broker_name}
@@ -461,9 +445,6 @@ async def remove_broker(
     
     # Remove from vault
     success = vault.delete_credentials(user_id, broker_name.lower(), ip_address)
-    
-    # Also remove from old manager
-    api_key_manager.delete_user_api_key(user_id, broker_name.lower())
     
     if not success:
         raise HTTPException(

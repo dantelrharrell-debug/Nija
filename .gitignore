@@ -60,8 +60,8 @@ data/webhook_config_test_*.json
 # Secure vault database (contains encrypted credentials)
 vault.db
 vault.db-journal
-*.db
-*.db-journal
+users.db
+users.db-journal
 
 # User YAML configuration files with API keys (should not be committed)
 config/users/*.yaml
