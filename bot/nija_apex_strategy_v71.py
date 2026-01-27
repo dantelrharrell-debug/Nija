@@ -156,12 +156,13 @@ class NIJAApexStrategyV71:
                 logger.info("ℹ️  Enhanced scoring disabled by configuration")
         
         # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
-        # RELAXED FILTERS (Jan 26, 2026): Lower thresholds to allow more trading opportunities in low-capital mode
-        self.min_adx = self.config.get('min_adx', 15)  # Lowered from 20 to 15 - allow weaker trends
-        self.volume_threshold = self.config.get('volume_threshold', 0.3)  # Lowered from 0.5 to 0.3 - 30% of 5-candle avg
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.05)  # Lowered from 0.10 to 0.05 - avoid only dead markets
-        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # Minimum trend conditions (out of 5) - lowered from 3 to 2
-        self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 6)
+        # ULTRA RELAXED FILTERS (Jan 27, 2026 - SECOND RELAXATION): Further reduced to find trading opportunities
+        # First relaxation (Jan 26) still resulted in 0 signals - need more aggressive relaxation
+        self.min_adx = self.config.get('min_adx', 12)  # Lowered from 15 to 12 - allow even weaker trends
+        self.volume_threshold = self.config.get('volume_threshold', 0.2)  # Lowered from 0.3 to 0.2 - 20% of 5-candle avg
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.02)  # Lowered from 0.05 to 0.02 - only filter completely dead markets
+        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # Keep at 2/5 - already relaxed
+        self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 3)  # Lowered from 6 to 3 seconds
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
         # PROFIT OPTIMIZATION: Stepped profit-taking configuration
@@ -297,8 +298,9 @@ class NIJAApexStrategyV71:
         - VWAP alignment (price above for uptrend, below for downtrend)
         - EMA sequence (9 > 21 > 50 for uptrend, 9 < 21 < 50 for downtrend)
         - MACD histogram alignment (positive for uptrend, negative for downtrend)
-        - ADX > 20 (sufficient trend strength)
-        - Volume > 50% of 5-candle average
+        - ADX > min_adx (configurable, default 12 - relaxed for signal generation)
+        - Volume (market filter) > volume_threshold of 5-candle average (configurable, default 20%)
+        - Volume (smart filter) > volume_min_threshold of 20-candle average (configurable, default 2%)
         
         Args:
             df: Price DataFrame
@@ -541,8 +543,8 @@ class NIJAApexStrategyV71:
         
         Filters:
         1. No trades 5 min before/after major news (stub - placeholder for News API)
-        2. No trades if volume < 30% avg
-        3. No trading during first 6 seconds of a new candle (per-symbol tracking)
+        2. No trades if volume < 2% avg (20-candle rolling average - ultra-relaxed to find opportunities)
+        3. No trading during first 3 seconds of a new candle (per-symbol tracking)
         
         Args:
             df: Price DataFrame
@@ -557,7 +559,8 @@ class NIJAApexStrategyV71:
         # For now, this is a placeholder that always passes
         news_clear = True  # Stub: would check upcoming news events here
         
-        # Filter 2: Volume filter - threshold is configurable via volume_min_threshold (default 5%)
+        # Filter 2: Volume filter - threshold is configurable via volume_min_threshold (default 2%)
+        # ULTRA RELAXED (Jan 27, 2026): Lowered from 5% to 2% to allow more trading opportunities
         avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
@@ -566,7 +569,8 @@ class NIJAApexStrategyV71:
             logger.debug(f'   🔇 Smart filter (volume): {volume_ratio*100:.1f}% < {self.volume_min_threshold*100:.0f}% threshold')
             return False, f'Volume too low ({volume_ratio*100:.1f}% of avg) - threshold: {self.volume_min_threshold*100:.0f}%'
         
-        # Filter 3: Candle timing filter (first 6 seconds)
+        # Filter 3: Candle timing filter (first 3 seconds)
+        # ULTRA RELAXED (Jan 27, 2026): Lowered from 6 to 3 seconds to allow more opportunities
         # Detect new candle by comparing timestamps
         # CRITICAL FIX (Jan 27, 2026): Use per-symbol tracking to avoid cross-market contamination
         # Previously used single instance variable causing all markets to block each other
@@ -577,7 +581,7 @@ class NIJAApexStrategyV71:
                 current_candle_time = df.index[-1]
                 last_candle_time = self.last_candle_times.get(symbol)
                 
-                # If we have timestamp data, check if we're in first 6 seconds
+                # If we have timestamp data, check if we're in first 3 seconds
                 if last_candle_time != current_candle_time:
                     # New candle detected - store time and check elapsed time
                     if last_candle_time is None:
