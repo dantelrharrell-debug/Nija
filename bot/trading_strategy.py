@@ -118,18 +118,10 @@ MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 
                             # This conservative rate ensures API key never gets temporarily blocked
 
 # Broker balance fetch timeout constants (Jan 27, 2026)
-# CRITICAL FIX: Reduced timeout from 45s to 20s to prevent long delays
-# Used in _is_broker_eligible_for_entry to prevent hanging on slow balance fetches
-# 
-# TIMEOUT RATIONALE:
-# - Kraken API typically responds in 1-5s under normal conditions
-# - Coinbase API typically responds in 0.5-2s under normal conditions
-# - Network latency adds ~0.5-1s
-# - Under load, APIs can take 10-15s
-# - 20s allows 2-3 retry attempts within timeout window while preventing excessive delays
-# - Previous 45s timeout was too long and blocked broker selection for too long
-# - If timeout occurs, cached balance is used as fallback (see CACHED_BALANCE_MAX_AGE_SECONDS)
-BALANCE_FETCH_TIMEOUT = 20  # Maximum time to wait for balance fetch (reduced from 45s)
+# CRITICAL FIX: Reduced from 45s to 20s to prevent broker selection delays
+# 20s chosen based on: APIs respond in 1-5s normally, 10-15s under load, allows 2-3 retries
+# If timeout occurs, cached balance is used as fallback (max age: 5 minutes)
+BALANCE_FETCH_TIMEOUT = 20  # Maximum time to wait for balance fetch
 CACHED_BALANCE_MAX_AGE_SECONDS = 300  # Use cached balance if fresh (5 minutes max staleness)
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
@@ -373,16 +365,11 @@ def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
         return None, TimeoutError(f"Operation timed out after {timeout_seconds}s")
 
     # CRITICAL FIX: Use get() with small timeout instead of get_nowait()
-    # This prevents race condition where thread completes but hasn't written to queue yet
-    # 
-    # QUEUE TIMEOUT RATIONALE:
-    # - After thread.join() returns, thread has completed execution
-    # - However, there's a small window where result may not be in queue yet (OS scheduling)
-    # - 1.0s timeout is generous - actual queue write typically happens in <10ms
-    # - This ensures we wait for the result without blocking indefinitely
-    # - If queue is truly empty after 1s, something is seriously wrong (return error)
+    # FIX: Use get(timeout=1.0) instead of get_nowait() to prevent race condition
+    # After thread.join(), there's a small window where result may not be in queue yet
+    # 1.0s timeout is generous - actual queue write happens in <10ms
     try:
-        ok, value = result_queue.get(timeout=1.0)  # Wait up to 1 second for result
+        ok, value = result_queue.get(timeout=1.0)
         return (value, None) if ok else (None, value)
     except queue.Empty:
         # This should never happen if thread completed, but handle it anyway
@@ -3436,7 +3423,7 @@ class TradingStrategy:
                     logger.error(f"   Exception type: {type(broker_check_error).__name__}")
                     import traceback
                     logger.error(f"   Traceback: {traceback.format_exc()}")
-                    logger.error(f"   ℹ️  This error prevented broker selection - bot will skip market scanning")
+                    logger.error(f"   ⚠️  This error prevented broker selection - bot will skip market scanning")
                     can_enter = False
                     skip_reasons.append(f"Broker eligibility check failed: {broker_check_error}")
                     # Set entry_broker to None to ensure it's defined for later code
