@@ -83,4 +83,5 @@ __all__ = [
     'execution_router',
     'equity_broker_integration',
     'revenue_tracker',
+    'global_risk_engine',
 ]
