@@ -87,18 +87,34 @@ app = FastAPI(
     redoc_url="/api/v1/redoc"
 )
 
-# CORS configuration - Allow all origins for development
-# TODO: In production, restrict to specific origins (mobile app domains)
+# CORS configuration
+allowed_origins = os.getenv('ALLOWED_ORIGINS', '*')
+if allowed_origins == '*':
+    logger.warning("⚠️  SECURITY WARNING: CORS is configured to allow ALL origins (*)")
+    logger.warning("⚠️  For production, set ALLOWED_ORIGINS environment variable")
+    logger.warning("⚠️  Example: ALLOWED_ORIGINS=https://app.example.com,https://mobile.example.com")
+    
+# Parse origins from comma-separated string or use wildcard
+origins_list = allowed_origins.split(',') if allowed_origins != '*' else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
+    allow_origins=origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Configuration
-JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'dev-secret-key-change-in-production')
+JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
+if not JWT_SECRET_KEY:
+    logger.critical("🔒 SECURITY WARNING: JWT_SECRET_KEY environment variable not set!")
+    logger.critical("🔒 Please set JWT_SECRET_KEY to a secure random value before deploying.")
+    logger.critical("🔒 Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'")
+    # Exit immediately if no JWT secret is configured
+    import sys
+    sys.exit(1)
+
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
 
@@ -315,10 +331,10 @@ async def start_trading(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"🔥 Error starting trading for user {user_id}: {e}")
+        logger.error(f"🔥 Error starting trading for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
+            detail="Internal server error. Please try again later."
         )
 
 
@@ -370,10 +386,10 @@ async def stop_trading(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"🔥 Error stopping trading for user {user_id}: {e}")
+        logger.error(f"🔥 Error stopping trading for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
+            detail="Internal server error. Please try again later."
         )
 
 
@@ -391,28 +407,27 @@ async def get_balance(
         logger.info(f"💰 Balance request from user {user_id}")
         
         # TODO: Integrate with actual broker balance query
-        # For now, return mock data
-        # In production, this would call:
-        # broker = get_broker_manager(user_id)
-        # balance = broker.get_account_balance()
+        # This endpoint is not yet fully implemented
+        logger.warning(f"⚠️  Balance endpoint called but returning mock data for user {user_id}")
         
-        mock_balance = 1000.0  # Mock balance
+        # Return mock data with clear indication
+        mock_balance = 1000.0
         
         return BalanceResponse(
             success=True,
             balance=mock_balance,
             currency="USD",
-            available_for_trading=mock_balance * 0.95,  # 95% available
-            broker="Coinbase"
+            available_for_trading=mock_balance * 0.95,
+            broker="Mock (Not Connected)"  # Clear indicator this is mock data
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"🔥 Error fetching balance for user {user_id}: {e}")
+        logger.error(f"🔥 Error fetching balance for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
+            detail="Internal server error. Please try again later."
         )
 
 
@@ -469,10 +484,10 @@ async def get_positions(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"🔥 Error fetching positions for user {user_id}: {e}")
+        logger.error(f"🔥 Error fetching positions for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
+            detail="Internal server error. Please try again later."
         )
 
 
@@ -541,10 +556,10 @@ async def get_performance(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"🔥 Error fetching performance for user {user_id}: {e}")
+        logger.error(f"🔥 Error fetching performance for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
+            detail="Internal server error. Please try again later."
         )
 
 

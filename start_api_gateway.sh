@@ -41,6 +41,25 @@ $PY -c "import uvicorn; print('✅ Uvicorn available')" 2>&1 || {
 # Set default port if not specified
 PORT=${PORT:-8000}
 
+# Check for JWT_SECRET_KEY (required for production)
+if [ -z "$JWT_SECRET_KEY" ]; then
+    echo ""
+    echo "⚠️  WARNING: JWT_SECRET_KEY environment variable not set"
+    echo "   This is REQUIRED for the API Gateway to start."
+    echo ""
+    echo "🔧 SOLUTION:"
+    echo "   Generate a secure secret:"
+    echo "   python -c \"import secrets; print(secrets.token_hex(32))\""
+    echo ""
+    echo "   Then set it:"
+    echo "   export JWT_SECRET_KEY='your-generated-secret'"
+    echo ""
+    echo "   Or add to .env file:"
+    echo "   echo \"JWT_SECRET_KEY=your-generated-secret\" >> .env"
+    echo ""
+    exit 1
+fi
+
 echo ""
 echo "🚀 Starting NIJA API Gateway on port $PORT"
 echo "📚 API Docs: http://localhost:$PORT/api/v1/docs"
