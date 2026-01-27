@@ -93,14 +93,18 @@ if allowed_origins == '*':
     logger.warning("⚠️  SECURITY WARNING: CORS is configured to allow ALL origins (*)")
     logger.warning("⚠️  For production, set ALLOWED_ORIGINS environment variable")
     logger.warning("⚠️  Example: ALLOWED_ORIGINS=https://app.example.com,https://mobile.example.com")
+    logger.warning("⚠️  Disabling credentials for wildcard CORS (security requirement)")
     
 # Parse origins from comma-separated string or use wildcard
 origins_list = allowed_origins.split(',') if allowed_origins != '*' else ["*"]
 
+# When using wildcard origins, credentials must be disabled for security
+allow_credentials = allowed_origins != '*'
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins_list,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -112,7 +116,6 @@ if not JWT_SECRET_KEY:
     logger.critical("🔒 Please set JWT_SECRET_KEY to a secure random value before deploying.")
     logger.critical("🔒 Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'")
     # Exit immediately if no JWT secret is configured
-    import sys
     sys.exit(1)
 
 JWT_ALGORITHM = "HS256"

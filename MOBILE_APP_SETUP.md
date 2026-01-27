@@ -276,7 +276,9 @@ Create a file `services/nijaApi.js`:
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BASE_URL = 'https://your-nija-deployment.railway.app';
+// Configuration - use environment variable in production
+// Example: Set REACT_APP_API_URL in your .env file
+const BASE_URL = process.env.REACT_APP_API_URL || 'https://your-nija-deployment.railway.app';
 
 class NijaApiClient {
   constructor() {
@@ -599,8 +601,15 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+// Configuration - use environment variable or app config in production
+// You can pass this via build-time configuration or runtime config
 class NijaApiClient {
-  static const String baseUrl = 'https://your-nija-deployment.railway.app';
+  // Default to production URL, override via constructor
+  final String baseUrl;
+  
+  NijaApiClient({
+    this.baseUrl = 'https://your-nija-deployment.railway.app'
+  });
   
   Future<Map<String, String>> _getHeaders() async {
     final prefs = await SharedPreferences.getInstance();
