@@ -32,6 +32,7 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
+email-validator==2.3.0
 fqdn==1.5.1
 gitdb==4.0.12
 GitPython==3.1.45
