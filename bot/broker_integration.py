@@ -746,8 +746,15 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.error(f"Failed to connect to Kraken: {e}")
             return False
     
-    def get_account_balance(self) -> Dict[str, float]:
-        """Get Kraken account balance with proper error handling."""
+    def get_account_balance(self, verbose: bool = True) -> Dict[str, float]:
+        """Get Kraken account balance with proper error handling.
+        
+        Args:
+            verbose: If True, log balance info. If False, suppress verbose logging.
+        
+        Returns:
+            Dict with balance information including total_balance, available_balance, currency, and error status.
+        """
         try:
             if not self.api:
                 return {
@@ -764,7 +771,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Check for API errors
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
-                logger.error(f"Kraken API error fetching balance: {error_msgs}")
+                if verbose:
+                    logger.error(f"Kraken API error fetching balance: {error_msgs}")
                 return {
                     'total_balance': 0.0,
                     'available_balance': 0.0,
@@ -779,7 +787,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                 usdt_balance = float(result.get('USDT', 0))
                 total = usd_balance + usdt_balance
                 
-                logger.info(f"Kraken balance: USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
+                if verbose:
+                    logger.info(f"Kraken balance: USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
                 
                 return {
                     'total_balance': total,
@@ -798,7 +807,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             }
             
         except Exception as e:
-            logger.error(f"Error fetching Kraken balance: {e}")
+            if verbose:
+                logger.error(f"Error fetching Kraken balance: {e}")
             return {
                 'total_balance': 0.0,
                 'available_balance': 0.0,

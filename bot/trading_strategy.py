@@ -169,55 +169,53 @@ PROFIT_TARGETS = [
     (1.0, "Profit target +1.0% (Net ~-0.4% after fees) - EMERGENCY"),    # Emergency exit to prevent larger loss
 ]
 
-# BROKER-SPECIFIC PROFIT TARGETS (Jan 23, 2026 - OPTIMIZED)
+# BROKER-SPECIFIC PROFIT TARGETS (Jan 27, 2026 - PROFITABILITY FIX)
 # Different brokers have different fee structures, requiring different profit targets
 # These ensure NET profitability after fees for each broker
 # PHILOSOPHY: "Little loss, major profit" - tight stops, wide profit targets
+# Kraken fees: ~0.52% round-trip (0.26% taker fee x 2 sides)
+# Using 0.6% in calculations for safety margin (includes spread)
 PROFIT_TARGETS_KRAKEN = [
-    (3.0, "Profit target +3.0% (Net +2.64% after 0.36% fees) - MAJOR PROFIT"),  # Major profit - let winners run
-    (2.0, "Profit target +2.0% (Net +1.64% after fees) - EXCELLENT"),           # Excellent profit
-    (1.0, "Profit target +1.0% (Net +0.64% after 0.36% fees) - GOOD"),          # Good profit
-    (0.7, "Profit target +0.7% (Net +0.34% after fees) - ACCEPTABLE"),          # Still profitable
-    (0.5, "Profit target +0.5% (Net +0.14% after fees) - MINIMAL"),             # Tight margin but profitable
+    (4.0, "Profit target +4.0% (Net +3.4% after 0.6% fees) - MAJOR PROFIT"),    # Major profit - let winners run
+    (3.0, "Profit target +3.0% (Net +2.4% after 0.6% fees) - EXCELLENT"),       # Excellent profit
+    (2.0, "Profit target +2.0% (Net +1.4% after 0.6% fees) - GOOD"),            # Good profit (preferred target)
+    (1.5, "Profit target +1.5% (Net +0.9% after 0.6% fees) - ACCEPTABLE"),      # Acceptable profit
+    (1.0, "Profit target +1.0% (Net +0.4% after 0.6% fees) - MINIMAL"),         # Bare minimum profit
 ]
 
-# 🚨 COINBASE LOCKDOWN (Jan 2026) - AGGRESSIVE PROFIT-TAKING
-# Coinbase has been holding positions too long - take profits MUCH faster
-# Lower all profit targets to lock in gains before reversals
-# NOTE: Targets below 1.4% are loss mitigation (not true profit after fees)
-# These accept small losses (-0.2%, -0.4%, -0.6%) to prevent larger reversals
+# 🚨 COINBASE PROFIT FIX (Jan 2026) - ENSURE NET PROFITABILITY
+# Coinbase fees are 1.4% round-trip (0.7% entry + 0.7% exit)
+# ALL profit targets must exceed 1.6% to ensure NET profitability after fees and spread
+# REMOVED all loss-making "emergency exit" targets - these guaranteed losses
+# PHILOSOPHY: Only take trades with positive risk/reward ratio
 PROFIT_TARGETS_COINBASE = [
-    (2.0, "Profit target +2.0% (Net +0.6% after fees) - EXCELLENT"),            # Excellent profit
-    (1.5, "Profit target +1.5% (Net +0.1% after 1.4% fees) - GOOD"),            # Barely profitable
-    (1.2, "Loss mitigation +1.2% (Net -0.2% after fees) - Accept small loss vs reversal"),
-    (1.0, "Loss mitigation +1.0% (Net -0.4% after fees) - Emergency exit"),
-    (0.8, "Loss mitigation +0.8% (Net -0.6% after fees) - LOCKDOWN - exit fast"),
+    (5.0, "Profit target +5.0% (Net +3.6% after 1.4% fees) - MAJOR PROFIT"),    # Major profit - let winners run
+    (3.5, "Profit target +3.5% (Net +2.1% after 1.4% fees) - EXCELLENT"),       # Excellent profit
+    (2.5, "Profit target +2.5% (Net +1.1% after 1.4% fees) - GOOD"),            # Good profit (preferred target)
+    (2.0, "Profit target +2.0% (Net +0.6% after fees) - ACCEPTABLE"),           # Minimum acceptable profit
+    (1.6, "Profit target +1.6% (Net +0.2% after fees) - MINIMAL"),              # Bare minimum (emergency only)
 ]
 
-# CRITICAL FIX (Jan 13, 2026): Tightened profit targets to lock gains faster
-# NIJA is for PROFIT - take gains quickly before reversals
-# Fee structure: See fee_aware_config.py - MARKET_ORDER_ROUND_TRIP = 1.4% (default)
-# First target (1.5%) is NET profitable after fees: 1.5% - 1.4% = +0.1% profit
-# Second target (1.2%) accepts small loss to prevent larger reversal: 1.2% - 1.4% = -0.2% (vs -1.0% stop)
-# Third target (1.0%) is emergency exit: 1.0% - 1.4% = -0.4% (still better than -1.0% stop loss)
-# The bot checks targets from TOP to BOTTOM, so it exits at 1.5% if available, 1.2% if not, etc.
+# PROFITABILITY FIX (Jan 27, 2026): Updated profit targets to ensure NET gains
+# NIJA is for PROFIT - all targets now ensure positive returns after fees
+# Fee structure: Coinbase 1.4% round-trip, Kraken 0.4% round-trip
+# New targets: Coinbase 2.5%+ (net 1.1%+), Kraken 2.0%+ (net 1.6%+)
+# Risk/Reward: Minimum 2:1 ratio enforced via stop loss sizing
 
-# FIX #3: Minimum Profit Threshold
+# FIX #3: Minimum Profit Threshold (Updated for new targets)
 # Calculate required profit = spread + fees + buffer before allowing exit
-# Coinbase: ~0.6% taker fee + ~0.2% spread = 0.8% one way, 1.6% round-trip
+# Coinbase: ~0.7% taker fee x2 + ~0.2% spread = 1.6% round-trip
 MIN_PROFIT_SPREAD = 0.002  # 0.2% estimated spread cost
-MIN_PROFIT_FEES = 0.012  # 1.2% estimated fees (0.6% per side)
+MIN_PROFIT_FEES = 0.014  # 1.4% total fees (0.7% per side)
 MIN_PROFIT_BUFFER = 0.002  # 0.2% safety buffer
-MIN_PROFIT_THRESHOLD = 0.016  # 1.6% minimum profit (spread + fees + buffer)
+MIN_PROFIT_THRESHOLD = 0.020  # 2.0% minimum profit (updated from 1.6% to match new targets)
 
-# PROFIT PROTECTION: Never Break Even, Never Loss (Jan 23, 2026)
-# NIJA is for PROFIT ONLY - take profit when profit decreases more than 0.5%
-# Fixed 0.5% pullback allowed - exit when profit drops 0.5%+ from previous check
-# Learning and adjusting: exit when pullback exceeds 0.5 percentage points
+# PROFIT PROTECTION: Updated for new profit targets (Jan 27, 2026)
+# Allow slightly larger pullback since profit targets are higher
 PROFIT_PROTECTION_ENABLED = True  # Enable profit protection system
-PROFIT_PROTECTION_PULLBACK_FIXED = 0.005  # Fixed 0.5% pullback allowed (0.005 = 0.5 percentage points)
-PROFIT_PROTECTION_MIN_PROFIT = 0.016  # Must exceed min threshold (1.6% for Coinbase) before protection activates
-PROFIT_PROTECTION_MIN_PROFIT_KRAKEN = 0.005  # Must exceed min threshold (0.5% for Kraken) before protection activates
+PROFIT_PROTECTION_PULLBACK_FIXED = 0.008  # Allow 0.8% pullback (increased from 0.5%)
+PROFIT_PROTECTION_MIN_PROFIT = 0.020  # Must exceed 2.0% for Coinbase before protection activates
+PROFIT_PROTECTION_MIN_PROFIT_KRAKEN = 0.010  # Must exceed 1.0% for Kraken before protection activates
 PROFIT_PROTECTION_NEVER_BREAKEVEN = True  # Never allow profitable positions to break even
 
 # Stop loss thresholds - ULTRA-AGGRESSIVE (V7.4 FIX - Jan 19, 2026)
@@ -230,27 +228,34 @@ PROFIT_PROTECTION_NEVER_BREAKEVEN = True  # Never allow profitable positions to 
 # Tier 2: Emergency micro-stop (-0.01%) - Logic failure prevention (not a trading stop)
 # Tier 3: Catastrophic failsafe (-5.0%) - Last resort protection
 
-# TIER 1: PRIMARY TRADING STOP-LOSS (Kraken small balances)
-# For small Kraken accounts, use -0.6% to -0.8% as the PRIMARY stop-loss
-# This accounts for Kraken's lower fees (0.36% round-trip) vs Coinbase (1.4%)
-STOP_LOSS_PRIMARY_KRAKEN = -0.008  # -0.8% for Kraken small balances (spread + fees + buffer)
-STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.006  # -0.6% minimum (tightest acceptable)
-STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.008  # -0.8% maximum (conservative)
+# 🚨 STOP LOSS FIX (Jan 27, 2026) - PROPER RISK/REWARD RATIO
+# Updated to ensure minimum 2:1 reward-to-risk ratio
+# With profit targets of 2.5%+ (Coinbase) and 2.0%+ (Kraken),
+# stop losses must be proportionally sized to maintain good risk/reward
+
+# TIER 1: PRIMARY TRADING STOP-LOSS
+# Kraken: With 2.0% profit target, use max 1.0% stop for 2:1 ratio
+STOP_LOSS_PRIMARY_KRAKEN = -0.010  # -1.0% for Kraken (allows 2:1 ratio with 2% profit target)
+STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.008  # -0.8% minimum (tighter for strong setups)
+STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.012  # -1.2% maximum (wider for volatile markets)
+
+# Coinbase: With 2.5% profit target, use max 1.25% stop for 2:1 ratio
+STOP_LOSS_PRIMARY_COINBASE = -0.0125  # -1.25% primary stop for Coinbase (2:1 ratio with 2.5% target)
+COINBASE_STOP_LOSS_MIN = -0.010  # -1.0% minimum (tighter for strong setups)
+COINBASE_STOP_LOSS_MAX = -0.015  # -1.5% maximum (wider for volatile markets)
+
+# Remove the "exit on ANY loss" requirement - this was causing premature exits
+COINBASE_EXIT_ANY_LOSS = False  # Allow positions to breathe, honor stop loss levels
+COINBASE_MAX_HOLD_MINUTES = 60  # Increased from 30 to 60 minutes (allow time for profit)
+COINBASE_PROFIT_LOCK_ENABLED = True  # Enable aggressive profit-taking on Coinbase
 
 # TIER 2: EMERGENCY MICRO-STOP (Logic failure prevention)
 # This is NOT a trading stop - it's a failsafe to prevent logic failures
 # Examples: imported positions without entry price, calculation errors, data corruption
 # Terminology: "Emergency micro-stop to prevent logic failures (not a trading stop)"
-STOP_LOSS_MICRO = -0.01  # -1% emergency micro-stop for logic failure prevention
-STOP_LOSS_WARNING = -0.01  # Same as micro-stop - warn immediately
-STOP_LOSS_THRESHOLD = -0.01  # Legacy threshold (same as micro-stop)
-
-# 🚨 COINBASE LOCKDOWN (Jan 2026) - AGGRESSIVE EXIT ENFORCEMENT
-# Coinbase has been holding losing trades - tighten all exit triggers
-STOP_LOSS_PRIMARY_COINBASE = -0.005  # -0.5% primary stop for Coinbase (tightened from -1.0%)
-COINBASE_EXIT_ANY_LOSS = True  # Exit Coinbase positions on ANY loss (P&L < 0%)
-COINBASE_MAX_HOLD_MINUTES = 30  # Force exit Coinbase positions after 30 minutes max
-COINBASE_PROFIT_LOCK_ENABLED = True  # Enable aggressive profit-taking on Coinbase
+STOP_LOSS_MICRO = -0.02  # -2% emergency micro-stop for logic failure prevention
+STOP_LOSS_WARNING = -0.02  # Same as micro-stop - warn immediately
+STOP_LOSS_THRESHOLD = -0.02  # Legacy threshold (same as micro-stop)
 
 # TIER 3: CATASTROPHIC FAILSAFE
 # Last resort protection - should NEVER be reached in normal operation
