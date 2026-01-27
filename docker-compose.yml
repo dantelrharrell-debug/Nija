@@ -1,0 +1,104 @@
+# Docker Compose for NIJA Platform
+# Production-grade stack with FastAPI, PostgreSQL, and Redis
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: nija-postgres
+    environment:
+      POSTGRES_DB: nija
+      POSTGRES_USER: nija_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nija_user -d nija"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nija-network
+
+  # Redis Cache & Job Queue
+  redis:
+    image: redis:7-alpine
+    container_name: nija-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nija-network
+
+  # FastAPI Backend (API Gateway)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: nija-api
+    environment:
+      # Database
+      DATABASE_URL: postgresql://nija_user:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/nija
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      # JWT
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_EXPIRATION_HOURS: 24
+      # Server
+      PORT: 8000
+      DEBUG: ${DEBUG:-false}
+      # Existing NIJA env vars (optional - for master account)
+      COINBASE_API_KEY: ${COINBASE_API_KEY:-}
+      COINBASE_API_SECRET: ${COINBASE_API_SECRET:-}
+      KRAKEN_MASTER_API_KEY: ${KRAKEN_MASTER_API_KEY:-}
+      KRAKEN_MASTER_API_SECRET: ${KRAKEN_MASTER_API_SECRET:-}
+    volumes:
+      - ./:/app
+      - /app/__pycache__
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - nija-network
+    restart: unless-stopped
+
+  # Web Dashboard (Next.js) - TODO: Create separate service
+  # web:
+  #   build:
+  #     context: ./web-dashboard
+  #     dockerfile: Dockerfile
+  #   container_name: nija-web
+  #   environment:
+  #     NEXT_PUBLIC_API_URL: http://api:8000
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - api
+  #   networks:
+  #     - nija-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  nija-network:
+    driver: bridge

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="NIJA AI Trading Platform - Autonomous cryptocurrency trading">
+    <title>NIJA - AI Trading Platform</title>
+    <link rel="stylesheet" href="../static/css/style.css">
+    <link rel="manifest" href="../static/manifest.json">
+    <meta name="theme-color" content="#6366f1">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+</head>
+<body>
+    <div id="app" class="app-container">
+        <!-- Loading Screen -->
+        <div id="loading-screen" class="loading-screen">
+            <div class="loader"></div>
+            <p>Loading NIJA...</p>
+        </div>
+
+        <!-- Login/Register Screen -->
+        <div id="auth-screen" class="auth-screen hidden">
+            <div class="auth-container">
+                <div class="auth-header">
+                    <h1>🤖 NIJA</h1>
+                    <p>AI-Powered Trading Platform</p>
+                </div>
+
+                <!-- Login Form -->
+                <div id="login-form" class="auth-form">
+                    <h2>Login</h2>
+                    <form onsubmit="handleLogin(event)">
+                        <div class="form-group">
+                            <label for="login-email">Email</label>
+                            <input type="email" id="login-email" required placeholder="you@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="login-password">Password</label>
+                            <input type="password" id="login-password" required placeholder="••••••••">
+                        </div>
+                        <button type="submit" class="btn btn-primary">Login</button>
+                    </form>
+                    <p class="auth-switch">
+                        Don't have an account? 
+                        <a href="#" onclick="showRegisterForm()">Register</a>
+                    </p>
+                </div>
+
+                <!-- Register Form -->
+                <div id="register-form" class="auth-form hidden">
+                    <h2>Register</h2>
+                    <form onsubmit="handleRegister(event)">
+                        <div class="form-group">
+                            <label for="register-email">Email</label>
+                            <input type="email" id="register-email" required placeholder="you@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="register-password">Password</label>
+                            <input type="password" id="register-password" required placeholder="••••••••">
+                        </div>
+                        <div class="form-group">
+                            <label for="register-tier">Subscription Tier</label>
+                            <select id="register-tier">
+                                <option value="basic">Basic ($100 max position)</option>
+                                <option value="pro">Pro ($1,000 max position)</option>
+                                <option value="enterprise">Enterprise ($10,000 max position)</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Register</button>
+                    </form>
+                    <p class="auth-switch">
+                        Already have an account? 
+                        <a href="#" onclick="showLoginForm()">Login</a>
+                    </p>
+                </div>
+
+                <div id="auth-error" class="error-message hidden"></div>
+            </div>
+        </div>
+
+        <!-- Main Dashboard -->
+        <div id="dashboard-screen" class="dashboard-screen hidden">
+            <!-- Navigation Bar -->
+            <nav class="navbar">
+                <div class="navbar-brand">
+                    <h1>🤖 NIJA</h1>
+                </div>
+                <div class="navbar-menu">
+                    <a href="#" onclick="showDashboard()" class="nav-link active">Dashboard</a>
+                    <a href="#" onclick="showBrokers()" class="nav-link">Brokers</a>
+                    <a href="#" onclick="showSettings()" class="nav-link">Settings</a>
+                    <a href="#" onclick="handleLogout()" class="nav-link">Logout</a>
+                </div>
+            </nav>
+
+            <!-- Dashboard Content -->
+            <div id="dashboard-content" class="dashboard-content">
+                <div class="dashboard-header">
+                    <h2>Trading Dashboard</h2>
+                    <div class="user-info">
+                        <span id="user-email"></span>
+                        <span class="badge" id="user-tier"></span>
+                    </div>
+                </div>
+
+                <!-- Stats Cards -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Total P&L</div>
+                        <div class="stat-value" id="stat-pnl">$0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Win Rate</div>
+                        <div class="stat-value" id="stat-winrate">0%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total Trades</div>
+                        <div class="stat-value" id="stat-trades">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Active Positions</div>
+                        <div class="stat-value" id="stat-positions">0</div>
+                    </div>
+                </div>
+
+                <!-- Trading Status -->
+                <div class="section">
+                    <h3>Trading Status</h3>
+                    <div class="status-card">
+                        <div class="status-indicator">
+                            <span class="status-dot" id="status-dot"></span>
+                            <span id="status-text">Checking...</span>
+                        </div>
+                        <div class="status-details">
+                            <p>Engine: <span id="engine-status">-</span></p>
+                            <p>Last Trade: <span id="last-trade">Never</span></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Positions -->
+                <div class="section">
+                    <h3>Active Positions</h3>
+                    <div id="positions-container" class="positions-container">
+                        <p class="empty-state">No active positions</p>
+                    </div>
+                </div>
+
+                <!-- Recent Trades -->
+                <div class="section">
+                    <h3>Recent Trades</h3>
+                    <div id="trades-container" class="trades-container">
+                        <p class="empty-state">No recent trades</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Brokers Content -->
+            <div id="brokers-content" class="dashboard-content hidden">
+                <div class="dashboard-header">
+                    <h2>Broker Management</h2>
+                </div>
+
+                <div class="section">
+                    <h3>Connected Brokers</h3>
+                    <div id="brokers-list" class="brokers-list">
+                        <p class="empty-state">No brokers configured</p>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h3>Add New Broker</h3>
+                    <form id="add-broker-form" onsubmit="handleAddBroker(event)">
+                        <div class="form-group">
+                            <label for="broker-name">Broker</label>
+                            <select id="broker-name" required>
+                                <option value="">Select Broker</option>
+                                <option value="coinbase">Coinbase</option>
+                                <option value="kraken">Kraken</option>
+                                <option value="binance">Binance</option>
+                                <option value="okx">OKX</option>
+                                <option value="alpaca">Alpaca</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="broker-api-key">API Key</label>
+                            <input type="text" id="broker-api-key" required placeholder="Your API Key">
+                        </div>
+                        <div class="form-group">
+                            <label for="broker-api-secret">API Secret</label>
+                            <input type="password" id="broker-api-secret" required placeholder="Your API Secret">
+                        </div>
+                        <button type="submit" class="btn btn-primary">Add Broker</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Settings Content -->
+            <div id="settings-content" class="dashboard-content hidden">
+                <div class="dashboard-header">
+                    <h2>Settings</h2>
+                </div>
+
+                <div class="section">
+                    <h3>Account Information</h3>
+                    <div class="settings-grid">
+                        <div class="setting-item">
+                            <label>User ID</label>
+                            <div id="setting-user-id">-</div>
+                        </div>
+                        <div class="setting-item">
+                            <label>Email</label>
+                            <div id="setting-email">-</div>
+                        </div>
+                        <div class="setting-item">
+                            <label>Subscription Tier</label>
+                            <div id="setting-tier">-</div>
+                        </div>
+                        <div class="setting-item">
+                            <label>Max Position Size</label>
+                            <div id="setting-max-position">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="../static/js/app.js"></script>
+</body>
+</html>
