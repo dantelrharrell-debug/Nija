@@ -2056,16 +2056,19 @@ class CoinbaseBroker(BaseBroker):
             
             return 0.0
     
-    def get_account_balance_detailed(self) -> dict:
+    def get_account_balance_detailed(self, verbose: bool = True) -> dict:
         """Get detailed account balance information including crypto holdings.
         
         This is a public wrapper around _get_account_balance_detailed() for
         callers that need the full balance breakdown (crypto holdings, consumer wallets, etc).
         
+        Args:
+            verbose: If True, logs detailed balance breakdown (default: True)
+        
         Returns:
             dict: Detailed balance info with keys: usdc, usd, trading_balance, crypto, consumer_usd, consumer_usdc
         """
-        return self._get_account_balance_detailed()
+        return self._get_account_balance_detailed(verbose=verbose)
     
     def is_available(self) -> bool:
         """
