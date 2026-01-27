@@ -91,6 +91,18 @@ test_logs_*.txt
 *.swp
 
 # Temporary documentation (COMPREHENSIVE - prevents accumulation)
+# Core implementation documentation (allowed)
+!IMPLEMENTATION_SUMMARY.md
+!IMPLEMENTATION_SUMMARY_UNIFIED_EXECUTION.md
+!IMPLEMENTATION_COMPLETE.md
+!IMPLEMENTATION_COMPLETE_MULTI_ASSET.md
+!IMPLEMENTATION_SUMMARY_CONSUMER_PLATFORM.md
+!IMPLEMENTATION_SUMMARY_PROFIT_OPTIMIZATION.md
+!MOBILE_APP_IMPLEMENTATION_SUMMARY.md
+!KRAKEN_SYMBOL_MAPPER_IMPLEMENTATION.md
+# Mobile testing guide (allowed)
+!mobile/TESTING_GUIDE.md
+# Temporary documentation patterns (excluded)
 ANSWER*.md
 CHECK*.md
 FIX_*.md
@@ -114,6 +126,7 @@ ISSUE*.md
 INVESTIGATION*.md
 MASTER*.md
 KRAKEN*.md
+NONCE*.md
 !KRAKEN_SYMBOL_MAPPER_IMPLEMENTATION.md  # Core implementation doc
 NONCE*.md
 OPTION*.md
@@ -361,8 +374,14 @@ k8s/overlays/*/secrets.yaml
 k8s/**/secrets.yaml
 
 # Mobile app build artifacts
-ios/
-android/
+ios/App/
+ios/Pods/
+ios/*.xcworkspace
+android/app/build/
+android/app/release/
+android/.gradle/
+!mobile/ios/  # Keep mobile/ios config directory
+!mobile/android/  # Keep mobile/android config directory
 node_modules/
 package-lock.json
 

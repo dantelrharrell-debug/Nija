@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Base configuration for all connections -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <!-- Trust system certificates -->
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    
+    <!-- Development configuration (REMOVE for production) -->
+    <!-- This allows HTTP connections to localhost for testing -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">10.0.3.2</domain>
+    </domain-config>
+    
+    <!-- Production API domain configuration -->
+    <!-- Update with your actual API domain -->
+    <!--
+    <domain-config>
+        <domain includeSubdomains="true">your-api-domain.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+        <pin-set expiration="2027-01-01">
+            <pin digest="SHA-256">base64-encoded-public-key-hash</pin>
+        </pin-set>
+    </domain-config>
+    -->
+</network-security-config>
