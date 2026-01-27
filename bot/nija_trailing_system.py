@@ -209,10 +209,28 @@ class NIJATrailingSystem:
         # Get EMA-21
         ema_21 = self.calculate_ema(df).iloc[-1]
         
-        # PROFIT LOCK: Keep 95% of all gains (never give back more than 5%)
+        # PEAK PROFIT TRACKING: Track highest profit achieved
+        if 'peak_profit_pct' not in position:
+            position['peak_profit_pct'] = profit_pct
+        
+        # Update peak profit if current profit is higher
+        if profit_pct > position['peak_profit_pct']:
+            position['peak_profit_pct'] = profit_pct
+        
+        # PROFIT LOCK: Never give back more than 0.5% of peak profit
+        # Example: Peak 3% → Drops to 2.5% → Auto-exit to lock in 2.5%
         if profit_pct >= 0.25:
-            # Lock in 95% of profit (give back max 5%)
-            locked_profit = profit_pct * 0.95
+            # Calculate giveback from peak
+            giveback_pct = position['peak_profit_pct'] - profit_pct
+            
+            # Exit if giving back more than 0.5% (with small epsilon for floating point comparison)
+            GIVEBACK_THRESHOLD = 0.5
+            EPSILON = 0.001  # 0.001% tolerance for floating point errors
+            if giveback_pct > (GIVEBACK_THRESHOLD + EPSILON):
+                return 'close_all', position['remaining_size'], f"Auto-exit: Giveback {giveback_pct:.2f}% from peak {position['peak_profit_pct']:.2f}% (locked at +{profit_pct:.2f}%)"
+            
+            # Lock in current profit minus 0.5% buffer
+            locked_profit = position['peak_profit_pct'] - 0.5
             profit_lock_stop = entry_price * (1 + locked_profit / 100) if side == 'long' else entry_price * (1 - locked_profit / 100)
             
             # Use the better stop (initial stop or profit lock)
@@ -223,7 +241,7 @@ class NIJATrailingSystem:
             
             if not position.get('profit_lock_active', False):
                 position['profit_lock_active'] = True
-                print(f"   🔒 Profit lock active: Keep 95% of gains (stop at +{locked_profit:.2f}%)")
+                print(f"   🔒 Profit lock active: Allow max 0.5% giveback from peak (stop at +{locked_profit:.2f}%)")
         
         # Calculate trailing stop
         new_stop = self.calculate_trailing_stop(position, current_price, ema_21, profit_pct)
