@@ -77,4 +77,10 @@ def _check_import_access():
 
 __all__ = [
     'verify_core_access',
+    'multi_asset_router',
+    'asset_engines',
+    'tiered_risk_engine',
+    'execution_router',
+    'equity_broker_integration',
+    'revenue_tracker',
 ]
