@@ -567,30 +567,34 @@ class NIJAApexStrategyV71:
         
         # Filter 3: Candle timing filter (first 6 seconds)
         # Detect new candle by comparing timestamps
+        # CRITICAL FIX (Jan 27, 2026): Only apply candle timing filter if we have valid datetime index
+        # Previously this filter would default to blocking ALL trades when datetime index wasn't available
         if len(df) >= 2:
-            current_candle_time = df.index[-1] if hasattr(df, 'index') else current_time
-            
-            # If we have timestamp data, check if we're in first 6 seconds
-            if self.last_candle_time != current_candle_time:
-                # New candle detected - store time and check elapsed time
-                if self.last_candle_time is None:
-                    # First run - allow trade
-                    self.last_candle_time = current_candle_time
-                else:
-                    # Calculate time since candle started
-                    if hasattr(df.index, 'to_pydatetime'):
-                        # Pandas datetime index
-                        time_since_candle = (current_time - current_candle_time.to_pydatetime()).total_seconds()
+            # Check if we have a proper datetime index
+            if hasattr(df.index, 'to_pydatetime'):
+                # We have a datetime index - apply the candle timing filter
+                current_candle_time = df.index[-1]
+                
+                # If we have timestamp data, check if we're in first 6 seconds
+                if self.last_candle_time != current_candle_time:
+                    # New candle detected - store time and check elapsed time
+                    if self.last_candle_time is None:
+                        # First run - allow trade
+                        self.last_candle_time = current_candle_time
                     else:
-                        # Estimate: if this is a fresh candle check, assume we're early
-                        time_since_candle = 0
-                    
-                    self.last_candle_time = current_candle_time
-                    
-                    # Block trade if we're in first N seconds of new candle
-                    if time_since_candle < self.candle_exclusion_seconds:
-                        logger.debug(f'   🔇 Smart filter (candle timing): {time_since_candle:.0f}s < {self.candle_exclusion_seconds}s threshold')
-                        return False, f'First {self.candle_exclusion_seconds}s of new candle - waiting for stability'
+                        # Calculate time since candle started
+                        time_since_candle = (current_time - current_candle_time.to_pydatetime()).total_seconds()
+                        
+                        self.last_candle_time = current_candle_time
+                        
+                        # Block trade if we're in first N seconds of new candle
+                        if time_since_candle < self.candle_exclusion_seconds:
+                            logger.debug(f'   🔇 Smart filter (candle timing): {time_since_candle:.0f}s < {self.candle_exclusion_seconds}s threshold')
+                            return False, f'First {self.candle_exclusion_seconds}s of new candle - waiting for stability'
+            else:
+                # No datetime index available - skip candle timing filter
+                # This prevents blocking all trades when timestamp data isn't in the DataFrame index
+                logger.debug('   ℹ️  Candle timing filter skipped (no datetime index available)')
         
         return True, 'All smart filters passed'
     
