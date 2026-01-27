@@ -191,7 +191,7 @@ class AggregatorHandler(logging.Handler):
             # Add to aggregator
             self.aggregator.add_log(log_entry)
         
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
             self.handleError(record)
 
 

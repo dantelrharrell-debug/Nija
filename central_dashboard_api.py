@@ -439,29 +439,30 @@ def stream_metrics():
     Server-Sent Events (SSE) endpoint for real-time metrics streaming
     
     Usage: EventSource('/api/metrics/stream')
+    Note: This endpoint streams indefinitely. Clients should handle connection cleanup.
     """
     def generate():
         """Generate SSE events"""
-        while True:
-            with _state_lock:
-                data = {
-                    'portfolio': _dashboard_state.get('portfolio', {}),
-                    'system_health': _dashboard_state.get('system_health', {}),
-                    'timestamp': datetime.now().isoformat()
-                }
-            
-            yield f"data: {json.dumps(data)}\n\n"
-            time.sleep(5)  # Update every 5 seconds
+        try:
+            while True:
+                with _state_lock:
+                    data = {
+                        'portfolio': _dashboard_state.get('portfolio', {}),
+                        'system_health': _dashboard_state.get('system_health', {}),
+                        'timestamp': datetime.now().isoformat()
+                    }
+                
+                yield f"data: {json.dumps(data)}\n\n"
+                time.sleep(5)  # Update every 5 seconds
+        except GeneratorExit:
+            # Client disconnected - cleanup
+            logger.debug("SSE client disconnected")
     
     return Response(generate(), mimetype='text/event-stream')
 
 
 # Startup/Shutdown hooks
-
-@app.before_request
-def before_first_request():
-    """Initialize dashboard on first request"""
-    start_dashboard_updates(interval=5)
+# Note: Initialization is handled in create_app() function
 
 
 def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:

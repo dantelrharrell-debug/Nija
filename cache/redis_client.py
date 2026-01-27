@@ -16,7 +16,7 @@ import logging
 import os
 import json
 import pickle
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Tuple
 from datetime import timedelta
 import redis
 from redis.connection import ConnectionPool
@@ -248,7 +248,7 @@ def cache_get(key: str, namespace: str = "", default: Any = None) -> Any:
             # Try pickle
             try:
                 return pickle.loads(value)
-            except:
+            except (pickle.UnpicklingError, TypeError, ValueError):
                 # Return as string
                 return value.decode('utf-8') if isinstance(value, bytes) else value
     
@@ -313,11 +313,25 @@ def cache_clear_namespace(namespace: str) -> int:
     try:
         client = get_redis_client()
         pattern = f"{namespace}*"
-        keys = client.keys(pattern)
         
-        if keys:
-            return client.delete(*keys)
-        return 0
+        # Use scan_iter instead of keys() for better performance
+        keys_to_delete = []
+        for key in client.scan_iter(match=pattern, count=100):
+            keys_to_delete.append(key)
+            # Delete in batches of 1000 to avoid memory issues
+            if len(keys_to_delete) >= 1000:
+                client.delete(*keys_to_delete)
+                count = len(keys_to_delete)
+                keys_to_delete.clear()
+        
+        # Delete remaining keys
+        if keys_to_delete:
+            client.delete(*keys_to_delete)
+            count = len(keys_to_delete)
+        else:
+            count = 0
+        
+        return count
     
     except Exception as e:
         logger.error(f"Cache clear namespace failed for {namespace}: {e}")
@@ -327,7 +341,7 @@ def cache_clear_namespace(namespace: str) -> int:
 # Rate limiting utilities
 
 def rate_limit_check(identifier: str, max_requests: int, 
-                    window_seconds: int) -> tuple[bool, int]:
+                    window_seconds: int) -> Tuple[bool, int]:
     """
     Check if rate limit is exceeded
     
