@@ -117,11 +117,11 @@ MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 
                             # At 5-15 markets per cycle with 8.0s delay, scanning takes 40-120 seconds
                             # This conservative rate ensures API key never gets temporarily blocked
 
-# Broker balance fetch timeout constants (Jan 24, 2026)
+# Broker balance fetch timeout constants (Jan 27, 2026)
+# CRITICAL FIX: Reduced timeout from 45s to 20s to prevent long delays
 # Used in _is_broker_eligible_for_entry to prevent hanging on slow balance fetches
-KRAKEN_API_TIMEOUT = 30  # Kraken's internal API timeout (from broker_manager.py)
-NETWORK_BUFFER_TIMEOUT = 15  # Additional buffer for network overhead and retries
-BALANCE_FETCH_TIMEOUT = KRAKEN_API_TIMEOUT + NETWORK_BUFFER_TIMEOUT  # Total: 45 seconds
+# 45s was too long and caused entire broker selection to hang
+BALANCE_FETCH_TIMEOUT = 20  # Maximum time to wait for balance fetch (reduced from 45s)
 CACHED_BALANCE_MAX_AGE_SECONDS = 300  # Use cached balance if fresh (5 minutes max staleness)
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
@@ -341,6 +341,9 @@ def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     Execute a function with a timeout. Returns (result, error).
     If timeout occurs, returns (None, TimeoutError).
     Default timeout is 30 seconds to accommodate production API latency.
+    
+    CRITICAL FIX (Jan 27, 2026): Fixed race condition where queue.get_nowait()
+    could raise queue.Empty even after successful completion.
     """
     if kwargs is None:
         kwargs = {}
@@ -353,18 +356,22 @@ def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
         except Exception as e:
             result_queue.put((False, e))
 
-    t = Thread(target=worker, daemon=True)
+    t = Thread(target=worker, daemon=False)  # Changed to daemon=False to prevent premature termination
     t.start()
     t.join(timeout_seconds)
 
     if t.is_alive():
+        # Thread still running after timeout
         return None, TimeoutError(f"Operation timed out after {timeout_seconds}s")
 
+    # CRITICAL FIX: Use get() with small timeout instead of get_nowait()
+    # This prevents race condition where thread completes but hasn't written to queue yet
     try:
-        ok, value = result_queue.get_nowait()
+        ok, value = result_queue.get(timeout=1.0)  # Wait up to 1 second for result
         return (value, None) if ok else (None, value)
     except queue.Empty:
-        return None, Exception("No result returned from worker")
+        # This should never happen if thread completed, but handle it anyway
+        return None, Exception("Worker thread completed but no result available")
 
 # Add bot directory to path if running from root
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1514,13 +1521,13 @@ class TradingStrategy:
                 error_msg = balance_result[1]
                 logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance fetch timed out or failed: {error_msg}")
                 
-                # CRITICAL FIX (Jan 24, 2026): Use cached balance if available and fresh
-                # If broker has a cached balance, check its age and use it if recent
+                # CRITICAL FIX (Jan 27, 2026): More permissive cached balance fallback
+                # When API is slow/timing out, we should still try to trade using cached balance
+                # Previously was too conservative - would reject broker if no timestamp
                 if hasattr(broker, '_last_known_balance') and broker._last_known_balance is not None:
                     cached_balance = broker._last_known_balance
                     
                     # Check if cached balance has a timestamp (for staleness check)
-                    # If broker doesn't track timestamp, log warning and reject cached balance (conservative)
                     cache_is_fresh = False
                     if hasattr(broker, '_balance_last_updated') and broker._balance_last_updated is not None:
                         balance_age_seconds = time.time() - broker._balance_last_updated
@@ -1528,11 +1535,13 @@ class TradingStrategy:
                         if not cache_is_fresh:
                             logger.warning(f"   ⚠️  Cached balance for {broker_name} is stale ({balance_age_seconds:.0f}s old > {CACHED_BALANCE_MAX_AGE_SECONDS}s max)")
                     else:
-                        # No timestamp tracking - be conservative and don't use cache
-                        logger.warning(f"   ⚠️  Cached balance for {broker_name} has no timestamp - rejecting for safety")
+                        # CRITICAL FIX (Jan 27, 2026): USE cache even without timestamp when API is failing
+                        # This is better than not trading at all when API is slow
+                        cache_is_fresh = True  # Changed from False - be permissive during API issues
+                        logger.info(f"   ℹ️  {broker_name} has cached balance but no timestamp - will use it since API is timing out")
                     
                     if cache_is_fresh:
-                        logger.warning(f"   ⚠️  Using cached balance for {broker_name}: ${cached_balance:.2f}")
+                        logger.info(f"   ✅ Using cached balance for {broker_name}: ${cached_balance:.2f}")
                         broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
                         min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
                         
@@ -3268,16 +3277,8 @@ class TradingStrategy:
                     # Select best broker for entry based on priority
                     entry_broker, entry_broker_name, broker_eligibility = self._select_entry_broker(all_brokers)
                     
-                    # Log broker eligibility status for all brokers
-                    # CRITICAL FIX (Jan 24, 2026): Change "Not configured" from DEBUG to INFO level
-                    # This ensures all broker status is visible in logs to help diagnose trading issues
-                    for broker_name, status in broker_eligibility.items():
-                        if "Eligible" in status:
-                            logger.info(f"      ✅ {broker_name.upper()}: {status}")
-                        elif "Not configured" in status:
-                            logger.info(f"      ⚪ {broker_name.upper()}: {status}")  # Changed from logger.debug to logger.info
-                        else:
-                            logger.warning(f"      ❌ {broker_name.upper()}: {status}")
+                    # Note: Broker eligibility logging moved to after exception handler (line ~3420)
+                    # to ensure it happens even if an exception occurs
                     
                     if not entry_broker:
                         can_enter = False
@@ -3397,17 +3398,34 @@ class TradingStrategy:
                         logger.info(f"   💰 {entry_broker_name.upper()} balance updated: ${account_balance:.2f} (total capital: ${total_capital:.2f})")
                 
                 except Exception as broker_check_error:
-                    # CRITICAL FIX (Jan 24, 2026): Log any exceptions that occur during broker selection
-                    # This prevents silent failures that cause the bot to skip market scanning
+                    # CRITICAL FIX (Jan 27, 2026): Enhanced exception logging with line number
+                    # This helps diagnose exactly where broker selection is failing
                     logger.error(f"   ❌ ERROR during broker eligibility check: {broker_check_error}")
                     logger.error(f"   Exception type: {type(broker_check_error).__name__}")
                     import traceback
                     logger.error(f"   Traceback: {traceback.format_exc()}")
+                    logger.error(f"   ℹ️  This error prevented broker selection - bot will skip market scanning")
                     can_enter = False
                     skip_reasons.append(f"Broker eligibility check failed: {broker_check_error}")
                     # Set entry_broker to None to ensure it's defined for later code
                     entry_broker = None
                     entry_broker_name = "UNKNOWN"
+                    # Initialize empty broker_eligibility dict if it wasn't created
+                    if 'broker_eligibility' not in locals():
+                        broker_eligibility = {}
+                
+                # CRITICAL FIX (Jan 27, 2026): Always log broker eligibility status
+                # Even if exception occurred, we want to see which brokers were checked
+                if 'broker_eligibility' in locals() and broker_eligibility:
+                    logger.info("")
+                    logger.info("   📊 Broker Eligibility Results:")
+                    for broker_name, status in broker_eligibility.items():
+                        if "Eligible" in status:
+                            logger.info(f"      ✅ {broker_name.upper()}: {status}")
+                        elif "Not configured" in status:
+                            logger.info(f"      ⚪ {broker_name.upper()}: {status}")
+                        else:
+                            logger.warning(f"      ❌ {broker_name.upper()}: {status}")
                 
                 logger.info("")
                 logger.info("═" * 80)
