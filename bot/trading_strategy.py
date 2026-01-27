@@ -120,7 +120,15 @@ MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 
 # Broker balance fetch timeout constants (Jan 27, 2026)
 # CRITICAL FIX: Reduced timeout from 45s to 20s to prevent long delays
 # Used in _is_broker_eligible_for_entry to prevent hanging on slow balance fetches
-# 45s was too long and caused entire broker selection to hang
+# 
+# TIMEOUT RATIONALE:
+# - Kraken API typically responds in 1-5s under normal conditions
+# - Coinbase API typically responds in 0.5-2s under normal conditions
+# - Network latency adds ~0.5-1s
+# - Under load, APIs can take 10-15s
+# - 20s allows 2-3 retry attempts within timeout window while preventing excessive delays
+# - Previous 45s timeout was too long and blocked broker selection for too long
+# - If timeout occurs, cached balance is used as fallback (see CACHED_BALANCE_MAX_AGE_SECONDS)
 BALANCE_FETCH_TIMEOUT = 20  # Maximum time to wait for balance fetch (reduced from 45s)
 CACHED_BALANCE_MAX_AGE_SECONDS = 300  # Use cached balance if fresh (5 minutes max staleness)
                             
@@ -366,6 +374,13 @@ def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
 
     # CRITICAL FIX: Use get() with small timeout instead of get_nowait()
     # This prevents race condition where thread completes but hasn't written to queue yet
+    # 
+    # QUEUE TIMEOUT RATIONALE:
+    # - After thread.join() returns, thread has completed execution
+    # - However, there's a small window where result may not be in queue yet (OS scheduling)
+    # - 1.0s timeout is generous - actual queue write typically happens in <10ms
+    # - This ensures we wait for the result without blocking indefinitely
+    # - If queue is truly empty after 1s, something is seriously wrong (return error)
     try:
         ok, value = result_queue.get(timeout=1.0)  # Wait up to 1 second for result
         return (value, None) if ok else (None, value)
@@ -1535,10 +1550,27 @@ class TradingStrategy:
                         if not cache_is_fresh:
                             logger.warning(f"   ⚠️  Cached balance for {broker_name} is stale ({balance_age_seconds:.0f}s old > {CACHED_BALANCE_MAX_AGE_SECONDS}s max)")
                     else:
-                        # CRITICAL FIX (Jan 27, 2026): USE cache even without timestamp when API is failing
-                        # This is better than not trading at all when API is slow
-                        cache_is_fresh = True  # Changed from False - be permissive during API issues
-                        logger.info(f"   ℹ️  {broker_name} has cached balance but no timestamp - will use it since API is timing out")
+                        # CRITICAL FIX (Jan 27, 2026): Conditional cache usage when no timestamp
+                        # If broker doesn't track timestamp, we can't verify age
+                        # SAFE APPROACH: Only use cache if broker object was created recently (this session)
+                        # This prevents trading with very stale data from previous sessions
+                        
+                        # Check if broker has a 'connected_at' or similar timestamp
+                        broker_session_age = None
+                        if hasattr(broker, 'connected_at'):
+                            broker_session_age = time.time() - broker.connected_at
+                        elif hasattr(broker, 'created_at'):
+                            broker_session_age = time.time() - broker.created_at
+                        
+                        # Only use untimestamped cache if broker was connected/created in last 10 minutes
+                        # This ensures cache is from current trading session, not stale from previous run
+                        if broker_session_age is not None and broker_session_age <= 600:  # 10 minutes
+                            cache_is_fresh = True
+                            logger.info(f"   ℹ️  {broker_name} cached balance has no timestamp, but broker connected {broker_session_age:.0f}s ago - using cache")
+                        else:
+                            # No timestamp and no session age - too risky to use
+                            cache_is_fresh = False
+                            logger.warning(f"   ⚠️  {broker_name} cached balance has no timestamp and no session age - rejecting for safety")
                     
                     if cache_is_fresh:
                         logger.info(f"   ✅ Using cached balance for {broker_name}: ${cached_balance:.2f}")
