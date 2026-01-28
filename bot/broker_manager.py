@@ -6156,7 +6156,7 @@ class KrakenBroker(BaseBroker):
             logger.error("   there may be a dependency version conflict.")
             return False
     
-    def get_account_balance(self) -> float:
+    def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get USD/USDT balance available for trading with fail-closed behavior.
         
@@ -6164,6 +6164,9 @@ class KrakenBroker(BaseBroker):
         - On error: Return last known balance (if available) instead of 0
         - Track consecutive errors to mark broker unavailable
         - Distinguish API errors from actual zero balance
+        
+        Args:
+            verbose: If True, logs detailed balance breakdown (default: True)
         
         Returns:
             float: Available USD + USDT balance (not including held funds)
@@ -6243,24 +6246,30 @@ class KrakenBroker(BaseBroker):
                     held_amount = eb - tb if eb > tb else 0.0
                 
                 # Enhanced balance logging with clear breakdown (Jan 19, 2026)
-                logger.info("=" * 70)
-                logger.info(f"💰 Kraken Balance ({self.account_identifier}):")
-                logger.info(f"   ✅ Available USD:  ${usd_balance:.2f}")
-                logger.info(f"   ✅ Available USDT: ${usdt_balance:.2f}")
-                logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                logger.info(f"   💵 Total Available: ${total:.2f}")
+                # Only log detailed breakdown if verbose is True
+                if verbose:
+                    logger.info("=" * 70)
+                    logger.info(f"💰 Kraken Balance ({self.account_identifier}):")
+                    logger.info(f"   ✅ Available USD:  ${usd_balance:.2f}")
+                    logger.info(f"   ✅ Available USDT: ${usdt_balance:.2f}")
+                    logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    logger.info(f"   💵 Total Available: ${total:.2f}")
                 
                 # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken
                 total_funds = total + held_amount
                 
-                if held_amount > 0:
-                    logger.info(f"   🔒 Held in open orders: ${held_amount:.2f}")
-                    logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
-                logger.info("=" * 70)
-                
-                # FIX #3 (Jan 20, 2026): Confirmation log for Kraken balance fetch
-                logger.info(f"✅ KRAKEN balance fetched: ${total_funds:.2f}")
+                if verbose:
+                    if held_amount > 0:
+                        logger.info(f"   🔒 Held in open orders: ${held_amount:.2f}")
+                        logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
+                    logger.info("=" * 70)
+                    
+                    # FIX #3 (Jan 20, 2026): Confirmation log for Kraken balance fetch
+                    logger.info(f"✅ KRAKEN balance fetched: ${total_funds:.2f}")
+                else:
+                    # Minimal logging when verbose=False
+                    logger.debug(f"Kraken balance ({self.account_identifier}): ${total_funds:.2f}")
                 
                 # SUCCESS: Update last known balance and reset error count
                 # 🚑 FIX 4: Store and return total_funds instead of just available
