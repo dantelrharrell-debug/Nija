@@ -2936,7 +2936,7 @@ class TradingStrategy:
                         
                         # If orphaned position made it here, it's showing strength - still monitor closely
                         logger.info(f"   ✅ ORPHANED POSITION SHOWING STRENGTH: {symbol} (RSI={rsi:.1f}, price above EMA9)")
-                        logger.info(f"      Will continue monitoring with strict exit criteria")
+                        logger.info(f"      Will monitor with lenient criteria to allow P&L development (exit only on extreme RSI with confirmation)")
                     
                     # PROFITABILITY FIX (Jan 28, 2026): REMOVE UNPROFITABLE RSI-ONLY EXITS
                     # Previous logic was exiting on RSI signals without verifying profitability
@@ -2946,10 +2946,11 @@ class TradingStrategy:
                     # - Position can be overbought (RSI > 55) but still losing money
                     # - Position can be oversold (RSI < 45) but still making money
                     # 
-                    # NEW STRATEGY: For positions without entry price, use EXTREME signals only
-                    # - Only exit on VERY overbought (RSI > 70) with confirmed weakness
-                    # - Only exit on VERY oversold (RSI < 30) with confirmed strength reversal
-                    # - Always verify position is weakening/strengthening before exit
+                    # NEW STRATEGY: For orphaned positions that passed aggressive checks (RSI >= 52, price >= EMA9)
+                    # use EXTREME signals only to allow positions to develop proper P&L:
+                    # - Only exit on VERY overbought (RSI > 70) with confirmed weakness (price < EMA9)
+                    # - Only exit on VERY oversold (RSI < 30) with confirmed downtrend (price < EMA21)
+                    # - Always verify price action confirms the RSI signal before exit
                     # 
                     # This prevents premature exits and lets positions develop proper P&L
                     
