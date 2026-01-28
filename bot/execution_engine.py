@@ -267,11 +267,20 @@ class ExecutionEngine:
             # Place market order via broker client
             if self.broker_client:
                 order_side = 'buy' if side == 'long' else 'sell'
+                
+                # Log broker being used for this trade
+                broker_name = getattr(self.broker_client, 'broker_type', 'unknown')
+                broker_name_str = broker_name.value if hasattr(broker_name, 'value') else str(broker_name)
+                logger.info(f"   Using broker: {broker_name_str.upper()}")
+                
                 result = self.broker_client.place_market_order(
                     symbol=symbol,
                     side=order_side,
                     quantity=position_size
                 )
+                
+                # Log the raw result for debugging
+                logger.debug(f"   Order result status: {result.get('status', 'N/A')}")
                 
                 # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
                 # DO NOT record trade if order failed or was rejected
@@ -283,6 +292,14 @@ class ExecutionEngine:
                     # Check if this is a geographic restriction and add to blacklist
                     self._handle_geographic_restriction_error(symbol, error_msg)
                     
+                    return None
+                
+                # Check for 'unfilled' status which indicates order wasn't placed
+                if result.get('status') == 'unfilled':
+                    error_msg = result.get('error', result.get('message', 'Order unfilled'))
+                    logger.warning(f"⚠️  Order not filled: {error_msg}")
+                    logger.warning(f"   Symbol: {symbol}, Size: ${position_size:.2f}")
+                    logger.warning("   Possible reasons: insufficient funds, minimum size not met, or other validation failure")
                     return None
                 
                 # ✅ SAFETY CHECK #3: Require txid before recording position
