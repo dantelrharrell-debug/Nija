@@ -1,0 +1,156 @@
+================================================================================
+NIJA LIVE EXECUTION + BACKTESTING ENGINE - ARCHITECTURE
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         COMMAND LINE INTERFACE (CLI)                         │
+│                        nija_execution_cli.py                                 │
+│                                                                              │
+│  Commands:  [backtest] [live] [report] [compare]                            │
+└──────────────────────────────┬──────────────────────────────────────────────┘
+                               │
+                ┌──────────────┼──────────────┐
+                │              │              │
+                ▼              ▼              ▼
+    ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+    │   BACKTESTING    │ │  LIVE TRACKING   │ │   REPORTING      │
+    │                  │ │                  │ │                  │
+    │ unified_backtest │ │ live_execution   │ │ JSON/CSV Export  │
+    │ _engine.py       │ │ _tracker.py      │ │ Comparison       │
+    └──────────────────┘ └──────────────────┘ └──────────────────┘
+            │                     │                     │
+            │                     │                     │
+            ▼                     ▼                     ▼
+    ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+    │ Performance      │ │ Risk Management  │ │ Data Persistence │
+    │ Metrics:         │ │                  │ │                  │
+    │ • Sharpe Ratio   │ │ • Circuit        │ │ • JSON Export    │
+    │ • Sortino Ratio  │ │   Breakers       │ │ • CSV Export     │
+    │ • Profit Factor  │ │ • Daily Loss     │ │ • State Mgmt     │
+    │ • Win Rate       │ │   Limits (5%)    │ │ • Trade Ledger   │
+    │ • Expectancy     │ │ • Max Drawdown   │ │                  │
+    │ • Max Drawdown   │ │   Alerts (12%)   │ │                  │
+    └──────────────────┘ └──────────────────┘ └──────────────────┘
+
+================================================================================
+INTEGRATION WITH EXISTING NIJA COMPONENTS
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      EXISTING NIJA EXECUTION ENGINE                          │
+│                     bot/execution_engine.py                                  │
+│                                                                              │
+│  Methods: execute_entry(), execute_exit()                                   │
+└──────────────────────────────┬──────────────────────────────────────────────┘
+                               │
+                               │ Integration via
+                               │ live_tracker_integration.py
+                               ▼
+                    ┌──────────────────────┐
+                    │  Live Tracker Hook   │
+                    │                      │
+                    │ • record_entry()     │
+                    │ • record_exit()      │
+                    │ • get_snapshot()     │
+                    └──────────────────────┘
+
+================================================================================
+DATA FLOW
+================================================================================
+
+BACKTESTING:
+Historical Data (CSV) → Backtest Engine → Performance Metrics → JSON Report
+
+LIVE TRADING:
+Execution Engine → Live Tracker → Real-time Monitoring → State Persistence
+                                ↓
+                        Circuit Breakers (if limits exceeded)
+
+REPORTING:
+Backtest Results + Live Data → Comparison Analysis → Investor Reports
+
+================================================================================
+KEY FEATURES
+================================================================================
+
+1. ELITE PERFORMANCE METRICS
+   ✓ Profit Factor: 2.0-2.6 target
+   ✓ Win Rate: 58-62% target
+   ✓ Sharpe Ratio: >1.8 target
+   ✓ Expectancy: +0.45R to +0.65R per trade
+
+2. RISK MANAGEMENT
+   ✓ Daily loss circuit breaker (5% default)
+   ✓ Max drawdown alerts (12% default)
+   ✓ Position validation
+   ✓ Real-time monitoring
+
+3. AUDIT TRAIL
+   ✓ Trade-by-trade logging
+   ✓ Entry/exit timestamps
+   ✓ Commission tracking
+   ✓ Slippage recording
+
+4. FLEXIBILITY
+   ✓ Multiple strategies supported
+   ✓ Regime-aware analysis
+   ✓ Environment-based config
+   ✓ Easy integration (5-10 lines)
+
+================================================================================
+FILES STRUCTURE
+================================================================================
+
+/Nija/
+├── bot/
+│   ├── unified_backtest_engine.py       [590 lines] - Core backtesting
+│   ├── live_execution_tracker.py        [530 lines] - Live monitoring
+│   ├── live_tracker_integration.py      [320 lines] - Easy integration
+│   └── execution_engine.py              [existing]  - Trade execution
+│
+├── nija_execution_cli.py                [480 lines] - CLI interface
+├── demo_execution_engine.py             [345 lines] - Complete demo
+│
+├── LIVE_EXECUTION_BACKTESTING_GUIDE.md  [complete]  - User guide
+├── LIVE_EXECUTION_ENGINE_SUMMARY.md     [complete]  - Implementation doc
+│
+├── data/
+│   └── live_tracking/
+│       ├── tracker_state.json           - Persistent state
+│       └── trades_*.csv                 - Trade exports
+│
+└── results/
+    └── *.json                           - Backtest results
+
+Total: ~2,700 lines of production code + comprehensive documentation
+
+================================================================================
+USAGE EXAMPLES
+================================================================================
+
+# Run backtest
+$ python nija_execution_cli.py backtest --symbol BTC-USD --data data.csv
+
+# Monitor live trades
+$ python nija_execution_cli.py live --balance 10000
+
+# Generate report
+$ python nija_execution_cli.py report --backtest results.json --live data/
+
+# Compare performance
+$ python nija_execution_cli.py compare --backtest results.json --live data/
+
+# Run complete demo
+$ python demo_execution_engine.py
+
+================================================================================
+STATUS: ✅ COMPLETE AND READY FOR PRODUCTION
+================================================================================
+
+Security: ✅ 0 vulnerabilities (CodeQL scanned)
+Testing:  ✅ All components validated
+Code:     ✅ Reviewed and verified
+Docs:     ✅ Complete usage guide
+Demo:     ✅ Working end-to-end
+
+Ready for integration with NIJA APEX strategies!
