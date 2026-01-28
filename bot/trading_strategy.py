@@ -1768,25 +1768,25 @@ class TradingStrategy:
             # For small Kraken balances, use conservative -0.8% primary stop
             # This accounts for spread (0.1%) + fees (0.36%) + slippage (0.1%) + buffer (0.24%)
             primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -0.8%
-            description = f"Kraken small balance (${account_balance:.2f}): Primary -0.8%, Micro -1.0%, Failsafe -5.0%"
+            description = f"Kraken small balance (${account_balance:.2f}): Primary -0.8%, Micro -2.0%, Failsafe -5.0%"
         
         # Kraken with larger balance: Can use tighter stop
         elif 'kraken' in broker_name:
             # For larger Kraken balances, use -0.5% minimum (tighter for better capital preservation)
             primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -0.5%
-            description = f"Kraken (${account_balance:.2f}): Primary -0.5%, Micro -1.0%, Failsafe -5.0%"
+            description = f"Kraken (${account_balance:.2f}): Primary -0.5%, Micro -2.0%, Failsafe -5.0%"
         
         # 🚨 COINBASE TIGHTENED STOP-LOSS (Jan 28, 2026)
         # Improved to -1.0% max for better capital preservation and risk/reward ratio
         elif 'coinbase' in broker_name:
             primary_stop = STOP_LOSS_PRIMARY_COINBASE  # -1.0% (improved from -1.25%)
-            description = f"COINBASE (${account_balance:.2f}): Primary -1.0%, Micro -1.0%, Failsafe -5.0%"
+            description = f"COINBASE (${account_balance:.2f}): Primary -1.0%, Micro -2.0%, Failsafe -5.0%"
         
         # Other exchanges: Use -1.0% primary stop (conservative default)
         else:
             # Higher fees require wider stop-loss
             primary_stop = -0.010  # -1.0% for other exchanges
-            description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -1.0%, Micro -1.0%, Failsafe -5.0%"
+            description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -1.0%, Micro -2.0%, Failsafe -5.0%"
         
         return (
             primary_stop,           # Tier 1: Primary trading stop
