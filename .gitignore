@@ -57,6 +57,12 @@ data/risk_state_test_*.json
 data/risk_limits_test_*.json
 data/webhook_config_test_*.json
 
+# Capital Scaling Engine data files (runtime state, should not be committed)
+data/compounding_state.json
+data/drawdown_protection.json
+data/milestones.json
+data/capital_allocation.json
+
 # Secure vault database (contains encrypted credentials)
 vault.db
 vault.db-journal
@@ -344,6 +350,10 @@ trade_journal.jsonl
 .railway-*
 .render-*
 .redeploy*
+
+# Build artifacts and metadata
+.env.build
+bot/version_info.py
 
 # NIXPACKS configuration (removed - use Dockerfile exclusively)
 # Railway should use Dockerfile via railway.json, not NIXPACKS auto-detection
