@@ -2938,81 +2938,66 @@ class TradingStrategy:
                         logger.info(f"   ✅ ORPHANED POSITION SHOWING STRENGTH: {symbol} (RSI={rsi:.1f}, price above EMA9)")
                         logger.info(f"      Will continue monitoring with strict exit criteria")
                     
-                    # ULTRA AGGRESSIVE: Exit on multiple signals to lock gains faster
-                    # Jan 13, 2026: AGGRESSIVE thresholds to sell positions before reversals eat profits
+                    # PROFITABILITY FIX (Jan 28, 2026): REMOVE UNPROFITABLE RSI-ONLY EXITS
+                    # Previous logic was exiting on RSI signals without verifying profitability
+                    # This caused "buying low, selling low" and "buying high, selling high" scenarios
+                    # 
+                    # KEY INSIGHT: RSI overbought/oversold indicates MOMENTUM, not profitability
+                    # - Position can be overbought (RSI > 55) but still losing money
+                    # - Position can be oversold (RSI < 45) but still making money
+                    # 
+                    # NEW STRATEGY: For positions without entry price, use EXTREME signals only
+                    # - Only exit on VERY overbought (RSI > 70) with confirmed weakness
+                    # - Only exit on VERY oversold (RSI < 30) with confirmed strength reversal
+                    # - Always verify position is weakening/strengthening before exit
+                    # 
+                    # This prevents premature exits and lets positions develop proper P&L
                     
-                    # Strong overbought (RSI > 55) - likely near top, take profits
-                    if rsi > RSI_OVERBOUGHT_THRESHOLD:
-                        logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f})")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'RSI overbought ({rsi:.1f}) - locking gains',
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-                        continue
-                    
-                    # Moderate overbought (RSI > 50) + weak momentum = exit (TIGHTENED from 52)
-                    # This catches positions that are up but losing steam
-                    if rsi > 50:
-                        # Check if price is below short-term EMA (momentum weakening)
+                    # EXTREME overbought (RSI > 70) with momentum weakening - likely reversal
+                    # Only exit if price is also below EMA9 (confirming momentum loss)
+                    if rsi > 70:
                         ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
                         if current_price < ema9:
-                            logger.info(f"   📉 MOMENTUM REVERSAL EXIT: {symbol} (RSI={rsi:.1f}, price below EMA9)")
+                            logger.info(f"   📈 EXTREME OVERBOUGHT + REVERSAL: {symbol} (RSI={rsi:.1f}, price<EMA9)")
+                            logger.info(f"      Exiting to protect against sharp reversal from overbought")
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Momentum reversal (RSI={rsi:.1f}, price<EMA9) - locking gains',
+                                'reason': f'Extreme overbought reversal (RSI={rsi:.1f}, price<EMA9)',
                                 'broker': position_broker,
                                 'broker_label': broker_label
                             })
                             continue
-                    
-                    # NEW: Profit protection - exit if in profit zone (RSI 45-55) but price crosses below EMA9
-                    # This prevents giving back profits when momentum shifts
-                    # TIGHTENED range from 48-60 to 45-55 for earlier exits
-                    if 45 < rsi < 55:
-                        ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
-                        ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
-                        # If price crosses below both EMAs, momentum is shifting - protect gains
-                        if current_price < ema9 and current_price < ema21:
-                            logger.info(f"   🔻 PROFIT PROTECTION EXIT: {symbol} (RSI={rsi:.1f}, price below both EMAs)")
-                            positions_to_exit.append({
-                                'symbol': symbol,
-                                'quantity': quantity,
-                                'reason': f'Profit protection (RSI={rsi:.1f}, bearish cross) - locking gains',
-                                'broker': position_broker,
-                                'broker_label': broker_label
-                            })
+                        else:
+                            logger.info(f"   📊 {symbol} very overbought (RSI={rsi:.1f}) but still strong (price>EMA9) - HOLDING")
                             continue
                     
-                    # Oversold (RSI < 45) - prevent further losses (TIGHTENED from 40)
-                    if rsi < RSI_OVERSOLD_THRESHOLD:
-                        logger.info(f"   📉 RSI OVERSOLD EXIT: {symbol} (RSI={rsi:.1f}) - cutting losses")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'RSI oversold ({rsi:.1f}) - cutting losses',
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-                        continue
+                    # REMOVED (Jan 28, 2026): Moderate RSI exits (RSI 45-55, RSI 50+) were too aggressive
+                    # These exits were triggering without profit verification, causing:
+                    # - Selling winners too early (RSI 50-55 exits at small gains)
+                    # - Selling losers too late (RSI 45-50 exits after significant losses)
+                    # Result: "Buying low, selling low" and minimal profits
+                    #
+                    # Now only extreme RSI levels (>70, <30) with confirming signals trigger exits
+                    # This allows positions to develop proper P&L before exiting
                     
-                    # Moderate oversold (RSI < 50) + downtrend = exit (TIGHTENED from 48)
-                    # This catches positions that are down and still falling
-                    if rsi < 50:
-                        # Check if price is in downtrend (below EMA21)
+                    # EXTREME oversold (RSI < 30) with continued weakness - likely further decline
+                    # Only exit if price is also below EMA21 (confirming downtrend)
+                    if rsi < 30:
                         ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
                         if current_price < ema21:
-                            logger.info(f"   📉 DOWNTREND EXIT: {symbol} (RSI={rsi:.1f}, price below EMA21)")
+                            logger.info(f"   📉 EXTREME OVERSOLD + DOWNTREND: {symbol} (RSI={rsi:.1f}, price<EMA21)")
+                            logger.info(f"      Exiting to prevent further losses in confirmed downtrend")
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Downtrend exit (RSI={rsi:.1f}, price<EMA21) - cutting losses',
+                                'reason': f'Extreme oversold downtrend (RSI={rsi:.1f}, price<EMA21)',
                                 'broker': position_broker,
                                 'broker_label': broker_label
                             })
+                            continue
+                        else:
+                            logger.info(f"   📊 {symbol} very oversold (RSI={rsi:.1f}) but bouncing (price>EMA21) - HOLDING for recovery")
                             continue
                     
                     # Check for weak market conditions (exit signal)
