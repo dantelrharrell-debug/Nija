@@ -398,6 +398,41 @@ COPY_TRADING_MODE=INDEPENDENT
 
 ---
 
+## 🚫 **Geographic Restriction Handling** (January 28, 2026)
+
+**NIJA now automatically detects and blocks geographically restricted assets.**
+
+### The Problem
+Some cryptocurrencies are restricted in certain regions (e.g., KMNO trading restricted in Washington state). Previously, NIJA would repeatedly attempt to trade these restricted assets, wasting opportunities and preventing successful trades on available symbols.
+
+### The Solution
+NIJA now automatically:
+- ✅ **Detects** geographic restriction errors from exchanges
+- ✅ **Blacklists** restricted symbols permanently
+- ✅ **Persists** the blacklist across bot restarts
+- ✅ **Filters** blacklisted symbols from market scanning
+- ✅ **Learns** from rejections without manual intervention
+
+### How It Works
+1. When a trade is rejected due to geographic restrictions, NIJA detects the error pattern
+2. The symbol is automatically added to `bot/restricted_symbols.json`
+3. On next startup, the blacklist is loaded and merged with disabled pairs
+4. The bot will never attempt to trade that symbol again
+
+### Example Logs
+```
+🚫 GEOGRAPHIC RESTRICTION DETECTED
+   Symbol: KMNO-USD
+   Error: EAccount:Invalid permissions:KMNO trading restricted for US:WA
+   Adding to permanent blacklist to prevent future attempts
+🚫 Added to restriction blacklist: KMNO-USD
+💾 Saved restriction blacklist (2 symbols)
+```
+
+**Learn More:** [GEOGRAPHIC_RESTRICTION_HANDLING.md](GEOGRAPHIC_RESTRICTION_HANDLING.md)
+
+---
+
 ---
 
 **🚀 New to NIJA?** See the **[Getting Started Guide](GETTING_STARTED.md)** for complete setup!

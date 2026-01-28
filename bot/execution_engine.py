@@ -259,6 +259,18 @@ class ExecutionEngine:
                     error_msg = result.get('error', 'Unknown error')
                     logger.error(f"❌ Order rejected: {error_msg}")
                     logger.error("   ⚠️  DO NOT RECORD TRADE - Order did not execute")
+                    
+                    # Check if this is a geographic restriction and add to blacklist
+                    if RESTRICTION_MANAGER_AVAILABLE and is_geographic_restriction_error(str(error_msg)):
+                        logger.warning("=" * 70)
+                        logger.warning("🚫 GEOGRAPHIC RESTRICTION DETECTED")
+                        logger.warning("=" * 70)
+                        logger.warning(f"   Symbol: {symbol}")
+                        logger.warning(f"   Error: {error_msg}")
+                        logger.warning("   Adding to permanent blacklist to prevent future attempts")
+                        logger.warning("=" * 70)
+                        add_restricted_symbol(symbol, str(error_msg))
+                    
                     return None
                 
                 # ✅ SAFETY CHECK #3: Require txid before recording position
