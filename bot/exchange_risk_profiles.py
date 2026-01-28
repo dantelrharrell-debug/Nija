@@ -174,9 +174,9 @@ def _get_okx_profile() -> Dict:
         'tp2_pct': 0.030,  # 3.0% - second take profit
         'tp3_pct': 0.045,  # 4.5% - third take profit
         
-        # Stop Loss (can be tighter with low fees)
-        'stop_loss_pct': 0.010,  # 1.0% stop loss
-        'max_loss_per_trade': 0.012,  # 1.2% max loss
+        # Stop Loss (tightened Jan 28, 2026 for better capital preservation)
+        'stop_loss_pct': 0.008,  # 0.8% stop loss (improved from 1.0%)
+        'max_loss_per_trade': 0.010,  # 1.0% max loss (improved from 1.2%)
         
         # Trade Frequency (higher frequency possible)
         'max_trades_per_day': 30,  # More trades due to low fees
@@ -679,10 +679,10 @@ EXCHANGE_PROFILES = {
         max_position_size_pct=0.18,  # 18% max per trade
         recommended_position_pct=0.10,  # 10% recommended
         
-        # Stop-loss parameters
-        min_stop_loss_pct=0.006,  # 0.6% minimum
-        max_stop_loss_pct=0.020,  # 2.0% maximum
-        recommended_stop_loss_pct=0.012,  # 1.2% recommended
+        # Stop-loss parameters (Jan 28, 2026: Tightened to -0.5% to -1.0% range)
+        min_stop_loss_pct=0.005,  # 0.5% minimum (improved from 0.6%)
+        max_stop_loss_pct=0.010,  # 1.0% maximum (improved from 2.0%)
+        recommended_stop_loss_pct=0.008,  # 0.8% recommended (improved from 1.2%)
         
         # Take-profit parameters
         min_take_profit_pct=0.010,  # 1.0% minimum

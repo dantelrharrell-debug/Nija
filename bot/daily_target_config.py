@@ -40,8 +40,10 @@ EXPECTED_WIN_RATE = 0.60  # 60% win rate
 AVG_WIN_PROFIT_PCT = 0.020  # 2.0%
 
 # Average loss per losing trade (after fees)
-# Conservative: 1.0% loss (tight stops)
-AVG_LOSS_PCT = 0.010  # 1.0%
+# Updated Jan 28, 2026: Tightened to -0.6% target (was -1.0%)
+# Aligns with ENHANCED_STRATEGY_GUIDE.md line 393: "Keep under -0.6% per losing trade"
+# Conservative: 0.6% loss (tighter stops for better capital preservation)
+AVG_LOSS_PCT = 0.006  # 0.6% (improved from 1.0% for better capital preservation)
 
 # Maximum trades per day (quality over quantity)
 MAX_TRADES_PER_DAY = 20

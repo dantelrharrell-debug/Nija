@@ -1009,7 +1009,7 @@ DAILY_TARGET = {
     'min_balance_for_target': 100.00,  # Scale target for smaller accounts
     'expected_win_rate': 0.60,  # 60% expected win rate
     'avg_win_pct': 0.020,  # 2.0% average profit per win
-    'avg_loss_pct': 0.010,  # 1.0% average loss per trade
+    'avg_loss_pct': 0.006,  # 0.6% average loss per trade (improved from 1.0% - Jan 28, 2026)
     'max_trades_per_day': 20,  # Maximum trades per day
     'min_trades_per_day': 5,  # Minimum trades to hit target
     'auto_adjust': True,  # Auto-adjust based on account balance
