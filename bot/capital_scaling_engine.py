@@ -22,20 +22,36 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from profit_compounding_engine import (
-    ProfitCompoundingEngine, 
-    CompoundingStrategy, 
-    CompoundingConfig
-)
-from drawdown_protection_system import (
-    DrawdownProtectionSystem,
-    DrawdownConfig,
-    ProtectionLevel
-)
-from capital_milestone_manager import (
-    CapitalMilestoneManager,
-    MilestoneConfig
-)
+try:
+    from profit_compounding_engine import (
+        ProfitCompoundingEngine, 
+        CompoundingStrategy, 
+        CompoundingConfig
+    )
+    from drawdown_protection_system import (
+        DrawdownProtectionSystem,
+        DrawdownConfig,
+        ProtectionLevel
+    )
+    from capital_milestone_manager import (
+        CapitalMilestoneManager,
+        MilestoneConfig
+    )
+except ImportError:
+    from bot.profit_compounding_engine import (
+        ProfitCompoundingEngine, 
+        CompoundingStrategy, 
+        CompoundingConfig
+    )
+    from bot.drawdown_protection_system import (
+        DrawdownProtectionSystem,
+        DrawdownConfig,
+        ProtectionLevel
+    )
+    from bot.capital_milestone_manager import (
+        CapitalMilestoneManager,
+        MilestoneConfig
+    )
 
 logger = logging.getLogger("nija.capital_engine")
 
