@@ -422,6 +422,22 @@ class IndependentBrokerTrader:
                 current['error_count'] = 0
                 current['last_error'] = None
     
+    def _display_capital_scaling_banner(self):
+        """
+        Display the NIJA Capital Scaling Protocol startup banner.
+        This banner is shown once when a trading loop starts.
+        """
+        logger.info("")
+        logger.info("   " + "=" * 70)
+        logger.info("   🔥 NIJA Capital Scaling Protocol 🔥")
+        logger.info("   " + "=" * 70)
+        logger.info("   📈 Mathematically optimal compounding roadmap")
+        logger.info("   💰 Automatic profit reinvestment for exponential growth")
+        logger.info("   🛡️  Drawdown protection and capital preservation")
+        logger.info("   🎯 Milestone tracking and progressive scaling")
+        logger.info("   " + "=" * 70)
+        logger.info("")
+    
     def run_broker_trading_loop(self, broker_type, broker, stop_flag: threading.Event):
         """
         Run independent trading loop for a single broker.
@@ -449,6 +465,9 @@ class IndependentBrokerTrader:
         if stop_flag.is_set():
             logger.info(f"🛑 {broker_name} stopped before first cycle")
             return
+        
+        # Display Capital Scaling Protocol banner (once at startup)
+        self._display_capital_scaling_banner()
         
         while not stop_flag.is_set():
             cycle_count += 1
@@ -550,6 +569,13 @@ class IndependentBrokerTrader:
         startup_delay = random.uniform(STARTUP_DELAY_MIN, STARTUP_DELAY_MAX)
         logger.info(f"   ⏳ {broker_name}: Initial startup delay {startup_delay:.1f}s...")
         stop_flag.wait(startup_delay)
+        
+        if stop_flag.is_set():
+            logger.info(f"🛑 {broker_name} stopped before first cycle")
+            return
+        
+        # Display Capital Scaling Protocol banner (once at startup)
+        self._display_capital_scaling_banner()
         
         cycle_count = 0
         
