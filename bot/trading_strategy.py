@@ -136,11 +136,13 @@ MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 
                             # At 5-15 markets per cycle with 8.0s delay, scanning takes 40-120 seconds
                             # This conservative rate ensures API key never gets temporarily blocked
 
-# Broker balance fetch timeout constants (Jan 27, 2026)
-# CRITICAL FIX: Reduced from 45s to 20s to prevent broker selection delays
-# 20s chosen based on: APIs respond in 1-5s normally, 10-15s under load, allows 2-3 retries
+# Broker balance fetch timeout constants (Jan 28, 2026)
+# CRITICAL FIX: Increased from 20s to 45s to accommodate Kraken API timeout (30s) plus network overhead
+# 45s chosen to allow: 30s Kraken API timeout + 15s network/serialization buffer
+# Kraken get_account_balance makes 2 API calls (Balance + TradeBalance) with 1s minimum between calls
+# Under production load, Kraken regularly takes 15-20s to respond (within 30s API timeout)
 # If timeout occurs, cached balance is used as fallback (max age: 5 minutes)
-BALANCE_FETCH_TIMEOUT = 20  # Maximum time to wait for balance fetch
+BALANCE_FETCH_TIMEOUT = 45  # Maximum time to wait for balance fetch (must be > Kraken API timeout of 30s)
 CACHED_BALANCE_MAX_AGE_SECONDS = 300  # Use cached balance if fresh (5 minutes max staleness)
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
@@ -1536,11 +1538,12 @@ class TradingStrategy:
             return False, f"{broker_name.upper()} in EXIT-ONLY mode"
         
         # Check if account balance meets minimum threshold
-        # CRITICAL FIX (Jan 24, 2026): Use timeout to prevent hanging on slow balance fetches
-        # Timeout configured to accommodate Kraken's API timeout plus network overhead
+        # CRITICAL FIX (Jan 28, 2026): Use timeout to prevent hanging on slow balance fetches
+        # Timeout configured to accommodate Kraken's API timeout (30s) plus network overhead (15s)
         try:
             # Call get_account_balance with timeout to prevent indefinite hanging
-            # Uses BALANCE_FETCH_TIMEOUT (45s = 30s Kraken API + 15s network buffer)
+            # Uses BALANCE_FETCH_TIMEOUT (45s = 30s Kraken API timeout + 15s network/serialization buffer)
+            # Note: Kraken makes 2 API calls (Balance + TradeBalance) with 1s minimum interval between calls
             balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=BALANCE_FETCH_TIMEOUT)
             
             # Check if timeout or error occurred
@@ -2935,83 +2938,69 @@ class TradingStrategy:
                         
                         # If orphaned position made it here, it's showing strength - still monitor closely
                         logger.info(f"   ✅ ORPHANED POSITION SHOWING STRENGTH: {symbol} (RSI={rsi:.1f}, price above EMA9)")
-                        logger.info(f"      Will continue monitoring with strict exit criteria")
+                        logger.info(f"      Will monitor with lenient criteria to allow P&L development (exit only on extreme RSI with confirmation)")
                     
-                    # ULTRA AGGRESSIVE: Exit on multiple signals to lock gains faster
-                    # Jan 13, 2026: AGGRESSIVE thresholds to sell positions before reversals eat profits
+                    # PROFITABILITY FIX (Jan 28, 2026): REMOVE UNPROFITABLE RSI-ONLY EXITS
+                    # Previous logic was exiting on RSI signals without verifying profitability
+                    # This caused "buying low, selling low" and "buying high, selling high" scenarios
+                    # 
+                    # KEY INSIGHT: RSI overbought/oversold indicates MOMENTUM, not profitability
+                    # - Position can be overbought (RSI > 55) but still losing money
+                    # - Position can be oversold (RSI < 45) but still making money
+                    # 
+                    # NEW STRATEGY: For orphaned positions that passed aggressive checks (RSI >= 52, price >= EMA9)
+                    # use EXTREME signals only to allow positions to develop proper P&L:
+                    # - Only exit on VERY overbought (RSI > 70) with confirmed weakness (price < EMA9)
+                    # - Only exit on VERY oversold (RSI < 30) with confirmed downtrend (price < EMA21)
+                    # - Always verify price action confirms the RSI signal before exit
+                    # 
+                    # This prevents premature exits and lets positions develop proper P&L
                     
-                    # Strong overbought (RSI > 55) - likely near top, take profits
-                    if rsi > RSI_OVERBOUGHT_THRESHOLD:
-                        logger.info(f"   📈 RSI OVERBOUGHT EXIT: {symbol} (RSI={rsi:.1f})")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'RSI overbought ({rsi:.1f}) - locking gains',
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-                        continue
-                    
-                    # Moderate overbought (RSI > 50) + weak momentum = exit (TIGHTENED from 52)
-                    # This catches positions that are up but losing steam
-                    if rsi > 50:
-                        # Check if price is below short-term EMA (momentum weakening)
+                    # EXTREME overbought (RSI > 70) with momentum weakening - likely reversal
+                    # Only exit if price is also below EMA9 (confirming momentum loss)
+                    if rsi > 70:
                         ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
                         if current_price < ema9:
-                            logger.info(f"   📉 MOMENTUM REVERSAL EXIT: {symbol} (RSI={rsi:.1f}, price below EMA9)")
+                            logger.info(f"   📈 EXTREME OVERBOUGHT + REVERSAL: {symbol} (RSI={rsi:.1f}, price<EMA9)")
+                            logger.info(f"      Exiting to protect against sharp reversal from overbought")
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Momentum reversal (RSI={rsi:.1f}, price<EMA9) - locking gains',
+                                'reason': f'Extreme overbought reversal (RSI={rsi:.1f}, price<EMA9)',
                                 'broker': position_broker,
                                 'broker_label': broker_label
                             })
                             continue
-                    
-                    # NEW: Profit protection - exit if in profit zone (RSI 45-55) but price crosses below EMA9
-                    # This prevents giving back profits when momentum shifts
-                    # TIGHTENED range from 48-60 to 45-55 for earlier exits
-                    if 45 < rsi < 55:
-                        ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
-                        ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
-                        # If price crosses below both EMAs, momentum is shifting - protect gains
-                        if current_price < ema9 and current_price < ema21:
-                            logger.info(f"   🔻 PROFIT PROTECTION EXIT: {symbol} (RSI={rsi:.1f}, price below both EMAs)")
-                            positions_to_exit.append({
-                                'symbol': symbol,
-                                'quantity': quantity,
-                                'reason': f'Profit protection (RSI={rsi:.1f}, bearish cross) - locking gains',
-                                'broker': position_broker,
-                                'broker_label': broker_label
-                            })
+                        else:
+                            logger.info(f"   📊 {symbol} very overbought (RSI={rsi:.1f}) but still strong (price>EMA9) - HOLDING")
                             continue
                     
-                    # Oversold (RSI < 45) - prevent further losses (TIGHTENED from 40)
-                    if rsi < RSI_OVERSOLD_THRESHOLD:
-                        logger.info(f"   📉 RSI OVERSOLD EXIT: {symbol} (RSI={rsi:.1f}) - cutting losses")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'RSI oversold ({rsi:.1f}) - cutting losses',
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-                        continue
+                    # REMOVED (Jan 28, 2026): Moderate RSI exits (RSI 45-55, RSI 50+) were too aggressive
+                    # These exits were triggering without profit verification, causing:
+                    # - Selling winners too early (RSI 50-55 exits at small gains)
+                    # - Selling losers too late (RSI 45-50 exits after significant losses)
+                    # Result: "Buying low, selling low" and minimal profits
+                    #
+                    # Now only extreme RSI levels (>70, <30) with confirming signals trigger exits
+                    # This allows positions to develop proper P&L before exiting
                     
-                    # Moderate oversold (RSI < 50) + downtrend = exit (TIGHTENED from 48)
-                    # This catches positions that are down and still falling
-                    if rsi < 50:
-                        # Check if price is in downtrend (below EMA21)
+                    # EXTREME oversold (RSI < 30) with continued weakness - likely further decline
+                    # Only exit if price is also below EMA21 (confirming downtrend)
+                    if rsi < 30:
                         ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
                         if current_price < ema21:
-                            logger.info(f"   📉 DOWNTREND EXIT: {symbol} (RSI={rsi:.1f}, price below EMA21)")
+                            logger.info(f"   📉 EXTREME OVERSOLD + DOWNTREND: {symbol} (RSI={rsi:.1f}, price<EMA21)")
+                            logger.info(f"      Exiting to prevent further losses in confirmed downtrend")
                             positions_to_exit.append({
                                 'symbol': symbol,
                                 'quantity': quantity,
-                                'reason': f'Downtrend exit (RSI={rsi:.1f}, price<EMA21) - cutting losses',
+                                'reason': f'Extreme oversold downtrend (RSI={rsi:.1f}, price<EMA21)',
                                 'broker': position_broker,
                                 'broker_label': broker_label
                             })
+                            continue
+                        else:
+                            logger.info(f"   📊 {symbol} very oversold (RSI={rsi:.1f}) but bouncing (price>EMA21) - HOLDING for recovery")
                             continue
                     
                     # Check for weak market conditions (exit signal)

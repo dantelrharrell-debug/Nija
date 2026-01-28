@@ -1,9 +1,9 @@
 """
-Test script for broker timeout fix (Jan 27, 2026)
+Test script for broker timeout fix (Jan 28, 2026)
 
 Tests the timeout handling improvements:
 1. call_with_timeout race condition fix
-2. Reduced timeout from 45s to 20s
+2. Timeout set to 45s to accommodate Kraken API timeout (30s) + network overhead (15s)
 3. Permissive cached balance fallback
 4. Better exception logging
 """
@@ -17,14 +17,14 @@ from bot.trading_strategy import call_with_timeout, BALANCE_FETCH_TIMEOUT, CACHE
 
 
 def test_timeout_constant():
-    """Test that timeout was reduced from 45s to 20s"""
+    """Test that timeout is set to 45s to accommodate Kraken API timeout (30s) + network overhead"""
     print("=" * 70)
     print("TEST 1: Timeout Constant Value")
     print("=" * 70)
     
     print(f"BALANCE_FETCH_TIMEOUT = {BALANCE_FETCH_TIMEOUT}s")
-    assert BALANCE_FETCH_TIMEOUT == 20, f"Timeout should be 20s, got {BALANCE_FETCH_TIMEOUT}s"
-    print(f"✅ Timeout correctly set to 20 seconds (was 45s)")
+    assert BALANCE_FETCH_TIMEOUT == 45, f"Timeout should be 45s, got {BALANCE_FETCH_TIMEOUT}s"
+    print(f"✅ Timeout correctly set to 45 seconds (30s Kraken API + 15s buffer)")
     print()
 
 
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     print("\n")
     print("╔" + "=" * 68 + "╗")
     print("║" + " " * 15 + "BROKER TIMEOUT FIX TEST SUITE" + " " * 24 + "║")
-    print("║" + " " * 20 + "January 27, 2026" + " " * 30 + "║")
+    print("║" + " " * 20 + "January 28, 2026" + " " * 30 + "║")
     print("╚" + "=" * 68 + "╝")
     print("\n")
     
