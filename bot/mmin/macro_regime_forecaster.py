@@ -119,7 +119,7 @@ class MacroRegimeForecaster:
         signals = {}
         
         # Crypto momentum
-        if 'crypto' in market_data:
+        if 'crypto' in market_data and market_data['crypto']:
             crypto_df = list(market_data['crypto'].values())[0] if market_data['crypto'] else None
             if crypto_df is not None and len(crypto_df) >= self.detection_window:
                 crypto_returns = crypto_df['close'].pct_change(self.detection_window).iloc[-1]
@@ -127,7 +127,7 @@ class MacroRegimeForecaster:
                 signals['crypto_volatility'] = crypto_df['close'].pct_change().std()
         
         # Equity momentum
-        if 'equities' in market_data:
+        if 'equities' in market_data and market_data['equities']:
             equity_df = list(market_data['equities'].values())[0] if market_data['equities'] else None
             if equity_df is not None and len(equity_df) >= self.detection_window:
                 equity_returns = equity_df['close'].pct_change(self.detection_window).iloc[-1]
@@ -135,14 +135,14 @@ class MacroRegimeForecaster:
                 signals['equity_volatility'] = equity_df['close'].pct_change().std()
         
         # Bond momentum (inverse relationship with risk)
-        if 'bonds' in market_data:
+        if 'bonds' in market_data and market_data['bonds']:
             bond_df = list(market_data['bonds'].values())[0] if market_data['bonds'] else None
             if bond_df is not None and len(bond_df) >= self.detection_window:
                 bond_returns = bond_df['close'].pct_change(self.detection_window).iloc[-1]
                 signals['bond_momentum'] = bond_returns
         
         # Commodity momentum (inflation proxy)
-        if 'commodities' in market_data:
+        if 'commodities' in market_data and market_data['commodities']:
             commodity_df = list(market_data['commodities'].values())[0] if market_data['commodities'] else None
             if commodity_df is not None and len(commodity_df) >= self.detection_window:
                 commodity_returns = commodity_df['close'].pct_change(self.detection_window).iloc[-1]

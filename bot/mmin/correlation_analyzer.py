@@ -56,17 +56,20 @@ class CrossMarketCorrelationAnalyzer:
         Calculate rolling correlations for multiple window sizes
         
         Args:
-            data: DataFrame with symbols as columns, returns as values
+            data: DataFrame with symbols as columns, prices as values
             
         Returns:
             Dictionary mapping window size to correlation matrix
         """
+        # Convert prices to returns for proper correlation analysis
+        returns = data.pct_change().dropna()
+        
         correlations = {}
         
         for window in self.window_sizes:
-            if len(data) >= window:
-                # Calculate rolling correlation
-                corr_matrix = data.rolling(window=window).corr().iloc[-len(data.columns):]
+            if len(returns) >= window:
+                # Calculate rolling correlation on returns (not prices)
+                corr_matrix = returns.rolling(window=window).corr().iloc[-len(returns.columns):]
                 correlations[window] = corr_matrix
                 self.correlation_matrices[window] = corr_matrix
                 logger.debug(f"Calculated {window}-period correlation matrix")
@@ -130,7 +133,10 @@ class CrossMarketCorrelationAnalyzer:
         series1 = series1.loc[common_idx]
         series2 = series2.loc[common_idx]
         
-        if len(series1) < max_lag * 2:
+        # Ensure sufficient data for lead-lag analysis
+        min_required_length = max_lag * 3  # Need at least 3x max_lag for robust analysis
+        if len(series1) < min_required_length:
+            logger.warning(f"Insufficient data for lead-lag analysis: {len(series1)} < {min_required_length}")
             return {}
         
         # Calculate cross-correlation at different lags

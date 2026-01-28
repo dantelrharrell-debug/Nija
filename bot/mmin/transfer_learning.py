@@ -91,13 +91,21 @@ class TransferLearningEngine:
         
         # Technical indicators (simplified for cross-market compatibility)
         if len(df) >= 14:
-            # RSI-like momentum
+            # Calculate basic RSI-like momentum (handling edge cases)
             delta = df['close'].diff()
             gain = delta.where(delta > 0, 0).rolling(window=14).mean()
             loss = -delta.where(delta < 0, 0).rolling(window=14).mean()
-            rs = gain / (loss + 1e-10)
-            rsi = 100 - (100 / (1 + rs))
-            features.append(rsi.iloc[-1] / 100.0)  # Normalize to 0-1
+            
+            # Handle edge cases for division
+            if gain.iloc[-1] == 0 and loss.iloc[-1] == 0:
+                # No price movement - neutral RSI
+                rsi_value = 50.0
+            else:
+                rs = gain / (loss + 1e-10)
+                rsi = 100 - (100 / (1 + rs))
+                rsi_value = rsi.iloc[-1]
+            
+            features.append(rsi_value / 100.0)  # Normalize to 0-1
             
             # Trend strength
             sma_20 = df['close'].rolling(window=20).mean()
@@ -145,7 +153,7 @@ class TransferLearningEngine:
             market_source=market_type,
             features=features,
             confidence=confidence,
-            success_rate=outcome.get('profit', 0.0) > 0,
+            success_rate=1.0 if outcome.get('profit', 0.0) > 0 else 0.0,  # 1.0 or 0.0 for single outcome
             metadata={
                 'timestamp': data.index[-1] if hasattr(data.index[-1], 'timestamp') else None,
                 'outcome': outcome,

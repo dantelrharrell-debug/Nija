@@ -172,6 +172,9 @@ class MultiMarketDataCollector:
         """
         Generate mock OHLCV data for testing
         
+        IMPORTANT: This is TEST-ONLY functionality. 
+        Real broker integration must be implemented before production use.
+        
         Args:
             symbol: Symbol name
             limit: Number of candles
@@ -179,6 +182,7 @@ class MultiMarketDataCollector:
         Returns:
             DataFrame with mock OHLCV data
         """
+        # Use deterministic seed for consistent test data
         np.random.seed(hash(symbol) % 2**32)
         
         # Generate realistic price movements
@@ -245,11 +249,16 @@ class MultiMarketDataCollector:
     
     def get_quality_metrics(self) -> Dict:
         """Get data quality metrics"""
+        # Calculate cache size only if needed (can be expensive for large caches)
+        cache_size = 0
+        if len(self.data_cache) > 0:
+            # Estimate size rather than computing exact memory usage
+            cache_size = len(self.data_cache) * 0.01  # Rough estimate in MB
+        
         return {
             **self.quality_metrics,
             'cached_symbols': len(self.data_cache),
-            'cache_size_mb': sum(df.memory_usage(deep=True).sum() 
-                               for df in self.data_cache.values()) / (1024 * 1024),
+            'cache_size_mb': cache_size,
         }
     
     def clear_cache(self):
