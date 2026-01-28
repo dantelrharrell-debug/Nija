@@ -29,13 +29,13 @@ from execution_engine import ExecutionEngine
 # Initialize logger before any imports that might fail
 logger = logging.getLogger("nija")
 
-# Import exchange capabilities for SHORT entry validation
+# Import exchange capabilities for SHORT entry validation and fee-aware profit targets
 try:
-    from exchange_capabilities import can_short
+    from exchange_capabilities import can_short, get_broker_capabilities, get_min_profit_target
     EXCHANGE_CAPABILITIES_AVAILABLE = True
 except ImportError:
     EXCHANGE_CAPABILITIES_AVAILABLE = False
-    logger.warning("Exchange capabilities module not available - SHORT validation disabled")
+    logger.warning("Exchange capabilities module not available - SHORT validation and fee-aware targets disabled")
 
 # Import position sizer for minimum position validation
 try:
@@ -219,6 +219,54 @@ class NIJAApexStrategyV71:
         else:
             # Fallback to string representation
             return str(broker_type).lower()
+    
+    def _get_broker_fee_aware_target(self, symbol: str, use_limit_order: bool = True) -> float:
+        """
+        Get minimum profit target for current broker/symbol to overcome fees.
+        
+        Formula: min_profit_target = broker_fee * 2.5
+        
+        This ensures trades are profitable after fees with a safety buffer.
+        
+        Args:
+            symbol: Trading symbol
+            use_limit_order: True for maker fees, False for taker fees
+            
+        Returns:
+            Minimum profit target as decimal (e.g., 0.035 = 3.5%)
+        """
+        if not EXCHANGE_CAPABILITIES_AVAILABLE:
+            # Fallback to conservative default if capabilities not available
+            return 0.025  # 2.5% default target
+        
+        broker_name = self._get_broker_name()
+        try:
+            min_target = get_min_profit_target(broker_name, symbol, use_limit_order)
+            logger.debug(f"Fee-aware profit target for {broker_name}/{symbol}: {min_target*100:.2f}%")
+            return min_target
+        except Exception as e:
+            logger.warning(f"Could not get fee-aware target for {broker_name}/{symbol}: {e}")
+            return 0.025  # 2.5% fallback
+    
+    def _get_broker_capabilities(self, symbol: str):
+        """
+        Get exchange capabilities for current broker and symbol.
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            ExchangeCapabilities object or None
+        """
+        if not EXCHANGE_CAPABILITIES_AVAILABLE:
+            return None
+        
+        broker_name = self._get_broker_name()
+        try:
+            return get_broker_capabilities(broker_name, symbol)
+        except Exception as e:
+            logger.warning(f"Could not get capabilities for {broker_name}/{symbol}: {e}")
+            return None
     
     def update_broker_client(self, new_broker_client):
         """
@@ -1047,8 +1095,14 @@ class NIJAApexStrategyV71:
                     stop_loss = self.risk_manager.calculate_stop_loss(
                         current_price, 'long', swing_low, atr
                     )
+                    
+                    # ✅ FEE-AWARE PROFIT TARGETS (Phase 4)
+                    # Get broker-specific round-trip fee and use it for dynamic profit targets
+                    broker_capabilities = self._get_broker_capabilities(symbol)
+                    broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
+                    
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'long'
+                        current_price, stop_loss, 'long', broker_fee_pct=broker_fee, use_limit_order=True
                     )
                     
                     # Adjust TP levels based on regime if enhanced scoring is enabled
@@ -1075,15 +1129,21 @@ class NIJAApexStrategyV71:
                     return result
             
             elif trend == 'downtrend':
-                # EARLY FILTER: Check if this broker/symbol supports shorting
-                # Spot markets don't support shorting - only futures/perpetuals do
+                # ✅ BROKER-AWARE SHORT EXECUTION (HIGH-IMPACT OPTIMIZATION)
+                # Check if this broker/symbol supports shorting BEFORE analyzing
+                # This prevents wasted computational cycles on blocked trades
+                # Effect: Increases win rate, capital utilization, compounding speed
                 if EXCHANGE_CAPABILITIES_AVAILABLE:
                     if not can_short(broker_name, symbol):
-                        logger.debug(f"   {symbol}: Skipping SHORT analysis - {broker_name} spot markets don't support shorting")
+                        logger.debug(f"   {symbol}: Skipping SHORT analysis - {broker_name} does not support shorting for {symbol}")
+                        logger.debug(f"      Market mode: SPOT (long-only) | For shorting use FUTURES/PERPS")
                         return {
                             'action': 'hold',
-                            'reason': f'{broker_name} does not support shorting for {symbol} (spot market)'
+                            'reason': f'{broker_name} does not support shorting for {symbol} (SPOT market - long-only)'
                         }
+                else:
+                    # If exchange capabilities not available, log warning but allow (risky)
+                    logger.warning(f"⚠️  Exchange capability check unavailable - analyzing SHORT for {symbol} (risky!)")
                 
                 # Use enhanced scoring if available, otherwise legacy
                 if self.use_enhanced_scoring:
@@ -1138,8 +1198,14 @@ class NIJAApexStrategyV71:
                     stop_loss = self.risk_manager.calculate_stop_loss(
                         current_price, 'short', swing_high, atr
                     )
+                    
+                    # ✅ FEE-AWARE PROFIT TARGETS (Phase 4)
+                    # Get broker-specific round-trip fee and use it for dynamic profit targets
+                    broker_capabilities = self._get_broker_capabilities(symbol)
+                    broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
+                    
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'short'
+                        current_price, stop_loss, 'short', broker_fee_pct=broker_fee, use_limit_order=True
                     )
                     
                     # Adjust TP levels based on regime if enhanced scoring is enabled

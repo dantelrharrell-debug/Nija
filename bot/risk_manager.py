@@ -666,11 +666,22 @@ class AdaptiveRiskManager:
         return stop_loss
     
     def calculate_take_profit_levels(self, entry_price: float, stop_loss: float,
-                                     side: str) -> Dict[str, float]:
+                                     side: str, broker_fee_pct: float = None, 
+                                     use_limit_order: bool = True) -> Dict[str, float]:
         """
-        Calculate take profit levels based on R-multiples
+        Calculate take profit levels based on R-multiples with FEE-AWARE PROFITABILITY
         
-        FEE-AWARE PROFITABILITY FIX (Dec 27, 2025):
+        ENHANCED (Phase 4): Dynamic profit targets based on broker fees
+        Formula: min_profit_target = broker_fee * 2.5
+        
+        This ensures NET profitability after fees with safety buffer for slippage.
+        
+        Fee Examples:
+        - Coinbase (1.4% round-trip): TP1 @ 3.5% (1.4% × 2.5)
+        - Kraken (0.42% round-trip): TP1 @ 1.05% (0.42% × 2.5)
+        - Binance (0.28% round-trip): TP1 @ 0.7% (0.28% × 2.5)
+        
+        Previous FIX (Dec 27, 2025):
         Adjusted to ensure NET profitability after Coinbase fees (~1.4% round-trip)
         
         Previous targets (0.5R, 1R, 1.5R) were too low and resulted in NET LOSSES
@@ -689,23 +700,48 @@ class AdaptiveRiskManager:
             entry_price: Entry price
             stop_loss: Stop loss price
             side: 'long' or 'short'
+            broker_fee_pct: Round-trip fee as decimal (e.g., 0.014 = 1.4%). If None, uses R-multiples.
+            use_limit_order: True for maker fees, False for taker fees (only used if broker_fee_pct provided)
         
         Returns:
-            Dictionary with TP1 (1.0R), TP2 (1.5R), TP3 (2.0R) levels
+            Dictionary with TP1, TP2, TP3 levels and risk
         """
         # Calculate R (risk per share)
         if side == 'long':
             risk = entry_price - stop_loss
-            # Fee-aware targets: 1R, 1.5R, 2R (ensures profitability after fees)
-            tp1 = entry_price + (risk * 1.0)  # 1R - minimum for fee coverage
-            tp2 = entry_price + (risk * 1.5)  # 1.5R - solid profit
-            tp3 = entry_price + (risk * 2.0)  # 2R - excellent trade
         else:  # short
             risk = stop_loss - entry_price
-            # Fee-aware targets: 1R, 1.5R, 2R (ensures profitability after fees)
-            tp1 = entry_price - (risk * 1.0)  # 1R - minimum for fee coverage
-            tp2 = entry_price - (risk * 1.5)  # 1.5R - solid profit
-            tp3 = entry_price - (risk * 2.0)  # 2R - excellent trade
+        
+        # If broker fee provided, use fee-aware targets
+        if broker_fee_pct is not None:
+            # Dynamic fee-aware profit targets
+            min_target_pct = broker_fee_pct * 2.5  # 2.5x fee for safety buffer
+            mid_target_pct = broker_fee_pct * 4.0  # 4x fee for solid profit
+            max_target_pct = broker_fee_pct * 6.0  # 6x fee for excellent trade
+            
+            if side == 'long':
+                tp1 = entry_price * (1 + min_target_pct)
+                tp2 = entry_price * (1 + mid_target_pct)
+                tp3 = entry_price * (1 + max_target_pct)
+            else:  # short
+                tp1 = entry_price * (1 - min_target_pct)
+                tp2 = entry_price * (1 - mid_target_pct)
+                tp3 = entry_price * (1 - max_target_pct)
+            
+            logger.debug(f"Fee-aware TP levels: Fee={broker_fee_pct*100:.2f}% | "
+                        f"TP1={min_target_pct*100:.2f}% | TP2={mid_target_pct*100:.2f}% | TP3={max_target_pct*100:.2f}%")
+        else:
+            # Legacy R-multiple based targets (fallback)
+            if side == 'long':
+                # Fee-aware targets: 1R, 1.5R, 2R (ensures profitability after fees)
+                tp1 = entry_price + (risk * 1.0)  # 1R - minimum for fee coverage
+                tp2 = entry_price + (risk * 1.5)  # 1.5R - solid profit
+                tp3 = entry_price + (risk * 2.0)  # 2R - excellent trade
+            else:  # short
+                # Fee-aware targets: 1R, 1.5R, 2R (ensures profitability after fees)
+                tp1 = entry_price - (risk * 1.0)  # 1R - minimum for fee coverage
+                tp2 = entry_price - (risk * 1.5)  # 1.5R - solid profit
+                tp3 = entry_price - (risk * 2.0)  # 2R - excellent trade
         
         return {
             'tp1': tp1,
