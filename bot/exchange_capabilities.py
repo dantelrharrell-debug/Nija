@@ -24,7 +24,7 @@ Exchange-Specific Rules:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 import logging
 
 logger = logging.getLogger("nija.capabilities")
@@ -444,6 +444,8 @@ class ExchangeCapabilityMatrix:
             return 0.025
         
         return caps.get_min_profit_target(use_limit_order, multiplier)
+    
+    def _detect_market_mode(self, symbol: str) -> MarketMode:
         """
         Detect market mode from symbol.
         
