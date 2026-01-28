@@ -1,0 +1,20 @@
+{
+  "base_capital": 1000.0,
+  "total_capital": 1854.0,
+  "profit_reserve": 465.75,
+  "reinvested_profits": 1397.25,
+  "start_date": "2026-01-28T17:22:40.076842",
+  "last_updated": "2026-01-28T17:22:45.687692",
+  "metrics": {
+    "days_active": 1,
+    "total_trades": 76,
+    "winning_trades": 50,
+    "total_profit": 980.0,
+    "total_fees": 126.0,
+    "net_profit": 854.0,
+    "cagr": 7.245216710189933e+99,
+    "daily_growth_rate": 85.4,
+    "win_rate": 65.78947368421053,
+    "profit_factor": 0.0
+  }
+}

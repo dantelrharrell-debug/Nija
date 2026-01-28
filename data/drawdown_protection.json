@@ -1,0 +1,11 @@
+{
+  "peak_capital": 1480.0,
+  "current_capital": 1220.0,
+  "drawdown_amount": 260.0,
+  "drawdown_pct": 17.56756756756757,
+  "protection_level": "danger",
+  "losing_streak": 5,
+  "winning_streak": 0,
+  "trades_since_peak": 33,
+  "last_updated": "2026-01-28T17:22:45.687940"
+}
