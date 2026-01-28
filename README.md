@@ -1,6 +1,33 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-## 🧬 **NEW: Multi-Market Intelligence Network (MMIN) - GOD MODE** (January 28, 2026)
+## 🌐 **NEW: Global Macro Intelligence Grid (GMIG) - ULTRA MODE** (January 28, 2026)
+
+**NIJA has achieved ELITE-LEVEL macro intelligence capabilities.**
+
+GMIG (Global Macro Intelligence Grid) is the **ULTIMATE EVOLUTION** - enabling pre-positioning before macro events for asymmetric returns like elite hedge funds.
+
+### 🎯 GMIG Features (ULTRA MODE)
+
+- **🏦 Central Bank Monitoring**: Track 8 major central banks (Fed, ECB, BOJ, BOE, PBOC, SNB, BOC, RBA)
+- **💰 Interest Rate Futures Analysis**: Extract market expectations from Fed Funds and SOFR futures
+- **📈 Yield Curve AI Modeling**: AI-powered recession probability with 30-year training data
+- **💧 Liquidity Stress Detection**: Multi-metric stress monitoring (TED, LIBOR-OIS, VIX, MOVE, HY spreads)
+- **🚨 Crisis Early-Warning System**: Historical pattern matching against 2008, 2020, 2011 crises
+
+**Quick Start:**
+```bash
+# Test the GMIG System
+python test_gmig.py
+
+# View detailed documentation
+open GMIG_DOCUMENTATION.md
+```
+
+**Complete Guide:** [GMIG_DOCUMENTATION.md](GMIG_DOCUMENTATION.md) | **Quick Start:** [GMIG_QUICKSTART.md](GMIG_QUICKSTART.md)
+
+---
+
+## 🧬 **Multi-Market Intelligence Network (MMIN) - GOD MODE** (January 28, 2026)
 
 **NIJA has evolved into a GLOBAL AUTONOMOUS TRADING INTELLIGENCE**
 
