@@ -136,11 +136,13 @@ MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 
                             # At 5-15 markets per cycle with 8.0s delay, scanning takes 40-120 seconds
                             # This conservative rate ensures API key never gets temporarily blocked
 
-# Broker balance fetch timeout constants (Jan 27, 2026)
-# CRITICAL FIX: Reduced from 45s to 20s to prevent broker selection delays
-# 20s chosen based on: APIs respond in 1-5s normally, 10-15s under load, allows 2-3 retries
+# Broker balance fetch timeout constants (Jan 28, 2026)
+# CRITICAL FIX: Increased from 20s to 45s to accommodate Kraken API timeout (30s) plus network overhead
+# 45s chosen to allow: 30s Kraken API timeout + 15s network/serialization buffer
+# Kraken get_account_balance makes 2 API calls (Balance + TradeBalance) with 1s minimum between calls
+# Under production load, Kraken regularly takes 15-20s to respond (within 30s API timeout)
 # If timeout occurs, cached balance is used as fallback (max age: 5 minutes)
-BALANCE_FETCH_TIMEOUT = 20  # Maximum time to wait for balance fetch
+BALANCE_FETCH_TIMEOUT = 45  # Maximum time to wait for balance fetch (must be > Kraken API timeout of 30s)
 CACHED_BALANCE_MAX_AGE_SECONDS = 300  # Use cached balance if fresh (5 minutes max staleness)
                             
 # Market scanning rotation (prevents scanning same markets every cycle)
@@ -1534,11 +1536,12 @@ class TradingStrategy:
             return False, f"{broker_name.upper()} in EXIT-ONLY mode"
         
         # Check if account balance meets minimum threshold
-        # CRITICAL FIX (Jan 24, 2026): Use timeout to prevent hanging on slow balance fetches
-        # Timeout configured to accommodate Kraken's API timeout plus network overhead
+        # CRITICAL FIX (Jan 28, 2026): Use timeout to prevent hanging on slow balance fetches
+        # Timeout configured to accommodate Kraken's API timeout (30s) plus network overhead (15s)
         try:
             # Call get_account_balance with timeout to prevent indefinite hanging
-            # Uses BALANCE_FETCH_TIMEOUT (45s = 30s Kraken API + 15s network buffer)
+            # Uses BALANCE_FETCH_TIMEOUT (45s = 30s Kraken API timeout + 15s network/serialization buffer)
+            # Note: Kraken makes 2 API calls (Balance + TradeBalance) with 1s minimum interval between calls
             balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=BALANCE_FETCH_TIMEOUT)
             
             # Check if timeout or error occurred
