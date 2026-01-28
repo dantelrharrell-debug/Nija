@@ -4162,7 +4162,7 @@ class AlpacaBroker(BaseBroker):
             logging.error("      4. Check for dependency conflicts with: pip check")
             return False
     
-    def get_account_balance(self) -> float:
+    def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get total equity (cash + position values) for Alpaca account.
         
@@ -4171,6 +4171,9 @@ class AlpacaBroker(BaseBroker):
         
         For Alpaca, the account object provides 'equity' which includes both cash and positions.
         This is the correct value to use for risk calculations and position sizing.
+        
+        Args:
+            verbose: If True, logs detailed balance breakdown (default: True)
         
         Returns:
             float: Total equity (cash + positions)
@@ -4184,17 +4187,21 @@ class AlpacaBroker(BaseBroker):
             cash = float(account.cash)
             position_value = equity - cash
             
-            # Enhanced logging to show breakdown
-            logger.info("=" * 70)
-            logger.info(f"💰 Alpaca Balance ({self.account_identifier}):")
-            logger.info(f"   ✅ Cash: ${cash:.2f}")
-            if position_value > 0:
-                logger.info(f"   📊 Position Value: ${position_value:.2f}")
-                logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                logger.info(f"   💎 TOTAL EQUITY: ${equity:.2f}")
+            # Enhanced logging to show breakdown (only if verbose=True)
+            if verbose:
+                logger.info("=" * 70)
+                logger.info(f"💰 Alpaca Balance ({self.account_identifier}):")
+                logger.info(f"   ✅ Cash: ${cash:.2f}")
+                if position_value > 0:
+                    logger.info(f"   📊 Position Value: ${position_value:.2f}")
+                    logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    logger.info(f"   💎 TOTAL EQUITY: ${equity:.2f}")
+                else:
+                    logger.info(f"   💎 TOTAL EQUITY: ${equity:.2f} (no positions)")
+                logger.info("=" * 70)
             else:
-                logger.info(f"   💎 TOTAL EQUITY: ${equity:.2f} (no positions)")
-            logger.info("=" * 70)
+                # Minimal logging when verbose=False
+                logger.debug(f"Alpaca balance ({self.account_identifier}): ${equity:.2f}")
             
             return equity
             
@@ -4584,9 +4591,12 @@ class BinanceBroker(BaseBroker):
             logging.error("      4. Check for dependency conflicts with: pip check")
             return False
     
-    def get_account_balance(self) -> float:
+    def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get USDT balance available for trading.
+        
+        Args:
+            verbose: If True, logs detailed balance breakdown (default: True)
         
         Returns:
             float: Available USDT balance
@@ -4602,11 +4612,15 @@ class BinanceBroker(BaseBroker):
             for balance in account.get('balances', []):
                 if balance['asset'] == 'USDT':
                     available = float(balance.get('free', 0))
-                    logging.info(f"💰 Binance USDT Balance: ${available:.2f}")
+                    if verbose:
+                        logging.info(f"💰 Binance USDT Balance: ${available:.2f}")
+                    else:
+                        logging.debug(f"Binance USDT Balance: ${available:.2f}")
                     return available
             
             # No USDT found
-            logging.warning("⚠️  No USDT balance found in Binance account")
+            if verbose:
+                logging.warning("⚠️  No USDT balance found in Binance account")
             return 0.0
             
         except Exception as e:
@@ -6156,7 +6170,7 @@ class KrakenBroker(BaseBroker):
             logger.error("   there may be a dependency version conflict.")
             return False
     
-    def get_account_balance(self) -> float:
+    def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get USD/USDT balance available for trading with fail-closed behavior.
         
@@ -6164,6 +6178,9 @@ class KrakenBroker(BaseBroker):
         - On error: Return last known balance (if available) instead of 0
         - Track consecutive errors to mark broker unavailable
         - Distinguish API errors from actual zero balance
+        
+        Args:
+            verbose: If True, logs detailed balance breakdown (default: True)
         
         Returns:
             float: Available USD + USDT balance (not including held funds)
@@ -6243,24 +6260,30 @@ class KrakenBroker(BaseBroker):
                     held_amount = eb - tb if eb > tb else 0.0
                 
                 # Enhanced balance logging with clear breakdown (Jan 19, 2026)
-                logger.info("=" * 70)
-                logger.info(f"💰 Kraken Balance ({self.account_identifier}):")
-                logger.info(f"   ✅ Available USD:  ${usd_balance:.2f}")
-                logger.info(f"   ✅ Available USDT: ${usdt_balance:.2f}")
-                logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                logger.info(f"   💵 Total Available: ${total:.2f}")
+                # Only log detailed breakdown if verbose is True
+                if verbose:
+                    logger.info("=" * 70)
+                    logger.info(f"💰 Kraken Balance ({self.account_identifier}):")
+                    logger.info(f"   ✅ Available USD:  ${usd_balance:.2f}")
+                    logger.info(f"   ✅ Available USDT: ${usdt_balance:.2f}")
+                    logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    logger.info(f"   💵 Total Available: ${total:.2f}")
                 
                 # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken
                 total_funds = total + held_amount
                 
-                if held_amount > 0:
-                    logger.info(f"   🔒 Held in open orders: ${held_amount:.2f}")
-                    logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
-                logger.info("=" * 70)
-                
-                # FIX #3 (Jan 20, 2026): Confirmation log for Kraken balance fetch
-                logger.info(f"✅ KRAKEN balance fetched: ${total_funds:.2f}")
+                if verbose:
+                    if held_amount > 0:
+                        logger.info(f"   🔒 Held in open orders: ${held_amount:.2f}")
+                        logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
+                    logger.info("=" * 70)
+                    
+                    # FIX #3 (Jan 20, 2026): Confirmation log for Kraken balance fetch
+                    logger.info(f"✅ KRAKEN balance fetched: ${total_funds:.2f}")
+                else:
+                    # Minimal logging when verbose=False
+                    logger.debug(f"Kraken balance ({self.account_identifier}): ${total_funds:.2f}")
                 
                 # SUCCESS: Update last known balance and reset error count
                 # 🚑 FIX 4: Store and return total_funds instead of just available
@@ -7587,7 +7610,7 @@ class OKXBroker(BaseBroker):
             logging.error("      4. Check for dependency conflicts with: pip check")
             return False
     
-    def get_account_balance(self) -> float:
+    def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get total equity (USDT + position values) with fail-closed behavior.
         
@@ -7599,6 +7622,9 @@ class OKXBroker(BaseBroker):
         - On error: Return last known balance (if available) instead of 0
         - Track consecutive errors to mark broker unavailable
         - Distinguish API errors from actual zero balance
+        
+        Args:
+            verbose: If True, logs detailed balance breakdown (default: True)
         
         Returns:
             float: Total equity (available USDT + position values)
@@ -7661,17 +7687,21 @@ class OKXBroker(BaseBroker):
                     # Calculate total equity
                     total_equity = available + position_value
                     
-                    # Enhanced logging
-                    logger.info("=" * 70)
-                    logger.info(f"💰 OKX Balance:")
-                    logger.info(f"   ✅ Available USDT: ${available:.2f}")
-                    if position_value > 0:
-                        logger.info(f"   📊 Position Value: ${position_value:.2f}")
-                        logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                        logger.info(f"   💎 TOTAL EQUITY (Available + Positions): ${total_equity:.2f}")
+                    # Enhanced logging (only if verbose=True)
+                    if verbose:
+                        logger.info("=" * 70)
+                        logger.info(f"💰 OKX Balance:")
+                        logger.info(f"   ✅ Available USDT: ${available:.2f}")
+                        if position_value > 0:
+                            logger.info(f"   📊 Position Value: ${position_value:.2f}")
+                            logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            logger.info(f"   💎 TOTAL EQUITY (Available + Positions): ${total_equity:.2f}")
+                        else:
+                            logger.info(f"   💎 TOTAL EQUITY: ${total_equity:.2f} (no positions)")
+                        logger.info("=" * 70)
                     else:
-                        logger.info(f"   💎 TOTAL EQUITY: ${total_equity:.2f} (no positions)")
-                    logger.info("=" * 70)
+                        # Minimal logging when verbose=False
+                        logger.debug(f"OKX balance: ${total_equity:.2f}")
                     
                     # SUCCESS: Update last known balance and reset error count
                     self._last_known_balance = total_equity
@@ -7681,7 +7711,8 @@ class OKXBroker(BaseBroker):
                     return total_equity
                 
                 # No USDT found - treat as zero balance (not an error)
-                logger.warning("⚠️  No USDT balance found in OKX account")
+                if verbose:
+                    logger.warning("⚠️  No USDT balance found in OKX account")
                 # Update last known balance to 0 (this is a successful API call, just zero balance)
                 self._last_known_balance = 0.0
                 self._balance_fetch_errors = 0
