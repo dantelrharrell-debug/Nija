@@ -82,8 +82,9 @@ class StrategySwarm:
         """
         if len(self.strategies) >= self.config['num_strategies']:
             logger.warning(
-                f"⚠️  Swarm at capacity ({self.config['num_strategies']}). "
-                f"Cannot add {strategy_id}"
+                f"⚠️  Swarm at maximum capacity ({self.config['num_strategies']} strategies). "
+                f"Remove an existing strategy or increase 'num_strategies' in configuration "
+                f"before adding {strategy_id}"
             )
             return False
         

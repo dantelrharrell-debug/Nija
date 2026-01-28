@@ -361,14 +361,16 @@ class RLStrategySelector:
         Args:
             filepath: Path to load model from
         """
+        import ast
+        
         with open(filepath, 'r') as f:
             model_data = json.load(f)
         
         # Restore Q-table
         self.q_table = {}
         for state_str, q_values in model_data['q_table'].items():
-            # Convert string back to tuple
-            state_tuple = eval(state_str)
+            # Convert string back to tuple safely
+            state_tuple = ast.literal_eval(state_str)
             self.q_table[state_tuple] = np.array(q_values)
         
         # Restore stats

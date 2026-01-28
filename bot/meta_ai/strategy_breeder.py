@@ -332,24 +332,38 @@ class StrategyBreeder:
             'mutation_count': mutation_count,
         }
     
-    def get_genealogy(self, strategy_id: str) -> List[BreedingRecord]:
+    def get_genealogy(self, strategy_id: str, max_depth: int = 10, _visited: set = None) -> List[BreedingRecord]:
         """
         Get breeding genealogy for a strategy
         
         Args:
             strategy_id: Strategy ID
+            max_depth: Maximum depth to traverse (prevents infinite recursion)
+            _visited: Internal set to track visited strategies (prevents cycles)
             
         Returns:
             List of breeding records in ancestry
         """
+        if _visited is None:
+            _visited = set()
+        
+        # Prevent cycles
+        if strategy_id in _visited:
+            return []
+        
+        # Prevent excessive depth
+        if max_depth <= 0:
+            return []
+        
+        _visited.add(strategy_id)
         genealogy = []
         
         # Find all breeding records involving this strategy
         for record in self.breeding_history:
             if record.offspring_id == strategy_id:
                 genealogy.append(record)
-                # Recursively find parent genealogies
-                genealogy.extend(self.get_genealogy(record.parent1_id))
-                genealogy.extend(self.get_genealogy(record.parent2_id))
+                # Recursively find parent genealogies with depth limit
+                genealogy.extend(self.get_genealogy(record.parent1_id, max_depth - 1, _visited.copy()))
+                genealogy.extend(self.get_genealogy(record.parent2_id, max_depth - 1, _visited.copy()))
         
         return genealogy

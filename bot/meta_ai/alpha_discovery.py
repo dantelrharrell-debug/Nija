@@ -166,17 +166,19 @@ class AlphaDiscovery:
             
         Returns:
             Performance metrics dictionary
+        
+        Note:
+            This is a placeholder implementation for testing.
+            In production, integrate with actual backtesting engine.
         """
-        # This is a placeholder implementation
-        # In production, this would:
-        # 1. Calculate all indicators
-        # 2. Generate entry/exit signals
-        # 3. Simulate trades
-        # 4. Calculate performance metrics
+        # PLACEHOLDER WARNING: This returns random metrics for testing only
+        # TODO: Integrate with actual backtesting engine before production use
+        logger.warning(
+            "⚠️  Using placeholder backtest - results are random for testing only. "
+            "Integrate with actual backtesting engine before production deployment."
+        )
         
-        # For now, return random metrics for demonstration
-        # TODO: Integrate with actual backtesting engine
-        
+        # Generate random metrics for testing
         sharpe = random.uniform(-0.5, 3.0)
         win_rate = random.uniform(0.35, 0.70)
         profit_factor = random.uniform(0.8, 3.5)
