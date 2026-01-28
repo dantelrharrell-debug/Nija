@@ -296,7 +296,10 @@ class StrategyOrchestrator:
         
         # Apply drawdown penalty
         if perf.current_drawdown > 0:
-            drawdown_pct = perf.current_drawdown / max(perf.total_pnl, 100)
+            # Use 100 as minimum denominator to avoid division by zero and extreme ratios
+            # This represents a minimum P&L baseline for drawdown calculations
+            DRAWDOWN_BASELINE = 100.0
+            drawdown_pct = perf.current_drawdown / max(abs(perf.total_pnl), DRAWDOWN_BASELINE)
             if drawdown_pct > 0.10:  # More than 10% drawdown
                 allocation *= (1 - drawdown_pct)
         

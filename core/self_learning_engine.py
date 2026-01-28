@@ -218,10 +218,15 @@ class SelfLearningEngine:
         
         try:
             with open(self.trade_history_file, 'r') as f:
-                for line in f:
-                    trade_dict = json.loads(line.strip())
-                    # Note: We're loading a simplified version, not full TradeRecord
-                    # This is sufficient for analytics
+                for line_num, line in enumerate(f, 1):
+                    try:
+                        trade_dict = json.loads(line.strip())
+                        # Note: We're loading a simplified version, not full TradeRecord
+                        # This is sufficient for analytics
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Error parsing trade history line {line_num}: {e}")
+                        # Continue with next line instead of failing completely
+                        continue
         except Exception as e:
             logger.error(f"Error loading trade history: {e}")
     
@@ -373,7 +378,11 @@ class SelfLearningEngine:
         test_avg = test.test_pnl / len(test.test_trades) if test.test_trades else 0
         
         # Determine winner (simplified - in production, use proper statistical tests)
-        improvement_pct = (test_avg - control_avg) / abs(control_avg) if control_avg != 0 else 0
+        # Safe division: avoid division by zero
+        if abs(control_avg) > 0.01:  # Minimum threshold to avoid division by near-zero
+            improvement_pct = (test_avg - control_avg) / abs(control_avg)
+        else:
+            improvement_pct = 0
         
         if improvement_pct > 0.10:  # 10% improvement
             test.winner = 'test'

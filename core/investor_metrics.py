@@ -291,7 +291,9 @@ class InvestorMetricsEngine:
         Returns:
             Calmar ratio
         """
-        if max_drawdown == 0:
+        # Avoid division by zero and very small drawdowns that would give misleading ratios
+        MIN_DRAWDOWN = 0.001  # 0.1% minimum drawdown threshold
+        if max_drawdown < MIN_DRAWDOWN:
             return 0.0
         
         return annualized_return / max_drawdown

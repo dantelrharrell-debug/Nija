@@ -70,13 +70,14 @@ class ExecutionMetrics:
         """Calculate slippage metrics"""
         if self.expected_price > 0 and self.fill_price > 0:
             if self.side == 'buy':
-                # For buys, negative slippage = better price (lower)
+                # For buys, negative slippage = better price (lower than expected)
                 self.slippage_usd = (self.fill_price - self.expected_price) * self.filled_size
                 self.slippage_bps = ((self.fill_price / self.expected_price) - 1) * 10000
             else:  # sell
-                # For sells, positive slippage = better price (higher)
-                self.slippage_usd = (self.expected_price - self.fill_price) * self.filled_size
-                self.slippage_bps = ((self.expected_price / self.fill_price) - 1) * 10000
+                # For sells, positive slippage = better price (higher than expected)
+                # Fixed: was (expected - fill), should be (fill - expected) for consistent positive = better convention
+                self.slippage_usd = (self.fill_price - self.expected_price) * self.filled_size
+                self.slippage_bps = ((self.fill_price / self.expected_price) - 1) * 10000
 
 
 @dataclass
@@ -376,6 +377,13 @@ class ExecutionIntelligence:
         Returns:
             Tuple of (exit_size, reason)
         """
+        # Validate position has required fields
+        required_fields = ['size', 'side', 'entry_price']
+        for field in required_fields:
+            if field not in position:
+                logger.error(f"Position missing required field: {field}")
+                return 0.0, f"Invalid position data: missing {field}"
+        
         current_size = position.get('size', 0)
         unrealized_pnl = position.get('unrealized_pnl', 0)
         unrealized_pnl_pct = position.get('unrealized_pnl_pct', 0)
