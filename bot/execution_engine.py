@@ -2,6 +2,8 @@
 """
 NIJA Execution Engine
 Handles order execution and position management for Apex Strategy v7.1
+
+Enhanced with Execution Intelligence Layer for optimal trade execution.
 """
 
 from typing import Dict, Optional, List
@@ -11,6 +13,37 @@ import sys
 import os
 
 logger = logging.getLogger("nija")
+
+# Import Execution Intelligence Layer
+try:
+    from bot.execution_intelligence import (
+        get_execution_intelligence,
+        MarketMicrostructure,
+        ExecutionIntelligence,
+        ExecutionPlan,
+        OrderType as EIOrderType
+    )
+    EXECUTION_INTELLIGENCE_AVAILABLE = True
+    logger.info("✅ Execution Intelligence Layer loaded - Elite execution optimization active")
+except ImportError:
+    try:
+        from execution_intelligence import (
+            get_execution_intelligence,
+            MarketMicrostructure,
+            ExecutionIntelligence,
+            ExecutionPlan,
+            OrderType as EIOrderType
+        )
+        EXECUTION_INTELLIGENCE_AVAILABLE = True
+        logger.info("✅ Execution Intelligence Layer loaded - Elite execution optimization active")
+    except ImportError:
+        EXECUTION_INTELLIGENCE_AVAILABLE = False
+        logger.warning("⚠️ Execution Intelligence Layer not available - using basic execution")
+        get_execution_intelligence = None
+        MarketMicrostructure = None
+        ExecutionIntelligence = None
+        ExecutionPlan = None
+        EIOrderType = None
 
 # Import hard controls for LIVE CAPITAL VERIFIED check
 try:
@@ -33,6 +66,37 @@ except ImportError:
         logger.warning(f"⚠️ Hard controls not available: {e}")
         logger.warning("   LIVE CAPITAL VERIFIED check will be skipped")
         get_hard_controls = None
+
+# Import Execution Intelligence Layer
+try:
+    from bot.execution_intelligence import (
+        get_execution_intelligence,
+        MarketMicrostructure,
+        ExecutionIntelligence,
+        ExecutionPlan,
+        OrderType as EIOrderType
+    )
+    EXECUTION_INTELLIGENCE_AVAILABLE = True
+    logger.info("✅ Execution Intelligence Layer loaded - Elite execution optimization active")
+except ImportError:
+    try:
+        from execution_intelligence import (
+            get_execution_intelligence,
+            MarketMicrostructure,
+            ExecutionIntelligence,
+            ExecutionPlan,
+            OrderType as EIOrderType
+        )
+        EXECUTION_INTELLIGENCE_AVAILABLE = True
+        logger.info("✅ Execution Intelligence Layer loaded - Elite execution optimization active")
+    except ImportError:
+        EXECUTION_INTELLIGENCE_AVAILABLE = False
+        logger.warning("⚠️ Execution Intelligence Layer not available - using basic execution")
+        get_execution_intelligence = None
+        MarketMicrostructure = None
+        ExecutionIntelligence = None
+        ExecutionPlan = None
+        EIOrderType = None
 
 # Constants
 VALID_ORDER_STATUSES = ['open', 'closed', 'filled', 'pending']
@@ -146,6 +210,195 @@ class ExecutionEngine:
                 self.trade_ledger = None
         else:
             self.trade_ledger = None
+        
+        # Initialize Execution Intelligence Layer
+        if EXECUTION_INTELLIGENCE_AVAILABLE:
+            try:
+                self.execution_intelligence = get_execution_intelligence()
+                logger.info("✅ Execution Intelligence initialized - Elite optimization enabled")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not initialize Execution Intelligence: {e}")
+                self.execution_intelligence = None
+        else:
+            self.execution_intelligence = None
+    
+    def _get_market_microstructure(self, symbol: str) -> Optional[MarketMicrostructure]:
+        """
+        Get current market microstructure data for execution optimization.
+        
+        Args:
+            symbol: Trading pair symbol
+            
+        Returns:
+            MarketMicrostructure object or None if unavailable
+        """
+        if not EXECUTION_INTELLIGENCE_AVAILABLE or not self.broker_client:
+            return None
+        
+        try:
+            import time
+            
+            # Try to get quote data from broker
+            if hasattr(self.broker_client, 'get_quote'):
+                quote = self.broker_client.get_quote(symbol)
+                if not quote:
+                    return None
+                
+                bid = quote.get('bid', 0.0)
+                ask = quote.get('ask', 0.0)
+                
+                if bid <= 0 or ask <= 0:
+                    return None
+                
+                # Calculate spread
+                spread_pct = (ask - bid) / bid if bid > 0 else 0.001
+                mid_price = (bid + ask) / 2.0
+                
+                # Get volume if available
+                volume_24h = quote.get('volume_24h', 0.0) or 1000000.0  # Default to 1M
+                
+                # Get order book depth if available
+                bid_depth = quote.get('bid_depth', 0.0) or volume_24h * 0.01
+                ask_depth = quote.get('ask_depth', 0.0) or volume_24h * 0.01
+                
+                # Estimate volatility from spread (rough approximation)
+                volatility = spread_pct * 2.0
+                
+                return MarketMicrostructure(
+                    symbol=symbol,
+                    bid=bid,
+                    ask=ask,
+                    spread_pct=spread_pct,
+                    volume_24h=volume_24h,
+                    bid_depth=bid_depth,
+                    ask_depth=ask_depth,
+                    volatility=volatility,
+                    price=mid_price,
+                    timestamp=time.time()
+                )
+            
+            # Fallback: try to get market data
+            if hasattr(self.broker_client, 'get_market_data'):
+                market_data = self.broker_client.get_market_data(symbol)
+                if market_data and 'price' in market_data:
+                    price = market_data['price']
+                    # Estimate bid/ask with typical spread
+                    estimated_spread = price * 0.001  # 0.1% spread
+                    bid = price - estimated_spread / 2.0
+                    ask = price + estimated_spread / 2.0
+                    
+                    return MarketMicrostructure(
+                        symbol=symbol,
+                        bid=bid,
+                        ask=ask,
+                        spread_pct=0.001,
+                        volume_24h=market_data.get('volume_24h', 1000000.0),
+                        bid_depth=10000.0,
+                        ask_depth=10000.0,
+                        volatility=market_data.get('volatility', 0.01),
+                        price=price,
+                        timestamp=time.time()
+                    )
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Could not get market microstructure for {symbol}: {e}")
+            return None
+    
+    def _optimize_execution_with_intelligence(
+        self,
+        symbol: str,
+        side: str,
+        size_usd: float,
+        urgency: float = 0.7
+    ) -> Optional[ExecutionPlan]:
+        """
+        Use Execution Intelligence to optimize order execution.
+        
+        Args:
+            symbol: Trading pair symbol
+            side: 'buy' or 'sell' (or 'long'/'short')
+            size_usd: Order size in USD
+            urgency: Execution urgency (0=patient, 1=immediate)
+            
+        Returns:
+            ExecutionPlan or None if optimization unavailable
+        """
+        if not self.execution_intelligence:
+            return None
+        
+        # Get market microstructure
+        market_data = self._get_market_microstructure(symbol)
+        if not market_data:
+            logger.debug(f"Market microstructure unavailable for {symbol}, skipping optimization")
+            return None
+        
+        # Normalize side to buy/sell
+        normalized_side = 'buy' if side in ['long', 'buy'] else 'sell'
+        
+        try:
+            # Get optimized execution plan
+            plan = self.execution_intelligence.optimize_execution(
+                symbol=symbol,
+                side=normalized_side,
+                size_usd=size_usd,
+                market_data=market_data,
+                urgency=urgency,
+                allow_splitting=False  # For now, disable splitting to keep things simple
+            )
+            
+            logger.info(f"🎯 Execution Intelligence Plan for {symbol}:")
+            logger.info(f"   Order Type: {plan.order_type.value}")
+            logger.info(f"   Expected Slippage: {plan.expected_slippage*100:.3f}%")
+            logger.info(f"   Expected Spread Cost: {plan.expected_spread_cost*100:.3f}%")
+            logger.info(f"   Total Execution Cost: {plan.total_cost_pct*100:.3f}%")
+            logger.info(f"   Market Impact: {plan.market_impact_pct*100:.3f}%")
+            
+            if plan.warnings:
+                for warning in plan.warnings:
+                    logger.warning(f"   ⚠️ {warning}")
+            
+            return plan
+            
+        except Exception as e:
+            logger.warning(f"Execution optimization failed for {symbol}: {e}")
+            return None
+    
+    def _record_execution_result(
+        self,
+        symbol: str,
+        expected_price: float,
+        actual_price: float,
+        side: str
+    ):
+        """
+        Record execution result for learning.
+        
+        Args:
+            symbol: Trading pair symbol
+            expected_price: Expected execution price
+            actual_price: Actual fill price
+            side: 'buy' or 'sell'
+        """
+        if not self.execution_intelligence:
+            return
+        
+        try:
+            # Get current spread for recording
+            market_data = self._get_market_microstructure(symbol)
+            spread_pct = market_data.spread_pct if market_data else 0.001
+            
+            self.execution_intelligence.record_execution_result(
+                symbol=symbol,
+                expected_price=expected_price,
+                actual_price=actual_price,
+                side=side,
+                spread_pct=spread_pct
+            )
+            
+        except Exception as e:
+            logger.debug(f"Could not record execution result: {e}")
     
     def _handle_geographic_restriction_error(self, symbol: str, error_msg: str):
         """
@@ -263,6 +516,14 @@ class ExecutionEngine:
             
             # Log entry attempt
             logger.info(f"Executing {side} entry: {symbol} size=${position_size:.2f}")
+            
+            # 🎯 EXECUTION INTELLIGENCE: Optimize execution before placing order
+            execution_plan = self._optimize_execution_with_intelligence(
+                symbol=symbol,
+                side=side,
+                size_usd=position_size,
+                urgency=0.7  # Default to moderate urgency for entries
+            )
             
             # Place market order via broker client
             if self.broker_client:
@@ -460,6 +721,16 @@ class ExecutionEngine:
                     'remaining_size': 1.0,  # 100%
                     'peak_profit_pct': 0.0  # Track peak profit for protection
                 }
+                
+                # 🎯 EXECUTION INTELLIGENCE: Record actual execution for learning
+                if actual_fill_price:
+                    order_side_normalized = 'buy' if side == 'long' else 'sell'
+                    self._record_execution_result(
+                        symbol=symbol,
+                        expected_price=entry_price,
+                        actual_price=actual_fill_price,
+                        side=order_side_normalized
+                    )
                 
                 self.positions[symbol] = position
                 logger.info(f"Position opened: {symbol} {side} @ {final_entry_price:.2f}")
