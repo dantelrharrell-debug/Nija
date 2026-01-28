@@ -1095,8 +1095,14 @@ class NIJAApexStrategyV71:
                     stop_loss = self.risk_manager.calculate_stop_loss(
                         current_price, 'long', swing_low, atr
                     )
+                    
+                    # ✅ FEE-AWARE PROFIT TARGETS (Phase 4)
+                    # Get broker-specific round-trip fee and use it for dynamic profit targets
+                    broker_capabilities = self._get_broker_capabilities(symbol)
+                    broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
+                    
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'long'
+                        current_price, stop_loss, 'long', broker_fee_pct=broker_fee, use_limit_order=True
                     )
                     
                     # Adjust TP levels based on regime if enhanced scoring is enabled
@@ -1192,8 +1198,14 @@ class NIJAApexStrategyV71:
                     stop_loss = self.risk_manager.calculate_stop_loss(
                         current_price, 'short', swing_high, atr
                     )
+                    
+                    # ✅ FEE-AWARE PROFIT TARGETS (Phase 4)
+                    # Get broker-specific round-trip fee and use it for dynamic profit targets
+                    broker_capabilities = self._get_broker_capabilities(symbol)
+                    broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
+                    
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'short'
+                        current_price, stop_loss, 'short', broker_fee_pct=broker_fee, use_limit_order=True
                     )
                     
                     # Adjust TP levels based on regime if enhanced scoring is enabled
