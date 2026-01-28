@@ -255,15 +255,17 @@ PROFIT_PROTECTION_NEVER_BREAKEVEN = True  # Never allow profitable positions to 
 # stop losses must be proportionally sized to maintain good risk/reward
 
 # TIER 1: PRIMARY TRADING STOP-LOSS
-# Kraken: With 2.0% profit target, use max 1.0% stop for 2:1 ratio
-STOP_LOSS_PRIMARY_KRAKEN = -0.010  # -1.0% for Kraken (allows 2:1 ratio with 2% profit target)
-STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.008  # -0.8% minimum (tighter for strong setups)
-STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.012  # -1.2% maximum (wider for volatile markets)
+# Updated Jan 28, 2026: Tightened stop-losses to -0.5% through -1.0% range
+# Target: Average loss -0.6% per losing trade (ENHANCED_STRATEGY_GUIDE.md line 393)
+# Kraken: With 2.0% profit target, improved risk/reward ratio
+STOP_LOSS_PRIMARY_KRAKEN = -0.008  # -0.8% for Kraken (allows 2.5:1 ratio with 2% profit target - IMPROVED)
+STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.005  # -0.5% minimum (tighter for strong setups with low volatility)
+STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.010  # -1.0% maximum (was -1.2%, tightened for better capital preservation)
 
-# Coinbase: With 2.5% profit target, use max 1.25% stop for 2:1 ratio
-STOP_LOSS_PRIMARY_COINBASE = -0.0125  # -1.25% primary stop for Coinbase (2:1 ratio with 2.5% target)
-COINBASE_STOP_LOSS_MIN = -0.010  # -1.0% minimum (tighter for strong setups)
-COINBASE_STOP_LOSS_MAX = -0.015  # -1.5% maximum (wider for volatile markets)
+# Coinbase: With 2.5% profit target, improved risk/reward ratio
+STOP_LOSS_PRIMARY_COINBASE = -0.010  # -1.0% primary stop for Coinbase (allows 2.5:1 ratio with 2.5% target - IMPROVED)
+COINBASE_STOP_LOSS_MIN = -0.008  # -0.8% minimum (tighter for strong setups)
+COINBASE_STOP_LOSS_MAX = -0.010  # -1.0% maximum (was -1.5%, tightened for better capital preservation)
 
 # Remove the "exit on ANY loss" requirement - this was causing premature exits
 COINBASE_EXIT_ANY_LOSS = False  # Allow positions to breathe, honor stop loss levels
@@ -1764,30 +1766,30 @@ class TradingStrategy:
         elif hasattr(broker, '__class__'):
             broker_name = broker.__class__.__name__.lower()
         
-        # Kraken with small balance: Use -0.6% to -0.8% primary stop
+        # Kraken with small balance: Use -0.8% primary stop (conservative)
         if 'kraken' in broker_name and account_balance < 100:
             # For small Kraken balances, use conservative -0.8% primary stop
             # This accounts for spread (0.1%) + fees (0.36%) + slippage (0.1%) + buffer (0.24%)
             primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -0.8%
-            description = f"Kraken small balance (${account_balance:.2f}): Primary -0.8%, Micro -1.0%, Failsafe -5.0%"
+            description = f"Kraken small balance (${account_balance:.2f}): Primary -0.8%, Micro -2.0%, Failsafe -5.0%"
         
         # Kraken with larger balance: Can use tighter stop
         elif 'kraken' in broker_name:
-            # For larger Kraken balances, use -0.6% minimum (tighter)
-            primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -0.6%
-            description = f"Kraken (${account_balance:.2f}): Primary -0.6%, Micro -1.0%, Failsafe -5.0%"
+            # For larger Kraken balances, use -0.5% minimum (tighter for better capital preservation)
+            primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -0.5%
+            description = f"Kraken (${account_balance:.2f}): Primary -0.5%, Micro -2.0%, Failsafe -5.0%"
         
-        # 🚨 COINBASE LOCKDOWN (Jan 2026) - TIGHTENED STOP-LOSS
-        # Coinbase has been holding losing trades - use AGGRESSIVE -0.5% stop
+        # 🚨 COINBASE TIGHTENED STOP-LOSS (Jan 28, 2026)
+        # Improved to -1.0% max for better capital preservation and risk/reward ratio
         elif 'coinbase' in broker_name:
-            primary_stop = STOP_LOSS_PRIMARY_COINBASE  # -0.5% AGGRESSIVE (tightened from -1.0%)
-            description = f"COINBASE LOCKDOWN (${account_balance:.2f}): Primary -0.5% (AGGRESSIVE), Micro -1.0%, Failsafe -5.0%"
+            primary_stop = STOP_LOSS_PRIMARY_COINBASE  # -1.0% (improved from -1.25%)
+            description = f"COINBASE (${account_balance:.2f}): Primary -1.0%, Micro -2.0%, Failsafe -5.0%"
         
         # Other exchanges: Use -1.0% primary stop (conservative default)
         else:
             # Higher fees require wider stop-loss
             primary_stop = -0.010  # -1.0% for other exchanges
-            description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -1.0%, Micro -1.0%, Failsafe -5.0%"
+            description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -1.0%, Micro -2.0%, Failsafe -5.0%"
         
         return (
             primary_stop,           # Tier 1: Primary trading stop

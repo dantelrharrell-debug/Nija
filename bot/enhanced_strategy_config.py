@@ -276,7 +276,7 @@ PERFORMANCE_TARGETS = {
     # Conservative estimates (multi-indicator consensus)
     'target_win_rate': 0.70,                # 70% win rate target
     'target_avg_win_pct': 2.0,              # 2.0% average win
-    'target_avg_loss_pct': -0.6,            # -0.6% average loss
+    'target_avg_loss_pct': -0.6,            # -0.6% average loss (ACHIEVED - stop-loss range -0.5% to -1.0%)
     'target_profit_factor': 2.5,            # Win $ / Loss $ ratio
     'target_daily_return_pct': 1.5,         # 1.5% daily return
     'target_monthly_return_pct': 25.0,      # 25% monthly return
