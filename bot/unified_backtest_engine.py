@@ -106,6 +106,26 @@ class BacktestResults:
     
     def to_dict(self) -> Dict:
         """Convert results to dictionary for export"""
+        # Convert equity curve timestamps to strings
+        equity_records = []
+        for record in self.equity_curve.to_dict(orient='records'):
+            # Convert any timestamps to ISO format strings
+            converted_record = {}
+            for key, value in record.items():
+                if isinstance(value, pd.Timestamp):
+                    converted_record[key] = value.isoformat()
+                else:
+                    converted_record[key] = value
+            equity_records.append(converted_record)
+        
+        # Convert monthly returns index to strings
+        monthly_returns_dict = {}
+        for key, value in self.monthly_returns.items():
+            if isinstance(key, pd.Timestamp):
+                monthly_returns_dict[key.isoformat()] = value
+            else:
+                monthly_returns_dict[str(key)] = value
+        
         result = {
             'summary': {
                 'initial_balance': self.initial_balance,
@@ -134,8 +154,8 @@ class BacktestResults:
                 'total_duration': str(self.total_duration),
             },
             'trades': [t.to_dict() for t in self.trades],
-            'equity_curve': self.equity_curve.to_dict(orient='records'),
-            'monthly_returns': self.monthly_returns.to_dict(),
+            'equity_curve': equity_records,
+            'monthly_returns': monthly_returns_dict,
             'regime_stats': self.regime_stats,
         }
         return result
@@ -502,7 +522,7 @@ class UnifiedBacktestEngine:
         
         # Monthly returns
         if not equity_df.empty:
-            monthly_equity = equity_df['total_equity'].resample('M').last()
+            monthly_equity = equity_df['total_equity'].resample('ME').last()
             monthly_returns = monthly_equity.pct_change() * 100
         else:
             monthly_returns = pd.Series()
