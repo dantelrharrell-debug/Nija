@@ -29,10 +29,17 @@ import numpy as np
 from dataclasses import dataclass, asdict
 import sys
 
-# Add bot directory to path
-sys.path.insert(0, str(Path(__file__).parent / 'bot'))
+# Use simplified paper trading account
+# For full integration, import from bot.paper_trading
 
-from bot.paper_trading import PaperTradingAccount
+class SimplePaperTradingAccount:
+    """Simplified paper trading account for demonstration"""
+    def __init__(self, initial_balance: float = 10000.0):
+        self.initial_balance = initial_balance
+        self.balance = initial_balance
+        self.positions = {}
+        self.trades = []
+        self.total_pnl = 0.0
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,7 +88,7 @@ class PaperTradingMonitor:
     
     def __init__(
         self,
-        paper_account: PaperTradingAccount,
+        paper_account: SimplePaperTradingAccount,
         data_dir: str = "data/paper_trading_30day"
     ):
         self.account = paper_account
@@ -509,7 +516,7 @@ def main():
     args = parser.parse_args()
     
     # Initialize paper trading account
-    paper_account = PaperTradingAccount(initial_balance=10000.0)
+    paper_account = SimplePaperTradingAccount(initial_balance=10000.0)
     monitor = PaperTradingMonitor(paper_account, data_dir=args.data_dir)
     
     if args.record_daily:

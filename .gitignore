@@ -399,3 +399,17 @@ capacitor.config.ts
 *.aab
 *.ipa
 *.dSYM.zip
+
+# Security scanning outputs
+bandit-report.json
+safety-report.json
+
+# Paper trading data (user-specific, don't commit)
+paper_trading_data.json
+data/paper_trading_30day/
+data/paper_trading/
+
+# Backtest results and data (user-specific, large files)
+results/*.json
+data/*_historical_5y.csv
+data/backtest/
