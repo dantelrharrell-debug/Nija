@@ -1,5 +1,65 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
+## 🎯 **NEW: High-Leverage Improvements** (January 28, 2026)
+
+NIJA now includes three critical improvements for production trading:
+
+### 1️⃣ CodeQL + Security Hardening
+
+**Automated security scanning integrated into CI/CD:**
+- ✅ CodeQL analysis for Python and JavaScript
+- ✅ Dependency vulnerability scanning (Safety, Bandit)
+- ✅ Secret scanning (TruffleHog)
+- ✅ Weekly automated scans
+- ✅ GitHub Security Advisories integration
+
+**View Security Status:**
+```
+GitHub → Security Tab → Code scanning alerts
+```
+
+**Documentation:** [SECURITY_HARDENING_GUIDE.md](SECURITY_HARDENING_GUIDE.md)
+
+### 2️⃣ 5-Year Multi-Regime Backtesting
+
+**Comprehensive historical validation across market cycles:**
+- 📊 5 years of backtesting data
+- 🎭 Multi-regime analysis (bull/bear/ranging/volatile)
+- 📈 Monte Carlo simulation (1,000 runs)
+- 🔬 Statistical significance testing
+- 📝 Investor-grade reports
+
+**Quick Start:**
+```bash
+# Run 5-year backtest
+python run_5year_backtest.py \
+  --symbol BTC-USD \
+  --years 5 \
+  --output results/backtest_btc.json
+```
+
+### 3️⃣ 30-Day Live Paper Trading
+
+**Real-world validation before deploying capital:**
+- 📅 30-day tracking with daily reports
+- 📊 Performance vs backtest comparison
+- ⚠️ Automated performance alerts
+- 📈 Weekly summaries and final report
+- ✅ Go/no-go decision framework
+
+**Quick Start:**
+```bash
+# Daily tracking (set up as cron job)
+python run_30day_paper_trading.py --record-daily
+
+# Generate final report
+python run_30day_paper_trading.py --final-report
+```
+
+**Complete Guide:** [HIGH_LEVERAGE_IMPROVEMENTS.md](HIGH_LEVERAGE_IMPROVEMENTS.md)
+
+---
+
 ## 🏆 **ELITE PERFORMANCE MODE - v7.3** (January 28, 2026)
 
 **NIJA now targets the top 0.1% of automated trading systems worldwide with elite-tier performance metrics.**
