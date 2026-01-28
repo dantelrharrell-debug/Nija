@@ -275,10 +275,16 @@ class UnifiedBacktestEngine:
         """
         entry_time = entry_time or self.current_time or datetime.now()
         
-        # Calculate position value
+        # Apply slippage (simulates real market conditions)
+        if side == 'long':
+            entry_price *= (1 + self.slippage_pct)
+        else:
+            entry_price *= (1 - self.slippage_pct)
+        
+        # Recalculate position value after slippage
         position_value = size * entry_price
         
-        # Calculate commission
+        # Calculate commission based on slippage-adjusted value
         commission = position_value * self.commission_pct
         
         # Check if enough balance
@@ -286,12 +292,6 @@ class UnifiedBacktestEngine:
         if total_cost > self.current_balance:
             logger.warning(f"Insufficient balance: ${self.current_balance:.2f} < ${total_cost:.2f}")
             return None
-        
-        # Apply slippage (simulates real market conditions)
-        if side == 'long':
-            entry_price *= (1 + self.slippage_pct)
-        else:
-            entry_price *= (1 - self.slippage_pct)
         
         # Create position
         position_id = f"{symbol}-{side}-{len(self.positions)+1}"
@@ -360,13 +360,19 @@ class UnifiedBacktestEngine:
         exit_value = pos['size'] * exit_price
         exit_commission = exit_value * self.commission_pct
         
-        # Net P&L
+        # Net P&L (after all commissions)
         total_commission = pos['commission_paid'] + exit_commission
         pnl = pnl_before_commission - total_commission
         pnl_pct = (pnl / (pos['size'] * pos['entry_price'])) * 100
         
-        # Return capital + P&L
-        self.current_balance += exit_value + pnl
+        # Return capital
+        # On entry we deducted: position_value + entry_commission
+        # On exit we return: position_value + pnl_before_commission - exit_commission
+        # Which simplifies to: position_value + (pnl_before_commission - exit_commission)
+        # Since pnl = pnl_before_commission - total_commission
+        # We add back: position_value + pnl + entry_commission
+        original_position_value = pos['size'] * pos['entry_price']
+        self.current_balance += original_position_value + pnl + pos['commission_paid']
         
         # Update peak
         if self.current_balance > self.peak_balance:
@@ -651,16 +657,16 @@ if __name__ == "__main__":
         size=0.1,
         stop_loss=49000.0,
         take_profit=52000.0,
-        entry_time=datetime(2024, 1, 1, 10, 0),
+        entry_time=datetime.now() - timedelta(hours=4),
         regime="trending"
     )
     
-    engine.update_equity_curve(datetime(2024, 1, 1, 12, 0), {"BTC-USD": 50500.0})
+    engine.update_equity_curve(datetime.now() - timedelta(hours=2), {"BTC-USD": 50500.0})
     
     engine.close_position(
         pos1,
         exit_price=51000.0,
-        exit_time=datetime(2024, 1, 1, 14, 0),
+        exit_time=datetime.now(),
         exit_reason="take_profit"
     )
     

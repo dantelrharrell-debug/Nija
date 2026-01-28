@@ -108,16 +108,28 @@ Examples:
             df = pd.read_csv(args.data)
             logger.info(f"Loaded {len(df)} rows from {args.data}")
             
-            # Parse timestamp column
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                df.set_index('timestamp', inplace=True)
-            elif 'time' in df.columns:
-                df['time'] = pd.to_datetime(df['time'])
-                df.set_index('time', inplace=True)
-            elif 'date' in df.columns:
-                df['date'] = pd.to_datetime(df['date'])
-                df.set_index('date', inplace=True)
+            # Parse timestamp column - try common column names
+            timestamp_col = None
+            for col in ['timestamp', 'time', 'date', 'datetime']:
+                if col in df.columns:
+                    timestamp_col = col
+                    break
+            
+            if timestamp_col is None:
+                logger.error("No timestamp column found. Expected one of: timestamp, time, date, datetime")
+                return 1
+            
+            try:
+                df[timestamp_col] = pd.to_datetime(df[timestamp_col])
+                df.set_index(timestamp_col, inplace=True)
+            except Exception as e:
+                logger.error(f"Failed to parse timestamp column '{timestamp_col}': {e}")
+                return 1
+            
+            # Ensure index is datetime for filtering
+            if not isinstance(df.index, pd.DatetimeIndex):
+                logger.error(f"Index must be DatetimeIndex, got {type(df.index)}")
+                return 1
             
             # Filter to last N days if specified
             if args.days:
