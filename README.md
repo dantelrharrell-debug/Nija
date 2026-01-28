@@ -1,6 +1,33 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-## 🧬 **NEW: Meta-AI Strategy Evolution Engine - GOD MODE** (January 28, 2026)
+## 🧬 **NEW: Multi-Market Intelligence Network (MMIN) - GOD MODE** (January 28, 2026)
+
+**NIJA has evolved into a GLOBAL AUTONOMOUS TRADING INTELLIGENCE**
+
+NIJA MMIN transforms the bot from a single-market system into a multi-market intelligence that operates across crypto, forex, equities, commodities, and bonds simultaneously.
+
+### 🚀 MMIN Features
+
+- **🌐 Cross-Market Learning**: Learn patterns from crypto and apply to equities, forex, and vice versa
+- **🧠 Transfer Learning**: Knowledge gained from one asset class enhances trading in others
+- **📊 Macro Regime Forecasting**: Predict economic regimes (risk-on/off, inflation, growth, recession)
+- **💰 Global Capital Routing**: Intelligently allocate capital across markets based on opportunities
+- **🔗 Correlation-Aware Intelligence**: Use cross-market correlations for signal confirmation
+
+**Quick Start:**
+```bash
+# Test the MMIN System
+python test_mmin.py
+
+# View detailed documentation
+open MMIN_DOCUMENTATION.md
+```
+
+**Complete Guide:** [MMIN_DOCUMENTATION.md](MMIN_DOCUMENTATION.md)
+
+---
+
+## 🧬 **Meta-AI Strategy Evolution Engine - GOD MODE** (January 28, 2026)
 
 **NIJA now features a revolutionary self-improving AI system that evolves trading strategies autonomously.**
 
