@@ -1,6 +1,31 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-## 🎯 **NEW: High-Leverage Improvements** (January 28, 2026)
+## 🧬 **NEW: Meta-AI Strategy Evolution Engine - GOD MODE** (January 28, 2026)
+
+**NIJA now features a revolutionary self-improving AI system that evolves trading strategies autonomously.**
+
+### 🎯 Meta-AI Evolution Features
+
+- **🧬 Genetic Algorithm Evolution**: 50-strategy population with crossover, mutation, and natural selection
+- **🤖 Reinforcement Learning**: Q-learning strategy selector that adapts to market conditions
+- **🐝 Swarm Intelligence**: Dynamic capital allocation across 10+ uncorrelated strategies
+- **🌱 Self-Breeding**: Combines successful strategies to create superior offspring
+- **🔬 Alpha Discovery**: Automatically discovers new trading signals from 100+ indicator combinations
+
+**Quick Start:**
+```bash
+# Test the Meta-AI Evolution Engine
+python test_meta_ai_evolution.py
+
+# View detailed documentation
+open META_AI_EVOLUTION_GUIDE.md
+```
+
+**Complete Guide:** [META_AI_EVOLUTION_GUIDE.md](META_AI_EVOLUTION_GUIDE.md)
+
+---
+
+## 🎯 **High-Leverage Improvements** (January 28, 2026)
 
 NIJA now includes three critical improvements for production trading:
 
