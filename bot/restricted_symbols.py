@@ -5,11 +5,14 @@ Manages a persistent blacklist of symbols that cannot be traded due to
 geographic restrictions (e.g., "KMNO trading restricted for US:WA").
 
 This prevents the bot from repeatedly attempting to trade restricted symbols.
+
+Thread-safe for concurrent access from multiple trading threads.
 """
 
 import os
 import json
 import logging
+import threading
 from typing import List, Set
 from datetime import datetime
 
@@ -25,6 +28,7 @@ class RestrictedSymbolsManager:
     def __init__(self):
         self.restricted_symbols: Set[str] = set()
         self.restriction_reasons: dict = {}  # symbol -> reason mapping
+        self._lock = threading.Lock()  # Thread safety for concurrent access
         self.load_blacklist()
     
     def load_blacklist(self):
@@ -62,6 +66,8 @@ class RestrictedSymbolsManager:
         """
         Add a symbol to the restriction blacklist
         
+        Thread-safe operation.
+        
         Args:
             symbol: Trading symbol to blacklist (e.g., 'KMNO-USD', 'KMNOUSD')
             reason: Reason for restriction (e.g., 'trading restricted for US:WA')
@@ -69,19 +75,20 @@ class RestrictedSymbolsManager:
         # Normalize symbol (handle both dash and no-dash formats)
         normalized_symbols = self._normalize_symbol(symbol)
         
-        added_any = False
-        for sym in normalized_symbols:
-            if sym not in self.restricted_symbols:
-                self.restricted_symbols.add(sym)
-                if reason:
-                    self.restriction_reasons[sym] = reason
-                added_any = True
-                logger.warning(f"🚫 Added to restriction blacklist: {sym}")
-                if reason:
-                    logger.warning(f"   Reason: {reason}")
-        
-        if added_any:
-            self.save_blacklist()
+        with self._lock:  # Thread-safe modification
+            added_any = False
+            for sym in normalized_symbols:
+                if sym not in self.restricted_symbols:
+                    self.restricted_symbols.add(sym)
+                    if reason:
+                        self.restriction_reasons[sym] = reason
+                    added_any = True
+                    logger.warning(f"🚫 Added to restriction blacklist: {sym}")
+                    if reason:
+                        logger.warning(f"   Reason: {reason}")
+            
+            if added_any:
+                self.save_blacklist()
     
     def is_restricted(self, symbol: str) -> bool:
         """
@@ -130,15 +137,19 @@ class RestrictedSymbolsManager:
         return sorted(list(self.restricted_symbols))
 
 
-# Global instance
+# Global instance (initialized at module load for thread safety)
 _restriction_manager = None
+_manager_lock = threading.Lock()
 
 
 def get_restriction_manager() -> RestrictedSymbolsManager:
-    """Get or create the global restriction manager instance"""
+    """Get or create the global restriction manager instance (thread-safe)"""
     global _restriction_manager
     if _restriction_manager is None:
-        _restriction_manager = RestrictedSymbolsManager()
+        with _manager_lock:
+            # Double-check locking pattern
+            if _restriction_manager is None:
+                _restriction_manager = RestrictedSymbolsManager()
     return _restriction_manager
 
 
@@ -168,11 +179,23 @@ def is_geographic_restriction_error(error_message: str) -> bool:
         'restricted for us:',
         'not available in your region',
         'geographic restriction',
-        'not permitted in',
-        'invalid permissions',
-        'region not supported'
+        'region not supported',
+        # More specific pattern for "invalid permissions" to avoid false positives
+        # Only match if combined with geographic/trading context
+        ('invalid permissions' in error_lower and ('trading' in error_lower or 'us:' in error_lower))
     ]
-    return any(indicator in error_lower for indicator in restriction_indicators)
+    
+    # Check string patterns
+    for indicator in restriction_indicators:
+        if isinstance(indicator, str):
+            if indicator in error_lower:
+                return True
+        elif isinstance(indicator, bool):
+            # Handle tuple conditions that evaluate to boolean
+            if indicator:
+                return True
+    
+    return False
 
 
 def extract_symbol_from_error(error_message: str, attempted_symbol: str = None) -> str:

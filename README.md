@@ -433,8 +433,6 @@ NIJA now automatically:
 
 ---
 
----
-
 **🚀 New to NIJA?** See the **[Getting Started Guide](GETTING_STARTED.md)** for complete setup!
 
 ## 💎 Kraken Trading - Fully Enabled & Profit-Taking Verified

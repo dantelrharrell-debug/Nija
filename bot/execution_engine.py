@@ -147,6 +147,26 @@ class ExecutionEngine:
         else:
             self.trade_ledger = None
     
+    def _handle_geographic_restriction_error(self, symbol: str, error_msg: str):
+        """
+        Handle geographic restriction errors by adding symbol to blacklist
+        
+        Thread-safe helper method for processing geographic restriction errors.
+        
+        Args:
+            symbol: Trading symbol that was rejected
+            error_msg: Error message from broker
+        """
+        if RESTRICTION_MANAGER_AVAILABLE and is_geographic_restriction_error(str(error_msg)):
+            logger.warning("=" * 70)
+            logger.warning("🚫 GEOGRAPHIC RESTRICTION DETECTED")
+            logger.warning("=" * 70)
+            logger.warning(f"   Symbol: {symbol}")
+            logger.warning(f"   Error: {error_msg}")
+            logger.warning("   Adding to permanent blacklist to prevent future attempts")
+            logger.warning("=" * 70)
+            add_restricted_symbol(symbol, str(error_msg))
+    
     def _get_broker_round_trip_fee(self) -> float:
         """
         Get broker-specific round-trip fee for fee-aware profit calculations.
@@ -261,15 +281,7 @@ class ExecutionEngine:
                     logger.error("   ⚠️  DO NOT RECORD TRADE - Order did not execute")
                     
                     # Check if this is a geographic restriction and add to blacklist
-                    if RESTRICTION_MANAGER_AVAILABLE and is_geographic_restriction_error(str(error_msg)):
-                        logger.warning("=" * 70)
-                        logger.warning("🚫 GEOGRAPHIC RESTRICTION DETECTED")
-                        logger.warning("=" * 70)
-                        logger.warning(f"   Symbol: {symbol}")
-                        logger.warning(f"   Error: {error_msg}")
-                        logger.warning("   Adding to permanent blacklist to prevent future attempts")
-                        logger.warning("=" * 70)
-                        add_restricted_symbol(symbol, str(error_msg))
+                    self._handle_geographic_restriction_error(symbol, error_msg)
                     
                     return None
                 
@@ -448,15 +460,7 @@ class ExecutionEngine:
             logger.error("   ⚠️  DO NOT RECORD TRADE - Order did not execute")
             
             # Check if this is a geographic restriction and add to blacklist
-            if RESTRICTION_MANAGER_AVAILABLE and is_geographic_restriction_error(error_msg):
-                logger.warning("=" * 70)
-                logger.warning("🚫 GEOGRAPHIC RESTRICTION DETECTED")
-                logger.warning("=" * 70)
-                logger.warning(f"   Symbol: {symbol}")
-                logger.warning(f"   Error: {error_msg}")
-                logger.warning("   Adding to permanent blacklist to prevent future attempts")
-                logger.warning("=" * 70)
-                add_restricted_symbol(symbol, error_msg)
+            self._handle_geographic_restriction_error(symbol, error_msg)
             
             return None
                 

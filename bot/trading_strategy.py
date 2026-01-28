@@ -80,14 +80,22 @@ DISABLED_PAIRS = ["XRP-USD", "XRPUSD", "XRP-USDT"] + _additional_disabled  # Blo
 
 # Load geographically restricted symbols from blacklist
 try:
-    from restricted_symbols import get_restriction_manager
+    from bot.restricted_symbols import get_restriction_manager
     _restriction_mgr = get_restriction_manager()
     _restricted_symbols = _restriction_mgr.get_all_restricted_symbols()
     if _restricted_symbols:
         logger.info(f"📋 Loaded {len(_restricted_symbols)} geographically restricted symbols")
         DISABLED_PAIRS.extend(_restricted_symbols)
-except Exception as e:
-    logger.debug(f"Note: Could not load restriction blacklist: {e}")
+except ImportError:
+    try:
+        from restricted_symbols import get_restriction_manager
+        _restriction_mgr = get_restriction_manager()
+        _restricted_symbols = _restriction_mgr.get_all_restricted_symbols()
+        if _restricted_symbols:
+            logger.info(f"📋 Loaded {len(_restricted_symbols)} geographically restricted symbols")
+            DISABLED_PAIRS.extend(_restricted_symbols)
+    except ImportError as e:
+        logger.debug(f"Note: Could not load restriction blacklist: {e}")
 
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
