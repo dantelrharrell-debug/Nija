@@ -84,6 +84,25 @@ except ImportError:
         class OrderRejectedError(ExecutionError):
             pass
 
+# Import restriction manager for geographic restriction handling
+try:
+    from bot.restricted_symbols import (
+        add_restricted_symbol, is_geographic_restriction_error
+    )
+    RESTRICTION_MANAGER_AVAILABLE = True
+except ImportError:
+    try:
+        from restricted_symbols import (
+            add_restricted_symbol, is_geographic_restriction_error
+        )
+        RESTRICTION_MANAGER_AVAILABLE = True
+    except ImportError:
+        RESTRICTION_MANAGER_AVAILABLE = False
+        def add_restricted_symbol(symbol, reason=None):
+            pass
+        def is_geographic_restriction_error(error_msg):
+            return False
+
 
 class ExecutionEngine:
     """
@@ -127,6 +146,26 @@ class ExecutionEngine:
                 self.trade_ledger = None
         else:
             self.trade_ledger = None
+    
+    def _handle_geographic_restriction_error(self, symbol: str, error_msg: str):
+        """
+        Handle geographic restriction errors by adding symbol to blacklist
+        
+        Thread-safe helper method for processing geographic restriction errors.
+        
+        Args:
+            symbol: Trading symbol that was rejected
+            error_msg: Error message from broker
+        """
+        if RESTRICTION_MANAGER_AVAILABLE and is_geographic_restriction_error(str(error_msg)):
+            logger.warning("=" * 70)
+            logger.warning("🚫 GEOGRAPHIC RESTRICTION DETECTED")
+            logger.warning("=" * 70)
+            logger.warning(f"   Symbol: {symbol}")
+            logger.warning(f"   Error: {error_msg}")
+            logger.warning("   Adding to permanent blacklist to prevent future attempts")
+            logger.warning("=" * 70)
+            add_restricted_symbol(symbol, str(error_msg))
     
     def _get_broker_round_trip_fee(self) -> float:
         """
@@ -240,6 +279,10 @@ class ExecutionEngine:
                     error_msg = result.get('error', 'Unknown error')
                     logger.error(f"❌ Order rejected: {error_msg}")
                     logger.error("   ⚠️  DO NOT RECORD TRADE - Order did not execute")
+                    
+                    # Check if this is a geographic restriction and add to blacklist
+                    self._handle_geographic_restriction_error(symbol, error_msg)
+                    
                     return None
                 
                 # ✅ SAFETY CHECK #3: Require txid before recording position
@@ -409,6 +452,17 @@ class ExecutionEngine:
             else:
                 logger.warning("No broker client configured - simulation mode")
                 return None
+        
+        except OrderRejectedError as e:
+            # Handle order rejection - check if it's a geographic restriction
+            error_msg = str(e)
+            logger.error(f"❌ Order rejected: {error_msg}")
+            logger.error("   ⚠️  DO NOT RECORD TRADE - Order did not execute")
+            
+            # Check if this is a geographic restriction and add to blacklist
+            self._handle_geographic_restriction_error(symbol, error_msg)
+            
+            return None
                 
         except Exception as e:
             logger.error(f"Execution error: {e}")

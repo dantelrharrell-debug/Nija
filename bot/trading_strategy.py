@@ -78,6 +78,25 @@ _env_disabled_pairs = os.getenv('DISABLED_PAIRS', '')
 _additional_disabled = [p.strip() for p in _env_disabled_pairs.split(',') if p.strip()]
 DISABLED_PAIRS = ["XRP-USD", "XRPUSD", "XRP-USDT"] + _additional_disabled  # Block all XRP pairs - net negative performance
 
+# Load geographically restricted symbols from blacklist
+try:
+    from bot.restricted_symbols import get_restriction_manager
+    _restriction_mgr = get_restriction_manager()
+    _restricted_symbols = _restriction_mgr.get_all_restricted_symbols()
+    if _restricted_symbols:
+        logger.info(f"📋 Loaded {len(_restricted_symbols)} geographically restricted symbols")
+        DISABLED_PAIRS.extend(_restricted_symbols)
+except ImportError:
+    try:
+        from restricted_symbols import get_restriction_manager
+        _restriction_mgr = get_restriction_manager()
+        _restricted_symbols = _restriction_mgr.get_all_restricted_symbols()
+        if _restricted_symbols:
+            logger.info(f"📋 Loaded {len(_restricted_symbols)} geographically restricted symbols")
+            DISABLED_PAIRS.extend(_restricted_symbols)
+    except ImportError as e:
+        logger.debug(f"Note: Could not load restriction blacklist: {e}")
+
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
