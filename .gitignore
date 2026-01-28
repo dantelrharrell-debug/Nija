@@ -349,6 +349,10 @@ trade_journal.jsonl
 .render-*
 .redeploy*
 
+# Build artifacts and metadata
+.env.build
+bot/version_info.py
+
 # NIXPACKS configuration (removed - use Dockerfile exclusively)
 # Railway should use Dockerfile via railway.json, not NIXPACKS auto-detection
 nixpacks.toml
