@@ -61,6 +61,12 @@ class ExchangeCapabilities:
     has_take_profit: bool = True  # Exchange-native take profit
     has_trailing_stop: bool = False  # Exchange-native trailing
     
+    # Fee structure (for fee-aware profit targets)
+    # Round-trip cost = (taker_fee * 2) + spread_cost or (maker_fee * 2) + spread_cost
+    taker_fee: float = 0.001  # Default 0.1% taker fee
+    maker_fee: float = 0.001  # Default 0.1% maker fee
+    spread_cost: float = 0.001  # Default 0.1% spread
+    
     def can_short(self) -> bool:
         """Check if this exchange/market can execute SHORT positions"""
         return self.supports_short
@@ -68,6 +74,36 @@ class ExchangeCapabilities:
     def can_long(self) -> bool:
         """Check if this exchange/market can execute LONG positions"""
         return self.supports_long
+    
+    def get_round_trip_fee(self, use_limit_order: bool = True) -> float:
+        """
+        Calculate round-trip trading cost (entry + exit).
+        
+        Args:
+            use_limit_order: True for maker fees, False for taker fees
+            
+        Returns:
+            Total round-trip cost as decimal (e.g., 0.014 = 1.4%)
+        """
+        fee = self.maker_fee if use_limit_order else self.taker_fee
+        return (fee * 2) + self.spread_cost
+    
+    def get_min_profit_target(self, use_limit_order: bool = True, multiplier: float = 2.5) -> float:
+        """
+        Calculate minimum profit target to overcome fees.
+        
+        Formula: min_profit_target = round_trip_fee * multiplier
+        Default multiplier = 2.5 (ensures profit after fees + buffer for slippage)
+        
+        Args:
+            use_limit_order: True for maker fees, False for taker fees
+            multiplier: Multiplier for fee coverage (default 2.5)
+            
+        Returns:
+            Minimum profit target as decimal (e.g., 0.035 = 3.5%)
+        """
+        round_trip = self.get_round_trip_fee(use_limit_order)
+        return round_trip * multiplier
 
 
 class ExchangeCapabilityMatrix:
@@ -93,7 +129,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=1.0,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=False
+                    has_trailing_stop=False,
+                    taker_fee=0.0026,  # 0.26% taker fee
+                    maker_fee=0.0016,  # 0.16% maker fee
+                    spread_cost=0.001   # ~0.1% spread (0.42% round-trip)
                 ),
                 MarketMode.FUTURES: ExchangeCapabilities(
                     broker_name='kraken',
@@ -105,7 +144,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=50.0,  # Kraken Futures allows up to 50x
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=False
+                    has_trailing_stop=False,
+                    taker_fee=0.0005,  # 0.05% taker fee (lower on futures)
+                    maker_fee=0.0002,  # 0.02% maker fee (lower on futures)
+                    spread_cost=0.0005  # ~0.05% spread (0.15% round-trip)
                 ),
                 MarketMode.PERPETUAL: ExchangeCapabilities(
                     broker_name='kraken',
@@ -117,7 +159,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=50.0,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=False
+                    has_trailing_stop=False,
+                    taker_fee=0.0005,  # 0.05% taker fee
+                    maker_fee=0.0002,  # 0.02% maker fee
+                    spread_cost=0.0005  # ~0.05% spread (0.15% round-trip)
                 ),
             },
             
@@ -133,7 +178,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=1.0,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=False
+                    has_trailing_stop=False,
+                    taker_fee=0.006,  # 0.6% taker fee (HIGH)
+                    maker_fee=0.004,  # 0.4% maker fee (HIGH)
+                    spread_cost=0.002  # ~0.2% spread (1.4% round-trip with taker)
                 ),
             },
             
@@ -149,7 +197,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=1.0,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=True
+                    has_trailing_stop=True,
+                    taker_fee=0.001,  # 0.1% taker fee
+                    maker_fee=0.001,  # 0.1% maker fee
+                    spread_cost=0.0008  # ~0.08% spread (0.28% round-trip)
                 ),
                 MarketMode.MARGIN: ExchangeCapabilities(
                     broker_name='binance',
@@ -162,7 +213,10 @@ class ExchangeCapabilityMatrix:
                     requires_margin_account=True,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=True
+                    has_trailing_stop=True,
+                    taker_fee=0.001,  # 0.1% taker fee
+                    maker_fee=0.001,  # 0.1% maker fee
+                    spread_cost=0.0008  # ~0.08% spread
                 ),
                 MarketMode.FUTURES: ExchangeCapabilities(
                     broker_name='binance',
@@ -174,7 +228,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=125.0,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=True
+                    has_trailing_stop=True,
+                    taker_fee=0.0004,  # 0.04% taker fee (lower on futures)
+                    maker_fee=0.0002,  # 0.02% maker fee (lower on futures)
+                    spread_cost=0.0004  # ~0.04% spread
                 ),
                 MarketMode.PERPETUAL: ExchangeCapabilities(
                     broker_name='binance',
@@ -186,7 +243,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=125.0,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=True
+                    has_trailing_stop=True,
+                    taker_fee=0.0004,  # 0.04% taker fee
+                    maker_fee=0.0002,  # 0.02% maker fee
+                    spread_cost=0.0004  # ~0.04% spread
                 ),
             },
             
@@ -202,7 +262,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=1.0,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=True
+                    has_trailing_stop=True,
+                    taker_fee=0.0008,  # 0.08% taker fee
+                    maker_fee=0.0006,  # 0.06% maker fee
+                    spread_cost=0.0006  # ~0.06% spread (0.20% round-trip)
                 ),
                 MarketMode.MARGIN: ExchangeCapabilities(
                     broker_name='okx',
@@ -215,7 +278,10 @@ class ExchangeCapabilityMatrix:
                     requires_margin_account=True,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=True
+                    has_trailing_stop=True,
+                    taker_fee=0.0008,  # 0.08% taker fee
+                    maker_fee=0.0006,  # 0.06% maker fee
+                    spread_cost=0.0006  # ~0.06% spread
                 ),
                 MarketMode.FUTURES: ExchangeCapabilities(
                     broker_name='okx',
@@ -227,7 +293,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=100.0,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=True
+                    has_trailing_stop=True,
+                    taker_fee=0.0005,  # 0.05% taker fee
+                    maker_fee=0.0002,  # 0.02% maker fee
+                    spread_cost=0.0004  # ~0.04% spread
                 ),
                 MarketMode.PERPETUAL: ExchangeCapabilities(
                     broker_name='okx',
@@ -239,7 +308,10 @@ class ExchangeCapabilityMatrix:
                     max_leverage=100.0,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=True
+                    has_trailing_stop=True,
+                    taker_fee=0.0005,  # 0.05% taker fee
+                    maker_fee=0.0002,  # 0.02% maker fee
+                    spread_cost=0.0004  # ~0.04% spread
                 ),
             },
             
@@ -256,7 +328,10 @@ class ExchangeCapabilityMatrix:
                     requires_margin_account=True,
                     has_stop_loss=True,
                     has_take_profit=True,
-                    has_trailing_stop=True
+                    has_trailing_stop=True,
+                    taker_fee=0.0,  # 0% commission (commission-free)
+                    maker_fee=0.0,  # 0% commission (commission-free)
+                    spread_cost=0.0005  # ~0.05% spread (SEC fees + spread)
                 ),
             },
         }
@@ -324,7 +399,51 @@ class ExchangeCapabilityMatrix:
         
         return can_short
     
-    def _detect_market_mode(self, symbol: str) -> MarketMode:
+    def get_broker_fees(self, broker: str, symbol: str) -> Tuple[float, float, float]:
+        """
+        Get broker fee structure for a symbol.
+        
+        Args:
+            broker: Broker name
+            symbol: Trading symbol
+            
+        Returns:
+            Tuple of (taker_fee, maker_fee, round_trip_fee_with_limit_orders)
+        """
+        market_mode = self._detect_market_mode(symbol)
+        caps = self.get_capabilities(broker, market_mode)
+        
+        if caps is None:
+            logger.warning(f"No fee data for {broker}/{symbol} - using conservative defaults")
+            return (0.001, 0.001, 0.003)  # 0.1% fees + 0.1% spread
+        
+        return (caps.taker_fee, caps.maker_fee, caps.get_round_trip_fee(use_limit_order=True))
+    
+    def get_min_profit_target_for_broker(self, broker: str, symbol: str, 
+                                         use_limit_order: bool = True, 
+                                         multiplier: float = 2.5) -> float:
+        """
+        Get minimum profit target for a broker/symbol to overcome fees.
+        
+        Formula: min_profit_target = round_trip_fee * multiplier
+        
+        Args:
+            broker: Broker name
+            symbol: Trading symbol
+            use_limit_order: True for maker fees, False for taker fees
+            multiplier: Fee coverage multiplier (default 2.5)
+            
+        Returns:
+            Minimum profit target as decimal (e.g., 0.035 = 3.5%)
+        """
+        market_mode = self._detect_market_mode(symbol)
+        caps = self.get_capabilities(broker, market_mode)
+        
+        if caps is None:
+            logger.warning(f"No capability data for {broker}/{symbol} - using default 2.5% target")
+            return 0.025
+        
+        return caps.get_min_profit_target(use_limit_order, multiplier)
         """
         Detect market mode from symbol.
         
@@ -373,9 +492,15 @@ class ExchangeCapabilityMatrix:
         
         for mode, caps in broker_caps.items():
             short_status = "✅ YES" if caps.supports_short else "❌ NO"
+            round_trip = caps.get_round_trip_fee(use_limit_order=True)
+            min_target = caps.get_min_profit_target(use_limit_order=True)
+            
             lines.append(f"\n{mode.value.upper()}:")
             lines.append(f"  Long Positions:  ✅ YES")
             lines.append(f"  Short Positions: {short_status}")
+            lines.append(f"  Fees: Taker {caps.taker_fee*100:.2f}% | Maker {caps.maker_fee*100:.2f}%")
+            lines.append(f"  Round-trip Cost: {round_trip*100:.2f}% (with limit orders)")
+            lines.append(f"  Min Profit Target: {min_target*100:.2f}% (fee × 2.5)")
             if caps.supports_leverage:
                 lines.append(f"  Max Leverage:    {caps.max_leverage}x")
             if caps.requires_margin_account:
@@ -401,6 +526,38 @@ def can_short(broker: str, symbol: str) -> bool:
         True if shorting supported
     """
     return EXCHANGE_CAPABILITIES.supports_shorting(broker, symbol)
+
+
+def get_broker_capabilities(broker: str, symbol: str) -> Optional[ExchangeCapabilities]:
+    """
+    Get full capabilities for a broker/symbol combination.
+    
+    Args:
+        broker: Broker name
+        symbol: Trading symbol
+        
+    Returns:
+        ExchangeCapabilities object or None
+    """
+    market_mode = EXCHANGE_CAPABILITIES._detect_market_mode(symbol)
+    return EXCHANGE_CAPABILITIES.get_capabilities(broker, market_mode)
+
+
+def get_min_profit_target(broker: str, symbol: str, use_limit_order: bool = True) -> float:
+    """
+    Get minimum profit target for a broker/symbol to overcome fees.
+    
+    Formula: min_profit_target = broker_fee * 2.5
+    
+    Args:
+        broker: Broker name
+        symbol: Trading symbol
+        use_limit_order: True for maker fees, False for taker fees
+        
+    Returns:
+        Minimum profit target as decimal (e.g., 0.035 = 3.5%)
+    """
+    return EXCHANGE_CAPABILITIES.get_min_profit_target_for_broker(broker, symbol, use_limit_order)
 
 
 if __name__ == "__main__":
