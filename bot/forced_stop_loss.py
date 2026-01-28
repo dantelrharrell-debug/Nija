@@ -132,6 +132,10 @@ class ForcedStopLoss:
         - No filters applied
         - No confidence checks
         
+        CONCURRENCY FIXES (Issue #1):
+        - FIX #4: Mandatory balance refresh before emergency sell
+        - FIX #5: Proper orphan resolution (sync → rebuild → validate → sell)
+        
         This is investor protection, not a system failure.
         
         Args:
@@ -161,6 +165,43 @@ class ForcedStopLoss:
             return False, None, error_msg
         
         try:
+            # FIX #4: Mandatory Balance Refresh Before Emergency Sell
+            # Even in protective mode, we MUST sync balances to validate available assets
+            logger.warning(f"   🔄 FIX #4: Refreshing balances before emergency sell...")
+            try:
+                # Refresh account balance to get current state
+                if hasattr(self.broker, 'get_account_balance'):
+                    current_balance = self.broker.get_account_balance()
+                    logger.warning(f"   Current USD balance: ${current_balance:.2f}")
+                
+                # FIX #5: Proper Orphan Resolution Logic
+                # For orphan positions, we need to: sync balances → rebuild position → validate size → THEN sell
+                # Get actual available asset quantity from broker
+                available_asset = 0.0
+                if hasattr(self.broker, 'get_positions'):
+                    positions = self.broker.get_positions()
+                    for pos in positions:
+                        if pos.get('symbol') == symbol:
+                            available_asset = float(pos.get('quantity', 0))
+                            logger.warning(f"   Broker reports {available_asset:.8f} {symbol} available")
+                            break
+                
+                # Validate that we have enough asset to sell
+                if available_asset > 0 and available_asset < quantity:
+                    logger.warning(f"   ⚠️ Position size mismatch detected (orphan position)")
+                    logger.warning(f"      Requested: {quantity:.8f}")
+                    logger.warning(f"      Available: {available_asset:.8f}")
+                    logger.warning(f"   🔧 FIX #5: Adjusting to actual broker balance")
+                    quantity = available_asset  # Use actual balance, not stale internal state
+                elif available_asset == 0:
+                    error_msg = f"No {symbol} balance available to sell (position may already be closed)"
+                    logger.warning(f"   ❌ ABORT EXIT: {error_msg}")
+                    return False, None, error_msg
+                    
+            except Exception as refresh_err:
+                logger.warning(f"   ⚠️ Could not refresh balances: {refresh_err}")
+                logger.warning(f"   Proceeding with emergency sell using provided quantity")
+            
             # Get current price for logging purposes
             try:
                 current_price = self.broker.get_current_price(symbol)
