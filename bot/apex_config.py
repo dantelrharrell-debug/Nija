@@ -801,23 +801,24 @@ RISK_CONFIG = get_active_risk_config()
 # ═══════════════════════════════════════════════════════════════════
 
 POSITION_SIZING = {
-    # Base Position Sizes
-    'base_position_size': 0.03,  # 3% base position size
-    'min_position_size': 0.01,  # 1% minimum position
-    'max_position_size': 0.10,  # 10% maximum position
+    # Base Position Sizes - ELITE V7.3 OPTIMIZED
+    'base_position_size': 0.03,  # 3% base position size (elite optimal)
+    'min_position_size': 0.02,  # 2% minimum position (elite floor)
+    'max_position_size': 0.05,  # 5% maximum position (elite ceiling)
     
     # ADX-Weighted Sizing
     'use_adx_weighting': True,
-    'adx_weak_multiplier': 0.5,  # 0.5x size when ADX < 20
-    'adx_moderate_multiplier': 1.0,  # 1.0x size when ADX 20-40
-    'adx_strong_multiplier': 1.5,  # 1.5x size when ADX > 40
+    'adx_weak_multiplier': 0.67,  # 0.67x size when ADX < 20 (2% * 0.67 = 1.3%)
+    'adx_moderate_multiplier': 1.0,  # 1.0x size when ADX 20-40 (3%)
+    'adx_strong_multiplier': 1.5,  # 1.5x size when ADX > 40 (3% * 1.5 = 4.5%)
     
     # Signal Score Weighting
     'score_multipliers': {
-        6: 1.2,  # A+ setup: 120% of base size
-        5: 1.0,  # Strong setup: 100% of base size
-        4: 0.8,  # Good setup: 80% of base size
-        3: 0.6,  # Moderate setup: 60% of base size
+        6: 1.2,  # A+ setup: 120% of base size (3.6%, capped at 5%)
+        5: 1.0,  # Strong setup: 100% of base size (3%)
+        4: 0.8,  # Good setup: 80% of base size (2.4%)
+        3: 0.67,  # Moderate setup: 67% of base size (2%, at minimum)
+
         2: 0.4,  # Minimum setup: 40% of base size
     }
 }

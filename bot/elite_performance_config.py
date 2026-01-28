@@ -376,7 +376,7 @@ def validate_performance_targets(metrics: Dict) -> Tuple[bool, Dict[str, str]]:
                 'win_rate': float,
                 'avg_win_pct': float,
                 'avg_loss_pct': float,
-                'expectancy': float,
+                'expectancy': float (as decimal, e.g., 0.0048 for 0.48%),
                 'max_drawdown': float,
             }
     
@@ -403,11 +403,14 @@ def validate_performance_targets(metrics: Dict) -> Tuple[bool, Dict[str, str]]:
     elif wr > wr_target['danger_zone']:
         warnings['win_rate'] = f"Martingale risk: {wr:.1%} > {wr_target['danger_zone']:.1%}"
     
-    # Check Expectancy
+    # Check Expectancy (convert target from R to decimal)
     exp = metrics.get('expectancy', 0)
     exp_target = ELITE_PERFORMANCE_TARGETS['expectancy']
-    if exp < exp_target['target_min']:
-        warnings['expectancy'] = f"Below elite target: {exp:.3f}R < {exp_target['target_min']:.3f}R"
+    # Expectancy can be provided either as absolute value or as R-multiple
+    # If it's very small (< 0.01), assume it's already a decimal percentage
+    target_min = exp_target['target_min'] / 100.0  # Convert 0.45R to 0.0045 (0.45%)
+    if exp < target_min:
+        warnings['expectancy'] = f"Below elite target: {exp:.4f} ({exp*100:.2f}%) < {target_min:.4f} ({target_min*100:.2f}%)"
     
     # Check Max Drawdown
     dd = metrics.get('max_drawdown', 0)
