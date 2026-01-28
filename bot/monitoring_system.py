@@ -104,6 +104,33 @@ class PerformanceMetrics:
         if self.losing_trades == 0:
             return 0.0
         return self.total_loss / self.losing_trades
+    
+    @property
+    def risk_reward_ratio(self) -> float:
+        """Calculate risk:reward ratio (avg_win / avg_loss)"""
+        avg_loss = self.average_loss
+        if avg_loss == 0:
+            return float('inf') if self.average_win > 0 else 0.0
+        return abs(self.average_win / avg_loss)
+    
+    @property
+    def expectancy(self) -> float:
+        """
+        Calculate expectancy (expected return per trade)
+        Formula: (Win Rate × Avg Win) - (Loss Rate × Avg Loss)
+        """
+        if self.total_trades == 0:
+            return 0.0
+        win_rate = self.win_rate / 100.0  # Convert to decimal
+        loss_rate = 1.0 - win_rate
+        return (win_rate * self.average_win) - (loss_rate * self.average_loss)
+    
+    @property
+    def average_loss(self) -> float:
+        """Average losing trade"""
+        if self.losing_trades == 0:
+            return 0.0
+        return self.total_loss / self.losing_trades
 
 
 class MonitoringSystem:
