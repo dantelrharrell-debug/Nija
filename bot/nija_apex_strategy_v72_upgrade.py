@@ -111,8 +111,9 @@ class NIJAApexStrategyV72:
         near_vwap = abs(current_price - vwap) / vwap < 0.005
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bullish pullback
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi > rsi_prev
+        # 2. RSI bullish pullback (INSTITUTIONAL GRADE: Early entry, avoid chasing)
+        # RSI 25-45: optimal oversold recovery zone (buy low, maximize R:R)
+        conditions['rsi_pullback'] = 25 <= rsi <= 45 and rsi > rsi_prev
         
         # 3. Bullish candlestick
         body = current['close'] - current['open']
@@ -173,8 +174,9 @@ class NIJAApexStrategyV72:
         near_vwap = abs(current_price - vwap) / vwap < 0.005
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bearish pullback
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi < rsi_prev
+        # 2. RSI bearish pullback (INSTITUTIONAL GRADE: Early entry, avoid chasing)
+        # RSI 55-75: optimal overbought pullback zone (sell high, maximize R:R)
+        conditions['rsi_pullback'] = 55 <= rsi <= 75 and rsi < rsi_prev
         
         # 3. Bearish candlestick
         body = current['close'] - current['open']

@@ -434,11 +434,11 @@ class NIJAApexStrategyV71:
     
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
-        Long Entry Logic
+        Long Entry Logic (INSTITUTIONAL GRADE)
         
         Conditions:
         1. Pullback to EMA21 or VWAP (price within 0.5% of either)
-        2. RSI bullish pullback (30-70 range, showing recovery)
+        2. RSI bullish pullback (25-45 range, early entry for max R:R)
         3. Bullish engulfing or hammer candlestick pattern
         4. MACD histogram ticking up (current > previous)
         5. Volume >= 60% of last 2 candles average
@@ -468,8 +468,9 @@ class NIJAApexStrategyV71:
         near_vwap = abs(current_price - vwap) / vwap < 0.02
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bullish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi > rsi_prev
+        # 2. RSI bullish pullback (INSTITUTIONAL GRADE: Early entry, avoid chasing)
+        # RSI 25-45: optimal oversold recovery zone (buy low, maximize R:R)
+        conditions['rsi_pullback'] = 25 <= rsi <= 45 and rsi > rsi_prev
         
         # 3. Bullish candlestick patterns
         body = current['close'] - current['open']
@@ -515,11 +516,11 @@ class NIJAApexStrategyV71:
     
     def check_short_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
-        Short Entry Logic (mirror of long with bearish elements)
+        Short Entry Logic (INSTITUTIONAL GRADE, mirror of long with bearish elements)
         
         Conditions:
         1. Pullback to EMA21 or VWAP (price within 0.5% of either)
-        2. RSI bearish pullback (30-70 range, showing decline)
+        2. RSI bearish pullback (55-75 range, early entry for max R:R)
         3. Bearish engulfing or shooting star candlestick pattern
         4. MACD histogram ticking down (current < previous)
         5. Volume >= 60% of last 2 candles average
@@ -549,8 +550,9 @@ class NIJAApexStrategyV71:
         near_vwap = abs(current_price - vwap) / vwap < 0.02
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bearish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi < rsi_prev
+        # 2. RSI bearish pullback (INSTITUTIONAL GRADE: Early entry, avoid chasing)
+        # RSI 55-75: optimal overbought pullback zone (sell high, maximize R:R)
+        conditions['rsi_pullback'] = 55 <= rsi <= 75 and rsi < rsi_prev
         
         # 3. Bearish candlestick patterns
         body = current['close'] - current['open']
