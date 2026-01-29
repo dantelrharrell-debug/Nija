@@ -423,9 +423,156 @@ This security model will be updated as:
 - Best practices evolve
 - User feedback is received
 
-**Last Updated**: January 8, 2026  
-**Version**: 1.0  
-**Status**: ✅ Initial Security Model Implemented
+**Last Updated**: January 29, 2026  
+**Version**: 2.0  
+**Status**: ✅ Enhanced with God Mode CI Hardening
+
+## God Mode CI - Advanced Security Hardening
+
+**NEW**: NIJA now includes next-level security hardening with comprehensive artifact scanning, pre-commit hooks, and organization-wide secret policies.
+
+### 1️⃣ Artifact Scanning
+
+**Docker Image Scanning**:
+- Trivy vulnerability scanner (CRITICAL/HIGH severity)
+- Grype comprehensive security scanning  
+- Automated SARIF upload to GitHub Security
+- Weekly scheduled scans
+
+**Python Package Scanning**:
+- pip-audit for known vulnerabilities
+- GuardDog for malicious package detection
+- SBOM (Software Bill of Materials) generation
+- License compliance checking
+
+**Build Artifact Validation**:
+- Wheel integrity verification
+- Dependency tree analysis
+- License conflict detection
+
+**Configuration**: `.github/workflows/artifact-scanning.yml`
+
+### 2️⃣ Pre-Commit Secret Hooks
+
+**Prevention at the Source**:
+- Secrets blocked before they reach GitHub
+- Multiple redundant scanners for defense in depth
+- Custom NIJA-specific checks
+- Automatic validation on every commit
+
+**Installed Hooks**:
+- **detect-secrets**: Baseline-driven secret detection
+- **gitleaks**: Comprehensive secret scanning with custom rules
+- **trufflehog**: Verified-only secret detection
+- **detect-private-key**: SSH/PEM key detection
+- **detect-aws-credentials**: AWS credential detection
+- **Custom checks**: .env files, API keys, PEM files
+
+**Additional Checks**:
+- Code quality (trailing whitespace, EOF, YAML/JSON syntax)
+- Python security (Bandit linting)
+- Large file detection (>5MB)
+- Merge conflict detection
+
+**Setup**: See [.github/PRE_COMMIT_SETUP.md](.github/PRE_COMMIT_SETUP.md)
+
+**Quick Start**:
+```bash
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
+
+### 3️⃣ Organization-Wide Secret Policy
+
+**Centralized Enforcement**:
+- Consistent rules across all NIJA projects
+- Custom patterns for trading APIs (Coinbase, Kraken, Alpaca)
+- Allowlisted templates and documentation
+- Multi-layer defense (pre-commit + CI + GitHub native)
+
+**Configuration Files**:
+- `.gitleaks.toml`: Organization-wide gitleaks rules
+- `.secrets.baseline`: Known false positives
+- `.bandit.yml`: Python security linting rules
+- `.pre-commit-config.yaml`: Pre-commit hook configuration
+
+**Policy Documentation**: [.github/SECRET_SCANNING_POLICY.md](.github/SECRET_SCANNING_POLICY.md)
+
+**Enforcement Layers**:
+1. Developer machine (pre-commit hooks)
+2. CI/CD pipeline (GitHub Actions)
+3. GitHub native secret scanning
+4. Artifact and build scanning
+
+### Security Scanning Matrix
+
+| Scanner | Layer | Frequency | Coverage |
+|---------|-------|-----------|----------|
+| detect-secrets | Pre-commit + CI | Every commit | Baseline-driven |
+| gitleaks | Pre-commit + CI | Every commit + Weekly | Comprehensive |
+| trufflehog | Pre-commit + CI | Every commit + Weekly | Verified only |
+| GitHub Secret Scanning | Native | Continuous | Partner patterns |
+| Trivy | CI | On build + Weekly | Docker images |
+| Grype | CI | On build | Docker images |
+| pip-audit | CI | Every build | Python packages |
+| GuardDog | CI | Every build | Malicious packages |
+| Bandit | Pre-commit + CI | Every commit | Python security |
+
+### Incident Response
+
+**If Secret Detected**:
+1. ❌ Commit blocked by pre-commit hook
+2. 🔧 Remove secret from code
+3. 🔄 Rotate credential immediately
+4. ✅ Verify not in git history
+5. 📝 Document incident
+
+**If Secret Reaches GitHub**:
+1. 🚨 IMMEDIATE: Revoke credential (within 1 hour)
+2. 🔍 Audit for unauthorized access
+3. 🧹 Remove from git history (BFG Repo-Cleaner)
+4. 📢 Notify security team
+5. 📊 Postmortem and prevention
+
+**Tools**:
+- [BFG Repo-Cleaner](https://rtyley.github.io/bfg-repo-cleaner/)
+- [GitHub: Removing Sensitive Data](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
+
+### Developer Requirements
+
+**All developers must**:
+1. Install pre-commit hooks: `pre-commit install`
+2. Read security documentation
+3. Never commit real credentials
+4. Use .env.example templates only
+5. Report security concerns immediately
+
+### Compliance Checklist
+
+**Repository Security**:
+- [x] Pre-commit hooks configured
+- [x] Gitleaks organization config
+- [x] Secrets baseline maintained
+- [x] .gitignore excludes credentials
+- [x] CI security scans enabled
+- [x] Artifact scanning enabled
+- [x] Docker image scanning enabled
+- [x] Python package scanning enabled
+- [x] License compliance checking
+- [x] SBOM generation
+- [x] Organization-wide policy documented
+
+**Ongoing**:
+- [x] Daily: CI scans on commits/PRs
+- [x] Weekly: Scheduled full scans
+- [ ] Monthly: Configuration review
+- [ ] Quarterly: Policy updates
+- [ ] Annually: Complete security audit
+
+---
+
+**Remember**: Multiple layers of defense ensure secrets never reach production. Each layer is independent and redundant.
 
 ---
 
