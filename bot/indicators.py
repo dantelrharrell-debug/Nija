@@ -870,13 +870,13 @@ def calculate_indicators(df):
     }
 
 
-def resample_to_higher_timeframe(df, target_timeframe='5T'):
+def resample_to_higher_timeframe(df, target_timeframe='5min'):
     """
     Resample OHLCV data to a higher timeframe.
     
     Args:
         df: DataFrame with OHLCV data and datetime index
-        target_timeframe: Target timeframe (e.g., '5T' for 5 minutes, '15T' for 15 minutes,
+        target_timeframe: Target timeframe (e.g., '5min' for 5 minutes, '15min' for 15 minutes,
                          '1H' for 1 hour, '4H' for 4 hours, '1D' for 1 day)
     
     Returns:
@@ -900,8 +900,8 @@ def resample_to_higher_timeframe(df, target_timeframe='5T'):
     return resampled
 
 
-def check_multi_timeframe_rsi_agreement(df, current_timeframe='1T', 
-                                       higher_timeframes=['5T', '15T'],
+def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min', 
+                                       higher_timeframes=['5min', '15min'],
                                        rsi_period=14,
                                        agreement_threshold=10):
     """
@@ -917,8 +917,8 @@ def check_multi_timeframe_rsi_agreement(df, current_timeframe='1T',
     
     Args:
         df: DataFrame with OHLCV data and datetime index
-        current_timeframe: Current/base timeframe (e.g., '1T' for 1 minute)
-        higher_timeframes: List of higher timeframes to check (e.g., ['5T', '15T'])
+        current_timeframe: Current/base timeframe (e.g., '1min' for 1 minute)
+        higher_timeframes: List of higher timeframes to check (e.g., ['5min', '15min'])
         rsi_period: RSI calculation period (default 14)
         agreement_threshold: RSI difference threshold for alignment (default 10)
     
