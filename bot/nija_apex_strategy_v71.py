@@ -21,7 +21,7 @@ import os
 
 from indicators import (
     calculate_vwap, calculate_ema, calculate_rsi, calculate_macd,
-    calculate_atr, calculate_adx, scalar
+    calculate_atr, calculate_adx, calculate_bollinger_bands, scalar
 )
 from risk_manager import RiskManager
 from execution_engine import ExecutionEngine
@@ -911,6 +911,13 @@ class NIJAApexStrategyV71:
         indicators['plus_di'] = plus_di
         indicators['minus_di'] = minus_di
         
+        # Calculate Bollinger Bands for volatility-based adaptive profit targets
+        bb_upper, bb_middle, bb_lower, bb_bandwidth = calculate_bollinger_bands(df, period=20, std_dev=2)
+        indicators['bb_upper'] = bb_upper
+        indicators['bb_middle'] = bb_middle
+        indicators['bb_lower'] = bb_lower
+        indicators['bb_bandwidth'] = bb_bandwidth  # Normalized volatility measure for adaptive targets
+        
         return indicators
     
     def analyze_market(self, df: pd.DataFrame, symbol: str, 
@@ -1105,13 +1112,21 @@ class NIJAApexStrategyV71:
                         current_price, 'long', swing_low, atr
                     )
                     
-                    # ✅ FEE-AWARE PROFIT TARGETS (Phase 4)
+                    # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
                     # Get broker-specific round-trip fee and use it for dynamic profit targets
+                    # Enhanced with volatility-based adaptive targeting for institutional performance
                     broker_capabilities = self._get_broker_capabilities(symbol)
                     broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
                     
+                    # Extract volatility bandwidth for adaptive profit targeting
+                    volatility_bandwidth = scalar(indicators['bb_bandwidth'].iloc[-1])
+                    
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'long', broker_fee_pct=broker_fee, use_limit_order=True
+                        current_price, stop_loss, 'long', 
+                        broker_fee_pct=broker_fee, 
+                        use_limit_order=True,
+                        atr=atr,
+                        volatility_bandwidth=volatility_bandwidth
                     )
                     
                     # Adjust TP levels based on regime if enhanced scoring is enabled
@@ -1208,13 +1223,21 @@ class NIJAApexStrategyV71:
                         current_price, 'short', swing_high, atr
                     )
                     
-                    # ✅ FEE-AWARE PROFIT TARGETS (Phase 4)
+                    # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
                     # Get broker-specific round-trip fee and use it for dynamic profit targets
+                    # Enhanced with volatility-based adaptive targeting for institutional performance
                     broker_capabilities = self._get_broker_capabilities(symbol)
                     broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
                     
+                    # Extract volatility bandwidth for adaptive profit targeting
+                    volatility_bandwidth = scalar(indicators['bb_bandwidth'].iloc[-1])
+                    
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'short', broker_fee_pct=broker_fee, use_limit_order=True
+                        current_price, stop_loss, 'short', 
+                        broker_fee_pct=broker_fee, 
+                        use_limit_order=True,
+                        atr=atr,
+                        volatility_bandwidth=volatility_bandwidth
                     )
                     
                     # Adjust TP levels based on regime if enhanced scoring is enabled
