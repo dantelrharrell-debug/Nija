@@ -120,7 +120,7 @@ def list_users():
     
     except Exception as e:
         logger.error(f"Error listing users: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to list users'}), 500
 
 
 @app.route('/api/user/<user_id>/pnl', methods=['GET'])
@@ -158,7 +158,7 @@ def get_user_pnl(user_id: str):
     
     except Exception as e:
         logger.error(f"Error getting PnL for {user_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve PnL data'}), 500
 
 
 @app.route('/api/master/pnl', methods=['GET'])
@@ -203,7 +203,7 @@ def get_user_risk(user_id: str):
     
     except Exception as e:
         logger.error(f"Error getting risk for {user_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve risk data'}), 500
 
 
 @app.route('/api/user/<user_id>/risk', methods=['POST'])
@@ -231,7 +231,7 @@ def update_user_risk(user_id: str):
     
     except Exception as e:
         logger.error(f"Error updating risk for {user_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to update risk limits'}), 500
 
 
 @app.route('/api/killswitch/global', methods=['POST'])
@@ -253,7 +253,7 @@ def trigger_global_killswitch():
     
     except Exception as e:
         logger.error(f"Error triggering global kill switch: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to trigger global kill switch'}), 500
 
 
 @app.route('/api/killswitch/global', methods=['DELETE'])
@@ -270,7 +270,7 @@ def reset_global_killswitch():
     
     except Exception as e:
         logger.error(f"Error resetting global kill switch: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to reset global kill switch'}), 500
 
 
 @app.route('/api/killswitch/user/<user_id>', methods=['POST'])
@@ -293,7 +293,7 @@ def trigger_user_killswitch(user_id: str):
     
     except Exception as e:
         logger.error(f"Error triggering user kill switch: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to trigger user kill switch'}), 500
 
 
 @app.route('/api/killswitch/user/<user_id>', methods=['DELETE'])
@@ -311,7 +311,7 @@ def reset_user_killswitch(user_id: str):
     
     except Exception as e:
         logger.error(f"Error resetting user kill switch: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to reset user kill switch'}), 500
 
 
 @app.route('/api/stats', methods=['GET'])
@@ -344,7 +344,7 @@ def get_system_stats():
     
     except Exception as e:
         logger.error(f"Error getting system stats: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve system statistics'}), 500
 
 
 @app.route('/api/user/<user_id>/nonce', methods=['GET'])
@@ -362,7 +362,7 @@ def get_user_nonce_stats(user_id: str):
     
     except Exception as e:
         logger.error(f"Error getting nonce stats for {user_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve nonce statistics'}), 500
 
 
 @app.route('/api/user/<user_id>/nonce/reset', methods=['POST'])
@@ -380,7 +380,7 @@ def reset_user_nonce(user_id: str):
     
     except Exception as e:
         logger.error(f"Error resetting nonce for {user_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to reset nonce'}), 500
 
 
 @app.route('/api/positions/open', methods=['GET'])
@@ -404,7 +404,7 @@ def get_open_positions():
     
     except Exception as e:
         logger.error(f"Error getting open positions: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve open positions'}), 500
 
 
 @app.route('/api/trades/history', methods=['GET'])
@@ -439,7 +439,7 @@ def get_trade_history():
     
     except Exception as e:
         logger.error(f"Error getting trade history: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve trade history'}), 500
 
 
 @app.route('/api/trades/ledger', methods=['GET'])
@@ -468,7 +468,7 @@ def get_trade_ledger():
     
     except Exception as e:
         logger.error(f"Error getting trade ledger: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve trade ledger'}), 500
 
 
 @app.route('/api/trades/export', methods=['GET'])
@@ -516,7 +516,7 @@ def export_trades():
     
     except Exception as e:
         logger.error(f"Error exporting trades: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to export trades'}), 500
 
 
 @app.route('/api/trades/statistics', methods=['GET'])
@@ -539,7 +539,7 @@ def get_trade_statistics():
     
     except Exception as e:
         logger.error(f"Error getting statistics: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve statistics'}), 500
 
 
 @app.route('/api/aggregated/summary', methods=['GET'])
@@ -649,7 +649,7 @@ def get_aggregated_summary():
     
     except Exception as e:
         logger.error(f"Error getting aggregated summary: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve aggregated summary'}), 500
 
 
 @app.route('/api/aggregated/performance', methods=['GET'])
@@ -730,7 +730,7 @@ def get_aggregated_performance():
     
     except Exception as e:
         logger.error(f"Error getting aggregated performance: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve aggregated performance'}), 500
 
 
 @app.route('/api/aggregated/positions', methods=['GET'])
@@ -807,7 +807,7 @@ def get_aggregated_positions():
     
     except Exception as e:
         logger.error(f"Error getting aggregated positions: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve aggregated positions'}), 500
 
 
 @app.route('/api/aggregated/statistics', methods=['GET'])
@@ -883,7 +883,7 @@ def get_aggregated_statistics():
     
     except Exception as e:
         logger.error(f"Error getting aggregated statistics: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve aggregated statistics'}), 500
 
 
 @app.route('/api/aggregated/traceability', methods=['GET'])
@@ -976,7 +976,7 @@ def get_trade_traceability():
     
     except Exception as e:
         logger.error(f"Error getting trade traceability: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve trade traceability'}), 500
 
 
 def run_dashboard_api(host: str = '0.0.0.0', port: int = 5001, debug: bool = False):

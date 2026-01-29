@@ -234,7 +234,7 @@ def tradingview_webhook():
             }), 200
     except Exception as e:
         print(f"❌ Webhook error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Webhook processing failed'}), 500
 
 @app.route('/positions', methods=['GET'])
 def get_positions():
@@ -262,7 +262,7 @@ def get_positions():
         }), 200
     
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve positions'}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 8080))
