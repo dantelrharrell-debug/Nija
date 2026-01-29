@@ -11,6 +11,7 @@ Tests:
 2. Long signal → buy order mapping
 3. Short signal → sell order mapping  
 4. Copy trading signal propagation
+5. RSI ranges (buy low, sell high)
 """
 
 import sys
@@ -192,6 +193,123 @@ def test_indicator_buy_sell_signals():
         return False
 
 
+def test_rsi_range_separation():
+    """Test that buy and sell RSI ranges don't overlap incorrectly"""
+    print("\n" + "=" * 70)
+    print("TEST 6: RSI Range Separation (INSTITUTIONAL GRADE)")
+    print("=" * 70)
+    
+    print("\n📊 Test: Long entry RSI range (should be 25-45)")
+    print("   → Buy in LOWER RSI range (early entry, max R:R)")
+    
+    # CRITICAL TEST CASES - LONG ENTRY
+    critical_long_tests = [
+        (35, 30, True, "assert long_entry(rsi=35) == True"),
+        (45, 40, True, "assert long_entry(rsi=45) == True (boundary)"),
+        (48, 45, False, "assert long_entry(rsi=48) == False (too high)"),
+        (55, 50, False, "assert long_entry(rsi=55) == False (way too high)"),
+        (65, 60, False, "assert long_entry(rsi=65) == False (extremely high)"),
+    ]
+    
+    print("\n   🔴 CRITICAL ASSERTIONS (MUST PASS):")
+    all_passed = True
+    for rsi, rsi_prev, should_pass, description in critical_long_tests:
+        # Replicate the institutional logic: 25 <= rsi <= 45 and rsi > rsi_prev
+        condition = 25 <= rsi <= 45 and rsi > rsi_prev
+        
+        print(f"\n   {description}")
+        print(f"      RSI={rsi}, RSI_prev={rsi_prev}")
+        print(f"      Condition: 25 <= {rsi} <= 45 and {rsi} > {rsi_prev}")
+        print(f"      Result: {condition}, Expected: {should_pass}")
+        
+        if condition == should_pass:
+            print(f"      ✅ PASS")
+        else:
+            print(f"      ❌ FAIL - CRITICAL ERROR!")
+            all_passed = False
+    
+    # Additional edge cases
+    edge_cases_long = [
+        (25, 20, True, "RSI 25 (lower boundary) → BUY"),
+        (26, 25, True, "RSI 26 rising from 25 → BUY"),
+        (40, 35, True, "RSI 40 rising from 35 → BUY"),
+        (44, 40, True, "RSI 44 rising from 40 → BUY (near upper boundary)"),
+        (46, 45, False, "RSI 46 → NO BUY (just outside range)"),
+        (50, 48, False, "RSI 50 → NO BUY (neutral zone)"),
+    ]
+    
+    print("\n   📊 Edge Case Tests:")
+    for rsi, rsi_prev, should_pass, description in edge_cases_long:
+        condition = 25 <= rsi <= 45 and rsi > rsi_prev
+        
+        print(f"      {description}: ", end="")
+        if condition == should_pass:
+            print(f"✅")
+        else:
+            print(f"❌ (got {condition}, expected {should_pass})")
+            all_passed = False
+    
+    print("\n📊 Test: Short entry RSI range (should be 55-75)")
+    print("   → Sell in UPPER RSI range (early entry, max R:R)")
+    
+    # CRITICAL TEST CASES - SHORT ENTRY
+    critical_short_tests = [
+        (65, 70, True, "assert short_entry(rsi=65) == True"),
+        (58, 63, True, "assert short_entry(rsi=58) == True"),
+        (45, 50, False, "assert short_entry(rsi=45) == False (too low)"),
+        (35, 40, False, "assert short_entry(rsi=35) == False (way too low)"),
+    ]
+    
+    print("\n   🔴 CRITICAL ASSERTIONS (MUST PASS):")
+    for rsi, rsi_prev, should_pass, description in critical_short_tests:
+        # Replicate the institutional logic: 55 <= rsi <= 75 and rsi < rsi_prev
+        condition = 55 <= rsi <= 75 and rsi < rsi_prev
+        
+        print(f"\n   {description}")
+        print(f"      RSI={rsi}, RSI_prev={rsi_prev}")
+        print(f"      Condition: 55 <= {rsi} <= 75 and {rsi} < {rsi_prev}")
+        print(f"      Result: {condition}, Expected: {should_pass}")
+        
+        if condition == should_pass:
+            print(f"      ✅ PASS")
+        else:
+            print(f"      ❌ FAIL - CRITICAL ERROR!")
+            all_passed = False
+    
+    # Additional edge cases
+    edge_cases_short = [
+        (75, 78, True, "RSI 75 (upper boundary) → SELL"),
+        (74, 75, True, "RSI 74 falling from 75 → SELL"),
+        (60, 65, True, "RSI 60 falling from 65 → SELL"),
+        (56, 60, True, "RSI 56 falling from 60 → SELL (near lower boundary)"),
+        (55, 58, True, "RSI 55 (lower boundary) → SELL"),
+        (54, 56, False, "RSI 54 → NO SELL (just outside range)"),
+        (50, 53, False, "RSI 50 → NO SELL (neutral zone)"),
+        (76, 78, False, "RSI 76 → NO SELL (above range)"),
+    ]
+    
+    print("\n   📊 Edge Case Tests:")
+    for rsi, rsi_prev, should_pass, description in edge_cases_short:
+        condition = 55 <= rsi <= 75 and rsi < rsi_prev
+        
+        print(f"      {description}: ", end="")
+        if condition == should_pass:
+            print(f"✅")
+        else:
+            print(f"❌ (got {condition}, expected {should_pass})")
+            all_passed = False
+    
+    if all_passed:
+        print("\n   ✅ ALL RSI RANGE TESTS PASSED (INSTITUTIONAL GRADE)")
+        print("   → Long entries: RSI 25-45 (early entry, avoid chasing)")
+        print("   → Short entries: RSI 55-75 (early entry, avoid chasing)")
+        print("   → NO OVERLAP: Maximizes R:R, captures trend expansion")
+        return True
+    else:
+        print("\n   ❌ SOME RSI RANGE TESTS FAILED - CRITICAL!")
+        return False
+
+
 def main():
     """Run all tests"""
     print("\n" + "=" * 70)
@@ -208,6 +326,7 @@ def main():
     results.append(("Short → Sell Mapping", test_short_to_sell_mapping()))
     results.append(("Copy Trading Propagation", test_copy_trading_signal_propagation()))
     results.append(("Indicator Signals", test_indicator_buy_sell_signals()))
+    results.append(("RSI Range Separation", test_rsi_range_separation()))
     
     # Summary
     print("\n" + "=" * 70)

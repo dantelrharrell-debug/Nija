@@ -434,11 +434,11 @@ class NIJAApexStrategyV71:
     
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
-        Long Entry Logic
+        Long Entry Logic (INSTITUTIONAL GRADE + ADAPTIVE RSI)
         
         Conditions:
         1. Pullback to EMA21 or VWAP (price within 0.5% of either)
-        2. RSI bullish pullback (30-70 range, showing recovery)
+        2. RSI bullish pullback (ADAPTIVE ranges based on market regime)
         3. Bullish engulfing or hammer candlestick pattern
         4. MACD histogram ticking up (current > previous)
         5. Volume >= 60% of last 2 candles average
@@ -468,8 +468,20 @@ class NIJAApexStrategyV71:
         near_vwap = abs(current_price - vwap) / vwap < 0.02
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bullish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi > rsi_prev
+        # 2. RSI bullish pullback (ADAPTIVE MAX ALPHA UPGRADE)
+        # Get adaptive RSI ranges based on current market regime
+        if self.use_enhanced_scoring and self.regime_detector and self.current_regime:
+            adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
+            rsi_ranges = self.regime_detector.get_adaptive_rsi_ranges(self.current_regime, adx)
+            long_rsi_min = rsi_ranges['long_min']
+            long_rsi_max = rsi_ranges['long_max']
+        else:
+            # Fallback to institutional grade static ranges
+            long_rsi_min = 25
+            long_rsi_max = 45
+        
+        # Apply adaptive RSI condition: only buy in lower RSI range (buy low)
+        conditions['rsi_pullback'] = long_rsi_min <= rsi <= long_rsi_max and rsi > rsi_prev
         
         # 3. Bullish candlestick patterns
         body = current['close'] - current['open']
@@ -515,11 +527,11 @@ class NIJAApexStrategyV71:
     
     def check_short_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
-        Short Entry Logic (mirror of long with bearish elements)
+        Short Entry Logic (INSTITUTIONAL GRADE + ADAPTIVE RSI, mirror of long with bearish elements)
         
         Conditions:
         1. Pullback to EMA21 or VWAP (price within 0.5% of either)
-        2. RSI bearish pullback (30-70 range, showing decline)
+        2. RSI bearish pullback (ADAPTIVE ranges based on market regime)
         3. Bearish engulfing or shooting star candlestick pattern
         4. MACD histogram ticking down (current < previous)
         5. Volume >= 60% of last 2 candles average
@@ -549,8 +561,20 @@ class NIJAApexStrategyV71:
         near_vwap = abs(current_price - vwap) / vwap < 0.02
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bearish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi < rsi_prev
+        # 2. RSI bearish pullback (ADAPTIVE MAX ALPHA UPGRADE)
+        # Get adaptive RSI ranges based on current market regime
+        if self.use_enhanced_scoring and self.regime_detector and self.current_regime:
+            adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
+            rsi_ranges = self.regime_detector.get_adaptive_rsi_ranges(self.current_regime, adx)
+            short_rsi_min = rsi_ranges['short_min']
+            short_rsi_max = rsi_ranges['short_max']
+        else:
+            # Fallback to institutional grade static ranges
+            short_rsi_min = 55
+            short_rsi_max = 75
+        
+        # Apply adaptive RSI condition: only sell in upper RSI range (sell high)
+        conditions['rsi_pullback'] = short_rsi_min <= rsi <= short_rsi_max and rsi < rsi_prev
         
         # 3. Bearish candlestick patterns
         body = current['close'] - current['open']
@@ -1417,6 +1441,52 @@ class NIJAApexStrategyV71:
         except Exception as e:
             logger.error(f"Execution error: {e}")
             return False
+    
+    # ============================================================
+    # INSTITUTIONAL-GRADE RSI ENTRY FILTERS
+    # ============================================================
+    
+    def _rsi_long_filter(self, rsi: float) -> bool:
+        """
+        Institutional long entry RSI filter: buy weakness, not strength.
+        
+        Args:
+            rsi: Current RSI value (expected range: 0-100)
+            
+        Returns:
+            True if RSI is in optimal long entry zone (25-45), False otherwise
+            
+        Note:
+            Invalid RSI values (NaN, infinity, or outside 0-100) return False
+        """
+        # Validate RSI is a valid number within expected range
+        if not isinstance(rsi, (int, float)) or np.isnan(rsi) or np.isinf(rsi):
+            return False
+        if rsi < 0 or rsi > 100:
+            return False
+        
+        return 25 <= rsi <= 45
+    
+    def _rsi_short_filter(self, rsi: float) -> bool:
+        """
+        Institutional short entry RSI filter: sell strength, not weakness.
+        
+        Args:
+            rsi: Current RSI value (expected range: 0-100)
+            
+        Returns:
+            True if RSI is in optimal short entry zone (55-75), False otherwise
+            
+        Note:
+            Invalid RSI values (NaN, infinity, or outside 0-100) return False
+        """
+        # Validate RSI is a valid number within expected range
+        if not isinstance(rsi, (int, float)) or np.isnan(rsi) or np.isinf(rsi):
+            return False
+        if rsi < 0 or rsi > 100:
+            return False
+        
+        return 55 <= rsi <= 75
     
     # ============================================================
     # AI MOMENTUM SCORING (SKELETON - PLACEHOLDER FOR FUTURE)
