@@ -242,9 +242,9 @@ class MonthlyReport(Base):
     year = Column(Integer, nullable=False, index=True)
     month = Column(Integer, nullable=False, index=True)
     
-    # Capital metrics
-    start_equity = Column(Numeric(18, 8), nullable=False)
-    end_equity = Column(Numeric(18, 8), nullable=False)
+    # NAV and returns
+    start_nav = Column(Numeric(18, 8), nullable=False)
+    end_nav = Column(Numeric(18, 8), nullable=False)
     monthly_return_pct = Column(Numeric(8, 4), default=0)
     
     # Trading metrics
@@ -266,3 +266,62 @@ class MonthlyReport(Base):
     
     def __repr__(self):
         return f"<MonthlyReport(user_id='{self.user_id}', year={self.year}, month={self.month}, return={self.monthly_return_pct}%)>"
+
+
+class PortfolioEquity(Base):
+    """Portfolio equity tracking with regime and volatility"""
+    __tablename__ = 'portfolio_equity'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(50), ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False, index=True)
+    timestamp = Column(DateTime, nullable=False, default=func.now(), index=True)
+    
+    # Core metrics
+    equity = Column(Numeric(18, 8), nullable=False)
+    drawdown_pct = Column(Numeric(8, 4), default=0)
+    volatility_pct = Column(Numeric(8, 4), default=0)
+    regime = Column(String(20), default='neutral')  # bull_trending, bear_trending, ranging, volatile, crisis
+    
+    created_at = Column(DateTime, default=func.now())
+    
+    def __repr__(self):
+        return f"<PortfolioEquity(user_id='{self.user_id}', timestamp={self.timestamp}, equity={self.equity}, regime='{self.regime}')>"
+
+
+class DailyReturn(Base):
+    """Daily return tracking"""
+    __tablename__ = 'daily_returns'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(50), ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    return_pct = Column(Numeric(8, 4), nullable=False)
+    
+    created_at = Column(DateTime, default=func.now())
+    
+    def __repr__(self):
+        return f"<DailyReturn(user_id='{self.user_id}', date={self.date}, return={self.return_pct}%)>"
+
+
+class RiskEvent(Base):
+    """Risk events log"""
+    __tablename__ = 'risk_events'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(50), ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False, index=True)
+    timestamp = Column(DateTime, nullable=False, default=func.now(), index=True)
+    
+    # Event details
+    event_type = Column(String(50), nullable=False)  # drawdown_warning, volatility_spike, regime_change, etc.
+    severity = Column(String(20), default='info')  # info, warning, critical
+    description = Column(Text)
+    
+    # Metrics at time of event
+    equity = Column(Numeric(18, 8))
+    drawdown_pct = Column(Numeric(8, 4))
+    volatility_pct = Column(Numeric(8, 4))
+    
+    created_at = Column(DateTime, default=func.now())
+    
+    def __repr__(self):
+        return f"<RiskEvent(user_id='{self.user_id}', type='{self.event_type}', severity='{self.severity}')>"

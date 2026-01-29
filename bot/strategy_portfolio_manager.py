@@ -409,7 +409,12 @@ class StrategyPortfolioManager:
         # Perfect diversification: 1/n, Maximum concentration: 1.0
         n = len(allocations)
         perfect_herfindahl = 1 / n
-        concentration_score = (1 - (herfindahl - perfect_herfindahl) / (1 - perfect_herfindahl)) * 50
+        
+        # Guard against division by zero for single strategy
+        if n == 1:
+            concentration_score = 0.0  # Single strategy = no diversification
+        else:
+            concentration_score = (1 - (herfindahl - perfect_herfindahl) / (1 - perfect_herfindahl)) * 50
         
         # Combine scores
         diversification_score = correlation_score + concentration_score
@@ -463,17 +468,148 @@ class StrategyPortfolioManager:
             }
         }
     
-    def rebalance(self, new_total_capital: float) -> None:
+    def score_strategies(self) -> Dict[str, float]:
         """
-        Rebalance portfolio with updated capital
+        Score all strategies based on performance and risk metrics
+        
+        Returns:
+            Dictionary mapping strategy names to scores (0-100)
+        """
+        scores = {}
+        
+        for name, config in self.strategies.items():
+            if not config.enabled:
+                scores[name] = 0.0
+                continue
+            
+            perf = self.performance[name]
+            
+            # Performance component (40 points)
+            win_rate_score = (perf.winning_trades / perf.total_trades * 40) if perf.total_trades > 0 else 20.0
+            
+            # Risk-adjusted return component (40 points)
+            sharpe_score = min(perf.sharpe_ratio * 10, 40) if perf.sharpe_ratio > 0 else 0
+            
+            # Drawdown component (20 points) - inverse scoring
+            dd_score = max(0, 20 - perf.max_drawdown_pct)
+            
+            # Total score
+            total_score = win_rate_score + sharpe_score + dd_score
+            
+            scores[name] = min(total_score, 100.0)
+        
+        logger.info("Strategy Scores:")
+        for name, score in sorted(scores.items(), key=lambda x: x[1], reverse=True):
+            logger.info(f"  {name}: {score:.1f}/100")
+        
+        return scores
+    
+    def allocate_capital(self, scores: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+        """
+        Allocate capital across strategies based on scores and constraints
         
         Args:
-            new_total_capital: Updated total capital
+            scores: Strategy scores (will calculate if not provided)
+        
+        Returns:
+            Dictionary mapping strategy names to capital amounts
         """
-        self.total_capital = new_total_capital
+        if scores is None:
+            scores = self.score_strategies()
+        
+        # Get current allocation
+        if not self.current_allocation:
+            self.optimize_allocation()
+        
+        allocations = {}
+        for name, alloc_pct in self.current_allocation.allocations.items():
+            capital = self.total_capital * (alloc_pct / 100)
+            allocations[name] = capital
+        
+        logger.info("Capital Allocation:")
+        for name, capital in sorted(allocations.items(), key=lambda x: x[1], reverse=True):
+            logger.info(f"  {name}: ${capital:,.2f}")
+        
+        return allocations
+    
+    def rebalance_strategies(self, new_total_capital: Optional[float] = None) -> Dict[str, float]:
+        """
+        Rebalance strategies with updated capital and recalculate allocations
+        
+        Args:
+            new_total_capital: Updated total capital (optional)
+        
+        Returns:
+            Dictionary of new capital allocations
+        """
+        if new_total_capital is not None:
+            self.total_capital = new_total_capital
+        
+        # Recalculate optimal allocation
         self.optimize_allocation()
         
-        logger.info(f"Rebalanced portfolio with new capital: ${new_total_capital:,.2f}")
+        # Get new allocations
+        new_allocations = self.allocate_capital()
+        
+        logger.info(f"✅ Rebalanced portfolio with total capital: ${self.total_capital:,.2f}")
+        
+        return new_allocations
+    
+    def optimize_diversification(self) -> Dict[str, any]:
+        """
+        Optimize portfolio for maximum diversification
+        
+        Returns:
+            Dictionary with optimization results
+        """
+        # Calculate current correlation
+        correlation_matrix = self.calculate_correlation_matrix()
+        current_div_score = self.get_diversification_score()
+        
+        # Get current allocation
+        if not self.current_allocation:
+            self.optimize_allocation()
+        
+        # Simulate different allocations to maximize diversification
+        best_allocation = self.current_allocation.allocations.copy()
+        best_div_score = current_div_score
+        
+        # Try equal weight allocation
+        enabled_strategies = [name for name, cfg in self.strategies.items() if cfg.enabled]
+        if len(enabled_strategies) > 1:
+            equal_weight = 100.0 / len(enabled_strategies)
+            test_allocation = {name: equal_weight for name in enabled_strategies}
+            
+            # Temporarily update allocation to calculate score
+            old_allocation = self.current_allocation
+            self.current_allocation = PortfolioAllocation(
+                allocations=test_allocation,
+                regime=self.current_regime,
+                timestamp=datetime.now(),
+                total_capital=self.total_capital
+            )
+            
+            test_div_score = self.get_diversification_score()
+            
+            if test_div_score > best_div_score:
+                best_allocation = test_allocation
+                best_div_score = test_div_score
+            
+            # Restore original allocation
+            self.current_allocation = old_allocation
+        
+        logger.info(f"Diversification Optimization:")
+        logger.info(f"  Current Score: {current_div_score:.1f}/100")
+        logger.info(f"  Optimized Score: {best_div_score:.1f}/100")
+        logger.info(f"  Improvement: {best_div_score - current_div_score:.1f} points")
+        
+        return {
+            'current_diversification': current_div_score,
+            'optimized_diversification': best_div_score,
+            'improvement': best_div_score - current_div_score,
+            'optimized_allocation': best_allocation,
+            'correlation_matrix': correlation_matrix.tolist() if correlation_matrix.size > 0 else []
+        }
     
     def save_state(self) -> None:
         """Save portfolio state to disk"""

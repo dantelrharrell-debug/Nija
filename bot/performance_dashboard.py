@@ -141,20 +141,36 @@ class PerformanceDashboard:
         metrics = self.metrics_calculator.calculate_metrics()
         
         return {
+            # Returns
             'total_return_pct': metrics.total_return_pct,
             'daily_return_pct': metrics.daily_return_pct,
             'monthly_return_pct': metrics.monthly_return_pct,
             'annualized_return_pct': metrics.annualized_return_pct,
+            'cagr_pct': metrics.cagr_pct,
+            
+            # Risk metrics
             'sharpe_ratio': metrics.sharpe_ratio,
             'sortino_ratio': metrics.sortino_ratio,
+            'calmar_ratio': metrics.calmar_ratio,
             'max_drawdown_pct': metrics.max_drawdown_pct,
             'current_drawdown_pct': metrics.current_drawdown_pct,
+            
+            # Trade statistics
             'total_trades': metrics.total_trades,
             'winning_trades': metrics.winning_trades,
             'losing_trades': metrics.losing_trades,
             'win_rate_pct': metrics.win_rate_pct,
+            'avg_win': metrics.avg_win,
+            'avg_loss': metrics.avg_loss,
+            'profit_factor': metrics.profit_factor,
+            
+            # Time metrics
             'days_trading': metrics.days_trading,
             'avg_trades_per_day': metrics.avg_trades_per_day,
+            'longest_winning_streak': metrics.longest_winning_streak,
+            'longest_losing_streak': metrics.longest_losing_streak,
+            
+            # Volatility
             'daily_volatility_pct': metrics.daily_volatility_pct,
             'annualized_volatility_pct': metrics.annualized_volatility_pct
         }

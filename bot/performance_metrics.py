@@ -48,10 +48,12 @@ class PerformanceMetrics:
     daily_return_pct: float
     monthly_return_pct: float
     annualized_return_pct: float
+    cagr_pct: float  # Compound Annual Growth Rate
     
     # Risk metrics
     sharpe_ratio: float
     sortino_ratio: float
+    calmar_ratio: float  # Return / Max Drawdown
     max_drawdown_pct: float
     current_drawdown_pct: float
     
@@ -62,7 +64,7 @@ class PerformanceMetrics:
     win_rate_pct: float
     avg_win: float
     avg_loss: float
-    profit_factor: float
+    profit_factor: float  # Gross profit / Gross loss
     
     # Time metrics
     days_trading: int
@@ -314,8 +316,8 @@ class PerformanceMetricsCalculator:
             # Return zero metrics if no data
             return PerformanceMetrics(
                 total_return_pct=0.0, daily_return_pct=0.0, monthly_return_pct=0.0,
-                annualized_return_pct=0.0, sharpe_ratio=0.0, sortino_ratio=0.0,
-                max_drawdown_pct=0.0, current_drawdown_pct=0.0, total_trades=0,
+                annualized_return_pct=0.0, cagr_pct=0.0, sharpe_ratio=0.0, sortino_ratio=0.0,
+                calmar_ratio=0.0, max_drawdown_pct=0.0, current_drawdown_pct=0.0, total_trades=0,
                 winning_trades=0, losing_trades=0, win_rate_pct=0.0, avg_win=0.0,
                 avg_loss=0.0, profit_factor=0.0, days_trading=0, avg_trades_per_day=0.0,
                 longest_winning_streak=0, longest_losing_streak=0,
@@ -336,20 +338,35 @@ class PerformanceMetricsCalculator:
         else:
             days_trading = 1
         
-        # Annualized return
+        # Annualized return (using compound growth)
         if days_trading > 0:
             try:
                 # Protect against overflow for very small days_trading values
-                days_trading = max(days_trading, 7)  # Minimum 7 days for annualization
-                annualized_return_pct = (((self.current_equity / self.initial_capital) ** (365 / days_trading)) - 1) * 100
+                days_trading_for_annual = max(days_trading, 7)  # Minimum 7 days for annualization
+                annualized_return_pct = (((self.current_equity / self.initial_capital) ** (365 / days_trading_for_annual)) - 1) * 100
             except OverflowError:
                 # Fallback for extreme values
-                annualized_return_pct = total_return_pct * (365 / days_trading)
+                annualized_return_pct = total_return_pct * (365 / days_trading_for_annual)
         else:
             annualized_return_pct = 0.0
         
-        # Monthly return (approximate)
-        monthly_return_pct = annualized_return_pct / 12
+        # CAGR (Compound Annual Growth Rate) - same as annualized return
+        cagr_pct = annualized_return_pct
+        
+        # Monthly return (geometric mean if we have monthly data)
+        if len(self.snapshots) > 30:
+            # Calculate actual monthly returns if we have enough data
+            monthly_returns = []
+            for i in range(30, len(self.snapshots), 30):
+                if i < len(self.snapshots):
+                    start_equity = self.snapshots[i-30].equity
+                    end_equity = self.snapshots[i].equity
+                    if start_equity > 0:
+                        monthly_ret = ((end_equity - start_equity) / start_equity) * 100
+                        monthly_returns.append(monthly_ret)
+            monthly_return_pct = np.mean(monthly_returns) if monthly_returns else annualized_return_pct / 12
+        else:
+            monthly_return_pct = annualized_return_pct / 12
         
         # Risk metrics
         sharpe_ratio = self.calculate_sharpe_ratio()
@@ -357,28 +374,55 @@ class PerformanceMetricsCalculator:
         max_drawdown_pct, _, _ = self.calculate_max_drawdown()
         current_drawdown_pct = ((self.peak_equity - self.current_equity) / self.peak_equity * 100) if self.peak_equity > 0 else 0.0
         
+        # Calmar Ratio (Annualized Return / Max Drawdown)
+        calmar_ratio = (annualized_return_pct / max_drawdown_pct) if max_drawdown_pct > 0 else 0.0
+        
         # Trade statistics
         total_trades = latest.total_trades
         winning_trades = latest.winning_trades
         losing_trades = latest.losing_trades
         win_rate_pct = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
         
-        # Calculate average win/loss and profit factor
-        # Note: These would need to be calculated from trade history
-        # For now, using approximations
-        avg_win = 0.0
-        avg_loss = 0.0
-        profit_factor = 0.0
+        # Calculate average win/loss and profit factor from snapshots
+        gross_profit = 0.0
+        gross_loss = 0.0
+        win_count = 0
+        loss_count = 0
         
-        # Streaks
+        # Approximate from daily realized P&L
+        for snapshot in self.snapshots:
+            if snapshot.realized_pnl_today > 0:
+                gross_profit += snapshot.realized_pnl_today
+                win_count += 1
+            elif snapshot.realized_pnl_today < 0:
+                gross_loss += abs(snapshot.realized_pnl_today)
+                loss_count += 1
+        
+        avg_win = (gross_profit / win_count) if win_count > 0 else 0.0
+        avg_loss = (gross_loss / loss_count) if loss_count > 0 else 0.0
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0.0
+        
+        # Streaks - approximate from daily returns
         longest_winning_streak = 0
         longest_losing_streak = 0
+        current_win_streak = 0
+        current_loss_streak = 0
+        
+        for ret in self.daily_returns:
+            if ret > 0:
+                current_win_streak += 1
+                current_loss_streak = 0
+                longest_winning_streak = max(longest_winning_streak, current_win_streak)
+            elif ret < 0:
+                current_loss_streak += 1
+                current_win_streak = 0
+                longest_losing_streak = max(longest_losing_streak, current_loss_streak)
         
         # Volatility
         daily_volatility_pct = np.std(self.daily_returns) if len(self.daily_returns) > 1 else 0.0
         annualized_volatility_pct = daily_volatility_pct * np.sqrt(252)
         
-        # Average trades per day
+        # Average trades per day (use original days_trading)
         avg_trades_per_day = total_trades / days_trading if days_trading > 0 else 0.0
         
         return PerformanceMetrics(
@@ -386,8 +430,10 @@ class PerformanceMetricsCalculator:
             daily_return_pct=daily_return_pct,
             monthly_return_pct=monthly_return_pct,
             annualized_return_pct=annualized_return_pct,
+            cagr_pct=cagr_pct,
             sharpe_ratio=sharpe_ratio,
             sortino_ratio=sortino_ratio,
+            calmar_ratio=calmar_ratio,
             max_drawdown_pct=max_drawdown_pct,
             current_drawdown_pct=current_drawdown_pct,
             total_trades=total_trades,
