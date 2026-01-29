@@ -143,6 +143,54 @@ def test_short_entry_rsi_100_extreme_false(strategy):
 
 
 # ============================
+# INPUT VALIDATION TESTS
+# ============================
+
+def test_long_entry_rsi_negative_invalid(strategy):
+    """RSI -10 → FALSE (invalid negative value)"""
+    assert strategy._rsi_long_filter(-10) is False
+
+
+def test_short_entry_rsi_negative_invalid(strategy):
+    """RSI -10 → FALSE (invalid negative value)"""
+    assert strategy._rsi_short_filter(-10) is False
+
+
+def test_long_entry_rsi_over_100_invalid(strategy):
+    """RSI 150 → FALSE (invalid value > 100)"""
+    assert strategy._rsi_long_filter(150) is False
+
+
+def test_short_entry_rsi_over_100_invalid(strategy):
+    """RSI 150 → FALSE (invalid value > 100)"""
+    assert strategy._rsi_short_filter(150) is False
+
+
+def test_long_entry_rsi_nan_invalid(strategy):
+    """RSI NaN → FALSE (invalid value)"""
+    import numpy as np
+    assert strategy._rsi_long_filter(np.nan) is False
+
+
+def test_short_entry_rsi_nan_invalid(strategy):
+    """RSI NaN → FALSE (invalid value)"""
+    import numpy as np
+    assert strategy._rsi_short_filter(np.nan) is False
+
+
+def test_long_entry_rsi_inf_invalid(strategy):
+    """RSI infinity → FALSE (invalid value)"""
+    import numpy as np
+    assert strategy._rsi_long_filter(np.inf) is False
+
+
+def test_short_entry_rsi_inf_invalid(strategy):
+    """RSI infinity → FALSE (invalid value)"""
+    import numpy as np
+    assert strategy._rsi_short_filter(np.inf) is False
+
+
+# ============================
 # INTEGRATION VERIFICATION
 # ============================
 
