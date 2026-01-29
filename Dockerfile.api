@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -26,8 +27,15 @@ USER nija
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
-# Run FastAPI with Uvicorn
-CMD ["uvicorn", "fastapi_backend:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Startup script to handle database initialization
+COPY --chown=nija:nija docker-entrypoint.sh /app/
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Run with entrypoint for database initialization
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# Default command: Run FastAPI with Uvicorn
+CMD ["uvicorn", "fastapi_backend:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
