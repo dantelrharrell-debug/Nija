@@ -229,6 +229,9 @@ def export_csv_report():
 # For standalone testing
 if __name__ == '__main__':
     from flask import Flask
+    import os
     app = Flask(__name__)
     app.register_blueprint(dashboard_bp)
-    app.run(debug=True, port=5001)
+    # Only use debug mode in development, not production
+    debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(debug=debug_mode, port=5001)
