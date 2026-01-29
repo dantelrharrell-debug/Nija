@@ -183,26 +183,26 @@ curl -X GET http://localhost:8000/api/status \
 
 ### For End Users
 
-✅ **Simple Setup**: Register → Add broker credentials → Start trading  
-✅ **Mobile-Friendly**: PWA installable on iOS/Android  
-✅ **Real-Time Stats**: Monitor P&L, positions, trades  
-✅ **Secure**: Encrypted credentials, JWT auth  
-✅ **Multi-Broker**: Coinbase, Kraken, Binance, OKX, Alpaca  
+✅ **Simple Setup**: Register → Add broker credentials → Start trading
+✅ **Mobile-Friendly**: PWA installable on iOS/Android
+✅ **Real-Time Stats**: Monitor P&L, positions, trades
+✅ **Secure**: Encrypted credentials, JWT auth
+✅ **Multi-Broker**: Coinbase, Kraken, Binance, OKX, Alpaca
 
 ### For Developers
 
-✅ **Modern Stack**: FastAPI + PostgreSQL + Redis  
-✅ **Well-Documented**: Swagger/OpenAPI auto-docs  
-✅ **Docker-Ready**: One command to deploy  
-✅ **Scalable**: Kubernetes-ready architecture  
-✅ **Type-Safe**: Pydantic models throughout  
+✅ **Modern Stack**: FastAPI + PostgreSQL + Redis
+✅ **Well-Documented**: Swagger/OpenAPI auto-docs
+✅ **Docker-Ready**: One command to deploy
+✅ **Scalable**: Kubernetes-ready architecture
+✅ **Type-Safe**: Pydantic models throughout
 
 ### For Strategy Protection
 
-✅ **Layer Separation**: Strategy never exposed  
-✅ **User Isolation**: Each user in separate instance  
-✅ **Capital Protection**: No cross-user bleeding  
-✅ **Read-Only Stats**: Users see results, not logic  
+✅ **Layer Separation**: Strategy never exposed
+✅ **User Isolation**: Each user in separate instance
+✅ **Capital Protection**: No cross-user bleeding
+✅ **Read-Only Stats**: Users see results, not logic
 
 ---
 
@@ -380,9 +380,9 @@ Web App (Next.js)    ↗                 ↗              ↗            ↗
                                                     (Layer 3)  (Layer 2)  (Layer 1)
 ```
 
-**Layer 3 (Public)**: User-facing API  
-**Layer 2 (Limited)**: User instance management  
-**Layer 1 (Private)**: Your strategy (protected!)  
+**Layer 3 (Public)**: User-facing API
+**Layer 2 (Limited)**: User instance management
+**Layer 1 (Private)**: Your strategy (protected!)
 
 ---
 

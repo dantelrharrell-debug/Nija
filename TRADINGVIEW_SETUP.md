@@ -123,7 +123,7 @@ TRADINGVIEW_WEBHOOK_SECRET=nija_webhook_2025
 
 ### **3. Alert Settings:**
 - **Condition**: Your indicator/strategy condition
-- **Options**: 
+- **Options**:
   - ✅ "Once Per Bar Close" (recommended)
   - ✅ "Webhook URL" enabled
 - **Expiration**: Open-ended

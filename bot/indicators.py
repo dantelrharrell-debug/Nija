@@ -9,16 +9,16 @@ EPSILON = 1e-6  # Small value to prevent division by zero
 def scalar(x):
     """
     Convert indicator value to float.
-    
+
     Defensive helper to handle cases where indicators may return tuples/lists
     instead of scalar values. This prevents comparison bugs.
-    
+
     Args:
         x: Indicator value (could be float, int, tuple, list, or pandas Series)
-        
+
     Returns:
         float: Scalar float value
-        
+
     Examples:
         >>> scalar(25.5)
         25.5
@@ -26,7 +26,7 @@ def scalar(x):
         25.5
         >>> scalar([25.5, 30.0])
         25.5
-        
+
     Raises:
         ValueError: If tuple/list is empty
     """
@@ -65,91 +65,91 @@ def calculate_rsi(df, period=14):
     return rsi.ffill().fillna(50)
 
 
-def calculate_volatility_weighted_rsi_bands(df, rsi_period=14, atr_period=14, adx_period=14, 
+def calculate_volatility_weighted_rsi_bands(df, rsi_period=14, atr_period=14, adx_period=14,
                                             base_width=10):
     """
     Calculate Volatility-Weighted RSI Bands (GOD MODE+)
-    
+
     Blends ATR + ADX to create dynamic RSI bands that adapt to market conditions:
     - High volatility → Wider bands (less sensitive to noise)
     - Low volatility → Tighter bands (more responsive)
     - Strong trend (high ADX) → Narrower bands (follow trend)
     - Weak trend (low ADX) → Wider bands (avoid false signals)
-    
+
     Formula: rsi_width = base_width * (1 / normalized_volatility)
     Where normalized_volatility combines ATR and ADX
-    
+
     Args:
         df: DataFrame with OHLCV data
         rsi_period: RSI calculation period (default 14)
         atr_period: ATR calculation period (default 14)
         adx_period: ADX calculation period (default 14)
         base_width: Base RSI band width in points (default 10)
-    
+
     Returns:
         tuple: (rsi, upper_band, lower_band, band_width)
             - rsi: Standard RSI values
             - upper_band: Dynamic upper band (70 adjusted)
             - lower_band: Dynamic lower band (30 adjusted)
             - band_width: Calculated band width
-    
+
     Example:
         In high volatility choppy market (ATR=5%, ADX=15):
         - normalized_volatility = high → wider bands (e.g., 75/25 instead of 70/30)
-        
+
         In strong trending market (ATR=2%, ADX=40):
         - normalized_volatility = low → tighter bands (e.g., 68/32 instead of 70/30)
     """
     df = _ensure_numeric(df, ['high', 'low', 'close'])
-    
+
     # Calculate base RSI
     rsi = calculate_rsi(df, period=rsi_period)
-    
+
     # Calculate ATR for volatility measure
     atr = calculate_atr(df, period=atr_period)
-    
+
     # Calculate ADX for trend strength
     adx, _, _ = calculate_adx(df, period=adx_period)
-    
+
     # Calculate ATR as percentage of price (normalized volatility)
     current_price = df['close']
     atr_pct = (atr / current_price) * 100  # Convert to percentage
-    
+
     # Normalize ATR percentage to 0-1 range (capping at 10% for extreme cases)
     # Typical crypto ATR%: 1-5%, so we use 5% as midpoint
     normalized_atr = (atr_pct / 5.0).clip(upper=2.0)  # Normalize around 5% ATR
-    
+
     # Normalize ADX to 0-1 range (inverse - higher ADX = tighter bands)
     # ADX range typically 0-50, we use 25 as midpoint
     # Inverse because strong trend (high ADX) should have TIGHTER bands
     normalized_adx_inverse = (1.0 - (adx / 50.0).clip(upper=1.0))
-    
+
     # Combine ATR and ADX for composite volatility metric
     # Weight: 60% ATR (volatility), 40% inverse ADX (trend strength)
     # High volatility OR weak trend → higher value → wider bands
     composite_volatility = (0.6 * normalized_atr + 0.4 * normalized_adx_inverse)
-    
+
     # Ensure minimum volatility to prevent division issues
     composite_volatility = composite_volatility.clip(lower=EPSILON)
-    
+
     # Calculate dynamic band width: rsi_width = base_width * (1 / normalized_volatility)
     # Low volatility (0.5) → narrow bands (base_width * 2.0)
     # High volatility (2.0) → wide bands (base_width * 0.5)
     band_width = base_width / composite_volatility
-    
+
     # Clip band width to reasonable range (5-20 points from centerline)
     band_width = band_width.clip(lower=5, upper=20)
-    
+
     # Calculate dynamic bands centered at 50
     # Standard: 70/30, but we adjust based on volatility
     center = 50
     upper_band = center + band_width
     lower_band = center - band_width
-    
+
     # Ensure bands stay within RSI range (0-100)
     upper_band = upper_band.clip(upper=95)
     lower_band = lower_band.clip(lower=5)
-    
+
     return (
         rsi.ffill().fillna(50),
         upper_band.ffill().fillna(70),
@@ -175,11 +175,11 @@ def calculate_macd(df, fast=12, slow=26, signal=9):
 def calculate_atr(df, period=14):
     """
     Calculate Average True Range (ATR)
-    
+
     Args:
         df: DataFrame with 'high', 'low', 'close' columns
         period: ATR period (default 14)
-    
+
     Returns:
         pandas.Series: ATR values
     """
@@ -187,25 +187,25 @@ def calculate_atr(df, period=14):
     high = df['high']
     low = df['low']
     close = df['close']
-    
+
     # True Range calculation
     tr1 = high - low
     tr2 = abs(high - close.shift())
     tr3 = abs(low - close.shift())
-    
+
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(window=period, min_periods=period).mean()
-    
+
     return atr.ffill().fillna(0)
 
 def calculate_adx(df, period=14):
     """
     Calculate Average Directional Index (ADX)
-    
+
     Args:
         df: DataFrame with 'high', 'low', 'close' columns
         period: ADX period (default 14)
-    
+
     Returns:
         tuple: (adx, plus_di, minus_di)
     """
@@ -213,56 +213,56 @@ def calculate_adx(df, period=14):
     high = df['high']
     low = df['low']
     close = df['close']
-    
+
     # Calculate +DM and -DM
     plus_dm = high.diff()
     minus_dm = -low.diff()
-    
+
     # Set values to 0 when not dominant
     plus_dm[plus_dm < 0] = 0
     plus_dm[(plus_dm < minus_dm)] = 0
     minus_dm[minus_dm < 0] = 0
     minus_dm[(minus_dm < plus_dm)] = 0
-    
+
     # Calculate True Range
     tr1 = high - low
     tr2 = abs(high - close.shift())
     tr3 = abs(low - close.shift())
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    
+
     # Smooth the indicators
     atr = tr.rolling(window=period, min_periods=period).mean()
     plus_di = 100 * (plus_dm.rolling(window=period, min_periods=period).mean() / atr)
     minus_di = 100 * (minus_dm.rolling(window=period, min_periods=period).mean() / atr)
-    
+
     # Calculate DX and ADX
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
     adx = dx.rolling(window=period, min_periods=period).mean()
-    
+
     return adx.ffill().fillna(0), plus_di.ffill().fillna(0), minus_di.ffill().fillna(0)
 
 def calculate_bollinger_bands(df, period=20, std_dev=2):
     """
     Calculate Bollinger Bands for volatility and mean reversion analysis
-    
+
     Bollinger Bands consist of:
     - Middle Band: Simple Moving Average (SMA)
     - Upper Band: SMA + (standard deviation * multiplier)
     - Lower Band: SMA - (standard deviation * multiplier)
-    
+
     Used for:
     - Mean reversion trading (buy at lower band, sell at upper band)
     - Volatility breakout detection (squeeze when bands narrow)
     - Overbought/oversold conditions
-    
+
     Args:
         df: DataFrame with 'close' column
         period: Period for SMA and standard deviation (default 20)
         std_dev: Standard deviation multiplier (default 2)
-    
+
     Returns:
         tuple: (upper_band, middle_band, lower_band, bandwidth)
-        
+
     Research-backed usage (2026):
     - Price touching lower band + RSI < 30 = strong buy signal (oversold)
     - Price touching upper band + RSI > 70 = strong sell signal (overbought)
@@ -270,21 +270,21 @@ def calculate_bollinger_bands(df, period=20, std_dev=2):
     - Wide bandwidth (> 0.15) indicates high volatility = reduce position size
     """
     df = _ensure_numeric(df, ['close'])
-    
+
     # Calculate middle band (SMA)
     middle_band = df['close'].rolling(window=period, min_periods=period).mean()
-    
+
     # Calculate standard deviation
     std = df['close'].rolling(window=period, min_periods=period).std()
-    
+
     # Calculate upper and lower bands
     upper_band = middle_band + (std * std_dev)
     lower_band = middle_band - (std * std_dev)
-    
+
     # Calculate bandwidth (normalized volatility measure)
     # Bandwidth = (Upper - Lower) / Middle
     bandwidth = (upper_band - lower_band) / middle_band
-    
+
     return (
         upper_band.ffill().fillna(df['close']),
         middle_band.ffill().fillna(df['close']),
@@ -295,26 +295,26 @@ def calculate_bollinger_bands(df, period=20, std_dev=2):
 def calculate_stochastic(df, k_period=14, d_period=3):
     """
     Calculate Stochastic Oscillator for momentum and reversal detection
-    
+
     The Stochastic Oscillator compares closing price to the price range over a period.
     It consists of two lines:
     - %K (fast): Current position within the range
     - %D (slow): SMA of %K
-    
+
     Used for:
     - Overbought/oversold detection (>80 overbought, <20 oversold)
     - Momentum confirmation with RSI
     - Divergence detection (price vs stochastic direction)
     - Crossover signals (%K crossing %D)
-    
+
     Args:
         df: DataFrame with 'high', 'low', 'close' columns
         k_period: Period for %K calculation (default 14)
         d_period: Period for %D smoothing (default 3)
-    
+
     Returns:
         tuple: (stoch_k, stoch_d)
-        
+
     Research-backed usage (2026):
     - %K crosses above %D while both < 20 = strong buy signal
     - %K crosses below %D while both > 80 = strong sell signal
@@ -322,42 +322,42 @@ def calculate_stochastic(df, k_period=14, d_period=3):
     - Works best combined with RSI and Bollinger Bands for confirmation
     """
     df = _ensure_numeric(df, ['high', 'low', 'close'])
-    
+
     # Get rolling highs and lows
     low_min = df['low'].rolling(window=k_period, min_periods=k_period).min()
     high_max = df['high'].rolling(window=k_period, min_periods=k_period).max()
-    
+
     # Calculate %K (fast stochastic)
     # %K = 100 * (Current Close - Lowest Low) / (Highest High - Lowest Low)
     # Add EPSILON to denominator to prevent division by zero when range is 0
     range_diff = high_max - low_min
     stoch_k = 100 * ((df['close'] - low_min) / (range_diff + EPSILON))
-    
+
     # Calculate %D (slow stochastic - SMA of %K)
     stoch_d = stoch_k.rolling(window=d_period, min_periods=d_period).mean()
-    
+
     return stoch_k.ffill().fillna(50), stoch_d.ffill().fillna(50)
 
 def calculate_vwap_bands(df, std_dev=2):
     """
     Calculate VWAP with standard deviation bands
-    
+
     VWAP Bands add volatility bands around the VWAP line, similar to Bollinger Bands,
     but weighted by volume. This provides institutional-level support/resistance zones.
-    
+
     Used for:
     - Identifying institutional support/resistance levels
     - Mean reversion trading around VWAP
     - Trend strength (price consistently above/below VWAP)
     - Better entry/exit timing than simple VWAP
-    
+
     Args:
         df: DataFrame with 'high', 'low', 'close', 'volume' columns
         std_dev: Standard deviation multiplier for bands (default 2)
-    
+
     Returns:
         tuple: (vwap, upper_band, lower_band)
-        
+
     Research-backed usage (2026):
     - Price above VWAP = bullish (institutional buyers in control)
     - Price below VWAP = bearish (institutional sellers in control)
@@ -365,24 +365,24 @@ def calculate_vwap_bands(df, std_dev=2):
     - Price rejecting upper VWAP band = strong sell zone
     """
     df = _ensure_numeric(df, ['high', 'low', 'close', 'volume'])
-    
+
     # Calculate typical price
     typical_price = (df['high'] + df['low'] + df['close']) / 3
-    
+
     # Calculate VWAP - add EPSILON to prevent division by zero
     cumulative_volume = df['volume'].cumsum()
     vwap = (typical_price * df['volume']).cumsum() / (cumulative_volume + EPSILON)
-    
+
     # Calculate variance for VWAP bands
     # Variance = cumsum((price - vwap)^2 * volume) / cumsum(volume)
     price_deviation_squared = ((typical_price - vwap) ** 2) * df['volume']
     variance = price_deviation_squared.cumsum() / (cumulative_volume + EPSILON)
     std = variance ** 0.5
-    
+
     # Calculate bands
     upper_band = vwap + (std * std_dev)
     lower_band = vwap - (std * std_dev)
-    
+
     return (
         vwap.ffill().fillna(df['close']),
         upper_band.ffill().fillna(df['close']),
@@ -392,16 +392,16 @@ def calculate_vwap_bands(df, std_dev=2):
 def detect_market_regime(df):
     """
     Detect market regime to determine optimal trading strategy
-    
+
     Market regimes determine which strategy to use:
     - TRENDING: Use momentum strategies (RSI + MACD)
     - RANGING: Use mean reversion strategies (Bollinger Bands)
     - HIGH_VOLATILITY: Reduce position sizes, widen stops
     - LOW_VOLATILITY: Prepare for breakouts (volatility compression)
-    
+
     Args:
         df: DataFrame with OHLCV data
-    
+
     Returns:
         dict: {
             'regime': str ('TRENDING', 'RANGING', 'TRANSITIONAL'),
@@ -410,7 +410,7 @@ def detect_market_regime(df):
             'recommended_strategy': str ('momentum', 'mean_reversion', 'cautious'),
             'confidence': float (0.0-1.0)
         }
-    
+
     Research-backed thresholds (2026):
     - ADX > 25 = Trending market (use momentum)
     - ADX < 20 = Ranging market (use mean reversion)
@@ -425,22 +425,22 @@ def detect_market_regime(df):
             'recommended_strategy': 'cautious',
             'confidence': 0.0
         }
-    
+
     # Calculate ADX for trend strength
     adx, plus_di, minus_di = calculate_adx(df)
     current_adx = adx.iloc[-1]
-    
+
     # Calculate Bollinger Bands for volatility
     bb_upper, bb_middle, bb_lower, bb_width = calculate_bollinger_bands(df)
     current_bandwidth = bb_width.iloc[-1]
-    
+
     # Calculate EMAs for trend direction
     ema_9 = calculate_ema(df, 9)
     ema_21 = calculate_ema(df, 21)
     ema_50 = calculate_ema(df, 50)
-    
+
     current_price = df['close'].iloc[-1]
-    
+
     # Determine market regime based on ADX
     if current_adx > 25:
         regime = 'TRENDING'
@@ -454,7 +454,7 @@ def detect_market_regime(df):
         regime = 'TRANSITIONAL'
         recommended_strategy = 'cautious'
         confidence = 0.5
-    
+
     # Determine volatility based on Bollinger Bandwidth
     if current_bandwidth > 0.15:
         volatility = 'HIGH'
@@ -462,7 +462,7 @@ def detect_market_regime(df):
         volatility = 'LOW'
     else:
         volatility = 'MEDIUM'
-    
+
     # Determine trend direction
     if ema_9.iloc[-1] > ema_21.iloc[-1] > ema_50.iloc[-1] and current_price > ema_9.iloc[-1]:
         trend_direction = 'BULLISH'
@@ -470,7 +470,7 @@ def detect_market_regime(df):
         trend_direction = 'BEARISH'
     else:
         trend_direction = 'NEUTRAL'
-    
+
     return {
         'regime': regime,
         'volatility': volatility,
@@ -484,20 +484,20 @@ def detect_market_regime(df):
 def calculate_multi_indicator_score(df):
     """
     Calculate multi-indicator consensus score for entry signal quality
-    
+
     This is the #1 profitability enhancement from 2026 research.
     Combines multiple indicators for confirmation, achieving 73% win rate
     vs 45-50% with single indicators.
-    
+
     Score breakdown (0-10 points):
     - Momentum indicators (0-3 points): RSI, MACD, Stochastic
     - Trend indicators (0-2 points): EMA alignment, Price vs VWAP
     - Volume indicators (0-2 points): Volume surge, Volume trend
     - Volatility indicators (0-3 points): Bollinger position, ATR, Bandwidth
-    
+
     Args:
         df: DataFrame with OHLCV data
-    
+
     Returns:
         dict: {
             'long_score': int (0-10),
@@ -506,7 +506,7 @@ def calculate_multi_indicator_score(df):
             'short_confidence': float (0.0-1.0),
             'breakdown': dict (detailed scoring)
         }
-    
+
     Research-backed thresholds (2026):
     - Score >= 7: High confidence (execute with full position size)
     - Score 5-6: Medium confidence (execute with reduced position size)
@@ -521,7 +521,7 @@ def calculate_multi_indicator_score(df):
             'short_confidence': 0.0,
             'breakdown': {}
         }
-    
+
     # Calculate all indicators
     vwap = calculate_vwap(df)
     rsi = calculate_rsi(df, period=14)
@@ -532,7 +532,7 @@ def calculate_multi_indicator_score(df):
     ema_9 = calculate_ema(df, 9)
     ema_21 = calculate_ema(df, 21)
     ema_50 = calculate_ema(df, 50)
-    
+
     # Current values
     current_price = df['close'].iloc[-1]
     prev_price = df['close'].iloc[-2]
@@ -549,40 +549,40 @@ def calculate_multi_indicator_score(df):
     prev_stoch_d = stoch_d.iloc[-2]
     current_volume = df['volume'].iloc[-1]
     avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
-    
+
     # Initialize scores
     long_score = 0
     short_score = 0
     breakdown = {'long': {}, 'short': {}}
-    
+
     # === MOMENTUM INDICATORS (0-3 points each) ===
-    
+
     # RSI (0-1 point)
     if 30 < current_rsi < 70 and current_rsi > prev_rsi and current_rsi_9 > 50:
         long_score += 1
         breakdown['long']['rsi'] = 1
     else:
         breakdown['long']['rsi'] = 0
-        
+
     if 30 < current_rsi < 70 and current_rsi < prev_rsi and current_rsi_9 < 50:
         short_score += 1
         breakdown['short']['rsi'] = 1
     else:
         breakdown['short']['rsi'] = 0
-    
+
     # MACD (0-1 point)
     if current_macd > current_signal and current_hist > prev_hist:
         long_score += 1
         breakdown['long']['macd'] = 1
     else:
         breakdown['long']['macd'] = 0
-        
+
     if current_macd < current_signal and current_hist < prev_hist:
         short_score += 1
         breakdown['short']['macd'] = 1
     else:
         breakdown['short']['macd'] = 0
-    
+
     # Stochastic (0-1 point)
     stoch_bullish_cross = current_stoch_k > current_stoch_d and prev_stoch_k <= prev_stoch_d
     stoch_in_oversold = current_stoch_k < 30
@@ -591,7 +591,7 @@ def calculate_multi_indicator_score(df):
         breakdown['long']['stochastic'] = 1
     else:
         breakdown['long']['stochastic'] = 0
-        
+
     stoch_bearish_cross = current_stoch_k < current_stoch_d and prev_stoch_k >= prev_stoch_d
     stoch_in_overbought = current_stoch_k > 70
     if (stoch_bearish_cross or stoch_in_overbought) and current_stoch_k > 20:
@@ -599,9 +599,9 @@ def calculate_multi_indicator_score(df):
         breakdown['short']['stochastic'] = 1
     else:
         breakdown['short']['stochastic'] = 0
-    
+
     # === TREND INDICATORS (0-2 points) ===
-    
+
     # EMA alignment (0-1 point)
     ema_bullish = ema_9.iloc[-1] > ema_21.iloc[-1] > ema_50.iloc[-1]
     if ema_bullish:
@@ -609,29 +609,29 @@ def calculate_multi_indicator_score(df):
         breakdown['long']['ema_alignment'] = 1
     else:
         breakdown['long']['ema_alignment'] = 0
-        
+
     ema_bearish = ema_9.iloc[-1] < ema_21.iloc[-1] < ema_50.iloc[-1]
     if ema_bearish:
         short_score += 1
         breakdown['short']['ema_alignment'] = 1
     else:
         breakdown['short']['ema_alignment'] = 0
-    
+
     # Price vs VWAP (0-1 point)
     if current_price > vwap.iloc[-1]:
         long_score += 1
         breakdown['long']['vwap'] = 1
     else:
         breakdown['long']['vwap'] = 0
-        
+
     if current_price < vwap.iloc[-1]:
         short_score += 1
         breakdown['short']['vwap'] = 1
     else:
         breakdown['short']['vwap'] = 0
-    
+
     # === VOLUME INDICATORS (0-2 points) ===
-    
+
     # Volume surge (0-1 point)
     volume_surge = current_volume > avg_volume * 1.2
     if volume_surge and current_price > prev_price:
@@ -639,13 +639,13 @@ def calculate_multi_indicator_score(df):
         breakdown['long']['volume_surge'] = 1
     else:
         breakdown['long']['volume_surge'] = 0
-        
+
     if volume_surge and current_price < prev_price:
         short_score += 1
         breakdown['short']['volume_surge'] = 1
     else:
         breakdown['short']['volume_surge'] = 0
-    
+
     # Volume confirmation (0-1 point)
     if current_volume >= avg_volume * 0.8:
         long_score += 1
@@ -655,9 +655,9 @@ def calculate_multi_indicator_score(df):
     else:
         breakdown['long']['volume_confirmation'] = 0
         breakdown['short']['volume_confirmation'] = 0
-    
+
     # === VOLATILITY INDICATORS (0-3 points) ===
-    
+
     # Bollinger Band position (0-2 points)
     # Long: Price near lower band (oversold) or breaking above middle
     # Prevent division by zero when bands collapse
@@ -671,7 +671,7 @@ def calculate_multi_indicator_score(df):
         breakdown['long']['bollinger'] = 1
     else:
         breakdown['long']['bollinger'] = 0
-    
+
     # Short: Price near upper band (overbought) or breaking below middle
     # Prevent division by zero when bands collapse
     band_range_upper = bb_upper.iloc[-1] - bb_middle.iloc[-1] + EPSILON
@@ -684,7 +684,7 @@ def calculate_multi_indicator_score(df):
         breakdown['short']['bollinger'] = 1
     else:
         breakdown['short']['bollinger'] = 0
-    
+
     # Volatility state (0-1 point)
     # Low volatility = prepare for breakout (favorable)
     if bb_width.iloc[-1] < 0.05:
@@ -695,11 +695,11 @@ def calculate_multi_indicator_score(df):
     else:
         breakdown['long']['volatility'] = 0
         breakdown['short']['volatility'] = 0
-    
+
     # Calculate confidence (0.0 - 1.0)
     long_confidence = min(long_score / 10.0, 1.0)
     short_confidence = min(short_score / 10.0, 1.0)
-    
+
     return {
         'long_score': long_score,
         'short_score': short_score,
@@ -711,7 +711,7 @@ def calculate_multi_indicator_score(df):
 def check_no_trade_zones(df, rsi):
     """
     Check if we're in a NO-TRADE ZONE
-    
+
     Returns: (is_no_trade_zone, reason)
     """
     # NO-TRADE ZONE LOGIC
@@ -741,7 +741,7 @@ def check_no_trade_zones(df, rsi):
 def calculate_indicators(df):
     """
     NIJA ULTIMATE TRADING LOGIC™
-    
+
     Calculate all indicators and generate precise entry signals based on:
     - VWAP (main trend filter)
     - RSI 14 (momentum trigger with CROSS detection)
@@ -766,7 +766,7 @@ def calculate_indicators(df):
             "no_trade_reason": None,
             "entry_conditions": {}
         }
-    
+
     # Calculate all indicators
     vwap = calculate_vwap(df)
     rsi = calculate_rsi(df, period=14)
@@ -774,7 +774,7 @@ def calculate_indicators(df):
     ema_21 = calculate_ema(df, 21)
     ema_50 = calculate_ema(df, 50)
     macd_line, signal_line, hist = calculate_macd(df)
-    
+
     # Get current and previous values
     current_price = df['close'].iloc[-1]
     prev_price = df['close'].iloc[-2]
@@ -782,29 +782,29 @@ def calculate_indicators(df):
     prev_rsi = rsi.iloc[-2]
     current_volume = df['volume'].iloc[-1]
     prev_2_volume = df['volume'].iloc[-2] + df['volume'].iloc[-3]
-    
+
     # Check no-trade zones
     is_no_trade, reason = check_no_trade_zones(df, rsi)
-    
+
     # ═══════════════════════════════════════════════════════════
     # NIJA LONG ENTRY CONDITIONS (Scored 1-5, need 2+ for entry)
     # Multi-Strategy: Momentum Breakout OR Pullback/Mean Reversion
     # ═══════════════════════════════════════════════════════════
-    
+
     # Core trend conditions (must have these for quality)
     price_above_vwap = current_price > vwap.iloc[-1]
     ema_bullish = ema_9.iloc[-1] > ema_21.iloc[-1] > ema_50.iloc[-1]
-    
+
     # RSI Strategy 1: Momentum (rising RSI)
     rsi_momentum_rising = current_rsi > prev_rsi and current_rsi < 80
-    
+
     # RSI Strategy 2: Pullback/Mean Reversion (RSI cooling off in uptrend)
     # RSI 30-70 range, price still above VWAP, EMAs aligned = healthy pullback
     rsi_pullback = bool(30 < current_rsi < 70 and current_rsi < prev_rsi and price_above_vwap and ema_bullish)
-    
+
     # Accept EITHER momentum OR pullback
     rsi_favorable = bool(rsi_momentum_rising or rsi_pullback)
-    
+
     long_conditions = {
         "price_above_vwap": bool(price_above_vwap),
         "ema_alignment": bool(ema_bullish),
@@ -812,29 +812,29 @@ def calculate_indicators(df):
         "volume_confirmation": bool(current_volume >= prev_2_volume * 0.5),
         "candle_close_bullish": bool(current_price > prev_price)
     }
-    
+
     # Buy signal: require 3+ conditions for entry by default
     long_score = sum(long_conditions.values())
     buy_signal = long_score >= 3
-    
+
     # ═══════════════════════════════════════════════════════════
     # NIJA SHORT ENTRY CONDITIONS (Scored 1-5, need 2+ for entry)
     # Multi-Strategy: Momentum Breakdown OR Bounce/Mean Reversion
     # ═══════════════════════════════════════════════════════════
-    
+
     # Core trend conditions
     price_below_vwap = current_price < vwap.iloc[-1]
     ema_bearish = ema_9.iloc[-1] < ema_21.iloc[-1] < ema_50.iloc[-1]
-    
+
     # RSI Strategy 1: Momentum (falling RSI)
     rsi_momentum_falling = current_rsi < prev_rsi and current_rsi > 20
-    
+
     # RSI Strategy 2: Bounce/Mean Reversion (RSI bouncing in downtrend)
     rsi_bounce = bool(30 < current_rsi < 70 and current_rsi > prev_rsi and price_below_vwap and ema_bearish)
-    
+
     # Accept EITHER momentum OR bounce
     rsi_favorable_short = bool(rsi_momentum_falling or rsi_bounce)
-    
+
     short_conditions = {
         "price_below_vwap": bool(price_below_vwap),
         "ema_alignment": bool(ema_bearish),
@@ -842,11 +842,11 @@ def calculate_indicators(df):
         "volume_confirmation": bool(current_volume >= prev_2_volume * 0.5),
         "candle_close_bearish": bool(current_price < prev_price)
     }
-    
+
     # Sell signal: require 3+ conditions for entry by default
     short_score = sum(short_conditions.values())
     sell_signal = short_score >= 3
-    
+
     return {
         "vwap": vwap,
         "rsi": rsi,
@@ -873,19 +873,19 @@ def calculate_indicators(df):
 def resample_to_higher_timeframe(df, target_timeframe='5min'):
     """
     Resample OHLCV data to a higher timeframe.
-    
+
     Args:
         df: DataFrame with OHLCV data and datetime index
         target_timeframe: Target timeframe (e.g., '5min' for 5 minutes, '15min' for 15 minutes,
                          '1H' for 1 hour, '4H' for 4 hours, '1D' for 1 day)
-    
+
     Returns:
         DataFrame: Resampled OHLCV data
     """
     # Ensure we have a datetime index
     if not isinstance(df.index, pd.DatetimeIndex):
         raise ValueError("DataFrame must have a DatetimeIndex for resampling")
-    
+
     # Resample OHLCV data
     resampled = pd.DataFrame()
     resampled['open'] = df['open'].resample(target_timeframe).first()
@@ -893,35 +893,35 @@ def resample_to_higher_timeframe(df, target_timeframe='5min'):
     resampled['low'] = df['low'].resample(target_timeframe).min()
     resampled['close'] = df['close'].resample(target_timeframe).last()
     resampled['volume'] = df['volume'].resample(target_timeframe).sum()
-    
+
     # Drop NaN rows
     resampled = resampled.dropna()
-    
+
     return resampled
 
 
-def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min', 
+def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min',
                                        higher_timeframes=['5min', '15min'],
                                        rsi_period=14,
                                        agreement_threshold=10):
     """
     Check Multi-Timeframe RSI Agreement (GOD MODE+)
-    
+
     Only allows entries when lower timeframe RSI aligns with higher timeframe RSI direction.
     This prevents counter-trend trades and improves win rate significantly.
-    
+
     Logic:
     - Bullish signal: All timeframes show RSI in bullish territory or rising
     - Bearish signal: All timeframes show RSI in bearish territory or falling
     - No agreement: Mixed signals across timeframes = NO TRADE
-    
+
     Args:
         df: DataFrame with OHLCV data and datetime index
         current_timeframe: Current/base timeframe (e.g., '1min' for 1 minute)
         higher_timeframes: List of higher timeframes to check (e.g., ['5min', '15min'])
         rsi_period: RSI calculation period (default 14)
         agreement_threshold: RSI difference threshold for alignment (default 10)
-    
+
     Returns:
         dict: {
             'agreement': bool - True if all timeframes agree
@@ -931,20 +931,20 @@ def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min',
             'allow_long': bool - True if multi-TF analysis allows long entry
             'allow_short': bool - True if multi-TF analysis allows short entry
         }
-    
+
     Example:
         Current TF (1m): RSI = 35 (oversold, bullish potential)
         Higher TF (5m): RSI = 32 (also oversold, bullish)
         Higher TF (15m): RSI = 38 (also oversold, bullish)
         Result: AGREEMENT = True, DIRECTION = bullish, ALLOW_LONG = True
-        
+
         Current TF (1m): RSI = 35 (oversold, bullish potential)
         Higher TF (5m): RSI = 65 (overbought, bearish)
         Result: AGREEMENT = False, NO TRADE ALLOWED
     """
     # Calculate RSI for current timeframe
     current_rsi = calculate_rsi(df, period=rsi_period).iloc[-1]
-    
+
     # Determine current timeframe direction
     # Bullish: RSI < 50 and potentially rising (oversold to neutral)
     # Bearish: RSI > 50 and potentially falling (overbought to neutral)
@@ -954,25 +954,25 @@ def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min',
         current_direction = 'bearish'  # Overbought, looking for reversal down
     else:
         current_direction = 'neutral'  # No clear directional bias
-    
+
     # Calculate RSI for higher timeframes
     higher_rsis = {}
     higher_directions = []
-    
+
     for htf in higher_timeframes:
         try:
             # Resample to higher timeframe
             htf_df = resample_to_higher_timeframe(df, htf)
-            
+
             # Need enough data for RSI calculation
             if len(htf_df) < rsi_period + 5:
                 # Not enough data, skip this timeframe
                 continue
-            
+
             # Calculate RSI for higher timeframe
             htf_rsi = calculate_rsi(htf_df, period=rsi_period).iloc[-1]
             higher_rsis[htf] = htf_rsi
-            
+
             # Determine higher timeframe direction
             if htf_rsi < 40:
                 htf_direction = 'bullish'
@@ -980,9 +980,9 @@ def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min',
                 htf_direction = 'bearish'
             else:
                 htf_direction = 'neutral'
-            
+
             higher_directions.append(htf_direction)
-            
+
         except Exception as e:
             # If resampling fails, skip this timeframe
             import logging
@@ -990,17 +990,17 @@ def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min',
                 f"Failed to resample to {htf}: {e}"
             )
             continue
-    
+
     # Check for agreement
     # Agreement requires all timeframes to point in same direction
     all_directions = [current_direction] + higher_directions
-    
+
     # Count directions
     bullish_count = all_directions.count('bullish')
     bearish_count = all_directions.count('bearish')
     neutral_count = all_directions.count('neutral')
     total_timeframes = len(all_directions)
-    
+
     # Determine overall agreement and direction
     if bullish_count >= (total_timeframes * 0.7):  # 70% or more bullish
         agreement = True
@@ -1018,7 +1018,7 @@ def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min',
         direction = 'neutral'
         allow_long = False
         allow_short = False
-    
+
     return {
         'agreement': agreement,
         'direction': direction,

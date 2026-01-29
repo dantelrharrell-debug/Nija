@@ -25,7 +25,7 @@ logger = logging.getLogger('nija.signals')
 class TradeSignal:
     """
     Represents a trade signal emitted by the master account.
-    
+
     This signal contains all information needed to replicate a trade to user accounts.
     """
     broker: str  # Exchange name (e.g., "coinbase", "kraken")
@@ -39,7 +39,7 @@ class TradeSignal:
     master_balance: float  # Master account balance at time of trade (for position sizing)
     master_trade_id: str = None  # P2: Master trade ID for copy tracking (optional, generated if not provided)
     order_status: str = "FILLED"  # P1: Order status (FILLED, PARTIALLY_FILLED, etc.)
-    
+
     def to_dict(self) -> Dict:
         """Convert signal to dictionary for logging/serialization."""
         return asdict(self)
@@ -48,14 +48,14 @@ class TradeSignal:
 class TradeSignalEmitter:
     """
     Thread-safe signal emitter for master account trades.
-    
+
     Manages a queue of trade signals that are consumed by the copy trade engine.
     """
-    
+
     def __init__(self, max_queue_size: int = 1000):
         """
         Initialize the signal emitter.
-        
+
         Args:
             max_queue_size: Maximum number of signals to queue (prevents memory overflow)
         """
@@ -63,20 +63,20 @@ class TradeSignalEmitter:
         self._lock = threading.Lock()
         self._total_signals_emitted = 0
         self._signals_dropped = 0
-        
+
         logger.info("=" * 70)
         logger.info("📡 TRADE SIGNAL EMITTER INITIALIZED")
         logger.info("=" * 70)
         logger.info(f"   Max queue size: {max_queue_size}")
         logger.info("=" * 70)
-    
+
     def emit_signal(self, signal: TradeSignal) -> bool:
         """
         Emit a trade signal to be consumed by copy engine.
-        
+
         Args:
             signal: TradeSignal object containing trade details
-            
+
         Returns:
             True if signal was queued successfully, False if queue is full
         """
@@ -86,11 +86,11 @@ class TradeSignalEmitter:
                 try:
                     self.signal_queue.put_nowait(signal)
                     self._total_signals_emitted += 1
-                    
+
                     # Determine trade type for logging
                     is_exit = signal.side.lower() == 'sell'
                     trade_type = "EXIT/PROFIT-TAKING" if is_exit else "ENTRY"
-                    
+
                     # ✅ REQUIREMENT #1 & #3: Updated logging for master - "signals sent, not executed"
                     logger.info("=" * 70)
                     logger.info(f"📡 MASTER {trade_type} SIGNAL SENT (NOT EXECUTED)")
@@ -110,9 +110,9 @@ class TradeSignalEmitter:
                         logger.info(f"   ℹ️  This entry signal will be sent to user accounts for execution")
                     logger.info(f"   Total Signals Emitted: {self._total_signals_emitted}")
                     logger.info("=" * 70)
-                    
+
                     return True
-                    
+
                 except queue.Full:
                     self._signals_dropped += 1
                     logger.error("=" * 70)
@@ -124,20 +124,20 @@ class TradeSignalEmitter:
                     logger.error("   💡 Copy engine may be lagging - check for errors")
                     logger.error("=" * 70)
                     return False
-                    
+
         except Exception as e:
             logger.error(f"❌ Error emitting signal: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
-    
+
     def get_signal(self, timeout: float = 1.0) -> Optional[TradeSignal]:
         """
         Get the next signal from the queue (blocking with timeout).
-        
+
         Args:
             timeout: Maximum seconds to wait for a signal
-            
+
         Returns:
             TradeSignal if available, None if timeout or queue empty
         """
@@ -146,11 +146,11 @@ class TradeSignalEmitter:
             return signal
         except queue.Empty:
             return None
-    
+
     def get_stats(self) -> Dict:
         """
         Get statistics about signal emission.
-        
+
         Returns:
             Dictionary with emission stats
         """
@@ -170,7 +170,7 @@ _signal_emitter: Optional[TradeSignalEmitter] = None
 def get_signal_emitter() -> TradeSignalEmitter:
     """
     Get the global signal emitter instance (singleton pattern).
-    
+
     Returns:
         Global TradeSignalEmitter instance
     """
@@ -194,9 +194,9 @@ def emit_trade_signal(
 ) -> bool:
     """
     Convenience function to emit a trade signal.
-    
+
     This is the main entry point for emitting signals from broker code.
-    
+
     Args:
         broker: Exchange name (e.g., "coinbase", "kraken")
         symbol: Trading pair (e.g., "BTC-USD")
@@ -208,10 +208,10 @@ def emit_trade_signal(
         master_balance: Current master account balance
         master_trade_id: Master trade ID for copy tracking (auto-generated if None)
         order_status: Order fill status (default: "FILLED")
-        
+
     Returns:
         True if signal was emitted successfully
-        
+
     Example:
         >>> emit_trade_signal(
         ...     broker="coinbase",
@@ -232,11 +232,11 @@ def emit_trade_signal(
         logger.warning(f"⚠️  Signal NOT emitted - order status is {order_status}, not FILLED/PARTIALLY_FILLED")
         logger.warning(f"   Copy trading requires confirmed filled orders, not pending/approved signals")
         return False
-    
+
     # P2: Generate master_trade_id if not provided
     if not master_trade_id:
         master_trade_id = f"{broker}_{symbol}_{order_id}_{int(time.time())}"
-    
+
     signal = TradeSignal(
         broker=broker,
         symbol=symbol,
@@ -250,6 +250,6 @@ def emit_trade_signal(
         master_trade_id=master_trade_id,
         order_status=order_status
     )
-    
+
     emitter = get_signal_emitter()
     return emitter.emit_signal(signal)

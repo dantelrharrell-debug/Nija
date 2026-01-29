@@ -3,41 +3,41 @@
 <plist version="1.0">
 <dict>
     <!-- Privacy Descriptions - REQUIRED for App Store -->
-    
+
     <!-- Camera Access (for QR code scanning) -->
     <key>NSCameraUsageDescription</key>
     <string>We need camera access to scan QR codes for quick API key configuration.</string>
-    
+
     <!-- Photo Library Access (for saving charts/reports) -->
     <key>NSPhotoLibraryUsageDescription</key>
     <string>We need access to your photo library to save trading charts and performance reports.</string>
-    
+
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>We need permission to save trading charts to your photo library.</string>
-    
+
     <!-- Face ID / Touch ID (for biometric authentication) -->
     <key>NSFaceIDUsageDescription</key>
     <string>We use Face ID to securely authenticate you and protect your trading account.</string>
-    
+
     <!-- User Tracking (for analytics - iOS 14.5+) -->
     <key>NSUserTrackingUsageDescription</key>
     <string>We use tracking to improve app performance and provide personalized trading insights. Your data is never shared with third parties.</string>
-    
+
     <!-- Location (for regulatory compliance) -->
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Location is used to comply with regional trading regulations and provide localized content.</string>
-    
+
     <!-- Notifications (for trade alerts) -->
     <key>NSRemoteNotificationsUsageDescription</key>
     <string>We send notifications to alert you about trade executions, position updates, and account activity.</string>
-    
+
     <!-- App Transport Security -->
     <key>NSAppTransportSecurity</key>
     <dict>
         <!-- For production, only allow HTTPS -->
         <key>NSAllowsArbitraryLoads</key>
         <false/>
-        
+
         <!-- Exception domains (if needed for specific APIs) -->
         <key>NSExceptionDomains</key>
         <dict>
@@ -52,14 +52,14 @@
             </dict>
         </dict>
     </dict>
-    
+
     <!-- Required Capabilities -->
     <key>UIBackgroundModes</key>
     <array>
         <string>remote-notification</string>
         <string>fetch</string>
     </array>
-    
+
     <!-- Supported Interface Orientations -->
     <key>UISupportedInterfaceOrientations</key>
     <array>
@@ -67,7 +67,7 @@
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
-    
+
     <key>UISupportedInterfaceOrientations~ipad</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
@@ -75,23 +75,23 @@
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
-    
+
     <!-- Status Bar Style -->
     <key>UIStatusBarStyle</key>
     <string>UIStatusBarStyleLightContent</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <true/>
-    
+
     <!-- Launch Screen -->
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
-    
+
     <!-- App Info -->
     <key>CFBundleDisplayName</key>
     <string>NIJA</string>
     <key>CFBundleName</key>
     <string>NIJA</string>
-    
+
     <!-- Prevent backup (optional - for security) -->
     <key>UIFileSharingEnabled</key>
     <false/>

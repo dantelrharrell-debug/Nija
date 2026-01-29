@@ -13,7 +13,7 @@ jobs:
   dependency-scan:
     name: Dependency Vulnerability Scan
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
   secrets-scan:
     name: Secret Scanning
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -107,7 +107,7 @@ jobs:
   bandit-scan:
     name: Python Security Linting (Bandit)
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -137,7 +137,7 @@ jobs:
   pre-commit-checks:
     name: Pre-Commit Hook Validation
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4

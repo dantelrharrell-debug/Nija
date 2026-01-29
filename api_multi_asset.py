@@ -146,12 +146,12 @@ class TradeRequest(BaseModel):
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict:
     """Get current user from token (simplified - use JWT in production)."""
     token = credentials.credentials
-    
+
     # Simplified auth - in production, decode JWT and validate
     for user_id, user_data in users_db.items():
         if user_data.get("token") == token:
             return {"user_id": user_id, **user_data}
-    
+
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid authentication credentials"
@@ -187,17 +187,17 @@ def get_or_create_risk_engine(user_id: str, tier: str, capital: float) -> Tiered
 async def startup_event():
     """Initialize services on startup."""
     logger.info("Starting NIJA Multi-Asset Platform API v2.0")
-    
+
     # Start execution orchestrator
     execution_orchestrator.start()
-    
+
     # Initialize equity broker (Alpaca)
     if os.getenv('ALPACA_API_KEY'):
         alpaca = AlpacaBroker(paper_trading=True)
         if alpaca.authenticate():
             equity_broker_manager.add_broker(EquityBroker.ALPACA, alpaca)
             logger.info("Alpaca broker initialized successfully")
-    
+
     logger.info("NIJA platform ready")
 
 
@@ -244,11 +244,11 @@ async def register(user: UserRegister, background_tasks: BackgroundTasks):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
+
     # Create user
     user_id = f"user_{len(users_db) + 1}"
     token = f"token_{user_id}"  # Simplified - use JWT in production
-    
+
     users_db[user_id] = {
         "email": user.email,
         "password_hash": hash_password(user.password),  # Hash password before storage
@@ -257,7 +257,7 @@ async def register(user: UserRegister, background_tasks: BackgroundTasks):
         "token": token,
         "created_at": datetime.now().isoformat()
     }
-    
+
     # Record subscription revenue
     tier_enum = SubscriptionTier[user.tier]
     background_tasks.add_task(
@@ -266,9 +266,9 @@ async def register(user: UserRegister, background_tasks: BackgroundTasks):
         tier=tier_enum,
         is_annual=False
     )
-    
+
     logger.info(f"New user registered: {user_id}, tier={user.tier}")
-    
+
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -283,14 +283,14 @@ async def get_allocation(current_user: Dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
     tier = current_user["tier"]
     capital = current_user["capital"]
-    
+
     # Get router
     router = get_or_create_router(user_id, tier, capital)
-    
+
     # Get allocation
     allocation = router.route_capital()
     capital_by_asset = router.get_capital_by_asset_class(allocation)
-    
+
     return CapitalAllocationResponse(
         crypto_pct=allocation.crypto_pct,
         equity_pct=allocation.equity_pct,
@@ -309,19 +309,19 @@ async def get_status(current_user: Dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
     tier = current_user["tier"]
     capital = current_user["capital"]
-    
+
     # Get router and allocation
     router = get_or_create_router(user_id, tier, capital)
     allocation = router.route_capital()
     capital_by_asset = router.get_capital_by_asset_class(allocation)
-    
+
     # Get risk engine status
     risk_engine = get_or_create_risk_engine(user_id, tier, capital)
     risk_status = risk_engine.get_risk_status()
-    
+
     # Get execution config
     exec_config = execution_router.get_tier_config(tier)
-    
+
     return TradingStatusResponse(
         user_id=user_id,
         tier=tier,
@@ -352,23 +352,23 @@ async def place_trade(
     user_id = current_user["user_id"]
     tier = current_user["tier"]
     capital = current_user["capital"]
-    
+
     # Validate with risk engine
     risk_engine = get_or_create_risk_engine(user_id, tier, capital)
-    
+
     approved, risk_level, message = risk_engine.validate_trade(
         trade_size=trade.size,
         current_positions=0,  # TODO: Get actual position count
         market_volatility=50.0,  # TODO: Get actual volatility
         asset_class=trade.asset_class
     )
-    
+
     if not approved:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Trade rejected by risk engine: {message}"
         )
-    
+
     # Route order to execution
     order = {
         "user_id": user_id,
@@ -379,11 +379,11 @@ async def place_trade(
         "order_type": trade.order_type,
         "limit_price": trade.limit_price
     }
-    
+
     routing_info = execution_router.route_order(tier, order)
-    
+
     logger.info(f"Trade placed: {user_id}, {trade.symbol}, ${trade.size}")
-    
+
     return {
         "success": True,
         "message": "Trade submitted successfully",
@@ -396,7 +396,7 @@ async def place_trade(
 async def get_revenue():
     """Get platform revenue metrics (admin only)."""
     summary = revenue_tracker.get_revenue_summary()
-    
+
     return RevenueResponse(
         total_revenue=summary["total_revenue"],
         mrr=summary["mrr"],

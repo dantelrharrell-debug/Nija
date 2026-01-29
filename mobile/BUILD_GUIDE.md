@@ -189,7 +189,7 @@ npm run cap:add:android
    ```
 
 2. **Update App Configuration:**
-   
+
    Edit `android/app/build.gradle`:
    ```gradle
    defaultConfig {
@@ -202,7 +202,7 @@ npm run cap:add:android
    ```
 
 3. **Configure Permissions:**
-   
+
    Edit `android/app/src/main/AndroidManifest.xml`:
    ```xml
    <uses-permission android:name="android.permission.INTERNET" />
@@ -211,7 +211,7 @@ npm run cap:add:android
    ```
 
 4. **Add Network Security Config:**
-   
+
    Create `android/app/src/main/res/xml/network_security_config.xml`
    (See `mobile/android/README.md` for details)
 
@@ -264,7 +264,7 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     // ... existing config ...
-    
+
     signingConfigs {
         release {
             keyAlias keystoreProperties['keyAlias']
@@ -273,7 +273,7 @@ android {
             storePassword keystoreProperties['storePassword']
         }
     }
-    
+
     buildTypes {
         release {
             signingConfig signingConfigs.release

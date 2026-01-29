@@ -16,7 +16,7 @@ jobs:
     strategy:
       matrix:
         dockerfile: [Dockerfile, Dockerfile.api, Dockerfile.dashboard, Dockerfile.gateway]
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -87,7 +87,7 @@ jobs:
   python-package-scan:
     name: Python Package Security Scan
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -131,7 +131,7 @@ jobs:
   build-artifact-scan:
     name: Build Artifact Integrity Check
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -184,7 +184,7 @@ EOF
   dependency-license-scan:
     name: License Compliance Check
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4

@@ -37,7 +37,7 @@ ELITE_PERFORMANCE_TARGETS = {
         'danger_zone': 3.0,  # Above this may indicate overfitting
         'description': 'Maximizes compounding, controls risk, attracts investors',
     },
-    
+
     # Win Rate (Optimized - NOT Maximized)
     'win_rate': {
         'minimum': 0.50,     # 50% - Below this needs review
@@ -46,7 +46,7 @@ ELITE_PERFORMANCE_TARGETS = {
         'danger_zone': 0.70, # 70%+ usually indicates martingale or fake edge
         'description': 'Best balance: confidence, profitability, stability',
     },
-    
+
     # Average Loss Per Trade (% of account balance)
     'average_loss_pct': {
         'maximum': -0.008,   # -0.8% - Conservative limit
@@ -54,7 +54,7 @@ ELITE_PERFORMANCE_TARGETS = {
         'target_max': -0.004,# -0.4% - Elite floor (aggressive)
         'description': 'Enables fast compounding, protects longevity, shallow drawdowns',
     },
-    
+
     # Average Win Per Trade (% of account balance)
     'average_win_pct': {
         'minimum': 0.009,    # 0.9% - Minimum for profitability
@@ -63,7 +63,7 @@ ELITE_PERFORMANCE_TARGETS = {
         'optimal': 0.012,    # 1.2% - Sweet spot
         'description': 'Balanced profit targets for sustainable growth',
     },
-    
+
     # Risk:Reward Ratio (R:R)
     'risk_reward_ratio': {
         'minimum': 1.5,      # 1:1.5 - Below this is suboptimal
@@ -72,7 +72,7 @@ ELITE_PERFORMANCE_TARGETS = {
         'optimal': 2.0,      # 1:2.0 - Sweet spot
         'description': 'Enables high win rate + profit factor + rapid growth',
     },
-    
+
     # Expectancy (Real Money Metric)
     # (Win Rate × Avg Win) - (Loss Rate × Avg Loss)
     'expectancy': {
@@ -82,7 +82,7 @@ ELITE_PERFORMANCE_TARGETS = {
         'optimal': 0.55,     # +0.55R - Sweet spot
         'description': 'Mathematical edge enabling explosive compounding',
     },
-    
+
     # Maximum Drawdown (% of peak equity)
     'max_drawdown': {
         'maximum': 0.15,     # 15% - Hard stop
@@ -91,7 +91,7 @@ ELITE_PERFORMANCE_TARGETS = {
         'warning': 0.08,     # 8% - Early warning threshold
         'description': 'Capital preservation and investor psychology',
     },
-    
+
     # Sharpe Ratio (Risk-Adjusted Returns)
     'sharpe_ratio': {
         'minimum': 1.2,      # 1.2 - Acceptable
@@ -115,7 +115,7 @@ TRADING_FREQUENCY = {
         'maximum': 20,       # Hard cap (prevents overtrading)
         'description': 'Adaptive frequency for optimal compounding',
     },
-    
+
     # Monthly trade targets
     'trades_per_month': {
         'minimum': 60,       # 3/day × 20 trading days
@@ -137,7 +137,7 @@ GROWTH_TARGETS = {
         'value': 0.48,       # 48% monthly theoretical
         'description': 'Maximum possible with perfect execution',
     },
-    
+
     # Monthly growth (realistic target)
     'monthly_growth_target': {
         'conservative': 0.15,  # 15% monthly (throttled)
@@ -145,7 +145,7 @@ GROWTH_TARGETS = {
         'aggressive': 0.25,    # 25% monthly (elite performance)
         'description': 'Sustainable long-term growth rates',
     },
-    
+
     # Annual growth targets
     'annual_growth_target': {
         'conservative': 4.35,  # 435% (15% monthly compounded)
@@ -163,7 +163,7 @@ GROWTH_TARGETS = {
 MULTI_ENGINE_STACK = {
     'enabled': True,
     'description': 'Dynamic rotation between specialized trading engines',
-    
+
     # Engine 1: Momentum Scalping AI
     'momentum_scalping': {
         'enabled': True,
@@ -175,7 +175,7 @@ MULTI_ENGINE_STACK = {
         'market_conditions': ['low_volatility', 'ranging'],
         'description': 'High win rate, fast trades, low drawdown',
     },
-    
+
     # Engine 2: Trend Capture AI
     'trend_capture': {
         'enabled': True,
@@ -187,7 +187,7 @@ MULTI_ENGINE_STACK = {
         'market_conditions': ['high_adx', 'trending'],
         'description': 'Lower win rate, huge winners, explosive growth days',
     },
-    
+
     # Engine 3: Volatility Breakout AI
     'volatility_breakout': {
         'enabled': True,
@@ -199,7 +199,7 @@ MULTI_ENGINE_STACK = {
         'market_conditions': ['news_events', 'session_open', 'high_volatility'],
         'description': 'News + session surges, largest profit bursts',
     },
-    
+
     # Engine 4: Range Compression AI
     'range_compression': {
         'enabled': True,
@@ -223,11 +223,11 @@ ELITE_POSITION_SIZING = {
     'min_position_pct': 0.02,    # 2% minimum
     'max_position_pct': 0.05,    # 5% maximum
     'optimal_position_pct': 0.03,# 3% optimal
-    
+
     # Total exposure limits
     'max_total_exposure': 0.80,  # 80% max exposure
     'optimal_exposure': 0.60,    # 60% optimal exposure
-    
+
     # Position count limits
     'max_concurrent_positions': 20,  # Up to 20 positions (5% each)
     'optimal_positions': 12,          # 12 positions (balanced)
@@ -249,7 +249,7 @@ ELITE_RISK_MANAGEMENT = {
         'optimal_stop_pct': 0.006,    # 0.6% optimal
         'description': 'Wider stops reduce stop-hunts, protect positions',
     },
-    
+
     # Profit Targets (targeting 1:1.8 to 1:2.5 R:R)
     'profit_targets': {
         'method': 'stepped_exits',
@@ -293,14 +293,14 @@ ELITE_RISK_MANAGEMENT = {
 PERFORMANCE_VALIDATION = {
     # Check performance every N trades
     'validation_frequency': 20,  # Validate every 20 trades
-    
+
     # Alert thresholds
     'alert_if_below': {
         'profit_factor': 1.8,     # Alert if PF < 1.8
         'win_rate': 0.55,         # Alert if WR < 55%
         'expectancy': 0.40,       # Alert if E < 0.40R
     },
-    
+
     # Auto-adjust if targets missed
     'auto_adjust': {
         'enabled': True,
@@ -317,14 +317,14 @@ PERFORMANCE_VALIDATION = {
 def calculate_expectancy(win_rate: float, avg_win: float, avg_loss: float) -> float:
     """
     Calculate expectancy (expected return per dollar risked)
-    
+
     Formula: (Win Rate × Avg Win) - (Loss Rate × Avg Loss)
-    
+
     Args:
         win_rate: Win rate as decimal (e.g., 0.60 for 60%)
         avg_win: Average win as decimal (e.g., 0.012 for 1.2%)
         avg_loss: Average loss as decimal (e.g., 0.006 for 0.6%)
-    
+
     Returns:
         Expectancy as decimal (e.g., 0.0048 = 0.48% per trade)
     """
@@ -336,11 +336,11 @@ def calculate_expectancy(win_rate: float, avg_win: float, avg_loss: float) -> fl
 def calculate_profit_factor(total_profit: float, total_loss: float) -> float:
     """
     Calculate profit factor (total profit / total loss)
-    
+
     Args:
         total_profit: Total gross profit
         total_loss: Total gross loss (absolute value)
-    
+
     Returns:
         Profit factor (e.g., 2.3)
     """
@@ -352,11 +352,11 @@ def calculate_profit_factor(total_profit: float, total_loss: float) -> float:
 def calculate_risk_reward_ratio(avg_win: float, avg_loss: float) -> float:
     """
     Calculate risk:reward ratio
-    
+
     Args:
         avg_win: Average win as decimal (e.g., 0.012)
         avg_loss: Average loss as decimal (e.g., 0.006)
-    
+
     Returns:
         R:R ratio (e.g., 2.0 for 1:2)
     """
@@ -368,7 +368,7 @@ def calculate_risk_reward_ratio(avg_win: float, avg_loss: float) -> float:
 def validate_performance_targets(metrics: Dict) -> Tuple[bool, Dict[str, str]]:
     """
     Validate if current performance meets elite targets
-    
+
     Args:
         metrics: Dictionary with performance metrics
             {
@@ -379,14 +379,14 @@ def validate_performance_targets(metrics: Dict) -> Tuple[bool, Dict[str, str]]:
                 'expectancy': float (as decimal, e.g., 0.0048 for 0.48%),
                 'max_drawdown': float,
             }
-    
+
     Returns:
         (is_elite, warnings) tuple where:
             is_elite: True if all targets met
             warnings: Dict of metrics that need improvement
     """
     warnings = {}
-    
+
     # Check Profit Factor
     pf = metrics.get('profit_factor', 0)
     pf_target = ELITE_PERFORMANCE_TARGETS['profit_factor']
@@ -394,7 +394,7 @@ def validate_performance_targets(metrics: Dict) -> Tuple[bool, Dict[str, str]]:
         warnings['profit_factor'] = f"Below elite target: {pf:.2f} < {pf_target['target_min']}"
     elif pf > pf_target['danger_zone']:
         warnings['profit_factor'] = f"Overfitting risk: {pf:.2f} > {pf_target['danger_zone']}"
-    
+
     # Check Win Rate
     wr = metrics.get('win_rate', 0)
     wr_target = ELITE_PERFORMANCE_TARGETS['win_rate']
@@ -402,7 +402,7 @@ def validate_performance_targets(metrics: Dict) -> Tuple[bool, Dict[str, str]]:
         warnings['win_rate'] = f"Below elite target: {wr:.1%} < {wr_target['target_min']:.1%}"
     elif wr > wr_target['danger_zone']:
         warnings['win_rate'] = f"Martingale risk: {wr:.1%} > {wr_target['danger_zone']:.1%}"
-    
+
     # Check Expectancy (convert target from R to decimal)
     exp = metrics.get('expectancy', 0)
     exp_target = ELITE_PERFORMANCE_TARGETS['expectancy']
@@ -411,13 +411,13 @@ def validate_performance_targets(metrics: Dict) -> Tuple[bool, Dict[str, str]]:
     target_min = exp_target['target_min'] / 100.0  # Convert 0.45R to 0.0045 (0.45%)
     if exp < target_min:
         warnings['expectancy'] = f"Below elite target: {exp:.4f} ({exp*100:.2f}%) < {target_min:.4f} ({target_min*100:.2f}%)"
-    
+
     # Check Max Drawdown
     dd = metrics.get('max_drawdown', 0)
     dd_target = ELITE_PERFORMANCE_TARGETS['max_drawdown']
     if dd > dd_target['target']:
         warnings['max_drawdown'] = f"Above elite target: {dd:.1%} > {dd_target['target']:.1%}"
-    
+
     is_elite = len(warnings) == 0
     return is_elite, warnings
 
@@ -425,16 +425,16 @@ def validate_performance_targets(metrics: Dict) -> Tuple[bool, Dict[str, str]]:
 def get_optimal_position_size(adx: float, signal_quality: float) -> float:
     """
     Calculate optimal position size based on trend strength and signal quality
-    
+
     Args:
         adx: ADX value (trend strength)
         signal_quality: Signal score 0-1 (e.g., 0.8 for 4/5 conditions)
-    
+
     Returns:
         Position size as % of account (e.g., 0.03 for 3%)
     """
     sizing = ELITE_POSITION_SIZING
-    
+
     # Base size on ADX
     if adx < 20:
         base_size = sizing['min_position_pct']  # 2%
@@ -442,16 +442,16 @@ def get_optimal_position_size(adx: float, signal_quality: float) -> float:
         base_size = sizing['optimal_position_pct']  # 3%
     else:
         base_size = sizing['max_position_pct']  # 5%
-    
+
     # Adjust for signal quality
     quality_multiplier = 0.7 + (0.3 * signal_quality)  # 0.7 - 1.0x
-    
+
     adjusted_size = base_size * quality_multiplier
-    
+
     # Clamp to min/max
-    adjusted_size = max(sizing['min_position_pct'], 
+    adjusted_size = max(sizing['min_position_pct'],
                        min(sizing['max_position_pct'], adjusted_size))
-    
+
     return adjusted_size
 
 

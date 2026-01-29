@@ -55,20 +55,20 @@ class OptimizationResult:
 class PortfolioOptimizer:
     """
     Portfolio-level optimizer for NIJA trading system
-    
+
     Optimizes entire portfolio composition rather than individual positions,
     considering correlations, risk factors, and opportunity quality.
     """
-    
+
     def __init__(self, config: Dict = None):
         """
         Initialize Portfolio Optimizer
-        
+
         Args:
             config: Optional configuration dictionary
         """
         self.config = config or {}
-        
+
         # Scoring weights for different factors
         self.scoring_weights = {
             'profitability': self.config.get('profitability_weight', 0.30),  # Current P&L
@@ -77,13 +77,13 @@ class PortfolioOptimizer:
             'correlation': self.config.get('correlation_weight', 0.15),  # Diversification value
             'momentum': self.config.get('momentum_weight', 0.15),  # Price momentum
         }
-        
+
         # Optimization parameters
         self.max_position_weight = self.config.get('max_position_weight', 0.20)  # 20% max per position
         self.min_position_weight = self.config.get('min_position_weight', 0.02)  # 2% minimum
         self.target_position_count = self.config.get('target_position_count', 10)  # Optimal diversification
         self.rebalance_threshold = self.config.get('rebalance_threshold', 0.05)  # 5% deviation triggers rebalance
-        
+
         logger.info("=" * 70)
         logger.info("📊 Portfolio Optimizer Initialized")
         logger.info("=" * 70)
@@ -93,7 +93,7 @@ class PortfolioOptimizer:
         logger.info(f"Target Positions: {self.target_position_count}")
         logger.info(f"Position Weight Range: {self.min_position_weight*100:.0f}%-{self.max_position_weight*100:.0f}%")
         logger.info("=" * 70)
-    
+
     def score_position(
         self,
         symbol: str,
@@ -103,18 +103,18 @@ class PortfolioOptimizer:
     ) -> PositionScore:
         """
         Score a position based on multiple factors
-        
+
         Args:
             symbol: Trading pair symbol
             position_data: Position info (pnl_pct, entry_price, current_price, etc.)
             market_data: Current market metrics (rsi, adx, atr, etc.)
             correlation_matrix: Optional correlation matrix for diversification scoring
-            
+
         Returns:
             PositionScore object
         """
         scores = {}
-        
+
         # Factor 1: Profitability (0-100)
         pnl_pct = position_data.get('pnl_pct', 0.0)
         if pnl_pct >= 5.0:
@@ -129,7 +129,7 @@ class PortfolioOptimizer:
             scores['profitability'] = 20
         else:
             scores['profitability'] = 0
-        
+
         # Factor 2: Trend Strength (0-100)
         adx = market_data.get('adx', 0)
         if adx >= 40:
@@ -142,18 +142,18 @@ class PortfolioOptimizer:
             scores['trend_strength'] = 40
         else:
             scores['trend_strength'] = 20
-        
+
         # Factor 3: Risk/Reward Ratio (0-100)
         current_price = position_data.get('current_price', 0)
         entry_price = position_data.get('entry_price', 0)
         stop_loss = position_data.get('stop_loss', entry_price * 0.95)  # Default 5% stop
         target_price = position_data.get('target_price', entry_price * 1.10)  # Default 10% target
-        
+
         if current_price > 0 and stop_loss > 0:
             risk = abs(current_price - stop_loss)
             reward = abs(target_price - current_price)
             rr_ratio = reward / risk if risk > 0 else 0
-            
+
             if rr_ratio >= 3.0:
                 scores['risk_reward'] = 100
             elif rr_ratio >= 2.0:
@@ -166,18 +166,18 @@ class PortfolioOptimizer:
                 scores['risk_reward'] = 20
         else:
             scores['risk_reward'] = 50  # Neutral if no data
-        
+
         # Factor 4: Correlation/Diversification (0-100)
         if correlation_matrix is not None and symbol in correlation_matrix.index:
             # Lower average correlation = better diversification = higher score
             corr_values = correlation_matrix.loc[symbol].drop(symbol, errors='ignore')
             avg_corr = abs(corr_values).mean() if len(corr_values) > 0 else 0.5
-            
+
             # Score inversely proportional to correlation
             scores['correlation'] = max(0, min(100, (1 - avg_corr) * 100))
         else:
             scores['correlation'] = 50  # Neutral if no correlation data
-        
+
         # Factor 5: Momentum (0-100)
         rsi = market_data.get('rsi', 50)
         if 40 <= rsi <= 60:
@@ -192,13 +192,13 @@ class PortfolioOptimizer:
         else:
             # Extreme levels - risky
             scores['momentum'] = 40
-        
+
         # Calculate weighted total score
         total_score = sum(
             scores[factor] * self.scoring_weights[factor]
             for factor in scores
         )
-        
+
         # Generate recommendation
         if total_score >= 75:
             recommendation = 'increase'
@@ -216,7 +216,7 @@ class PortfolioOptimizer:
             recommendation = 'close'
             confidence = 0.8
             reason = f"Poor position (score: {total_score:.0f}/100) - consider closing"
-        
+
         return PositionScore(
             symbol=symbol,
             total_score=total_score,
@@ -225,7 +225,7 @@ class PortfolioOptimizer:
             confidence=confidence,
             reason=reason
         )
-    
+
     def optimize_portfolio(
         self,
         positions: List[Dict],
@@ -235,26 +235,26 @@ class PortfolioOptimizer:
     ) -> OptimizationResult:
         """
         Optimize entire portfolio composition
-        
+
         Args:
             positions: List of current positions
             market_data: Dictionary mapping symbol -> market metrics
             total_equity: Total portfolio equity
             correlation_matrix: Optional correlation matrix
-            
+
         Returns:
             OptimizationResult with recommendations
         """
         logger.info("=" * 70)
         logger.info("🔬 Running Portfolio Optimization")
         logger.info("=" * 70)
-        
+
         # Score all positions
         position_scores = {}
         for pos in positions:
             symbol = pos.get('symbol')
             market_metrics = market_data.get(symbol, {})
-            
+
             score = self.score_position(
                 symbol=symbol,
                 position_data=pos,
@@ -262,29 +262,29 @@ class PortfolioOptimizer:
                 correlation_matrix=correlation_matrix
             )
             position_scores[symbol] = score
-            
+
             logger.info(f"{symbol:12s} | Score: {score.total_score:5.1f}/100 | {score.recommendation.upper():8s} | {score.reason}")
-        
+
         # Calculate optimal weights based on scores
         recommended_weights = self._calculate_optimal_weights(position_scores, total_equity)
-        
+
         # Generate rebalancing actions
         rebalance_actions = self._generate_rebalance_actions(
             positions, position_scores, recommended_weights, total_equity
         )
-        
+
         # Calculate efficiency metrics
         efficiency_metrics = self._calculate_efficiency_metrics(
             position_scores, positions, total_equity
         )
-        
+
         # Generate summary
         summary = self._generate_summary(position_scores, rebalance_actions, efficiency_metrics)
-        
+
         logger.info("=" * 70)
         logger.info(summary)
         logger.info("=" * 70)
-        
+
         return OptimizationResult(
             current_positions=position_scores,
             recommended_weights=recommended_weights,
@@ -292,7 +292,7 @@ class PortfolioOptimizer:
             efficiency_metrics=efficiency_metrics,
             summary=summary
         )
-    
+
     def _calculate_optimal_weights(
         self,
         position_scores: Dict[str, PositionScore],
@@ -300,30 +300,30 @@ class PortfolioOptimizer:
     ) -> Dict[str, float]:
         """
         Calculate optimal position weights based on scores
-        
+
         Uses a score-weighted approach with min/max constraints
         """
         if not position_scores:
             return {}
-        
+
         # Get scores for weighting
         scores = {symbol: score.total_score for symbol, score in position_scores.items()}
         total_score = sum(scores.values())
-        
+
         if total_score <= 0:
             # Equal weight if all scores are zero
             equal_weight = 1.0 / len(position_scores)
             return {symbol: equal_weight for symbol in position_scores}
-        
+
         # Calculate score-based weights
         raw_weights = {symbol: score / total_score for symbol, score in scores.items()}
-        
+
         # Apply min/max constraints
         constrained_weights = {}
         for symbol, weight in raw_weights.items():
             constrained_weight = max(self.min_position_weight, min(self.max_position_weight, weight))
             constrained_weights[symbol] = constrained_weight
-        
+
         # Normalize to sum to 1.0
         total_weight = sum(constrained_weights.values())
         if total_weight > 0:
@@ -333,9 +333,9 @@ class PortfolioOptimizer:
             }
         else:
             normalized_weights = constrained_weights
-        
+
         return normalized_weights
-    
+
     def _generate_rebalance_actions(
         self,
         positions: List[Dict],
@@ -345,28 +345,28 @@ class PortfolioOptimizer:
     ) -> List[Dict]:
         """Generate specific rebalancing actions"""
         actions = []
-        
+
         # Calculate current weights
         current_weights = {}
         for pos in positions:
             symbol = pos.get('symbol')
             value = pos.get('market_value', 0)
             current_weights[symbol] = value / total_equity if total_equity > 0 else 0
-        
+
         # Compare current vs recommended
         for symbol in recommended_weights:
             current_weight = current_weights.get(symbol, 0)
             target_weight = recommended_weights[symbol]
             weight_diff = target_weight - current_weight
-            
+
             # Only rebalance if difference exceeds threshold
             if abs(weight_diff) >= self.rebalance_threshold:
                 current_value = current_weight * total_equity
                 target_value = target_weight * total_equity
                 value_diff = target_value - current_value
-                
+
                 action = 'increase' if value_diff > 0 else 'decrease'
-                
+
                 actions.append({
                     'symbol': symbol,
                     'action': action,
@@ -379,12 +379,12 @@ class PortfolioOptimizer:
                     'score': position_scores[symbol].total_score if symbol in position_scores else 0,
                     'priority': abs(weight_diff)  # Higher deviation = higher priority
                 })
-        
+
         # Sort by priority (highest first)
         actions.sort(key=lambda x: x['priority'], reverse=True)
-        
+
         return actions
-    
+
     def _calculate_efficiency_metrics(
         self,
         position_scores: Dict[str, PositionScore],
@@ -394,21 +394,21 @@ class PortfolioOptimizer:
         """Calculate portfolio efficiency metrics"""
         if not position_scores:
             return {}
-        
+
         # Average position score
         avg_score = np.mean([score.total_score for score in position_scores.values()])
-        
+
         # Score distribution
         scores_list = [score.total_score for score in position_scores.values()]
         score_std = np.std(scores_list) if len(scores_list) > 1 else 0
-        
+
         # Position count
         position_count = len(positions)
-        
+
         # Total unrealized P&L
         total_pnl = sum(pos.get('unrealized_pnl', 0) for pos in positions)
         total_pnl_pct = (total_pnl / total_equity * 100) if total_equity > 0 else 0
-        
+
         # Recommendation distribution
         recommendations = [score.recommendation for score in position_scores.values()]
         rec_counts = {
@@ -417,7 +417,7 @@ class PortfolioOptimizer:
             'decrease': recommendations.count('decrease'),
             'close': recommendations.count('close'),
         }
-        
+
         return {
             'average_score': avg_score,
             'score_std': score_std,
@@ -427,7 +427,7 @@ class PortfolioOptimizer:
             'recommendations': rec_counts,
             'portfolio_quality': 'excellent' if avg_score >= 75 else 'good' if avg_score >= 60 else 'fair' if avg_score >= 40 else 'poor'
         }
-    
+
     def _generate_summary(
         self,
         position_scores: Dict[str, PositionScore],
@@ -445,12 +445,12 @@ class PortfolioOptimizer:
             "",
             "Recommendations:",
         ]
-        
+
         rec_counts = efficiency_metrics.get('recommendations', {})
         for rec_type, count in rec_counts.items():
             if count > 0:
                 lines.append(f"  {rec_type.capitalize()}: {count} positions")
-        
+
         if rebalance_actions:
             lines.append("")
             lines.append(f"Rebalancing Actions Required: {len(rebalance_actions)}")
@@ -464,17 +464,17 @@ class PortfolioOptimizer:
         else:
             lines.append("")
             lines.append("No rebalancing actions required - portfolio is well-optimized")
-        
+
         return "\n".join(lines)
 
 
 def create_portfolio_optimizer(config: Dict = None) -> PortfolioOptimizer:
     """
     Factory function to create PortfolioOptimizer instance
-    
+
     Args:
         config: Optional configuration
-        
+
     Returns:
         PortfolioOptimizer instance
     """
@@ -484,12 +484,12 @@ def create_portfolio_optimizer(config: Dict = None) -> PortfolioOptimizer:
 # Example usage
 if __name__ == "__main__":
     import logging
-    
+
     logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
-    
+
     # Create optimizer
     optimizer = create_portfolio_optimizer()
-    
+
     # Mock data
     positions = [
         {
@@ -515,17 +515,17 @@ if __name__ == "__main__":
             'target_price': 2200,
         },
     ]
-    
+
     market_data = {
         'BTC-USD': {'adx': 35, 'rsi': 55, 'atr': 1500},
         'ETH-USD': {'adx': 25, 'rsi': 45, 'atr': 80},
     }
-    
+
     # Run optimization
     result = optimizer.optimize_portfolio(
         positions=positions,
         market_data=market_data,
         total_equity=50000
     )
-    
+
     print(result.summary)

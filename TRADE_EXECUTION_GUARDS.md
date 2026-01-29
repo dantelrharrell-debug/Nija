@@ -94,10 +94,10 @@ CREATE TABLE copy_trade_map (
 **User Statuses**:
 1. **filled**: User's order successfully executed
    - Records: user_order_id, user_size
-   
+
 2. **skipped**: User doesn't have the broker configured or broker not connected
    - Records: user_error explaining why
-   
+
 3. **failed**: User's order execution failed
    - Records: user_error with failure reason
 
@@ -188,10 +188,10 @@ recent_trades = db.get_ledger_transactions(user_id='master', limit=10)
 
 for trade in recent_trades:
     master_trade_id = trade['order_id']  # or use trade['master_trade_id']
-    
+
     # Get copy trade summary
     summary = db.get_copy_trade_summary(master_trade_id)
-    
+
     print(f"Trade: {trade['symbol']} {trade['side']} @ ${trade['price']:.2f}")
     print(f"  Total Users: {summary['total_users']}")
     print(f"  ✅ Filled: {summary['filled_count']}")
@@ -231,7 +231,7 @@ The changes are **backward compatible**:
 1. **Database Migration**: Automatic on first run
    - `copy_trade_map` table created automatically
    - `master_trade_id` column added to `trade_ledger` (nullable)
-   
+
 2. **Code Changes**: Drop-in replacement
    - Existing code continues to work
    - New guards add extra safety
@@ -271,7 +271,7 @@ db = get_trade_ledger_db()
 with db._get_connection() as conn:
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT 
+        SELECT
             COUNT(DISTINCT master_trade_id) as total_master_trades,
             SUM(CASE WHEN user_status = 'filled' THEN 1 ELSE 0 END) as total_filled,
             SUM(CASE WHEN user_status = 'skipped' THEN 1 ELSE 0 END) as total_skipped,
@@ -281,7 +281,7 @@ with db._get_connection() as conn:
         WHERE created_at >= datetime('now', '-1 day')
     """)
     stats = dict(cursor.fetchone())
-    
+
 print(f"Last 24 Hours Copy Trading Stats:")
 print(f"  Master Trades: {stats['total_master_trades']}")
 print(f"  Copy Attempts: {stats['total_copy_attempts']}")
@@ -315,7 +315,7 @@ print(f"  Success Rate: {stats['total_filled'] / stats['total_copy_attempts'] * 
 2. Verify order_status is being set correctly in broker responses
 3. Check if users have broker accounts configured
 
-**Solution**: 
+**Solution**:
 - Ensure `order_status='FILLED'` is passed to `emit_trade_signal()`
 - Verify broker responses include correct status
 

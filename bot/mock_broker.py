@@ -28,7 +28,7 @@ class MockBroker(BaseBroker):
     def place_market_order(self, symbol: str, side: str, quantity: float, size_type: str = 'quote') -> Dict:
         """
         Place a market order in paper mode.
-        
+
         Args:
             symbol: Trading pair (e.g., BTC-USD)
             side: 'buy' or 'sell'
@@ -51,7 +51,7 @@ class MockBroker(BaseBroker):
                     # quantity is already USD
                     estimated_usd = float(quantity)
                 self._balance += estimated_usd
-            
+
             filled = {
                 "symbol": symbol,
                 "side": side,

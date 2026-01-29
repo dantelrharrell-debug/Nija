@@ -38,9 +38,9 @@ def demo_alpha_user_onboarding():
     print("\n" + "="*60)
     print("DEMO: Alpha User Onboarding")
     print("="*60 + "\n")
-    
+
     onboarding = get_onboarding_system()
-    
+
     # 1. Founder generates invitation code
     print("Step 1: Generate invitation code")
     invitation = onboarding.generate_invitation_code(
@@ -51,7 +51,7 @@ def demo_alpha_user_onboarding():
     print(f"✅ Invitation code generated: {invitation.code}")
     print(f"   Expires: {invitation.expires_at.strftime('%Y-%m-%d %H:%M:%S')}")
     print()
-    
+
     # 2. User registers with invitation code
     print("Step 2: User registration")
     success, error, user_id = onboarding.register_user(
@@ -59,21 +59,21 @@ def demo_alpha_user_onboarding():
         email="alice@trader.com",
         password_hash="hashed_password_here"
     )
-    
+
     if success:
         print(f"✅ User registered: {user_id}")
     else:
         print(f"❌ Registration failed: {error}")
         return None
     print()
-    
+
     # 3. Email verification
     print("Step 3: Email verification")
     success, error = onboarding.verify_email(user_id, "verification_code_123")
     if success:
         print("✅ Email verified")
     print()
-    
+
     # 4. Broker credentials setup
     print("Step 4: Broker credentials setup")
     success, error = onboarding.setup_broker_credentials(
@@ -85,21 +85,21 @@ def demo_alpha_user_onboarding():
     if success:
         print("✅ Broker credentials configured")
     print()
-    
+
     # 5. Tutorial completion
     print("Step 5: Complete tutorial")
     success, error = onboarding.complete_tutorial(user_id)
     if success:
         print("✅ Tutorial completed")
     print()
-    
+
     # 6. Account activation
     print("Step 6: Activate account")
     success, error = onboarding.activate_user(user_id)
     if success:
         print("✅ Account activated!")
     print()
-    
+
     # Check onboarding status
     status = onboarding.get_onboarding_status(user_id)
     if status:
@@ -107,7 +107,7 @@ def demo_alpha_user_onboarding():
         print(f"   Progress: {status.get_progress_percent()}%")
         print(f"   Status: {status.status.value}")
         print(f"   Steps completed: {', '.join(status.steps_completed)}")
-    
+
     return user_id
 
 
@@ -118,9 +118,9 @@ def demo_subscription_management(user_id: str):
     print("\n" + "="*60)
     print("DEMO: Subscription Management")
     print("="*60 + "\n")
-    
+
     engine = get_monetization_engine()
-    
+
     # 1. Show available tiers
     print("Step 1: Available subscription tiers")
     pricing = engine.get_all_pricing()
@@ -130,7 +130,7 @@ def demo_subscription_management(user_id: str):
         print(f"     Yearly: ${tier.yearly_price} (save ${tier.monthly_price * 12 - tier.yearly_price})")
         print(f"     Max Positions: {tier.limits['max_positions']}")
         print()
-    
+
     # 2. Create subscription with trial
     print("Step 2: Create subscription (14-day trial)")
     success, error, subscription = engine.create_subscription(
@@ -139,7 +139,7 @@ def demo_subscription_management(user_id: str):
         interval=BillingInterval.MONTHLY,
         trial_days=14
     )
-    
+
     if success:
         print(f"✅ Subscription created")
         print(f"   Tier: {subscription.tier.value}")
@@ -147,7 +147,7 @@ def demo_subscription_management(user_id: str):
         print(f"   Trial ends: {subscription.trial_end.strftime('%Y-%m-%d')}")
         print(f"   Next billing: {subscription.current_period_end.strftime('%Y-%m-%d')}")
     print()
-    
+
     # 3. Track usage
     print("Step 3: Track usage")
     engine.track_usage(user_id, "trades_executed", 5)
@@ -155,7 +155,7 @@ def demo_subscription_management(user_id: str):
     engine.track_usage(user_id, "active_positions", 3)
     print("✅ Usage tracked")
     print()
-    
+
     # 4. Check usage limits
     print("Step 4: Check usage limits")
     limits = engine.check_usage_limits(user_id)
@@ -166,14 +166,14 @@ def demo_subscription_management(user_id: str):
         for limit, info in limits['limits_exceeded'].items():
             print(f"   {limit}: {info['current']}/{info['limit']}")
     print()
-    
+
     # 5. Simulate upgrade
     print("Step 5: Upgrade to Enterprise")
     success, error = engine.upgrade_subscription(user_id, SubscriptionTier.ENTERPRISE)
     if success:
         print("✅ Upgraded to Enterprise tier")
     print()
-    
+
     return subscription
 
 
@@ -184,9 +184,9 @@ def demo_risk_monitoring(user_id: str):
     print("\n" + "="*60)
     print("DEMO: Global Risk Monitoring")
     print("="*60 + "\n")
-    
+
     risk_engine = get_global_risk_engine()
-    
+
     # 1. Update account metrics
     print("Step 1: Update account metrics")
     risk_engine.update_account_metrics(user_id, {
@@ -197,7 +197,7 @@ def demo_risk_monitoring(user_id: str):
     })
     print("✅ Metrics updated")
     print()
-    
+
     # 2. Get account risk metrics
     print("Step 2: Get account risk metrics")
     account_metrics = risk_engine.get_account_metrics(user_id)
@@ -208,7 +208,7 @@ def demo_risk_monitoring(user_id: str):
         print(f"   Unrealized P&L: ${account_metrics.unrealized_pnl:,.2f}")
         print(f"   Drawdown: {account_metrics.drawdown_pct:.2f}%")
     print()
-    
+
     # 3. Check if new position can be opened
     print("Step 3: Check if new position can be opened")
     can_open, reason = risk_engine.can_open_position(user_id, 1000.0)
@@ -217,7 +217,7 @@ def demo_risk_monitoring(user_id: str):
     else:
         print(f"❌ Position denied: {reason}")
     print()
-    
+
     # 4. Get portfolio metrics
     print("Step 4: Get portfolio-level metrics")
     portfolio = risk_engine.calculate_portfolio_metrics()
@@ -227,7 +227,7 @@ def demo_risk_monitoring(user_id: str):
     print(f"   Total Balance: ${portfolio.total_balance:,.2f}")
     print(f"   Portfolio Drawdown: {portfolio.portfolio_drawdown_pct:.2f}%")
     print()
-    
+
     # 5. Get recent risk events
     print("Step 5: Get recent risk events")
     events = risk_engine.get_risk_events(hours=24)
@@ -247,13 +247,13 @@ def demo_founder_dashboard():
     print("\n" + "="*60)
     print("DEMO: Founder Dashboard")
     print("="*60 + "\n")
-    
+
     dashboard = FounderDashboard(update_interval=5)
-    
+
     # 1. Get dashboard overview
     print("Step 1: Get dashboard overview")
     overview = dashboard.get_dashboard_overview()
-    
+
     print("Platform Metrics:")
     if 'platform_metrics' in overview:
         metrics = overview['platform_metrics']
@@ -265,7 +265,7 @@ def demo_founder_dashboard():
             print(f"  Trades (24h): {metrics['trades_24h'].get('count', 0)}")
             print(f"  P&L (24h): ${metrics['trades_24h'].get('total_pnl', 0):,.2f}")
     print()
-    
+
     # 2. Get system health
     print("Step 2: Get system health")
     health = dashboard.get_system_health()
@@ -273,7 +273,7 @@ def demo_founder_dashboard():
     print(f"  Memory: {health['memory_percent']:.1f}%")
     print(f"  Disk: {health['disk_percent']:.1f}%")
     print()
-    
+
     # 3. Get revenue metrics
     print("Step 3: Get revenue metrics")
     revenue = dashboard.get_revenue_metrics()
@@ -285,7 +285,7 @@ def demo_founder_dashboard():
             if count > 0:
                 print(f"    {tier}: {count}")
     print()
-    
+
     dashboard.shutdown()
 
 
@@ -296,22 +296,22 @@ def main():
     print("\n" + "="*80)
     print(" "*20 + "NIJA PLATFORM INTEGRATION DEMO")
     print("="*80)
-    
+
     # 1. Onboard alpha user
     user_id = demo_alpha_user_onboarding()
     if not user_id:
         print("❌ Onboarding failed, stopping demo")
         return
-    
+
     # 2. Set up subscription
     demo_subscription_management(user_id)
-    
+
     # 3. Monitor risk
     demo_risk_monitoring(user_id)
-    
+
     # 4. View founder dashboard
     demo_founder_dashboard()
-    
+
     print("\n" + "="*80)
     print(" "*25 + "DEMO COMPLETE! ✅")
     print("="*80)

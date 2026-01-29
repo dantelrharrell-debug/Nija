@@ -9,13 +9,13 @@ record all trades in the LiveExecutionTracker for performance monitoring.
 
 Usage:
     from bot.live_tracker_integration import LiveTrackerIntegration
-    
+
     # In execution_engine.py __init__:
     self.live_tracker_integration = LiveTrackerIntegration(
         initial_balance=10000.0,
         enabled=True
     )
-    
+
     # After successful entry execution:
     self.live_tracker_integration.record_entry(
         trade_id=position_id,
@@ -28,7 +28,7 @@ Usage:
         commission=entry_fee,
         broker=broker_name
     )
-    
+
     # After successful exit execution:
     self.live_tracker_integration.record_exit(
         trade_id=position_id,
@@ -53,7 +53,7 @@ class LiveTrackerIntegration:
     """
     Integration layer for live execution tracking
     """
-    
+
     def __init__(
         self,
         initial_balance: float,
@@ -64,7 +64,7 @@ class LiveTrackerIntegration:
     ):
         """
         Initialize live tracker integration
-        
+
         Args:
             initial_balance: Starting account balance
             data_dir: Data directory (default: ./data/live_tracking)
@@ -74,19 +74,19 @@ class LiveTrackerIntegration:
         """
         self.enabled = enabled
         self.tracker = None
-        
+
         if not enabled:
             logger.info("Live tracker integration disabled")
             return
-        
+
         # Set default data directory
         if data_dir is None:
             data_dir = os.getenv('LIVE_TRACKER_DATA_DIR', './data/live_tracking')
-        
+
         try:
             # Import here to avoid circular dependencies
             from bot.live_execution_tracker import LiveExecutionTracker
-            
+
             self.tracker = LiveExecutionTracker(
                 initial_balance=initial_balance,
                 data_dir=data_dir,
@@ -94,16 +94,16 @@ class LiveTrackerIntegration:
                 max_drawdown_pct=max_drawdown_pct,
                 enable_alerts=True
             )
-            
+
             logger.info("✅ Live tracker integration initialized")
             logger.info(f"   Data directory: {data_dir}")
             logger.info(f"   Risk limits: Daily loss={max_daily_loss_pct}%, Max DD={max_drawdown_pct}%")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize live tracker: {e}")
             logger.warning("Live tracking will be disabled")
             self.enabled = False
-    
+
     def record_entry(
         self,
         trade_id: str,
@@ -121,9 +121,9 @@ class LiveTrackerIntegration:
     ):
         """
         Record trade entry
-        
+
         This should be called after a successful entry order execution.
-        
+
         Args:
             trade_id: Unique trade identifier (position_id)
             symbol: Trading symbol
@@ -140,7 +140,7 @@ class LiveTrackerIntegration:
         """
         if not self.enabled or self.tracker is None:
             return
-        
+
         try:
             self.tracker.record_entry(
                 trade_id=trade_id,
@@ -158,7 +158,7 @@ class LiveTrackerIntegration:
             )
         except Exception as e:
             logger.error(f"Failed to record entry: {e}")
-    
+
     def record_exit(
         self,
         trade_id: str,
@@ -169,9 +169,9 @@ class LiveTrackerIntegration:
     ):
         """
         Record trade exit
-        
+
         This should be called after a successful exit order execution.
-        
+
         Args:
             trade_id: Trade identifier (position_id)
             exit_price: Actual exit price (fill price)
@@ -181,7 +181,7 @@ class LiveTrackerIntegration:
         """
         if not self.enabled or self.tracker is None:
             return
-        
+
         try:
             self.tracker.record_exit(
                 trade_id=trade_id,
@@ -192,7 +192,7 @@ class LiveTrackerIntegration:
             )
         except Exception as e:
             logger.error(f"Failed to record exit: {e}")
-    
+
     def update_position(
         self,
         trade_id: str,
@@ -200,58 +200,58 @@ class LiveTrackerIntegration:
     ):
         """
         Update open position with current price (for unrealized P&L)
-        
+
         Args:
             trade_id: Trade identifier
             current_price: Current market price
         """
         if not self.enabled or self.tracker is None:
             return
-        
+
         try:
             self.tracker.update_position(trade_id, current_price)
         except Exception as e:
             logger.error(f"Failed to update position: {e}")
-    
+
     def get_performance_snapshot(self, current_balance: float):
         """
         Get current performance snapshot
-        
+
         Args:
             current_balance: Current account balance
-            
+
         Returns:
             LivePerformanceSnapshot or None
         """
         if not self.enabled or self.tracker is None:
             return None
-        
+
         try:
             return self.tracker.get_performance_snapshot(current_balance)
         except Exception as e:
             logger.error(f"Failed to get performance snapshot: {e}")
             return None
-    
+
     def print_daily_summary(self):
         """Print daily trading summary"""
         if not self.enabled or self.tracker is None:
             return
-        
+
         try:
             self.tracker.print_daily_summary()
         except Exception as e:
             logger.error(f"Failed to print daily summary: {e}")
-    
+
     def export_to_csv(self, output_path: Optional[str] = None):
         """
         Export trades to CSV
-        
+
         Args:
             output_path: Output file path (optional)
         """
         if not self.enabled or self.tracker is None:
             return
-        
+
         try:
             self.tracker.export_to_csv(output_path)
         except Exception as e:
@@ -265,18 +265,18 @@ def create_live_tracker_integration(
 ) -> LiveTrackerIntegration:
     """
     Create live tracker integration with environment-based configuration
-    
+
     Environment variables:
         LIVE_TRACKER_ENABLED: Enable live tracking (default: true)
         LIVE_TRACKER_DATA_DIR: Data directory (default: ./data/live_tracking)
         LIVE_TRACKER_MAX_DAILY_LOSS: Max daily loss % (default: 5.0)
         LIVE_TRACKER_MAX_DRAWDOWN: Max drawdown % (default: 12.0)
         INITIAL_BALANCE: Initial account balance (required if not provided)
-    
+
     Args:
         initial_balance: Override initial balance from environment
         enabled: Override enabled flag from environment
-        
+
     Returns:
         LiveTrackerIntegration instance
     """
@@ -286,11 +286,11 @@ def create_live_tracker_integration(
     env_data_dir = os.getenv('LIVE_TRACKER_DATA_DIR', './data/live_tracking')
     env_max_daily_loss = float(os.getenv('LIVE_TRACKER_MAX_DAILY_LOSS', '5.0'))
     env_max_drawdown = float(os.getenv('LIVE_TRACKER_MAX_DRAWDOWN', '12.0'))
-    
+
     # Override with provided values
     final_enabled = enabled if enabled is not None else env_enabled
     final_balance = initial_balance if initial_balance is not None else env_balance
-    
+
     return LiveTrackerIntegration(
         initial_balance=final_balance,
         data_dir=env_data_dir,
@@ -312,7 +312,7 @@ from bot.live_tracker_integration import create_live_tracker_integration
 # 2. Add to ExecutionEngine.__init__():
 def __init__(self, broker_client, user_id="master", ...):
     # ... existing initialization ...
-    
+
     # Initialize live tracker integration
     try:
         self.live_tracker = create_live_tracker_integration(

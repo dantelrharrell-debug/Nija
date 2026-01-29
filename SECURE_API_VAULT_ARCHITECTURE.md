@@ -179,7 +179,7 @@ async def store_credentials(
 ):
     """
     Store user credentials in Vault.
-    
+
     Security:
     - User can only store their own credentials
     - Credentials encrypted at rest by Vault
@@ -188,11 +188,11 @@ async def store_credentials(
     # Verify user can only store their own credentials
     if request.user_id != user["user_id"]:
         raise HTTPException(status_code=403, detail="Cannot store credentials for other users")
-    
+
     try:
         # Build secret path
         secret_path = f"secret/users/{request.user_id}/{request.broker}"
-        
+
         # Prepare secret data
         secret_data = {
             "api_key": request.api_key,
@@ -201,25 +201,25 @@ async def store_credentials(
             "created_at": datetime.utcnow().isoformat(),
             "created_by": user["user_id"]
         }
-        
+
         if request.additional_params:
             secret_data["additional_params"] = request.additional_params
-        
+
         # Store in Vault KV v2
         vault_client.secrets.kv.v2.create_or_update_secret(
             path=secret_path,
             secret=secret_data
         )
-        
+
         logger.info(f"Stored credentials for user {request.user_id} on {request.broker}")
-        
+
         return {
             "status": "success",
             "message": "Credentials stored successfully",
             "user_id": request.user_id,
             "broker": request.broker
         }
-    
+
     except Exception as e:
         logger.error(f"Failed to store credentials: {e}")
         raise HTTPException(status_code=500, detail="Failed to store credentials")
@@ -232,7 +232,7 @@ async def retrieve_credentials(
 ):
     """
     Retrieve user credentials from Vault.
-    
+
     Security:
     - User can only retrieve their own credentials
     - Audit log entry created
@@ -241,20 +241,20 @@ async def retrieve_credentials(
     # Verify user can only retrieve their own credentials
     if request.user_id != user["user_id"]:
         raise HTTPException(status_code=403, detail="Cannot retrieve credentials for other users")
-    
+
     try:
         # Build secret path
         secret_path = f"secret/users/{request.user_id}/{request.broker}"
-        
+
         # Retrieve from Vault
         response = vault_client.secrets.kv.v2.read_secret_version(
             path=secret_path
         )
-        
+
         secret_data = response['data']['data']
-        
+
         logger.info(f"Retrieved credentials for user {request.user_id} on {request.broker}")
-        
+
         return {
             "status": "success",
             "credentials": {
@@ -264,7 +264,7 @@ async def retrieve_credentials(
                 "additional_params": secret_data.get("additional_params")
             }
         }
-    
+
     except hvac.exceptions.InvalidPath:
         raise HTTPException(status_code=404, detail="Credentials not found")
     except Exception as e:
@@ -279,7 +279,7 @@ async def rotate_credentials(
 ):
     """
     Rotate user credentials (update to new keys).
-    
+
     Security:
     - User can only rotate their own credentials
     - Old version retained (can rollback)
@@ -288,11 +288,11 @@ async def rotate_credentials(
     # Verify user can only rotate their own credentials
     if request.user_id != user["user_id"]:
         raise HTTPException(status_code=403, detail="Cannot rotate credentials for other users")
-    
+
     try:
         # Build secret path
         secret_path = f"secret/users/{request.user_id}/{request.broker}"
-        
+
         # Prepare new secret data
         secret_data = {
             "api_key": request.new_api_key,
@@ -301,20 +301,20 @@ async def rotate_credentials(
             "rotated_at": datetime.utcnow().isoformat(),
             "rotated_by": user["user_id"]
         }
-        
+
         # Update in Vault (creates new version)
         vault_client.secrets.kv.v2.create_or_update_secret(
             path=secret_path,
             secret=secret_data
         )
-        
+
         logger.info(f"Rotated credentials for user {request.user_id} on {request.broker}")
-        
+
         return {
             "status": "success",
             "message": "Credentials rotated successfully"
         }
-    
+
     except Exception as e:
         logger.error(f"Failed to rotate credentials: {e}")
         raise HTTPException(status_code=500, detail="Failed to rotate credentials")
@@ -328,7 +328,7 @@ async def revoke_credentials(
 ):
     """
     Revoke (delete) user credentials.
-    
+
     Security:
     - User can only revoke their own credentials
     - Soft delete (can be recovered from versions)
@@ -337,23 +337,23 @@ async def revoke_credentials(
     # Verify user can only revoke their own credentials
     if user_id != user["user_id"]:
         raise HTTPException(status_code=403, detail="Cannot revoke credentials for other users")
-    
+
     try:
         # Build secret path
         secret_path = f"secret/users/{user_id}/{broker}"
-        
+
         # Delete from Vault (soft delete - versions retained)
         vault_client.secrets.kv.v2.delete_latest_version_of_secret(
             path=secret_path
         )
-        
+
         logger.info(f"Revoked credentials for user {user_id} on {broker}")
-        
+
         return {
             "status": "success",
             "message": "Credentials revoked successfully"
         }
-    
+
     except Exception as e:
         logger.error(f"Failed to revoke credentials: {e}")
         raise HTTPException(status_code=500, detail="Failed to revoke credentials")
@@ -366,7 +366,7 @@ async def list_user_brokers(
 ):
     """
     List all brokers configured for a user.
-    
+
     Security:
     - User can only list their own brokers
     - Returns broker names only (no credentials)
@@ -374,23 +374,23 @@ async def list_user_brokers(
     # Verify user can only list their own brokers
     if user_id != user["user_id"]:
         raise HTTPException(status_code=403, detail="Cannot list brokers for other users")
-    
+
     try:
         # List secrets under user path
         secret_path = f"secret/users/{user_id}"
-        
+
         response = vault_client.secrets.kv.v2.list_secrets(
             path=secret_path
         )
-        
+
         brokers = response['data']['keys']
-        
+
         return {
             "status": "success",
             "user_id": user_id,
             "brokers": brokers
         }
-    
+
     except hvac.exceptions.InvalidPath:
         return {
             "status": "success",
@@ -564,7 +564,7 @@ services:
       - "8200:8200"
       - "8201:8201"
     command: server
-    
+
   vault-2:
     image: vault:1.15
     environment:
@@ -578,7 +578,7 @@ services:
       - "8210:8200"
       - "8211:8201"
     command: server
-    
+
   vault-3:
     image: vault:1.15
     environment:
@@ -739,12 +739,12 @@ def renew_token(client):
     while True:
         # Renew token
         client.auth.token.renew_self()
-        
+
         # Sleep for 80% of TTL
         lookup = client.auth.token.lookup_self()
         ttl = lookup['data']['ttl']
         sleep_time = int(ttl * 0.8)
-        
+
         time.sleep(sleep_time)
 ```
 
@@ -792,7 +792,7 @@ class VaultConnectionPool:
         )
         self.client = Client(url=url)
         self.client.session.mount('https://', adapter)
-    
+
     def get_client(self):
         return self.client
 
@@ -820,20 +820,20 @@ def get_credentials_cached(user_id: str, broker: str):
     # Check cache first
     cache_key = f"creds:{user_id}:{broker}"
     cached = redis_client.get(cache_key)
-    
+
     if cached:
         return json.loads(cached)
-    
+
     # Fetch from Vault
     creds = retrieve_credentials(user_id, broker)
-    
+
     # Cache for 5 minutes
     redis_client.setex(
         cache_key,
         timedelta(minutes=5),
         json.dumps(creds)
     )
-    
+
     return creds
 ```
 
@@ -870,34 +870,34 @@ class APIKeyManager:
             )
         else:
             self.vault = vault_client
-        
+
         logger.info("API key manager initialized with Vault backend")
-    
+
     def store_user_api_key(self, user_id, broker, api_key, api_secret, additional_params=None):
         """Store credentials in Vault instead of memory."""
         secret_path = f"secret/users/{user_id}/{broker}"
-        
+
         secret_data = {
             'api_key': api_key,
             'api_secret': api_secret,
             'broker': broker,
             'created_at': datetime.now().isoformat()
         }
-        
+
         if additional_params:
             secret_data['additional_params'] = additional_params
-        
+
         self.vault.secrets.kv.v2.create_or_update_secret(
             path=secret_path,
             secret=secret_data
         )
-        
+
         logger.info(f"Stored credentials in Vault for user {user_id} on {broker}")
-    
+
     def get_user_api_key(self, user_id, broker):
         """Retrieve credentials from Vault."""
         secret_path = f"secret/users/{user_id}/{broker}"
-        
+
         try:
             response = self.vault.secrets.kv.v2.read_secret_version(
                 path=secret_path
@@ -932,7 +932,7 @@ services:
       VAULT_DEV_ROOT_TOKEN_ID: root  # Dev only
     cap_add:
       - IPC_LOCK
-    
+
   nija-api:
     build: .
     depends_on:
@@ -993,7 +993,7 @@ services:
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: January 27, 2026  
-**Status**: ✅ Ready for Implementation  
+**Document Version**: 1.0
+**Last Updated**: January 27, 2026
+**Status**: ✅ Ready for Implementation
 **Owner**: Security Team

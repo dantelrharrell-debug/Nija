@@ -64,14 +64,14 @@ class ExecutionConfig:
 class ExecutionRouter:
     """
     Routes trades to appropriate execution infrastructure based on tier.
-    
+
     Features:
     - Priority-based queue management
     - Tier-specific execution rules
     - Latency monitoring
     - Automatic retry logic
     """
-    
+
     # Tier-specific execution configurations
     TIER_EXECUTION_CONFIGS = {
         "STARTER": ExecutionConfig(
@@ -123,7 +123,7 @@ class ExecutionRouter:
             retry_limit=5
         )
     }
-    
+
     def __init__(self):
         """Initialize execution router with priority queues."""
         # Priority queues for each priority level
@@ -133,7 +133,7 @@ class ExecutionRouter:
             ExecutionPriority.VERY_HIGH: queue.PriorityQueue(),
             ExecutionPriority.ULTRA_HIGH: queue.PriorityQueue()
         }
-        
+
         # Execution metrics
         self.execution_stats = {
             "total_orders": 0,
@@ -142,12 +142,12 @@ class ExecutionRouter:
             "average_latency_ms": 0.0,
             "by_tier": {}
         }
-        
+
         # Lock for thread safety
         self.lock = threading.Lock()
-        
+
         logger.info("ExecutionRouter initialized")
-    
+
     def route_order(
         self,
         user_tier: str,
@@ -156,12 +156,12 @@ class ExecutionRouter:
     ) -> Dict:
         """
         Route order to appropriate execution infrastructure.
-        
+
         Args:
             user_tier: User's subscription tier
             order: Order details (pair, side, size, etc.)
             timestamp: Order timestamp (optional)
-            
+
         Returns:
             Dictionary with routing information
         """
@@ -170,7 +170,7 @@ class ExecutionRouter:
             tier,
             self.TIER_EXECUTION_CONFIGS["SAVER"]  # Default to SAVER
         )
-        
+
         # Create execution request
         execution_request = {
             "order": order,
@@ -182,16 +182,16 @@ class ExecutionRouter:
             "timestamp": timestamp or datetime.now(),
             "attempts": 0
         }
-        
+
         # Add to appropriate priority queue
         priority_value = config.priority.value
         self.queues[config.priority].put((priority_value, execution_request))
-        
+
         logger.info(
             f"Order routed: tier={tier}, priority={config.priority.name}, "
             f"infrastructure={config.infrastructure.value}"
         )
-        
+
         return {
             "routed": True,
             "tier": tier,
@@ -200,11 +200,11 @@ class ExecutionRouter:
             "max_latency_ms": config.max_latency_ms,
             "queue_size": self.queues[config.priority].qsize()
         }
-    
+
     def get_next_order(self) -> Optional[Dict]:
         """
         Get next order from highest priority queue.
-        
+
         Returns:
             Next execution request or None if all queues empty
         """
@@ -221,9 +221,9 @@ class ExecutionRouter:
                     return execution_request
             except queue.Empty:
                 continue
-        
+
         return None
-    
+
     def record_execution(
         self,
         tier: str,
@@ -233,7 +233,7 @@ class ExecutionRouter:
     ):
         """
         Record execution metrics.
-        
+
         Args:
             tier: User tier
             success: Whether execution succeeded
@@ -242,19 +242,19 @@ class ExecutionRouter:
         """
         with self.lock:
             self.execution_stats["total_orders"] += 1
-            
+
             if success:
                 self.execution_stats["successful_orders"] += 1
             else:
                 self.execution_stats["failed_orders"] += 1
-            
+
             # Update average latency (moving average)
             total = self.execution_stats["total_orders"]
             current_avg = self.execution_stats["average_latency_ms"]
             self.execution_stats["average_latency_ms"] = (
                 (current_avg * (total - 1) + latency_ms) / total
             )
-            
+
             # Per-tier stats
             if tier not in self.execution_stats["by_tier"]:
                 self.execution_stats["by_tier"][tier] = {
@@ -263,26 +263,26 @@ class ExecutionRouter:
                     "failed": 0,
                     "avg_latency_ms": 0.0
                 }
-            
+
             tier_stats = self.execution_stats["by_tier"][tier]
             tier_stats["total"] += 1
-            
+
             if success:
                 tier_stats["successful"] += 1
             else:
                 tier_stats["failed"] += 1
-            
+
             # Update tier average latency
             tier_total = tier_stats["total"]
             tier_avg = tier_stats["avg_latency_ms"]
             tier_stats["avg_latency_ms"] = (
                 (tier_avg * (tier_total - 1) + latency_ms) / tier_total
             )
-    
+
     def get_queue_status(self) -> Dict:
         """
         Get current queue status.
-        
+
         Returns:
             Dictionary with queue sizes by priority
         """
@@ -293,24 +293,24 @@ class ExecutionRouter:
             "NORMAL": self.queues[ExecutionPriority.NORMAL].qsize(),
             "total": sum(q.qsize() for q in self.queues.values())
         }
-    
+
     def get_execution_stats(self) -> Dict:
         """
         Get execution statistics.
-        
+
         Returns:
             Dictionary with execution metrics
         """
         with self.lock:
             return self.execution_stats.copy()
-    
+
     def get_tier_config(self, tier: str) -> ExecutionConfig:
         """
         Get execution configuration for a tier.
-        
+
         Args:
             tier: User tier name
-            
+
         Returns:
             ExecutionConfig for the tier
         """
@@ -318,7 +318,7 @@ class ExecutionRouter:
             tier.upper(),
             self.TIER_EXECUTION_CONFIGS["SAVER"]
         )
-    
+
     def clear_queues(self):
         """Clear all execution queues (use with caution)."""
         for priority_queue in self.queues.values():
@@ -333,25 +333,25 @@ class ExecutionRouter:
 class ExecutionOrchestrator:
     """
     Orchestrates trade execution across multiple infrastructure types.
-    
+
     This is the main coordinator that:
     - Pulls orders from priority queues
     - Routes to appropriate execution backend
     - Handles retries and failures
     - Monitors performance
     """
-    
+
     def __init__(self, router: ExecutionRouter):
         """
         Initialize execution orchestrator.
-        
+
         Args:
             router: ExecutionRouter instance
         """
         self.router = router
         self.running = False
         self.worker_thread = None
-        
+
     def start(self):
         """Start execution worker thread."""
         if not self.running:
@@ -359,7 +359,7 @@ class ExecutionOrchestrator:
             self.worker_thread = threading.Thread(target=self._execution_worker, daemon=True)
             self.worker_thread.start()
             logger.info("ExecutionOrchestrator started")
-    
+
     def stop(self):
         """Stop execution worker thread."""
         if self.running:
@@ -367,51 +367,51 @@ class ExecutionOrchestrator:
             if self.worker_thread:
                 self.worker_thread.join(timeout=5.0)
             logger.info("ExecutionOrchestrator stopped")
-    
+
     def _execution_worker(self):
         """
         Worker thread that processes orders from queues.
-        
+
         This runs continuously and processes orders based on priority.
         """
         while self.running:
             try:
                 # Get next order
                 request = self.router.get_next_order()
-                
+
                 if request is None:
                     # No orders, sleep briefly
                     time.sleep(0.1)
                     continue
-                
+
                 # Execute order
                 start_time = datetime.now()
                 success = self._execute_order(request)
                 latency_ms = (datetime.now() - start_time).total_seconds() * 1000
-                
+
                 # Record metrics
                 self.router.record_execution(
                     tier=request["tier"],
                     success=success,
                     latency_ms=latency_ms
                 )
-                
+
                 logger.info(
                     f"Order executed: tier={request['tier']}, "
                     f"success={success}, latency={latency_ms:.1f}ms"
                 )
-                
+
             except Exception as e:
                 logger.error(f"Error in execution worker: {e}")
                 time.sleep(1.0)  # Back off on error
-    
+
     def _execute_order(self, request: Dict) -> bool:
         """
         Execute a single order.
-        
+
         Args:
             request: Execution request
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -420,15 +420,15 @@ class ExecutionOrchestrator:
         # - bot/broker_integration.py for crypto
         # - Stock broker APIs for equities
         # - Derivatives broker APIs for futures/options
-        
+
         order = request["order"]
         tier = request["tier"]
         infrastructure = request["infrastructure"]
-        
+
         logger.info(
             f"Executing order on {infrastructure.value} infrastructure: "
             f"tier={tier}, order={order}"
         )
-        
+
         # Placeholder - actual execution to be implemented
         return True

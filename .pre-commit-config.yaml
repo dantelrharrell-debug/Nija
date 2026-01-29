@@ -129,24 +129,24 @@ repos:
     hooks:
       - id: check-env-files
         name: Prevent committing .env files with secrets
-        entry: bash -c 'if git diff --cached --name-only | grep -qE "^\.env$"; then echo "ERROR: Cannot commit .env file. Use .env.example instead."; exit 1; fi'
+        entry: bash -c 'if git diff --cached --name-only | grep -qE "^\.env$"; then echo "ERROR Cannot commit .env file. Use .env.example instead."; exit 1; fi'
         language: system
         pass_filenames: false
-        stages: [commit]
+        stages: [pre-commit]
 
       - id: check-api-keys
         name: Check for hardcoded API keys
-        entry: bash -c 'git diff --cached | grep -iE "(api[_-]?key|api[_-]?secret|coinbase[_-]?api|private[_-]?key|access[_-]?token).*=.*['\''\"]\w{20,}" && echo "ERROR: Potential hardcoded API key detected!" && exit 1 || exit 0'
+        entry: bash -c 'git diff --cached | grep -iE "(api[_-]?key|api[_-]?secret|coinbase[_-]?api|private[_-]?key|access[_-]?token).*=.*[\"]\w{20,}" && echo "ERROR Potential hardcoded API key detected!" && exit 1 || exit 0'
         language: system
         pass_filenames: false
-        stages: [commit]
+        stages: [pre-commit]
 
       - id: check-pem-files
         name: Prevent committing PEM/certificate files
-        entry: bash -c 'if git diff --cached --name-only | grep -qE "\.pem$|\.key$|\.crt$"; then echo "ERROR: Cannot commit certificate/key files."; exit 1; fi'
+        entry: bash -c 'if git diff --cached --name-only | grep -qE "\.pem$|\.key$|\.crt$"; then echo "ERROR Cannot commit certificate/key files."; exit 1; fi'
         language: system
         pass_filenames: false
-        stages: [commit]
+        stages: [pre-commit]
 
 # Configuration for CI (run all hooks on all files)
 ci:

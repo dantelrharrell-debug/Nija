@@ -7,7 +7,7 @@ The bot was placing trades that violated tier-based risk management limits when 
 ### Example Scenario (from logs)
 - **Account:** USER account, STARTER tier with $58.78 balance
 - **Max allowed trade:** $8.82 (15% of balance per tier limits)
-- **Trade request:** $10.58 
+- **Trade request:** $10.58
 - **What happened:**
   1. Tier auto-resize reduced trade to $8.82 ✅ (within tier limits)
   2. Kraken minimum enforcement bumped it back to $10.00 ❌ (violating tier limits)
@@ -66,7 +66,7 @@ Modified the Kraken minimum enforcement logic to respect tier limits for USER ac
    ```python
    if quantity < kraken_min:
        is_master_account = (self.account_type == AccountType.MASTER)
-       
+
        if tier_was_auto_resized and not is_master_account:
            # USER account: REJECT to protect tier limits
            return {"status": "error", "error": "..."}
@@ -157,7 +157,7 @@ Created comprehensive test script: `test_tier_kraken_conflict.py`
 
 ### Test Case 2: USER Account - Valid Trade
 - Account type: USER
-- Balance: $100.00 (SAVER tier)  
+- Balance: $100.00 (SAVER tier)
 - Requested: $12.00
 - Tier-adjusted: $10.00 (10% of $100)
 - Kraken minimum: $10.00
@@ -240,6 +240,6 @@ The tier system is designed to grow with your account - this protection ensures 
 ## Related Documentation
 
 - `TIER_AND_RISK_CONFIG_GUIDE.md` - Tier system overview
-- `TIER_EXECUTION_GUIDE.md` - Tier execution details  
+- `TIER_EXECUTION_GUIDE.md` - Tier execution details
 - `KRAKEN_TRADING_GUIDE.md` - Kraken-specific requirements
 - `STARTER_SAFE_PROFILE.md` - STARTER tier specifics

@@ -27,7 +27,7 @@ Total Fees: $2.34
    - Exit: $51,000.00
    - Net P&L: **+$0.80** (+0.8%)
    - Exit Reason: Take profit hit
-   
+
 2. **❌ ETH-USD** (Losing Trade)
    - Entry: $103.65
    - Exit: $93.32
@@ -176,7 +176,7 @@ Based on the logs from 16:12-16:16 UTC:
 
 **Success Criteria:**
 - Net P&L turns positive (>$0)
-- Win rate maintains 50%+ 
+- Win rate maintains 50%+
 - Average wins > average losses
 
 ## 🛠️ How to Check Status Yourself
@@ -244,8 +244,8 @@ While NIJA has lost money historically, it is **currently protecting your capita
 
 ---
 
-**Report Generated**: January 27, 2026 16:30 UTC  
-**Data Sources**: 
+**Report Generated**: January 27, 2026 16:30 UTC
+**Data Sources**:
 - Trade Ledger Database (`data/trade_ledger.db`)
 - Trade History JSON (`data/trade_history.json`)
 - Bot Logs (provided in problem statement)

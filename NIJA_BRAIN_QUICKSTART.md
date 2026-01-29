@@ -136,21 +136,21 @@ if analysis['decision'] == 'long' and analysis['confidence'] > 0.70:
         side='long',
         size=analysis['components']['orchestrator']['consensus']['position_size']
     )
-    
+
 # 3. Monitor position
 while position['is_open']:
     # Get current data
     df = get_latest_data('BTC-USD')
     indicators = calculate_indicators(df)
-    
+
     # Ask Brain: Should I exit?
     exit_eval = brain.evaluate_exit('BTC-USD', df, indicators, position)
-    
+
     if exit_eval['should_exit']:
         # 4. Execute exit
         exit_size = position['size'] * exit_eval['exit_pct']
         close_position(position, exit_size, exit_eval['reason'])
-        
+
         # 5. Record result
         brain.record_trade_completion({
             'trade_id': position['id'],
@@ -223,33 +223,33 @@ brain.record_trade_completion(trade_data)
 
 ## Common Questions
 
-**Q: Does this replace my existing strategies?**  
+**Q: Does this replace my existing strategies?**
 A: No, it coordinates them. It runs multiple strategies and uses ensemble voting.
 
-**Q: How many strategies do I need?**  
+**Q: How many strategies do I need?**
 A: Minimum 2 for ensemble voting. System works with v7.1, v7.2, or custom strategies.
 
-**Q: What's the learning curve?**  
+**Q: What's the learning curve?**
 A: 5 minutes to start, 30 minutes to understand all features.
 
-**Q: Will this slow down my trading?**  
+**Q: Will this slow down my trading?**
 A: No. Analysis takes <100ms per opportunity.
 
-**Q: Can I disable components?**  
+**Q: Can I disable components?**
 A: Yes. Each component (orchestrator, execution, learning, metrics) is optional.
 
 ## Troubleshooting
 
-**"Strategy not registered"**  
+**"Strategy not registered"**
 → Use `create_default_orchestrator()` or register manually
 
-**"No signals generated"**  
+**"No signals generated"**
 → Check if strategies are in ACTIVE state, not MONITORING
 
-**"Ensemble vote failed"**  
+**"Ensemble vote failed"**
 → Need 2+ strategies to agree. Lower `ensemble_min_votes` or add more strategies
 
-**"Learning engine not working"**  
+**"Learning engine not working"**
 → Need minimum 10-30 trades before optimization kicks in
 
 ## Next Steps
@@ -268,7 +268,7 @@ A: Yes. Each component (orchestrator, execution, learning, metrics) is optional.
 
 ---
 
-**Version**: 1.0  
-**Status**: ✅ Production Ready  
-**Lines of Code**: 2,863  
+**Version**: 1.0
+**Status**: ✅ Production Ready
+**Lines of Code**: 2,863
 **Components**: 4 (All operational)

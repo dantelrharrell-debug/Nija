@@ -122,7 +122,7 @@ Master fee: 5% = $2,500
 - 4 LIVABLE @ $499/mo = $1,996/mo
 - 1 BALLER @ $999/mo = $999/mo
 
-**Monthly Recurring Revenue**: $11,550/mo  
+**Monthly Recurring Revenue**: $11,550/mo
 **Annual Recurring Revenue**: $138,600/year
 
 Plus performance fees and copy trading fees!
@@ -361,5 +361,5 @@ The NIJA Multi-Asset SaaS Platform is fully implemented, tested, documented, and
 
 *Built with precision. Tested with rigor. Ready for scale.*
 
-**NIJA Multi-Asset Platform v2.0**  
+**NIJA Multi-Asset Platform v2.0**
 *Trading Intelligence Across All Markets*

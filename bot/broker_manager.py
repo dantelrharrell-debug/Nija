@@ -24,9 +24,9 @@ import threading
 # not just whether requests is available (it's used elsewhere for HTTP calls)
 try:
     from requests.exceptions import (
-        Timeout, 
-        ReadTimeout, 
-        ConnectTimeout, 
+        Timeout,
+        ReadTimeout,
+        ConnectTimeout,
         ConnectionError as RequestsConnectionError  # Avoid shadowing built-in ConnectionError
     )
     REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE = True
@@ -113,7 +113,7 @@ except ImportError:
 # Import Kraken Rate Profiles for separate entry/exit API budgets (Jan 23, 2026)
 try:
     from bot.kraken_rate_profiles import (
-        KrakenRateMode, 
+        KrakenRateMode,
         KrakenAPICategory,
         get_kraken_rate_profile,
         get_category_for_method,
@@ -176,7 +176,7 @@ except ImportError:
         import sys
         import io
         from contextlib import contextmanager
-        
+
         @contextmanager
         def suppress_pykrakenapi_prints():
             original_stdout = sys.stdout
@@ -216,7 +216,7 @@ except ImportError:
 #   - PROTECTION ($0.50): Absolute minimum to allow bot to start (hard requirement)
 #   - TRADING ($10.00): Default minimum for trading (can be raised via environment variable)
 #   This allows small accounts ($10-20) to trade while preventing dust-level trading
-# 
+#
 # ACCOUNT SIZE MODES: Can be customized via MINIMUM_TRADING_BALANCE environment variable:
 #   - Small accounts: $10-15 (default, suitable for testing and small capital)
 #   - Standard accounts: $25+ (better for fee efficiency and multiple positions)
@@ -252,7 +252,7 @@ KRAKEN_STARTUP_DELAY_SECONDS = 5.0  # Similar to Coinbase's 40s delay but shorte
 
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
-    'your_passphrase', 'YOUR_PASSPHRASE', 
+    'your_passphrase', 'YOUR_PASSPHRASE',
     'passphrase', 'PASSPHRASE',
     'your_password', 'YOUR_PASSWORD',
     'password', 'PASSWORD'
@@ -286,17 +286,17 @@ _FIRST_TRADE_LOCK = threading.Lock()
 def normalize_symbol_for_broker(symbol: str, broker_name: str) -> str:
     """
     Normalize a trading symbol to the format expected by a specific broker.
-    
+
     This prevents cross-broker symbol compatibility issues like trying to
     trade Binance-only pairs (BUSD) on Kraken, or using wrong separators.
-    
+
     Args:
         symbol: Input symbol in any format (ETH-USD, ETH.BUSD, ETHUSDT, etc.)
         broker_name: Broker name ('coinbase', 'kraken', 'binance', 'okx', etc.)
-    
+
     Returns:
         Normalized symbol in broker-specific format
-        
+
     Examples:
         normalize_symbol_for_broker("ETH.BUSD", "kraken") → "ETH-USD"
         normalize_symbol_for_broker("ETH-USD", "kraken") → "ETH-USD"
@@ -305,15 +305,15 @@ def normalize_symbol_for_broker(symbol: str, broker_name: str) -> str:
     """
     if not symbol or not broker_name:
         return symbol
-    
+
     broker_name = broker_name.lower()
     symbol_upper = symbol.upper()
-    
+
     # Extract base and quote currencies from various formats
     # Handle formats: ETH-USD, ETH.BUSD, ETHUSDT, ETH/USD
     base = None
     quote = None
-    
+
     # Split on common separators
     if '-' in symbol_upper:
         parts = symbol_upper.split('-')
@@ -342,7 +342,7 @@ def normalize_symbol_for_broker(symbol: str, broker_name: str) -> str:
         else:
             # Can't parse - return as-is
             return symbol
-    
+
     # CRITICAL: Map BUSD (Binance-only) to supported stablecoins
     # Kraken, Coinbase, OKX don't support BUSD
     if quote == 'BUSD':
@@ -356,35 +356,35 @@ def normalize_symbol_for_broker(symbol: str, broker_name: str) -> str:
             quote = 'BUSD'  # Keep BUSD for Binance
         else:
             quote = 'USD'  # Default to USD for unknown brokers
-    
+
     # Broker-specific formatting
     if broker_name == 'kraken':
         # Kraken: ETH-USD (dash separator, matches kraken_symbol_mapper expectations)
         return f"{base}-{quote}"
-        
+
     elif broker_name == 'coinbase':
         # Coinbase format: ETH-USD, BTC-USDT (dash separator)
         # NOTE: Coinbase supports both USD and USDT/USDC pairs
         # We don't auto-convert USDC/USDT to USD because some assets
         # may only have USDT/USDC pairs available, not USD
         return f"{base}-{quote}"
-        
+
     elif broker_name == 'binance':
         # Binance format: ETHUSDT, BTCBUSD (no separator)
         return f"{base}{quote}"
-        
+
     elif broker_name == 'okx':
         # OKX format: ETH-USDT, BTC-USDT (dash separator, prefers USDT)
         # Convert USD to USDT for OKX
         if quote == 'USD':
             quote = 'USDT'
         return f"{base}-{quote}"
-        
+
     elif broker_name == 'alpaca':
         # Alpaca format: varies, but generally handles standard formats
         # Keep dash separator
         return f"{base}-{quote}"
-        
+
     else:
         # Unknown broker - return with dash separator (most common)
         return f"{base}-{quote}"
@@ -399,7 +399,7 @@ FORBIDDEN_JITTER_MAX = 30.0   # Maximum additional random delay for 403 "Forbidd
 
 # Fallback market list - popular crypto trading pairs used when API fails
 FALLBACK_MARKETS = [
-    'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 
+    'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD',
     'DOGE-USD', 'MATIC-USD', 'DOT-USD', 'LINK-USD', 'UNI-USD',
     'AVAX-USD', 'ATOM-USD', 'LTC-USD', 'NEAR-USD', 'ALGO-USD',
     'XLM-USD', 'HBAR-USD', 'APT-USD', 'ARB-USD', 'OP-USD',
@@ -416,16 +416,16 @@ def _serialize_object_to_dict(obj) -> Dict:
     """
     Safely convert any object to a dictionary for JSON serialization.
     Handles nested objects, dataclasses, and Coinbase SDK response objects.
-    
+
     Args:
         obj: Any object to convert
-        
+
     Returns:
         dict: Flattened dictionary representation
     """
     if obj is None:
         return {}
-    
+
     if isinstance(obj, dict):
         return obj
 
@@ -439,14 +439,14 @@ def _serialize_object_to_dict(obj) -> Dict:
                 return ast.literal_eval(obj)
             except Exception:
                 return {"_raw": obj, "_type": type(obj).__name__}
-    
+
     # Try JSON serialization first (handles dataclasses with json.JSONEncoder)
     try:
         json_str = json.dumps(obj, default=str)
         return json.loads(json_str)
     except Exception:
         pass
-    
+
     # Fallback: convert object attributes
     try:
         result = {}
@@ -477,7 +477,7 @@ class BrokerType(Enum):
 class AccountType(Enum):
     """
     Account type for separating master (Nija system) from user accounts.
-    
+
     MASTER: Nija master account that controls the system
     USER: Individual user/investor accounts
     """
@@ -487,7 +487,7 @@ class AccountType(Enum):
 
 class BaseBroker(ABC):
     """Base class for all broker integrations"""
-    
+
     def __init__(self, broker_type: BrokerType, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         self.broker_type = broker_type
         self.account_type = account_type  # MASTER or USER account
@@ -496,28 +496,28 @@ class BaseBroker(ABC):
         self.credentials_configured = False  # Track if credentials were provided
         self.last_connection_error = None  # Track last connection error for troubleshooting
         self.exit_only_mode = False  # Default: not in exit-only mode (can be overridden by subclasses)
-    
+
     @abstractmethod
     def connect(self) -> bool:
         """Establish connection to broker"""
         pass
-    
+
     @abstractmethod
     def get_account_balance(self) -> float:
         """Get USD trading balance. Must be implemented by each broker."""
         pass
-    
+
     @abstractmethod
     def get_positions(self) -> List[Dict]:
         """Get open positions. Must be implemented by each broker."""
         pass
-    
+
     @abstractmethod
     def place_market_order(
-        self, 
-        symbol: str, 
-        side: str, 
-        quantity: float, 
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
         size_type: str = 'quote',
         ignore_balance: bool = False,
         ignore_min_trade: bool = False,
@@ -525,7 +525,7 @@ class BaseBroker(ABC):
     ) -> Dict:
         """
         Place market order. Must be implemented by each broker.
-        
+
         Args:
             symbol: Trading symbol
             side: 'buy' or 'sell'
@@ -536,7 +536,7 @@ class BaseBroker(ABC):
             force_liquidate: Bypass ALL validation (EMERGENCY ONLY)
         """
         pass
-    
+
     def close_position(self, symbol: str, base_size: Optional[float] = None, **kwargs) -> Dict:
         """Default implementation calls place_market_order. Brokers can override."""
         quantity = kwargs.get('quantity', base_size)
@@ -545,24 +545,24 @@ class BaseBroker(ABC):
         if quantity is None:
             raise ValueError("close_position requires a quantity or base_size")
         return self.place_market_order(symbol, side, quantity, size_type)
-    
+
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """Get candle data. Optional method, brokers can override."""
         return []
-    
+
     def get_current_price(self, symbol: str) -> float:
         """Get current price. Optional method, brokers can override."""
         return 0.0
-    
+
     def get_total_capital(self, include_positions: bool = True) -> Dict:
         """
         Get total capital including both free balance and open position values.
-        
+
         PRO MODE Feature: Default implementation for brokers that don't override.
-        
+
         Args:
             include_positions: If True, includes position values in total capital (default True)
-        
+
         Returns:
             dict: Capital breakdown with keys:
                 - free_balance: Available USD/USDC for new trades
@@ -574,20 +574,20 @@ class BaseBroker(ABC):
         try:
             # Get free balance
             free_balance = self.get_account_balance()
-            
+
             # Get positions and calculate their values
             positions = self.get_positions()
             position_value_total = 0.0
             position_details = []
-            
+
             if include_positions:
                 for pos in positions:
                     symbol = pos.get('symbol')
                     quantity = pos.get('quantity', 0)
-                    
+
                     if not symbol or quantity <= 0:
                         continue
-                    
+
                     # Get current price for position
                     try:
                         price = self.get_current_price(symbol)
@@ -602,9 +602,9 @@ class BaseBroker(ABC):
                             })
                     except Exception:
                         continue
-            
+
             total_capital = free_balance + position_value_total
-            
+
             return {
                 'free_balance': free_balance,
                 'position_value': position_value_total,
@@ -612,7 +612,7 @@ class BaseBroker(ABC):
                 'positions': position_details,
                 'position_count': len(position_details)
             }
-            
+
         except Exception:
             return {
                 'free_balance': 0.0,
@@ -621,38 +621,38 @@ class BaseBroker(ABC):
                 'positions': [],
                 'position_count': 0
             }
-    
+
     def get_market_data(self, symbol: str, timeframe: str = '5m', limit: int = 100) -> Dict:
         """Get market data. Optional method, brokers can override."""
         candles = self.get_candles(symbol, timeframe, limit)
         return {'candles': candles}
-    
+
     def supports_asset_class(self, asset_class: str) -> bool:
         """Check if broker supports asset class. Optional method, brokers can override."""
         return False
-    
+
     def supports_symbol(self, symbol: str) -> bool:
         """
         Check if broker supports a given trading symbol.
-        
+
         This is a critical safety check to prevent attempting trades on unsupported pairs.
         For example, Kraken doesn't support BUSD (Binance-only stablecoin).
-        
+
         Args:
             symbol: Trading symbol to check (any format)
-            
+
         Returns:
             bool: True if broker supports this symbol, False otherwise
-            
+
         Default implementation: extracts quote currency and checks against known unsupported pairs.
         Brokers can override for more sophisticated checks (e.g., API-based validation).
         """
         if not symbol:
             return False
-        
+
         symbol_upper = symbol.upper()
         broker_name = self.broker_type.value.lower()
-        
+
         # Extract quote currency (USD, USDT, BUSD, etc.)
         quote = None
         if '-' in symbol_upper:
@@ -673,11 +673,11 @@ class BaseBroker(ABC):
                 quote = 'BUSD'
             elif symbol_upper.endswith('USD'):
                 quote = 'USD'
-        
+
         if not quote:
             # Can't determine quote currency - assume supported
             return True
-        
+
         # Broker-specific unsupported pairs
         unsupported = {
             'kraken': ['BUSD'],  # Kraken doesn't support Binance USD
@@ -685,31 +685,31 @@ class BaseBroker(ABC):
             'okx': ['BUSD'],  # OKX doesn't support BUSD
             'alpaca': ['BUSD', 'USDT', 'USDC'],  # Alpaca is stocks/traditional assets
         }
-        
+
         # Check if quote currency is unsupported for this broker
         if broker_name in unsupported:
             if quote in unsupported[broker_name]:
                 logger.debug(f"⏭️ {broker_name.title()} doesn't support {quote} pairs (symbol: {symbol})")
                 return False
-        
+
         return True
-    
+
     @property
     def min_trade_size(self) -> float:
         """
         Minimum trade size for this broker (hard block).
         Trades below this size will be rejected.
-        
+
         Broker-specific minimums:
         - Coinbase: $5.00 (higher fees require larger trades)
         - Kraken: $5.00 (allows smaller positions)
         - Default: $5.00
-        
+
         Returns:
             float: Minimum trade size in USD
         """
         broker_name = self.broker_type.value.lower()
-        
+
         # Broker-specific minimums
         minimums = {
             'coinbase': 5.00,
@@ -718,22 +718,22 @@ class BaseBroker(ABC):
             'okx': 5.00,
             'alpaca': 1.00,  # Stocks/traditional assets have lower minimums
         }
-        
+
         return minimums.get(broker_name, 5.00)
-    
+
     @property
     def warn_trade_size(self) -> float:
         """
         Warning threshold for trade size.
         Trades below this size will generate a warning but still execute.
-        
+
         Set to $10 for copy trading optics (user experience).
-        
+
         Returns:
             float: Warning threshold in USD
         """
         return 10.00
-    
+
     def execute_order(
         self,
         symbol: str,
@@ -746,17 +746,17 @@ class BaseBroker(ABC):
     ) -> Dict:
         """
         Execute order with broker-specific pre-flight validation.
-        
+
         This is a wrapper around place_market_order that adds:
         1. Symbol support validation
         2. EXIT-ONLY mode validation
         3. Minimum trade size validation with warnings
-        
+
         One signal → Broker-specific execution
         SIGNAL: AUSD-USD BUY
         ├── Kraken → SUPPORTED → EXECUTE ✅
         └── Coinbase → UNSUPPORTED + EXIT-ONLY → SKIP 🚫
-        
+
         Args:
             symbol: Trading symbol
             side: 'buy' or 'sell'
@@ -765,13 +765,13 @@ class BaseBroker(ABC):
             ignore_balance: Bypass balance validation (EMERGENCY ONLY)
             ignore_min_trade: Bypass minimum trade size validation (EMERGENCY ONLY)
             force_liquidate: Bypass ALL validation (EMERGENCY ONLY)
-        
+
         Returns:
             Dict with order result or error
         """
         broker_name = self.broker_type.value.lower()
         broker_title = broker_name.title()
-        
+
         # PRE-FLIGHT CHECK 1: Symbol support validation
         # Skip if symbol not supported by this broker
         if not self.supports_symbol(symbol):
@@ -785,7 +785,7 @@ class BaseBroker(ABC):
                 "partial_fill": False,
                 "filled_pct": 0.0
             }
-        
+
         # PRE-FLIGHT CHECK 2: EXIT-ONLY mode validation
         # Block BUY orders when broker is in exit-only mode
         if side.lower() == 'buy' and self.exit_only_mode and not force_liquidate:
@@ -799,7 +799,7 @@ class BaseBroker(ABC):
                 "partial_fill": False,
                 "filled_pct": 0.0
             }
-        
+
         # PRE-FLIGHT CHECK 3: Minimum trade size validation
         # Only check for quote (USD) size, not base (crypto quantity)
         if size_type == 'quote' and not ignore_min_trade and not force_liquidate:
@@ -809,7 +809,7 @@ class BaseBroker(ABC):
                 logger.warning(f"      Size: ${quantity:.2f} < ${self.warn_trade_size:.2f} (warning threshold)")
                 logger.warning(f"      Broker: {broker_title}")
                 logger.warning(f"      💡 For better copy trading optics, consider larger positions")
-            
+
             # Check hard minimum (block)
             if quantity < self.min_trade_size:
                 logger.info(f"   ❌ Trade rejected for {symbol}")
@@ -822,7 +822,7 @@ class BaseBroker(ABC):
                     "partial_fill": False,
                     "filled_pct": 0.0
                 }
-        
+
         # All pre-flight checks passed - execute order
         return self.place_market_order(
             symbol=symbol,
@@ -840,24 +840,24 @@ class BaseBroker(ABC):
 def _is_invalid_product_error(error_message: str) -> bool:
     """
     Check if an error message indicates an invalid/delisted product.
-    
+
     This function is used both for logging filter and exception handling to
     maintain consistency in how we detect invalid ProductID errors.
-    
+
     Args:
         error_message: The error message to check (case-insensitive)
-    
+
     Returns:
         True if the error indicates an invalid product, False otherwise
     """
     error_str = str(error_message).lower()
-    
+
     # Check for various patterns that indicate invalid/delisted products
     has_invalid_keyword = 'invalid' in error_str and ('product' in error_str or 'symbol' in error_str)
     is_productid_invalid = 'productid is invalid' in error_str
     is_400_invalid_arg = '400' in error_str and 'invalid_argument' in error_str
     is_no_key_error = 'no key' in error_str and 'was found' in error_str
-    
+
     return has_invalid_keyword or is_productid_invalid or is_400_invalid_arg or is_no_key_error
 
 
@@ -866,14 +866,14 @@ class _CoinbaseInvalidProductFilter(logging.Filter):
     def filter(self, record):
         """
         Determine if a log record should be logged.
-        
+
         Filters out ERROR-level logs from Coinbase SDK that contain
         invalid ProductID error messages, as these are expected errors
         that are already handled by exception handlers.
-        
+
         Args:
             record: LogRecord instance to be filtered
-        
+
         Returns:
             False if the record should be filtered out (invalid ProductID error),
             True if the record should be logged normally
@@ -881,16 +881,16 @@ class _CoinbaseInvalidProductFilter(logging.Filter):
         # Only filter records from coinbase.RESTClient logger
         if not record.name.startswith('coinbase'):
             return True
-        
+
         # Check if this is an invalid ProductID error using shared detection logic
         msg = record.getMessage()
         is_invalid_product = _is_invalid_product_error(msg)
-        
+
         # Completely suppress ERROR logs for invalid products
         # Return False to prevent the log from being emitted at all
         if is_invalid_product and record.levelno >= logging.ERROR:
             return False  # Filter out completely
-        
+
         # Let all other logs through
         return True
 
@@ -898,7 +898,7 @@ class _CoinbaseInvalidProductFilter(logging.Filter):
 # Coinbase-specific broker implementation
 class CoinbaseBroker(BaseBroker):
     """Coinbase Advanced Trade broker implementation"""
-    
+
     def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         """Initialize Coinbase broker"""
         super().__init__(BrokerType.COINBASE, account_type=account_type, user_id=user_id)
@@ -906,7 +906,7 @@ class CoinbaseBroker(BaseBroker):
         self.portfolio_uuid = None
         self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
         self._invalid_symbols_cache = set()  # Cache for known invalid/delisted symbols (CRITICAL FIX Jan 11, 2026)
-        
+
         # Cache for account data to prevent redundant API calls during initialization
         # NOTE: These caches are only accessed during bot startup in the main thread,
         # before any trading threads are spawned. Thread safety is not a concern as
@@ -916,7 +916,7 @@ class CoinbaseBroker(BaseBroker):
         self._balance_cache = None
         self._balance_cache_time = None
         self._cache_ttl = 120  # Cache TTL in seconds (increased from 30s to 120s to reduce API calls and avoid rate limits)
-        
+
         # Initialize rate limiter for API calls to prevent 403/429 errors
         # Coinbase has strict rate limits: ~10 req/s burst but much lower sustained rate
         # Using 12 requests per minute (1 every 5 seconds) for safe sustained operation
@@ -935,7 +935,7 @@ class CoinbaseBroker(BaseBroker):
         else:
             self._rate_limiter = None
             logger.warning("⚠️ RateLimiter not available - using manual delays only")
-        
+
         # Initialize position tracker for profit-based exits
         try:
             from position_tracker import PositionTracker
@@ -944,56 +944,56 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logger.warning(f"⚠️ Position tracker initialization failed: {e}")
             self.position_tracker = None
-        
+
         # Balance tracking for fail-closed behavior (Jan 19, 2026)
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
         self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
-        
+
         # FIX 2: EXIT-ONLY mode when balance is below minimum (Jan 20, 2026)
         # Allows emergency sells even when account is too small for new entries
         self.exit_only_mode = False
-        
+
         # CRITICAL FIX (Jan 11, 2026): Install logging filter to suppress invalid ProductID errors
         # The Coinbase SDK logs "ProductID is invalid" as ERROR before raising exceptions
         # These errors are expected (delisted coins) and already handled by our exception logic
         # This filter prevents log pollution while preserving our own error handling
         self._install_logging_filter()
-    
+
     def _install_logging_filter(self):
         """Install logging filter to suppress Coinbase SDK invalid ProductID errors"""
         # NOTE: Unlike handlers, filters are NOT inherited by child loggers.
         # We must add the filter to both the parent and child loggers explicitly.
         # See: https://docs.python.org/3/library/logging.html#filter-objects
-        
+
         # Apply filter to parent 'coinbase' logger
         coinbase_logger = logging.getLogger('coinbase')
         coinbase_logger.addFilter(_CoinbaseInvalidProductFilter())
-        
+
         # Apply filter to 'coinbase.RESTClient' child logger (not inherited from parent)
         rest_logger = logging.getLogger('coinbase.RESTClient')
         rest_logger.addFilter(_CoinbaseInvalidProductFilter())
-        
+
         logging.debug("✅ Coinbase SDK logging filter installed (suppresses invalid ProductID errors)")
-    
+
     def _is_cache_valid(self, cache_time) -> bool:
         """
         Check if a cache entry is still valid based on its timestamp.
-        
+
         Args:
             cache_time: Timestamp when cache was last updated (or None if never cached)
-            
+
         Returns:
             True if cache is still valid, False otherwise
         """
         return cache_time is not None and (time.time() - cache_time) < self._cache_ttl
-    
+
     def clear_cache(self):
         """
         Clear all cached data to force fresh API calls.
-        
+
         This is useful when stale cached data needs to be refreshed,
         particularly for balance checking immediately after connection.
         """
@@ -1002,21 +1002,21 @@ class CoinbaseBroker(BaseBroker):
         self._accounts_cache = None
         self._accounts_cache_time = None
         logger.debug("Cache cleared (balance and accounts)")
-    
+
     def _api_call_with_retry(self, api_func, *args, max_retries=5, base_delay=5.0, **kwargs):
         """
         Execute an API call with exponential backoff retry logic for rate limiting and connection errors.
-        
+
         Args:
             api_func: The API function to call
             *args: Positional arguments for the API function
             max_retries: Maximum number of retry attempts (default: 5)
             base_delay: Base delay in seconds for exponential backoff (default: 5.0)
             **kwargs: Keyword arguments for the API function
-            
+
         Returns:
             The API response if successful
-            
+
         Raises:
             Exception: If all retries are exhausted
         """
@@ -1027,7 +1027,7 @@ class CoinbaseBroker(BaseBroker):
                 # Catch all exceptions to handle various API error types (HTTP errors, network errors, etc.)
                 # This is intentionally broad to ensure all rate limiting and connection errors are caught
                 error_msg = str(e).lower()
-                
+
                 # Check if this is a connection error (network issues, connection reset, etc.)
                 is_connection_error = (
                     'connection' in error_msg or
@@ -1041,7 +1041,7 @@ class CoinbaseBroker(BaseBroker):
                     'eof occurred' in error_msg or
                     'broken pipe' in error_msg
                 )
-                
+
                 # Check if this is a rate limiting error (403, 429, or "too many" errors)
                 # Use precise pattern matching to avoid false positives
                 is_403_error = (
@@ -1056,14 +1056,14 @@ class CoinbaseBroker(BaseBroker):
                     'too many requests' in error_msg
                 )
                 is_rate_limit = is_403_error or is_429_error
-                
+
                 # Determine if error is retryable
                 is_retryable = is_rate_limit or is_connection_error
-                
+
                 # If this is the last attempt or not a retryable error, raise
                 if attempt >= max_retries - 1 or not is_retryable:
                     raise
-                
+
                 # Calculate exponential backoff delay with maximum cap
                 # For connection errors, use moderate delays
                 # For 403 errors, use longer delays (more aggressive backoff)
@@ -1076,16 +1076,16 @@ class CoinbaseBroker(BaseBroker):
                 else:
                     delay = min(base_delay * (2 ** attempt), 60.0)  # 5s, 10s, 20s, 40s, 60s (capped)
                     error_type = "Rate limit (429)"
-                
+
                 logging.warning(f"⚠️  API {error_type} (attempt {attempt + 1}/{max_retries}): {e}")
                 logging.warning(f"   Waiting {delay:.1f}s before retry...")
                 time.sleep(delay)
-    
+
     def _log_trade_to_journal(self, symbol: str, side: str, price: float,
                                size_usd: float, quantity: float, pnl_data: dict = None):
         """
         Log trade to trade_journal.jsonl with P&L tracking.
-        
+
         Args:
             symbol: Trading symbol
             side: 'BUY' or 'SELL'
@@ -1096,7 +1096,7 @@ class CoinbaseBroker(BaseBroker):
         """
         try:
             from datetime import datetime
-            
+
             trade_entry = {
                 "timestamp": datetime.now().isoformat(),
                 "symbol": symbol,
@@ -1105,64 +1105,64 @@ class CoinbaseBroker(BaseBroker):
                 "size_usd": size_usd,
                 "quantity": quantity
             }
-            
+
             # Add P&L data for SELL orders
             if pnl_data and side == 'SELL':
                 trade_entry["entry_price"] = pnl_data.get('entry_price', 0)
                 trade_entry["pnl_dollars"] = pnl_data.get('pnl_dollars', 0)
                 trade_entry["pnl_percent"] = pnl_data.get('pnl_percent', 0)
                 trade_entry["entry_value"] = pnl_data.get('entry_value', 0)
-            
+
             # Append to trade journal file
             journal_file = "trade_journal.jsonl"
             with open(journal_file, 'a') as f:
                 f.write(json.dumps(trade_entry) + '\n')
-            
+
             logger.debug(f"Trade logged to journal: {symbol} {side} @ ${price:.2f}")
         except Exception as e:
             logger.warning(f"Failed to log trade to journal: {e}")
-    
+
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade API with retry logic"""
         try:
             from coinbase.rest import RESTClient
             import os
             import time
-            
+
             # Get credentials from environment
             api_key = os.getenv("COINBASE_API_KEY")
             api_secret = os.getenv("COINBASE_API_SECRET")
-            
+
             if not api_key or not api_secret:
                 logging.error("❌ Coinbase API credentials not found")
                 return False
-            
+
             # Initialize REST client
             self.client = RESTClient(api_key=api_key, api_secret=api_secret)
-            
+
             # Test connection by fetching accounts with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
             max_attempts = 10  # Increased from 6 to give more chances for API to recover from rate limits
-            
+
             for attempt in range(1, max_attempts + 1):
                 try:
                     accounts_resp = self.client.get_accounts()
-                    
+
                     # Cache accounts response to avoid redundant API calls during initialization
                     self._accounts_cache = accounts_resp
                     self._accounts_cache_time = time.time()
-                    
+
                     self.connected = True
-                    
+
                     if attempt > 1:
                         logging.info(f"✅ Connected to Coinbase Advanced Trade API (succeeded on attempt {attempt})")
                     else:
                         logging.info("✅ Connected to Coinbase Advanced Trade API")
-                    
+
                     # Portfolio detection (will use cached accounts)
                     self._detect_portfolio()
-                    
+
                     # 🚑 FIX 2: DISABLE COINBASE FOR SMALL ACCOUNTS
                     # If total equity < $75, disable Coinbase and route to Kraken
                     # This prevents Coinbase fees from eating small accounts
@@ -1186,9 +1186,9 @@ class CoinbaseBroker(BaseBroker):
                             logging.error("=" * 70)
                             self.connected = False
                             return False
-                        
+
                         total_funds = balance_data.get('total_funds', 0.0)
-                        
+
                         # FIX 2: FORCED EXIT OVERRIDES - Allow connection even when balance < minimum
                         # This enables emergency sells to close losing positions
                         # Only NEW ENTRIES are blocked, not EXITS
@@ -1208,7 +1208,7 @@ class CoinbaseBroker(BaseBroker):
                             logging.warning(f"   ")
                             logging.warning(f"   ✅ Coinbase connection maintained for emergency exits")
                             logging.warning("=" * 70)
-                            
+
                             # Mark as EXIT-ONLY mode (not fully disabled)
                             self.exit_only_mode = True
                             # Keep connected = True so sells can execute
@@ -1228,31 +1228,31 @@ class CoinbaseBroker(BaseBroker):
                         logging.error("=" * 70)
                         self.connected = False
                         return False
-                    
+
                     return True
-                    
+
                 except Exception as e:
                     error_msg = str(e)
                     error_msg_lower = error_msg.lower()
-                    
+
                     # Distinguish between 403 (API key temporarily blocked) and 429 (rate limit quota)
                     is_403_forbidden = (
-                        '403' in error_msg_lower or 
-                        'forbidden' in error_msg_lower or 
+                        '403' in error_msg_lower or
+                        'forbidden' in error_msg_lower or
                         'too many errors' in error_msg_lower
                     )
                     is_429_rate_limit = (
-                        '429' in error_msg_lower or 
-                        'rate limit' in error_msg_lower or 
+                        '429' in error_msg_lower or
+                        'rate limit' in error_msg_lower or
                         'too many requests' in error_msg_lower
                     )
                     is_network_error = any(keyword in error_msg_lower for keyword in [
                         'timeout', 'connection', 'network', 'service unavailable',
                         '503', '504', 'temporary', 'try again'
                     ])
-                    
+
                     is_retryable = is_403_forbidden or is_429_rate_limit or is_network_error
-                    
+
                     if is_retryable and attempt < max_attempts:
                         # Use different delays based on error type
                         if is_403_forbidden:
@@ -1271,25 +1271,25 @@ class CoinbaseBroker(BaseBroker):
                             delay = min(10.0 * (2 ** (attempt - 1)), 60.0)
                             logging.warning(f"⚠️  Connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                             logging.warning(f"   Network error - waiting {delay:.1f}s before retry...")
-                        
+
                         logging.info(f"🔄 Retrying connection in {delay:.1f}s (attempt {attempt + 1}/{max_attempts})...")
                         time.sleep(delay)
                         continue
                     else:
                         logging.error(f"❌ Failed to verify Coinbase connection: {e}")
                         return False
-            
+
             # Should never reach here, but just in case
             logging.error("❌ Failed to connect after maximum retry attempts")
             return False
-                
+
         except ImportError:
             logging.error("❌ Coinbase SDK not installed. Run: pip install coinbase-advanced-py")
             return False
         except Exception as e:
             logging.error(f"❌ Coinbase connection error: {e}")
             return False
-    
+
     def _detect_portfolio(self):
         """DISABLED: Always use default Advanced Trade portfolio"""
         try:
@@ -1297,7 +1297,7 @@ class CoinbaseBroker(BaseBroker):
             # The Coinbase Advanced Trade API can ONLY trade from the default trading portfolio
             # Consumer wallets (even if they show up in accounts list) CANNOT be used for trading
             # The SDK's market_order_buy() always routes to the default portfolio
-            
+
             logging.info("=" * 70)
             logging.info("🎯 PORTFOLIO ROUTING: DEFAULT ADVANCED TRADE")
             logging.info("=" * 70)
@@ -1305,10 +1305,10 @@ class CoinbaseBroker(BaseBroker):
             logging.info("   Consumer wallets are NOT accessible for trading")
             logging.info("   Transfer funds via: https://www.coinbase.com/advanced-portfolio")
             logging.info("=" * 70)
-            
+
             # Do NOT set portfolio_uuid - let SDK use default
             self.portfolio_uuid = None
-            
+
             # Use cached accounts if available to avoid redundant API calls
             try:
                 if self._accounts_cache and self._is_cache_valid(self._accounts_cache_time):
@@ -1320,68 +1320,68 @@ class CoinbaseBroker(BaseBroker):
                     accounts_resp = self.client.get_accounts() if hasattr(self.client, 'get_accounts') else self.client.list_accounts()
                     self._accounts_cache = accounts_resp
                     self._accounts_cache_time = time.time()
-                
+
                 accounts = getattr(accounts_resp, 'accounts', [])
-                
+
                 logging.info("📊 ACCOUNT BALANCES (for information only):")
                 logging.info("-" * 70)
-                
+
                 for account in accounts:
                     currency = getattr(account, 'currency', None)
                     available_obj = getattr(account, 'available_balance', None)
                     available = float(getattr(available_obj, 'value', 0) or 0)
                     account_name = getattr(account, 'name', 'Unknown')
                     account_type = getattr(account, 'type', 'Unknown')
-                    
+
                     if currency in ['USD', 'USDC'] and available > 0:
                         tradeable = "✅ TRADEABLE" if account_type == "ACCOUNT_TYPE_CRYPTO" else "❌ NOT TRADEABLE (Consumer)"
                         logging.info(f"   {currency}: ${available:.2f} | {account_name} | {tradeable}")
-                
+
                 logging.info("=" * 70)
-                    
+
             except Exception as e:
                 logging.warning(f"⚠️  Portfolio detection failed: {e}")
                 logging.info("   Will use default portfolio routing")
-                
+
         except Exception as e:
             logging.error(f"❌ Portfolio detection error: {e}")
-    
+
     def _is_account_tradeable(self, account_type: str, platform: str) -> bool:
         """
         IMPROVEMENT #3: Expanded account type matching patterns.
         Checks multiple patterns to identify tradeable accounts.
-        
+
         Args:
             account_type: Type string from API (e.g., "ACCOUNT_TYPE_CRYPTO")
             platform: Platform string from API (e.g., "ADVANCED_TRADE")
-            
+
         Returns:
             True if account is tradeable via Advanced Trade API
         """
         if not account_type:
             return False
-            
+
         account_type_str = str(account_type).upper()
         platform_str = str(platform or "").upper()
-        
+
         # Pattern 1: Explicit ACCOUNT_TYPE_CRYPTO
         if account_type_str == "ACCOUNT_TYPE_CRYPTO":
             return True
-        
+
         # Pattern 2: Advanced Trade platform designation
         if "ADVANCED_TRADE" in platform_str or "ADVANCED" in platform_str:
             return True
-        
+
         # Pattern 3: Trading portfolio indicators
         if "TRADING" in platform_str or "TRADING_PORTFOLIO" in account_type_str:
             return True
-        
+
         # Pattern 4: Not explicitly a consumer/vault account
         if "CONSUMER" not in account_type_str and "VAULT" not in account_type_str and "WALLET" not in account_type_str:
             # If platform is not explicitly consumer, assume tradeable
             if platform_str and "ADVANCED" in platform_str:
                 return True
-        
+
         return False
 
     def get_all_products(self) -> list:
@@ -1389,14 +1389,14 @@ class CoinbaseBroker(BaseBroker):
         Fetch ALL available products (cryptocurrency pairs) from Coinbase.
         Handles pagination to retrieve 700+ markets without timeouts.
         Uses rate limiting and retry logic to prevent 403/429 errors.
-        
+
         Returns:
             List of product IDs (e.g., ['BTC-USD', 'ETH-USD', ...])
         """
         try:
             logging.info("📡 Fetching all products from Coinbase API (700+ markets)...")
             all_products = []
-            
+
             # Get products with pagination
             if hasattr(self.client, 'get_products'):
                 # CRITICAL FIX: Add retry logic for 403/429 rate limit errors
@@ -1405,18 +1405,18 @@ class CoinbaseBroker(BaseBroker):
                 max_retries = RATE_LIMIT_MAX_RETRIES
                 retry_count = 0
                 products_resp = None
-                
+
                 while retry_count <= max_retries:
                     try:
                         # CRITICAL FIX: Wrap get_products() call with rate limiting
                         # The Coinbase SDK's get_all_products=True internally makes multiple paginated
                         # requests rapidly, which can exhaust rate limits before market scanning begins
                         # Using rate limiter with retry logic to prevent 403 "Forbidden" errors
-                        
+
                         def _fetch_products():
                             """Inner function for rate-limited product fetching"""
                             return self.client.get_products(get_all_products=True)
-                        
+
                         # Apply rate limiting if available
                         if self._rate_limiter:
                             # Rate-limited call - enforces minimum interval between requests
@@ -1424,20 +1424,20 @@ class CoinbaseBroker(BaseBroker):
                         else:
                             # Fallback to direct call without rate limiting
                             products_resp = _fetch_products()
-                        
+
                         # Success! Break out of retry loop
                         break
-                        
+
                     except Exception as fetch_err:
                         error_str = str(fetch_err)
-                        
+
                         # Check if it's a rate limit error (403 or 429)
                         is_rate_limit = '429' in error_str or 'rate limit' in error_str.lower()
                         is_forbidden = '403' in error_str or 'forbidden' in error_str.lower() or 'too many' in error_str.lower()
-                        
+
                         if (is_rate_limit or is_forbidden) and retry_count < max_retries:
                             retry_count += 1
-                            
+
                             # Calculate backoff delay
                             if is_forbidden:
                                 # 403 errors: Use fixed delay with jitter (API key temporarily blocked)
@@ -1447,21 +1447,21 @@ class CoinbaseBroker(BaseBroker):
                                 # 429 errors: Use exponential backoff
                                 delay = RATE_LIMIT_BASE_DELAY * (2 ** (retry_count - 1))
                                 logging.warning(f"⚠️  Rate limit (429 Too Many Requests): Quota exceeded on get_all_products, waiting {delay:.1f}s before retry {retry_count}/{max_retries}")
-                            
+
                             time.sleep(delay)
                             continue
                         else:
                             # Not a rate limit error or max retries reached
                             raise fetch_err
-                
+
                 # Check if we successfully fetched products
                 if not products_resp:
                     logging.error("⚠️  Failed to fetch products after retries")
                     return FALLBACK_MARKETS
-                    
+
                 # Log response type and structure
                 logging.info(f"   Response type: {type(products_resp).__name__}")
-                
+
                 # Handle both object and dict responses
                 if hasattr(products_resp, 'products'):
                     products = products_resp.products
@@ -1472,7 +1472,7 @@ class CoinbaseBroker(BaseBroker):
                 else:
                     products = []
                     logging.warning(f"⚠️  Unexpected response type: {type(products_resp).__name__}")
-                
+
                 if not products:
                     logging.warning("⚠️  No products returned from API - response may be empty or malformed")
                     # Debug: Show what attributes/keys are available
@@ -1482,19 +1482,19 @@ class CoinbaseBroker(BaseBroker):
                     elif isinstance(products_resp, dict):
                         logging.info(f"   Available keys: {list(products_resp.keys())}")
                     return []
-                
+
                 # Extract product IDs - handle various response formats
                 # CRITICAL FIX (Jan 10, 2026): Add status filtering to exclude delisted/disabled products
                 # This prevents invalid symbols (e.g., 2Z-USD, AGLD-USD, HIO, BOE) from causing API errors
                 filtered_count = 0
                 filtered_products_count = 0  # Tracks all filtered products (status, disabled, format)
                 DEBUG_LOG_LIMIT = 5  # Maximum number of filtered products to log at debug level
-                
+
                 for i, product in enumerate(products):
                     product_id = None
                     status = None
                     trading_disabled = False
-                    
+
                     # Debug first product to understand structure
                     if i == 0:
                         if hasattr(product, '__dict__'):
@@ -1502,7 +1502,7 @@ class CoinbaseBroker(BaseBroker):
                             logging.info(f"   First product attributes: {attrs}")
                         elif isinstance(product, dict):
                             logging.info(f"   First product keys: {list(product.keys())[:10]}")
-                    
+
                     # Try object attribute access (Coinbase uses 'product_id', not 'id')
                     if hasattr(product, 'product_id'):
                         product_id = getattr(product, 'product_id', None)
@@ -1517,16 +1517,16 @@ class CoinbaseBroker(BaseBroker):
                         product_id = product.get('product_id') or product.get('id')
                         status = product.get('status')
                         trading_disabled = product.get('trading_disabled', False)
-                    
+
                     # CRITICAL FILTERS to prevent invalid symbol errors:
                     # 1. Must have product_id
                     if not product_id:
                         continue
-                    
+
                     # 2. Must be USD or USDC pair
                     if not (product_id.endswith('-USD') or product_id.endswith('-USDC')):
                         continue
-                    
+
                     # 3. Status must be 'online' (exclude offline, delisted, etc.)
                     # This is the KEY fix - prevents delisted coins from being scanned
                     if not status or status.lower() != 'online':
@@ -1534,14 +1534,14 @@ class CoinbaseBroker(BaseBroker):
                         if filtered_products_count <= DEBUG_LOG_LIMIT:  # Log first 5 for debugging
                             logging.debug(f"   Filtered out {product_id}: status={status}")
                         continue
-                    
+
                     # 4. Trading must not be disabled
                     if trading_disabled:
                         filtered_products_count += 1
                         if filtered_products_count <= DEBUG_LOG_LIMIT:
                             logging.debug(f"   Filtered out {product_id}: trading_disabled=True")
                         continue
-                    
+
                     # 5. Validate symbol format (basic sanity check)
                     # Valid format: 2-8 chars, dash, USD/USDC
                     parts = product_id.split('-')
@@ -1550,34 +1550,34 @@ class CoinbaseBroker(BaseBroker):
                         if filtered_products_count <= DEBUG_LOG_LIMIT:
                             logging.debug(f"   Filtered out {product_id}: invalid format (length)")
                         continue
-                    
+
                     # Passed all filters - add to list
                     all_products.append(product_id)
-                
+
                 if filtered_products_count > 0:
                     logging.info(f"   Filtered out {filtered_products_count} products (offline/delisted/disabled/invalid format)")
-                
+
                 logging.info(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
-                
+
                 # Remove duplicates and sort
                 all_products = sorted(list(set(all_products)))
-                
+
                 logging.info(f"✅ Successfully fetched {len(all_products)} USD/USDC trading pairs from Coinbase API")
                 if all_products:
                     logging.info(f"   Sample markets: {', '.join(all_products[:10])}")
-                
+
                 # CRITICAL FIX (Jan 10, 2026): Add cooldown after get_all_products to prevent burst
                 # This gives the API time to reset before we start scanning markets
                 logging.info("   💤 Cooling down for 10s after bulk product fetch to prevent rate limiting...")
                 time.sleep(10.0)
-                
+
                 return all_products
-            
+
             # Fallback: Use curated list of popular crypto markets
             logging.warning("⚠️  Could not fetch products from API, using fallback list of popular markets")
             logging.info(f"   Using {len(FALLBACK_MARKETS)} fallback markets")
             return FALLBACK_MARKETS
-            
+
         except Exception as e:
             logging.error(f"🔥 Error fetching all products: {e}")
             return []
@@ -1589,7 +1589,7 @@ class CoinbaseBroker(BaseBroker):
         for Advanced Trade orders. To avoid false positives (and endless
         INSUFFICIENT_FUND rejections), we enumerate accounts and only count
         ones marked as Advanced Trade / crypto accounts.
-        
+
         IMPROVEMENTS:
         1. Better consumer wallet diagnostics - tells user to transfer funds
         2. API permission validation - checks if we can see accounts
@@ -1605,7 +1605,7 @@ class CoinbaseBroker(BaseBroker):
         if self._balance_cache and self._is_cache_valid(self._balance_cache_time):
             logging.debug("Using cached balance data")
             return self._balance_cache
-        
+
         usd_balance = 0.0
         usdc_balance = 0.0
         usd_held = 0.0  # Track held funds (in open orders/positions)
@@ -1620,12 +1620,12 @@ class CoinbaseBroker(BaseBroker):
         try:
             if verbose:
                 logging.info("💰 Fetching account balance via portfolio breakdown (preferred)...")
-            
+
             # Use retry logic for portfolio API calls to handle rate limiting
             portfolios_resp = None
             if hasattr(self.client, 'get_portfolios'):
                 portfolios_resp = self._api_call_with_retry(self.client.get_portfolios)
-            
+
             portfolios = getattr(portfolios_resp, 'portfolios', [])
             if isinstance(portfolios_resp, dict):
                 portfolios = portfolios_resp.get('portfolios', [])
@@ -1666,7 +1666,7 @@ class CoinbaseBroker(BaseBroker):
                     available_val = getattr(pos, 'available_to_trade_fiat', None) if not isinstance(pos, dict) else pos.get('available_to_trade_fiat')
                     # Try to get held amount if available in the response
                     held_val = getattr(pos, 'hold_fiat', None) if not isinstance(pos, dict) else pos.get('hold_fiat')
-                    
+
                     # CRITICAL FIX (Jan 24, 2026): Use CORRECT Coinbase API field names
                     # The Coinbase Advanced Trade API uses:
                     # - available_to_trade_crypto (amount freely tradable in crypto units)
@@ -1686,22 +1686,22 @@ class CoinbaseBroker(BaseBroker):
                         # Debug: log what fields are available in the response
                         if asset and asset not in ['USD', 'USDC']:
                             logging.debug(f"   📊 {asset} API fields: total_balance_crypto={base_total}, available_to_trade_crypto={base_available}")
-                    
+
                     try:
                         available = float(available_val or 0)
                     except Exception:
                         available = 0.0
-                    
+
                     try:
                         held = float(held_val or 0)
                     except Exception:
                         held = 0.0
-                    
+
                     try:
                         base_avail_qty = float(base_available or 0)
                     except Exception:
                         base_avail_qty = 0.0
-                    
+
                     try:
                         base_total_qty = float(base_total or 0)
                     except Exception:
@@ -1738,7 +1738,7 @@ class CoinbaseBroker(BaseBroker):
                 trading_balance = usd_balance + usdc_balance
                 total_held = usd_held + usdc_held
                 total_funds = trading_balance + total_held
-                
+
                 if verbose:
                     logging.info("-" * 70)
                     logging.info(f"   💰 Available USD (portfolio):  ${usd_balance:.2f}")
@@ -1764,11 +1764,11 @@ class CoinbaseBroker(BaseBroker):
                     "consumer_usd": consumer_usd,
                     "consumer_usdc": consumer_usdc,
                 }
-                
+
                 # Cache the result
                 self._balance_cache = result
                 self._balance_cache_time = time.time()
-                
+
                 return result
             else:
                 logging.warning("⚠️  No default portfolio found; falling back to get_accounts()")
@@ -1800,7 +1800,7 @@ class CoinbaseBroker(BaseBroker):
                 resp = self._api_call_with_retry(self.client.get_accounts)
                 self._accounts_cache = resp
                 self._accounts_cache_time = time.time()
-            
+
             accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
 
             # IMPROVEMENT #2: Validate API permissions
@@ -1914,7 +1914,7 @@ class CoinbaseBroker(BaseBroker):
                     logging.info(f"   🔒 Total Held: ${total_held:.2f}")
                     logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
                 logging.info(f"   🪙 Crypto Holdings: {len(crypto_holdings)} assets")
-            
+
             # IMPROVEMENT #1: Enhanced consumer wallet detection and diagnosis
             if consumer_usd > 0 or consumer_usdc > 0:
                 if verbose:
@@ -1933,7 +1933,7 @@ class CoinbaseBroker(BaseBroker):
                     logging.warning("")
                     logging.warning("After transfer, bot will see funds and start trading! ✅")
                     logging.warning("-" * 70)
-            
+
             if verbose:
                 logging.info(f"📊 API Status: Saw {accounts_seen} accounts, {tradeable_accounts} tradeable")
                 logging.info(f"   💎 Tradeable crypto holdings: {len(crypto_holdings)} assets")
@@ -1951,11 +1951,11 @@ class CoinbaseBroker(BaseBroker):
                 "consumer_usd": consumer_usd,
                 "consumer_usdc": consumer_usdc,
             }
-            
+
             # Cache the result
             self._balance_cache = result
             self._balance_cache_time = time.time()
-            
+
             return result
         except Exception as e:
             logging.error(f"🔥 ERROR get_account_balance: {e}")
@@ -1980,43 +1980,43 @@ class CoinbaseBroker(BaseBroker):
                 "consumer_usd": consumer_usd,
                 "consumer_usdc": consumer_usdc,
             }
-    
+
     def get_account_balance(self, verbose: bool = True) -> float:
         """Get USD trading balance with fail-closed behavior (conforms to BaseBroker interface).
-        
+
         🚑 FIX 4: BALANCE MUST INCLUDE LOCKED FUNDS
         Returns total_equity (available + locked) instead of just available_usd.
         This prevents NIJA from thinking it's broke when it has funds locked in positions.
-        
+
         CRITICAL FIX (Jan 19, 2026): Fail closed - not "balance = 0"
         - On error: Return last known balance (if available) instead of 0
         - Track consecutive errors to mark broker unavailable
         - Distinguish API errors from actual zero balance
-        
+
         Args:
             verbose: If True, logs detailed balance breakdown (default: True)
-        
+
         Returns:
             float: TOTAL EQUITY (cash + positions) not just available cash
                    Returns last known balance on error (not 0)
         """
         try:
             balance_data = self._get_account_balance_detailed(verbose=verbose)
-            
+
             if balance_data is None:
                 # API call failed - use last known balance if available
                 self._balance_fetch_errors += 1
                 if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
                     logger.error(f"❌ Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
-                
+
                 if self._last_known_balance is not None:
                     logger.warning(f"⚠️ Coinbase balance fetch failed, using last known balance: ${self._last_known_balance:.2f}")
                     return self._last_known_balance
                 else:
                     logger.error("❌ Coinbase balance fetch failed and no last known balance available, returning 0.0")
                     return 0.0
-            
+
             # 🚑 FIX 4: Return total_funds (available + locked) instead of just trading_balance
             # This ensures rotation and sizing use TOTAL EQUITY not just free cash
             # Fallback chain: total_funds -> trading_balance -> 0.0
@@ -2024,82 +2024,82 @@ class CoinbaseBroker(BaseBroker):
             if total_funds is None:
                 total_funds = balance_data.get('trading_balance', 0.0)
             result = float(total_funds)
-            
+
             # Log what we're returning for transparency
             trading_balance = float(balance_data.get('trading_balance', 0.0))
             total_held = float(balance_data.get('total_held', 0.0))
-            
+
             if total_held > 0:
                 logger.debug(f"💎 Total Equity: ${result:.2f} (Available: ${trading_balance:.2f} + Locked: ${total_held:.2f})")
             else:
                 logger.debug(f"💰 Total Equity: ${result:.2f} (no locked funds)")
-            
+
             # SUCCESS: Update last known balance and reset error count
             self._last_known_balance = result
             self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
             self._balance_fetch_errors = 0
             self._is_available = True
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"❌ Exception fetching Coinbase balance: {e}")
             self._balance_fetch_errors += 1
             if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
                 logger.error(f"❌ Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
-            
+
             # Return last known balance instead of 0
             if self._last_known_balance is not None:
                 logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
                 return self._last_known_balance
-            
+
             return 0.0
-    
+
     def get_account_balance_detailed(self, verbose: bool = True) -> dict:
         """Get detailed account balance information including crypto holdings.
-        
+
         This is a public wrapper around _get_account_balance_detailed() for
         callers that need the full balance breakdown (crypto holdings, consumer wallets, etc).
-        
+
         Args:
             verbose: If True, logs detailed balance breakdown (default: True)
-        
+
         Returns:
             dict: Detailed balance info with keys: usdc, usd, trading_balance, crypto, consumer_usd, consumer_usdc
         """
         return self._get_account_balance_detailed(verbose=verbose)
-    
+
     def is_available(self) -> bool:
         """
         Check if Coinbase broker is available for trading.
-        
+
         Returns False if there have been 3+ consecutive balance fetch errors.
         This prevents trading when the API is not working properly.
-        
+
         Returns:
             bool: True if broker is available, False if unavailable
         """
         return self._is_available
-    
+
     def get_error_count(self) -> int:
         """
         Get the number of consecutive balance fetch errors.
-        
+
         Returns:
             int: Number of consecutive errors
         """
         return self._balance_fetch_errors
-    
+
     def get_total_capital(self, include_positions: bool = True) -> Dict:
         """
         Get total capital including both free balance and open position values.
-        
+
         PRO MODE Feature: Counts open positions as available capital for rotation trading.
-        
+
         Args:
             include_positions: If True, includes position values in total capital (default True)
-        
+
         Returns:
             dict: Capital breakdown with keys:
                 - free_balance: Available USD/USDC for new trades
@@ -2111,20 +2111,20 @@ class CoinbaseBroker(BaseBroker):
         try:
             # Get free balance
             free_balance = self.get_account_balance()
-            
+
             # Get positions and calculate their values
             positions = self.get_positions()
             position_value_total = 0.0
             position_details = []
-            
+
             if include_positions:
                 for pos in positions:
                     symbol = pos.get('symbol')
                     quantity = pos.get('quantity', 0)
-                    
+
                     if not symbol or quantity <= 0:
                         continue
-                    
+
                     # Get current price for position
                     try:
                         price = self.get_current_price(symbol)
@@ -2140,9 +2140,9 @@ class CoinbaseBroker(BaseBroker):
                     except Exception as price_err:
                         logger.warning(f"⚠️ Could not get price for {symbol}: {price_err}")
                         continue
-            
+
             total_capital = free_balance + position_value_total
-            
+
             result = {
                 'free_balance': free_balance,
                 'position_value': position_value_total,
@@ -2150,11 +2150,11 @@ class CoinbaseBroker(BaseBroker):
                 'positions': position_details,
                 'position_count': len(position_details)
             }
-            
+
             logger.debug(f"💰 Total capital: ${total_capital:.2f} (free: ${free_balance:.2f}, positions: ${position_value_total:.2f})")
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error calculating total capital: {e}")
             return {
@@ -2164,12 +2164,12 @@ class CoinbaseBroker(BaseBroker):
                 'positions': [],
                 'position_count': 0
             }
-    
+
     def get_account_balance_OLD_BROKEN_METHOD(self):
         """
         OLD METHOD - DOES NOT WORK - Kept for reference
         Parse balances from ONLY v3 Advanced Trade API
-        
+
         CRITICAL: Consumer wallet balances are NOT usable for API trading.
         Only Advanced Trade portfolio balance can be used for orders.
         This method ONLY returns Advanced Trade balance to prevent mismatches.
@@ -2188,16 +2188,16 @@ class CoinbaseBroker(BaseBroker):
                 import time
                 import jwt
                 from cryptography.hazmat.primitives import serialization
-                
+
                 api_key = os.getenv("COINBASE_API_KEY")
                 api_secret = os.getenv("COINBASE_API_SECRET")
-                
+
                 # Normalize PEM
                 if '\\n' in api_secret:
                     api_secret = api_secret.replace('\\n', '\n')
-                
+
                 private_key = serialization.load_pem_private_key(api_secret.encode('utf-8'), password=None)
-                
+
                 # Make v2 API call
                 uri = "GET api.coinbase.com/v2/accounts"
                 payload = {
@@ -2208,16 +2208,16 @@ class CoinbaseBroker(BaseBroker):
                     'aud': ['coinbase-apis'],
                     'uri': uri
                 }
-                token = jwt.encode(payload, private_key, algorithm='ES256', 
+                token = jwt.encode(payload, private_key, algorithm='ES256',
                                   headers={'kid': api_key, 'nonce': str(int(time.time()))})
                 headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
                 response = requests.get(f"https://api.coinbase.com/v2/accounts", headers=headers)
-                
+
                 if response.status_code == 200:
                     data = response.json()
                     v2_accounts = data.get('data', [])
                     logging.info(f"📁 v2 Consumer API: {len(v2_accounts)} account(s)")
-                    
+
                     for acc in v2_accounts:
                         currency_obj = acc.get('currency', {})
                         currency = currency_obj.get('code', 'N/A') if isinstance(currency_obj, dict) else currency_obj
@@ -2225,7 +2225,7 @@ class CoinbaseBroker(BaseBroker):
                         balance = float(balance_obj.get('amount', 0) if isinstance(balance_obj, dict) else balance_obj or 0)
                         account_type = acc.get('type', 'unknown')
                         name = acc.get('name', 'Unknown')
-                        
+
                         if currency == "USD":
                             consumer_usd += balance
                             if balance > 0:
@@ -2236,10 +2236,10 @@ class CoinbaseBroker(BaseBroker):
                                 logging.info(f"   📊 Consumer USDC: ${balance:.2f} (type={account_type}, name={name}) [NOT TRADABLE VIA API]")
                 else:
                     logging.warning(f"⚠️  v2 API returned status {response.status_code}")
-                    
+
             except Exception as v2_error:
                 logging.warning(f"⚠️  v2 API check failed: {v2_error}")
-            
+
             # Check v3 Advanced Trade API - THIS IS THE ONLY TRADABLE BALANCE
             logging.info(f"💰 Checking v3 API (Advanced Trade - TRADABLE BALANCE)...")
             try:
@@ -2247,7 +2247,7 @@ class CoinbaseBroker(BaseBroker):
                 accounts_resp = self.client.list_accounts() if hasattr(self.client, 'list_accounts') else self.client.get_accounts()
                 accounts = getattr(accounts_resp, 'accounts', [])
                 logging.info(f"📁 v3 Advanced Trade API: {len(accounts)} account(s)")
-                
+
                 # ENHANCED DEBUG: Show ALL accounts
                 if len(accounts) == 0:
                     logging.error(f"   🚨 API returned ZERO accounts!")
@@ -2263,10 +2263,10 @@ class CoinbaseBroker(BaseBroker):
                     account_type = getattr(account, 'type', None)
                     account_name = getattr(account, 'name', 'Unknown')
                     account_uuid = getattr(account, 'uuid', 'no-uuid')
-                    
+
                     # DEBUG: Log EVERY account we see
                     logging.info(f"      → {currency}: ${available:.2f} | {account_name} | {account_type} | UUID: {account_uuid[:8]}...")
-                    
+
                     # ONLY count Advanced Trade balances for trading
                     if currency == "USD":
                         usd_balance += available
@@ -2289,7 +2289,7 @@ class CoinbaseBroker(BaseBroker):
             # Consumer wallet balances CANNOT be used for trading via API
             # The market_order_buy() function can ONLY access Advanced Trade portfolio
             trading_balance = usdc_balance if usdc_balance > 0 else usd_balance
-            
+
             # IGNORE ALLOW_CONSUMER_USD flag - it's misleading
             # Consumer wallets are simply NOT accessible for API trading
             if self.allow_consumer_usd and (consumer_usd > 0 or consumer_usdc > 0):
@@ -2304,7 +2304,7 @@ class CoinbaseBroker(BaseBroker):
             logging.info(f"   Advanced Trade USDC: ${usdc_balance:.2f} ✅ [TRADABLE]")
             logging.info(f"   ▶ TRADING BALANCE: ${trading_balance:.2f}")
             logging.info("")
-            
+
             # Warn if funds are insufficient (using module-level constants)
             if trading_balance < MINIMUM_BALANCE_PROTECTION:
                 funding_needed = MINIMUM_BALANCE_PROTECTION - trading_balance
@@ -2357,7 +2357,7 @@ class CoinbaseBroker(BaseBroker):
                 logging.warning("=" * 70)
             else:
                 logging.info(f"   ✅ Sufficient funds in Advanced Trade for trading!")
-            
+
             logging.info("=" * 70)
 
             return {
@@ -2380,7 +2380,7 @@ class CoinbaseBroker(BaseBroker):
                 "consumer_usd": 0.0,
                 "consumer_usdc": 0.0,
             }
-    
+
     def _dump_portfolio_summary(self):
         """Diagnostic: dump all portfolios and their USD/USDC balances"""
         try:
@@ -2504,7 +2504,7 @@ class CoinbaseBroker(BaseBroker):
         # Ensure cache exists (defensive programming)
         if not hasattr(self, '_product_cache'):
             self._product_cache = {}
-        
+
         if symbol in self._product_cache:
             return self._product_cache[symbol]
 
@@ -2513,12 +2513,12 @@ class CoinbaseBroker(BaseBroker):
             # RATE LIMIT FIX: Wrap get_product with rate limiter to prevent 429 errors
             def _fetch_product():
                 return self.client.get_product(product_id=symbol)
-            
+
             if self._rate_limiter:
                 product = self._rate_limiter.call('get_product', _fetch_product)
             else:
                 product = _fetch_product()
-            
+
             if isinstance(product, dict):
                 meta = product
             else:
@@ -2537,12 +2537,12 @@ class CoinbaseBroker(BaseBroker):
 
         self._product_cache[symbol] = meta
         return meta
-    
+
     def place_market_order(
-        self, 
-        symbol: str, 
-        side: str, 
-        quantity: float, 
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
         size_type: str = 'quote',
         ignore_balance: bool = False,
         ignore_min_trade: bool = False,
@@ -2550,7 +2550,7 @@ class CoinbaseBroker(BaseBroker):
     ) -> Dict:
         """
         Place market order with balance verification (and optional bypasses for emergencies).
-        
+
         Args:
             symbol: Trading pair (e.g., 'BTC-USD')
             side: 'buy' or 'sell'
@@ -2559,7 +2559,7 @@ class CoinbaseBroker(BaseBroker):
             ignore_balance: Bypass balance validation (EMERGENCY ONLY - FIX 1)
             ignore_min_trade: Bypass minimum trade size validation (EMERGENCY ONLY - FIX 1)
             force_liquidate: Bypass ALL validation (EMERGENCY ONLY - FIX 1)
-        
+
         Returns:
             Order response dictionary
         """
@@ -2576,7 +2576,7 @@ class CoinbaseBroker(BaseBroker):
                     "partial_fill": False,
                     "filled_pct": 0.0
                 }
-            
+
             if not isinstance(symbol, str):
                 logger.error(f"❌ INVALID SYMBOL: Symbol must be string, got {type(symbol)}")
                 logger.error(f"   Symbol value: {symbol}")
@@ -2587,7 +2587,7 @@ class CoinbaseBroker(BaseBroker):
                     "partial_fill": False,
                     "filled_pct": 0.0
                 }
-            
+
             # Validate symbol format (should be like "BTC-USD", "ETH-USD", etc.)
             if '-' not in symbol or len(symbol) < 5:
                 logger.error(f"❌ INVALID SYMBOL: Invalid format '{symbol}'")
@@ -2600,7 +2600,7 @@ class CoinbaseBroker(BaseBroker):
                     "partial_fill": False,
                     "filled_pct": 0.0
                 }
-            
+
             # Global BUY guard: block all buys when emergency stop is active or HARD_BUY_OFF=1
             try:
                 import os as _os
@@ -2636,7 +2636,7 @@ class CoinbaseBroker(BaseBroker):
             #   - Losing positions can always be closed
             #   - Capital bleeding can always be stopped
             # ================================================================
-            
+
             # Log explicit bypass for SELL orders
             if side.lower() == 'sell':
                 logger.info(f"🛡️ PROTECTIVE SELL MODE for {symbol}: EMERGENCY EXIT MODE — SELL ONLY")
@@ -2644,7 +2644,7 @@ class CoinbaseBroker(BaseBroker):
                 logger.info(f"   ✅ Minimum balance check: SKIPPED (protective exit)")
                 logger.info(f"   ✅ EXIT-ONLY mode: ALLOWED (protective exit)")
                 logger.info(f"   ✅ Capital preservation: ACTIVE")
-            
+
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
             # NOTE: SELL orders are NOT checked here - they always pass through
             if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
@@ -2676,26 +2676,26 @@ class CoinbaseBroker(BaseBroker):
             if side.lower() == 'buy' and not (force_liquidate or ignore_balance):
                 balance_data = self._get_account_balance_detailed()
                 trading_balance = float(balance_data.get('trading_balance', 0.0))
-                
+
                 logger.info(f"💰 Pre-flight balance check for {symbol}:")
                 logger.info(f"   Available: ${trading_balance:.2f}")
                 logger.info(f"   Required:  ${quantity:.2f}")
-                
+
                 # ADD FIX #2: Add 2% safety buffer for fees/rounding (Coinbase typically takes 0.5-1%)
                 safety_buffer = quantity * 0.02  # 2% buffer
                 required_with_buffer = quantity + safety_buffer
-                
+
                 if trading_balance < required_with_buffer:
                     error_msg = f"Insufficient funds: ${trading_balance:.2f} available, ${required_with_buffer:.2f} required (with 2% fee buffer)"
                     logger.error(f"❌ PRE-FLIGHT CHECK FAILED: {error_msg}")
                     logger.error(f"   Bot detected ${trading_balance:.2f} but needs ${required_with_buffer:.2f} for this order")
-                    
+
                     # Log USD/USDC inventory for debugging
                     logger.error(f"   Account inventory:")
                     inventory_lines = self.get_usd_usdc_inventory()
                     for line in inventory_lines:
                         logger.error(f"     {line}")
-                    
+
                     return {
                         "status": "unfilled",
                         "error": "INSUFFICIENT_FUND",
@@ -2705,13 +2705,13 @@ class CoinbaseBroker(BaseBroker):
                     }
 
             client_order_id = str(uuid.uuid4())
-            
+
             if side.lower() == 'buy':
                 # CRITICAL FIX: Round quote_size to 2 decimal places for Coinbase precision requirements
                 # Floating point math can create values like 23.016000000000002
                 # Coinbase rejects these with PREVIEW_INVALID_QUOTE_SIZE_PRECISION
                 quote_size_rounded = round(quantity, 2)
-                
+
                 # Use positional client_order_id to avoid SDK signature mismatch
                 logger.info(f"📤 Placing BUY order: {symbol}, quote_size=${quote_size_rounded:.2f}")
                 logger.info(f"   Using Coinbase Advanced Trade v3 API (market_order_buy)")
@@ -2719,14 +2719,14 @@ class CoinbaseBroker(BaseBroker):
                     logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
                 else:
                     logger.info(f"   This API can ONLY trade from Advanced Trade portfolio, NOT Consumer wallets")
-                
+
                 # Include portfolio_uuid if we have it
                 order_kwargs = {
                     'client_order_id': client_order_id,
                     'product_id': symbol,
                     'quote_size': str(quote_size_rounded)
                 }
-                
+
                 # Note: The Coinbase SDK market_order_buy may not support portfolio_uuid parameter
                 # It routes to the default portfolio automatically
                 # The real fix is to ensure funds are in the default trading portfolio
@@ -2808,10 +2808,10 @@ class CoinbaseBroker(BaseBroker):
                             # NOTE: available_base now includes BOTH available AND held crypto
                             # (fixed in _get_account_balance_detailed to prevent INSUFFICIENT_FUND errors)
                             # No need to adjust for holds separately - they're already included
-                            
+
                             logger.info(f"   Real-time balance check: {available_base:.8f} {base_currency} total (available+held)")
                             logger.info(f"   Tracked position size: {quantity:.8f} {base_currency}")
-                            
+
                             # FIX 2: SELL MUST IGNORE CASH BALANCE
                             # CRITICAL: We're selling CRYPTO, not buying with USD
                             # The check should be: "Do we have the crypto?" NOT "Do we have USD?"
@@ -2822,9 +2822,9 @@ class CoinbaseBroker(BaseBroker):
                             # - We can now exit losing positions even with $0 USD balance
                             # - Sells are NOT blocked by insufficient USD (which makes no sense!)
                             # - Position management works correctly
-                            
+
                             epsilon = 1e-8
-                            
+
                             # Validate quantity is positive before proceeding
                             if quantity <= epsilon:
                                 logger.error(
@@ -2838,7 +2838,7 @@ class CoinbaseBroker(BaseBroker):
                                     "partial_fill": False,
                                     "filled_pct": 0.0
                                 }
-                            
+
                             if available_base <= epsilon:
                                 # FIX 2: Changed from ERROR to WARNING
                                 # We should still TRY to sell even if balance shows zero
@@ -2852,7 +2852,7 @@ class CoinbaseBroker(BaseBroker):
                                 )
                                 # DON'T RETURN - continue with sell attempt
                                 # The exchange will reject if there's truly no balance
-                                
+
                                 # CRITICAL FIX (Jan 24, 2026): Preemptively clear likely phantom positions
                                 # When balance is zero and we're being asked to sell, this is likely
                                 # a phantom position (already sold/transferred but still tracked)
@@ -2865,7 +2865,7 @@ class CoinbaseBroker(BaseBroker):
                                     logger.warning(
                                         f"   If sell fails, position will be auto-cleared from tracker"
                                     )
-                            
+
                             if available_base < quantity:
                                 diff = quantity - available_base
                                 logger.warning(
@@ -2907,11 +2907,11 @@ class CoinbaseBroker(BaseBroker):
                     # If API metadata did not provide an increment, use a conservative fallback per asset
                     if base_increment is None and base_currency in fallback_increment_map:
                         base_increment = fallback_increment_map[base_currency]
-                    
+
                     # Final safety: ensure we have an increment
                     if base_increment is None:
                         base_increment = 0.01  # Default to 2 decimal places
-                    
+
                     # Calculate precision from increment CORRECTLY
                     import math
                     if base_increment >= 1:
@@ -2924,7 +2924,7 @@ class CoinbaseBroker(BaseBroker):
                     # FIX #3: Use a larger safety margin to account for fees and rounding
                     # Coinbase typically charges 0.5-1% in trading fees, plus potential precision rounding
                     requested_qty = float(quantity)  # Already adjusted to available if needed
-                    
+
                     # CRITICAL FIX: For small positions (< $10 value), use minimal safety margin
                     # The 0.5% margin was causing tiny positions to round to 0 after subtraction
                     try:
@@ -2934,7 +2934,7 @@ class CoinbaseBroker(BaseBroker):
                         # If we can't get price, assume it's a larger position (safer - uses percentage margin)
                         logger.warning(f"⚠️ Could not get price for {symbol}: {price_err}")
                         position_usd_value = 100  # Default to large position logic
-                    
+
                     if position_usd_value < 10.0:
                         # For small positions, use tiny epsilon only (not percentage)
                         # These positions are too small for fees to matter much
@@ -2943,24 +2943,24 @@ class CoinbaseBroker(BaseBroker):
                     else:
                         # For larger positions, use 0.5% margin
                         safety_margin = max(requested_qty * 0.005, 1e-8)
-                    
+
                     # Subtract safety margin to leave room for fees and rounding
                     trade_qty = max(0.0, requested_qty - safety_margin)
-                    
+
                     logger.info(f"   Safety margin: {safety_margin:.8f} {base_currency}")
                     logger.info(f"   Final trade qty: {trade_qty:.8f} {base_currency}")
 
                     # Quantize size DOWN to allowed increment using floor division
                     # This is more reliable than Decimal arithmetic
                     import math
-                    
+
                     # Calculate how many increments fit into trade_qty (floor division)
                     num_increments = math.floor(trade_qty / base_increment)
                     base_size_rounded = num_increments * base_increment
-                    
+
                     # Round to the correct decimal places to avoid floating point artifacts
                     base_size_rounded = round(base_size_rounded, precision)
-                    
+
                     # CRITICAL FIX: If rounding resulted in 0 or too small, try selling FULL available balance
                     # This happens with very small positions where safety margin + rounding = 0
                     if base_size_rounded <= 0 or base_size_rounded < base_increment:
@@ -2970,9 +2970,9 @@ class CoinbaseBroker(BaseBroker):
                         base_size_rounded = num_increments * base_increment
                         base_size_rounded = round(base_size_rounded, precision)
                         logger.info(f"   Retry with full balance: {base_size_rounded} {base_currency}")
-                    
+
                     logger.info(f"   Derived base_increment={base_increment} precision={precision} → rounded={base_size_rounded}")
-                    
+
                     # FINAL CHECK: If still too small, mark as dust and skip
                     # This is expected behavior for very small positions, not an error
                     if base_size_rounded <= 0 or base_size_rounded < base_increment:
@@ -2983,7 +2983,7 @@ class CoinbaseBroker(BaseBroker):
                         logger.info(f"   Increment: {base_increment}, Precision: {precision}")
                         logger.info(f"   Rounded: {base_size_rounded}")
                         logger.info(f"   💡 This dust position will be retried in 24h in case it grows")
-                        
+
                         # CRITICAL FIX (Jan 24, 2026): Clear phantom positions from tracker
                         # If available balance is essentially zero (< 1e-8) but position is tracked,
                         # this is a phantom position that needs to be cleared from tracker
@@ -2995,7 +2995,7 @@ class CoinbaseBroker(BaseBroker):
                                 logger.info(f"   ✅ Phantom position cleared from tracker")
                             except Exception as clear_err:
                                 logger.error(f"   ❌ Failed to clear phantom position: {clear_err}")
-                        
+
                         return {
                             "status": "skipped_dust",
                             "error": "INVALID_SIZE",
@@ -3051,14 +3051,14 @@ class CoinbaseBroker(BaseBroker):
                     logger.info(f"📤 Placing SELL order: {symbol}, quote_size=${quote_size_rounded:.2f}")
                     if self.portfolio_uuid:
                         logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
-                    
+
                     order = _with_backoff(
                         self.client.market_order_sell,
                         client_order_id,
                         product_id=symbol,
                         quote_size=str(quote_size_rounded)
                     )
-            
+
             # CRITICAL: Parse order response to check for success/failure
             # Coinbase returns an object with 'success' field and 'error_response'
             # Use helper to safely serialize the response
@@ -3086,15 +3086,15 @@ class CoinbaseBroker(BaseBroker):
                     "message": "Coinbase SDK returned non-dict response",
                     "raw_response": str(order_dict)
                 }
-            
+
             # Check for Coinbase error response
             success = order_dict.get('success', True)
             error_response = order_dict.get('error_response', {})
-            
+
             if not success or error_response:
                 error_code = error_response.get('error', 'UNKNOWN_ERROR')
                 error_message = error_response.get('message', 'Unknown error from broker')
-                
+
                 logger.error(f"❌ Trade failed for {symbol}:")
                 logger.error(f"   Status: unfilled")
                 logger.error(f"   Error: {error_message}")
@@ -3207,7 +3207,7 @@ class CoinbaseBroker(BaseBroker):
                                 logger.error(f"   Fallback attempt {attempt} failed: {emsg}")
                     except Exception as fb_err:
                         logger.error(f"   Fallback decrement retry failed: {fb_err}")
-                
+
                 return {
                     "status": "unfilled",
                     "error": error_code,
@@ -3216,9 +3216,9 @@ class CoinbaseBroker(BaseBroker):
                     "partial_fill": order_dict.get('partial_fill', False),
                     "filled_pct": order_dict.get('filled_pct', 0.0)
                 }
-            
+
             logger.info(f"✅ Order filled successfully: {symbol}")
-            
+
             # P0 GUARD: Execution broker decides reality - verify order success before ANY position creation
             # This is the CRITICAL guard that prevents "fake positions" when broker orders actually fail
             if not success:
@@ -3236,10 +3236,10 @@ class CoinbaseBroker(BaseBroker):
                     "message": "Broker reported order failure",
                     "order": order_dict
                 }
-            
+
             # Enhanced trade confirmation logging with account identification
             account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "MASTER"
-            
+
             # FIRST LIVE TRADE BANNER (for legal/operational protection)
             global _FIRST_TRADE_EXECUTED
             with _FIRST_TRADE_LOCK:
@@ -3260,7 +3260,7 @@ class CoinbaseBroker(BaseBroker):
                     logger.info("   All subsequent trades will be logged normally.")
                     logger.info(LOG_SEPARATOR)
                     logger.info("")
-            
+
             logger.info(LOG_SEPARATOR)
             logger.info(f"✅ TRADE CONFIRMATION - {account_label}")
             logger.info(LOG_SEPARATOR)
@@ -3272,27 +3272,27 @@ class CoinbaseBroker(BaseBroker):
             logger.info(f"   Account: {account_label}")
             logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
             logger.info(LOG_SEPARATOR)
-            
+
             # Flush logs immediately to ensure confirmation is visible
             if _root_logger.handlers:
                 for handler in _root_logger.handlers:
                     handler.flush()
-            
+
             # Extract or estimate filled size
             # Coinbase API v3 doesn't return filled_size in the response,
             # so we estimate based on what we sent
             filled_size = None
-            
+
             # Try to extract from success_response
             success_response = order_dict.get('success_response', {})
             if success_response:
                 filled_size = success_response.get('filled_size')
-            
+
             # If not available, estimate based on order configuration
             if not filled_size:
                 order_config = order_dict.get('order_configuration', {})
                 market_config = order_config.get('market_market_ioc', {})
-                
+
                 if side.upper() == 'BUY' and 'quote_size' in market_config:
                     # For buy orders, estimate crypto received = quote_size / price
                     try:
@@ -3300,12 +3300,12 @@ class CoinbaseBroker(BaseBroker):
                         # RATE LIMIT FIX: Wrap get_product with rate limiter to prevent 429 errors
                         def _fetch_price_data():
                             return self.client.get_product(symbol)
-                        
+
                         if self._rate_limiter:
                             price_data = self._rate_limiter.call('get_product', _fetch_price_data)
                         else:
                             price_data = _fetch_price_data()
-                        
+
                         if price_data and 'price' in price_data:
                             current_price = float(price_data['price'])
                             filled_size = quote_size / current_price
@@ -3315,10 +3315,10 @@ class CoinbaseBroker(BaseBroker):
                 else:
                     # For sell orders or unknown, use quantity as estimate
                     filled_size = quantity
-            
+
             if filled_size:
                 logger.info(f"   Filled crypto amount: {filled_size:.6f}")
-            
+
             # CRITICAL: Track position for profit-based exits (ONLY after P0 guard passes)
             if self.position_tracker:
                 try:
@@ -3326,18 +3326,18 @@ class CoinbaseBroker(BaseBroker):
                         # Track entry for profit calculation
                         # Try to get actual fill price from order response first
                         fill_price = None
-                        
+
                         # Try to extract actual fill price from success_response
                         if success_response and 'average_filled_price' in success_response:
                             try:
                                 fill_price = float(success_response['average_filled_price'])
                             except:
                                 pass
-                        
+
                         # Fallback to current market price if fill price not available
                         if not fill_price or fill_price == 0:
                             fill_price = self.get_current_price(symbol)
-                        
+
                         if fill_price > 0:
                             size_usd = quantity if size_type == 'quote' else (filled_size * fill_price if filled_size else 0)
                             self.position_tracker.track_entry(
@@ -3348,7 +3348,7 @@ class CoinbaseBroker(BaseBroker):
                                 strategy="APEX_v7.1"
                             )
                             logger.info(f"   📊 Position tracked: entry=${fill_price:.2f}, size=${size_usd:.2f}")
-                            
+
                             # Log BUY trade to journal
                             self._log_trade_to_journal(
                                 symbol=symbol,
@@ -3367,21 +3367,21 @@ class CoinbaseBroker(BaseBroker):
                                 pass
                         if not fill_price or fill_price == 0:
                             fill_price = self.get_current_price(symbol)
-                        
+
                         # Calculate P&L for this exit
                         pnl_data = None
                         if fill_price and fill_price > 0:
                             pnl_data = self.position_tracker.calculate_pnl(symbol, fill_price)
                             if pnl_data:
                                 logger.info(f"   💰 Exit P&L: ${pnl_data['pnl_dollars']:+.2f} ({pnl_data['pnl_percent']:+.2f}%)")
-                        
+
                         # Track exit (partial or full sell)
                         self.position_tracker.track_exit(
                             symbol=symbol,
                             exit_quantity=filled_size if filled_size else None
                         )
                         logger.info(f"   📊 Position exit tracked")
-                        
+
                         # Log SELL trade to journal with P&L
                         self._log_trade_to_journal(
                             symbol=symbol,
@@ -3393,30 +3393,30 @@ class CoinbaseBroker(BaseBroker):
                         )
                 except Exception as track_err:
                     logger.warning(f"   ⚠️ Position tracking failed: {track_err}")
-            
+
             # COPY TRADING: Emit trade signal for master account trades
             # This allows user accounts to replicate master trades automatically
             try:
                 # Only emit signals for MASTER accounts (not USER accounts)
                 if self.account_type == AccountType.MASTER:
                     from trade_signal_emitter import emit_trade_signal
-                    
+
                     # Get current balance for position sizing
                     balance_data = self._get_account_balance_detailed()
                     master_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
-                    
+
                     # CRITICAL: Log if master balance fetch failed
                     if not balance_data or master_balance <= 0:
                         logger.warning("⚠️  Master balance could not be retrieved for copy trading")
                         logger.warning(f"   Balance data: {balance_data}")
                         logger.warning("   Position sizing for users may fail without valid master balance")
-                    
+
                     # Get execution price
                     exec_price = fill_price if (fill_price and fill_price > 0) else self.get_current_price(symbol)
-                    
+
                     # Determine broker name
                     broker_name = self.broker_type.value.lower() if hasattr(self, 'broker_type') else 'coinbase'
-                    
+
                     # ✅ FIX 5: VERIFY COPY ENGINE SIGNAL EMISSION
                     logger.info("=" * 70)
                     logger.info("📡 EMITTING TRADE SIGNAL TO COPY ENGINE")
@@ -3429,7 +3429,7 @@ class CoinbaseBroker(BaseBroker):
                     logger.info(f"   Price: ${exec_price:.2f}" if exec_price else "   Price: N/A")
                     logger.info(f"   Master Balance: ${master_balance:.2f}")
                     logger.info("=" * 70)
-                    
+
                     # Emit signal
                     # CRITICAL FIX (Jan 23, 2026): Add order_status parameter
                     # Use actual order status from order_dict if available, otherwise assume FILLED
@@ -3440,7 +3440,7 @@ class CoinbaseBroker(BaseBroker):
                         signal_status = 'PARTIALLY_FILLED'
                     else:
                         signal_status = actual_status
-                    
+
                     signal_emitted = emit_trade_signal(
                         broker=broker_name,
                         symbol=symbol,
@@ -3452,7 +3452,7 @@ class CoinbaseBroker(BaseBroker):
                         master_balance=master_balance,
                         order_status=signal_status  # Use actual order status
                     )
-                    
+
                     # ✅ FIX 5: CONFIRM SIGNAL EMISSION STATUS
                     if signal_emitted:
                         logger.info("✅ Trade signal emitted successfully")
@@ -3471,13 +3471,13 @@ class CoinbaseBroker(BaseBroker):
                 logger.warning(f"   ⚠️ Trade signal emission failed: {signal_err}")
                 logger.warning(f"   ⚠️ User accounts will NOT copy this trade!")
                 logger.warning(f"   Traceback: {traceback.format_exc()}")
-            
+
             return {
-                "status": "filled", 
+                "status": "filled",
                 "order": order_dict,
                 "filled_size": float(filled_size) if filled_size else 0.0
             }
-            
+
         except Exception as e:
             # Enhanced error logging with full details
             error_msg = str(e)
@@ -3486,13 +3486,13 @@ class CoinbaseBroker(BaseBroker):
             logger.error(f"   Type: {error_type}")
             logger.error(f"   Message: {error_msg}")
             logger.error(f"   Side: {side}, Quantity: {quantity}")
-            
+
             # Log additional context if available
             if hasattr(e, 'response'):
                 logger.error(f"   Response: {e.response}")
             if hasattr(e, 'status_code'):
                 logger.error(f"   Status code: {e.status_code}")
-                
+
             return {"status": "error", "error": f"{error_type}: {error_msg}"}
 
     def force_liquidate(
@@ -3503,21 +3503,21 @@ class CoinbaseBroker(BaseBroker):
     ) -> Dict:
         """
         🚑 EMERGENCY SELL OVERRIDE - Force liquidate position bypassing ALL checks.
-        
+
         This is the FIX 1 implementation that allows NIJA to exit losing positions
         immediately without being blocked by balance validation or minimum trade limits.
-        
+
         CRITICAL: This method MUST be used for emergency exits and losing trades.
         It bypasses:
         - Balance checks (ignore_balance=True)
         - Minimum trade size validation (ignore_min_trade=True)
         - All other validation that could prevent exit
-        
+
         Args:
             symbol: Trading symbol (e.g., 'BTC-USD')
             quantity: Quantity to sell (in base currency)
             reason: Reason for forced liquidation (for logging)
-        
+
         Returns:
             Order result dict with status
         """
@@ -3527,7 +3527,7 @@ class CoinbaseBroker(BaseBroker):
         logger.warning(f"   Quantity: {quantity}")
         logger.warning(f"   Mode: EMERGENCY EXIT MODE — SELL ONLY")
         logger.warning("=" * 70)
-        
+
         try:
             # Force market sell with ALL checks bypassed
             # This uses place_market_order but with special flags
@@ -3540,14 +3540,14 @@ class CoinbaseBroker(BaseBroker):
                 ignore_min_trade=True,    # ← REQUIRED: Bypass minimum trade size
                 force_liquidate=True      # ← REQUIRED: Bypass all other checks
             )
-            
+
             if result.get('status') == 'filled':
                 logger.warning(f"✅ FORCE LIQUIDATE SUCCESSFUL: {symbol}")
             else:
                 logger.error(f"❌ FORCE LIQUIDATE FAILED: {symbol} - {result.get('error', 'Unknown error')}")
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"❌ FORCE LIQUIDATE EXCEPTION: {symbol} - {e}")
             logger.error(traceback.format_exc())
@@ -3556,7 +3556,7 @@ class CoinbaseBroker(BaseBroker):
                 "error": str(e),
                 "symbol": symbol
             }
-    
+
     def close_position(
         self,
         symbol: str,
@@ -3588,7 +3588,7 @@ class CoinbaseBroker(BaseBroker):
         except TypeError:
             # Graceful fallback if upstream signatures drift
             return self.place_market_order(symbol, 'sell', size, size_type='base')
-    
+
     def get_positions(self) -> List[Dict]:
         """Return tradable crypto positions with base quantities.
 
@@ -3603,7 +3603,7 @@ class CoinbaseBroker(BaseBroker):
             portfolios_resp = None
             if hasattr(self.client, 'get_portfolios'):
                 portfolios_resp = self._api_call_with_retry(self.client.get_portfolios)
-            
+
             portfolios = getattr(portfolios_resp, 'portfolios', [])
             if isinstance(portfolios_resp, dict):
                 portfolios = portfolios_resp.get('portfolios', [])
@@ -3689,7 +3689,7 @@ class CoinbaseBroker(BaseBroker):
                         except Exception:
                             # If we can't get price, include it anyway to be safe
                             pass
-                        
+
                         positions.append({
                             'symbol': position_symbol,
                             'quantity': quantity,
@@ -3732,7 +3732,7 @@ class CoinbaseBroker(BaseBroker):
                     except Exception:
                         # If we can't get price, include it anyway to be safe
                         pass
-                    
+
                     positions.append({
                         'symbol': position_symbol,
                         'quantity': balance,
@@ -3742,7 +3742,7 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logger.error(f"Error fetching positions: {e}")
             return []
-    
+
     def get_market_data(self, symbol: str, timeframe: str = '5m', limit: int = 100) -> Dict:
         """
         Get market data (wrapper around get_candles for compatibility)
@@ -3757,23 +3757,23 @@ class CoinbaseBroker(BaseBroker):
             # CRITICAL FIX (Jan 19, 2026): Normalize symbol for Coinbase format
             # This prevents cross-broker symbol issues (e.g., using Binance BUSD symbols on Coinbase)
             normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
-            
+
             # Check if broker supports this symbol (e.g., Coinbase doesn't support BUSD)
             if not self.supports_symbol(normalized_symbol):
                 logger.info(f"⏭️ Skipping unsupported symbol {symbol} on Coinbase (normalized: {normalized_symbol})")
                 return 0.0
-            
+
             # Fast path: product ticker price
             try:
                 # RATE LIMIT FIX: Wrap get_product with rate limiter to prevent 429 errors
                 def _fetch_product_price():
                     return self.client.get_product(normalized_symbol)
-                
+
                 if self._rate_limiter:
                     product = self._rate_limiter.call('get_product', _fetch_product_price)
                 else:
                     product = _fetch_product_price()
-                
+
                 price_val = product.get('price') if isinstance(product, dict) else getattr(product, 'price', None)
                 if price_val:
                     return float(price_val)
@@ -3792,27 +3792,27 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logging.error(f"⚠️ get_current_price failed for {symbol}: {e}")
             return 0.0
-    
+
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """Get candle data with rate limiting and retry logic
-        
+
         UPDATED (Jan 9, 2026): Added RateLimiter integration to prevent 403/429 errors
         - Uses centralized rate limiter (10 req/min for candles = 1 every 6 seconds)
         - Reduced max retries from 6 to 3 for 403 errors (API key ban, not transient)
         - 429 errors get standard retry with exponential backoff
         - Rate limiter prevents cascading retries that trigger API key bans
-        
+
         UPDATED (Jan 11, 2026): Added invalid symbol caching to prevent repeated API calls
         - Caches known invalid symbols to avoid wasted API calls
         - Reduces log pollution from Coinbase SDK error messages
         """
-        
+
         # CRITICAL FIX (Jan 11, 2026): Check invalid symbols cache first
         # If symbol is known to be invalid, skip API call entirely
         if symbol in self._invalid_symbols_cache:
             logging.debug(f"⚠️  Skipping cached invalid symbol: {symbol}")
             return []
-        
+
         # Wrapper function for rate-limited API call
         def _fetch_candles():
             granularity_map = {
@@ -3822,25 +3822,25 @@ class CoinbaseBroker(BaseBroker):
                 "1h": "ONE_HOUR",
                 "1d": "ONE_DAY"
             }
-            
+
             granularity = granularity_map.get(timeframe, "FIVE_MINUTE")
-            
+
             end = int(time.time())
             start = end - (300 * count)  # 5 min candles
-            
+
             candles = self.client.get_candles(
                 product_id=symbol,
                 start=start,
                 end=end,
                 granularity=granularity
             )
-            
+
             if hasattr(candles, 'candles'):
                 return [vars(c) for c in candles.candles]
             elif isinstance(candles, dict) and 'candles' in candles:
                 return candles['candles']
             return []
-        
+
         # Use rate limiter if available
         for attempt in range(RATE_LIMIT_MAX_RETRIES):
             try:
@@ -3850,29 +3850,29 @@ class CoinbaseBroker(BaseBroker):
                 else:
                     # Fallback to direct call without rate limiting
                     return _fetch_candles()
-                
+
             except Exception as e:
                 error_str = str(e).lower()
-                
+
                 # CRITICAL FIX (Jan 10, 2026): Distinguish invalid symbols from rate limits
                 # Invalid symbols should not trigger retries or count toward rate limit errors
                 # This prevents delisted coins from causing circuit breaker activation
-                
+
                 # Check for invalid product/symbol errors using shared detection logic
                 is_invalid_symbol = _is_invalid_product_error(str(e))
-                
+
                 # If invalid symbol, don't retry - just skip it
                 if is_invalid_symbol:
                     # CRITICAL FIX (Jan 11, 2026): Cache invalid symbol to prevent future API calls
                     self._invalid_symbols_cache.add(symbol)
                     logging.debug(f"⚠️  Invalid/delisted symbol: {symbol} - cached and skipping")
                     return []  # Return empty to signal "no data" without counting as error
-                
+
                 # Distinguish between 429 (rate limit) and 403 (too many errors / temporary ban)
                 is_403_forbidden = '403' in error_str or 'forbidden' in error_str or 'too many errors' in error_str
                 is_429_rate_limit = '429' in error_str or 'rate limit' in error_str or 'too many requests' in error_str
                 is_rate_limited = is_403_forbidden or is_429_rate_limit
-                
+
                 if is_rate_limited and attempt < RATE_LIMIT_MAX_RETRIES - 1:
                     # Different handling for 403 vs 429
                     if is_403_forbidden:
@@ -3887,7 +3887,7 @@ class CoinbaseBroker(BaseBroker):
                         jitter = random.uniform(0, retry_delay * 0.3)  # 30% jitter
                         total_delay = retry_delay + jitter
                         logging.warning(f"⚠️  Rate limited (429) on {symbol}, retrying in {total_delay:.1f}s (attempt {attempt+1}/{RATE_LIMIT_MAX_RETRIES})")
-                    
+
                     time.sleep(total_delay)
                     continue
                 else:
@@ -3899,36 +3899,36 @@ class CoinbaseBroker(BaseBroker):
                         if not is_rate_limited:
                             logging.error(f"Error fetching candles for {symbol}: {e}")
                     return []
-        
+
         return []
-    
+
     def get_real_entry_price(self, symbol: str) -> Optional[float]:
         """
         ✅ FIX: Get real entry price from Coinbase order history.
-        
+
         Fetches the most recent buy order fill for the given symbol to determine
         the actual entry price. This is used to recover entry prices for positions
         that weren't properly tracked during initial entry.
-        
+
         NOTE: For positions with multiple partial fills or round-trip trades,
         this returns the most recent BUY fill price. For more accurate tracking
         of complex positions, use position_tracker from the start.
-        
+
         Args:
             symbol: Trading symbol (e.g., 'BNB-USD')
-            
+
         Returns:
             Real entry price if found, None otherwise
         """
         if not self.client:
             logger.debug(f"Cannot get entry price for {symbol}: client not connected")
             return None
-        
+
         try:
             # Fetch recent fills for the symbol using Coinbase Advanced Trade API
             # get_fills returns all recent fills, can filter by product_ids
             logger.debug(f"Fetching order fills for {symbol} to recover entry price...")
-            
+
             # Use rate limiter to prevent 429 errors
             def _fetch_fills():
                 fills_resp = self.client.get_fills(
@@ -3936,23 +3936,23 @@ class CoinbaseBroker(BaseBroker):
                     limit=100  # Get last 100 fills to find recent buys
                 )
                 return fills_resp
-            
+
             if self._rate_limiter:
                 fills_resp = self._rate_limiter.call('get_fills', _fetch_fills)
             else:
                 fills_resp = _fetch_fills()
-            
+
             # Parse fills response
             fills = []
             if hasattr(fills_resp, 'fills'):
                 fills = fills_resp.fills
             elif isinstance(fills_resp, dict) and 'fills' in fills_resp:
                 fills = fills_resp['fills']
-            
+
             if not fills:
                 logger.debug(f"No fills found for {symbol}")
                 return None
-            
+
             # Find the most recent BUY fill for this symbol
             # NOTE: Coinbase API returns fills in reverse chronological order (newest first)
             # We look for the first BUY fill, which represents the most recent entry
@@ -3966,7 +3966,7 @@ class CoinbaseBroker(BaseBroker):
                     side = getattr(fill, 'side', '').upper()
                     price = getattr(fill, 'price', None)
                     size = getattr(fill, 'size', None)
-                
+
                 # We want BUY fills (entry) not SELL fills (exit)
                 if side == 'BUY' and price:
                     try:
@@ -3977,15 +3977,15 @@ class CoinbaseBroker(BaseBroker):
                     except (ValueError, TypeError) as e:
                         logger.warning(f"Invalid price data for {symbol}: {price} - {e}")
                         continue  # Try next fill
-            
+
             # No buy fills found
             logger.debug(f"No BUY fills found for {symbol} in recent history")
             return None
-            
+
         except Exception as e:
             logger.warning(f"Failed to fetch entry price for {symbol}: {e}")
             return None
-    
+
     def supports_asset_class(self, asset_class: str) -> bool:
         """Coinbase supports crypto only"""
         return asset_class.lower() == "crypto"
@@ -3994,61 +3994,61 @@ class CoinbaseBroker(BaseBroker):
 class AlpacaBroker(BaseBroker):
     """
     Alpaca integration for stocks and crypto.
-    
+
     Features:
     - Stock trading (US equities)
     - Crypto trading (select cryptocurrencies)
     - Paper and live trading modes
     - Multi-account support (master + user accounts)
-    
+
     Documentation: https://alpaca.markets/docs/
     """
-    
+
     def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         """
         Initialize Alpaca broker with account type support.
-        
+
         Args:
             account_type: MASTER for Nija system account, USER for individual user accounts
             user_id: User ID for USER account_type (e.g., 'tania_gilbert')
-            
+
         Raises:
             ValueError: If account_type is USER but user_id is not provided
         """
         super().__init__(BrokerType.ALPACA, account_type=account_type, user_id=user_id)
-        
+
         # Validate that USER account_type has user_id
         if account_type == AccountType.USER and not user_id:
             raise ValueError("USER account_type requires user_id parameter")
-        
+
         self.api = None
-        
+
         # Set identifier for logging
         if account_type == AccountType.MASTER:
             self.account_identifier = "MASTER"
         else:
             self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
-    
+
     @property
     def client(self):
         """Alias for self.api to maintain consistency with other brokers"""
         return self.api
-    
+
     def connect(self) -> bool:
         """
         Connect to Alpaca API with retry logic.
-        
+
         Uses different credentials based on account_type:
         - MASTER: ALPACA_API_KEY / ALPACA_API_SECRET / ALPACA_PAPER
         - USER: ALPACA_USER_{user_id}_API_KEY / ALPACA_USER_{user_id}_API_SECRET / ALPACA_USER_{user_id}_PAPER
-        
+
         Returns:
             bool: True if connected successfully
         """
         try:
             from alpaca.trading.client import TradingClient
             import time
-            
+
             # Get credentials based on account type
             if self.account_type == AccountType.MASTER:
                 api_key = os.getenv("ALPACA_API_KEY", "").strip()
@@ -4066,7 +4066,7 @@ class AlpacaBroker(BaseBroker):
                 paper_str = os.getenv(f"ALPACA_USER_{user_env_name}_PAPER", "true").strip()
                 paper = paper_str.lower() == "true"
                 cred_label = f"USER:{self.user_id}"
-            
+
             if not api_key or not api_secret:
                 # Mark that credentials were not configured (not an error, just not set up)
                 self.credentials_configured = False
@@ -4084,22 +4084,22 @@ class AlpacaBroker(BaseBroker):
                     logger.info(f"      ALPACA_USER_{user_env_name}_API_SECRET=<your-api-secret>")
                     logger.info(f"      ALPACA_USER_{user_env_name}_PAPER=true  # or false for live trading")
                 return False
-            
+
             # Log connection mode
             mode_str = "PAPER" if paper else "LIVE"
             logging.info(f"📊 Attempting to connect Alpaca {cred_label} ({mode_str} mode)...")
-            
+
             self.api = TradingClient(api_key, api_secret, paper=paper)
-            
+
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
-            
+
             # Test connection with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
             max_attempts = 5
             base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
-            
+
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
@@ -4108,47 +4108,47 @@ class AlpacaBroker(BaseBroker):
                         delay = base_delay * (2 ** (attempt - 2))
                         logging.info(f"🔄 Retrying Alpaca {cred_label} connection in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
-                    
+
                     account = self.api.get_account()
                     self.connected = True
-                    
+
                     if attempt > 1:
                         logging.info(f"✅ Connected to Alpaca {cred_label} API (succeeded on attempt {attempt})")
                     else:
                         logging.info(f"✅ Alpaca {cred_label} connected ({'PAPER' if paper else 'LIVE'})")
-                    
+
                     return True
-                
+
                 except Exception as e:
                     error_msg = str(e)
-                    
+
                     # Special handling for paper trading being disabled
                     if "paper" in error_msg.lower() and "not" in error_msg.lower():
                         logging.warning(f"⚠️  Alpaca {cred_label} paper trading may be disabled or account not configured for paper trading")
                         logging.warning(f"   Try setting ALPACA{'_USER_' + user_env_name if self.account_type == AccountType.USER else ''}_PAPER=false for live trading")
                         return False
-                    
+
                     # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
                     # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
                     # These indicate API key blocking and need longer cooldown periods
                     is_retryable = any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
-                        '503', '504', '429', '403', 'forbidden', 
+                        '503', '504', '429', '403', 'forbidden',
                         'too many errors', 'temporary', 'try again'
                     ])
-                    
+
                     if is_retryable and attempt < max_attempts:
                         logging.warning(f"⚠️  Alpaca {cred_label} connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                         continue
                     else:
                         logging.warning(f"⚠️  Alpaca {cred_label} connection failed: {e}")
                         return False
-            
+
             # Should never reach here, but just in case
             logging.error(f"❌ Failed to connect to Alpaca {cred_label} after maximum retry attempts")
             return False
-            
+
         except ImportError as e:
             # SDK not installed or import failed
             logging.error(f"❌ Alpaca connection failed ({self.account_identifier}): SDK import error")
@@ -4161,32 +4161,32 @@ class AlpacaBroker(BaseBroker):
             logging.error("      3. Try manual install: pip install alpaca-py")
             logging.error("      4. Check for dependency conflicts with: pip check")
             return False
-    
+
     def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get total equity (cash + position values) for Alpaca account.
-        
+
         CRITICAL FIX (Rule #3): Balance = CASH + POSITION VALUE
         Returns total equity (available cash + position market value), not just cash.
-        
+
         For Alpaca, the account object provides 'equity' which includes both cash and positions.
         This is the correct value to use for risk calculations and position sizing.
-        
+
         Args:
             verbose: If True, logs detailed balance breakdown (default: True)
-        
+
         Returns:
             float: Total equity (cash + positions)
         """
         try:
             account = self.api.get_account()
-            
+
             # Alpaca provides 'equity' which is cash + position values
             # This is exactly what we need per Rule #3
             equity = float(account.equity)
             cash = float(account.cash)
             position_value = equity - cash
-            
+
             # Enhanced logging to show breakdown (only if verbose=True)
             if verbose:
                 logger.info("=" * 70)
@@ -4202,33 +4202,33 @@ class AlpacaBroker(BaseBroker):
             else:
                 # Minimal logging when verbose=False
                 logger.debug(f"Alpaca balance ({self.account_identifier}): ${equity:.2f}")
-            
+
             return equity
-            
+
         except Exception as e:
             logger.error(f"Error fetching Alpaca balance: {e}")
             return 0.0
-    
+
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Place market order"""
         try:
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
-            
+
             order_side = OrderSide.BUY if side.lower() == 'buy' else OrderSide.SELL
-            
+
             order_data = MarketOrderRequest(
                 symbol=symbol,
                 qty=quantity,
                 side=order_side,
                 time_in_force=TimeInForce.DAY
             )
-            
+
             order = self.api.submit_order(order_data)
-            
+
             # Enhanced trade confirmation logging with account identification
             account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "MASTER"
-            
+
             # FIRST LIVE TRADE BANNER (for legal/operational protection)
             global _FIRST_TRADE_EXECUTED
             with _FIRST_TRADE_LOCK:
@@ -4249,7 +4249,7 @@ class AlpacaBroker(BaseBroker):
                     logger.info("   All subsequent trades will be logged normally.")
                     logger.info(LOG_SEPARATOR)
                     logger.info("")
-            
+
             logger.info(LOG_SEPARATOR)
             logger.info(f"✅ TRADE CONFIRMATION - {account_label}")
             logger.info(LOG_SEPARATOR)
@@ -4261,22 +4261,22 @@ class AlpacaBroker(BaseBroker):
             logger.info(f"   Account: {account_label}")
             logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
             logger.info(LOG_SEPARATOR)
-            
+
             # Flush logs immediately to ensure confirmation is visible
             if _root_logger.handlers:
                 for handler in _root_logger.handlers:
                     handler.flush()
-            
+
             return {
                 "status": "submitted",
                 "order": order,
                 "account": account_label  # Add account identification to result
             }
-            
+
         except Exception as e:
             logger.error(f"Alpaca order error: {e}")
             return {"status": "error", "error": str(e)}
-    
+
     def get_positions(self) -> List[Dict]:
         """Get open positions"""
         try:
@@ -4291,7 +4291,7 @@ class AlpacaBroker(BaseBroker):
         except Exception as e:
             logger.error(f"Error fetching positions: {e}")
             return []
-    
+
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """Get candle data with retry logic for rate limiting"""
         # Import Alpaca SDK dependencies (method-level import to avoid import errors when SDK not installed)
@@ -4303,17 +4303,17 @@ class AlpacaBroker(BaseBroker):
         except ImportError:
             logging.error("Alpaca SDK not installed. Run: pip install alpaca-py")
             return []
-        
+
         # Get credentials and create client outside retry loop (doesn't change between retries)
         api_key = os.getenv("ALPACA_API_KEY")
         api_secret = os.getenv("ALPACA_API_SECRET")
-        
+
         if not api_key or not api_secret:
             logging.error("Alpaca API credentials not configured")
             return []
-        
+
         data_client = StockHistoricalDataClient(api_key, api_secret)
-        
+
         # Timeframe mapping (constant for all retries)
         timeframe_map = {
             "1m": TimeFrame.Minute,
@@ -4323,7 +4323,7 @@ class AlpacaBroker(BaseBroker):
             "1d": TimeFrame.Day
         }
         tf = timeframe_map.get(timeframe, TimeFrame(5, TimeFrame.Minute))
-        
+
         # Retry loop for API call (1-based indexing for clearer log messages)
         for attempt in range(1, RATE_LIMIT_MAX_RETRIES + 1):
             try:
@@ -4332,9 +4332,9 @@ class AlpacaBroker(BaseBroker):
                     timeframe=tf,
                     start=datetime.now() - timedelta(days=7)
                 )
-                
+
                 bars = data_client.get_stock_bars(request_params)
-                
+
                 candles = []
                 for bar in bars[symbol]:
                     candles.append({
@@ -4345,29 +4345,29 @@ class AlpacaBroker(BaseBroker):
                         'close': float(bar.close),
                         'volume': float(bar.volume)
                     })
-                
+
                 return candles[-count:] if len(candles) > count else candles
-                
+
             except Exception as e:
                 error_str = str(e).lower()
-                
+
                 # CRITICAL FIX (Jan 13, 2026): Use centralized error detection function
                 # Alpaca returns various error messages for invalid/delisted stocks:
                 # - "invalid symbol", "symbol not found", "asset not found"
                 # - "No key SYMBOL was found" (common for delisted stocks)
                 # These should not trigger retries or count toward rate limit errors
                 is_invalid_symbol = _is_invalid_product_error(str(e))
-                
+
                 # Log invalid symbols at debug level (not error) since it's expected
                 if is_invalid_symbol:
                     logging.debug(f"⚠️  Invalid/delisted stock symbol: {symbol} - skipping")
                     return []  # Return empty to signal "no data" without counting as error
-                
+
                 # Distinguish between 429 (rate limit) and 403 (too many errors / temporary ban)
                 is_403_forbidden = '403' in error_str or 'forbidden' in error_str or 'too many errors' in error_str
                 is_429_rate_limit = '429' in error_str or 'rate limit' in error_str or 'too many requests' in error_str
                 is_rate_limited = is_403_forbidden or is_429_rate_limit
-                
+
                 if is_rate_limited and attempt < RATE_LIMIT_MAX_RETRIES:
                     # Different handling for 403 vs 429
                     if is_403_forbidden:
@@ -4382,7 +4382,7 @@ class AlpacaBroker(BaseBroker):
                         delay = base_delay + jitter
                         logging.warning(f"⚠️  Alpaca rate limit (429): Too many requests for {symbol}")
                         logging.warning(f"   Waiting {delay:.1f}s before retry {attempt}/{RATE_LIMIT_MAX_RETRIES}...")
-                    
+
                     time.sleep(delay)
                     continue
                 else:
@@ -4394,18 +4394,18 @@ class AlpacaBroker(BaseBroker):
                         # Non-rate-limit error - log at ERROR level
                         logging.error(f"Error fetching candles for {symbol}: {e}")
                     return []
-        
+
         return []
-    
+
     def supports_asset_class(self, asset_class: str) -> bool:
         """Alpaca supports stocks"""
         return asset_class.lower() in ["stocks", "stock"]
-    
+
     def get_all_products(self) -> list:
         """
         Get list of tradeable stock symbols from Alpaca.
         Note: Alpaca is for stocks, not crypto. Returns popular stock symbols.
-        
+
         Returns:
             List of stock symbols (e.g., ['AAPL', 'MSFT', 'GOOGL', ...])
         """
@@ -4413,27 +4413,27 @@ class AlpacaBroker(BaseBroker):
             if not self.api:
                 logging.warning("⚠️  Alpaca not connected, cannot fetch products")
                 return []
-            
+
             # Get all active assets from Alpaca
             from alpaca.trading.requests import GetAssetsRequest
             from alpaca.trading.enums import AssetClass, AssetStatus
-            
+
             request = GetAssetsRequest(
                 status=AssetStatus.ACTIVE,
                 asset_class=AssetClass.US_EQUITY
             )
-            
+
             assets = self.api.get_all_assets(request)
-            
+
             # Extract tradeable symbols
             symbols = []
             for asset in assets:
                 if asset.tradable and asset.status == AssetStatus.ACTIVE:
                     symbols.append(asset.symbol)
-            
+
             logging.info(f"📊 Alpaca: Found {len(symbols)} tradeable stock symbols")
             return symbols
-            
+
         except ImportError:
             logging.warning("⚠️  Alpaca SDK not available")
             return []
@@ -4451,58 +4451,58 @@ class AlpacaBroker(BaseBroker):
 class BinanceBroker(BaseBroker):
     """
     Binance Exchange integration for cryptocurrency spot trading.
-    
+
     Features:
     - Spot trading (USDT pairs)
     - Market and limit orders
     - Real-time account balance
     - Historical candle data (OHLCV)
-    
+
     Documentation: https://python-binance.readthedocs.io/
     """
-    
+
     def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         super().__init__(BrokerType.BINANCE, account_type=account_type, user_id=user_id)
         self.client = None
-    
+
     def connect(self) -> bool:
         """
         Connect to Binance API with retry logic.
-        
+
         Requires environment variables:
         - BINANCE_API_KEY: Your Binance API key
         - BINANCE_API_SECRET: Your Binance API secret
         - BINANCE_USE_TESTNET: 'true' for testnet, 'false' for live (optional, default: false)
-        
+
         Returns:
             bool: True if connected successfully
         """
         try:
             from binance.client import Client
             import time
-            
+
             api_key = os.getenv("BINANCE_API_KEY", "").strip()
             api_secret = os.getenv("BINANCE_API_SECRET", "").strip()
             use_testnet = os.getenv("BINANCE_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
-            
+
             if not api_key or not api_secret:
                 # Silently skip - Binance is optional, no need for scary error messages
                 logging.info("⚠️  Binance credentials not configured (skipping)")
                 return False
-            
+
             # Initialize Binance client
             if use_testnet:
                 # Testnet base URL
                 self.client = Client(api_key, api_secret, testnet=True)
             else:
                 self.client = Client(api_key, api_secret)
-            
+
             # Test connection by fetching account status with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
             max_attempts = 5
             base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
-            
+
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
@@ -4511,31 +4511,31 @@ class BinanceBroker(BaseBroker):
                         delay = base_delay * (2 ** (attempt - 2))
                         logging.info(f"🔄 Retrying Binance connection in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
-                    
+
                     account = self.client.get_account()
-                    
+
                     if account:
                         self.connected = True
-                        
+
                         if attempt > 1:
                             logging.info(f"✅ Connected to Binance API (succeeded on attempt {attempt})")
-                        
+
                         env_type = "🧪 TESTNET" if use_testnet else "🔴 LIVE"
                         logging.info("=" * 70)
                         logging.info(f"✅ BINANCE CONNECTED ({env_type})")
                         logging.info("=" * 70)
-                        
+
                         # Log account trading status
                         can_trade = account.get('canTrade', False)
                         logging.info(f"   Trading Enabled: {'✅' if can_trade else '❌'}")
-                        
+
                         # Log USDT balance
                         for balance in account.get('balances', []):
                             if balance['asset'] == 'USDT':
                                 usdt_balance = float(balance['free'])
                                 logging.info(f"   USDT Balance: ${usdt_balance:.2f}")
                                 break
-                        
+
                         logging.info("=" * 70)
                         return True
                     else:
@@ -4545,20 +4545,20 @@ class BinanceBroker(BaseBroker):
                         else:
                             logging.warning("⚠️  Binance connection test failed: No account data returned")
                             return False
-                
+
                 except Exception as e:
                     error_msg = str(e)
-                    
+
                     # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
                     # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
                     # These indicate API key blocking and need longer cooldown periods
                     is_retryable = any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
-                        '503', '504', '429', '403', 'forbidden', 
+                        '503', '504', '429', '403', 'forbidden',
                         'too many errors', 'temporary', 'try again'
                     ])
-                    
+
                     if is_retryable and attempt < max_attempts:
                         logging.warning(f"⚠️  Binance connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                         continue
@@ -4573,11 +4573,11 @@ class BinanceBroker(BaseBroker):
                         else:
                             logging.warning(f"⚠️  Binance connection failed: {e}")
                         return False
-            
+
             # Should never reach here, but just in case
             logging.error("❌ Failed to connect to Binance after maximum retry attempts")
             return False
-                
+
         except ImportError as e:
             # SDK not installed or import failed
             logging.error("❌ Binance connection failed: SDK import error")
@@ -4590,24 +4590,24 @@ class BinanceBroker(BaseBroker):
             logging.error("      3. Try manual install: pip install python-binance")
             logging.error("      4. Check for dependency conflicts with: pip check")
             return False
-    
+
     def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get USDT balance available for trading.
-        
+
         Args:
             verbose: If True, logs detailed balance breakdown (default: True)
-        
+
         Returns:
             float: Available USDT balance
         """
         try:
             if not self.client:
                 return 0.0
-            
+
             # Get account balances
             account = self.client.get_account()
-            
+
             # Find USDT balance
             for balance in account.get('balances', []):
                 if balance['asset'] == 'USDT':
@@ -4617,38 +4617,38 @@ class BinanceBroker(BaseBroker):
                     else:
                         logging.debug(f"Binance USDT Balance: ${available:.2f}")
                     return available
-            
+
             # No USDT found
             if verbose:
                 logging.warning("⚠️  No USDT balance found in Binance account")
             return 0.0
-            
+
         except Exception as e:
             logging.error(f"Error fetching Binance balance: {e}")
             return 0.0
-    
+
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """
         Place market order on Binance.
-        
+
         Args:
             symbol: Trading pair (e.g., 'BTC-USD' or 'BTCUSDT')
             side: 'buy' or 'sell'
             quantity: Order size in USDT (for buys) or base currency (for sells)
-        
+
         Returns:
             dict: Order result with status, order_id, etc.
         """
         try:
             if not self.client:
                 return {"status": "error", "error": "Not connected to Binance"}
-            
+
             # Convert symbol format (BTC-USD -> BTCUSDT)
             binance_symbol = symbol.replace('-USD', 'USDT').replace('-', '')
-            
+
             # Binance uses uppercase for side
             binance_side = side.upper()
-            
+
             # Place market order
             # Note: Binance requires 'quantity' parameter for market orders
             # For buy orders, you may want to use quoteOrderQty instead
@@ -4664,17 +4664,17 @@ class BinanceBroker(BaseBroker):
                     symbol=binance_symbol,
                     quantity=quantity
                 )
-            
+
             if order:
                 order_id = order.get('orderId')
                 status = order.get('status', 'UNKNOWN')
                 filled_qty = float(order.get('executedQty', 0))
-                
+
                 logging.info(f"✅ Binance order placed: {binance_side} {binance_symbol}")
                 logging.info(f"   Order ID: {order_id}")
                 logging.info(f"   Status: {status}")
                 logging.info(f"   Filled: {filled_qty}")
-                
+
                 return {
                     "status": "filled" if status == "FILLED" else "unfilled",
                     "order_id": str(order_id),
@@ -4683,69 +4683,69 @@ class BinanceBroker(BaseBroker):
                     "quantity": quantity,
                     "filled_quantity": filled_qty
                 }
-            
+
             logging.error("❌ Binance order failed: No order data returned")
             return {"status": "error", "error": "No order data"}
-            
+
         except Exception as e:
             logging.error(f"Binance order error: {e}")
             return {"status": "error", "error": str(e)}
-    
+
     def get_positions(self) -> List[Dict]:
         """
         Get open positions (non-zero balances).
-        
+
         Returns:
             list: List of position dicts with symbol, quantity, currency
         """
         try:
             if not self.client:
                 return []
-            
+
             # Get account balances
             account = self.client.get_account()
             positions = []
-            
+
             for balance in account.get('balances', []):
                 asset = balance['asset']
                 available = float(balance.get('free', 0))
-                
+
                 # Only include non-zero, non-USDT balances
                 if asset != 'USDT' and available > 0:
                     # Convert to standard symbol format
                     symbol = f'{asset}USDT'
-                    
+
                     positions.append({
                         'symbol': symbol,
                         'quantity': available,
                         'currency': asset
                     })
-            
+
             return positions
-            
+
         except Exception as e:
             logging.error(f"Error fetching Binance positions: {e}")
             return []
-    
+
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """
         Get historical candle data from Binance.
-        
+
         Args:
             symbol: Trading pair (e.g., 'BTC-USD' or 'BTCUSDT')
             timeframe: Candle interval ('1m', '5m', '15m', '1h', '1d', etc.)
             count: Number of candles to fetch (max 1000)
-        
+
         Returns:
             list: List of candle dicts with OHLCV data
         """
         try:
             if not self.client:
                 return []
-            
+
             # Convert symbol format
             binance_symbol = symbol.replace('-USD', 'USDT').replace('-', '')
-            
+
             # Map timeframe to Binance interval
             # Binance uses: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w, 1M
             interval_map = {
@@ -4756,16 +4756,16 @@ class BinanceBroker(BaseBroker):
                 "4h": "4h",
                 "1d": "1d"
             }
-            
+
             binance_interval = interval_map.get(timeframe.lower(), "5m")
-            
+
             # Fetch klines (candles)
             klines = self.client.get_klines(
                 symbol=binance_symbol,
                 interval=binance_interval,
                 limit=min(count, 1000)  # Binance max is 1000
             )
-            
+
             candles = []
             for kline in klines:
                 # Binance kline format: [timestamp, open, high, low, close, volume, ...]
@@ -4777,21 +4777,21 @@ class BinanceBroker(BaseBroker):
                     'close': float(kline[4]),
                     'volume': float(kline[5])
                 })
-            
+
             return candles
-            
+
         except Exception as e:
             logging.error(f"Error fetching Binance candles: {e}")
             return []
-    
+
     def supports_asset_class(self, asset_class: str) -> bool:
         """Binance supports crypto spot trading"""
         return asset_class.lower() in ["crypto", "cryptocurrency"]
-    
+
     def get_all_products(self) -> list:
         """
         Get list of all tradeable cryptocurrency pairs from Binance.
-        
+
         Returns:
             List of trading pairs (e.g., ['BTCUSDT', 'ETHUSDT', ...])
         """
@@ -4799,10 +4799,10 @@ class BinanceBroker(BaseBroker):
             if not self.client:
                 logging.warning("⚠️  Binance not connected, cannot fetch products")
                 return []
-            
+
             # Get all exchange info (includes all trading pairs)
             exchange_info = self.client.get_exchange_info()
-            
+
             # Extract symbols that are trading (status = 'TRADING')
             symbols = []
             for symbol_info in exchange_info.get('symbols', []):
@@ -4811,10 +4811,10 @@ class BinanceBroker(BaseBroker):
                     symbol = symbol_info.get('symbol', '')
                     if symbol.endswith('USDT'):
                         symbols.append(symbol)
-            
+
             logging.info(f"📊 Binance: Found {len(symbols)} tradeable USDT pairs")
             return symbols
-            
+
         except Exception as e:
             logging.warning(f"⚠️  Error fetching Binance products: {e}")
             # Return a fallback list of popular crypto pairs
@@ -4830,12 +4830,12 @@ class BinanceBroker(BaseBroker):
 # ============================================================================
 # KRAKEN NONCE PERSISTENCE
 # ============================================================================
-# 
+#
 # CRITICAL FIX (Jan 17, 2026): Persist Kraken nonce across restarts
-# 
+#
 # Problem: Without persistence, nonce resets on restart, causing "Invalid nonce"
 # errors if Kraken remembers the previous session's nonce (60+ seconds).
-# 
+#
 # Solution: Store nonce in kraken_nonce.txt and load it on startup
 # - Thread-safe: Uses lock to prevent race conditions
 # - Restart-safe: Loads last nonce from file
@@ -4858,15 +4858,15 @@ MASTER_ACCOUNT_IDENTIFIER = "master"
 def get_kraken_nonce_file(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER) -> str:
     """
     Get the nonce file path for a specific Kraken account.
-    
+
     CRITICAL FIX (Jan 17, 2026): Each account needs its own nonce file to prevent collisions.
     - MASTER account: data/kraken_nonce_master.txt
     - USER accounts: data/kraken_nonce_user_daivon.txt, etc.
-    
+
     Args:
         account_identifier: Account identifier (e.g., 'master', 'user_daivon_frazier', 'USER:daivon_frazier')
                            Will be sanitized to safe filename format.
-    
+
     Returns:
         str: Full path to account-specific nonce file
     """
@@ -4878,23 +4878,23 @@ def get_kraken_nonce_file(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER) -
     # Remove any remaining unsafe characters (keep only alphanumeric, underscore, hyphen)
     # Place hyphen at the start of character class to avoid needing escape
     safe_identifier = re.sub(r'[^-a-z0-9_]', '', safe_identifier)
-    
+
     # Ensure data directory exists
     os.makedirs(_data_dir, exist_ok=True)
-    
+
     return os.path.join(_data_dir, f"kraken_nonce_{safe_identifier}.txt")
 
 def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
     """
     Generate Kraken nonce with persistence across restarts.
-    
+
     CRITICAL FIX (Jan 18, 2026): Changed to use MILLISECONDS (not microseconds) to match
     KrakenNonce class and Kraken API expectations. Automatically migrates old microsecond
     nonces to milliseconds.
-    
+
     CRITICAL FIX (Jan 17, 2026): Now supports account-specific nonce files to prevent
     nonce collisions between MASTER and USER accounts.
-    
+
     This function:
     1. Loads last nonce from account-specific nonce file (if exists)
     2. Migrates from legacy nonce file for MASTER account (backward compatibility)
@@ -4902,24 +4902,24 @@ def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
     4. Generates new nonce = max(current_time_ms, last_nonce + 1)
     5. Persists new nonce to account-specific file
     6. Returns new nonce
-    
+
     Thread-safe: Uses lock to prevent race conditions
     Restart-safe: Persists to file for next restart
     Account-isolated: Each account has its own nonce file
-    
+
     Args:
         account_identifier: Account identifier (default: "master")
                            Examples: "master", "user_daivon_frazier", "USER:tania_gilbert"
-    
+
     Returns:
         int: New nonce (milliseconds since epoch)
     """
     with _nonce_lock:
         # Get account-specific nonce file
         nonce_file = get_kraken_nonce_file(account_identifier)
-        
+
         last_nonce = 0
-        
+
         # BACKWARD COMPATIBILITY: Migrate legacy MASTER nonce file
         # If this is the MASTER account and the new file doesn't exist but the old one does,
         # migrate the nonce value from the old file to preserve continuity
@@ -4934,7 +4934,7 @@ def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
                             logging.info(f"📦 Migrated MASTER nonce from legacy file: {last_nonce}")
                 except (ValueError, IOError) as e:
                     logging.debug(f"Could not migrate legacy nonce file: {e}")
-        
+
         # Read existing nonce from account-specific file
         if os.path.exists(nonce_file):
             try:
@@ -4972,22 +4972,22 @@ def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
 class KrakenBroker(BaseBroker):
     """
     Kraken Pro Exchange integration for cryptocurrency spot trading.
-    
+
     Features:
     - Spot trading (USD/USDT pairs)
     - Market and limit orders
     - Real-time account balance
     - Historical candle data (OHLCV)
-    
+
     Documentation: https://docs.kraken.com/rest/
     Python wrapper: https://github.com/veox/python3-krakenex
     """
-    
+
     # HTTP timeout for Kraken API calls (in seconds)
     # This prevents indefinite hanging if the API is slow or unresponsive
     # 30 seconds is reasonable as Kraken normally responds in 1-5 seconds
     API_TIMEOUT_SECONDS = 30
-    
+
     # Class-level flag to track if detailed permission error instructions have been logged
     # This prevents spamming the logs with duplicate permission error messages
     # The detailed instructions are logged ONCE GLOBALLY (not once per account)
@@ -4995,93 +4995,93 @@ class KrakenBroker(BaseBroker):
     # Thread-safe: uses lock for concurrent access protection
     _permission_error_details_logged = False
     _permission_errors_lock = threading.Lock()
-    
+
     # Class-level set to track accounts that have had permission errors
     # This prevents retrying connections for accounts with permission errors
     # Permission errors require user action (fixing API key permissions) and cannot
     # be resolved by retrying. Thread-safe: uses same lock as _permission_error_details_logged
     _permission_failed_accounts = set()
-    
+
     def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         """
         Initialize Kraken broker with account type support.
-        
+
         Args:
             account_type: MASTER for Nija system account, USER for individual user accounts
             user_id: User ID for USER account_type (e.g., 'daivon_frazier')
-            
+
         Raises:
             ValueError: If account_type is USER but user_id is not provided
         """
         super().__init__(BrokerType.KRAKEN, account_type=account_type, user_id=user_id)
-        
+
         # Validate that USER account_type has user_id
         if account_type == AccountType.USER and not user_id:
             raise ValueError("USER account_type requires user_id parameter")
-        
+
         self.api = None
         self.kraken_api = None
-        
+
         # Balance tracking for fail-closed behavior (Fix 3)
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
         self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
-        
+
         # FIX 2: EXIT-ONLY mode when balance is below minimum (Jan 20, 2026)
         # Allows emergency sells even when account is too small for new entries
         self.exit_only_mode = False
-        
+
         # FIX #2: Balance cache and health status for Kraken
         # Cache balance after successful fetch and track health
         self.balance_cache = {}  # Structure: {"kraken": balance_value}
         self.kraken_health = "UNKNOWN"  # Status: "OK", "ERROR", or "UNKNOWN"
-        
+
         # CRITICAL FIX (Jan 17, 2026): Monotonic nonce with API call serialization
-        # 
+        #
         # Nonce tracking for guaranteeing strict monotonic increase
         # This prevents "Invalid nonce" errors from rapid consecutive requests
-        # 
+        #
         # Research findings from Kraken API documentation and testing:
         # - Kraken REMEMBERS the last nonce it saw for each API key (persists 60+ seconds)
         # - Kraken expects nonces to be NEAR CURRENT TIME (not far in the future)
         # - The strict monotonic counter prevents collisions even with current time
         # - Nonces should be based on current UNIX timestamp (Kraken's best practice)
-        # 
+        #
         # Why 0-5 seconds is CORRECT:
         # - Aligns with Kraken's expectations (nonces near current time)
         # - Strict monotonic counter prevents all collisions within a session
         # - Small jitter (0-5s) prevents multi-instance collisions
         # - Error recovery uses 60-second immediate jump when nonce errors occur
-        # 
+        #
         # Why 10-20 seconds FAILS:
         # - Nonces too far in the future may exceed Kraken's acceptable window
         # - Causes "Invalid nonce" errors on first connection attempt
         # - Each retry wastes 30-60 seconds before eventual success
-        # 
+        #
         # Why very large offsets (180-240s) FAIL:
         # - Definitely exceeds Kraken's acceptable forward time window
         # - Kraken rejects nonces too far in the future
-        # 
+        #
         # Session Restart Handling:
         # - The strict monotonic counter already handles rapid restarts
         # - If current time hasn't advanced enough, counter increments by 1
         # - This guarantees each nonce is unique and increasing
         # - No large forward offset needed for restart protection
-        # 
+        #
         # Set identifier for logging (must be set BEFORE nonce initialization)
         if account_type == AccountType.MASTER:
             self.account_identifier = "MASTER"
         else:
             self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
-        
+
         # CRITICAL FIX (Jan 17, 2026): Each account uses its own nonce file
         # This prevents nonce collisions between MASTER and USER accounts
         # - MASTER: data/kraken_nonce_master.txt
         # - USER accounts: data/kraken_nonce_user_daivon_frazier.txt, etc.
         self._nonce_file = get_kraken_nonce_file(self.account_identifier)
-        
+
         # VERIFICATION: Ensure nonce file path is unique per account (prevent cross-contamination)
         # This assertion protects against regression bugs where nonce files might be shared
         if account_type == AccountType.MASTER:
@@ -5089,12 +5089,12 @@ class KrakenBroker(BaseBroker):
         else:
             # USER accounts: user_id is guaranteed to be non-None (validated above at line 3607-3608)
             assert user_id.lower() in self._nonce_file.lower(), f"USER nonce file must contain user_id '{user_id}': {self._nonce_file}"
-        
+
         logger.debug(f"   Nonce file for {self.account_identifier}: {self._nonce_file}")
-        
+
         # ✅ FIX 3: Timestamp-based Kraken Nonce (Global Nonce Manager)
         # ONE global nonce source shared across MASTER + ALL USERS
-        # 
+        #
         # This is the correct solution per FIX 3 requirements:
         # - Uses int(time.time() * 1000) for milliseconds since epoch
         # - Monotonically increasing (time only moves forward)
@@ -5116,24 +5116,24 @@ class KrakenBroker(BaseBroker):
             # Fallback to per-user KrakenNonce (DEPRECATED but kept for compatibility)
             logger.warning(f"   ⚠️  Global nonce manager not available, falling back to per-user KrakenNonce")
             self._use_global_nonce = False
-            
+
             # Load persisted nonce from file and initialize KrakenNonce with it
             persisted_nonce = get_kraken_nonce(self.account_identifier)
             self._kraken_nonce = KrakenNonce()
-            
+
             # Proper microsecond/millisecond conversion
             current_time_ms = int(time.time() * 1000)
             MICROSECOND_THRESHOLD = 100000000000000  # 10^14
-            
+
             if persisted_nonce > MICROSECOND_THRESHOLD:
                 persisted_nonce_ms = int(persisted_nonce / 1000)
                 logger.debug(f"   Converted persisted nonce from microseconds ({persisted_nonce}) to milliseconds ({persisted_nonce_ms})")
             else:
                 persisted_nonce_ms = persisted_nonce
-            
+
             initial_nonce = max(persisted_nonce_ms, current_time_ms)
             self._kraken_nonce.set_initial_value(initial_nonce)
-            
+
             logger.debug(f"   ✅ KrakenNonce instance created for {self.account_identifier} (fallback), initial nonce: {initial_nonce}ms")
         else:
             # ⚠️ DEPRECATED: This fallback is kept for backward compatibility only
@@ -5142,11 +5142,11 @@ class KrakenBroker(BaseBroker):
             self._use_global_nonce = False
             self._kraken_nonce = None
             # Note: _last_nonce is DEPRECATED and should be removed in future versions
-        
+
         # Thread lock to ensure nonce generation is thread-safe
         # Prevents race conditions when multiple threads call API simultaneously
         self._nonce_lock = threading.Lock()
-        
+
         # CRITICAL FIX: API call serialization to prevent simultaneous Kraken calls
         # Problem: Multiple threads can call Kraken API simultaneously, causing nonce collisions
         # Solution: Serialize all private API calls through a lock
@@ -5154,7 +5154,7 @@ class KrakenBroker(BaseBroker):
         # - Public API calls don't need nonces and are not serialized
         # - Lock is per-instance, so MASTER and USER accounts can still call in parallel
         self._api_call_lock = threading.Lock()
-        
+
         # Timestamp of last API call for rate limiting
         # Ensures minimum delay between consecutive Kraken API calls
         # CRITICAL FIX (Jan 18, 2026): Increased from 200ms to 1000ms to prevent nonce errors
@@ -5166,16 +5166,16 @@ class KrakenBroker(BaseBroker):
         self._last_api_call_time = 0.0
         self._min_call_interval = 1.0  # 1000ms (1 second) minimum between calls (fallback)
         self._last_call_by_category = {}  # Per-category call tracking: {category: timestamp}
-        
+
         # Kraken rate profile configuration
         # Will be set during connect() based on account balance
         self._kraken_rate_mode = None  # KrakenRateMode enum
         self._kraken_rate_profile = None  # Rate profile dict
-    
+
     def _initialize_kraken_market_data(self):
         """
         Initialize Kraken market data for dynamic minimum volumes.
-        
+
         This fetches trading pair information from Kraken API and caches it.
         Called after successful connection to ensure API is available.
         """
@@ -5196,14 +5196,14 @@ class KrakenBroker(BaseBroker):
             logger.warning(f"   ⚠️  Could not load market data: {e}")
             logger.warning("   Will use static minimum volumes as fallback")
             return False
-    
+
     def _immediate_nonce_jump(self):
         """
         Immediately jump nonce forward when a nonce error is detected.
-        
+
         This method jumps the nonce forward by 120 seconds to clear the "burned"
         nonce window and ensure the next API call will succeed.
-        
+
         Thread-safe: Uses the nonce generator's internal lock.
         """
         if self._use_global_nonce:
@@ -5219,70 +5219,70 @@ class KrakenBroker(BaseBroker):
             # Use KrakenNonce instance (fallback)
             immediate_jump_ms = 120 * 1000  # 120 seconds in milliseconds
             new_nonce = self._kraken_nonce.jump_forward(immediate_jump_ms)
-            
+
             # Persist the jumped nonce to account-specific file
             try:
                 with open(self._nonce_file, "w") as f:
                     f.write(str(new_nonce))
             except IOError as e:
                 logging.debug(f"Could not persist jumped nonce: {e}")
-            
+
             logger.debug(f"   ⚡ Immediately jumped nonce forward by 120s to clear burned nonce window")
         else:
             # FIX 3: Final fallback - use global nonce manager if available, else simple timestamp
             # No per-instance _last_nonce tracking
             logger.debug(f"   ⚡ Global nonce manager in use (fallback path) - timestamp-based, no jump needed")
             return
-    
+
     def _kraken_private_call(self, method: str, params: Optional[Dict] = None, category: Optional['KrakenAPICategory'] = None):
         """
         CRITICAL: Serialized wrapper for Kraken private API calls.
-        
+
         This method ensures:
         1. Only ONE private API call happens at a time (prevents nonce collisions)
         2. Category-specific rate limiting (separate budgets for entry/exit/monitoring)
         3. Thread-safe execution using locks
         4. GLOBAL serialization across MASTER + ALL USERS (Option B)
-        
+
         Problem solved:
         - Multiple threads calling Kraken API simultaneously with same nonce
         - Rapid consecutive calls generating duplicate nonces
         - Race conditions in nonce generation
         - Nonce collisions between MASTER and USER accounts
         - Different API budgets for entry vs exit vs monitoring operations
-        
+
         Args:
             method: Kraken API method name (e.g., 'Balance', 'AddOrder')
             params: Optional parameters dict for the API call
             category: Optional KrakenAPICategory to override auto-detection
-            
+
         Returns:
             API response dict
-            
+
         Raises:
             Exception: If API call fails or self.api is not initialized
         """
         if not self.api:
             raise Exception("Kraken API not initialized - call connect() first")
-        
+
         # Determine API category for rate limiting
         if category is None and KrakenAPICategory is not None:
             # Auto-detect category from method name
             category = get_category_for_method(method) if get_category_for_method else KrakenAPICategory.MONITORING
-        
+
         # Use GLOBAL API lock to serialize calls across ALL accounts (Option B)
         # This ensures only ONE Kraken API call happens at a time across MASTER + ALL USERS
         if get_kraken_api_lock is not None:
             global_lock = get_kraken_api_lock()
         else:
             global_lock = self._api_call_lock  # Fallback to per-account lock
-        
+
         # Serialize API calls - only one call at a time across ALL accounts
         with global_lock:
             # Enforce minimum delay between calls (per-category tracking)
             with self._api_call_lock:
                 current_time = time.time()
-                
+
                 # Get category-specific rate limit or fallback to default
                 if category and self._kraken_rate_profile and calculate_min_interval:
                     # Use category-specific rate limit from profile
@@ -5293,29 +5293,29 @@ class KrakenBroker(BaseBroker):
                     else:
                         category_key = str(category)
                     last_call = self._last_call_by_category.get(category_key, 0)
-                    
+
                     logger.debug(f"   📊 Rate limit for {method} ({category_key}): {min_interval:.1f}s")
                 else:
                     # Fallback to global rate limit
                     min_interval = self._min_call_interval
                     last_call = self._last_api_call_time
                     category_key = 'global'
-                
+
                 time_since_last_call = current_time - last_call
-                
+
                 if time_since_last_call < min_interval:
                     # Sleep to maintain minimum interval
                     sleep_time = min_interval - time_since_last_call
                     logger.debug(f"   🛡️  Rate limiting ({category_key}): sleeping {sleep_time*1000:.0f}ms between Kraken calls")
                     time.sleep(sleep_time)
-                
+
                 # Update last call time for this category
                 if category and self._kraken_rate_profile:
                     self._last_call_by_category[category_key] = time.time()
-                
+
                 # Also update global last call time
                 self._last_api_call_time = time.time()
-            
+
             # Make the API call (nonce is generated by _nonce_monotonic function)
             # Suppress pykrakenapi's print() statements that flood the console
             with suppress_pykrakenapi_prints():
@@ -5323,36 +5323,36 @@ class KrakenBroker(BaseBroker):
                     result = self.api.query_private(method)
                 else:
                     result = self.api.query_private(method, params)
-            
+
             return result
-    
+
     def _kraken_api_call(self, method: str, params: Optional[Dict] = None, category: Optional['KrakenAPICategory'] = None):
         """
         Compatibility wrapper for _kraken_private_call().
-        
+
         This method provides compatibility with code that expects _kraken_api_call()
         (like KrakenOrderCleanup) while delegating to the actual implementation
         in _kraken_private_call().
-        
+
         Args:
             method: Kraken API method name (e.g., 'Balance', 'OpenOrders')
             params: Optional parameters dict for the API call
             category: Optional KrakenAPICategory for rate limiting. If None, the category
                      is auto-detected by _kraken_private_call based on the method name.
-            
+
         Returns:
             API response dict
         """
         return self._kraken_private_call(method, params, category)
-    
+
     def connect(self) -> bool:
         """
         Connect to Kraken Pro API with retry logic.
-        
+
         Uses different credentials based on account_type:
         - MASTER: KRAKEN_MASTER_API_KEY / KRAKEN_MASTER_API_SECRET
         - USER: KRAKEN_USER_{user_id}_API_KEY / KRAKEN_USER_{user_id}_API_SECRET
-        
+
         Returns:
             bool: True if connected successfully
         """
@@ -5360,14 +5360,14 @@ class KrakenBroker(BaseBroker):
             import krakenex
             from pykrakenapi import KrakenAPI
             import time
-            
+
             # Suppress verbose logging from Kraken SDK libraries
             # This prevents "attempt: XXX | ['EQuery:...']" messages from flooding the logs
             kraken_logger = logging.getLogger('krakenex')
             kraken_logger.setLevel(logging.WARNING)
             pykraken_logger = logging.getLogger('pykrakenapi')
             pykraken_logger.setLevel(logging.WARNING)
-            
+
             # Get credentials based on account type
             # Enhanced credential detection to identify "set but invalid" variables
             if self.account_type == AccountType.MASTER:
@@ -5375,11 +5375,11 @@ class KrakenBroker(BaseBroker):
                 secret_name = "KRAKEN_MASTER_API_SECRET"
                 api_key_raw = os.getenv(key_name, "")
                 api_secret_raw = os.getenv(secret_name, "")
-                
+
                 # Log when master credentials are found
                 if api_key_raw and api_secret_raw:
                     logger.info("   ✅ Using KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET for master account")
-                
+
                 # Fallback to legacy credentials if master credentials not set
                 # This provides backward compatibility for deployments using KRAKEN_API_KEY
                 if not api_key_raw:
@@ -5388,14 +5388,14 @@ class KrakenBroker(BaseBroker):
                         api_key_raw = legacy_key
                         key_name = "KRAKEN_API_KEY (legacy)"
                         logger.info("   Using legacy KRAKEN_API_KEY for master account")
-                
+
                 if not api_secret_raw:
                     legacy_secret = os.getenv("KRAKEN_API_SECRET", "")
                     if legacy_secret:
                         api_secret_raw = legacy_secret
                         secret_name = "KRAKEN_API_SECRET (legacy)"
                         logger.info("   Using legacy KRAKEN_API_SECRET for master account")
-                
+
                 api_key = api_key_raw.strip()
                 api_secret = api_secret_raw.strip()
                 cred_label = "MASTER"
@@ -5412,13 +5412,13 @@ class KrakenBroker(BaseBroker):
                 api_key = api_key_raw.strip()
                 api_secret = api_secret_raw.strip()
                 cred_label = f"USER:{self.user_id}"
-            
+
             # Enhanced validation: detect if variables are set but contain only whitespace
             key_is_set = api_key_raw != ""
             secret_is_set = api_secret_raw != ""
             key_valid_after_strip = bool(api_key)
             secret_valid_after_strip = bool(api_secret)
-            
+
             # Check for malformed credentials (set but empty after stripping)
             if (key_is_set and not key_valid_after_strip) or (secret_is_set and not secret_valid_after_strip):
                 # Mark that credentials were NOT properly configured (empty/whitespace = not configured)
@@ -5426,11 +5426,11 @@ class KrakenBroker(BaseBroker):
                 self.credentials_configured = False
                 self.last_connection_error = "Credentials contain only whitespace"
                 logger.warning(f"⚠️  Kraken credentials DETECTED but INVALID for {cred_label}")
-                
+
                 # Determine status messages for each credential
                 key_status = 'SET but contains only whitespace/invisible characters' if (key_is_set and not key_valid_after_strip) else 'valid'
                 secret_status = 'SET but contains only whitespace/invisible characters' if (secret_is_set and not secret_valid_after_strip) else 'valid'
-                
+
                 logger.warning(f"   {key_name}: {key_status}")
                 logger.warning(f"   {secret_name}: {secret_status}")
                 logger.warning("   🔧 FIX: Check your deployment platform (Railway/Render) environment variables:")
@@ -5438,7 +5438,7 @@ class KrakenBroker(BaseBroker):
                 logger.warning("      2. Ensure the values are not just whitespace characters")
                 logger.warning("      3. Re-deploy after fixing the values")
                 return False
-            
+
             # SMART CACHE MANAGEMENT: If credentials exist NOW, clear any previous permission error cache
             # This allows users to fix their credentials/permissions and have the bot retry automatically
             # without requiring a full restart. The cache is meant to prevent retry loops during a single
@@ -5451,7 +5451,7 @@ class KrakenBroker(BaseBroker):
                         logger.info(f"🔄 Clearing previous permission error cache for {cred_label} - credentials now available")
                         logger.info(f"   Will retry connection with current credentials")
                         KrakenBroker._permission_failed_accounts.discard(cred_label)
-            
+
             if not api_key or not api_secret:
                 # Mark that credentials were not configured (not an error, just not set up)
                 self.credentials_configured = False
@@ -5477,23 +5477,23 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   📖 Each user must create their own API key at: https://www.kraken.com/u/security/api")
                     logger.info("   📖 Setup guide: KRAKEN_QUICK_START.md")
                 return False
-            
+
             # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors
             # CRITICAL FIX: Override default nonce generation to guarantee strict monotonic increase
             # The default krakenex nonce uses time.time() which has seconds precision and can
             # produce duplicate nonces if multiple requests happen in the same second.
-            # 
+            #
             # SOLUTION: Use milliseconds + tracking to ensure each nonce is strictly greater
             # than the previous one, even if requests happen in the same millisecond.
             self.api = krakenex.API(key=api_key, secret=api_secret)
-            
+
             # CRITICAL FIX (Jan 17, 2026): Set timeout on HTTP requests to prevent hanging
             # krakenex doesn't set a default timeout, causing indefinite hangs if API is slow.
             # We use functools.partial to patch the session (standard pattern for krakenex).
             # Per-instance modification - no global state affected. Degrades gracefully if session changes.
             try:
                 self.api.session.request = functools.partial(
-                    self.api.session.request, 
+                    self.api.session.request,
                     timeout=self.API_TIMEOUT_SECONDS
                 )
                 logger.debug(f"✅ HTTP timeout configured ({self.API_TIMEOUT_SECONDS}s) for {cred_label}")
@@ -5501,27 +5501,27 @@ class KrakenBroker(BaseBroker):
                 # If session attribute doesn't exist, log warning but continue
                 # This maintains backward compatibility if krakenex changes its internals
                 logger.warning(f"⚠️  Could not configure HTTP timeout: {e}")
-            
+
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
-            
+
             # Override _nonce to use simplified timestamp-based nonce (Railway-safe)
             # This prevents "EAPI:Invalid nonce" errors by using ONE global timestamp source
             # shared across MASTER + ALL USERS.
-            # 
+            #
             # Benefits:
             # 1. No nonce collisions (timestamps only move forward)
             # 2. Millisecond precision (13 digits) - adequate for API calls
             # 3. Thread-safe (built-in time function)
             # 4. Scales to any number of users
             # 5. No file persistence needed (timestamps are always fresh)
-            
+
             if self._use_global_nonce:
                 # Use global timestamp-based nonce (Railway-safe)
                 def _nonce_monotonic():
                     """
                     Generate nonce using timestamp (Railway-safe).
-                    
+
                     ONE global source for MASTER + ALL USERS.
                     - Millisecond precision (13 digits)
                     - Thread-safe (uses time.time())
@@ -5530,54 +5530,54 @@ class KrakenBroker(BaseBroker):
                     """
                     nonce = get_global_kraken_nonce()
                     return str(nonce)
-                
+
                 logger.debug(f"✅ GLOBAL Kraken Nonce (timestamp-based) installed for {cred_label}")
-                
+
             elif self._kraken_nonce is not None:
                 # Fallback: Use per-user KrakenNonce instance (DEPRECATED)
                 def _nonce_monotonic():
                     """
                     Generate nonce using KrakenNonce instance (DEPRECATED).
-                    
+
                     Thread-safe: KrakenNonce uses internal lock.
                     Monotonic: Each nonce is strictly greater than previous.
                     Persistent: Nonces are saved to account-specific file.
                     """
                     nonce = self._kraken_nonce.next()
-                    
+
                     # Persist to account-specific file for restart-safety
                     try:
                         with open(self._nonce_file, "w") as f:
                             f.write(str(nonce))
                     except IOError as e:
                         logging.debug(f"Could not persist nonce: {e}")
-                    
+
                     return str(nonce)
-                
+
                 logger.debug(f"✅ KrakenNonce generator installed for {cred_label} (fallback)")
             else:
                 # Final fallback to basic implementation
                 def _nonce_monotonic():
                     """
                     DEPRECATED: Generate nonce using timestamp (fallback only).
-                    
+
                     FIX 3: No per-instance _last_nonce tracking.
                     Uses simple timestamp-based nonce (milliseconds since epoch).
                     """
                     # FIX 3: Use simple timestamp-based nonce (no per-instance state)
                     current_nonce = int(time.time() * 1000)
-                    
+
                     # Persist to account-specific file for restart-safety
                     try:
                         with open(self._nonce_file, "w") as f:
                             f.write(str(current_nonce))
                     except IOError as e:
                         logging.debug(f"Could not persist nonce: {e}")
-                    
+
                     return str(current_nonce)
-                
+
                 logger.debug(f"⚠️  DEPRECATED: Basic fallback nonce generator installed for {cred_label} (should use global nonce manager)")
-            
+
             # Replace the nonce generator
             # NOTE: This directly overrides the internal _nonce method of krakenex.API
             try:
@@ -5603,9 +5603,9 @@ class KrakenBroker(BaseBroker):
                 logger.error("   This may indicate a version incompatibility with krakenex library")
                 logger.error("   Please report this issue with your krakenex version")
                 return False
-            
+
             self.kraken_api = KrakenAPI(self.api)
-            
+
             # CRITICAL FIX (Jan 17, 2026): Add startup delay before first Kraken API call
             # This ensures:
             # - Nonce file exists and is initialized properly
@@ -5615,7 +5615,7 @@ class KrakenBroker(BaseBroker):
             logger.info(f"   ⏳ Waiting {KRAKEN_STARTUP_DELAY_SECONDS:.1f}s before Kraken connection test (prevents nonce collisions)...")
             time.sleep(KRAKEN_STARTUP_DELAY_SECONDS)
             logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
-            
+
             # Test connection by fetching account balance with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
@@ -5630,13 +5630,13 @@ class KrakenBroker(BaseBroker):
             lockout_base_delay = 120.0  # 2 minutes base delay for "Temporary lockout" errors
             last_error_was_lockout = False  # Track if previous attempt was a lockout error
             last_error_was_nonce = False  # Track if previous attempt was a nonce error
-            
+
             for attempt in range(1, max_attempts + 1):
                 try:
                     # Log connection attempt at INFO level so users can see progress
                     if attempt == 1:
                         logger.info(f"   Testing Kraken connection ({cred_label})...")
-                    
+
                     if attempt > 1:
                         # Add delay before retry with exponential backoff
                         # For "Temporary lockout" errors, use much longer delays: 120s, 240s, 360s, 480s (2min, 4min, 6min, 8min)
@@ -5663,7 +5663,7 @@ class KrakenBroker(BaseBroker):
                             # CRITICAL FIX (Jan 18, 2026): Removed attempt < max_attempts check to log ALL retries
                             logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
                         time.sleep(delay)
-                        
+
                         # Jump nonce forward on retry to skip any potentially "burned" nonces
                         # from the failed request. Kraken may have validated but not processed
                         # the nonce, making it unusable for future requests.
@@ -5672,24 +5672,24 @@ class KrakenBroker(BaseBroker):
                         #   - Nonce errors: attempt * 20000ms (20s, 40s, 60s, 80s, 100s) - 20x larger jumps (INCREASED from 10x)
                         # Larger jumps for nonce errors ensure we skip well beyond the burned nonce window
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
-                        
+
                         if self._kraken_nonce is not None:
                             # Use KrakenNonce instance (OPTION A) with public method
                             # Use 20x larger nonce jump for nonce-specific errors (INCREASED from 10x)
                             nonce_multiplier = 20 if last_error_was_nonce else 1
                             # Convert from microseconds to milliseconds for KrakenNonce
                             nonce_jump_ms = nonce_multiplier * 1000 * attempt  # Formula: multiplier * attempt * 1000ms
-                            
+
                             # Jump forward and get new nonce value
                             new_nonce = self._kraken_nonce.jump_forward(nonce_jump_ms)
-                            
+
                             # Persist the jumped nonce to account-specific file
                             try:
                                 with open(self._nonce_file, "w") as f:
                                     f.write(str(new_nonce))
                             except IOError as e:
                                 logging.debug(f"Could not persist jumped nonce: {e}")
-                            
+
                             if last_error_was_nonce:
                                 logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms (20x jump for nonce error)")
                             else:
@@ -5700,19 +5700,19 @@ class KrakenBroker(BaseBroker):
                             nonce_multiplier = 20 if last_error_was_nonce else 1
                             nonce_jump = nonce_multiplier * 1000 * attempt  # milliseconds
                             current_nonce = int(time.time() * 1000) + nonce_jump
-                            
+
                             # Persist the jumped nonce to account-specific file
                             try:
                                 with open(self._nonce_file, "w") as f:
                                     f.write(str(current_nonce))
                             except IOError as e:
                                 logging.debug(f"Could not persist nonce: {e}")
-                            
+
                             if last_error_was_nonce:
                                 logger.debug(f"   Jumped nonce forward by {nonce_jump}ms (20x jump for nonce error)")
                             else:
                                 logger.debug(f"   Jumped nonce forward by {nonce_jump}ms for retry {attempt}")
-                    
+
                     # The _nonce_monotonic() function automatically handles nonce generation
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
                     # It will be called automatically by krakenex when query_private() is invoked.
@@ -5720,27 +5720,27 @@ class KrakenBroker(BaseBroker):
                     # Use MONITORING category for balance checks (conservative rate limiting)
                     balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                     balance = self._kraken_private_call('Balance', category=balance_category)
-                    
+
                     if balance and 'error' in balance:
                         if balance['error']:
                             error_msgs = ', '.join(balance['error'])
-                            
+
                             # Check if it's a permission error (EGeneral:Permission denied, EAPI:Invalid permission, etc.)
                             is_permission_error = any(keyword in error_msgs.lower() for keyword in [
-                                'permission denied', 'egeneral:permission', 
+                                'permission denied', 'egeneral:permission',
                                 'eapi:invalid permission', 'insufficient permission'
                             ])
-                            
+
                             if is_permission_error:
                                 self.last_connection_error = f"Permission denied: {error_msgs}"
                                 logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
-                                
+
                                 # Track this account as failed due to permission error for this session
                                 # The cache will be automatically cleared if valid credentials are detected later
                                 # Thread-safe update using class-level lock
                                 with KrakenBroker._permission_errors_lock:
                                     KrakenBroker._permission_failed_accounts.add(cred_label)
-                                    
+
                                     # Only log detailed permission error instructions ONCE GLOBALLY
                                     # After the first account with permission error, subsequent accounts
                                     # get a brief reference message instead of full instructions
@@ -5750,7 +5750,7 @@ class KrakenBroker(BaseBroker):
                                         should_log_details = True
                                     else:
                                         should_log_details = False
-                                
+
                                 if should_log_details:
                                     logger.error("   ⚠️  API KEY PERMISSION ERROR")
                                     logger.error("   Your Kraken API key does not have the required permissions.")
@@ -5790,9 +5790,9 @@ class KrakenBroker(BaseBroker):
                                     logger.error("   🔧 FIX: Must use Classic API key with Query/Create/Cancel Orders permissions")
                                     logger.error("   https://www.kraken.com/u/security/api")
                                     logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
-                                
+
                                 return False
-                            
+
                             # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, lockout, etc.)
                             # CRITICAL: Include "invalid nonce" and "lockout" as retryable errors
                             # Invalid nonce errors can happen due to:
@@ -5801,7 +5801,7 @@ class KrakenBroker(BaseBroker):
                             # - Previous failed requests leaving the nonce counter in inconsistent state
                             # The microsecond-based nonce generator should fix this, but we still retry
                             # to handle edge cases and transient issues.
-                            # 
+                            #
                             # "Temporary lockout" errors require special handling with longer delays (minutes, not seconds)
                             # "Invalid nonce" errors require moderate delays (30s increments) and aggressive nonce jumps (10x)
                             is_lockout_error = 'lockout' in error_msgs.lower()
@@ -5812,26 +5812,26 @@ class KrakenBroker(BaseBroker):
                             is_retryable = is_lockout_error or is_nonce_error or any(keyword in error_msgs.lower() for keyword in [
                                 'timeout', 'connection', 'network', 'rate limit',
                                 'too many requests', 'service unavailable',
-                                '503', '504', '429', '403', 'forbidden', 
+                                '503', '504', '429', '403', 'forbidden',
                                 'too many errors', 'temporary', 'try again'
                             ])
-                            
+
                             if is_retryable and attempt < max_attempts:
                                 # Set flags for special error types to use appropriate delays on next retry
                                 last_error_was_lockout = is_lockout_error
                                 last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
-                                
+
                                 # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
                                 # Don't wait until the next retry iteration - do it now to clear the burned nonce
                                 if is_nonce_error:
                                     self._immediate_nonce_jump()
-                                
+
                                 # Reduce log spam for transient errors
                                 # - Nonce errors: Log at INFO level on first attempt, DEBUG on retries (transient, will auto-retry)
                                 # - Other retryable errors: Log as WARNING only on first attempt
                                 # - All retries after first attempt: Log at DEBUG level for diagnostics
                                 error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
-                                
+
                                 # For nonce errors, log at INFO level on first attempt so users know what failed
                                 # Log at DEBUG level on retries to reduce spam
                                 # These are transient and automatically retried with nonce jumps
@@ -5851,24 +5851,24 @@ class KrakenBroker(BaseBroker):
                                 self.last_connection_error = error_msgs
                                 logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
                                 return False
-                    
+
                     if balance and 'result' in balance:
                         self.connected = True
-                        
+
                         if attempt > 1:
                             logger.info(f"✅ Connected to Kraken Pro API ({cred_label}) (succeeded on attempt {attempt})")
-                        
+
                         logger.info("=" * 70)
                         logger.info(f"✅ KRAKEN PRO CONNECTED ({cred_label})")
                         logger.info("=" * 70)
-                        
+
                         # Log USD/USDT balance
                         result = balance.get('result', {})
                         usd_balance = float(result.get('ZUSD', 0))  # Kraken uses ZUSD for USD
                         usdt_balance = float(result.get('USDT', 0))
-                        
+
                         total = usd_balance + usdt_balance
-                        
+
                         # FIX (Jan 23, 2026): Calculate held funds to get total account equity
                         # This ensures EXIT-ONLY mode is based on total funds (available + held)
                         # not just available balance, matching the logic in get_account_balance()
@@ -5876,7 +5876,7 @@ class KrakenBroker(BaseBroker):
                         balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                         trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
                         held_amount = 0.0
-                        
+
                         if trade_balance and 'result' in trade_balance:
                             tb_result = trade_balance['result']
                             # equivalent_balance = total balance including held orders
@@ -5885,10 +5885,10 @@ class KrakenBroker(BaseBroker):
                             equivalent_balance = float(tb_result.get('eb', 0))
                             trade_balance_free = float(tb_result.get('tb', 0))
                             held_amount = equivalent_balance - trade_balance_free if equivalent_balance > trade_balance_free else 0.0
-                        
+
                         # Calculate total funds (available + held) for minimum balance check
                         total_funds = total + held_amount
-                        
+
                         logger.info(f"   Account: {self.account_identifier}")
                         logger.info(f"   USD Balance: ${usd_balance:.2f}")
                         logger.info(f"   USDT Balance: ${usdt_balance:.2f}")
@@ -5896,7 +5896,7 @@ class KrakenBroker(BaseBroker):
                         if held_amount > 0:
                             logger.info(f"   Held in Orders: ${held_amount:.2f}")
                             logger.info(f"   Total Funds: ${total_funds:.2f}")
-                        
+
                         # Initialize Kraken rate profile based on account balance (Jan 23, 2026)
                         # Separate entry/exit/monitoring API budgets for optimal performance
                         # Use total_funds for rate profile selection to match actual capital capacity
@@ -5904,8 +5904,8 @@ class KrakenBroker(BaseBroker):
                             # Auto-select rate mode based on account balance
                             self._kraken_rate_profile = get_kraken_rate_profile(account_balance=total_funds)
                             self._kraken_rate_mode = (
-                                KrakenRateMode.LOW_CAPITAL if total_funds < 100.0 
-                                else KrakenRateMode.STANDARD if total_funds < 1000.0 
+                                KrakenRateMode.LOW_CAPITAL if total_funds < 100.0
+                                else KrakenRateMode.STANDARD if total_funds < 1000.0
                                 else KrakenRateMode.AGGRESSIVE
                             )
                             logger.info(f"   📊 Rate Profile: {self._kraken_rate_profile['name']}")
@@ -5913,7 +5913,7 @@ class KrakenBroker(BaseBroker):
                             logger.info(f"      Monitoring: {self._kraken_rate_profile['monitoring']['min_interval_seconds']:.1f}s interval")
                         else:
                             logger.debug(f"   ⚠️  Kraken rate profiles not available, using default rate limiting")
-                        
+
                         # Check minimum balance requirement for Kraken
                         # Kraken is PRIMARY engine for small accounts ($25+)
                         # FIX 2: FORCED EXIT OVERRIDES - Allow connection even when balance < minimum
@@ -5936,7 +5936,7 @@ class KrakenBroker(BaseBroker):
                             logger.warning(f"   ")
                             logger.warning(f"   ✅ Kraken connection maintained for emergency exits")
                             logger.warning("=" * 70)
-                            
+
                             # Mark as EXIT-ONLY mode (not fully disabled)
                             self.exit_only_mode = True
                             # Keep connected = True so sells can execute
@@ -5944,13 +5944,13 @@ class KrakenBroker(BaseBroker):
                         else:
                             # Normal mode - full trading allowed
                             self.exit_only_mode = False
-                        
+
                         logger.info("=" * 70)
-                        
+
                         # CRITICAL FIX (Jan 23, 2026): Initialize market data right after connection
                         # Fetch minimum volumes for all trading pairs to prevent order rejections
                         self._initialize_kraken_market_data()
-                        
+
                         # CRITICAL FIX (Jan 18, 2026): Add post-connection delay
                         # After successful connection test, wait before allowing next API call
                         # This prevents "Invalid nonce" when balance is checked immediately after
@@ -5963,7 +5963,7 @@ class KrakenBroker(BaseBroker):
                         logger.info(f"   ⏳ Post-connection cooldown: {post_connection_delay:.1f}s (prevents nonce errors)...")
                         time.sleep(post_connection_delay)
                         logger.debug(f"   ✅ Cooldown complete - ready for balance checks")
-                        
+
                         return True
                     else:
                         # No result, but could be retryable
@@ -5975,10 +5975,10 @@ class KrakenBroker(BaseBroker):
                             self.last_connection_error = error_msg
                             logger.error(f"❌ Kraken connection test failed: {error_msg}")
                             return False
-                
+
                 except Exception as e:
                     error_msg = str(e)
-                    
+
                     # Check if this is a timeout or connection error from requests library
                     # These errors should be logged clearly and are always retryable
                     # Use the module-level flag to avoid repeated import attempts
@@ -5995,7 +5995,7 @@ class KrakenBroker(BaseBroker):
                             'timed out' in error_msg.lower() or
                             'connection' in error_msg.lower()
                         )
-                    
+
                     if is_timeout_error:
                         # Timeout/connection errors are common and expected - log at INFO level, not ERROR
                         # After logging, we 'continue' to the next iteration which applies exponential
@@ -6010,24 +6010,24 @@ class KrakenBroker(BaseBroker):
                             logger.warning(f"   The Kraken API may be experiencing issues or network connectivity problems")
                             logger.warning(f"   Will try again on next connection cycle")
                             return False
-                    
+
                     # CRITICAL FIX: Check if this is a permission error in the exception path
                     # Permission errors can also be raised as exceptions by krakenex/pykrakenapi
                     is_permission_error = any(keyword in error_msg.lower() for keyword in [
                         'permission denied', 'egeneral:permission',
                         'eapi:invalid permission', 'insufficient permission'
                     ])
-                    
+
                     if is_permission_error:
                         self.last_connection_error = f"Permission denied: {error_msg}"
                         logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msg}")
-                        
+
                         # Track this account as failed due to permission error for this session
                         # The cache will be automatically cleared if valid credentials are detected later
                         # Thread-safe update using class-level lock
                         with KrakenBroker._permission_errors_lock:
                             KrakenBroker._permission_failed_accounts.add(cred_label)
-                            
+
                             # Only log detailed instructions ONCE GLOBALLY (not once per account)
                             # This prevents log spam when multiple users have permission errors
                             if not KrakenBroker._permission_error_details_logged:
@@ -6035,7 +6035,7 @@ class KrakenBroker(BaseBroker):
                                 should_log_details = True
                             else:
                                 should_log_details = False
-                        
+
                         if should_log_details:
                             logger.error("   ⚠️  API KEY PERMISSION ERROR")
                             logger.error("   Your Kraken API key does not have the required permissions.")
@@ -6075,9 +6075,9 @@ class KrakenBroker(BaseBroker):
                             logger.error("   🔧 FIX: Must use Classic API key with Query/Create/Cancel Orders permissions")
                             logger.error("   https://www.kraken.com/u/security/api")
                             logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
-                        
+
                         return False
-                    
+
                     # Check if error is retryable (rate limiting, network issues, 403 errors, nonce errors, lockout, etc.)
                     # CRITICAL: Include "invalid nonce" and "lockout" as retryable errors
                     # Invalid nonce errors can happen due to:
@@ -6086,7 +6086,7 @@ class KrakenBroker(BaseBroker):
                     # - Previous failed requests leaving the nonce counter in inconsistent state
                     # The microsecond-based nonce generator should fix this, but we still retry
                     # to handle edge cases and transient issues.
-                    # 
+                    #
                     # "Temporary lockout" errors require special handling with longer delays (minutes, not seconds)
                     # "Invalid nonce" errors require moderate delays (30s increments) and aggressive nonce jumps (10x)
                     is_lockout_error = 'lockout' in error_msg.lower()
@@ -6097,26 +6097,26 @@ class KrakenBroker(BaseBroker):
                     is_retryable = is_lockout_error or is_nonce_error or any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
-                        '503', '504', '429', '403', 'forbidden', 
+                        '503', '504', '429', '403', 'forbidden',
                         'too many errors', 'temporary', 'try again'
                     ])
-                    
+
                     if is_retryable and attempt < max_attempts:
                         # Set flags for special error types to use appropriate delays on next retry
                         last_error_was_lockout = is_lockout_error
                         last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
-                        
+
                         # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
                         # Don't wait until the next retry iteration - do it now to clear the burned nonce
                         if is_nonce_error:
                             self._immediate_nonce_jump()
-                        
+
                         # Log retryable errors appropriately:
                         # - Timeout errors: Already logged above (special case)
                         # - Nonce errors: Log at INFO level (transient, will auto-retry)
                         # - Lockout/other errors: Log at WARNING on first attempt, INFO on retries
                         error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
-                        
+
                         # For nonce errors, log at INFO level so users see progress
                         if is_nonce_error:
                             logger.info(f"   🔄 Kraken ({cred_label}) nonce error - auto-retry (attempt {attempt}/{max_attempts})")
@@ -6138,7 +6138,7 @@ class KrakenBroker(BaseBroker):
                         else:
                             logger.warning(f"⚠️  Kraken connection failed: {error_msg}")
                         return False
-            
+
             # Should never reach here, but just in case
             # Log summary of all failed attempts to help with debugging
             self.last_connection_error = "Failed after max retry attempts"
@@ -6152,7 +6152,7 @@ class KrakenBroker(BaseBroker):
                 logger.error("   Last error was: Temporary lockout (too many failed requests)")
                 logger.error("   Wait 5-10 minutes before restarting")
             return False
-                
+
         except ImportError as e:
             # SDK not installed or import failed
             self.last_connection_error = f"SDK import error: {str(e)}"
@@ -6169,19 +6169,19 @@ class KrakenBroker(BaseBroker):
             logger.error("   If the packages are installed but import still fails,")
             logger.error("   there may be a dependency version conflict.")
             return False
-    
+
     def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get USD/USDT balance available for trading with fail-closed behavior.
-        
+
         CRITICAL FIX (Fix 3): Fail closed - not "balance = 0"
         - On error: Return last known balance (if available) instead of 0
         - Track consecutive errors to mark broker unavailable
         - Distinguish API errors from actual zero balance
-        
+
         Args:
             verbose: If True, logs detailed balance breakdown (default: True)
-        
+
         Returns:
             float: Available USD + USDT balance (not including held funds)
                    Returns last known balance on error (not 0)
@@ -6194,7 +6194,7 @@ class KrakenBroker(BaseBroker):
                     self._is_available = False
                     self.kraken_health = "ERROR"
                     logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
-                
+
                 if self._last_known_balance is not None:
                     logger.warning(f"⚠️ Kraken API not connected ({self.account_identifier}), using last known balance: ${self._last_known_balance:.2f}")
                     # Use cached balance if available
@@ -6206,25 +6206,25 @@ class KrakenBroker(BaseBroker):
                     self._is_available = False
                     self.kraken_health = "ERROR"
                     return 0.0
-            
+
             # Get account balance using serialized API call
             # Use MONITORING category for balance checks (conservative rate limiting)
             balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
             balance = self._kraken_private_call('Balance', category=balance_category)
-            
+
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
-                
+
                 # FIX #2: On error, log warning and use last known balance
                 logger.warning(f"⚠️ Kraken API error fetching balance ({self.account_identifier}): {error_msgs}")
-                
+
                 # DO NOT zero balance on one failure
                 self._balance_fetch_errors += 1
                 if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
                     self.kraken_health = "ERROR"
                     logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
-                
+
                 if self._last_known_balance is not None:
                     logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
                     # Use cached balance if available
@@ -6234,22 +6234,22 @@ class KrakenBroker(BaseBroker):
                 else:
                     logger.error(f"   ❌ No last known balance available, returning 0")
                     return 0.0
-            
+
             if balance and 'result' in balance:
                 result = balance['result']
-                
+
                 # Kraken uses ZUSD for USD and USDT for Tether
                 usd_balance = float(result.get('ZUSD', 0))
                 usdt_balance = float(result.get('USDT', 0))
-                
+
                 total = usd_balance + usdt_balance
-                
+
                 # Also get TradeBalance to see held funds
                 # Use MONITORING category for balance checks (conservative rate limiting)
                 balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                 trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
                 held_amount = 0.0
-                
+
                 if trade_balance and 'result' in trade_balance:
                     tb_result = trade_balance['result']
                     # eb = equivalent balance (total balance including held orders)
@@ -6258,7 +6258,7 @@ class KrakenBroker(BaseBroker):
                     eb = float(tb_result.get('eb', 0))
                     tb = float(tb_result.get('tb', 0))
                     held_amount = eb - tb if eb > tb else 0.0
-                
+
                 # Enhanced balance logging with clear breakdown (Jan 19, 2026)
                 # Only log detailed breakdown if verbose is True
                 if verbose:
@@ -6268,36 +6268,36 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   ✅ Available USDT: ${usdt_balance:.2f}")
                     logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                     logger.info(f"   💵 Total Available: ${total:.2f}")
-                
+
                 # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken
                 total_funds = total + held_amount
-                
+
                 if verbose:
                     if held_amount > 0:
                         logger.info(f"   🔒 Held in open orders: ${held_amount:.2f}")
                         logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                         logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
                     logger.info("=" * 70)
-                    
+
                     # FIX #3 (Jan 20, 2026): Confirmation log for Kraken balance fetch
                     logger.info(f"✅ KRAKEN balance fetched: ${total_funds:.2f}")
                 else:
                     # Minimal logging when verbose=False
                     logger.debug(f"Kraken balance ({self.account_identifier}): ${total_funds:.2f}")
-                
+
                 # SUCCESS: Update last known balance and reset error count
                 # 🚑 FIX 4: Store and return total_funds instead of just available
                 self._last_known_balance = total_funds
                 self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
                 self._balance_fetch_errors = 0
                 self._is_available = True
-                
+
                 # FIX #2: Force Kraken balance cache after success
                 self.balance_cache["kraken"] = total_funds
                 self.kraken_health = "OK"
-                
+
                 return total_funds
-            
+
             # Unexpected response - treat as error
             # FIX #2: Log warning and use last known balance
             logger.warning(f"⚠️ Unexpected Kraken API response format ({self.account_identifier})")
@@ -6305,16 +6305,16 @@ class KrakenBroker(BaseBroker):
             if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
                 self.kraken_health = "ERROR"
-            
+
             if self._last_known_balance is not None:
                 logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
                 # Use cached balance if available
                 if "kraken" in self.balance_cache:
                     return self.balance_cache["kraken"]
                 return self._last_known_balance
-            
+
             return 0.0
-            
+
         except Exception as e:
             # FIX #2: Log warning and use last known balance on exception
             logger.warning(f"⚠️ Exception fetching Kraken balance ({self.account_identifier}): {e}")
@@ -6323,7 +6323,7 @@ class KrakenBroker(BaseBroker):
                 self._is_available = False
                 self.kraken_health = "ERROR"
                 logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
-            
+
             # Return last known balance instead of 0
             if self._last_known_balance is not None:
                 logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
@@ -6331,25 +6331,25 @@ class KrakenBroker(BaseBroker):
                 if "kraken" in self.balance_cache:
                     return self.balance_cache["kraken"]
                 return self._last_known_balance
-            
+
             return 0.0
-    
+
     def get_account_balance_detailed(self) -> dict:
         """
         Get detailed account balance information with fail-closed behavior.
-        
+
         CRITICAL FIX (Fix 3): Fail closed - not "balance = 0"
         - On error: Include error flag in response
         - Return last known balance if available
         - Don't return all zeros on error
-        
+
         Returns detailed balance breakdown for comprehensive fund visibility.
         Matches CoinbaseBroker interface for consistency.
-        
+
         Returns:
             dict: Detailed balance info with keys:
                 - usd: Available USD balance
-                - usdt: Available USDT balance  
+                - usdt: Available USDT balance
                 - trading_balance: Total available (USD + USDT)
                 - usd_held: USD held in open orders
                 - usdt_held: USDT held in open orders
@@ -6372,30 +6372,30 @@ class KrakenBroker(BaseBroker):
             'error': True,
             'error_message': 'Unknown error'
         }
-        
+
         try:
             if not self.api:
                 error_msg = 'API not connected'
                 logger.warning(f"⚠️ {error_msg} ({self.account_identifier})")
                 return {**default_balance, 'error_message': error_msg}
-            
+
             # Get account balance using serialized API call
             # Use MONITORING category for balance checks (conservative rate limiting)
             balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
             balance = self._kraken_private_call('Balance', category=balance_category)
-            
+
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
                 logger.error(f"❌ Kraken API error fetching detailed balance ({self.account_identifier}): {error_msgs}")
                 return {**default_balance, 'error_message': f'API error: {error_msgs}'}
-            
+
             if balance and 'result' in balance:
                 result = balance['result']
-                
+
                 # Kraken uses ZUSD for USD and USDT for Tether
                 usd_balance = float(result.get('ZUSD', 0))
                 usdt_balance = float(result.get('USDT', 0))
-                
+
                 # Get crypto holdings (exclude USD and USDT)
                 crypto_holdings = {}
                 for currency, amount in result.items():
@@ -6403,9 +6403,9 @@ class KrakenBroker(BaseBroker):
                         # Strip the 'Z' or 'X' prefix Kraken uses for some currencies
                         clean_currency = currency.lstrip('ZX')
                         crypto_holdings[clean_currency] = float(amount)
-                
+
                 trading_balance = usd_balance + usdt_balance
-                
+
                 # Get TradeBalance to calculate held funds
                 # Use MONITORING category for balance checks (conservative rate limiting)
                 balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
@@ -6413,7 +6413,7 @@ class KrakenBroker(BaseBroker):
                 usd_held = 0.0
                 usdt_held = 0.0
                 total_held = 0.0
-                
+
                 if trade_balance and 'result' in trade_balance:
                     tb_result = trade_balance['result']
                     # eb = equivalent balance (total balance including held orders)
@@ -6422,7 +6422,7 @@ class KrakenBroker(BaseBroker):
                     eb = float(tb_result.get('eb', 0))
                     tb = float(tb_result.get('tb', 0))
                     total_held = eb - tb if eb > tb else 0.0
-                    
+
                     # NOTE: Kraken's TradeBalance API returns total held amount in base currency (USD)
                     # but doesn't break it down by USD vs USDT. We approximate the distribution
                     # based on the ratio of USD to USDT in available balances.
@@ -6437,9 +6437,9 @@ class KrakenBroker(BaseBroker):
                     else:
                         # If only USDT or no balance, assign all held to USDT
                         usdt_held = total_held
-                
+
                 total_funds = trading_balance + total_held
-                
+
                 return {
                     'usd': usd_balance,
                     'usdt': usdt_balance,
@@ -6451,49 +6451,49 @@ class KrakenBroker(BaseBroker):
                     'crypto': crypto_holdings,
                     'error': False
                 }
-            
+
             # Unexpected response
             return {**default_balance, 'error_message': 'Unexpected API response format'}
-            
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"❌ Exception fetching Kraken detailed balance ({self.account_identifier}): {error_msg}")
             return {**default_balance, 'error_message': error_msg}
-    
+
     def is_available(self) -> bool:
         """
         Check if Kraken broker is available for trading.
-        
+
         Returns False if there have been 3+ consecutive balance fetch errors.
         This prevents trading when the API is not working properly.
-        
+
         Returns:
             bool: True if broker is available, False if unavailable
         """
         return self._is_available
-    
+
     def get_error_count(self) -> int:
         """
         Get the number of consecutive balance fetch errors.
-        
+
         Returns:
             int: Number of consecutive errors
         """
         return self._balance_fetch_errors
-    
+
     def get_current_price(self, symbol: str) -> Optional[float]:
         """
         Get current market price for a symbol from Kraken.
-        
+
         CRITICAL FIX: Implements proper price fetching with broker-specific symbol translation.
         This prevents ghost positions by ensuring prices can be fetched correctly.
-        
+
         Args:
             symbol: Trading pair in standard format (e.g., 'BTC-USD', 'ETH-USD', 'DOGE-USD')
-            
+
         Returns:
             float: Current market price, or None if fetch fails
-            
+
         Safety:
             - Uses symbol mapper to convert to Kraken format
             - Returns None on failure (not 0.0) for explicit error handling
@@ -6503,13 +6503,13 @@ class KrakenBroker(BaseBroker):
             if not self.api:
                 logger.error(f"❌ Price fetch failed for {symbol} — Kraken API not connected")
                 return None
-            
+
             # CRITICAL: Use symbol mapper to convert to Kraken format
             # This ensures we use the correct format (e.g., XETHZUSD, XXBTZUSD)
             # instead of incorrect formats like ETHUSD, BTCUSD
             kraken_symbol = None
             normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
-            
+
             if convert_to_kraken:
                 kraken_symbol = convert_to_kraken(normalized_symbol)
                 if not kraken_symbol:
@@ -6521,15 +6521,15 @@ class KrakenBroker(BaseBroker):
                 kraken_symbol = normalized_symbol.replace('-', '').upper()
                 if kraken_symbol.startswith('BTC'):
                     kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
-            
+
             logger.debug(f"📊 Fetching price for {symbol} (Kraken: {kraken_symbol})")
-            
+
             # Fetch current price using Kraken Ticker API
             # Ticker is a public endpoint (no authentication needed)
             # Suppress pykrakenapi's print() statements
             with suppress_pykrakenapi_prints():
                 ticker_result = self.api.query_public('Ticker', {'pair': kraken_symbol})
-            
+
             if ticker_result and 'result' in ticker_result:
                 ticker_data = ticker_result['result'].get(kraken_symbol, {})
                 if ticker_data:
@@ -6551,12 +6551,12 @@ class KrakenBroker(BaseBroker):
                 if ticker_result and 'error' in ticker_result and ticker_result['error']:
                     logger.error(f"   API errors: {', '.join(ticker_result['error'])}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"❌ Price fetch failed for {symbol} — Exception: {e}")
             logger.error(f"   💡 This may indicate symbol mismatch or API connectivity issues")
             return None
-    
+
     def force_liquidate(
         self,
         symbol: str,
@@ -6565,17 +6565,17 @@ class KrakenBroker(BaseBroker):
     ) -> Dict:
         """
         🚑 EMERGENCY SELL OVERRIDE - Force liquidate position bypassing ALL checks.
-        
+
         This is the FIX 1 implementation for Kraken that allows NIJA to exit losing positions
         immediately without being blocked by validation.
-        
+
         CRITICAL: This method MUST be used for emergency exits and losing trades.
-        
+
         Args:
             symbol: Trading symbol (e.g., 'BTC-USD')
             quantity: Quantity to sell (in base currency)
             reason: Reason for forced liquidation (for logging)
-        
+
         Returns:
             Order result dict with status
         """
@@ -6586,7 +6586,7 @@ class KrakenBroker(BaseBroker):
         logger.warning(f"   Quantity: {quantity}")
         logger.warning(f"   Mode: EMERGENCY EXIT MODE — SELL ONLY")
         logger.warning("=" * 70)
-        
+
         try:
             # Force market sell with emergency bypass flags
             result = self.place_market_order(
@@ -6597,14 +6597,14 @@ class KrakenBroker(BaseBroker):
                 ignore_min_trade=True,
                 force_liquidate=True
             )
-            
+
             if result.get('status') == 'filled':
                 logger.warning(f"✅ PROTECTIVE LIQUIDATION SUCCESSFUL [Kraken]: {symbol}")
             else:
                 logger.error(f"❌ PROTECTIVE LIQUIDATION FAILED [Kraken]: {symbol} - {result.get('error', 'Unknown error')}")
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"❌ PROTECTIVE LIQUIDATION EXCEPTION [Kraken]: {symbol} - {e}")
             logger.error(traceback.format_exc())
@@ -6613,11 +6613,11 @@ class KrakenBroker(BaseBroker):
                 "error": str(e),
                 "symbol": symbol
             }
-    
+
     def place_market_order(
-        self, 
-        symbol: str, 
-        side: str, 
+        self,
+        symbol: str,
+        side: str,
         quantity: float,
         size_type: str = 'quote',
         ignore_balance: bool = False,
@@ -6626,19 +6626,19 @@ class KrakenBroker(BaseBroker):
     ) -> Dict:
         """
         Place market order on Kraken.
-        
+
         Args:
             symbol: Trading pair (e.g., 'BTC-USD' or 'XBTUSDT')
             side: 'buy' or 'sell'
             quantity: Order size in USD (for buys) or base currency (for sells)
-        
+
         Returns:
             dict: Order result with status, order_id, etc.
         """
         try:
             if not self.api:
                 return {"status": "error", "error": "Not connected to Kraken"}
-            
+
             # 🚑 FIX #1: FORCE SELL OVERRIDE - SELL orders bypass ALL restrictions
             # ================================================================
             # CRITICAL: SELL orders are NEVER blocked by:
@@ -6654,7 +6654,7 @@ class KrakenBroker(BaseBroker):
             #   - Losing positions can always be closed
             #   - Capital bleeding can always be stopped
             # ================================================================
-            
+
             # Log explicit bypass for SELL orders
             if side.lower() == 'sell':
                 logger.info(f"🛡️ PROTECTIVE SELL MODE for {symbol}: EMERGENCY EXIT MODE — SELL ONLY")
@@ -6662,7 +6662,7 @@ class KrakenBroker(BaseBroker):
                 logger.info(f"   ✅ Minimum balance check: SKIPPED (protective exit)")
                 logger.info(f"   ✅ EXIT-ONLY mode: ALLOWED (protective exit)")
                 logger.info(f"   ✅ Capital preservation: ACTIVE")
-            
+
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
             # NOTE: SELL orders are NOT checked here - they always pass through
             if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
@@ -6676,7 +6676,7 @@ class KrakenBroker(BaseBroker):
                     "partial_fill": False,
                     "filled_pct": 0.0
                 }
-            
+
             # CRITICAL FIX (Jan 19, 2026): Normalize symbol for Kraken and check support
             # Railway Golden Rule #4: Broker-specific trading pairs
             # This prevents trying to trade Binance-only pairs (BUSD) on Kraken
@@ -6685,10 +6685,10 @@ class KrakenBroker(BaseBroker):
                 logger.warning(f"⏭️ SKIPPING TRADE: {error_msg}")
                 logger.warning(f"   💡 TIP: This symbol contains unsupported quote currency for Kraken (e.g., BUSD)")
                 return {"status": "error", "error": error_msg}
-            
+
             # Normalize to standard format for Kraken (ETH-USD, BTC-USDT, etc.)
             normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
-            
+
             # SYMBOL VALIDATION FIX (Jan 20, 2026): Use symbol mapper to validate and convert
             # This prevents "EQuery:Unknown asset pair" errors by validating symbols before trading
             kraken_symbol = None
@@ -6699,30 +6699,30 @@ class KrakenBroker(BaseBroker):
                     logger.warning(f"⏭️ SKIPPING TRADE: {error_msg}")
                     logger.warning(f"   💡 TIP: This pair may have been delisted or is not tradable")
                     return {"status": "error", "error": error_msg}
-                
+
                 # Convert to Kraken format using symbol mapper
                 kraken_symbol = convert_to_kraken(normalized_symbol)
                 if not kraken_symbol:
                     error_msg = f"Cannot convert {normalized_symbol} to Kraken format"
                     logger.error(f"❌ CONVERSION ERROR: {error_msg}")
                     return {"status": "error", "error": error_msg}
-                
+
                 logger.debug(f"✅ Symbol validated: {normalized_symbol} -> {kraken_symbol}")
-            
+
             # Fallback: Manual conversion if symbol mapper not available
             # Convert from standard format (ETH-USD) to Kraken internal format (XETHZUSD)
             # Kraken internal format: no separator, X prefix for some assets
             # Examples: ETH-USD -> XETHZUSD, BTC-USD -> XXBTZUSD
             if not kraken_symbol:
                 kraken_symbol = normalized_symbol.replace('-', '').upper()
-                
+
                 # Kraken uses X prefix for BTC
                 if kraken_symbol.startswith('BTC'):
                     kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
-            
+
             # Determine order type
             order_type = side.lower()  # 'buy' or 'sell'
-            
+
             # ✅ TIER LOCK ENFORCEMENT: Validate trade size against tier minimums
             # This prevents small trades that will be eaten by fees
             # Track if tier auto-resize occurred (used for Kraken minimum enforcement later)
@@ -6730,19 +6730,19 @@ class KrakenBroker(BaseBroker):
             # Determine if this is a master account (not subject to tier limits)
             # Used in both tier validation and Kraken minimum enforcement
             is_master_account = (self.account_type == AccountType.MASTER)
-            
+
             if side.lower() == 'buy' and get_tier_from_balance and validate_trade_size:
                 try:
                     # Get current balance
                     balance_info = self.get_account_balance_detailed()
                     if balance_info and not balance_info.get('error', False):
                         current_balance = balance_info.get('trading_balance', 0.0)
-                        
+
                         # Check if balance meets minimum tier requirement ($10 SAVER tier minimum)
                         # Use tier config to get the minimum balance
                         saver_tier_config = get_tier_config(get_tier_from_balance(10.0))
                         min_balance_required = saver_tier_config.capital_min
-                        
+
                         if current_balance < min_balance_required:
                             logging.error(LOG_SEPARATOR)
                             logging.error("❌ TIER ENFORCEMENT: BUY ORDER BLOCKED")
@@ -6755,15 +6755,15 @@ class KrakenBroker(BaseBroker):
                                 "status": "error",
                                 "error": f"Account balance ${current_balance:.2f} below minimum tier requirement ${min_balance_required:.2f}"
                             }
-                        
+
                         # Determine user's tier based on balance
                         # Master accounts always get BALLER tier regardless of balance
                         user_tier = get_tier_from_balance(current_balance, is_master=is_master_account)
                         tier_config = get_tier_config(user_tier)
-                        
+
                         # Calculate order size in USD (quantity is already in USD for buy orders)
                         order_size_usd = quantity
-                        
+
                         # AUTO-RESIZE trade instead of rejecting (smarter approach)
                         # If trade exceeds tier limits, resize to maximum safe size
                         # NOTE: Master accounts have more flexible limits
@@ -6772,7 +6772,7 @@ class KrakenBroker(BaseBroker):
                                 order_size_usd, user_tier, current_balance,
                                 is_master=is_master_account, exchange='kraken'
                             )
-                            
+
                             if resized_size == 0.0:
                                 # Trade is below minimum - cannot resize
                                 logging.error(LOG_SEPARATOR)
@@ -6798,7 +6798,7 @@ class KrakenBroker(BaseBroker):
                                 logging.info(f"   Executed size: ${resized_size:.2f}")
                                 logging.info(f"   Reason: {resize_reason}")
                                 logging.info(LOG_SEPARATOR)
-                                
+
                                 # Update quantity to resized amount
                                 quantity = resized_size
                                 order_size_usd = resized_size
@@ -6812,7 +6812,7 @@ class KrakenBroker(BaseBroker):
                         else:
                             # Fallback to old validation if auto_resize not available
                             is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
-                            
+
                             if not is_valid:
                                 logging.error(LOG_SEPARATOR)
                                 logging.error("❌ TIER ENFORCEMENT: TRADE SIZE BLOCKED")
@@ -6827,16 +6827,16 @@ class KrakenBroker(BaseBroker):
                                     "status": "error",
                                     "error": f"[{user_tier.value} Tier] {reason}"
                                 }
-                            
+
                             # Log tier validation success
                             logging.info(f"✅ Tier validation passed: [{user_tier.value}] ${order_size_usd:.2f} trade")
                             logging.info(f"   Account balance: ${current_balance:.2f}")
                             logging.info(f"   Tier range: ${tier_config.trade_size_min:.2f}-${tier_config.trade_size_max:.2f}")
-                        
+
                 except Exception as tier_err:
                     # Don't block trade if tier validation fails - just log warning
                     logging.warning(f"⚠️  Tier validation error (allowing trade): {tier_err}")
-            
+
             # ✅ KRAKEN MINIMUM ENFORCEMENT: Check if trade meets Kraken's minimum
             # However, DO NOT bump up trades that were auto-resized down by tier limits
             # This prevents violating tier-based risk management for profit protection
@@ -6844,13 +6844,13 @@ class KrakenBroker(BaseBroker):
             if side.lower() == 'buy' and size_type == 'quote':
                 # Use Kraken minimum from imported constant
                 kraken_min = KRAKEN_MINIMUM_ORDER_USD or 10.00
-                
+
                 if quantity < kraken_min:
                     # Check if this trade was auto-resized down due to tier limits
                     # using explicit flag set during tier validation above
                     # CRITICAL: Only enforce tier protection for USER accounts, not MASTER
                     # Note: is_master_account is defined at line 6691
-                    
+
                     if tier_was_auto_resized and not is_master_account:
                         # USER account: Trade was resized down by tier limits, and result is below Kraken minimum
                         # REJECT the trade to protect tier-based risk management
@@ -6876,7 +6876,7 @@ class KrakenBroker(BaseBroker):
                         # Safe to bump up to Kraken minimum
                         original_quantity = quantity
                         quantity = kraken_min
-                        
+
                         if is_master_account and tier_was_auto_resized:
                             # Master account: tier resize occurred but we override for Kraken minimum
                             logging.info(LOG_SEPARATOR)
@@ -6898,7 +6898,7 @@ class KrakenBroker(BaseBroker):
                             logging.info(f"   Adjusted size: ${quantity:.2f}")
                             logging.info(f"   Reason: Meeting Kraken's ${kraken_min:.2f} minimum order value")
                             logging.info(LOG_SEPARATOR)
-            
+
             # ✅ PRE-FLIGHT BALANCE CHECK: Verify sufficient funds BEFORE sending to Kraken API
             # This prevents "EOrder:Insufficient funds" rejections from the API
             # Same pattern as Coinbase broker (lines 2550-2580)
@@ -6906,21 +6906,21 @@ class KrakenBroker(BaseBroker):
                 balance_data = self.get_account_balance_detailed()
                 if balance_data and not balance_data.get('error', False):
                     trading_balance = float(balance_data.get('trading_balance', 0.0))
-                    
+
                     logging.info(f"💰 Pre-flight balance check for {symbol}:")
                     logging.info(f"   Available: ${trading_balance:.2f}")
                     logging.info(f"   Required:  ${quantity:.2f}")
-                    
+
                     # Add 2% safety buffer for fees/rounding (Kraken typically takes 0.16-0.26%)
                     safety_buffer = quantity * 0.02  # 2% buffer
                     required_with_buffer = quantity + safety_buffer
-                    
+
                     if trading_balance < required_with_buffer:
                         error_msg = f"Insufficient funds: ${trading_balance:.2f} available, ${required_with_buffer:.2f} required (with 2% fee buffer)"
                         logging.error(f"❌ PRE-FLIGHT CHECK FAILED: {error_msg}")
                         logging.error(f"   Bot detected ${trading_balance:.2f} but needs ${required_with_buffer:.2f} for this order")
                         logging.error(f"   This prevents 'EOrder:Insufficient funds' rejection from Kraken API")
-                        
+
                         # Return unfilled status to prevent API call
                         return {
                             "status": "unfilled",
@@ -6931,29 +6931,29 @@ class KrakenBroker(BaseBroker):
                         }
                     else:
                         logging.info(f"   ✅ Balance sufficient: ${trading_balance:.2f} available >= ${required_with_buffer:.2f} required")
-            
+
             # ✅ CRITICAL FIX: Convert USD quantity to base currency volume for Kraken
             # Kraken's AddOrder API expects 'volume' in base currency (e.g., number of tokens)
             # not in quote currency (USD). When size_type='quote', we need to convert.
-            # 
+            #
             # Example: To buy $9.16 worth of FIDA at $0.97/FIDA:
             #   volume = $9.16 / $0.97 = 9.44 FIDA (base currency)
-            # 
+            #
             # This fixes "volume minimum not met" errors when trades are auto-resized
             # to tier limits but the USD amount is too small to meet minimum volume requirements.
-            # 
+            #
             # NOTE: SELL orders always use size_type='base' (selling specific token quantity),
             # so this conversion is only needed for BUY orders with size_type='quote'.
             volume_for_order = quantity  # Default: use quantity as-is
-            
+
             if size_type == 'quote' and side.lower() == 'buy':
                 # For BUY orders with quote currency (USD), convert to base currency
                 logging.debug(f"🔄 Converting USD quantity to base currency volume for Kraken")
                 logging.debug(f"   Quote amount (USD): ${quantity:.2f}")
-                
+
                 # Get current market price for conversion
                 current_price = self.get_current_price(symbol)
-                
+
                 if not current_price or current_price <= 0:
                     error_msg = f"Cannot convert USD to volume: price unavailable for {symbol}"
                     logging.error(f"❌ {error_msg}")
@@ -6964,14 +6964,14 @@ class KrakenBroker(BaseBroker):
                         "error": "PRICE_UNAVAILABLE",
                         "message": error_msg
                     }
-                
+
                 # Convert USD to base currency volume
                 volume_for_order = quantity / current_price
                 logging.info(f"📊 USD to Volume Conversion:")
                 logging.info(f"   USD amount: ${quantity:.2f}")
                 logging.info(f"   Price: ${current_price:.8f}")
                 logging.info(f"   Volume (base): {volume_for_order:.8f}")
-                
+
                 # ✅ VALIDATION: Check if converted volume meets Kraken minimums
                 # This prevents "volume minimum not met" rejections
                 if validate_order_size:
@@ -6981,7 +6981,7 @@ class KrakenBroker(BaseBroker):
                         price=current_price,
                         side=side
                     )
-                    
+
                     if not is_valid:
                         logging.error(LOG_SEPARATOR)
                         logging.error("❌ KRAKEN ORDER VALIDATION FAILED")
@@ -6998,9 +6998,9 @@ class KrakenBroker(BaseBroker):
                             "error": "VOLUME_TOO_SMALL",
                             "message": validation_error
                         }
-                    
+
                     logging.info(f"   ✅ Volume validation passed: {volume_for_order:.8f} meets Kraken minimums")
-            
+
             # Place market order using serialized API call
             # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
             # Use category-specific rate limiting for entry vs exit operations
@@ -7010,15 +7010,15 @@ class KrakenBroker(BaseBroker):
                 'ordertype': 'market',
                 'volume': str(volume_for_order)
             }
-            
+
             # Determine API category: ENTRY for buy, EXIT for sell
             if KrakenAPICategory is not None:
                 api_category = KrakenAPICategory.ENTRY if side.lower() == 'buy' else KrakenAPICategory.EXIT
             else:
                 api_category = None
-            
+
             result = self._kraken_private_call('AddOrder', order_params, category=api_category)
-            
+
             # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
             # DO NOT allow rejected orders to be recorded as successful trades
             if result and 'error' in result and result['error']:
@@ -7034,13 +7034,13 @@ class KrakenBroker(BaseBroker):
                 logging.error(LOG_SEPARATOR)
                 # Return error status to prevent recording this as a successful trade
                 return {"status": "error", "error": error_msgs}
-            
+
             # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
-                
+
                 # ✅ SAFETY CHECK #3: Require txid before recording position
                 # If no txid → trade not executed → return error
                 if not order_id:
@@ -7055,12 +7055,12 @@ class KrakenBroker(BaseBroker):
                     logging.error(LOG_SEPARATOR)
                     # Return error status to prevent recording this as a successful trade
                     return {"status": "error", "error": "No txid returned from Kraken - order did not execute"}
-                
+
                 logging.info(f"✅ Kraken txid received: {order_id}")
-                
+
                 # Enhanced trade confirmation logging with account identification
                 account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "UNKNOWN"
-                
+
                 # FIRST LIVE TRADE BANNER (for legal/operational protection)
                 global _FIRST_TRADE_EXECUTED
                 with _FIRST_TRADE_LOCK:
@@ -7081,7 +7081,7 @@ class KrakenBroker(BaseBroker):
                         logging.info("   All subsequent trades will be logged normally.")
                         logging.info(LOG_SEPARATOR)
                         logging.info("")
-                
+
                 logging.info(LOG_SEPARATOR)
                 logging.info(f"✅ TRADE CONFIRMATION - {account_label}")
                 logging.info(LOG_SEPARATOR)
@@ -7093,23 +7093,23 @@ class KrakenBroker(BaseBroker):
                 logging.info(f"   Account: {account_label}")
                 logging.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
                 logging.info(LOG_SEPARATOR)
-                
+
                 # Flush logs immediately to ensure confirmation is visible
                 if _root_logger.handlers:
                     for handler in _root_logger.handlers:
                         handler.flush()
-                
+
                 # COPY TRADING: Emit trade signal for master account trades
                 # This allows user accounts to replicate master trades automatically
                 try:
                     # Only emit signals for MASTER accounts (not USER accounts)
                     if self.account_type == AccountType.MASTER:
                         from trade_signal_emitter import emit_trade_signal
-                        
+
                         # Get current balance for position sizing
                         balance_data = self.get_account_balance_detailed()
                         master_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
-                        
+
                         # Get current price for this symbol
                         # For market orders, use a reasonable estimate
                         # In future, could fetch actual execution price from order details
@@ -7128,15 +7128,15 @@ class KrakenBroker(BaseBroker):
                                     exec_price = float(last_price) if last_price else 0.0
                         except Exception as price_err:
                             logger.debug(f"Could not fetch execution price: {price_err}")
-                        
+
                         # Determine broker name
                         broker_name = self.broker_type.value.lower() if hasattr(self, 'broker_type') else 'kraken'
-                        
+
                         # Determine size_type (Kraken uses base currency quantity for market orders)
                         size_type = 'base'
-                        
+
                         logger.info("📡 Emitting trade signal to copy engine")
-                        
+
                         # Emit signal
                         signal_emitted = emit_trade_signal(
                             broker=broker_name,
@@ -7148,12 +7148,12 @@ class KrakenBroker(BaseBroker):
                             order_id=order_id,
                             master_balance=master_balance
                         )
-                        
+
                         # ENHANCED COPY TRADING: Also trigger direct on_master_trade hook
                         # This provides a simplified interface for copy trading implementations
                         try:
                             from bot.kraken_copy_trading import on_master_trade
-                            
+
                             # Build trade object for hook
                             trade_obj = {
                                 'symbol': symbol,
@@ -7164,7 +7164,7 @@ class KrakenBroker(BaseBroker):
                                 'order_id': order_id,
                                 'broker': broker_name
                             }
-                            
+
                             logger.info("🎯 Triggering on_master_trade hook for direct copy execution")
                             on_master_trade(trade_obj)
                             logger.info("✅ on_master_trade hook completed")
@@ -7173,7 +7173,7 @@ class KrakenBroker(BaseBroker):
                         except Exception as hook_err:
                             logger.warning(f"⚠️ on_master_trade hook failed: {hook_err}")
                             logger.warning(f"   Copy trading may not execute properly")
-                        
+
                         # Confirm signal emission status
                         if signal_emitted:
                             logger.info(f"✅ Trade signal emitted successfully for {symbol} {side}")
@@ -7185,7 +7185,7 @@ class KrakenBroker(BaseBroker):
                     logger.warning(f"   ⚠️ Trade signal emission failed: {signal_err}")
                     logger.warning(f"   ⚠️ User accounts will NOT copy this trade!")
                     logger.warning(f"   Traceback: {traceback.format_exc()}")
-                
+
                 return {
                     "status": "filled",
                     "order_id": order_id,
@@ -7194,46 +7194,46 @@ class KrakenBroker(BaseBroker):
                     "quantity": quantity,
                     "account": account_label  # Add account identification to result
                 }
-            
+
             logger.error("❌ Kraken order failed: No result data")
             return {"status": "error", "error": "No result data"}
-            
+
         except Exception as e:
             logger.error(f"Kraken order error: {e}")
             return {"status": "error", "error": str(e)}
-    
+
     def get_positions(self) -> List[Dict]:
         """
         Get open positions (non-zero balances).
-        
+
         Returns:
             list: List of position dicts with symbol, quantity, currency
         """
         try:
             if not self.api:
                 return []
-            
+
             # Get account balance using serialized API call
             # Use MONITORING category for balance checks (conservative rate limiting)
             balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
             balance = self._kraken_private_call('Balance', category=balance_category)
-            
+
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
                 logging.error(f"Error fetching Kraken positions: {error_msgs}")
                 return []
-            
+
             if balance and 'result' in balance:
                 result = balance['result']
                 positions = []
-                
+
                 for asset, amount in result.items():
                     balance_val = float(amount)
-                    
+
                     # Skip USD/USDT and zero balances
                     if asset in ['ZUSD', 'USDT'] or balance_val <= 0:
                         continue
-                    
+
                     # Convert Kraken asset codes to standard format
                     # XXBT -> BTC, XETH -> ETH, etc.
                     currency = asset
@@ -7241,54 +7241,54 @@ class KrakenBroker(BaseBroker):
                         currency = currency[1:]
                     if currency == 'XBT':
                         currency = 'BTC'
-                    
+
                     # CRITICAL FIX: Create symbol with dash separator to avoid ambiguity
                     # This prevents ARBUSD being misinterpreted as ARB-BUSD instead of ARB-USD
                     # Always use dash separator for Kraken symbols: ARB-USD, ETH-USD, etc.
                     symbol = f'{currency}-USD'
-                    
+
                     # CRITICAL FIX: Filter out unsupported symbols before adding to positions
                     # This prevents orphaned positions from unsupported pairs (e.g., BUSD-based)
                     if not self.supports_symbol(symbol):
                         logger.debug(f"⏭️ Skipping unsupported position: {symbol} (balance: {balance_val} {currency})")
                         continue
-                    
+
                     positions.append({
                         'symbol': symbol,
                         'quantity': balance_val,
                         'currency': currency
                     })
-                
+
                 return positions
-            
+
             return []
-            
+
         except Exception as e:
             logging.error(f"Error fetching Kraken positions: {e}")
             return []
-    
+
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """
         Get historical candle data from Kraken.
-        
+
         Args:
             symbol: Trading pair (e.g., 'BTC-USD' or 'XBTUSD')
             timeframe: Candle interval ('1m', '5m', '15m', '1h', '1d', etc.)
             count: Number of candles to fetch (max 720)
-        
+
         Returns:
             list: List of candle dicts with OHLCV data
         """
         try:
             if not self.kraken_api:
                 return []
-            
+
             # CRITICAL FIX: Use symbol mapper to convert to Kraken format
             # This ensures we use the correct format (e.g., XETHZUSD, XXBTZUSD)
             # instead of incorrect formats like ETHUSD, BTCUSD
             kraken_symbol = None
             normalized_symbol = normalize_symbol_for_broker(symbol, self.broker_type.value)
-            
+
             if convert_to_kraken:
                 kraken_symbol = convert_to_kraken(normalized_symbol)
                 if not kraken_symbol:
@@ -7299,7 +7299,7 @@ class KrakenBroker(BaseBroker):
                 kraken_symbol = normalized_symbol.replace('-', '').upper()
                 if kraken_symbol.startswith('BTC'):
                     kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
-            
+
             # Map timeframe to Kraken interval (in minutes)
             # Kraken supports: 1, 5, 15, 30, 60, 240, 1440, 10080, 21600
             interval_map = {
@@ -7311,9 +7311,9 @@ class KrakenBroker(BaseBroker):
                 "4h": 240,
                 "1d": 1440
             }
-            
+
             kraken_interval = interval_map.get(timeframe.lower(), 5)
-            
+
             # Fetch OHLC data using pykrakenapi
             # Suppress pykrakenapi's print() statements
             with suppress_pykrakenapi_prints():
@@ -7322,7 +7322,7 @@ class KrakenBroker(BaseBroker):
                 interval=kraken_interval,
                 ascending=True
             )
-            
+
             # Convert to standard format
             candles = []
             for idx, row in ohlc.tail(count).iterrows():
@@ -7334,36 +7334,36 @@ class KrakenBroker(BaseBroker):
                     'close': float(row['close']),
                     'volume': float(row['volume'])
                 })
-            
+
             return candles
-            
+
         except Exception as e:
             logging.error(f"Error fetching Kraken candles: {e}")
             return []
-    
+
     def supports_asset_class(self, asset_class: str) -> bool:
         """
         Kraken supports multiple asset classes.
-        
+
         - Crypto: Spot trading via Kraken API (fully supported)
         - Futures: Via Kraken Futures API (enabled)
         - Stocks: Via AlpacaBroker integration (use AlpacaBroker for stocks)
         - Options: In development by Kraken (not yet available)
-        
+
         Returns:
             bool: True if asset class is supported
         """
         supported = asset_class.lower() in ["crypto", "cryptocurrency", "futures"]
         return supported
-    
+
     def get_all_products(self) -> list:
         """
         Get list of all tradeable cryptocurrency and futures pairs from Kraken.
-        
+
         Includes:
         - Crypto spot pairs (BTC-USD, ETH-USD, etc.)
         - Futures pairs (if enable_futures is True in config)
-        
+
         Returns:
             List of trading pairs in standard format (e.g., ['BTC-USD', 'ETH-USD', 'BTC-PERP', ...])
         """
@@ -7371,7 +7371,7 @@ class KrakenBroker(BaseBroker):
             if not self.kraken_api:
                 logging.warning("⚠️  Kraken not connected, cannot fetch products")
                 return []
-            
+
             # Initialize symbol mapper with API data for dynamic symbol detection
             # This prevents "Unknown asset pair" errors by building a complete symbol map
             if get_kraken_symbol_mapper:
@@ -7381,21 +7381,21 @@ class KrakenBroker(BaseBroker):
                     logging.debug("✅ Symbol mapper initialized with Kraken API data")
                 except Exception as mapper_err:
                     logging.warning(f"⚠️  Could not initialize symbol mapper: {mapper_err}")
-            
+
             # CRITICAL FIX (Jan 23, 2026): Initialize market data for dynamic minimum volumes
             # This prevents "volume minimum not met" rejections by fetching actual pair minimums
             self._initialize_kraken_market_data()
-            
+
             # Get all tradable asset pairs (returns pandas DataFrame)
             # Suppress pykrakenapi's print() statements
             with suppress_pykrakenapi_prints():
                 asset_pairs = self.kraken_api.get_tradable_asset_pairs()
-            
+
             # Extract pairs that trade against USD or USDT
             symbols = []
             futures_count = 0
             spot_count = 0
-            
+
             # Iterate over DataFrame rows using iterrows()
             # pykrakenapi returns DataFrame with pair info including 'wsname' column
             for pair_name, pair_info in asset_pairs.iterrows():
@@ -7407,11 +7407,11 @@ class KrakenBroker(BaseBroker):
                     # Convert from Kraken format to standard format
                     # e.g., BTC/USD -> BTC-USD
                     symbol = wsname.replace('/', '-')
-                    
+
                     # Detect futures pairs (contain 'PERP', 'F0', or quarter codes like 'Z24', 'H25')
                     # Kraken futures typically have symbols like BTC-PERP, ETH-F0, BTC-Z24
                     is_futures = any(x in symbol for x in ['PERP', 'F0', 'F1', 'F2', 'F3', 'F4'])
-                    
+
                     if is_futures:
                         futures_count += 1
                         # Only add futures if enabled in config
@@ -7421,10 +7421,10 @@ class KrakenBroker(BaseBroker):
                     else:
                         spot_count += 1
                         symbols.append(symbol)
-            
+
             logging.info(f"📊 Kraken: Found {spot_count} spot pairs + {futures_count} futures pairs = {len(symbols)} total tradable USD/USDT pairs")
             return symbols
-            
+
         except Exception as e:
             logging.warning(f"⚠️  Error fetching Kraken products: {e}")
             # Return a fallback list of popular crypto pairs
@@ -7440,17 +7440,17 @@ class KrakenBroker(BaseBroker):
 class OKXBroker(BaseBroker):
     """
     OKX Exchange integration for crypto spot and futures trading.
-    
+
     Features:
     - Spot trading (USDT pairs)
-    - Futures/perpetual contracts  
+    - Futures/perpetual contracts
     - Testnet support for paper trading
     - Advanced order types
-    
+
     Documentation: https://www.okx.com/docs-v5/en/
     Python SDK: https://github.com/okx/okx-python-sdk
     """
-    
+
     def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
         super().__init__(BrokerType.OKX, account_type=account_type, user_id=user_id)
         self.client = None
@@ -7458,41 +7458,41 @@ class OKXBroker(BaseBroker):
         self.market_api = None
         self.trade_api = None
         self.use_testnet = False
-        
+
         # Balance tracking for fail-closed behavior (Jan 19, 2026)
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
-    
+
     def connect(self) -> bool:
         """
         Connect to OKX Exchange API with retry logic.
-        
+
         Requires environment variables:
         - OKX_API_KEY: Your OKX API key
         - OKX_API_SECRET: Your OKX API secret
         - OKX_PASSPHRASE: Your OKX API passphrase
         - OKX_USE_TESTNET: 'true' for testnet, 'false' for live (optional, default: false)
-        
+
         Returns:
             bool: True if connected successfully
         """
         try:
             from okx.api import Account, Market, Trade
             import time
-            
+
             api_key = os.getenv("OKX_API_KEY", "").strip()
             api_secret = os.getenv("OKX_API_SECRET", "").strip()
             passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
             self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
-            
+
             if not api_key or not api_secret or not passphrase:
                 # Silently skip - OKX is optional, no need for scary error messages
                 logging.info("⚠️  OKX credentials not configured (skipping)")
                 return False
-            
-            
+
+
             # Check for placeholder passphrase (most common user error)
             # Note: Only checking passphrase because API keys are UUIDs/hex without obvious placeholder patterns
             if passphrase in PLACEHOLDER_PASSPHRASE_VALUES:
@@ -7501,21 +7501,21 @@ class OKXBroker(BaseBroker):
                 logging.warning("   Current value looks like a placeholder (e.g., 'your_passphrase')")
                 logging.warning("   Replace it with your actual OKX API passphrase from https://www.okx.com/account/my-api")
                 return False
-            
+
             # Determine API flag (0 = live, 1 = testnet)
             flag = "1" if self.use_testnet else "0"
-            
+
             # Initialize OKX API clients
             self.account_api = Account(api_key, api_secret, passphrase, flag)
             self.market_api = Market(api_key, api_secret, passphrase, flag)
             self.trade_api = Trade(api_key, api_secret, passphrase, flag)
-            
+
             # Test connection by fetching account balance with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
             max_attempts = 5
             base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
-            
+
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
@@ -7524,59 +7524,59 @@ class OKXBroker(BaseBroker):
                         delay = base_delay * (2 ** (attempt - 2))
                         logging.info(f"🔄 Retrying OKX connection in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
-                    
+
                     result = self.account_api.get_balance()
-                    
+
                     if result and result.get('code') == '0':
                         self.connected = True
-                        
+
                         if attempt > 1:
                             logging.info(f"✅ Connected to OKX API (succeeded on attempt {attempt})")
-                        
+
                         env_type = "🧪 TESTNET" if self.use_testnet else "🔴 LIVE"
                         logging.info("=" * 70)
                         logging.info(f"✅ OKX CONNECTED ({env_type})")
                         logging.info("=" * 70)
-                        
+
                         # Log account info
                         data = result.get('data', [])
                         if data and len(data) > 0:
                             total_eq = data[0].get('totalEq', '0')
                             logging.info(f"   Total Account Value: ${float(total_eq):.2f}")
-                        
+
                         logging.info("=" * 70)
                         return True
                     else:
                         error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-                        
+
                         # Check if error is retryable
                         is_retryable = any(keyword in error_msg.lower() for keyword in [
                             'timeout', 'connection', 'network', 'rate limit',
                             'too many requests', 'service unavailable',
-                            '503', '504', '429', '403', 'forbidden', 
+                            '503', '504', '429', '403', 'forbidden',
                             'too many errors', 'temporary', 'try again'
                         ])
-                        
+
                         if is_retryable and attempt < max_attempts:
                             logging.warning(f"⚠️  OKX connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                             continue
                         else:
                             logging.warning(f"⚠️  OKX connection test failed: {error_msg}")
                             return False
-                
+
                 except Exception as e:
                     error_msg = str(e)
-                    
+
                     # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
                     # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
                     # These indicate API key blocking and need longer cooldown periods
                     is_retryable = any(keyword in error_msg.lower() for keyword in [
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
-                        '503', '504', '429', '403', 'forbidden', 
+                        '503', '504', '429', '403', 'forbidden',
                         'too many errors', 'temporary', 'try again'
                     ])
-                    
+
                     if is_retryable and attempt < max_attempts:
                         logging.warning(f"⚠️  OKX connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                         continue
@@ -7592,11 +7592,11 @@ class OKXBroker(BaseBroker):
                         else:
                             logging.warning(f"⚠️  OKX connection failed: {e}")
                         return False
-            
+
             # Should never reach here, but just in case
             logging.error("❌ Failed to connect to OKX after maximum retry attempts")
             return False
-                
+
         except ImportError as e:
             # SDK not installed or import failed
             logging.error("❌ OKX connection failed: SDK import error")
@@ -7609,23 +7609,23 @@ class OKXBroker(BaseBroker):
             logging.error("      3. Try manual install: pip install okx")
             logging.error("      4. Check for dependency conflicts with: pip check")
             return False
-    
+
     def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get total equity (USDT + position values) with fail-closed behavior.
-        
+
         CRITICAL FIX (Rule #3): Balance = CASH + POSITION VALUE
         Returns total equity (available cash + position market value), not just available balance.
         This ensures risk calculations and position sizing account for capital deployed in positions.
-        
+
         CRITICAL FIX (Jan 19, 2026): Fail closed - not "balance = 0"
         - On error: Return last known balance (if available) instead of 0
         - Track consecutive errors to mark broker unavailable
         - Distinguish API errors from actual zero balance
-        
+
         Args:
             verbose: If True, logs detailed balance breakdown (default: True)
-        
+
         Returns:
             float: Total equity (available USDT + position values)
                    Returns last known balance on error (not 0)
@@ -7645,22 +7645,22 @@ class OKXBroker(BaseBroker):
                     self._balance_fetch_errors += 1
                     self._is_available = False
                     return 0.0
-            
+
             # Get account balance (available cash)
             result = self.account_api.get_balance()
-            
+
             if result and result.get('code') == '0':
                 data = result.get('data', [])
                 if data and len(data) > 0:
                     details = data[0].get('details', [])
-                    
+
                     # Find USDT balance
                     available = 0.0
                     for detail in details:
                         if detail.get('ccy') == 'USDT':
                             available = float(detail.get('availBal', 0))
                             break
-                    
+
                     # FIX Rule #3: Get position values and add to available cash
                     position_value = 0.0
                     try:
@@ -7683,10 +7683,10 @@ class OKXBroker(BaseBroker):
                     except Exception as pos_err:
                         logger.debug(f"   Could not fetch positions: {pos_err}")
                         # Continue with just cash balance if positions can't be fetched
-                    
+
                     # Calculate total equity
                     total_equity = available + position_value
-                    
+
                     # Enhanced logging (only if verbose=True)
                     if verbose:
                         logger.info("=" * 70)
@@ -7702,14 +7702,14 @@ class OKXBroker(BaseBroker):
                     else:
                         # Minimal logging when verbose=False
                         logger.debug(f"OKX balance: ${total_equity:.2f}")
-                    
+
                     # SUCCESS: Update last known balance and reset error count
                     self._last_known_balance = total_equity
                     self._balance_fetch_errors = 0
                     self._is_available = True
-                    
+
                     return total_equity
-                
+
                 # No USDT found - treat as zero balance (not an error)
                 if verbose:
                     logger.warning("⚠️  No USDT balance found in OKX account")
@@ -7721,77 +7721,77 @@ class OKXBroker(BaseBroker):
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
                 logger.error(f"❌ OKX API error fetching balance: {error_msg}")
-                
+
                 # Return last known balance instead of 0
                 self._balance_fetch_errors += 1
                 if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
                     logger.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
-                
+
                 if self._last_known_balance is not None:
                     logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
                     return self._last_known_balance
                 else:
                     logger.error(f"   ❌ No last known balance available, returning 0")
                     return 0.0
-                
+
         except Exception as e:
             logger.error(f"❌ Exception fetching OKX balance: {e}")
             self._balance_fetch_errors += 1
             if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
                 logger.error(f"❌ OKX marked unavailable after {self._balance_fetch_errors} consecutive errors")
-            
+
             # Return last known balance instead of 0
             if self._last_known_balance is not None:
                 logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
                 return self._last_known_balance
-            
+
             return 0.0
-    
+
     def is_available(self) -> bool:
         """
         Check if OKX broker is available for trading.
-        
+
         Returns False if there have been 3+ consecutive balance fetch errors.
         This prevents trading when the API is not working properly.
-        
+
         Returns:
             bool: True if broker is available, False if unavailable
         """
         return self._is_available
-    
+
     def get_error_count(self) -> int:
         """
         Get the number of consecutive balance fetch errors.
-        
+
         Returns:
             int: Number of consecutive errors
         """
         return self._balance_fetch_errors
-    
+
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """
         Place market order on OKX.
-        
+
         Args:
             symbol: Trading pair (e.g., 'BTC-USDT')
             side: 'buy' or 'sell'
             quantity: Order size in USDT (for buys) or base currency (for sells)
-        
+
         Returns:
             dict: Order result with status, order_id, etc.
         """
         try:
             if not self.trade_api:
                 return {"status": "error", "error": "Not connected to OKX"}
-            
+
             # Convert symbol format if needed (BTC-USD -> BTC-USDT)
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
-            
+
             # Determine order side (buy/sell)
             okx_side = side.lower()
-            
+
             # Place market order
             # For spot trading: tdMode = 'cash'
             # For margin/futures: tdMode = 'cross' or 'isolated'
@@ -7802,7 +7802,7 @@ class OKXBroker(BaseBroker):
                 ordType='market',
                 sz=str(quantity)
             )
-            
+
             if result and result.get('code') == '0':
                 data = result.get('data', [])
                 if data and len(data) > 0:
@@ -7815,40 +7815,40 @@ class OKXBroker(BaseBroker):
                         "side": okx_side,
                         "quantity": quantity
                     }
-            
+
             error_msg = result.get('msg', 'Unknown error') if result else 'No response'
             logging.error(f"❌ OKX order failed: {error_msg}")
             return {"status": "error", "error": error_msg}
-            
+
         except Exception as e:
             logging.error(f"OKX order error: {e}")
             return {"status": "error", "error": str(e)}
-    
+
     def get_positions(self) -> List[Dict]:
         """
         Get open positions (non-zero balances).
-        
+
         Returns:
             list: List of position dicts with symbol, quantity, currency
         """
         try:
             if not self.account_api:
                 return []
-            
+
             # Get account balance to see all assets
             result = self.account_api.get_balance()
-            
+
             if result and result.get('code') == '0':
                 positions = []
                 data = result.get('data', [])
-                
+
                 if data and len(data) > 0:
                     details = data[0].get('details', [])
-                    
+
                     for detail in details:
                         ccy = detail.get('ccy')
                         available = float(detail.get('availBal', 0))
-                        
+
                         # Only include non-zero, non-USDT balances
                         if ccy != 'USDT' and available > 0:
                             positions.append({
@@ -7856,58 +7856,58 @@ class OKXBroker(BaseBroker):
                                 'quantity': available,
                                 'currency': ccy
                             })
-                
+
                 return positions
-            
+
             return []
-            
+
         except Exception as e:
             logging.error(f"Error fetching OKX positions: {e}")
             return []
-    
+
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """
         Get historical candle data from OKX.
-        
+
         Args:
             symbol: Trading pair (e.g., 'BTC-USDT')
             timeframe: Candle interval ('1m', '5m', '15m', '1H', '1D', etc.)
             count: Number of candles to fetch (max 100)
-        
+
         Returns:
             list: List of candle dicts with OHLCV data
         """
         try:
             if not self.market_api:
                 return []
-            
+
             # Convert symbol format if needed
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
-            
+
             # Map timeframe to OKX format
             # OKX uses: 1m, 3m, 5m, 15m, 30m, 1H, 2H, 4H, 6H, 12H, 1D, 1W, 1M
             timeframe_map = {
                 "1m": "1m",
-                "5m": "5m", 
+                "5m": "5m",
                 "15m": "15m",
                 "1h": "1H",
                 "4h": "4H",
                 "1d": "1D"
             }
-            
+
             okx_timeframe = timeframe_map.get(timeframe.lower(), "5m")
-            
+
             # Fetch candles
             result = self.market_api.get_candles(
                 instId=okx_symbol,
                 bar=okx_timeframe,
                 limit=str(min(count, 100))  # OKX max is 100
             )
-            
+
             if result and result.get('code') == '0':
                 data = result.get('data', [])
                 candles = []
-                
+
                 for candle in data:
                     # OKX candle format: [timestamp, open, high, low, close, volume, volumeCcy, volumeCcyQuote, confirm]
                     candles.append({
@@ -7918,55 +7918,55 @@ class OKXBroker(BaseBroker):
                         'close': float(candle[4]),
                         'volume': float(candle[5])
                     })
-                
+
                 return candles
-            
+
             return []
-            
+
         except Exception as e:
             logging.error(f"Error fetching OKX candles: {e}")
             return []
-    
+
     def get_current_price(self, symbol: str) -> float:
         """
         Get current market price for a symbol.
-        
+
         Args:
             symbol: Trading pair (e.g., 'BTC-USDT')
-        
+
         Returns:
             float: Current price or 0.0 on error
         """
         try:
             if not self.market_api:
                 return 0.0
-            
+
             # Convert symbol format if needed
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
-            
+
             # Get ticker data
             result = self.market_api.get_ticker(instId=okx_symbol)
-            
+
             if result and result.get('code') == '0':
                 data = result.get('data', [])
                 if data and len(data) > 0:
                     last_price = data[0].get('last')
                     return float(last_price) if last_price else 0.0
-            
+
             return 0.0
-            
+
         except Exception as e:
             logging.debug(f"Error fetching OKX price for {symbol}: {e}")
             return 0.0
-    
+
     def supports_asset_class(self, asset_class: str) -> bool:
         """OKX supports crypto spot and futures"""
         return asset_class.lower() in ["crypto", "futures"]
-    
+
     def get_all_products(self) -> list:
         """
         Get list of all tradeable cryptocurrency pairs from OKX.
-        
+
         Returns:
             List of trading pairs (e.g., ['BTC-USDT', 'ETH-USDT', ...])
         """
@@ -7974,13 +7974,13 @@ class OKXBroker(BaseBroker):
             if not self.market_api:
                 logging.warning("⚠️  OKX not connected, cannot fetch products")
                 return []
-            
+
             # Get all trading instruments (spot trading)
             result = self.market_api.get_instruments(instType='SPOT')
-            
+
             if result and result.get('code') == '0':
                 instruments = result.get('data', [])
-                
+
                 # Extract symbols that trade against USDT
                 symbols = []
                 for inst in instruments:
@@ -7988,17 +7988,17 @@ class OKXBroker(BaseBroker):
                     # Filter for USDT pairs
                     if inst_id.endswith('-USDT') and inst.get('state') == 'live':
                         symbols.append(inst_id)
-                
+
                 logging.info(f"📊 OKX: Found {len(symbols)} tradeable USDT pairs")
                 return symbols
             else:
                 logging.warning(f"⚠️  OKX API returned error: {result.get('msg', 'Unknown error')}")
                 return self._get_okx_fallback_pairs()
-            
+
         except Exception as e:
             logging.warning(f"⚠️  Error fetching OKX products: {e}")
             return self._get_okx_fallback_pairs()
-    
+
     def _get_okx_fallback_pairs(self) -> list:
         """Get fallback list of popular OKX trading pairs"""
         fallback_pairs = [
@@ -8013,81 +8013,81 @@ class OKXBroker(BaseBroker):
 class BrokerManager:
     """
     Manages multiple broker connections with independent operation.
-    
+
     ARCHITECTURE (Jan 10, 2026 Update):
     ------------------------------------
     Each broker operates INDEPENDENTLY and should NOT affect other brokers.
-    
+
     The "primary broker" concept exists only for backward compatibility:
     - Used by legacy single-broker code paths
     - Used for master account position cap enforcement
     - Does NOT control independent broker trading
-    
+
     For multi-broker trading, use IndependentBrokerTrader which:
     - Runs each broker in its own thread
     - Isolates errors between brokers
     - Prevents cascade failures
     - Ensures one broker's issues don't affect others
-    
+
     CRITICAL: No broker should have automatic priority over others.
     Previously, Coinbase was automatically set as primary, which caused
     it to control trading decisions for all brokers. This has been fixed.
     """
-    
+
     def __init__(self):
         self.brokers: Dict[BrokerType, BaseBroker] = {}
         self.active_broker: Optional[BaseBroker] = None
         self.primary_broker_type: Optional[BrokerType] = None
-    
+
     def add_broker(self, broker: BaseBroker):
         """
         Add a broker to the manager.
-        
+
         IMPORTANT: Each broker is independent and should be treated equally.
         No broker automatically becomes "primary" - this prevents one broker
         from controlling or affecting trading decisions for other brokers.
-        
+
         To set a primary broker for legacy compatibility, explicitly call
         set_primary_broker() after adding brokers.
         """
         self.brokers[broker.broker_type] = broker
-        
+
         # CRITICAL FIX (Jan 10, 2026): Remove automatic primary broker selection
         # Previously, Coinbase was automatically set as primary, which made it
         # control trading logic for all other brokers. Each broker should operate
         # independently without one broker affecting others.
-        # 
+        #
         # Auto-set first broker as primary ONLY if no primary is set yet
         # This maintains backward compatibility while removing Coinbase preference
         if self.active_broker is None:
             self.set_primary_broker(broker.broker_type)
             logger.info(f"   First broker {broker.broker_type.value} set as primary (for legacy compatibility)")
-        
+
         # NOTE: Removed automatic Coinbase priority logic
         # Old logic: "Always prefer Coinbase as primary if available"
         # This was causing Coinbase to control other brokerages
         # Each broker now operates independently through IndependentBrokerTrader
-        
+
         logger.info(f"📊 Added {broker.broker_type.value} broker (independent operation)")
-    
+
     def set_primary_broker(self, broker_type: BrokerType) -> bool:
         """
         Set a specific broker as the primary/active broker.
-        
+
         NOTE: This method exists for backward compatibility with legacy code
         that expects a "primary" broker. In modern multi-broker architecture,
         each broker should operate independently via IndependentBrokerTrader.
-        
+
         The primary broker is used only for:
         - Legacy single-broker trading logic
         - Position cap enforcement (shared across master account)
         - Backward compatibility with older code
-        
+
         It does NOT control or affect other brokers' independent trading.
-        
+
         Args:
             broker_type: Type of broker to set as primary
-            
+
         Returns:
             bool: True if successfully set as primary
         """
@@ -8099,39 +8099,39 @@ class BrokerManager:
         else:
             logging.warning(f"⚠️  Cannot set {broker_type.value} as primary - not connected")
             return False
-    
+
     def get_primary_broker(self) -> Optional[BaseBroker]:
         """
         Get the current primary/active broker.
-        
+
         Returns:
             BaseBroker instance or None if no broker is active
         """
         return self.active_broker
-    
+
     def select_primary_master_broker(self):
         """
         Select the primary master broker with intelligent fallback logic.
-        
+
         FIX #2: Make Kraken the PRIMARY broker for entries when Coinbase is in exit_only mode.
-        
+
         Priority rules:
         1. If Coinbase is in exit_only mode → Kraken becomes PRIMARY for all new entries
         2. If current primary has insufficient balance → Promote Kraken to PRIMARY
         3. Coinbase exists ONLY for: Emergency exits, Position closures, Legacy compatibility
-        
+
         This ensures the master portfolio uses the correct broker for new entries.
         """
         if not self.active_broker:
             logger.warning("⚠️ No primary broker set - cannot select primary master")
             return
-        
+
         current_primary = self.active_broker.broker_type.value.upper()
-        
+
         # FIX #2: Check if Coinbase is in exit_only mode (Kraken becomes PRIMARY)
         should_promote_kraken = False
         promotion_reason = ""
-        
+
         # Primary check: Is the current broker in EXIT_ONLY mode?
         if self.active_broker.exit_only_mode:
             should_promote_kraken = True
@@ -8147,7 +8147,7 @@ class BrokerManager:
                     logger.info(f"🔍 {current_primary} has insufficient balance: ${balance:.2f} < ${MINIMUM_TRADING_BALANCE:.2f}")
             except Exception as e:
                 logger.warning(f"⚠️ Could not check balance for {current_primary}: {e}")
-        
+
         if should_promote_kraken:
             # FIX #2: Promote Kraken to PRIMARY broker for all new entries
             if BrokerType.KRAKEN in self.brokers:
@@ -8170,21 +8170,21 @@ class BrokerManager:
                 logger.warning("   Add Kraken credentials to enable PRIMARY broker fallback")
         else:
             logger.debug(f"✅ Primary broker ({current_primary}) is ready for entries")
-    
+
     def connect_all(self):
         """Connect to all configured brokers"""
         logger.info("")
         logger.info("🔌 Connecting to brokers...")
         for broker in self.brokers.values():
             broker.connect()
-    
+
     def get_broker_for_symbol(self, symbol: str) -> Optional[BaseBroker]:
         """Get appropriate broker for a symbol"""
         from market_adapter import market_adapter
-        
+
         # Detect market type
         market_type = market_adapter.detect_market_type(symbol)
-        
+
         # Map to asset class
         asset_class_map = {
             "crypto": "crypto",
@@ -8192,29 +8192,29 @@ class BrokerManager:
             "futures": "futures",
             "options": "options"
         }
-        
+
         asset_class = asset_class_map.get(market_type.value, "stocks")
-        
+
         # Find broker that supports this asset class
         for broker in self.brokers.values():
             if broker.connected and broker.supports_asset_class(asset_class):
                 return broker
-        
+
         return None
-    
+
     def place_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Route order to appropriate broker"""
         broker = self.get_broker_for_symbol(symbol)
-        
+
         if not broker:
             return {
                 "status": "error",
                 "error": f"No broker available for {symbol}"
             }
-        
+
         logger.info(f"📤 Routing {side} order for {symbol} to {broker.broker_type.value}")
         return broker.place_market_order(symbol, side, quantity)
-    
+
     def get_total_balance(self) -> float:
         """Get total USD balance across all brokers"""
         total = 0.0
@@ -8222,7 +8222,7 @@ class BrokerManager:
             if broker.connected:
                 total += broker.get_account_balance()
         return total
-    
+
     def get_all_positions(self) -> List[Dict]:
         """Get positions from all brokers"""
         all_positions = []
@@ -8233,7 +8233,7 @@ class BrokerManager:
                     pos['broker'] = broker_type.value
                 all_positions.extend(positions)
         return all_positions
-    
+
     def get_connected_brokers(self) -> List[str]:
         """Get list of connected broker names"""
         return [b.broker_type.value for b in self.brokers.values() if b.connected]

@@ -203,31 +203,31 @@ def decode_access_token(token: str) -> Optional[Dict]:
 async def check_rate_limit(request: Request, user_id: str = None):
     """
     Rate limiting middleware - prevents API abuse.
-    
+
     Args:
         request: FastAPI request object
         user_id: Optional user ID for per-user limits
-    
+
     Raises:
         HTTPException: If rate limit exceeded
     """
     # Use IP address or user_id as key
     key = user_id if user_id else request.client.host if request.client else "unknown"
     current_time = time.time()
-    
+
     # Get request timestamps for this key
     timestamps = rate_limit_storage[key]
-    
+
     # Remove timestamps outside the window
     timestamps = [t for t in timestamps if current_time - t < RATE_LIMIT_WINDOW]
-    
+
     # Check if limit exceeded
     if len(timestamps) >= RATE_LIMIT_REQUESTS:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Rate limit exceeded. Max {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds."
         )
-    
+
     # Add current request
     timestamps.append(current_time)
     rate_limit_storage[key] = timestamps
@@ -239,28 +239,28 @@ async def get_current_user(
 ) -> str:
     """
     Dependency to get current authenticated user from JWT token.
-    
+
     Returns:
         str: User ID
-        
+
     Raises:
         HTTPException: If token is invalid or expired
     """
     token = credentials.credentials
     payload = decode_access_token(token)
-    
+
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     user_id = payload['user_id']
-    
+
     # Check rate limit for authenticated user
     await check_rate_limit(request, user_id)
-    
+
     return user_id
 
 
@@ -311,11 +311,11 @@ async def get_info():
 async def register(user_data: UserRegister, request: Request):
     """
     Register a new user account.
-    
+
     Returns JWT token for immediate login.
     """
     email = user_data.email.lower().strip()
-    
+
     # Check if user exists
     existing_user = user_db.get_user_by_email(email)
     if existing_user:
@@ -323,10 +323,10 @@ async def register(user_data: UserRegister, request: Request):
             status_code=status.HTTP_409_CONFLICT,
             detail="User already exists"
         )
-    
+
     # Create user ID
     user_id = f"user_{secrets.token_hex(8)}"
-    
+
     # Create user in database with password hashing
     success = user_db.create_user(
         user_id=user_id,
@@ -334,20 +334,20 @@ async def register(user_data: UserRegister, request: Request):
         password=user_data.password,  # Will be hashed by user_db
         subscription_tier=user_data.subscription_tier
     )
-    
+
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create user"
         )
-    
+
     # Register permissions based on tier
     max_position_size = {
         'basic': 100.0,
         'pro': 1000.0,
         'enterprise': 10000.0
     }.get(user_data.subscription_tier, 100.0)
-    
+
     permissions = UserPermissions(
         user_id=user_id,
         max_position_size_usd=max_position_size,
@@ -355,12 +355,12 @@ async def register(user_data: UserRegister, request: Request):
         max_positions=3 if user_data.subscription_tier == 'basic' else 10
     )
     permission_validator.register_user(permissions)
-    
+
     # Generate token
     token = create_access_token(user_id)
-    
+
     logger.info(f"✅ New user registered: {email} (ID: {user_id}, Tier: {user_data.subscription_tier})")
-    
+
     return TokenResponse(
         access_token=token,
         user_id=user_id,
@@ -375,39 +375,39 @@ async def login(credentials: UserLogin, request: Request):
     Login user and return JWT token.
     """
     email = credentials.email.lower().strip()
-    
+
     # Get user from database
     user_profile = user_db.get_user_by_email(email)
-    
+
     if not user_profile:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials"
         )
-    
+
     # Get IP address for audit logging
     ip_address = request.client.host if request.client else None
-    
+
     # Verify password (uses Argon2)
     if not user_db.verify_password(user_profile['user_id'], credentials.password, ip_address):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials"
         )
-    
+
     if not user_profile.get('enabled', True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account disabled"
         )
-    
+
     user_id = user_profile['user_id']
-    
+
     # Generate token
     token = create_access_token(user_id)
-    
+
     logger.info(f"✅ User logged in: {email} (ID: {user_id})")
-    
+
     return TokenResponse(
         access_token=token,
         user_id=user_id,
@@ -424,15 +424,15 @@ async def login(credentials: UserLogin, request: Request):
 async def get_profile(user_id: str = Depends(get_current_user)):
     """Get current user's profile."""
     user_profile = user_manager.get_user(user_id)
-    
+
     if not user_profile:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     permissions = permission_validator.get_user_permissions(user_id)
-    
+
     return UserProfile(
         user_id=user_id,
         email=user_profile['email'],
@@ -464,16 +464,16 @@ async def add_broker(
 ):
     """Add broker API credentials to secure vault."""
     supported_brokers = ['coinbase', 'kraken', 'binance', 'okx', 'alpaca']
-    
+
     if broker_name.lower() not in supported_brokers:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported broker. Supported: {', '.join(supported_brokers)}"
         )
-    
+
     # Get IP address for audit logging
     ip_address = request.client.host if request.client else None
-    
+
     # Store encrypted credentials in secure vault
     success = vault.store_credentials(
         user_id=user_id,
@@ -483,15 +483,15 @@ async def add_broker(
         additional_params=credentials.additional_params,
         ip_address=ip_address
     )
-    
+
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to store credentials"
         )
-    
+
     logger.info(f"✅ User {user_id} added {broker_name} credentials")
-    
+
     return {"message": f"{broker_name} credentials added successfully", "broker": broker_name}
 
 
@@ -503,18 +503,18 @@ async def remove_broker(
 ):
     """Remove broker API credentials from secure vault."""
     ip_address = request.client.host if request.client else None
-    
+
     # Remove from vault
     success = vault.delete_credentials(user_id, broker_name.lower(), ip_address)
-    
+
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No {broker_name} credentials found"
         )
-    
+
     logger.info(f"✅ User {user_id} removed {broker_name} credentials")
-    
+
     return {"message": f"{broker_name} credentials removed successfully"}
 
 
@@ -526,20 +526,20 @@ async def remove_broker(
 async def start_bot(user_id: str = Depends(get_current_user)):
     """
     Start NIJA trading bot for user.
-    
+
     This endpoint starts a headless NIJA instance for this user.
     The bot runs autonomously until stopped.
     """
     result = user_control.start_trading(user_id)
-    
+
     if not result.get('success'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result.get('error', 'Failed to start bot')
         )
-    
+
     logger.info(f"▶️ Started NIJA bot for user {user_id}")
-    
+
     return {
         "message": "NIJA bot started successfully",
         "user_id": user_id,
@@ -551,19 +551,19 @@ async def start_bot(user_id: str = Depends(get_current_user)):
 async def stop_bot(user_id: str = Depends(get_current_user)):
     """
     Stop NIJA trading bot for user.
-    
+
     This gracefully stops the bot, closing positions and canceling orders.
     """
     result = user_control.stop_trading(user_id)
-    
+
     if not result.get('success'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result.get('error', 'Failed to stop bot')
         )
-    
+
     logger.info(f"⏹️ Stopped NIJA bot for user {user_id}")
-    
+
     return {
         "message": "NIJA bot stopped successfully",
         "user_id": user_id,
@@ -575,11 +575,11 @@ async def stop_bot(user_id: str = Depends(get_current_user)):
 async def get_status(user_id: str = Depends(get_current_user)):
     """
     Get current NIJA bot status for user.
-    
+
     Returns real-time status without exposing strategy internals.
     """
     status = user_control.get_user_status(user_id)
-    
+
     return TradingStatus(
         user_id=user_id,
         trading_enabled=status.get('status') == 'running',
@@ -593,11 +593,11 @@ async def get_status(user_id: str = Depends(get_current_user)):
 async def get_positions(user_id: str = Depends(get_current_user)):
     """
     Get active trading positions.
-    
+
     Returns current positions without exposing entry/exit logic.
     """
     positions = user_control.get_user_positions(user_id)
-    
+
     # TODO: Convert to Position models
     return positions
 
@@ -606,11 +606,11 @@ async def get_positions(user_id: str = Depends(get_current_user)):
 async def get_pnl(user_id: str = Depends(get_current_user)):
     """
     Get profit & loss statistics.
-    
+
     Returns aggregated P&L without exposing strategy performance details.
     """
     stats = user_control.get_user_stats(user_id)
-    
+
     return Stats(
         user_id=user_id,
         total_trades=stats.get('total_trades', 0),
@@ -626,17 +626,17 @@ async def get_pnl(user_id: str = Depends(get_current_user)):
 async def get_config(user_id: str = Depends(get_current_user)):
     """
     Get user's trading configuration.
-    
+
     Returns user settings and limits without exposing strategy parameters.
     """
     permissions = permission_validator.get_user_permissions(user_id)
-    
+
     if not permissions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User configuration not found"
         )
-    
+
     return {
         "user_id": user_id,
         "max_position_size_usd": permissions.max_position_size_usd,
@@ -660,7 +660,7 @@ async def get_trade_history(
 ):
     """
     Get trade history with pagination and date filtering.
-    
+
     Args:
         limit: Number of trades to return (max 1000)
         offset: Offset for pagination
@@ -672,7 +672,7 @@ async def get_trade_history(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Limit cannot exceed 1000"
         )
-    
+
     # TODO: Implement actual trade history retrieval from database
     trades = user_control.get_user_trades(
         user_id=user_id,
@@ -681,7 +681,7 @@ async def get_trade_history(
         start_date=start_date,
         end_date=end_date
     )
-    
+
     return {
         "user_id": user_id,
         "trades": trades,
@@ -698,7 +698,7 @@ async def get_performance_metrics(
 ):
     """
     Get comprehensive performance metrics.
-    
+
     Args:
         period: Time period (7d, 30d, 90d, 1y, all)
     """
@@ -708,10 +708,10 @@ async def get_performance_metrics(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid period. Must be one of: {', '.join(valid_periods)}"
         )
-    
+
     # TODO: Calculate actual metrics from database
     metrics = user_control.get_performance_metrics(user_id, period)
-    
+
     return {
         "user_id": user_id,
         "period": period,
@@ -737,7 +737,7 @@ async def get_daily_pnl(
 ):
     """
     Get daily P&L breakdown.
-    
+
     Args:
         days: Number of days to retrieve (max 365)
     """
@@ -746,10 +746,10 @@ async def get_daily_pnl(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Days cannot exceed 365"
         )
-    
+
     # TODO: Get actual daily P&L from database
     daily_pnl = user_control.get_daily_pnl(user_id, days)
-    
+
     return {
         "user_id": user_id,
         "days": days,
@@ -764,7 +764,7 @@ async def get_market_breakdown(user_id: str = Depends(get_current_user)):
     """
     # TODO: Get actual market breakdown from database
     breakdown = user_control.get_market_breakdown(user_id)
-    
+
     return {
         "user_id": user_id,
         "markets": breakdown or []
@@ -783,13 +783,13 @@ class SubscriptionUpdate(BaseModel):
 async def get_subscription(user_id: str = Depends(get_current_user)):
     """Get current subscription details."""
     user_profile = user_db.get_user_by_id(user_id)
-    
+
     if not user_profile:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     # TODO: Integrate with actual billing system (Stripe)
     return {
         "user_id": user_id,
@@ -819,14 +819,14 @@ async def upgrade_subscription(
 ):
     """
     Upgrade/downgrade subscription tier.
-    
+
     This would integrate with Stripe in production.
     """
     # TODO: Implement Stripe payment flow
     # For now, just update the tier (placeholder)
-    
+
     logger.info(f"🔄 User {user_id} requesting tier change to: {data.tier}")
-    
+
     return {
         "message": "Subscription upgrade initiated",
         "user_id": user_id,
@@ -844,20 +844,20 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 class ConnectionManager:
     """Manage WebSocket connections for real-time updates."""
-    
+
     def __init__(self):
         self.active_connections: Dict[str, List[WebSocket]] = defaultdict(list)
-    
+
     async def connect(self, user_id: str, websocket: WebSocket):
         await websocket.accept()
         self.active_connections[user_id].append(websocket)
         logger.info(f"📡 WebSocket connected for user {user_id}")
-    
+
     def disconnect(self, user_id: str, websocket: WebSocket):
         if user_id in self.active_connections:
             self.active_connections[user_id].remove(websocket)
             logger.info(f"📡 WebSocket disconnected for user {user_id}")
-    
+
     async def send_personal_message(self, user_id: str, message: Dict[str, Any]):
         """Send message to specific user's connections."""
         for connection in self.active_connections.get(user_id, []):
@@ -873,7 +873,7 @@ manager = ConnectionManager()
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
     """
     WebSocket endpoint for real-time trading updates.
-    
+
     Sends real-time notifications for:
     - Trade executions
     - Position updates
@@ -885,7 +885,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         while True:
             # Keep connection alive and handle incoming messages
             data = await websocket.receive_text()
-            
+
             # Echo back for now (placeholder)
             await websocket.send_json({
                 "type": "ack",
@@ -904,7 +904,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 frontend_dir = os.path.join(os.path.dirname(__file__), 'frontend')
 if os.path.exists(frontend_dir):
     app.mount("/static", StaticFiles(directory=os.path.join(frontend_dir, 'static')), name="static")
-    
+
     @app.get("/")
     async def serve_frontend():
         """Serve frontend index.html"""
@@ -928,9 +928,9 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     port = int(os.getenv('PORT', 8000))
-    
+
     uvicorn.run(
         "fastapi_backend:app",
         host="0.0.0.0",

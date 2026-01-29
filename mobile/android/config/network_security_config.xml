@@ -7,7 +7,7 @@
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-    
+
     <!-- Development configuration (REMOVE for production) -->
     <!-- This allows HTTP connections to localhost for testing -->
     <!-- IMPORTANT: Use build flavors or build configurations to automatically
@@ -17,7 +17,7 @@
         <domain includeSubdomains="true">10.0.2.2</domain>
         <domain includeSubdomains="true">10.0.3.2</domain>
     </domain-config>
-    
+
     <!-- Production API domain configuration -->
     <!-- Update with your actual API domain -->
     <!--

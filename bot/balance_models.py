@@ -27,13 +27,13 @@ from enum import Enum
 class BalanceSnapshot:
     """
     Three-part balance model for accurate trading capital tracking.
-    
+
     This replaces the old single-value balance approach that caused
     NIJA to only trade with free cash instead of total equity.
-    
+
     Attributes:
         total_equity_usd: Total account value (available + locked in positions)
-        available_usd: Free cash available for new trades  
+        available_usd: Free cash available for new trades
         locked_in_positions_usd: Value currently locked in open positions
         timestamp: When this snapshot was taken
         broker_name: Which broker this balance is from
@@ -43,15 +43,15 @@ class BalanceSnapshot:
     locked_in_positions_usd: float
     timestamp: datetime = field(default_factory=datetime.now)
     broker_name: str = ""
-    
+
     # Validation constants
     BALANCE_TOLERANCE = 0.01  # Allow 1 cent difference for floating point errors
-    
+
     def __post_init__(self):
         """Validate balance invariants."""
         # Allow small floating point differences
         calculated_total = self.available_usd + self.locked_in_positions_usd
-        
+
         if abs(calculated_total - self.total_equity_usd) > self.BALANCE_TOLERANCE:
             # Log warning but don't fail - broker APIs can have slight discrepancies
             import logging
@@ -62,14 +62,14 @@ class BalanceSnapshot:
                 f"available+locked={calculated_total:.2f} "
                 f"(diff={abs(calculated_total - self.total_equity_usd):.2f})"
             )
-    
+
     @property
     def utilization_pct(self) -> float:
         """Calculate percentage of capital locked in positions."""
         if self.total_equity_usd <= 0:
             return 0.0
         return (self.locked_in_positions_usd / self.total_equity_usd) * 100.0
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary for serialization."""
         return {
@@ -80,7 +80,7 @@ class BalanceSnapshot:
             'broker_name': self.broker_name,
             'utilization_pct': self.utilization_pct
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict) -> 'BalanceSnapshot':
         """Create from dictionary."""
@@ -97,10 +97,10 @@ class BalanceSnapshot:
 class UserBrokerState:
     """
     FIX 5: User Account Visibility
-    
+
     Tracks the complete state of a user's account on a specific broker.
     This enables NIJA to properly snapshot and display user balances.
-    
+
     Attributes:
         broker: Broker name (coinbase, kraken, alpaca)
         user_id: User identifier
@@ -115,22 +115,22 @@ class UserBrokerState:
     open_positions: List[Dict] = field(default_factory=list)
     last_updated: datetime = field(default_factory=datetime.now)
     connected: bool = True
-    
+
     @property
     def total_equity(self) -> float:
         """Get total equity from balance snapshot."""
         return self.balance.total_equity_usd
-    
+
     @property
     def available_cash(self) -> float:
         """Get available cash from balance snapshot."""
         return self.balance.available_usd
-    
+
     @property
     def position_count(self) -> int:
         """Number of open positions."""
         return len(self.open_positions)
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary for serialization."""
         return {
@@ -142,7 +142,7 @@ class UserBrokerState:
             'connected': self.connected,
             'position_count': self.position_count
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict) -> 'UserBrokerState':
         """Create from dictionary."""
@@ -164,18 +164,18 @@ def create_balance_snapshot_from_broker_response(
 ) -> BalanceSnapshot:
     """
     Helper function to create BalanceSnapshot from broker API responses.
-    
+
     Data sources by broker:
     - Coinbase: accounts + open positions
-    - Kraken: Balance + OpenPositions  
+    - Kraken: Balance + OpenPositions
     - Alpaca: equity vs buying_power
-    
+
     Args:
         broker_name: Name of the broker
         total_balance: Total account value (equity)
         available_balance: Free cash available
         positions_value: Value locked in positions (if not already calculated)
-        
+
     Returns:
         BalanceSnapshot with all three values populated
     """
@@ -186,7 +186,7 @@ def create_balance_snapshot_from_broker_response(
         locked_in_positions = max(0.0, locked_in_positions)
     else:
         locked_in_positions = positions_value
-    
+
     return BalanceSnapshot(
         total_equity_usd=total_balance,
         available_usd=available_balance,

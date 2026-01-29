@@ -1,7 +1,7 @@
 # NIJA Profit-Taking Visibility Enhancement
 
-**Date**: January 26, 2026  
-**Issue**: User asking "Is NIJA making and taking a profit?"  
+**Date**: January 26, 2026
+**Issue**: User asking "Is NIJA making and taking a profit?"
 **Status**: ✅ ENHANCED
 
 ---
@@ -221,8 +221,8 @@ When deployed, the bot will now show:
 
 ## Summary
 
-**Problem**: Insufficient visibility into profit-taking status  
-**Solution**: Comprehensive logging at multiple levels  
+**Problem**: Insufficient visibility into profit-taking status
+**Solution**: Comprehensive logging at multiple levels
 **Result**: Crystal clear visibility into when and how NIJA is taking profits
 
 **Your Action**: None required - logs will automatically show enhanced visibility on next deployment
@@ -231,6 +231,6 @@ When deployed, the bot will now show:
 
 ---
 
-**Last Updated**: January 26, 2026  
-**Version**: NIJA v7.1 + Enhanced Profit-Taking Visibility  
+**Last Updated**: January 26, 2026
+**Version**: NIJA v7.1 + Enhanced Profit-Taking Visibility
 **Status**: ✅ PRODUCTION READY

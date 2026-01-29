@@ -285,7 +285,7 @@ if "john_doe" in controls.daily_loss_trackers:
 if "john_doe" in controls.user_error_counts:
     error_count = controls.user_error_counts["john_doe"]
     print(f"API errors today: {error_count}/{controls.ERROR_THRESHOLD}")
-    
+
     if error_count >= controls.ERROR_THRESHOLD:
         print("⚠️ User auto-disabled due to errors")
 ```
@@ -319,7 +319,7 @@ for user_data in users_to_add:
         email=user_data['email'],
         subscription_tier=user_data['tier']
     )
-    
+
     # Set permissions
     perms = UserPermissions(
         user_id=user_data['user_id'],
@@ -329,7 +329,7 @@ for user_data in users_to_add:
         trade_only=True
     )
     validator.register_user(perms)
-    
+
     print(f"✅ Added user: {user_data['user_id']}")
 ```
 
@@ -504,6 +504,6 @@ For user management questions:
 
 ---
 
-**Version**: 1.0  
-**Last Updated**: January 8, 2026  
+**Version**: 1.0
+**Last Updated**: January 8, 2026
 **Status**: ✅ User Management System Operational

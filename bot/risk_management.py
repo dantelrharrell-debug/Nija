@@ -19,13 +19,13 @@ class RiskManager:
     """
     Advanced risk management for NIJA Apex Strategy v7.1.
     """
-    
+
     def __init__(self, account_balance, max_risk_per_trade=0.02,
                  max_daily_loss=0.025, max_total_exposure=0.30,
                  max_drawdown=0.10):
         """
         Initialize risk manager.
-        
+
         Args:
             account_balance: Current account balance in USD
             max_risk_per_trade: Maximum risk per trade as decimal (default: 2%)
@@ -39,53 +39,53 @@ class RiskManager:
         self.max_daily_loss = max_daily_loss
         self.max_total_exposure = max_total_exposure
         self.max_drawdown = max_drawdown
-        
+
         # Track daily performance
         self.daily_pnl = 0
         self.daily_reset_date = datetime.utcnow().date()
-        
+
         # Track open positions
         self.open_positions = []  # List of position dicts
         self.total_exposure = 0
-        
+
         # Drawdown tracking
         self.peak_balance = account_balance
         self.current_drawdown = 0
-    
+
     def update_balance(self, new_balance):
         """Update account balance and recalculate drawdown."""
         self.account_balance = new_balance
-        
+
         # Update peak balance
         if new_balance > self.peak_balance:
             self.peak_balance = new_balance
-        
+
         # Calculate current drawdown
         if self.peak_balance > 0:
             self.current_drawdown = (self.peak_balance - new_balance) / self.peak_balance
         else:
             self.current_drawdown = 0
-        
+
         # Reset daily PnL if new day
         today = datetime.utcnow().date()
         if today != self.daily_reset_date:
             self.daily_pnl = 0
             self.daily_reset_date = today
-    
+
     def calculate_position_size_adx_weighted(self, signal_strength, adx_value,
                                              base_size_pct=0.03, max_size_pct=0.10):
         """
         Calculate position size with ADX weighting.
-        
+
         Strong trends (high ADX) get larger positions.
         Weak trends (low ADX) get smaller positions.
-        
+
         Args:
             signal_strength: Signal quality score (0-5)
             adx_value: Current ADX value
             base_size_pct: Base position size percentage (default: 3%)
             max_size_pct: Maximum position size percentage (default: 10%)
-        
+
         Returns:
             dict: {
                 'position_size_usd': float,
@@ -104,7 +104,7 @@ class RiskManager:
             adx_multiplier = 0.5 + (adx_value - 20) * 0.025  # Linear scale 0.5 to 1.0
         else:
             adx_multiplier = 1.0 + min((adx_value - 40) * 0.0125, 0.5)  # Linear scale 1.0 to 1.5
-        
+
         # Signal strength multiplier (0.4x to 1.2x based on signal score)
         # Score 1-2: 0.4x to 0.6x
         # Score 3: 0.8x
@@ -118,33 +118,33 @@ class RiskManager:
             5: 1.2
         }
         signal_multiplier = signal_multipliers.get(signal_strength, 0.6)
-        
+
         # Calculate final position size
         position_size_pct = base_size_pct * adx_multiplier * signal_multiplier
         position_size_pct = min(position_size_pct, max_size_pct)
         position_size_pct = max(position_size_pct, 0.01)  # Minimum 1%
-        
+
         position_size_usd = self.account_balance * position_size_pct
-        
+
         return {
             'position_size_usd': position_size_usd,
             'position_size_pct': position_size_pct,
             'adx_multiplier': adx_multiplier,
             'signal_multiplier': signal_multiplier
         }
-    
+
     def calculate_stop_loss_atr(self, entry_price, atr_value, direction='long',
                                 atr_multiplier=1.5, min_stop_pct=0.003):
         """
         Calculate stop-loss with ATR buffer.
-        
+
         Args:
             entry_price: Entry price
             atr_value: Current ATR value
             direction: 'long' or 'short'
             atr_multiplier: ATR multiplier for stop distance (default: 1.5)
             min_stop_pct: Minimum stop-loss percentage (default: 0.3%)
-        
+
         Returns:
             dict: {
                 'stop_price': float,
@@ -154,41 +154,41 @@ class RiskManager:
         """
         # Calculate ATR-based stop distance
         atr_distance = atr_value * atr_multiplier
-        
+
         # Ensure minimum stop distance
         min_stop_distance = entry_price * min_stop_pct
         stop_distance = max(atr_distance, min_stop_distance)
-        
+
         # Calculate stop price
         if direction.lower() == 'long':
             stop_price = entry_price - stop_distance
         else:  # short
             stop_price = entry_price + stop_distance
-        
+
         stop_distance_pct = stop_distance / entry_price if entry_price > 0 else 0
-        
+
         return {
             'stop_price': stop_price,
             'stop_distance': stop_distance,
             'stop_distance_pct': stop_distance_pct
         }
-    
+
     def calculate_tiered_take_profits(self, entry_price, direction='long',
                                      tp1_pct=0.008, tp2_pct=0.015, tp3_pct=0.025):
         """
         Calculate tiered take-profit levels.
-        
+
         TP1: +0.8% (exit 50% of position, activate trailing stop)
         TP2: +1.5% (exit 30% of position)
         TP3: +2.5% (exit remaining 20%, runner continues with trail)
-        
+
         Args:
             entry_price: Entry price
             direction: 'long' or 'short'
             tp1_pct: TP1 percentage (default: 0.8%)
             tp2_pct: TP2 percentage (default: 1.5%)
             tp3_pct: TP3 percentage (default: 2.5%)
-        
+
         Returns:
             dict: {
                 'tp1': {'price': float, 'pct': float, 'exit_size': 0.50},
@@ -204,7 +204,7 @@ class RiskManager:
             tp1_price = entry_price * (1 - tp1_pct)
             tp2_price = entry_price * (1 - tp2_pct)
             tp3_price = entry_price * (1 - tp3_pct)
-        
+
         return {
             'tp1': {
                 'price': tp1_price,
@@ -225,14 +225,14 @@ class RiskManager:
                 'description': 'Final exit or continue trailing'
             }
         }
-    
+
     def calculate_trailing_stop(self, entry_price, current_price, highest_price,
                                direction='long', trail_pct=0.005, min_trail_pct=0.003):
         """
         Calculate trailing stop price.
-        
+
         Trailing stop activates after TP1 and trails price at specified distance.
-        
+
         Args:
             entry_price: Original entry price
             current_price: Current market price
@@ -240,7 +240,7 @@ class RiskManager:
             direction: 'long' or 'short'
             trail_pct: Trailing distance percentage (default: 0.5%)
             min_trail_pct: Minimum trailing distance (default: 0.3%)
-        
+
         Returns:
             dict: {
                 'trail_price': float,
@@ -253,31 +253,31 @@ class RiskManager:
             # Trail below highest price
             trail_distance = highest_price * max(trail_pct, min_trail_pct)
             trail_price = highest_price - trail_distance
-            
+
             # Calculate locked profit
             locked_profit_pct = (trail_price - entry_price) / entry_price if entry_price > 0 else 0
         else:  # short
             # Trail above lowest price
             trail_distance = highest_price * max(trail_pct, min_trail_pct)
             trail_price = highest_price + trail_distance
-            
+
             # Calculate locked profit
             locked_profit_pct = (entry_price - trail_price) / entry_price if entry_price > 0 else 0
-        
+
         return {
             'trail_price': trail_price,
             'trail_distance': trail_distance,
             'trail_distance_pct': trail_pct,
             'locked_profit_pct': locked_profit_pct
         }
-    
+
     def can_open_position(self, position_size_usd):
         """
         Check if new position can be opened based on risk limits.
-        
+
         Args:
             position_size_usd: Proposed position size in USD
-        
+
         Returns:
             dict: {
                 'can_open': bool,
@@ -299,7 +299,7 @@ class RiskManager:
                 'daily_pnl': self.daily_pnl,
                 'current_drawdown': self.current_drawdown
             }
-        
+
         # Check max drawdown
         if self.current_drawdown >= self.max_drawdown:
             return {
@@ -310,11 +310,11 @@ class RiskManager:
                 'daily_pnl': self.daily_pnl,
                 'current_drawdown': self.current_drawdown
             }
-        
+
         # Check total exposure limit
         new_exposure = self.total_exposure + position_size_usd
         exposure_pct = new_exposure / self.account_balance if self.account_balance > 0 else 0
-        
+
         if exposure_pct > self.max_total_exposure:
             return {
                 'can_open': False,
@@ -324,7 +324,7 @@ class RiskManager:
                 'daily_pnl': self.daily_pnl,
                 'current_drawdown': self.current_drawdown
             }
-        
+
         return {
             'can_open': True,
             'reason': 'All risk checks passed',
@@ -333,11 +333,11 @@ class RiskManager:
             'daily_pnl': self.daily_pnl,
             'current_drawdown': self.current_drawdown
         }
-    
+
     def add_position(self, symbol, entry_price, size_usd, direction, stop_price):
         """
         Add a new open position to tracking.
-        
+
         Args:
             symbol: Trading symbol
             entry_price: Entry price
@@ -358,14 +358,14 @@ class RiskManager:
             'tp3_hit': False,
             'remaining_size': 1.0  # Percentage remaining
         }
-        
+
         self.open_positions.append(position)
         self.total_exposure += size_usd
-    
+
     def remove_position(self, symbol):
         """
         Remove a position from tracking.
-        
+
         Args:
             symbol: Trading symbol
         """
@@ -374,11 +374,11 @@ class RiskManager:
                 self.total_exposure -= pos['size_usd'] * pos['remaining_size']
                 self.open_positions.pop(i)
                 break
-    
+
     def update_position_pnl(self, symbol, current_price, pnl_usd):
         """
         Update position PnL and daily PnL tracking.
-        
+
         Args:
             symbol: Trading symbol
             current_price: Current market price
@@ -392,11 +392,11 @@ class RiskManager:
                 else:
                     pos['highest_price'] = min(pos['highest_price'], current_price)
                 break
-    
+
     def record_closed_trade(self, pnl_usd):
         """
         Record PnL from a closed trade.
-        
+
         Args:
             pnl_usd: Trade PnL in USD
         """

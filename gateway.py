@@ -73,10 +73,10 @@ def verify_password(password: str, password_hash: str) -> bool:
 def generate_jwt_token(user_id: str) -> str:
     """
     Generate JWT token for authenticated user.
-    
+
     Args:
         user_id: User identifier
-        
+
     Returns:
         str: JWT token
     """
@@ -91,10 +91,10 @@ def generate_jwt_token(user_id: str) -> str:
 def decode_jwt_token(token: str) -> Optional[Dict]:
     """
     Decode and validate JWT token.
-    
+
     Args:
         token: JWT token string
-        
+
     Returns:
         dict: Decoded payload or None if invalid
     """
@@ -112,32 +112,32 @@ def decode_jwt_token(token: str) -> Optional[Dict]:
 def require_auth(f):
     """
     Decorator to require JWT authentication for endpoints.
-    
+
     Expects Authorization header: "Bearer <token>"
     Adds user_id to request context.
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
         auth_header = request.headers.get('Authorization')
-        
+
         if not auth_header:
             return jsonify({'error': 'Missing authorization header'}), 401
-        
+
         parts = auth_header.split()
         if len(parts) != 2 or parts[0].lower() != 'bearer':
             return jsonify({'error': 'Invalid authorization header format. Use: Bearer <token>'}), 401
-        
+
         token = parts[1]
         payload = decode_jwt_token(token)
-        
+
         if not payload:
             return jsonify({'error': 'Invalid or expired token'}), 401
-        
+
         # Add user_id to request context
         request.user_id = payload['user_id']
-        
+
         return f(*args, **kwargs)
-    
+
     return decorated_function
 
 
@@ -222,7 +222,7 @@ def get_info():
 def register():
     """
     Register a new user.
-    
+
     Request body:
         {
             "email": "user@example.com",
@@ -231,31 +231,31 @@ def register():
         }
     """
     data = request.get_json()
-    
+
     if not data or 'email' not in data or 'password' not in data:
         return jsonify({'error': 'Email and password are required'}), 400
-    
+
     email = data['email'].lower().strip()
     password = data['password']
     subscription_tier = data.get('subscription_tier', 'basic')
-    
+
     # Validate email format (basic check)
     if '@' not in email or '.' not in email:
         return jsonify({'error': 'Invalid email format'}), 400
-    
+
     # Check if user already exists
     if email in user_credentials:
         return jsonify({'error': 'User already exists'}), 409
-    
+
     # Create user ID
     user_id = f"user_{secrets.token_hex(8)}"
-    
+
     # Store credentials
     user_credentials[email] = {
         'password_hash': hash_password(password),
         'user_id': user_id
     }
-    
+
     # Create user profile
     try:
         user_profile = user_manager.create_user(
@@ -263,14 +263,14 @@ def register():
             email=email,
             subscription_tier=subscription_tier
         )
-        
+
         # Register default permissions based on tier
         max_position_size = {
             'basic': 100.0,
             'pro': 1000.0,
             'enterprise': 10000.0
         }.get(subscription_tier, 100.0)
-        
+
         permissions = UserPermissions(
             user_id=user_id,
             max_position_size_usd=max_position_size,
@@ -278,12 +278,12 @@ def register():
             max_positions=3 if subscription_tier == 'basic' else 10
         )
         permission_validator.register_user(permissions)
-        
+
         # Generate token
         token = generate_jwt_token(user_id)
-        
+
         logger.info(f"✅ New user registered: {email} (ID: {user_id}, Tier: {subscription_tier})")
-        
+
         return jsonify({
             'message': 'User registered successfully',
             'user_id': user_id,
@@ -291,7 +291,7 @@ def register():
             'subscription_tier': subscription_tier,
             'token': token
         }), 201
-        
+
     except Exception as e:
         logger.error(f"❌ Failed to register user: {e}")
         return jsonify({'error': 'Registration failed'}), 500
@@ -301,7 +301,7 @@ def register():
 def login():
     """
     Login user and return JWT token.
-    
+
     Request body:
         {
             "email": "user@example.com",
@@ -309,35 +309,35 @@ def login():
         }
     """
     data = request.get_json()
-    
+
     if not data or 'email' not in data or 'password' not in data:
         return jsonify({'error': 'Email and password are required'}), 400
-    
+
     email = data['email'].lower().strip()
     password = data['password']
-    
+
     # Check credentials
     if email not in user_credentials:
         return jsonify({'error': 'Invalid credentials'}), 401
-    
+
     user_creds = user_credentials[email]
-    
+
     if not verify_password(password, user_creds['password_hash']):
         return jsonify({'error': 'Invalid credentials'}), 401
-    
+
     user_id = user_creds['user_id']
-    
+
     # Get user profile
     user_profile = user_manager.get_user(user_id)
-    
+
     if not user_profile or not user_profile.get('enabled', True):
         return jsonify({'error': 'Account disabled'}), 403
-    
+
     # Generate token
     token = generate_jwt_token(user_id)
-    
+
     logger.info(f"✅ User logged in: {email} (ID: {user_id})")
-    
+
     return jsonify({
         'message': 'Login successful',
         'user_id': user_id,
@@ -357,13 +357,13 @@ def get_user_profile():
     """Get user profile (requires authentication)."""
     user_id = request.user_id
     user_profile = user_manager.get_user(user_id)
-    
+
     if not user_profile:
         return jsonify({'error': 'User not found'}), 404
-    
+
     # Get user permissions
     permissions = permission_validator.get_user_permissions(user_id)
-    
+
     return jsonify({
         'user_id': user_id,
         'email': user_profile['email'],
@@ -380,29 +380,29 @@ def get_user_profile():
 def user_settings():
     """Get or update user settings."""
     user_id = request.user_id
-    
+
     if request.method == 'GET':
         user_profile = user_manager.get_user(user_id)
         if not user_profile:
             return jsonify({'error': 'User not found'}), 404
-        
+
         return jsonify({
             'subscription_tier': user_profile.get('subscription_tier', 'basic'),
             'enabled': user_profile.get('enabled', True)
         })
-    
+
     elif request.method == 'PUT':
         data = request.get_json()
-        
+
         # Only allow updating certain fields
         allowed_updates = {}
         if 'subscription_tier' in data:
             allowed_updates['subscription_tier'] = data['subscription_tier']
-        
+
         if allowed_updates:
             user_manager.update_user(user_id, allowed_updates)
             logger.info(f"User {user_id} updated settings: {allowed_updates}")
-        
+
         return jsonify({'message': 'Settings updated successfully'})
 
 
@@ -416,7 +416,7 @@ def list_brokers():
     """List all configured brokers for user."""
     user_id = request.user_id
     brokers = api_key_manager.list_user_brokers(user_id)
-    
+
     return jsonify({
         'user_id': user_id,
         'brokers': brokers,
@@ -429,29 +429,29 @@ def list_brokers():
 def manage_broker_keys(broker_name: str):
     """
     Add or remove broker API keys.
-    
+
     SECURITY NOTE: API keys are encrypted and stored securely.
     They are NEVER exposed to the public API or logs.
     """
     user_id = request.user_id
-    
+
     # Validate broker name
     supported_brokers = ['coinbase', 'kraken', 'binance', 'okx', 'alpaca']
     if broker_name.lower() not in supported_brokers:
         return jsonify({
             'error': f'Unsupported broker. Supported: {", ".join(supported_brokers)}'
         }), 400
-    
+
     if request.method == 'POST':
         data = request.get_json()
-        
+
         if not data or 'api_key' not in data or 'api_secret' not in data:
             return jsonify({'error': 'api_key and api_secret are required'}), 400
-        
+
         api_key = data['api_key']
         api_secret = data['api_secret']
         additional_params = data.get('additional_params', {})
-        
+
         # Store encrypted credentials
         api_key_manager.store_user_api_key(
             user_id=user_id,
@@ -460,17 +460,17 @@ def manage_broker_keys(broker_name: str):
             api_secret=api_secret,
             additional_params=additional_params
         )
-        
+
         logger.info(f"✅ User {user_id} added {broker_name} API credentials")
-        
+
         return jsonify({
             'message': f'{broker_name} API credentials added successfully',
             'broker': broker_name
         }), 201
-    
+
     elif request.method == 'DELETE':
         success = api_key_manager.delete_user_api_key(user_id, broker_name.lower())
-        
+
         if success:
             logger.info(f"✅ User {user_id} removed {broker_name} API credentials")
             return jsonify({
@@ -491,10 +491,10 @@ def manage_broker_keys(broker_name: str):
 def trading_control():
     """
     Control user's trading engine (start/stop).
-    
+
     This endpoint sends commands to Layer 2 (Execution Engine).
     It does NOT expose strategy logic (Layer 1).
-    
+
     Request body:
         {
             "action": "start" | "stop" | "pause"
@@ -502,15 +502,15 @@ def trading_control():
     """
     user_id = request.user_id
     data = request.get_json()
-    
+
     if not data or 'action' not in data:
         return jsonify({'error': 'Action is required (start/stop/pause)'}), 400
-    
+
     action = data['action'].lower()
-    
+
     if action not in ['start', 'stop', 'pause']:
         return jsonify({'error': 'Invalid action. Use: start, stop, or pause'}), 400
-    
+
     # Send command to User Control Backend (Layer 2)
     if action == 'start':
         result = user_control.start_trading(user_id)
@@ -520,9 +520,9 @@ def trading_control():
         result = user_control.pause_trading(user_id)
     else:
         result = {'success': False, 'error': 'Invalid action'}
-    
+
     logger.info(f"🎮 User {user_id} trading control: {action} -> {result}")
-    
+
     if result.get('success'):
         return jsonify({
             'message': result.get('message', f'Trading {action} successful'),
@@ -543,15 +543,15 @@ def trading_control():
 def get_trading_status():
     """
     Get current trading status for user.
-    
+
     Returns status from Layer 2 (Execution Engine) without exposing
     strategy logic from Layer 1 (Core Brain).
     """
     user_id = request.user_id
-    
+
     # Query User Control Backend for user's trading status
     status = user_control.get_user_status(user_id)
-    
+
     # Format response
     response = {
         'user_id': user_id,
@@ -562,7 +562,7 @@ def get_trading_status():
         'stats': status.get('stats', {}),
         'layer': 'Layer 2 - Execution Engine'
     }
-    
+
     return jsonify(response)
 
 
@@ -571,15 +571,15 @@ def get_trading_status():
 def get_positions():
     """
     Get active trading positions for user.
-    
+
     Returns position data from Layer 2 (Execution Engine).
     Does NOT expose entry/exit logic from Layer 1 (Core Brain).
     """
     user_id = request.user_id
-    
+
     # Query User Control Backend for user's active positions
     positions = user_control.get_user_positions(user_id)
-    
+
     return jsonify({
         'user_id': user_id,
         'positions': positions,
@@ -592,19 +592,19 @@ def get_positions():
 def get_trade_history():
     """
     Get trade history for user.
-    
+
     Returns historical trade data from Layer 2 (Execution Engine).
     Does NOT expose strategy signals from Layer 1 (Core Brain).
     """
     user_id = request.user_id
-    
+
     # Optional query parameters
     limit = request.args.get('limit', 50, type=int)
     offset = request.args.get('offset', 0, type=int)
-    
+
     # TODO: Query Layer 2 for user's trade history
     trades = []
-    
+
     return jsonify({
         'user_id': user_id,
         'trades': trades,
@@ -623,15 +623,15 @@ def get_trade_history():
 def get_user_stats():
     """
     Get user trading statistics.
-    
+
     Returns aggregated statistics from Layer 2 (Execution Engine).
     Does NOT expose strategy performance metrics from Layer 1 (Core Brain).
     """
     user_id = request.user_id
-    
+
     # Query User Control Backend for user statistics
     stats = user_control.get_user_stats(user_id)
-    
+
     # Add additional calculated fields
     if 'total_pnl' not in stats:
         stats['total_pnl'] = 0.0
@@ -641,7 +641,7 @@ def get_user_stats():
         stats['total_profit'] = 0.0
     if 'total_loss' not in stats:
         stats['total_loss'] = 0.0
-    
+
     return jsonify(stats)
 
 
@@ -669,7 +669,7 @@ def internal_error(error):
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
-    
+
     logger.info("=" * 60)
     logger.info("🚀 Starting NIJA API Gateway (Layer 3 - Public API)")
     logger.info("=" * 60)
@@ -683,7 +683,7 @@ if __name__ == '__main__':
     logger.info("  Layer 2: Execution Engine (Isolated per user)")
     logger.info("  Layer 3: Public API Gateway ← YOU ARE HERE")
     logger.info("=" * 60)
-    
+
     app.run(
         host='0.0.0.0',
         port=port,

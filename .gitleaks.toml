@@ -111,33 +111,33 @@ paths = [
   '''.env.baller_tier''',
   '''.env.small_account_preset''',
   '''.env.profit_optimized''',
-  
+
   # Documentation
   '''.*\.md$''',
   '''.*\.txt$''',
-  
+
   # Archive
   '''archive/.*''',
-  
+
   # Git
   '''.git/.*''',
-  
+
   # Dependencies
   '''node_modules/.*''',
   '''venv/.*''',
   '''.venv/.*''',
-  
+
   # Frontend/Mobile
   '''frontend/.*''',
   '''mobile/.*''',
-  
+
   # Build artifacts
   '''build/.*''',
   '''dist/.*''',
-  
+
   # Test files
   '''test_.*\.py''',
-  
+
   # Baseline files
   '''.secrets.baseline''',
   '''.gitleaks.toml''',

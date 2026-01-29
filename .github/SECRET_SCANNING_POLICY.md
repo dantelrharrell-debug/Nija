@@ -4,8 +4,8 @@
 
 This document defines the centralized secret scanning rules and enforcement mechanisms for NIJA and related projects.
 
-**Last Updated**: January 29, 2026  
-**Version**: 1.0  
+**Last Updated**: January 29, 2026
+**Version**: 1.0
 **Scope**: All NIJA repositories and projects
 
 ## Policy Statement
@@ -104,7 +104,7 @@ Custom rules for:
 - Archive directory
 - Dependencies (`node_modules/`, `venv/`)
 
-**Location**: Root of repository  
+**Location**: Root of repository
 **Usage**: Shared across all NIJA projects
 
 ### detect-secrets Baseline (`.secrets.baseline`)
@@ -115,7 +115,7 @@ Custom rules for:
 - Updated when legitimate patterns are flagged
 - Reviewed and approved before baseline update
 
-**Location**: Root of repository  
+**Location**: Root of repository
 **Update**: `detect-secrets scan > .secrets.baseline`
 
 ### Bandit Configuration (`.bandit.yml`)
@@ -127,7 +127,7 @@ Custom rules for:
 - Excludes test files and archives
 - Medium severity and confidence threshold
 
-**Location**: Root of repository  
+**Location**: Root of repository
 **Usage**: Pre-commit and CI
 
 ## Allowed Practices
