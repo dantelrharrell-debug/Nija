@@ -91,7 +91,8 @@ class AdaptiveRiskManager:
     
     def __init__(self, min_position_pct=0.02, max_position_pct=0.08,
                  max_total_exposure=0.60, use_exchange_profiles=False,
-                 pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None):
+                 pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None,
+                 max_portfolio_volatility=0.04):
         """
         Initialize Adaptive Risk Manager - OPTIMIZED FOR HIGH WIN RATE v7.5
         Updated Jan 29, 2026: Optimized for better risk management and higher win rate
@@ -104,6 +105,7 @@ class AdaptiveRiskManager:
             pro_mode: If True, enables PRO MODE with position rotation (default False)
             min_free_reserve_pct: Minimum free balance % to maintain in PRO MODE (default 15%)
             tier_lock: If set, locks risk to specific tier limits (e.g., 'SAVER', 'INVESTOR')
+            max_portfolio_volatility: Maximum portfolio volatility (default 4% = 0.04) - CRITICAL for aggressive sizing
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct
@@ -111,6 +113,7 @@ class AdaptiveRiskManager:
         self.pro_mode = pro_mode
         self.min_free_reserve_pct = min_free_reserve_pct
         self.tier_lock = tier_lock  # NEW: Tier locking for PRO MODE
+        self.max_portfolio_volatility = max_portfolio_volatility  # NEW: Volatility exposure cap
         
         # Track recent trades for streak analysis
         self.recent_trades: List[Dict] = []
@@ -118,6 +121,10 @@ class AdaptiveRiskManager:
         
         # Current exposure tracking
         self.current_exposure = 0.0
+        
+        # Portfolio volatility tracking (NEW - for volatility exposure cap)
+        self.current_portfolio_volatility = 0.0
+        self.open_positions_volatility: Dict[str, float] = {}  # position_id -> volatility
         
         # Trade frequency tracking (for fee awareness)
         self.trades_today = 0
@@ -724,6 +731,72 @@ class AdaptiveRiskManager:
             self.current_exposure = max(0, self.current_exposure - position_pct)
         
         logger.debug(f"Exposure updated: {self.current_exposure*100:.1f}% (max: {self.max_total_exposure*100:.1f}%)")
+    
+    def add_position_volatility(self, position_id: str, position_size_pct: float, 
+                               volatility_pct: float) -> None:
+        """
+        Track volatility contribution of a new position
+        
+        Since we're increasing position size in trends (1.4x multiplier),
+        we need to cap total portfolio volatility to prevent over-leveraging.
+        
+        Args:
+            position_id: Unique position identifier
+            position_size_pct: Position size as % of portfolio
+            volatility_pct: Market volatility for this position (e.g., ATR/price)
+        """
+        # Calculate volatility contribution: position_size × volatility
+        volatility_contribution = position_size_pct * volatility_pct
+        self.open_positions_volatility[position_id] = volatility_contribution
+        
+        # Update total portfolio volatility
+        self.current_portfolio_volatility = sum(self.open_positions_volatility.values())
+        
+        logger.debug(f"Volatility tracking: {position_id} → {volatility_contribution*100:.2f}%")
+        logger.debug(f"Portfolio volatility: {self.current_portfolio_volatility*100:.2f}% "
+                    f"(max: {self.max_portfolio_volatility*100:.1f}%)")
+    
+    def remove_position_volatility(self, position_id: str) -> None:
+        """
+        Remove volatility contribution when position is closed
+        
+        Args:
+            position_id: Unique position identifier
+        """
+        if position_id in self.open_positions_volatility:
+            removed_vol = self.open_positions_volatility.pop(position_id)
+            self.current_portfolio_volatility = sum(self.open_positions_volatility.values())
+            logger.debug(f"Removed volatility: {position_id} → {removed_vol*100:.2f}%")
+            logger.debug(f"Portfolio volatility: {self.current_portfolio_volatility*100:.2f}%")
+    
+    def check_volatility_exposure_cap(self, new_position_size_pct: float, 
+                                      volatility_pct: float) -> Tuple[bool, str]:
+        """
+        Check if adding a new position would exceed portfolio volatility cap
+        
+        CRITICAL for aggressive position sizing (1.4x in trends)
+        Max portfolio volatility: 3% - 5% (default 4%)
+        
+        Args:
+            new_position_size_pct: Proposed position size as % of portfolio
+            volatility_pct: Market volatility for proposed position
+        
+        Returns:
+            Tuple of (can_add, reason)
+        """
+        # Calculate what the new volatility contribution would be
+        new_volatility_contribution = new_position_size_pct * volatility_pct
+        projected_portfolio_volatility = self.current_portfolio_volatility + new_volatility_contribution
+        
+        # Check against cap
+        if projected_portfolio_volatility > self.max_portfolio_volatility:
+            reason = (f"Portfolio volatility cap exceeded: "
+                     f"{projected_portfolio_volatility*100:.2f}% > "
+                     f"{self.max_portfolio_volatility*100:.1f}% max")
+            logger.warning(f"🛑 {reason}")
+            return False, reason
+        
+        return True, "Within volatility cap"
     
     def calculate_stop_loss(self, entry_price: float, side: str, 
                             swing_level: float, atr: float, bb_width: float = None) -> float:
