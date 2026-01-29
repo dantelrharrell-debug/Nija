@@ -211,17 +211,6 @@ TAKE_PROFIT = {
     'default_target': 0.030,  # 3.0% default if stages not met (OPTIMIZED: was 2.0%)
     'description': 'Optimized for aggressive profit-taking and capital efficiency',
 }
-            'profit_pct': 0.030,  # 3.0% profit
-            'profit_r': 5.0,  # 5.0R
-            'exit_percentage': 0.50,  # Exit 50% (100% total exited)
-            'action': 'final_exit_or_trail',
-        },
-    ],
-    'use_multi_stage': True,
-    'target_avg_win': 0.012,  # Target 1.2% average win (elite performance)
-    'target_risk_reward': 2.0,  # Target 1:2 R:R (elite range 1:1.8 - 1:2.5)
-    'description': 'Stepped exits optimized for 1:1.8 - 1:2.5 risk:reward ratio',
-}
 
 TRAILING_STOP = {
     'activation_r': 1.5,  # OPTIMIZED: Activate after 1.5R profit (earlier protection)
