@@ -698,20 +698,22 @@ class StrategyPortfolioManager:
             
             # Apply correlation adjustment if provided
             if correlation_adjusted_weights:
-                corr_factor = correlation_adjusted_weights.get(name, weight) / base_weights.get(name, 1.0)
-                weight *= corr_factor
+                weight_adjustment_ratio = correlation_adjusted_weights.get(name, weight) / base_weights.get(name, 1.0)
+                weight *= weight_adjustment_ratio
             
             final_allocations[name] = weight
         
         # Normalize to total capital
         total_weight = sum(final_allocations.values())
         if total_weight > 0:
-            final_allocations = {
+            allocations = {
                 name: (weight / total_weight) * self.total_capital
                 for name, weight in final_allocations.items()
             }
         
         return final_allocations
+    
+    def save_state(self) -> None:
         """Save portfolio state to disk"""
         state_file = self.data_dir / "portfolio_state.json"
         

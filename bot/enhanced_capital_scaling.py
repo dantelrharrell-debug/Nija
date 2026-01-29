@@ -163,9 +163,6 @@ class EnhancedCapitalScaler:
             return MarketCondition.DRAWDOWN_SEVERE
         elif dd > 3.0:
             return MarketCondition.DRAWDOWN_MODERATE
-        elif dd > 4.0:
-            # Drawdown > 4% but < 6%
-            return MarketCondition.DRAWDOWN_MODERATE
         
         # Strong trend + low drawdown: Aggressive
         if is_trending and dd < 2.0:

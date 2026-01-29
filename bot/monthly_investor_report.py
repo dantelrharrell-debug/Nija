@@ -96,7 +96,7 @@ class MonthlyInvestorReportGenerator:
         current_metrics = self.dashboard.get_current_metrics()
         
         return {
-            'sharpe_ratio': monthly_data.get('max_dd_month', current_metrics['sharpe_ratio']),
+            'sharpe_ratio': current_metrics['sharpe_ratio'],
             'sortino_ratio': current_metrics['sortino_ratio'],
             'calmar_ratio': current_metrics['calmar_ratio'],
             'max_drawdown_month_pct': monthly_data.get('max_drawdown_pct', 0),
