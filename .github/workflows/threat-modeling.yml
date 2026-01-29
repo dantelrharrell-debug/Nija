@@ -1,0 +1,213 @@
+name: Continuous Threat Modeling
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run threat modeling every day at 3am UTC
+    - cron: '0 3 * * *'
+
+jobs:
+  threat-analysis:
+    name: Automated Threat Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # OWASP Dependency Check for threat modeling
+    - name: Run OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'NIJA'
+        path: '.'
+        format: 'ALL'
+        args: >
+          --enableRetired
+          --enableExperimental
+          --nvdApiKey ${{ secrets.NVD_API_KEY }}
+      continue-on-error: true
+
+    - name: Upload OWASP Dependency Check results
+      uses: actions/upload-artifact@v4.4.3
+      if: always()
+      with:
+        name: dependency-check-report
+        path: reports/
+
+    # Threat modeling using Python threat-modeling libraries
+    - name: Generate Threat Model
+      run: |
+        mkdir -p security-reports
+        python scripts/generate_threat_model.py --output security-reports/threat-model.json
+      continue-on-error: true
+
+    # Security metrics calculation
+    - name: Calculate Security Score
+      run: |
+        python scripts/calculate_security_score.py \
+          --dependency-report reports/dependency-check-report.json \
+          --threat-model security-reports/threat-model.json \
+          --output security-reports/security-score.json
+      continue-on-error: true
+
+    # Upload all security reports
+    - name: Upload Threat Model Reports
+      uses: actions/upload-artifact@v4.4.3
+      if: always()
+      with:
+        name: threat-model-reports
+        path: security-reports/
+
+    # Create GitHub Security Advisory if critical threats found
+    - name: Check for Critical Threats
+      run: |
+        python scripts/check_critical_threats.py \
+          --security-score security-reports/security-score.json \
+          --threshold 70
+      continue-on-error: true
+
+  supply-chain-analysis:
+    name: Supply Chain Threat Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    # Analyze dependencies for supply chain attacks
+    - name: Run pip-audit for supply chain analysis
+      run: |
+        python -m pip install --upgrade pip
+        pip install pip-audit
+        pip-audit --requirement requirements.txt --format json --output pip-audit-report.json || true
+        pip-audit --requirement requirements.txt || echo "::warning::Supply chain vulnerabilities detected"
+
+    - name: Upload pip-audit report
+      uses: actions/upload-artifact@v4.4.3
+      if: always()
+      with:
+        name: pip-audit-report
+        path: pip-audit-report.json
+
+  attack-surface-analysis:
+    name: Attack Surface Mapping
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install analysis tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # Map attack surface
+    - name: Map API Attack Surface
+      run: |
+        mkdir -p security-reports
+        python scripts/map_attack_surface.py \
+          --api-files "api_*.py,fastapi_*.py,gateway.py" \
+          --output security-reports/attack-surface.json
+      continue-on-error: true
+
+    # Analyze authentication flows
+    - name: Analyze Authentication Flows
+      run: |
+        python scripts/analyze_auth_flows.py \
+          --auth-dir auth \
+          --output security-reports/auth-flows.json
+      continue-on-error: true
+
+    - name: Upload Attack Surface Reports
+      uses: actions/upload-artifact@v4.4.3
+      if: always()
+      with:
+        name: attack-surface-reports
+        path: security-reports/
+
+  threat-model-report:
+    name: Generate Threat Model Report
+    runs-on: ubuntu-latest
+    needs: [threat-analysis, supply-chain-analysis, attack-surface-analysis]
+    if: always()
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download all reports
+      uses: actions/download-artifact@v4.1.3
+      with:
+        path: all-reports
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Generate consolidated threat report
+      run: |
+        python -m pip install --upgrade pip
+        pip install jinja2 markdown
+        python scripts/generate_threat_report.py \
+          --reports-dir all-reports \
+          --output THREAT_MODEL_REPORT.md
+      continue-on-error: true
+
+    - name: Upload consolidated report
+      uses: actions/upload-artifact@v4.4.3
+      if: always()
+      with:
+        name: consolidated-threat-report
+        path: THREAT_MODEL_REPORT.md
+
+    - name: Comment on PR with threat report
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          let report = 'Threat model report not generated';
+          try {
+            report = fs.readFileSync('THREAT_MODEL_REPORT.md', 'utf8');
+          } catch (e) {
+            console.log('Could not read threat report:', e);
+          }
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## 🛡️ Automated Threat Model Report\n\n${report.substring(0, 60000)}`
+          });
+      continue-on-error: true

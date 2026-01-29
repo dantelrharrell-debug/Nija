@@ -43,6 +43,18 @@ scanner.out
 
 nija.log.*
 
+# Security reports and artifacts
+security-reports/
+chaos-results/
+all-reports/
+all-chaos-results/
+reports/
+*.sha256
+*-report.json
+THREAT_MODEL_REPORT.md
+CHAOS_TEST_REPORT.md
+canary-metrics*.json
+
 # Kraken nonce persistence (contains state, should not be committed)
 # Updated Jan 17, 2026: Account-specific nonce files in /data directory
 kraken_nonce.txt
@@ -340,6 +352,7 @@ example_*.py
 test_*.py
 !bot/test_*.py  # Keep bot tests
 !bot/tests/test_*.py  # Keep bot/tests directory tests
+!scripts/chaos/test_*.py  # Keep chaos testing scripts
 
 # Temporary text/config files
 *.txt.bak
