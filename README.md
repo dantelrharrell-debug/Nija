@@ -869,6 +869,13 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **[MULTI_USER_SETUP_GUIDE.md](MULTI_USER_SETUP_GUIDE.md)** - Multi-user setup and management
 - **[example_usage.py](example_usage.py)** - Implementation examples
 
+**🏗️ Platform Architecture (NEW - January 29, 2026)**:
+- **[PLATFORM_ARCHITECTURE.md](PLATFORM_ARCHITECTURE.md)** - 📐 Complete platform architecture design
+- **[API_ROUTES.md](API_ROUTES.md)** - 🚀 RESTful API specification (all endpoints)
+- **[DASHBOARD_DESIGN.md](DASHBOARD_DESIGN.md)** - 🎨 Dashboard UI/UX design (web + mobile)
+- **[SUBSCRIPTION_SYSTEM.md](SUBSCRIPTION_SYSTEM.md)** - 💳 Subscription tiers & billing logic
+- **[SCALING_BLUEPRINT.md](SCALING_BLUEPRINT.md)** - 📈 Infrastructure scaling strategy
+
 **User & Investor Tracking**:
 - **[USER_INVESTOR_DOCUMENTATION_INDEX.md](USER_INVESTOR_DOCUMENTATION_INDEX.md)** - 📚 Complete documentation index
 - **[USER_INVESTOR_REGISTRY.md](USER_INVESTOR_REGISTRY.md)** - 📋 Registry of all users
