@@ -9,7 +9,7 @@ CRITICAL REQUIREMENTS (non-negotiable):
 
 MASTER Requirements (ALL must be true):
 1. PRO_MODE=true
-2. LIVE_TRADING=true  
+2. LIVE_TRADING=true
 3. MASTER_BROKER=KRAKEN (connected)
 4. MASTER_CONNECTED=true
 
@@ -41,7 +41,7 @@ class MasterRequirements:
     live_trading: bool
     master_broker_kraken: bool
     master_connected: bool
-    
+
     def all_met(self) -> bool:
         """Check if all master requirements are met."""
         return (
@@ -50,7 +50,7 @@ class MasterRequirements:
             self.master_broker_kraken and
             self.master_connected
         )
-    
+
     def get_unmet_requirements(self) -> list:
         """Get list of unmet requirements."""
         unmet = []
@@ -74,7 +74,7 @@ class UserRequirements:
     standalone: bool  # Should be False for copy trading
     tier_sufficient: bool  # Balance >= STARTER tier minimum ($50)
     initial_capital_sufficient: bool  # Balance >= 100 for non-STARTER tiers
-    
+
     def all_met(self) -> bool:
         """Check if all user requirements are met."""
         return (
@@ -84,7 +84,7 @@ class UserRequirements:
             self.tier_sufficient and
             self.initial_capital_sufficient
         )
-    
+
     def get_unmet_requirements(self) -> list:
         """Get list of unmet requirements."""
         unmet = []
@@ -104,23 +104,23 @@ class UserRequirements:
 def check_master_requirements(multi_account_manager) -> MasterRequirements:
     """
     Check if master account meets all requirements for copy trading.
-    
+
     Args:
         multi_account_manager: MultiAccountBrokerManager instance
-        
+
     Returns:
         MasterRequirements dataclass with status of each requirement
     """
     # Check PRO_MODE
     pro_mode = os.getenv('PRO_MODE', 'false').lower() in ('true', '1', 'yes')
-    
+
     # Check LIVE_TRADING
     live_trading = os.getenv('LIVE_TRADING', '0') in ('1', 'true', 'True', 'yes')
-    
+
     # Check if Kraken master is configured and connected
     master_broker_kraken = False
     master_connected = False
-    
+
     # Import BrokerType - handle both bot.broker_manager and direct import
     try:
         from bot.broker_manager import BrokerType
@@ -136,7 +136,7 @@ def check_master_requirements(multi_account_manager) -> MasterRequirements:
                 master_broker_kraken=False,
                 master_connected=False
             )
-    
+
     if multi_account_manager:
         # Check if Kraken master broker exists and is connected
         if BrokerType.KRAKEN in multi_account_manager.master_brokers:
@@ -144,7 +144,7 @@ def check_master_requirements(multi_account_manager) -> MasterRequirements:
             kraken_master = multi_account_manager.master_brokers[BrokerType.KRAKEN]
             if kraken_master and hasattr(kraken_master, 'connected'):
                 master_connected = kraken_master.connected
-    
+
     return MasterRequirements(
         pro_mode=pro_mode,
         live_trading=live_trading,
@@ -161,27 +161,27 @@ def check_user_requirements(
 ) -> UserRequirements:
     """
     Check if user account meets all requirements for copy trading.
-    
+
     Args:
         user_id: User identifier
         user_balance: User's current balance in USD
         user_broker: User's broker instance
         copy_from_master: Whether user has copy_from_master enabled in config
-        
+
     Returns:
         UserRequirements dataclass with status of each requirement
     """
     # Check PRO_MODE (global setting applies to all users)
     pro_mode = os.getenv('PRO_MODE', 'false').lower() in ('true', '1', 'yes')
-    
+
     # Check COPY_TRADING via COPY_TRADING_MODE
     copy_trading_mode = os.getenv('COPY_TRADING_MODE', 'INDEPENDENT').upper()
     copy_trading_enabled = (copy_trading_mode == 'MASTER_FOLLOW') and copy_from_master
-    
+
     # Check STANDALONE (opposite of copy trading)
     # User is standalone if they are NOT in copy trading mode
     standalone = not copy_trading_enabled
-    
+
     # Check TIER >= STARTER (balance >= $50)
     # Import tier config - handle both bot.tier_config and direct import
     try:
@@ -203,10 +203,10 @@ def check_user_requirements(
                 tier_sufficient=tier_sufficient,
                 initial_capital_sufficient=initial_capital_sufficient
             )
-    
+
     starter_min = TIER_CONFIGS[TradingTier.STARTER].capital_min
     tier_sufficient = user_balance >= starter_min
-    
+
     # Check INITIAL_CAPITAL >= 100 (for non-STARTER tiers)
     # STARTER tier ($50-$99) doesn't need $100 minimum
     # All other tiers need $100 minimum
@@ -217,7 +217,7 @@ def check_user_requirements(
     else:
         # User is in SAVER+ tier, needs at least $100
         initial_capital_sufficient = user_balance >= 100.0
-    
+
     return UserRequirements(
         user_id=user_id,
         pro_mode=pro_mode,
@@ -238,7 +238,7 @@ def validate_copy_trading_requirements(
 ) -> Tuple[bool, str]:
     """
     Validate all copy trading requirements for master and optionally a specific user.
-    
+
     Args:
         multi_account_manager: MultiAccountBrokerManager instance
         user_id: Optional user ID to check (if None, only checks master)
@@ -246,17 +246,17 @@ def validate_copy_trading_requirements(
         user_broker: User's broker instance (required if user_id provided)
         copy_from_master: Whether user has copy_from_master enabled
         log_results: Whether to log the validation results
-        
+
     Returns:
         Tuple of (all_requirements_met: bool, reason: str)
     """
     # Check master requirements first
     master_reqs = check_master_requirements(multi_account_manager)
-    
+
     if not master_reqs.all_met():
         unmet = master_reqs.get_unmet_requirements()
         reason = f"Master requirements not met: {', '.join(unmet)}"
-        
+
         if log_results:
             logger.warning("=" * 70)
             logger.warning("❌ COPY TRADING DISABLED - MASTER REQUIREMENTS NOT MET")
@@ -270,20 +270,20 @@ def validate_copy_trading_requirements(
             logger.warning("   KRAKEN_MASTER_API_KEY=<your-key>")
             logger.warning("   KRAKEN_MASTER_API_SECRET=<your-secret>")
             logger.warning("=" * 70)
-        
+
         return False, reason
-    
+
     # If checking a specific user, validate user requirements
     if user_id is not None:
         if user_balance is None or user_broker is None:
             return False, f"User {user_id}: Missing balance or broker for validation"
-        
+
         user_reqs = check_user_requirements(user_id, user_balance, user_broker, copy_from_master)
-        
+
         if not user_reqs.all_met():
             unmet = user_reqs.get_unmet_requirements()
             reason = f"User requirements not met: {', '.join(unmet)}"
-            
+
             if log_results:
                 logger.warning("=" * 70)
                 logger.warning(f"❌ COPY TRADING DISABLED FOR {user_id.upper()}")
@@ -296,9 +296,9 @@ def validate_copy_trading_requirements(
                 logger.warning("   2. Ensure COPY_TRADING_MODE=MASTER_FOLLOW")
                 logger.warning(f"   3. Ensure account balance >= $50 (current: ${user_balance:.2f})")
                 logger.warning("=" * 70)
-            
+
             return False, reason
-    
+
     # All requirements met
     if log_results and user_id:
         logger.info("=" * 70)
@@ -313,38 +313,38 @@ def validate_copy_trading_requirements(
         logger.info(f"   ✅ STANDALONE=false")
         logger.info(f"   ✅ TIER >= STARTER (balance: ${user_balance:.2f})")
         logger.info("=" * 70)
-    
+
     return True, "All requirements met"
 
 
 def log_copy_trading_status(multi_account_manager):
     """
     Log comprehensive copy trading status showing which requirements are met.
-    
+
     Args:
         multi_account_manager: MultiAccountBrokerManager instance
     """
     logger.info("=" * 70)
     logger.info("📋 COPY TRADING REQUIREMENTS STATUS")
     logger.info("=" * 70)
-    
+
     # Check master requirements
     master_reqs = check_master_requirements(multi_account_manager)
-    
+
     logger.info("MASTER REQUIREMENTS:")
     logger.info(f"   {'✅' if master_reqs.pro_mode else '❌'} PRO_MODE=true")
     logger.info(f"   {'✅' if master_reqs.live_trading else '❌'} LIVE_TRADING=true")
     logger.info(f"   {'✅' if master_reqs.master_broker_kraken else '❌'} MASTER_BROKER=KRAKEN")
     logger.info(f"   {'✅' if master_reqs.master_connected else '❌'} MASTER_CONNECTED=true")
     logger.info("")
-    
+
     if master_reqs.all_met():
         logger.info("✅ Master: ALL REQUIREMENTS MET - Copy trading enabled")
     else:
         logger.warning("❌ Master: REQUIREMENTS NOT MET - Copy trading disabled")
         unmet = master_reqs.get_unmet_requirements()
         logger.warning(f"   Missing: {', '.join(unmet)}")
-    
+
     # Show configured user accounts
     logger.info("")
     logger.info("USER ACCOUNTS CONFIGURED:")
@@ -360,5 +360,5 @@ def log_copy_trading_status(multi_account_manager):
         logger.info("")
         logger.info("   💡 These users will receive copy trades when MASTER trades")
         logger.info("   💡 Each user must also meet individual requirements (PRO_MODE, balance, etc.)")
-    
+
     logger.info("=" * 70)

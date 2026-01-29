@@ -58,14 +58,14 @@ The NIJA mobile app provides cryptocurrency traders with a powerful, intuitive i
    ```bash
    ./setup-mobile.sh
    ```
-   
+
    This will:
    - Install npm dependencies
    - Add iOS and Android platforms
    - Sync web assets with native projects
 
 3. **Configure API endpoint:**
-   
+
    Edit `frontend/static/js/app.js`:
    ```javascript
    const API_BASE_URL = 'https://your-api-url.com/api';

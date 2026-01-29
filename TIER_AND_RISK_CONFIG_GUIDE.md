@@ -7,7 +7,7 @@ This guide explains the account tier management and trade size limits in the NIJ
 **⚠️ CRITICAL: Accounts below $100 should NOT be used for live independent trading.**
 
 **💡 PUBLIC-FACING MESSAGE:**
-> "NIJA AI Trading is designed for accounts starting at $100.  
+> "NIJA AI Trading is designed for accounts starting at $100.
 > Smaller balances may connect, but full trading performance begins at Starter tier."
 
 ## Changes Made (Jan 23, 2026)

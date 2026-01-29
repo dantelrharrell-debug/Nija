@@ -86,7 +86,7 @@ except ImportError:
 class NIJAApexStrategyV71:
     """
     NIJA Apex Strategy v7.1 - Unified Algorithmic Trading System
-    
+
     Features:
     1. Market Filter (uptrend/downtrend using VWAP, EMA9/21/50, MACD, ADX>20, Volume)
     2. Entry Logic (pullback to EMA21/VWAP, RSI, candlestick patterns, MACD tick, volume)
@@ -98,26 +98,26 @@ class NIJAApexStrategyV71:
     8. Smart Filters (news, volume, candle timing)
     9. Optional: AI Momentum Scoring (skeleton)
     """
-    
+
     def __init__(self, broker_client=None, config: Optional[Dict] = None):
         """
         Initialize NIJA Apex Strategy v7.1
-        
+
         Args:
             broker_client: Broker API client (Coinbase, Alpaca, Binance, etc.)
             config: Strategy configuration dictionary
         """
         self.broker_client = broker_client
         self.config = config or {}
-        
+
         # PROFIT OPTIMIZATION: Load enhanced configuration if not provided
         # Check if a comprehensive config was provided by looking for key optimization settings
         has_comprehensive_config = (
-            'use_enhanced_scoring' in self.config or 
-            'use_regime_detection' in self.config or 
+            'use_enhanced_scoring' in self.config or
+            'use_regime_detection' in self.config or
             'enable_stepped_exits' in self.config
         )
-        
+
         if not has_comprehensive_config:  # If basic/empty config, use optimized defaults
             try:
                 from profit_optimization_config import get_profit_optimization_config
@@ -125,23 +125,23 @@ class NIJAApexStrategyV71:
                 logger.info("🚀 Loaded profit optimization configuration")
             except ImportError:
                 logger.warning("⚠️  Profit optimization config not available, using defaults")
-        
+
         # PROFIT-TAKING ENFORCEMENT: Always enabled, cannot be disabled
         # This ensures profit-taking works 24/7 on all accounts, brokerages, and tiers
         self.config['enable_take_profit'] = True
-        
+
         # Initialize components with optimized parameters
         self.risk_manager = RiskManager(
             min_position_pct=self.config.get('min_position_pct', 0.02),
             max_position_pct=self.config.get('max_position_pct', 0.10)  # OPTIMIZED: 10% max for more positions (was 20%)
         )
         self.execution_engine = ExecutionEngine(broker_client)
-        
+
         # Initialize enhanced scoring and regime detection
         # PROFIT OPTIMIZATION: Enable by default if available
         enable_enhanced = self.config.get('use_enhanced_scoring', True)  # Default to True
         enable_regime = self.config.get('use_regime_detection', True)  # Default to True
-        
+
         if ENHANCED_SCORING_AVAILABLE and (enable_enhanced or enable_regime):
             self.entry_scorer = EnhancedEntryScorer(self.config)
             self.regime_detector = RegimeDetector(self.config)
@@ -155,7 +155,7 @@ class NIJAApexStrategyV71:
                 logger.warning("⚠️  Enhanced scoring modules not available - using legacy scoring")
             else:
                 logger.info("ℹ️  Enhanced scoring disabled by configuration")
-        
+
         # Strategy parameters - OPTIMIZED FOR HIGH WIN RATE
         # OPTIMIZATION (Jan 29, 2026): Rebalance filters for quality trades
         # Previous emergency relaxations prioritized quantity over quality (ADX=6, volume=0.1%)
@@ -167,7 +167,7 @@ class NIJAApexStrategyV71:
         self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # OPTIMIZED: Require 2/5 indicators (was 1/5, better confirmation)
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
-        
+
         # PROFIT OPTIMIZATION: Stepped profit-taking configuration
         # OPTIMIZED (Jan 29, 2026): More aggressive profit-taking for capital efficiency
         # Previous levels were too conservative, holding positions too long
@@ -180,16 +180,16 @@ class NIJAApexStrategyV71:
             0.040: 0.35,  # Exit 35% at 4.0% profit (NEW level for gradual scaling)
             0.060: 0.50,  # Exit 50% at 6.0% profit (was 5.0%, increased for better R:R)
         })
-        
+
         # AI Momentum Scoring (optional, skeleton for future)
         self.ai_momentum_enabled = self.config.get('ai_momentum_enabled', False)
-        
+
         # Track last candle time for timing filter (per-symbol to avoid cross-market contamination)
         self.last_candle_times = {}  # symbol -> timestamp
-        
+
         # Track current regime for logging
         self.current_regime = None
-        
+
         logger.info("=" * 70)
         logger.info("NIJA Apex Strategy v7.1 - HIGH WIN-RATE OPTIMIZED")
         logger.info("✅ PROFIT-TAKING: ALWAYS ENABLED (cannot be disabled)")
@@ -207,17 +207,17 @@ class NIJAApexStrategyV71:
         logger.info(f"✅ Confidence threshold: {MIN_CONFIDENCE*100:.0f}% (balanced quality)")
         logger.info(f"✅ Minimum ADX: {self.min_adx} (moderate trend strength)")
         logger.info("=" * 70)
-    
+
     def _get_broker_name(self) -> str:
         """
         Get broker name from broker_client.
-        
+
         Returns:
             str: Broker name (e.g., 'kraken', 'coinbase') or 'unknown'
         """
         if not self.broker_client or not hasattr(self.broker_client, 'broker_type'):
             return 'unknown'
-        
+
         broker_type = self.broker_client.broker_type
         if hasattr(broker_type, 'value'):
             # It's an Enum
@@ -228,26 +228,26 @@ class NIJAApexStrategyV71:
         else:
             # Fallback to string representation
             return str(broker_type).lower()
-    
+
     def _get_broker_fee_aware_target(self, symbol: str, use_limit_order: bool = True) -> float:
         """
         Get minimum profit target for current broker/symbol to overcome fees.
-        
+
         Formula: min_profit_target = broker_fee * 2.5
-        
+
         This ensures trades are profitable after fees with a safety buffer.
-        
+
         Args:
             symbol: Trading symbol
             use_limit_order: True for maker fees, False for taker fees
-            
+
         Returns:
             Minimum profit target as decimal (e.g., 0.035 = 3.5%)
         """
         if not EXCHANGE_CAPABILITIES_AVAILABLE:
             # Fallback to conservative default if capabilities not available
             return 0.025  # 2.5% default target
-        
+
         broker_name = self._get_broker_name()
         try:
             min_target = get_min_profit_target(broker_name, symbol, use_limit_order)
@@ -256,39 +256,39 @@ class NIJAApexStrategyV71:
         except Exception as e:
             logger.warning(f"Could not get fee-aware target for {broker_name}/{symbol}: {e}")
             return 0.025  # 2.5% fallback
-    
+
     def _get_broker_capabilities(self, symbol: str):
         """
         Get exchange capabilities for current broker and symbol.
-        
+
         Args:
             symbol: Trading symbol
-            
+
         Returns:
             ExchangeCapabilities object or None
         """
         if not EXCHANGE_CAPABILITIES_AVAILABLE:
             return None
-        
+
         broker_name = self._get_broker_name()
         try:
             return get_broker_capabilities(broker_name, symbol)
         except Exception as e:
             logger.warning(f"Could not get capabilities for {broker_name}/{symbol}: {e}")
             return None
-    
+
     def update_broker_client(self, new_broker_client):
         """
         Update the broker client for this strategy and its execution engine.
-        
+
         This is critical when switching between multiple brokers (e.g., KRAKEN to COINBASE)
         to ensure that the execution engine uses the correct broker for placing orders.
-        
+
         CRITICAL FIX (Jan 26, 2026): Prevents broker mismatch where trades are calculated
         for one broker's balance but executed on another broker. This was causing significant
         losses when KRAKEN detected a trade with $57.31 balance but execution used COINBASE's
         $24.16 balance instead.
-        
+
         Args:
             new_broker_client: The new broker client to use
         """
@@ -297,26 +297,26 @@ class NIJAApexStrategyV71:
             if hasattr(self, 'execution_engine') and self.execution_engine:
                 self.execution_engine.broker_client = new_broker_client
                 logger.debug(f"Updated execution engine broker to {self._get_broker_name()}")
-    
+
     def _validate_trade_quality(self, position_size: float, score: float) -> Dict:
         """
         Validate trade quality based on position size and confidence threshold.
-        
+
         Args:
             position_size: Calculated position size in USD
             score: Entry signal quality score (higher = better)
-            
+
         Returns:
             Dictionary with 'valid' (bool), 'reason' (str), and 'confidence' (float)
         """
         # Normalize position_size in case it's a tuple
         position_size = scalar(position_size)
-        
+
         # Check broker-specific minimum position size (FIX: Jan 24, 2026)
         # Kraken requires $10 minimum, others typically $2
         broker_name = self._get_broker_name()
         broker_minimum = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
-        
+
         if float(position_size) < broker_minimum:
             logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below {broker_name} minimum ${broker_minimum:.2f}")
             return {
@@ -324,14 +324,14 @@ class NIJAApexStrategyV71:
                 'reason': f'Position too small: ${position_size:.2f} < ${broker_minimum:.2f} minimum for {broker_name} (increase account size for better trading)',
                 'confidence': 0.0
             }
-        
+
         # Calculate and check confidence threshold (0.60 minimum)
         # Score is a quality metric (higher = better setup)
         # Normalize score to 0-1 range for confidence check
         confidence = min(score / MAX_ENTRY_SCORE, 1.0)
         # FIX: Guard against tuple returns (defensive programming)
         confidence = scalar(confidence)
-        
+
         if float(confidence) < MIN_CONFIDENCE:
             logger.info(f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below minimum {MIN_CONFIDENCE:.2f}")
             return {
@@ -339,18 +339,18 @@ class NIJAApexStrategyV71:
                 'reason': f'Confidence too low: {confidence:.2f} < {MIN_CONFIDENCE:.2f} (weak entry signal)',
                 'confidence': confidence
             }
-        
+
         logger.info(f"   ✅ Trade approved: Size=${position_size:.2f}, Confidence={confidence:.2f}")
         return {
             'valid': True,
             'reason': 'Trade quality validated',
             'confidence': confidence
         }
-    
+
     def check_market_filter(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, str, str]:
         """
         Market Filter: Only allow trades if uptrend or downtrend conditions are met
-        
+
         Required conditions:
         - VWAP alignment (price above for uptrend, below for downtrend)
         - EMA sequence (9 > 21 > 50 for uptrend, 9 < 21 < 50 for downtrend)
@@ -358,11 +358,11 @@ class NIJAApexStrategyV71:
         - ADX > min_adx (configurable, default 6 - FOURTH emergency relaxation for signal generation)
         - Volume (market filter) > volume_threshold of 5-candle average (configurable, default 5%)
         - Volume (smart filter) > volume_min_threshold of 20-candle average (configurable, default 0.1%)
-        
+
         Args:
             df: Price DataFrame
             indicators: Dictionary of calculated indicators
-        
+
         Returns:
             Tuple of (allow_trade, direction, reason)
             - allow_trade: True if market conditions permit trading
@@ -377,20 +377,20 @@ class NIJAApexStrategyV71:
         ema50 = indicators['ema_50'].iloc[-1]
         macd_hist = indicators['histogram'].iloc[-1]
         adx = scalar(indicators['adx'].iloc[-1])
-        
+
         # Volume check (5-candle average)
         avg_volume_5 = df['volume'].iloc[-5:].mean()
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume_5 if avg_volume_5 > 0 else 0
-        
+
         # ADX filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
         if self.min_adx > 0 and float(adx) < self.min_adx:
             return False, 'none', f'ADX too low ({adx:.1f} < {self.min_adx})'
-        
+
         # Volume filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
         if self.volume_threshold > 0 and volume_ratio < self.volume_threshold:
             return False, 'none', f'Volume too low ({volume_ratio*100:.1f}% of 5-candle avg)'
-        
+
         # Check for uptrend
         uptrend_conditions = {
             'vwap': current_price > vwap,
@@ -399,7 +399,7 @@ class NIJAApexStrategyV71:
             'adx_strong': adx > self.min_adx,
             'volume_ok': volume_ratio >= self.volume_threshold
         }
-        
+
         # Check for downtrend
         downtrend_conditions = {
             'vwap': current_price < vwap,
@@ -408,19 +408,19 @@ class NIJAApexStrategyV71:
             'adx_strong': adx > self.min_adx,
             'volume_ok': volume_ratio >= self.volume_threshold
         }
-        
+
         # QUALITY FIX: Check trend conditions - configurable threshold via min_trend_confirmation
         # Lowered from 4/5 to 2/5 (Jan 26, 2026) to allow more trading opportunities
         # This filters out marginal setups (0-1/5) while still allowing quality trades (2+/5)
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
-        
+
         # Log details for debugging
         logger.debug(f"Market filter - Uptrend: {uptrend_score}/5, Downtrend: {downtrend_score}/5")
         logger.debug(f"  Price vs VWAP: {current_price:.4f} vs {vwap:.4f}")
         logger.debug(f"  EMA sequence: {ema9:.4f} vs {ema21:.4f} vs {ema50:.4f}")
         logger.debug(f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, Vol ratio: {volume_ratio:.2f}")
-        
+
         # RELAXED FILTERS (Jan 26, 2026): Lower to 2/5 conditions to allow more trading opportunities
         # Previous: 3/5 required was too strict for low-capital accounts in current market conditions
         # 2/5 allows quality setups while still filtering out complete junk (0-1/5)
@@ -431,28 +431,28 @@ class NIJAApexStrategyV71:
         else:
             logger.debug(f"  → Rejected: Insufficient confirmation")
             return False, 'none', f'Insufficient trend confirmation (Up:{uptrend_score}/5, Down:{downtrend_score}/5 - need {self.min_trend_confirmation}/5)'
-    
+
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
         Long Entry Logic (INSTITUTIONAL GRADE + ADAPTIVE RSI)
-        
+
         Conditions:
         1. Pullback to EMA21 or VWAP (price within 0.5% of either)
         2. RSI bullish pullback (ADAPTIVE ranges based on market regime)
         3. Bullish engulfing or hammer candlestick pattern
         4. MACD histogram ticking up (current > previous)
         5. Volume >= 60% of last 2 candles average
-        
+
         Args:
             df: Price DataFrame
             indicators: Dictionary of calculated indicators
-        
+
         Returns:
             Tuple of (signal, score, reason)
         """
         current = df.iloc[-1]
         previous = df.iloc[-2]
-        
+
         current_price = current['close']
         vwap = indicators['vwap'].iloc[-1]
         ema21 = indicators['ema_21'].iloc[-1]
@@ -460,14 +460,14 @@ class NIJAApexStrategyV71:
         rsi_prev = scalar(indicators['rsi'].iloc[-2])
         macd_hist = indicators['histogram'].iloc[-1]
         macd_hist_prev = indicators['histogram'].iloc[-2]
-        
+
         conditions = {}
-        
+
         # 1. Pullback to EMA21 or VWAP (EMERGENCY RELAXATION Jan 29: 2.0% tolerance for crypto volatility - was 1.0%)
         near_ema21 = abs(current_price - ema21) / ema21 < 0.02
         near_vwap = abs(current_price - vwap) / vwap < 0.02
         conditions['pullback'] = near_ema21 or near_vwap
-        
+
         # 2. RSI bullish pullback (ADAPTIVE MAX ALPHA UPGRADE)
         # Get adaptive RSI ranges based on current market regime
         if self.use_enhanced_scoring and self.regime_detector and self.current_regime:
@@ -479,14 +479,14 @@ class NIJAApexStrategyV71:
             # Fallback to institutional grade static ranges
             long_rsi_min = 25
             long_rsi_max = 45
-        
+
         # Apply adaptive RSI condition: only buy in lower RSI range (buy low)
         conditions['rsi_pullback'] = long_rsi_min <= rsi <= long_rsi_max and rsi > rsi_prev
-        
+
         # 3. Bullish candlestick patterns
         body = current['close'] - current['open']
         prev_body = previous['close'] - previous['open']
-        
+
         # Bullish engulfing
         bullish_engulfing = (
             prev_body < 0 and  # Previous was bearish
@@ -494,7 +494,7 @@ class NIJAApexStrategyV71:
             current['close'] > previous['open'] and
             current['open'] < previous['close']
         )
-        
+
         # Hammer (small body, long lower wick)
         total_range = current['high'] - current['low']
         lower_wick = current['open'] - current['low'] if body > 0 else current['close'] - current['low']
@@ -504,48 +504,48 @@ class NIJAApexStrategyV71:
             total_range > 0 and
             lower_wick / total_range > 0.6
         )
-        
+
         conditions['candlestick'] = bullish_engulfing or hammer
-        
+
         # 4. MACD histogram ticking up
         conditions['macd_tick_up'] = macd_hist > macd_hist_prev
-        
+
         # 5. Volume confirmation (>= 60% of last 2 candles avg)
         avg_volume_2 = df['volume'].iloc[-3:-1].mean()
         conditions['volume'] = current['volume'] >= avg_volume_2 * 0.6
-        
+
         # Calculate score
         score = sum(conditions.values())
         signal = score >= 2  # EMERGENCY RELAXATION (Jan 29): 2/5 required - allow more opportunities (was 5/5 → 3/5 → 2/5)
-        
+
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
-        
+
         if score > 0:
             logger.debug(f"  Long entry check: {reason}")
-        
+
         return signal, score, reason
-    
+
     def check_short_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
         Short Entry Logic (INSTITUTIONAL GRADE + ADAPTIVE RSI, mirror of long with bearish elements)
-        
+
         Conditions:
         1. Pullback to EMA21 or VWAP (price within 0.5% of either)
         2. RSI bearish pullback (ADAPTIVE ranges based on market regime)
         3. Bearish engulfing or shooting star candlestick pattern
         4. MACD histogram ticking down (current < previous)
         5. Volume >= 60% of last 2 candles average
-        
+
         Args:
             df: Price DataFrame
             indicators: Dictionary of calculated indicators
-        
+
         Returns:
             Tuple of (signal, score, reason)
         """
         current = df.iloc[-1]
         previous = df.iloc[-2]
-        
+
         current_price = current['close']
         vwap = indicators['vwap'].iloc[-1]
         ema21 = indicators['ema_21'].iloc[-1]
@@ -553,14 +553,14 @@ class NIJAApexStrategyV71:
         rsi_prev = scalar(indicators['rsi'].iloc[-2])
         macd_hist = indicators['histogram'].iloc[-1]
         macd_hist_prev = indicators['histogram'].iloc[-2]
-        
+
         conditions = {}
-        
+
         # 1. Pullback to EMA21 or VWAP (EMERGENCY RELAXATION Jan 29: 2.0% tolerance for crypto volatility - was 1.0%)
         near_ema21 = abs(current_price - ema21) / ema21 < 0.02
         near_vwap = abs(current_price - vwap) / vwap < 0.02
         conditions['pullback'] = near_ema21 or near_vwap
-        
+
         # 2. RSI bearish pullback (ADAPTIVE MAX ALPHA UPGRADE)
         # Get adaptive RSI ranges based on current market regime
         if self.use_enhanced_scoring and self.regime_detector and self.current_regime:
@@ -572,14 +572,14 @@ class NIJAApexStrategyV71:
             # Fallback to institutional grade static ranges
             short_rsi_min = 55
             short_rsi_max = 75
-        
+
         # Apply adaptive RSI condition: only sell in upper RSI range (sell high)
         conditions['rsi_pullback'] = short_rsi_min <= rsi <= short_rsi_max and rsi < rsi_prev
-        
+
         # 3. Bearish candlestick patterns
         body = current['close'] - current['open']
         prev_body = previous['close'] - previous['open']
-        
+
         # Bearish engulfing
         bearish_engulfing = (
             prev_body > 0 and  # Previous was bullish
@@ -587,7 +587,7 @@ class NIJAApexStrategyV71:
             current['close'] < previous['open'] and
             current['open'] > previous['close']
         )
-        
+
         # Shooting star (small body, long upper wick)
         total_range = current['high'] - current['low']
         upper_wick = current['high'] - current['open'] if body < 0 else current['high'] - current['close']
@@ -597,41 +597,41 @@ class NIJAApexStrategyV71:
             total_range > 0 and
             upper_wick / total_range > 0.6
         )
-        
+
         conditions['candlestick'] = bearish_engulfing or shooting_star
-        
+
         # 4. MACD histogram ticking down
         conditions['macd_tick_down'] = macd_hist < macd_hist_prev
-        
+
         # 5. Volume confirmation
         avg_volume_2 = df['volume'].iloc[-3:-1].mean()
         conditions['volume'] = current['volume'] >= avg_volume_2 * 0.6
-        
+
         # Calculate score
         score = sum(conditions.values())
         signal = score >= 2  # EMERGENCY RELAXATION (Jan 29): 2/5 required - allow more opportunities (was 5/5 → 3/5 → 2/5)
-        
+
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
-        
+
         if score > 0:
             logger.debug(f"  Short entry check: {reason}")
-        
+
         return signal, score, reason
-    
+
     def check_smart_filters(self, df: pd.DataFrame, current_time: datetime, symbol: str = None) -> Tuple[bool, str]:
         """
         Smart Filters to avoid bad trades
-        
+
         Filters:
         1. No trades 5 min before/after major news (stub - placeholder for News API)
         2. No trades if volume < 0.5% avg (20-candle rolling average - emergency relaxation to find opportunities)
         3. No trading during first 1 second of a new candle (per-symbol tracking)
-        
+
         Args:
             df: Price DataFrame
             current_time: Current datetime
             symbol: Trading symbol (required for candle timing filter)
-        
+
         Returns:
             Tuple of (allowed, reason)
         """
@@ -639,17 +639,17 @@ class NIJAApexStrategyV71:
         # TODO: Integrate with News API (e.g., Benzinga, Alpha Vantage, etc.)
         # For now, this is a placeholder that always passes
         news_clear = True  # Stub: would check upcoming news events here
-        
+
         # Filter 2: Volume filter - threshold is configurable via volume_min_threshold (default 0.1%)
         # EMERGENCY RELAXATION (Jan 29, 2026 - FOURTH RELAXATION): Lowered from 0.5% to 0.1% to allow ultra-low volume markets
         avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
-        
+
         if volume_ratio < self.volume_min_threshold:
             logger.debug(f'   🔇 Smart filter (volume): {volume_ratio*100:.1f}% < {self.volume_min_threshold*100:.0f}% threshold')
             return False, f'Volume too low ({volume_ratio*100:.1f}% of avg) - threshold: {self.volume_min_threshold*100:.0f}%'
-        
+
         # Filter 3: Candle timing filter (DISABLED)
         # EMERGENCY RELAXATION (Jan 29, 2026 - FOURTH RELAXATION): DISABLED (set to 0) - was blocking too many opportunities
         # Detect new candle by comparing timestamps
@@ -661,7 +661,7 @@ class NIJAApexStrategyV71:
                 # We have a datetime index - apply the candle timing filter
                 current_candle_time = df.index[-1]
                 last_candle_time = self.last_candle_times.get(symbol)
-                
+
                 # If we have timestamp data, check if we're in first 3 seconds
                 if last_candle_time != current_candle_time:
                     # New candle detected - store time and check elapsed time
@@ -679,9 +679,9 @@ class NIJAApexStrategyV71:
                         else:
                             current_time_naive = current_time
                         time_since_candle = (current_time_naive - candle_dt).total_seconds()
-                        
+
                         self.last_candle_times[symbol] = current_candle_time
-                        
+
                         # Block trade if we're in first N seconds of new candle
                         if time_since_candle < self.candle_exclusion_seconds:
                             logger.debug(f'   🔇 Smart filter (candle timing): {time_since_candle:.0f}s < {self.candle_exclusion_seconds}s threshold')
@@ -693,40 +693,40 @@ class NIJAApexStrategyV71:
         elif symbol is None:
             # No symbol provided - skip candle timing filter to avoid errors
             logger.debug('   ℹ️  Candle timing filter skipped (no symbol provided)')
-        
+
         return True, 'All smart filters passed'
-    
+
     def _get_risk_score(self, score: float, metadata: Dict) -> float:
         """
         Get the appropriate score for risk calculations
-        
+
         Args:
             score: Enhanced score (if available) or legacy score
             metadata: Metadata dictionary from enhanced scoring
-            
+
         Returns:
             Score to use for risk calculations (legacy 0-5 scale)
         """
         if self.use_enhanced_scoring and metadata:
             return metadata.get('legacy_score', score)
         return score
-    
-    def check_entry_with_enhanced_scoring(self, df: pd.DataFrame, indicators: Dict, 
+
+    def check_entry_with_enhanced_scoring(self, df: pd.DataFrame, indicators: Dict,
                                          side: str, account_balance: float) -> Tuple[bool, float, str, Dict]:
         """
         Check entry conditions using enhanced scoring system
-        
+
         This method combines:
         - Legacy 5-point entry logic (for backward compatibility)
         - Enhanced 0-100 weighted scoring system
         - Market regime detection and adaptive thresholds
-        
+
         Args:
             df: Price DataFrame
             indicators: Dictionary of calculated indicators
             side: 'long' or 'short'
             account_balance: Current account balance
-            
+
         Returns:
             Tuple of (should_enter, score, reason, metadata)
         """
@@ -735,30 +735,30 @@ class NIJAApexStrategyV71:
             legacy_signal, legacy_score, legacy_reason = self.check_long_entry(df, indicators)
         else:
             legacy_signal, legacy_score, legacy_reason = self.check_short_entry(df, indicators)
-        
+
         # If enhanced scoring not available, use legacy only
         if not self.use_enhanced_scoring:
             return legacy_signal, legacy_score, legacy_reason, {'legacy_score': legacy_score}
-        
+
         # Calculate enhanced score (0-100)
         enhanced_score, score_breakdown = self.entry_scorer.calculate_entry_score(df, indicators, side)
-        
+
         # Detect market regime
         regime, regime_metrics = self.regime_detector.detect_regime(df, indicators)
         self.current_regime = regime
-        
+
         # Get regime-specific parameters
         regime_params = self.regime_detector.get_regime_parameters(regime)
-        
+
         # Adjust score threshold based on regime
         should_enter_enhanced = self.entry_scorer.should_enter_trade(enhanced_score)
-        
+
         # Combined decision: Both legacy and enhanced must agree
         should_enter = legacy_signal and should_enter_enhanced
-        
+
         # Build comprehensive reason
         reason = f"{side.upper()} | Regime:{regime.value} | Legacy:{legacy_score}/5 | Enhanced:{enhanced_score:.1f}/100 | {score_breakdown['quality']}"
-        
+
         # Metadata for logging and analysis
         metadata = {
             'legacy_score': legacy_score,
@@ -771,7 +771,7 @@ class NIJAApexStrategyV71:
             'should_enter_enhanced': should_enter_enhanced,
             'combined_decision': should_enter
         }
-        
+
         if should_enter:
             logger.info(f"  ✅ {reason}")
             logger.info(f"     Trend:{score_breakdown['trend_strength']:.1f} "
@@ -781,28 +781,28 @@ class NIJAApexStrategyV71:
                        f"Structure:{score_breakdown['market_structure']:.1f}")
         else:
             logger.debug(f"  ❌ {reason}")
-        
+
         return should_enter, enhanced_score, reason, metadata
-    
-    def adjust_position_size_for_regime(self, base_position_size: float, 
+
+    def adjust_position_size_for_regime(self, base_position_size: float,
                                        regime: 'MarketRegime', score: float) -> float:
         """
         Adjust position size based on market regime and entry score
-        
+
         Args:
             base_position_size: Base position size from risk manager
             regime: Current market regime
             score: Enhanced entry score (0-100)
-            
+
         Returns:
             Adjusted position size
         """
         if not self.use_enhanced_scoring:
             return base_position_size
-        
+
         # Regime-based adjustment
         regime_adjusted = self.regime_detector.adjust_position_size(regime, base_position_size)
-        
+
         # Score-based adjustment (higher scores = larger positions)
         if score >= 80:  # Excellent setup
             score_multiplier = 1.2
@@ -812,39 +812,39 @@ class NIJAApexStrategyV71:
             score_multiplier = 0.9
         else:  # Marginal setup
             score_multiplier = 0.7
-        
+
         # Combine adjustments
         final_size = regime_adjusted * score_multiplier
-        
+
         logger.debug(f"Position size adjustment: ${base_position_size:.2f} -> ${final_size:.2f} "
                     f"(regime:{regime.value}, score:{score:.1f})")
-        
+
         return final_size
-    
-    def check_exit_conditions(self, symbol: str, df: pd.DataFrame, 
+
+    def check_exit_conditions(self, symbol: str, df: pd.DataFrame,
                              indicators: Dict, current_price: float) -> Tuple[bool, str]:
         """
         Exit Logic
-        
+
         Conditions:
         0. **EMERGENCY LIQUIDATION** (FIX 3): PnL <= -1% → IMMEDIATE SELL
         1. Opposite signal detected
         2. Trailing stop hit
         3. Trend break (EMA9/21 cross)
-        
+
         Args:
             symbol: Trading symbol
             df: Price DataFrame
             indicators: Dictionary of calculated indicators
             current_price: Current market price
-        
+
         Returns:
             Tuple of (should_exit, reason)
         """
         position = self.execution_engine.get_position(symbol)
         if not position:
             return False, 'No position'
-        
+
         # FIX 3: EMERGENCY LIQUIDATION CHECK (HIGHEST PRIORITY)
         # If PnL <= -1%, force immediate liquidation with NO QUESTIONS
         # This bypasses ALL other checks and filters
@@ -857,11 +857,11 @@ class NIJAApexStrategyV71:
                     return True, '🚨 EMERGENCY LIQUIDATION: PnL <= -1% (capital preservation override)'
             except Exception as e:
                 logger.error(f"Error checking emergency liquidation: {e}")
-        
+
         side = position['side']
         ema9 = indicators['ema_9'].iloc[-1]
         ema21 = indicators['ema_21'].iloc[-1]
-        
+
         # 1. Check for opposite signal
         if side == 'long':
             short_signal, _, reason = self.check_short_entry(df, indicators)
@@ -871,15 +871,15 @@ class NIJAApexStrategyV71:
             long_signal, _, reason = self.check_long_entry(df, indicators)
             if long_signal:
                 return True, f'Opposite signal: {reason}'
-        
+
         # 2. Check trailing stop
         if self.execution_engine.check_stop_loss_hit(symbol, current_price):
             return True, f'Trailing stop hit @ {position["stop_loss"]:.2f}'
-        
+
         # 3. Check trend break (EMA9/21 cross)
         ema9_prev = indicators['ema_9'].iloc[-2]
         ema21_prev = indicators['ema_21'].iloc[-2]
-        
+
         if side == 'long':
             # Bearish cross: EMA9 crosses below EMA21
             if ema9 < ema21 and ema9_prev >= ema21_prev:
@@ -888,16 +888,16 @@ class NIJAApexStrategyV71:
             # Bullish cross: EMA9 crosses above EMA21
             if ema9 > ema21 and ema9_prev <= ema21_prev:
                 return True, 'Trend break: EMA9 crossed above EMA21'
-        
+
         return False, 'No exit conditions met'
-    
+
     def calculate_indicators(self, df: pd.DataFrame) -> Dict:
         """
         Calculate all required indicators
-        
+
         Args:
             df: Price DataFrame with columns: open, high, low, close, volume
-        
+
         Returns:
             Dictionary of indicators
         """
@@ -923,37 +923,37 @@ class NIJAApexStrategyV71:
             'ema_50': calculate_ema(df, 50),
             'rsi': calculate_rsi(df, 14),
         }
-        
+
         macd_line, signal_line, histogram = calculate_macd(df)
         indicators['macd_line'] = macd_line
         indicators['signal_line'] = signal_line
         indicators['histogram'] = histogram
-        
+
         indicators['atr'] = calculate_atr(df, 14)
         adx, plus_di, minus_di = calculate_adx(df, 14)
         indicators['adx'] = adx
         indicators['plus_di'] = plus_di
         indicators['minus_di'] = minus_di
-        
+
         # Calculate Bollinger Bands for volatility-based adaptive profit targets
         bb_upper, bb_middle, bb_lower, bb_bandwidth = calculate_bollinger_bands(df, period=20, std_dev=2)
         indicators['bb_upper'] = bb_upper
         indicators['bb_middle'] = bb_middle
         indicators['bb_lower'] = bb_lower
         indicators['bb_bandwidth'] = bb_bandwidth  # Normalized volatility measure for adaptive targets
-        
+
         return indicators
-    
-    def analyze_market(self, df: pd.DataFrame, symbol: str, 
+
+    def analyze_market(self, df: pd.DataFrame, symbol: str,
                        account_balance: float) -> Dict:
         """
         Main analysis function - combines all components
-        
+
         Args:
             df: Price DataFrame
             symbol: Trading symbol
             account_balance: Current account balance
-        
+
         Returns:
             Dictionary with analysis results and recommended action
         """
@@ -965,10 +965,10 @@ class NIJAApexStrategyV71:
                     'action': 'hold',
                     'reason': f'Insufficient data ({len(df)} candles, need 100+)'
                 }
-            
+
             # Calculate indicators
             indicators = self.calculate_indicators(df)
-            
+
             # Check smart filters
             current_time = datetime.now()
             filters_ok, filter_reason = self.check_smart_filters(df, current_time, symbol)
@@ -978,7 +978,7 @@ class NIJAApexStrategyV71:
                     'action': 'hold',
                     'reason': filter_reason
                 }
-            
+
             # Check market filter
             allow_trade, trend, market_reason = self.check_market_filter(df, indicators)
             if not allow_trade:
@@ -987,19 +987,19 @@ class NIJAApexStrategyV71:
                     'action': 'hold',
                     'reason': market_reason
                 }
-            
+
             # Check if we have an existing position
             position = self.execution_engine.get_position(symbol)
             current_price = df['close'].iloc[-1]
-            
+
             if position:
                 # Manage existing position
                 logger.debug(f"📊 Managing position: {symbol} @ ${current_price:.4f}")
-                
+
                 should_exit, exit_reason = self.check_exit_conditions(
                     symbol, df, indicators, current_price
                 )
-                
+
                 if should_exit:
                     return {
                         'action': 'exit',
@@ -1007,7 +1007,7 @@ class NIJAApexStrategyV71:
                         'position': position,
                         'current_price': current_price
                     }
-                
+
                 # PRIORITY 1: Check stepped profit exits (more aggressive, fee-aware)
                 # This takes profits gradually as position becomes profitable
                 stepped_exit = self.execution_engine.check_stepped_profit_exits(symbol, current_price)
@@ -1020,7 +1020,7 @@ class NIJAApexStrategyV71:
                         'exit_pct': stepped_exit['exit_pct'],
                         'current_price': current_price
                     }
-                
+
                 # PRIORITY 2: Check traditional take profit levels (backup)
                 tp_level = self.execution_engine.check_take_profit_hit(symbol, current_price)
                 if tp_level:
@@ -1029,7 +1029,7 @@ class NIJAApexStrategyV71:
                         'reason': f'{tp_level.upper()} reached',
                         'position': position
                     }
-                
+
                 # Update trailing stop
                 atr = scalar(indicators['atr'].iloc[-1])
                 if position.get('tp1_hit', False):
@@ -1038,23 +1038,23 @@ class NIJAApexStrategyV71:
                         position['side'], atr, breakeven_mode=True
                     )
                     self.execution_engine.update_stop_loss(symbol, new_stop)
-                
+
                 return {
                     'action': 'hold',
                     'reason': 'Position being managed',
                     'position': position
                 }
-            
+
             # No position - check for entry
             adx = scalar(indicators['adx'].iloc[-1])
-            
+
             # EARLY FILTER: Check if we can afford minimum position size for this broker
             # This avoids wasting computation on trades that will be rejected anyway
             broker_name = self._get_broker_name()
-            
+
             # Kraken requires $10 minimum, others typically allow smaller sizes
             min_required_balance = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
-            
+
             # Calculate maximum possible position size
             # For small accounts (<$100), use 20% to meet broker minimums
             # For larger accounts, use configured max (typically 10%)
@@ -1062,9 +1062,9 @@ class NIJAApexStrategyV71:
                 max_position_pct = SMALL_ACCOUNT_MAX_POSITION_PCT
             else:
                 max_position_pct = self.risk_manager.max_position_pct
-            
+
             max_position_size = account_balance * max_position_pct
-            
+
             # If even our maximum possible position is below minimum, skip analysis entirely
             if max_position_size < min_required_balance:
                 logger.info(f"   ❌ {symbol}: Account too small for {broker_name}")
@@ -1080,7 +1080,7 @@ class NIJAApexStrategyV71:
                     'action': 'hold',
                     'reason': f'Account too small for {broker_name} minimum (${min_required_balance:.2f})'
                 }
-            
+
             if trend == 'uptrend':
                 # Use enhanced scoring if available, otherwise legacy
                 if self.use_enhanced_scoring:
@@ -1090,20 +1090,20 @@ class NIJAApexStrategyV71:
                 else:
                     long_signal, score, reason = self.check_long_entry(df, indicators)
                     metadata = {}
-                
+
                 if long_signal:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
                     risk_score = self._get_risk_score(score, metadata)
-                    
+
                     # Get broker context for intelligent minimum position adjustments
                     broker_name = self._get_broker_name()
                     broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
-                    
+
                     # Extract regime confidence for GOD MODE+ adaptive risk (if available)
                     regime_confidence = metadata.get('regime_confidence', None) if metadata else None
-                    
+
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
                         account_balance, adx, risk_score,
                         broker_name=broker_name,
@@ -1112,19 +1112,19 @@ class NIJAApexStrategyV71:
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
-                    
+
                     # Adjust position size based on regime and score
                     if self.use_enhanced_scoring and self.current_regime:
                         position_size = self.adjust_position_size_for_regime(
                             position_size, self.current_regime, score
                         )
-                    
+
                     if float(position_size) == 0:
                         return {
                             'action': 'hold',
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
                         }
-                    
+
                     # Validate trade quality (position size and confidence)
                     validation = self._validate_trade_quality(position_size, risk_score)
                     if not validation['valid']:
@@ -1132,14 +1132,14 @@ class NIJAApexStrategyV71:
                             'action': 'hold',
                             'reason': validation['reason']
                         }
-                    
+
                     # Calculate stop loss and take profit
                     swing_low = self.risk_manager.find_swing_low(df, lookback=10)
                     atr = scalar(indicators['atr'].iloc[-1])
                     stop_loss = self.risk_manager.calculate_stop_loss(
                         current_price, 'long', swing_low, atr
                     )
-                    
+
                     # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
                     # Get broker-specific round-trip fee and use it for dynamic profit targets
                     # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
@@ -1148,24 +1148,24 @@ class NIJAApexStrategyV71:
                     # - Always maintains minimum fee coverage (1.8x broker fee)
                     broker_capabilities = self._get_broker_capabilities(symbol)
                     broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
-                    
+
                     # Extract volatility bandwidth for adaptive profit targeting
                     volatility_bandwidth = scalar(indicators['bb_bandwidth'].iloc[-1])
-                    
+
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'long', 
-                        broker_fee_pct=broker_fee, 
+                        current_price, stop_loss, 'long',
+                        broker_fee_pct=broker_fee,
                         use_limit_order=True,
                         atr=atr,
                         volatility_bandwidth=volatility_bandwidth
                     )
-                    
+
                     # Adjust TP levels based on regime if enhanced scoring is enabled
                     if self.use_enhanced_scoring and self.current_regime:
                         tp_levels = self.regime_detector.adjust_take_profit_levels(
                             self.current_regime, tp_levels
                         )
-                    
+
                     result = {
                         'action': 'enter_long',
                         'reason': reason,
@@ -1176,13 +1176,13 @@ class NIJAApexStrategyV71:
                         'score': score,
                         'adx': adx
                     }
-                    
+
                     # Add metadata if available
                     if metadata:
                         result['metadata'] = metadata
-                    
+
                     return result
-            
+
             elif trend == 'downtrend':
                 # ✅ BROKER-AWARE SHORT EXECUTION (HIGH-IMPACT OPTIMIZATION)
                 # Check if this broker/symbol supports shorting BEFORE analyzing
@@ -1199,7 +1199,7 @@ class NIJAApexStrategyV71:
                 else:
                     # If exchange capabilities not available, log warning but allow (risky)
                     logger.warning(f"⚠️  Exchange capability check unavailable - analyzing SHORT for {symbol} (risky!)")
-                
+
                 # Use enhanced scoring if available, otherwise legacy
                 if self.use_enhanced_scoring:
                     short_signal, score, reason, metadata = self.check_entry_with_enhanced_scoring(
@@ -1208,20 +1208,20 @@ class NIJAApexStrategyV71:
                 else:
                     short_signal, score, reason = self.check_short_entry(df, indicators)
                     metadata = {}
-                
+
                 if short_signal:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
                     risk_score = self._get_risk_score(score, metadata)
-                    
+
                     # Get broker context for intelligent minimum position adjustments
                     broker_name = self._get_broker_name()
                     broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
-                    
+
                     # Extract regime confidence for GOD MODE+ adaptive risk (if available)
                     regime_confidence = metadata.get('regime_confidence', None) if metadata else None
-                    
+
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
                         account_balance, adx, risk_score,
                         broker_name=broker_name,
@@ -1230,19 +1230,19 @@ class NIJAApexStrategyV71:
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
-                    
+
                     # Adjust position size based on regime and score
                     if self.use_enhanced_scoring and self.current_regime:
                         position_size = self.adjust_position_size_for_regime(
                             position_size, self.current_regime, score
                         )
-                    
+
                     if float(position_size) == 0:
                         return {
                             'action': 'hold',
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
                         }
-                    
+
                     # Validate trade quality (position size and confidence)
                     validation = self._validate_trade_quality(position_size, risk_score)
                     if not validation['valid']:
@@ -1250,14 +1250,14 @@ class NIJAApexStrategyV71:
                             'action': 'hold',
                             'reason': validation['reason']
                         }
-                    
+
                     # Calculate stop loss and take profit
                     swing_high = self.risk_manager.find_swing_high(df, lookback=10)
                     atr = scalar(indicators['atr'].iloc[-1])
                     stop_loss = self.risk_manager.calculate_stop_loss(
                         current_price, 'short', swing_high, atr
                     )
-                    
+
                     # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
                     # Get broker-specific round-trip fee and use it for dynamic profit targets
                     # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
@@ -1266,24 +1266,24 @@ class NIJAApexStrategyV71:
                     # - Always maintains minimum fee coverage (1.8x broker fee)
                     broker_capabilities = self._get_broker_capabilities(symbol)
                     broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
-                    
+
                     # Extract volatility bandwidth for adaptive profit targeting
                     volatility_bandwidth = scalar(indicators['bb_bandwidth'].iloc[-1])
-                    
+
                     tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'short', 
-                        broker_fee_pct=broker_fee, 
+                        current_price, stop_loss, 'short',
+                        broker_fee_pct=broker_fee,
                         use_limit_order=True,
                         atr=atr,
                         volatility_bandwidth=volatility_bandwidth
                     )
-                    
+
                     # Adjust TP levels based on regime if enhanced scoring is enabled
                     if self.use_enhanced_scoring and self.current_regime:
                         tp_levels = self.regime_detector.adjust_take_profit_levels(
                             self.current_regime, tp_levels
                         )
-                    
+
                     result = {
                         'action': 'enter_short',
                         'reason': reason,
@@ -1294,48 +1294,48 @@ class NIJAApexStrategyV71:
                         'score': score,
                         'adx': adx
                     }
-                    
+
                     # Add metadata if available
                     if metadata:
                         result['metadata'] = metadata
-                    
+
                     return result
-            
+
             return {
                 'action': 'hold',
                 'reason': f'No entry signal ({trend})'
             }
-            
+
         except Exception as e:
             logger.error(f"Analysis error: {e}")
             return {
                 'action': 'hold',
                 'reason': f'Error: {str(e)}'
             }
-    
+
     def execute_action(self, action_data: Dict, symbol: str) -> bool:
         """
         Execute the recommended action
-        
+
         Args:
             action_data: Dictionary from analyze_market()
             symbol: Trading symbol
-        
+
         Returns:
             True if action executed successfully
         """
         action = action_data.get('action')
-        
+
         try:
             # EMERGENCY: Check if entries are blocked via STOP_ALL_ENTRIES.conf
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
-            
+
             if entries_blocked and ('enter_long' in action or 'enter_short' in action):
                 logger.error("🛑 BUY BLOCKED: STOP_ALL_ENTRIES.conf active")
                 logger.error(f"   Position cap may be exceeded. Fix required before new entries allowed.")
                 return False
-            
+
             if action == 'enter_long':
                 position = self.execution_engine.execute_entry(
                     symbol=symbol,
@@ -1348,12 +1348,12 @@ class NIJAApexStrategyV71:
                 if position:
                     logger.info(f"Long entry executed: {symbol} @ {action_data['entry_price']:.2f}")
                     return True
-            
+
             elif action == 'enter_short':
                 # EXCHANGE CAPABILITY CHECK: Verify broker supports shorting for this symbol
                 # This prevents SHORT entries on exchanges that don't support them (e.g., Kraken spot)
                 broker_name = self._get_broker_name()
-                
+
                 # Check if this broker/symbol combination supports shorting
                 if EXCHANGE_CAPABILITIES_AVAILABLE:
                     if not can_short(broker_name, symbol):
@@ -1365,7 +1365,7 @@ class NIJAApexStrategyV71:
                         return False
                 else:
                     logger.warning(f"⚠️  Exchange capability check unavailable - allowing SHORT (risky!)")
-                
+
                 # Execute SHORT entry
                 position = self.execution_engine.execute_entry(
                     symbol=symbol,
@@ -1378,7 +1378,7 @@ class NIJAApexStrategyV71:
                 if position:
                     logger.info(f"✅ Short entry executed: {symbol} @ {action_data['entry_price']:.2f} (broker: {broker_name})")
                     return True
-            
+
             elif action == 'exit':
                 success = self.execution_engine.execute_exit(
                     symbol=symbol,
@@ -1387,7 +1387,7 @@ class NIJAApexStrategyV71:
                     reason=action_data['reason']
                 )
                 return success
-            
+
             elif action == 'partial_exit':
                 # Stepped profit exit (fee-aware gradual profit-taking)
                 success = self.execution_engine.execute_exit(
@@ -1400,7 +1400,7 @@ class NIJAApexStrategyV71:
                     logger.info(f"✅ Partial exit executed: {symbol} - {action_data['exit_pct']*100:.0f}% @ ${action_data['current_price']:.4f}")
                     logger.info(f"   Reason: {action_data['reason']}")
                 return success
-            
+
             elif action.startswith('take_profit_'):
                 # Partial exits based on TP level
                 if action == 'take_profit_tp1':
@@ -1417,7 +1417,7 @@ class NIJAApexStrategyV71:
                             symbol, action_data['position']['entry_price']
                         )
                     return success
-                
+
                 elif action == 'take_profit_tp2':
                     # Exit another 25% (75% total out)
                     return self.execution_engine.execute_exit(
@@ -1426,7 +1426,7 @@ class NIJAApexStrategyV71:
                         size_pct=0.5,  # 50% of remaining
                         reason='TP2 hit'
                     )
-                
+
                 elif action == 'take_profit_tp3':
                     # Exit remaining position
                     return self.execution_engine.execute_exit(
@@ -1435,27 +1435,27 @@ class NIJAApexStrategyV71:
                         size_pct=1.0,
                         reason='TP3 hit'
                     )
-            
+
             return False
-            
+
         except Exception as e:
             logger.error(f"Execution error: {e}")
             return False
-    
+
     # ============================================================
     # INSTITUTIONAL-GRADE RSI ENTRY FILTERS
     # ============================================================
-    
+
     def _rsi_long_filter(self, rsi: float) -> bool:
         """
         Institutional long entry RSI filter: buy weakness, not strength.
-        
+
         Args:
             rsi: Current RSI value (expected range: 0-100)
-            
+
         Returns:
             True if RSI is in optimal long entry zone (25-45), False otherwise
-            
+
         Note:
             Invalid RSI values (NaN, infinity, or outside 0-100) return False
         """
@@ -1464,19 +1464,19 @@ class NIJAApexStrategyV71:
             return False
         if rsi < 0 or rsi > 100:
             return False
-        
+
         return 25 <= rsi <= 45
-    
+
     def _rsi_short_filter(self, rsi: float) -> bool:
         """
         Institutional short entry RSI filter: sell strength, not weakness.
-        
+
         Args:
             rsi: Current RSI value (expected range: 0-100)
-            
+
         Returns:
             True if RSI is in optimal short entry zone (55-75), False otherwise
-            
+
         Note:
             Invalid RSI values (NaN, infinity, or outside 0-100) return False
         """
@@ -1485,49 +1485,49 @@ class NIJAApexStrategyV71:
             return False
         if rsi < 0 or rsi > 100:
             return False
-        
+
         return 55 <= rsi <= 75
-    
+
     # ============================================================
     # AI MOMENTUM SCORING (SKELETON - PLACEHOLDER FOR FUTURE)
     # ============================================================
-    
-    def calculate_ai_momentum_score(self, df: pd.DataFrame, 
+
+    def calculate_ai_momentum_score(self, df: pd.DataFrame,
                                     indicators: Dict) -> float:
         """
         AI-powered momentum scoring system (skeleton)
-        
+
         Future implementation ideas:
         - Machine learning model trained on historical price patterns
         - Sentiment analysis from news/social media
         - Market regime detection (trending vs ranging)
         - Volume profile analysis
         - Order flow analysis
-        
+
         Args:
             df: Price DataFrame
             indicators: Dictionary of calculated indicators
-        
+
         Returns:
             Momentum score (0.0 to 1.0)
         """
         # TODO: Implement AI/ML model here
         # Placeholder: simple weighted combination of indicators
-        
+
         if self.ai_momentum_enabled:
             # Example: weighted scoring
             rsi = scalar(indicators['rsi'].iloc[-1])
             adx = scalar(indicators['adx'].iloc[-1])
             macd_hist = indicators['histogram'].iloc[-1]
-            
+
             # Normalize to 0-1 range
             rsi_score = abs(rsi - 50) / 50  # Distance from neutral
             adx_score = min(adx / 50, 1.0)  # Trend strength
             macd_score = 0.5  # Placeholder
-            
+
             # Weighted average
             momentum_score = (rsi_score * 0.3 + adx_score * 0.5 + macd_score * 0.2)
-            
+
             return momentum_score
-        
+
         return 0.5  # Neutral score when disabled

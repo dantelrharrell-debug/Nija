@@ -34,7 +34,7 @@ Master executes SELL → emit_trade_signal(side="sell") → Copy Engine → User
 # COPY TRADING: Emit trade signal for master account trades
 if self.account_type == AccountType.MASTER:
     from trade_signal_emitter import emit_trade_signal
-    
+
     signal_emitted = emit_trade_signal(
         broker=broker_name,
         symbol=symbol,
@@ -66,7 +66,7 @@ def copy_trade_to_users(self, signal: TradeSignal):
     for user_id, user_broker in user_brokers.items():
         # Calculate scaled position size
         user_size = master_size × (user_balance / master_balance)
-        
+
         # Execute order with same side as master
         order_result = user_broker.execute_order(
             symbol=signal.symbol,
@@ -326,11 +326,11 @@ grep "COPY TRADE RESULTS" nija.log -A 5
 
 ## Summary
 
-✅ **Profit-taking IS synchronized** between master and users  
-✅ **SELL orders emit signals** just like BUY orders  
-✅ **Copy engine processes SELL** identically to BUY  
-✅ **All exit methods** (stop-loss, trailing, time-based) emit signals  
-✅ **Position sizing** maintains proportional exits  
+✅ **Profit-taking IS synchronized** between master and users
+✅ **SELL orders emit signals** just like BUY orders
+✅ **Copy engine processes SELL** identically to BUY
+✅ **All exit methods** (stop-loss, trailing, time-based) emit signals
+✅ **Position sizing** maintains proportional exits
 ✅ **Tested and verified** in production code
 
 **Users will automatically take profit when the master takes profit.**

@@ -63,7 +63,7 @@ KRAKEN_RATE_PROFILES = {
         'description': 'Balanced mode for $100-$1000 accounts',
         'min_account_balance': 100.0,
         'max_account_balance': 1000.0,
-        
+
         # Entry operations (AddOrder buy): 0 points
         # Can execute rapidly without API cost
         'entry': {
@@ -71,7 +71,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 30,          # Up to 30 entries/minute
             'api_cost_points': 0,          # Free on Kraken
         },
-        
+
         # Exit operations (AddOrder sell): 0 points
         # Can execute rapidly without API cost
         'exit': {
@@ -79,7 +79,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 30,          # Up to 30 exits/minute
             'api_cost_points': 0,          # Free on Kraken
         },
-        
+
         # Monitoring operations (Balance, TradeBalance): 1 point each
         # These consume API budget, so rate limit conservatively
         'monitoring': {
@@ -87,7 +87,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 6,            # Max 6 balance checks/minute
             'api_cost_points': 1,           # 1 point per check
         },
-        
+
         # Query operations (QueryOrders, OpenOrders): 1-2 points
         # Conservative rate limiting for order queries
         'query': {
@@ -95,7 +95,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 12,           # Max 12 queries/minute
             'api_cost_points': 1,           # 1-2 points per query
         },
-        
+
         # Overall API budget management
         'budget': {
             'total_points_per_minute': 15,  # Kraken Tier 0 limit
@@ -104,7 +104,7 @@ KRAKEN_RATE_PROFILES = {
             'query_budget_pct': 0.60,        # 60% of budget for queries
         },
     },
-    
+
     # LOW-CAPITAL MODE: Conservative for small accounts $20-$100
     # - Minimizes API calls to reduce "overhead cost"
     # - Prioritizes trade execution over frequent monitoring
@@ -114,7 +114,7 @@ KRAKEN_RATE_PROFILES = {
         'description': 'Conservative mode for $20-$100 small accounts',
         'min_account_balance': 20.0,
         'max_account_balance': 100.0,
-        
+
         # Entry operations (AddOrder buy): 0 points
         # No rate limiting needed (free on Kraken)
         'entry': {
@@ -122,7 +122,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 20,          # Up to 20 entries/minute
             'api_cost_points': 0,          # Free on Kraken
         },
-        
+
         # Exit operations (AddOrder sell): 0 points
         # No rate limiting needed (free on Kraken)
         'exit': {
@@ -130,7 +130,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 20,          # Up to 20 exits/minute
             'api_cost_points': 0,          # Free on Kraken
         },
-        
+
         # Monitoring operations (Balance, TradeBalance): 1 point each
         # HEAVILY rate limited to save API budget for small accounts
         'monitoring': {
@@ -138,7 +138,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 2,            # Max 2 balance checks/minute
             'api_cost_points': 1,           # 1 point per check
         },
-        
+
         # Query operations (QueryOrders, OpenOrders): 1-2 points
         # Conservative queries for small accounts
         'query': {
@@ -146,7 +146,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 4,            # Max 4 queries/minute
             'api_cost_points': 1,           # 1-2 points per query
         },
-        
+
         # Overall API budget management
         'budget': {
             'total_points_per_minute': 15,  # Kraken Tier 0 limit
@@ -154,7 +154,7 @@ KRAKEN_RATE_PROFILES = {
             'monitoring_budget_pct': 0.20,   # 20% of budget for monitoring
             'query_budget_pct': 0.80,        # 80% of budget for queries
         },
-        
+
         # Small account optimizations
         'optimizations': {
             'cache_balance': True,          # Cache balance for 60s
@@ -163,7 +163,7 @@ KRAKEN_RATE_PROFILES = {
             'batch_queries': True,           # Batch multiple queries when possible
         },
     },
-    
+
     # AGGRESSIVE MODE: High-frequency for professional accounts $1000+
     # - Maximum API utilization for active trading
     # - Real-time monitoring and rapid execution
@@ -173,7 +173,7 @@ KRAKEN_RATE_PROFILES = {
         'description': 'High-frequency mode for $1000+ professional accounts',
         'min_account_balance': 1000.0,
         'max_account_balance': None,  # No upper limit
-        
+
         # Entry operations (AddOrder buy): 0 points
         # Maximum speed for trade execution
         'entry': {
@@ -181,7 +181,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 60,          # Up to 60 entries/minute
             'api_cost_points': 0,          # Free on Kraken
         },
-        
+
         # Exit operations (AddOrder sell): 0 points
         # Maximum speed for trade execution
         'exit': {
@@ -189,7 +189,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 60,          # Up to 60 exits/minute
             'api_cost_points': 0,          # Free on Kraken
         },
-        
+
         # Monitoring operations (Balance, TradeBalance): 1 point each
         # Frequent monitoring for real-time tracking
         'monitoring': {
@@ -197,7 +197,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 12,           # Max 12 balance checks/minute
             'api_cost_points': 1,           # 1 point per check
         },
-        
+
         # Query operations (QueryOrders, OpenOrders): 1-2 points
         # Frequent queries for active position management
         'query': {
@@ -205,7 +205,7 @@ KRAKEN_RATE_PROFILES = {
             'max_per_minute': 20,           # Max 20 queries/minute
             'api_cost_points': 1,           # 1-2 points per query
         },
-        
+
         # Overall API budget management
         'budget': {
             'total_points_per_minute': 15,  # Kraken Tier 0 limit
@@ -227,11 +227,11 @@ def get_kraken_rate_profile(
 ) -> Dict:
     """
     Get Kraken rate limiting profile for the specified mode.
-    
+
     Args:
         mode: Rate limiting mode (STANDARD, LOW_CAPITAL, AGGRESSIVE)
         account_balance: Optional account balance to auto-select mode
-        
+
     Returns:
         Dict with rate limiting configuration
     """
@@ -246,7 +246,7 @@ def get_kraken_rate_profile(
         else:
             mode = KrakenRateMode.AGGRESSIVE
             logger.info(f"Auto-selected AGGRESSIVE mode for ${account_balance:.2f} balance")
-    
+
     profile = KRAKEN_RATE_PROFILES.get(mode, KRAKEN_RATE_PROFILES[KrakenRateMode.STANDARD])
     logger.debug(f"Using Kraken rate profile: {profile['name']}")
     return profile
@@ -258,21 +258,21 @@ def get_operation_rate_limit(
 ) -> Dict:
     """
     Get rate limit configuration for a specific API operation category.
-    
+
     Args:
         category: API operation category (ENTRY, EXIT, MONITORING, QUERY)
         mode: Rate limiting mode
-        
+
     Returns:
         Dict with rate limit settings for the category
     """
     profile = KRAKEN_RATE_PROFILES.get(mode, KRAKEN_RATE_PROFILES[KrakenRateMode.STANDARD])
     category_key = category.value
-    
+
     if category_key not in profile:
         logger.warning(f"Category {category_key} not found in profile, using monitoring defaults")
         category_key = 'monitoring'
-    
+
     return profile[category_key]
 
 
@@ -282,11 +282,11 @@ def calculate_min_interval(
 ) -> float:
     """
     Calculate minimum interval between API calls for a category.
-    
+
     Args:
         category: API operation category
         mode: Rate limiting mode
-        
+
     Returns:
         Minimum seconds between calls
     """
@@ -297,10 +297,10 @@ def calculate_min_interval(
 def get_category_for_method(method: str) -> KrakenAPICategory:
     """
     Determine API category for a Kraken API method.
-    
+
     Args:
         method: Kraken API method name (e.g., 'AddOrder', 'Balance')
-        
+
     Returns:
         KrakenAPICategory enum value
     """
@@ -309,15 +309,15 @@ def get_category_for_method(method: str) -> KrakenAPICategory:
         # Note: We can't distinguish buy vs sell here without params
         # Caller should specify category explicitly
         return KrakenAPICategory.ENTRY
-    
+
     # Monitoring operations
     if method in ['Balance', 'TradeBalance']:
         return KrakenAPICategory.MONITORING
-    
+
     # Query operations
     if method in ['QueryOrders', 'OpenOrders', 'ClosedOrders', 'TradesHistory']:
         return KrakenAPICategory.QUERY
-    
+
     # Default to monitoring (most conservative)
     logger.debug(f"Unknown method '{method}', defaulting to MONITORING category")
     return KrakenAPICategory.MONITORING
@@ -326,15 +326,15 @@ def get_category_for_method(method: str) -> KrakenAPICategory:
 def should_cache_balance(mode: KrakenRateMode = KrakenRateMode.STANDARD) -> bool:
     """
     Check if balance caching is enabled for the mode.
-    
+
     Args:
         mode: Rate limiting mode
-        
+
     Returns:
         True if balance should be cached
     """
     profile = KRAKEN_RATE_PROFILES.get(mode, KRAKEN_RATE_PROFILES[KrakenRateMode.STANDARD])
-    
+
     # Check if optimizations section exists
     optimizations = profile.get('optimizations', {})
     return optimizations.get('cache_balance', False)
@@ -343,10 +343,10 @@ def should_cache_balance(mode: KrakenRateMode = KrakenRateMode.STANDARD) -> bool
 def get_cache_ttl(mode: KrakenRateMode = KrakenRateMode.STANDARD) -> int:
     """
     Get cache TTL for the mode.
-    
+
     Args:
         mode: Rate limiting mode
-        
+
     Returns:
         Cache TTL in seconds
     """
@@ -362,15 +362,15 @@ def get_cache_ttl(mode: KrakenRateMode = KrakenRateMode.STANDARD) -> int:
 def get_rate_profile_summary(mode: KrakenRateMode = KrakenRateMode.STANDARD) -> str:
     """
     Get human-readable summary of rate profile settings.
-    
+
     Args:
         mode: Rate limiting mode
-        
+
     Returns:
         Formatted string with profile details
     """
     profile = KRAKEN_RATE_PROFILES.get(mode, KRAKEN_RATE_PROFILES[KrakenRateMode.STANDARD])
-    
+
     return f"""
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║              KRAKEN RATE LIMITING PROFILE: {mode.value.upper()}
@@ -420,16 +420,16 @@ if __name__ == "__main__":
     print("\n" + "="*80)
     print("KRAKEN RATE LIMITING PROFILES")
     print("="*80)
-    
+
     for mode in KrakenRateMode:
         print(get_rate_profile_summary(mode))
         print("\n")
-    
+
     # Test auto-selection
     print("\n" + "="*80)
     print("AUTO-SELECTION TESTS")
     print("="*80)
-    
+
     test_balances = [50.0, 150.0, 1500.0]
     for balance in test_balances:
         profile = get_kraken_rate_profile(account_balance=balance)

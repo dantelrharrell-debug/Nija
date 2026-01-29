@@ -74,19 +74,19 @@ def _get_account_manager():
     """
     Get the multi-account broker manager instance.
     Helper function to avoid code duplication.
-    
+
     Returns:
         MultiAccountBrokerManager instance
     """
     try:
         from bot.multi_account_broker_manager import MultiAccountBrokerManager
-        
+
         # Check if there's a global instance in the running bot
         if 'nija_bot' in sys.modules:
             nija_bot = sys.modules['nija_bot']
             if hasattr(nija_bot, 'account_manager'):
                 return nija_bot.account_manager
-        
+
         # Create new instance
         return MultiAccountBrokerManager()
     except Exception as e:
@@ -180,11 +180,11 @@ def health_check():
 def get_live_capital_status():
     """
     Get LIVE CAPITAL VERIFIED status.
-    
+
     This endpoint returns the current status of the LIVE CAPITAL VERIFIED
     kill-switch, which is the master safety control that must be enabled
     for live trading.
-    
+
     Returns:
         JSON with verification status and details
     """
@@ -196,10 +196,10 @@ def get_live_capital_status():
                 'can_trade': False,
                 'status': 'error'
             }), 503
-        
+
         hard_controls = get_hard_controls()
         status = hard_controls.get_verification_status()
-        
+
         # Add human-readable status
         if status['live_capital_verified']:
             status['status'] = 'LIVE TRADING ENABLED'
@@ -211,9 +211,9 @@ def get_live_capital_status():
             status['status_class'] = 'success'
             status['icon'] = '🟢'
             status['message'] = 'Live trading is disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable.'
-        
+
         return jsonify(status)
-    
+
     except Exception as e:
         logger.error(f"Error getting live capital status: {e}")
         return jsonify({
@@ -230,35 +230,35 @@ def list_users():
     try:
         if not all([get_user_pnl_tracker, get_user_risk_manager, get_hard_controls]):
             return jsonify({'error': 'User management modules not available'}), 503
-        
+
         pnl_tracker = get_user_pnl_tracker()
         risk_manager = get_user_risk_manager()
         hard_controls = get_hard_controls()
-        
+
         # Check if we should include master
         include_master = request.args.get('include_master', 'false').lower() == 'true'
-        
+
         # Get all users from various sources
         user_ids = set()
-        
+
         # From hard controls
         for user_id in hard_controls.user_kill_switches.keys():
             if user_id != 'master' or include_master:
                 user_ids.add(user_id)
-        
+
         # From risk manager
         for user_id in risk_manager._user_states.keys():
             if user_id != 'master' or include_master:
                 user_ids.add(user_id)
-        
+
         # Build user list
         users = []
         for user_id in sorted(user_ids):
             stats = pnl_tracker.get_stats(user_id)
             risk_state = risk_manager.get_state(user_id)
-            
+
             can_trade, reason = hard_controls.can_trade(user_id)
-            
+
             users.append({
                 'user_id': user_id,
                 'can_trade': can_trade,
@@ -271,13 +271,13 @@ def list_users():
                 'circuit_breaker': risk_state.circuit_breaker_triggered,
                 'is_master': user_id == 'master'
             })
-        
+
         return jsonify({
             'users': users,
             'total_users': len(users),
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error listing users: {e}")
         return jsonify({'error': 'Failed to list users'}), 500
@@ -289,18 +289,18 @@ def get_user_pnl(user_id: str):
     try:
         if not get_user_pnl_tracker:
             return jsonify({'error': 'PnL tracker not available'}), 503
-        
+
         pnl_tracker = get_user_pnl_tracker()
-        
+
         # Get overall stats
         stats = pnl_tracker.get_stats(user_id, force_refresh=True)
-        
+
         # Get recent trades
         recent_trades = pnl_tracker.get_recent_trades(user_id, limit=20)
-        
+
         # Get daily breakdown
         daily_breakdown = pnl_tracker.get_daily_breakdown(user_id, days=7)
-        
+
         return jsonify({
             'user_id': user_id,
             'stats': stats,
@@ -318,7 +318,7 @@ def get_user_pnl(user_id: str):
             ],
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting PnL for {user_id}: {e}")
         return jsonify({'error': 'Failed to retrieve PnL data'}), 500
@@ -332,20 +332,20 @@ def get_master_pnl():
 def get_users():
     """
     Get list of all users with their account information.
-    
+
     Returns:
         JSON with user list including balances, positions, and trading stats
     """
     try:
         _ensure_repo_in_path()
         from config.user_loader import get_user_config_loader
-        
+
         users_data = []
-        
+
         # Load user configurations
         user_loader = get_user_config_loader()
         all_user_configs = user_loader.all_users
-        
+
         # Get account manager
         account_mgr = _get_account_manager()
         if not account_mgr:
@@ -355,20 +355,20 @@ def get_users():
                 "total_users": 0,
                 "timestamp": datetime.now().isoformat()
             }), 500
-        
+
         # Get data for each user
         for user_config in all_user_configs:
             user_id = user_config.user_id
             if not user_id or user_id == 'master':
                 continue
-            
+
             # Get balance
             try:
                 user_balance = account_mgr.get_user_balance(user_id)
             except Exception as e:
                 logger.debug(f"Could not get balance for {user_id}: {e}")
                 user_balance = 0.0
-            
+
             # Get positions
             user_positions = []
             user_positions_count = 0
@@ -382,7 +382,7 @@ def get_users():
                             user_positions_count += len(positions)
             except Exception as e:
                 logger.debug(f"Could not get positions for {user_id}: {e}")
-            
+
             # Get trading stats
             total_pnl = 0.0
             daily_pnl = 0.0
@@ -414,7 +414,7 @@ def get_users():
                 total_trades = stats.get('completed_trades', 0)
             except Exception as e:
                 logger.debug(f"Could not get stats for {user_id}: {e}")
-            
+
             users_data.append({
                 "user_id": user_id,
                 "name": user_config.name,
@@ -430,13 +430,13 @@ def get_users():
                 "total_trades": total_trades,
                 "recent_trades": recent_trades
             })
-        
+
         return jsonify({
             "users": users_data,
             "total_users": len(users_data),
             "timestamp": datetime.now().isoformat()
         })
-    
+
     except ImportError as e:
         logger.exception("Import error in get_users")
         return jsonify({
@@ -459,7 +459,7 @@ def get_users():
 def get_trading_status():
     """
     Get comprehensive trading status for NIJA and all users.
-    
+
     Returns:
         JSON with:
         - is_trading: boolean indicating if bot is actively trading
@@ -486,18 +486,18 @@ def get_trading_status():
             "users": [],
             "errors": []
         }
-        
+
         # Check 1: Is bot process running (check log file activity)
         try:
             base_dir = Path(os.getenv("APP_DIR", "/app"))
             log_file = base_dir / "nija.log"
             alt_log_file = Path("../nija.log")
-            
+
             for lf in [log_file, alt_log_file]:
                 if lf.exists():
                     last_modified = datetime.fromtimestamp(lf.stat().st_mtime)
                     time_since_update = datetime.now() - last_modified
-                    
+
                     if time_since_update.total_seconds() < 300:  # 5 minutes
                         status["bot_running"] = True
                         status["bot_status"] = "running"
@@ -506,17 +506,17 @@ def get_trading_status():
                     break
         except Exception as e:
             status["errors"].append(f"Log check failed: {str(e)}")
-        
+
         # Check 2: Get broker positions and balances
         try:
             from broker_manager import CoinbaseBroker, KrakenBroker, OKXBroker
-            
+
             brokers_to_check = [
                 ("Coinbase Advanced Trade", CoinbaseBroker),
                 ("Kraken Pro", KrakenBroker),
                 ("OKX", OKXBroker),
             ]
-            
+
             for broker_name, broker_class in brokers_to_check:
                 try:
                     broker = broker_class()
@@ -531,7 +531,7 @@ def get_trading_status():
                                 "position_details": positions[:5]  # First 5 positions
                             })
                             status["total_positions"] += len(positions)
-                        
+
                         # Get balance
                         try:
                             balance_data = broker.get_account_balance()
@@ -539,9 +539,9 @@ def get_trading_status():
                                 balance = balance_data.get('trading_balance', 0)
                             else:
                                 balance = float(balance_data) if balance_data else 0
-                            
+
                             status["trading_balance"] += balance
-                            
+
                             # Add broker balance info
                             for broker_info in status["active_brokers"]:
                                 if broker_info["name"] == broker_name:
@@ -565,19 +565,19 @@ def get_trading_status():
             status["errors"].append(f"Broker import failed: {str(e)}")
         except Exception as e:
             status["errors"].append(f"Broker check failed: {str(e)}")
-        
+
         # Check 3: Recent trading activity from trade journal
         try:
             base_dir = Path(os.getenv("APP_DIR", "/app"))
             journal_file = Path("../trade_journal.jsonl")
             alt_journal = base_dir / "trade_journal.jsonl"
-            
+
             for jf in [journal_file, alt_journal]:
                 if jf.exists():
                     trades_24h = 0
                     last_trade = None
                     cutoff_time = datetime.now() - timedelta(hours=24)
-                    
+
                     with open(jf, 'r') as f:
                         for line in f:
                             if not line.strip():
@@ -585,49 +585,49 @@ def get_trading_status():
                             try:
                                 trade = json.loads(line)
                                 trade_time = datetime.fromisoformat(trade.get('timestamp', ''))
-                                
+
                                 if trade_time >= cutoff_time:
                                     trades_24h += 1
                                     if not last_trade or trade_time > datetime.fromisoformat(last_trade):
                                         last_trade = trade.get('timestamp')
                             except:
                                 continue
-                    
+
                     status["recent_activity"]["trades_24h"] = trades_24h
                     status["recent_activity"]["last_trade_time"] = last_trade
-                    
+
                     if trades_24h > 0:
                         status["is_trading"] = True
                     break
         except Exception as e:
             status["errors"].append(f"Trade journal check failed: {str(e)}")
-        
+
         # Check 4: User-specific trading status from multi-account broker manager
         try:
             _ensure_repo_in_path()
             from config.user_loader import get_user_config_loader
-            
+
             # Load user configurations
             user_loader = get_user_config_loader()
             all_user_configs = user_loader.all_users
-            
+
             # Get account manager
             account_mgr = _get_account_manager()
-            
+
             if account_mgr:
                 # Get user data from configuration files
                 for user_config in all_user_configs:
                     user_id = user_config.user_id
                     if not user_id or user_id == 'master':
                         continue
-                    
+
                     # Get balance for this user across all brokers
                     try:
                         user_balance = account_mgr.get_user_balance(user_id)
                     except Exception as e:
                         logger.debug(f"Could not get balance for {user_id}: {e}")
                         user_balance = 0.0
-                    
+
                     # Get positions for this user
                     user_positions = 0
                     try:
@@ -639,7 +639,7 @@ def get_trading_status():
                                     user_positions += len(positions)
                     except Exception as e:
                         logger.debug(f"Could not get positions for {user_id}: {e}")
-                    
+
                     # Get recent trades from user PnL tracker
                     recent_trades = []
                     total_pnl = 0.0
@@ -666,7 +666,7 @@ def get_trading_status():
                         total_trades = stats.get('completed_trades', 0)
                     except Exception as e:
                         logger.debug(f"Could not get PnL for {user_id}: {e}")
-                    
+
                     status["users"].append({
                         "user_id": user_id,
                         "name": user_config.name,
@@ -690,7 +690,7 @@ def get_trading_status():
             logger.exception(f"User check failed: {e}")
             status["errors"].append(f"User check failed: {str(e)}")
             status["users"] = []
-        
+
         # Determine overall trading status
         if status["is_trading"]:
             status["trading_status"] = "ACTIVE"
@@ -701,9 +701,9 @@ def get_trading_status():
         else:
             status["trading_status"] = "STOPPED"
             status["message"] = "NIJA bot does not appear to be running"
-        
+
         return jsonify(status)
-        
+
     except Exception as e:
         logger.exception("Error in get_trading_status")
         return jsonify({
@@ -723,7 +723,7 @@ def human_readable_status():
         with app.test_request_context():
             status_response = get_trading_status()
             data = status_response.get_json()
-        
+
         # Build HTML
         html = """<!DOCTYPE html>
 <html>
@@ -732,20 +732,20 @@ def human_readable_status():
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body { 
+        body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0f1419; 
-            color: #e7e9ea; 
+            background: #0f1419;
+            color: #e7e9ea;
             padding: 40px;
             line-height: 1.6;
         }
         .container { max-width: 900px; margin: 0 auto; }
         h1 { color: #1d9bf0; margin-bottom: 10px; }
         .timestamp { color: #71767b; font-size: 14px; margin-bottom: 30px; }
-        .status-box { 
-            background: #16181c; 
+        .status-box {
+            background: #16181c;
             border: 2px solid #2f3336;
-            border-radius: 12px; 
+            border-radius: 12px;
             padding: 30px;
             margin-bottom: 20px;
         }
@@ -800,24 +800,24 @@ def human_readable_status():
     <div class="container">
         <h1>🤖 NIJA Trading Status</h1>
         <div class="timestamp">Last updated: """ + data.get('timestamp', '') + """</div>
-        
+
         <div class="status-box status-""" + data.get('trading_status', 'stopped').lower() + """">
             <div class="status-indicator">"""
-        
+
         if data.get('trading_status') == 'ACTIVE':
             html += "🟢"
         elif data.get('trading_status') == 'READY':
             html += "🟡"
         else:
             html += "🔴"
-        
+
         html += """</div>
             <div class="status-text """ + data.get('trading_status', 'stopped').lower() + """">
                 """ + data.get('trading_status', 'UNKNOWN') + """
             </div>
             <p>""" + data.get('message', 'No status message available') + """</p>
         </div>
-        
+
         <div class="info-grid">
             <div class="info-card">
                 <div class="info-label">Open Positions</div>
@@ -836,7 +836,7 @@ def human_readable_status():
                 <div class="info-value">""" + str(len([b for b in data.get('active_brokers', []) if b.get('positions', 0) > 0])) + """</div>
             </div>
         </div>"""
-        
+
         # Broker details
         if data.get('active_brokers'):
             html += """
@@ -850,7 +850,7 @@ def human_readable_status():
                 Balance: $""" + f"{broker.get('balance', 0):.2f}" + """
             </div>"""
             html += "</div>"
-        
+
         # User details (if available)
         if data.get('users') and len(data.get('users', [])) > 0:
             html += """
@@ -867,7 +867,7 @@ def human_readable_status():
                 status_icon = "✅" if user.get('enabled') else "❌"
                 pnl_color = "color: #00ba7c;" if user.get('total_pnl', 0) >= 0 else "color: #f91880;"
                 daily_pnl_color = "color: #00ba7c;" if user.get('daily_pnl', 0) >= 0 else "color: #f91880;"
-                
+
                 html += """
             <div class="user-item" style="padding: 20px;">
                 <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
@@ -884,7 +884,7 @@ def human_readable_status():
                         <div style="font-size: 12px; color: #71767b;">Account Balance</div>
                     </div>
                 </div>
-                
+
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-top: 15px; padding-top: 15px; border-top: 1px solid #2f3336;">
                     <div>
                         <div style="font-size: 11px; color: #71767b; margin-bottom: 3px;">Open Positions</div>
@@ -907,7 +907,7 @@ def human_readable_status():
                         <div style="font-size: 16px; font-weight: bold; """ + daily_pnl_color + """">$""" + f"{user.get('daily_pnl', 0):.2f}" + """</div>
                     </div>
                 </div>"""
-                
+
                 # Show recent trades if available
                 if user.get('recent_trades') and len(user.get('recent_trades', [])) > 0:
                     html += """
@@ -923,7 +923,7 @@ def human_readable_status():
                     </div>"""
                     html += """
                 </div>"""
-                
+
                 html += """
             </div>"""
             html += "</div>"
@@ -934,22 +934,22 @@ def human_readable_status():
             <p>No user accounts configured or unable to fetch user data.</p>
             <p style="margin-top: 10px; font-size: 13px;">Configure users in <code>config/users/*.json</code> and set credentials in <code>.env</code></p>
         </div>"""
-        
+
         html += """
         <div style="margin-top: 30px; padding: 20px; background: #16181c; border-radius: 8px; font-size: 13px; color: #71767b;">
             <strong>Auto-refresh:</strong> This page refreshes every 10 seconds<br>
             <strong>API Endpoint:</strong> <a href="/api/trading_status" style="color: #1d9bf0;">/api/trading_status</a>
         </div>
-        
+
         <script>
             setTimeout(function() { location.reload(); }, 10000);
         </script>
     </div>
 </body>
 </html>"""
-        
+
         return html
-        
+
     except Exception as e:
         return f"""<!DOCTYPE html>
 <html>
@@ -966,7 +966,7 @@ def create_dashboard_html():
     """Create the dashboard HTML template"""
     templates_dir = Path(__file__).parent / "templates"
     templates_dir.mkdir(exist_ok=True)
-    
+
     html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1160,7 +1160,7 @@ def create_dashboard_html():
             // Balance
             document.getElementById('current-balance').textContent = formatCurrency(data.balance?.current || 0);
             document.getElementById('peak-balance').textContent = formatCurrency(data.balance?.peak || 0);
-            
+
             const changeValue = (data.balance?.current || 0) - (data.balance?.start || 0);
             const changePct = data.balance?.change_pct || 0;
             const changeEl = document.getElementById('balance-change');
@@ -1170,7 +1170,7 @@ def create_dashboard_html():
             // Performance
             document.getElementById('win-rate').textContent = `${(data.performance?.win_rate || 0).toFixed(1)}%`;
             document.getElementById('total-trades').textContent = data.performance?.total_trades || 0;
-            
+
             const netProfit = data.performance?.net_profit || 0;
             const netProfitEl = document.getElementById('net-profit');
             netProfitEl.textContent = formatCurrency(netProfit);
@@ -1179,7 +1179,7 @@ def create_dashboard_html():
             // Health
             const status = data.status || 'unknown';
             document.getElementById('status-text').textContent = status.charAt(0).toUpperCase() + status.slice(1);
-            
+
             const statusDot = document.getElementById('status-dot');
             statusDot.className = 'status-indicator';
             if (status === 'healthy') statusDot.classList.add('status-healthy');
@@ -1259,7 +1259,7 @@ def create_dashboard_html():
             updateTrades(trades);
 
             lastUpdate = Date.now();
-            document.getElementById('refresh-status').textContent = 
+            document.getElementById('refresh-status').textContent =
                 `Last update: ${new Date().toLocaleTimeString()}`;
         }
 
@@ -1272,7 +1272,7 @@ def create_dashboard_html():
 </body>
 </html>
 """
-    
+
     (templates_dir / "dashboard.html").write_text(html_content)
     logger.info(f"✅ Dashboard template created at {templates_dir / 'dashboard.html'}")
 
@@ -1281,7 +1281,7 @@ def create_users_dashboard_html():
     """Create the users dashboard HTML template"""
     templates_dir = Path(__file__).parent / "templates"
     templates_dir.mkdir(exist_ok=True)
-    
+
     html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1517,7 +1517,7 @@ def create_users_dashboard_html():
         function createUserCard(user) {
             const isMaster = user.is_master || user.user_id === 'master';
             const cardClass = isMaster ? 'user-card master-card' : 'user-card';
-            
+
             return `
                 <div class="${cardClass}">
                     <div class="user-card-header">
@@ -1529,7 +1529,7 @@ def create_users_dashboard_html():
                             ${user.can_trade ? '✓ Active' : '✗ Inactive'}
                         </span>
                     </div>
-                    
+
                     <div class="metric-row">
                         <div class="metric">
                             <div class="metric-label">Balance</div>
@@ -1544,7 +1544,7 @@ def create_users_dashboard_html():
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="metric-row">
                         <div class="metric">
                             <div class="metric-label">Win Rate</div>
@@ -1559,7 +1559,7 @@ def create_users_dashboard_html():
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="metric-row">
                         <div class="metric" style="grid-column: 1 / -1;">
                             <div class="metric-label">Total P&L</div>
@@ -1568,7 +1568,7 @@ def create_users_dashboard_html():
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="recent-trades-section" id="trades-${user.user_id}">
                         <div class="section-title">Recent Trades</div>
                         <div class="no-data">Loading trades...</div>
@@ -1581,12 +1581,12 @@ def create_users_dashboard_html():
             try {
                 const response = await fetch(`/api/user/${userId}/pnl`);
                 const data = await response.json();
-                
+
                 const tradesContainer = document.getElementById(`trades-${userId}`);
                 if (!tradesContainer) return;
-                
+
                 const recentTrades = data.recent_trades || [];
-                
+
                 if (recentTrades.length === 0) {
                     tradesContainer.innerHTML = `
                         <div class="section-title">Recent Trades</div>
@@ -1594,7 +1594,7 @@ def create_users_dashboard_html():
                     `;
                     return;
                 }
-                
+
                 const tradesHTML = recentTrades.slice(0, 5).map(trade => `
                     <div class="trade-item">
                         <span class="trade-symbol">${trade.symbol || 'N/A'}</span>
@@ -1603,7 +1603,7 @@ def create_users_dashboard_html():
                         </span>
                     </div>
                 `).join('');
-                
+
                 tradesContainer.innerHTML = `
                     <div class="section-title">Recent Trades</div>
                     ${tradesHTML}
@@ -1618,33 +1618,33 @@ def create_users_dashboard_html():
                 // Fetch users with master included
                 const response = await fetch('/api/users?include_master=true');
                 const data = await response.json();
-                
+
                 const container = document.getElementById('users-container');
-                
+
                 if (!data.users || data.users.length === 0) {
                     container.innerHTML = '<div class="no-data">No users found</div>';
                     return;
                 }
-                
+
                 // Sort: master first, then alphabetically
                 const sortedUsers = data.users.sort((a, b) => {
                     if (a.is_master || a.user_id === 'master') return -1;
                     if (b.is_master || b.user_id === 'master') return 1;
                     return a.user_id.localeCompare(b.user_id);
                 });
-                
+
                 container.innerHTML = `
                     <div class="user-cards-grid">
                         ${sortedUsers.map(user => createUserCard(user)).join('')}
                     </div>
                 `;
-                
+
                 // Load recent trades for each user
                 sortedUsers.forEach(user => loadRecentTrades(user.user_id));
-                
-                document.getElementById('refresh-status').textContent = 
+
+                document.getElementById('refresh-status').textContent =
                     `Last update: ${new Date().toLocaleTimeString()}`;
-                
+
             } catch (error) {
                 console.error('Error loading users:', error);
                 document.getElementById('users-container').innerHTML = `
@@ -1665,7 +1665,7 @@ def create_users_dashboard_html():
 </body>
 </html>
 """
-    
+
     (templates_dir / "users_dashboard.html").write_text(html_content)
     logger.info(f"✅ Users dashboard template created at {templates_dir / 'users_dashboard.html'}")
 
@@ -1676,21 +1676,21 @@ def get_recent_activity():
     try:
         if not get_activity_feed:
             return jsonify({'error': 'Activity feed not available'}), 503
-        
+
         # Get query parameters
         n = request.args.get('limit', default=100, type=int)
         event_type = request.args.get('type', default=None, type=str)
         symbol = request.args.get('symbol', default=None, type=str)
-        
+
         activity_feed = get_activity_feed()
         events = activity_feed.get_recent_events(n=n, event_type=event_type, symbol=symbol)
-        
+
         return jsonify({
             'events': events,
             'count': len(events),
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting recent activity: {e}")
         return jsonify({'error': 'Failed to retrieve recent activity'}), 500
@@ -1702,14 +1702,14 @@ def get_activity_summary():
     try:
         if not get_activity_feed:
             return jsonify({'error': 'Activity feed not available'}), 503
-        
+
         hours = request.args.get('hours', default=24, type=int)
-        
+
         activity_feed = get_activity_feed()
         summary = activity_feed.get_activity_summary(hours=hours)
-        
+
         return jsonify(summary)
-    
+
     except Exception as e:
         logger.error(f"Error getting activity summary: {e}")
         return jsonify({'error': 'Failed to retrieve activity summary'}), 500
@@ -1721,25 +1721,25 @@ def get_rejection_reasons():
     try:
         if not get_activity_feed:
             return jsonify({'error': 'Activity feed not available'}), 503
-        
+
         hours = request.args.get('hours', default=24, type=int)
-        
+
         activity_feed = get_activity_feed()
         reasons = activity_feed.get_rejection_reasons(hours=hours)
-        
+
         # Convert to sorted list for easier display
         reasons_list = [
             {'reason': reason, 'count': count}
             for reason, count in sorted(reasons.items(), key=lambda x: x[1], reverse=True)
         ]
-        
+
         return jsonify({
             'rejection_reasons': reasons_list,
             'total_rejections': sum(reasons.values()),
             'period_hours': hours,
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting rejection reasons: {e}")
         return jsonify({'error': 'Failed to retrieve rejection reasons'}), 500
@@ -1751,16 +1751,16 @@ def get_live_positions():
     try:
         if not get_position_mirror:
             return jsonify({'error': 'Position mirror not available'}), 503
-        
+
         position_mirror = get_position_mirror()
         positions = position_mirror.get_all_positions()
-        
+
         return jsonify({
             'positions': [pos.to_dict() for pos in positions],
             'count': len(positions),
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting live positions: {e}")
         return jsonify({'error': 'Failed to retrieve live positions'}), 500
@@ -1772,12 +1772,12 @@ def get_positions_summary():
     try:
         if not get_position_mirror:
             return jsonify({'error': 'Position mirror not available'}), 503
-        
+
         position_mirror = get_position_mirror()
         summary = position_mirror.get_portfolio_summary()
-        
+
         return jsonify(summary)
-    
+
     except Exception as e:
         logger.error(f"Error getting positions summary: {e}")
         return jsonify({'error': 'Failed to retrieve positions summary'}), 500
@@ -1789,17 +1789,17 @@ def get_positions_by_broker(broker: str):
     try:
         if not get_position_mirror:
             return jsonify({'error': 'Position mirror not available'}), 503
-        
+
         position_mirror = get_position_mirror()
         positions = position_mirror.get_positions_by_broker(broker)
-        
+
         return jsonify({
             'broker': broker,
             'positions': [pos.to_dict() for pos in positions],
             'count': len(positions),
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting positions for {broker}: {e}")
         return jsonify({'error': 'Failed to retrieve broker positions'}), 500
@@ -1815,7 +1815,7 @@ def aggregated_report():
 def get_aggregated_summary():
     """
     Get aggregated read-only summary of master + all users.
-    
+
     Returns:
         - Master account performance
         - Combined user performance
@@ -1825,20 +1825,20 @@ def get_aggregated_summary():
     try:
         if not get_user_pnl_tracker or not get_user_risk_manager:
             return jsonify({'error': 'Required modules not available'}), 503
-        
+
         pnl_tracker = get_user_pnl_tracker()
         risk_manager = get_user_risk_manager()
-        
+
         # Get master stats
         master_stats = pnl_tracker.get_stats('master', force_refresh=True)
         master_risk_state = risk_manager.get_state('master')
-        
+
         # Get all user stats (excluding master)
         all_user_ids = set()
         for user_id in risk_manager._user_states.keys():
             if user_id != 'master':
                 all_user_ids.add(user_id)
-        
+
         # Aggregate user metrics
         total_users = len(all_user_ids)
         users_can_trade = 0
@@ -1847,12 +1847,12 @@ def get_aggregated_summary():
         total_user_trades = 0
         total_user_wins = 0
         total_user_losses = 0
-        
+
         user_summaries = []
         for user_id in sorted(all_user_ids):
             user_stats = pnl_tracker.get_stats(user_id)
             user_risk_state = risk_manager.get_state(user_id)
-            
+
             if get_hard_controls:
                 hard_controls = get_hard_controls()
                 can_trade, reason = hard_controls.can_trade(user_id)
@@ -1861,13 +1861,13 @@ def get_aggregated_summary():
             else:
                 can_trade = True
                 users_can_trade += 1
-            
+
             total_user_balance += user_risk_state.balance
             total_user_pnl += user_stats.get('total_pnl', 0.0)
             total_user_trades += user_stats.get('completed_trades', 0)
             total_user_wins += user_stats.get('winning_trades', 0)
             total_user_losses += user_stats.get('losing_trades', 0)
-            
+
             user_summaries.append({
                 'user_id': user_id,
                 'balance': user_risk_state.balance,
@@ -1876,14 +1876,14 @@ def get_aggregated_summary():
                 'trades': user_stats.get('completed_trades', 0),
                 'can_trade': can_trade
             })
-        
+
         # Calculate aggregate win rate
         aggregate_win_rate = (total_user_wins / total_user_trades * 100) if total_user_trades > 0 else 0.0
-        
+
         # Portfolio totals
         portfolio_balance = master_risk_state.balance + total_user_balance
         portfolio_pnl = master_stats.get('total_pnl', 0.0) + total_user_pnl
-        
+
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'master_account': {
@@ -1913,7 +1913,7 @@ def get_aggregated_summary():
             },
             'user_details': user_summaries
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting aggregated summary: {e}")
         return jsonify({'error': 'Failed to retrieve aggregated summary'}), 500
@@ -1923,11 +1923,11 @@ def get_aggregated_summary():
 def restart_bot():
     """
     Restart the NIJA trading bot.
-    
+
     This endpoint sends a SIGTERM signal to the bot process, causing it
     to shut down gracefully. The deployment platform (Railway/Render) will
     automatically restart the bot.
-    
+
     Returns:
         JSON response with restart status
     """
@@ -1935,7 +1935,7 @@ def restart_bot():
         # Find the bot.py process
         bot_pid = None
         current_pid = os.getpid()
-        
+
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
                 cmdline = proc.info.get('cmdline', [])
@@ -1954,7 +1954,7 @@ def restart_bot():
                             break
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-        
+
         if bot_pid:
             logger.info(f"🔄 Restart requested - sending SIGTERM to bot process {bot_pid}")
             os.kill(bot_pid, sig.SIGTERM)
@@ -1971,7 +1971,7 @@ def restart_bot():
                 'message': 'Bot process not found - it may not be running',
                 'timestamp': datetime.now().isoformat()
             }), 404
-    
+
     except Exception as e:
         logger.error(f"Error restarting bot: {e}")
         return jsonify({
@@ -1983,19 +1983,19 @@ def restart_bot():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    
+
     # Create templates
     create_dashboard_html()
     create_users_dashboard_html()
-    
+
     # Ensure data directory exists
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     print("🚀 Starting NIJA Dashboard Server...")
     print("📊 Dashboard will be available at: http://localhost:5001")
     print("👥 Users Dashboard: http://localhost:5001/users")
     print("🔄 Auto-refresh every 5 seconds")
     print(f"🔄 Auto-refresh every {AUTO_REFRESH_INTERVAL} seconds")
     print("\nPress Ctrl+C to stop\n")
-    
+
     app.run(host='0.0.0.0', port=5001, debug=False)

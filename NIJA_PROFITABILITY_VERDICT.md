@@ -21,10 +21,10 @@
 - **Volatile markets**: 70 → 85 (+21%)
 
 #### Expected Impact:
-✅ **Trades with scores 60-74 will now be REJECTED** (were previously accepted)  
-✅ **Trades with confidence 0.60-0.74 will now be REJECTED** (were previously accepted)  
-✅ **The example losing trade (63/100 score, 0.60 confidence) would now be blocked**  
-✅ **Only high-probability setups with proven signals will be traded**  
+✅ **Trades with scores 60-74 will now be REJECTED** (were previously accepted)
+✅ **Trades with confidence 0.60-0.74 will now be REJECTED** (were previously accepted)
+✅ **The example losing trade (63/100 score, 0.60 confidence) would now be blocked**
+✅ **Only high-probability setups with proven signals will be traded**
 ✅ **Improved win rate by focusing on quality over quantity**
 
 ---
@@ -52,7 +52,7 @@
 - **Exit Reason**: Stop loss hit
 - **Problem**: Lost 10.62% on a single trade
 
-#### ✅ Winning Trade: BTC-USD  
+#### ✅ Winning Trade: BTC-USD
 - **Entry**: $50,000
 - **Exit**: $51,000
 - **P&L**: **+$0.80** (+0.80%)
@@ -204,7 +204,7 @@ fi
 
 ### What to Do
 1. **Tighten stop losses** to 2-3% maximum
-2. **Widen profit targets** to 5-6% minimum  
+2. **Widen profit targets** to 5-6% minimum
 3. **Add 2:1 risk/reward requirement** to entry filters
 4. **Monitor daily** with `python analyze_profitability.py`
 
@@ -216,8 +216,8 @@ NIJA will become profitable by:
 
 ---
 
-**Last Updated**: January 26, 2026  
-**Status**: LOSING MONEY - FIXES REQUIRED  
+**Last Updated**: January 26, 2026
+**Status**: LOSING MONEY - FIXES REQUIRED
 **Priority**: HIGH - Implement changes ASAP
 
 ---

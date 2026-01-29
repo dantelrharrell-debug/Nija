@@ -20,7 +20,7 @@ The filter thresholds in `nija_apex_strategy_v71.py` were too strict for low-cap
 1. **Smart Filter** - Blocking 26/30 markets (87%)
    - `volume_min_threshold = 0.10` (10% of average) - too high
    - Candle timing filter (first 6 seconds) - timing issue
-   
+
 2. **Market Filter** - Blocking markets with weak trends
    - `min_adx = 20` - too high for current volatility
    - `volume_threshold = 0.5` (50% of 5-candle average) - too high

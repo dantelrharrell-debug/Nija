@@ -299,18 +299,18 @@ from bot.broker_configs import STRATEGY_SELECTOR
 def run_cycle(self, broker):
     broker_type = broker.broker_type.value  # 'coinbase' or 'kraken'
     config = STRATEGY_SELECTOR.select_strategy(broker_type)
-    
+
     # Use broker-specific profit targets
     profit_targets = config.profit_targets
-    
+
     # Use broker-specific stop loss
     stop_loss = config.stop_loss
-    
+
     # Check if should enter long
     if config.should_buy(rsi, price, ema9, ema21):
         position_size = config.calculate_position_size(balance, signal_strength)
         # Execute trade
-    
+
     # Check if should enter short (only on Kraken!)
     if config.bidirectional and config.should_short(rsi, price, ema9, ema21):
         # Short selling only on low-fee exchanges
@@ -368,6 +368,6 @@ def run_cycle(self, broker):
 
 ---
 
-**Last Updated**: January 22, 2026  
-**Version**: 2.0  
+**Last Updated**: January 22, 2026
+**Version**: 2.0
 **Status**: ✅ Production Ready with Multi-Broker Scaling Support

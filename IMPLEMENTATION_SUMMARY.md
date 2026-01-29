@@ -1,7 +1,7 @@
 # Summary: Enhanced Profit-Taking Visibility for NIJA
 
-**Date**: January 26, 2026  
-**Issue**: User asked "Is NIJA making and taking a profit?"  
+**Date**: January 26, 2026
+**Issue**: User asked "Is NIJA making and taking a profit?"
 **Status**: ✅ **RESOLVED**
 
 ---
@@ -126,10 +126,10 @@ The profit-taking system is:
 
 After deploying these changes, users will have **crystal clear visibility** into:
 
-✅ **Every Cycle**: Position profit status summary with P&L and next targets  
-✅ **Every Position Check**: Debug logs showing current vs target profit levels  
-✅ **Every Profit Exit**: Detailed confirmation with profit amounts and reasoning  
-✅ **Progress Tracking**: How close each position is to next profit threshold  
+✅ **Every Cycle**: Position profit status summary with P&L and next targets
+✅ **Every Position Check**: Debug logs showing current vs target profit levels
+✅ **Every Profit Exit**: Detailed confirmation with profit amounts and reasoning
+✅ **Progress Tracking**: How close each position is to next profit threshold
 
 ## Example Log Flow
 
@@ -195,6 +195,6 @@ The NIJA trading bot **IS making and taking profits** - the system was always wo
 
 ---
 
-**Last Updated**: January 26, 2026  
-**Implemented By**: GitHub Copilot Coding Agent  
+**Last Updated**: January 26, 2026
+**Implemented By**: GitHub Copilot Coding Agent
 **Version**: NIJA v7.1 + Enhanced Profit-Taking Visibility

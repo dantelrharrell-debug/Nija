@@ -1,0 +1,154 @@
+# Pre-commit hooks for NIJA Trading Bot
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Secret Detection - Yelp's detect-secrets
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        name: Detect secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: |
+          (?x)^(
+            \.env\..*|
+            archive/.*|
+            .*\.md$|
+            \.gitignore$|
+            \.secrets\.baseline$
+          )
+
+  # Secret Detection - Gitleaks
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.1
+    hooks:
+      - id: gitleaks
+        name: Gitleaks secret scanner
+        entry: gitleaks detect --no-git --redact --verbose
+        language: golang
+        pass_filenames: false
+
+  # Secret Detection - TruffleHog (lightweight pre-commit version)
+  - repo: https://github.com/trufflesecurity/trufflehog
+    rev: v3.63.5
+    hooks:
+      - id: trufflehog
+        name: TruffleHog secret scanner
+        entry: bash -c 'trufflehog filesystem --directory=. --only-verified --json 2>&1 | grep -v "🐷" || true'
+        language: golang
+        pass_filenames: false
+
+  # Private key detection
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: detect-private-key
+        name: Detect private keys
+        exclude: |
+          (?x)^(
+            \.git/.*|
+            archive/.*
+          )
+
+  # AWS Credentials
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: detect-aws-credentials
+        name: Detect AWS credentials
+        args: ['--allow-missing-credentials']
+
+  # General code quality checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        exclude: |
+          (?x)^(
+            \.md$
+          )
+      - id: end-of-file-fixer
+        name: Fix end of files
+      - id: check-yaml
+        name: Check YAML syntax
+        exclude: |
+          (?x)^(
+            k8s/.*secrets\.yaml$
+          )
+      - id: check-json
+        name: Check JSON syntax
+      - id: check-added-large-files
+        name: Check for large files
+        args: ['--maxkb=5000']  # 5MB limit
+      - id: check-case-conflict
+        name: Check for case conflicts
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+      - id: mixed-line-ending
+        name: Check mixed line endings
+
+  # Python-specific checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-ast
+        name: Check Python AST
+      - id: check-docstring-first
+        name: Check docstring is first
+      - id: debug-statements
+        name: Check for debug statements
+      - id: name-tests-test
+        name: Check test naming
+        args: ['--pytest-test-first']
+        exclude: |
+          (?x)^(
+            bot/test_.*\.py$|
+            test_.*\.py$
+          )
+
+  # Python security - Bandit
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        name: Bandit security check
+        args: ['-c', '.bandit.yml']
+        exclude: |
+          (?x)^(
+            archive/.*|
+            venv/.*|
+            mobile/.*|
+            frontend/.*|
+            test_.*\.py$
+          )
+
+  # Environment file protection
+  - repo: local
+    hooks:
+      - id: check-env-files
+        name: Prevent committing .env files with secrets
+        entry: bash -c 'if git diff --cached --name-only | grep -qE "^\.env$"; then echo "ERROR Cannot commit .env file. Use .env.example instead."; exit 1; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: check-api-keys
+        name: Check for hardcoded API keys
+        entry: bash -c 'git diff --cached | grep -iE "(api[_-]?key|api[_-]?secret|coinbase[_-]?api|private[_-]?key|access[_-]?token).*=.*[\"]\w{20,}" && echo "ERROR Potential hardcoded API key detected!" && exit 1 || exit 0'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: check-pem-files
+        name: Prevent committing PEM/certificate files
+        entry: bash -c 'if git diff --cached --name-only | grep -qE "\.pem$|\.key$|\.crt$"; then echo "ERROR Cannot commit certificate/key files."; exit 1; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+# Configuration for CI (run all hooks on all files)
+ci:
+  autofix_prs: false
+  autoupdate_schedule: weekly

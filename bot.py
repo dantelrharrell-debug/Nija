@@ -140,7 +140,7 @@ def _handle_signal(sig, frame):
 def _log_kraken_connection_error_header(error_msg):
     """
     Log Kraken Master connection error header with consistent formatting.
-    
+
     Args:
         error_msg: The error message to display, or None if no specific error
     """
@@ -164,7 +164,7 @@ def main():
     # Get git metadata - try env vars first, then git commands
     git_branch = os.getenv("GIT_BRANCH", "")
     git_commit = os.getenv("GIT_COMMIT", "")
-    
+
     # Fallback to git commands if env vars not set
     if not git_branch:
         try:
@@ -176,7 +176,7 @@ def main():
             ).decode().strip()
         except Exception:
             git_branch = "unknown"
-    
+
     if not git_commit:
         try:
             git_commit = subprocess.check_output(
@@ -208,10 +208,10 @@ def main():
     logger.info("=" * 70)
     logger.info("🔍 PRE-FLIGHT: Checking Exchange Credentials")
     logger.info("=" * 70)
-    
+
     exchanges_configured = 0
     exchange_status = []
-    
+
     # Check Coinbase
     if os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET"):
         exchanges_configured += 1
@@ -220,18 +220,18 @@ def main():
     else:
         exchange_status.append("❌ Coinbase")
         logger.warning("⚠️  Coinbase credentials not configured")
-    
+
     # Check Kraken Master (with enhanced validation)
     kraken_master_configured = False
     kraken_master_key_raw = os.getenv("KRAKEN_MASTER_API_KEY", "")
     kraken_master_secret_raw = os.getenv("KRAKEN_MASTER_API_SECRET", "")
     kraken_master_key = kraken_master_key_raw.strip()
     kraken_master_secret = kraken_master_secret_raw.strip()
-    
+
     # Check for whitespace-only credentials (common configuration error)
     kraken_master_key_malformed = (kraken_master_key_raw != "" and kraken_master_key == "")
     kraken_master_secret_malformed = (kraken_master_secret_raw != "" and kraken_master_secret == "")
-    
+
     if kraken_master_key_malformed or kraken_master_secret_malformed:
         exchange_status.append("⚠️ Kraken (Master - MALFORMED)")
         logger.warning("⚠️  Kraken Master credentials ARE SET but CONTAIN ONLY WHITESPACE")
@@ -256,10 +256,10 @@ def main():
         logger.warning("   → Kraken will NOT connect without these environment variables:")
         logger.warning("      KRAKEN_MASTER_API_KEY")
         logger.warning("      KRAKEN_MASTER_API_SECRET")
-    
+
     # Check Kraken User accounts (with enhanced validation)
     kraken_users_configured = 0
-    
+
     # User #1: Daivon
     daivon_key_raw = os.getenv("KRAKEN_USER_DAIVON_API_KEY", "")
     daivon_secret_raw = os.getenv("KRAKEN_USER_DAIVON_API_SECRET", "")
@@ -267,7 +267,7 @@ def main():
     daivon_secret = daivon_secret_raw.strip()
     daivon_key_malformed = (daivon_key_raw != "" and daivon_key == "")
     daivon_secret_malformed = (daivon_secret_raw != "" and daivon_secret == "")
-    
+
     if daivon_key_malformed or daivon_secret_malformed:
         logger.warning("⚠️  Kraken User #1 (Daivon) credentials ARE SET but CONTAIN ONLY WHITESPACE")
         if daivon_key_malformed:
@@ -279,7 +279,7 @@ def main():
         kraken_users_configured += 1
     else:
         logger.warning("⚠️  Kraken User #1 (Daivon) credentials NOT SET")
-    
+
     # User #2: Tania
     tania_key_raw = os.getenv("KRAKEN_USER_TANIA_API_KEY", "")
     tania_secret_raw = os.getenv("KRAKEN_USER_TANIA_API_SECRET", "")
@@ -287,7 +287,7 @@ def main():
     tania_secret = tania_secret_raw.strip()
     tania_key_malformed = (tania_key_raw != "" and tania_key == "")
     tania_secret_malformed = (tania_secret_raw != "" and tania_secret == "")
-    
+
     if tania_key_malformed or tania_secret_malformed:
         logger.warning("⚠️  Kraken User #2 (Tania) credentials ARE SET but CONTAIN ONLY WHITESPACE")
         if tania_key_malformed:
@@ -299,7 +299,7 @@ def main():
         kraken_users_configured += 1
     else:
         logger.warning("⚠️  Kraken User #2 (Tania) credentials NOT SET")
-    
+
     # Update Kraken status if users are configured but master isn't
     if not kraken_master_configured and kraken_users_configured > 0:
         # Remove only the "❌ Kraken (Master)" status (keep MALFORMED if present)
@@ -307,7 +307,7 @@ def main():
         # Add updated status showing user accounts
         exchanges_configured += 1
         exchange_status.append(f"✅ Kraken (Users: {kraken_users_configured})")
-    
+
     # Check OKX
     if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
         exchanges_configured += 1
@@ -316,7 +316,7 @@ def main():
     else:
         exchange_status.append("❌ OKX")
         logger.warning("⚠️  OKX credentials not configured")
-    
+
     # Check Binance
     if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
         exchanges_configured += 1
@@ -325,7 +325,7 @@ def main():
     else:
         exchange_status.append("❌ Binance")
         logger.warning("⚠️  Binance credentials not configured")
-    
+
     # Check Alpaca
     if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET"):
         exchanges_configured += 1
@@ -334,12 +334,12 @@ def main():
     else:
         exchange_status.append("❌ Alpaca")
         logger.warning("⚠️  Alpaca credentials not configured")
-    
+
     logger.info("=" * 70)
     logger.info(f"📊 EXCHANGE CREDENTIAL SUMMARY: {exchanges_configured} configured")
     logger.info("   " + " | ".join(exchange_status))
     logger.info("=" * 70)
-    
+
     # Add specific Kraken help if it's not configured
     if not kraken_master_configured and kraken_users_configured == 0:
         logger.info("")
@@ -380,7 +380,7 @@ def main():
         logger.info("      • Run: python3 test_kraken_connection_live.py (test credentials)")
         logger.info("      • Run: python3 diagnose_kraken_connection.py (diagnose issues)")
         logger.info("=" * 70)
-    
+
     if exchanges_configured == 0:
         logger.error("=" * 70)
         logger.error("❌ CRITICAL: NO EXCHANGE CREDENTIALS CONFIGURED")
@@ -424,7 +424,7 @@ def main():
         logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
         _start_health_server()
         strategy = TradingStrategy()
-        
+
         # AUDIT USER BALANCES - Show all user balances regardless of trading status
         # This runs BEFORE trading starts to ensure visibility even if users aren't actively trading
         logger.info("=" * 70)
@@ -434,7 +434,7 @@ def main():
             strategy.multi_account_manager.audit_user_accounts()
         else:
             logger.warning("   ⚠️  Multi-account manager not available - skipping balance audit")
-        
+
         # STARTUP BALANCE CONFIRMATION - Display live capital for legal/operational protection
         logger.info("")
         logger.info("=" * 70)
@@ -443,17 +443,17 @@ def main():
         if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
             try:
                 manager = strategy.multi_account_manager
-                
+
                 # Get all balances
                 all_balances = manager.get_all_balances()
-                
+
                 # Master account total
                 master_total = sum(all_balances.get('master', {}).values())
                 logger.info(f"   Master: ${master_total:,.2f}")
-                
+
                 # User accounts - specifically Daivon and Tania
                 users_balances = all_balances.get('users', {})
-                
+
                 # Find Daivon's balance
                 daivon_total = 0.0
                 for user_id, balances in users_balances.items():
@@ -461,7 +461,7 @@ def main():
                         daivon_total = sum(balances.values())
                         break
                 logger.info(f"   Daivon: ${daivon_total:,.2f}")
-                
+
                 # Find Tania's balance
                 tania_total = 0.0
                 for user_id, balances in users_balances.items():
@@ -469,7 +469,7 @@ def main():
                         tania_total = sum(balances.values())
                         break
                 logger.info(f"   Tania: ${tania_total:,.2f}")
-                
+
                 # Show grand total
                 grand_total = master_total + daivon_total + tania_total
                 logger.info("")
@@ -480,7 +480,7 @@ def main():
         else:
             logger.warning("   ⚠️  Multi-account manager not available - cannot confirm balances")
         logger.info("=" * 70)
-        
+
         # Start copy trade engine in ACTIVE MODE for user accounts
         # ACTIVE MODE means:
         # - Track balances and positions
@@ -492,7 +492,7 @@ def main():
         # - MASTER_FOLLOW: Users mirror all master trades (default)
         # - INDEPENDENT: Users trade independently (no copy trading)
         copy_trading_mode = os.getenv('COPY_TRADING_MODE', 'MASTER_FOLLOW').upper()
-        
+
         if copy_trading_mode == 'MASTER_FOLLOW':
             logger.info("🔄 Starting copy trade engine in MASTER_FOLLOW MODE...")
             logger.info("   📋 Mode: MASTER_FOLLOW (mirror master trades)")
@@ -500,11 +500,11 @@ def main():
             try:
                 from bot.copy_trade_engine import start_copy_engine
                 from bot.copy_trading_requirements import log_copy_trading_status
-                
+
                 # Log copy trading requirements status before starting engine
                 if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
                     log_copy_trading_status(strategy.multi_account_manager)
-                
+
                 start_copy_engine(observe_only=False)  # CRITICAL: observe_only=False enables auto-trading
                 logger.info("   ✅ Copy trade engine started in ACTIVE MODE")
                 logger.info("   📡 Users will receive and execute copy trades from master accounts")
@@ -523,16 +523,16 @@ def main():
         logger.info("=" * 70)
         logger.info("📊 TRADING READINESS STATUS")
         logger.info("=" * 70)
-        
+
         # Check which master brokers are connected
         connected_master_brokers = []
         failed_master_brokers = []
-        
+
         if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
             for broker_type, broker in strategy.multi_account_manager.master_brokers.items():
                 if broker and broker.connected:
                     connected_master_brokers.append(broker_type.value.upper())
-        
+
         # CRITICAL FIX: Check for brokers with credentials configured but failed to connect
         # This catches cases where credentials are set but connection failed due to:
         # - SDK not installed (krakenex/pykrakenapi missing)
@@ -542,17 +542,17 @@ def main():
         # Check if Kraken was expected but didn't connect
         if kraken_master_configured and 'KRAKEN' not in connected_master_brokers:
             failed_master_brokers.append('KRAKEN')
-        
+
         # Track if Kraken credentials were not configured at all
         kraken_not_configured = not kraken_master_configured
-        
+
         if connected_master_brokers:
             logger.info("✅ NIJA IS READY TO TRADE!")
             logger.info("")
             logger.info("Active Master Exchanges:")
             for exchange in connected_master_brokers:
                 logger.info(f"   ✅ {exchange}")
-            
+
             # Show failed brokers if any were expected to connect
             if failed_master_brokers:
                 logger.info("")
@@ -566,7 +566,7 @@ def main():
                             failed_broker = strategy.failed_brokers[BrokerType.KRAKEN]
                             if hasattr(failed_broker, 'last_connection_error') and failed_broker.last_connection_error:
                                 error_msg = failed_broker.last_connection_error
-                        
+
                         if error_msg:
                             _log_kraken_connection_error_header(error_msg)
                             # Provide specific guidance based on error type
@@ -636,7 +636,7 @@ def main():
                             logger.error("         • KRAKEN_NOT_CONNECTING_DIAGNOSIS.md")
                             logger.error(f"      {ERROR_SEPARATOR}")
                             logger.error("")
-            
+
             # Show warning if Kraken Master credentials are not configured
             if kraken_not_configured:
                 logger.info("")
@@ -651,7 +651,7 @@ def main():
                 logger.warning("   📖 Get credentials: https://www.kraken.com/u/security/api")
                 logger.warning("   📖 Setup guide: SOLUTION_MASTER_KRAKEN_NOT_TRADING.md")
                 logger.warning("   🔍 Diagnostic tool: python3 diagnose_master_kraken_live.py")
-            
+
             logger.info("")
             logger.info(f"📈 Trading will occur on {len(connected_master_brokers)} exchange(s)")
             logger.info("💡 Each exchange operates independently")
@@ -664,12 +664,12 @@ def main():
             logger.warning("   1. Run: python3 validate_all_env_vars.py")
             logger.warning("   2. Configure at least one master exchange")
             logger.warning("   3. Restart the bot")
-        
+
         logger.info("=" * 70)
 
         # Check if we should use independent multi-broker trading mode
         use_independent_trading = os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
-        
+
         if use_independent_trading and strategy.independent_trader:
             logger.info("=" * 70)
             logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING MODE")
@@ -677,25 +677,25 @@ def main():
             logger.info("Each broker will trade independently in isolated threads.")
             logger.info("Failures in one broker will NOT affect other brokers.")
             logger.info("=" * 70)
-            
+
             # Start independent trading for all funded brokers
             if strategy.start_independent_multi_broker_trading():
                 logger.info("✅ Independent multi-broker trading started successfully")
-                
+
                 # Main loop just monitors status and keeps process alive
                 cycle_count = 0
                 while True:
                     try:
                         cycle_count += 1
-                        
+
                         # Log status every 10 cycles (25 minutes)
                         if cycle_count % 10 == 0:
                             logger.info(f"🔄 Status check #{cycle_count // 10}")
                             strategy.log_multi_broker_status()
-                        
+
                         # Sleep for 2.5 minutes
                         time.sleep(150)
-                        
+
                     except KeyboardInterrupt:
                         logger.info("Received shutdown signal, stopping all trading...")
                         strategy.stop_independent_trading()
@@ -707,7 +707,7 @@ def main():
                 logger.error("❌ Failed to start independent multi-broker trading")
                 logger.info("Falling back to single-broker mode...")
                 use_independent_trading = False
-        
+
         if not use_independent_trading:
             # Single broker mode (original behavior)
             logger.info("🚀 Starting single-broker trading loop (2.5 minute cadence)...")

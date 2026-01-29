@@ -21,20 +21,20 @@ from apex_backtest import ApexBacktest
 def generate_sample_data(num_candles=200):
     """
     Generate sample OHLCV data for testing
-    
+
     In production, you would fetch this from your broker or data provider.
     """
     np.random.seed(42)
-    
+
     # Generate realistic price movement
     base_price = 50000.0  # Starting price
     prices = [base_price]
-    
+
     for _ in range(num_candles - 1):
         change = np.random.normal(0, 0.01)  # 1% volatility
         new_price = prices[-1] * (1 + change)
         prices.append(new_price)
-    
+
     # Create OHLC from close prices
     data = []
     for i, close in enumerate(prices):
@@ -42,7 +42,7 @@ def generate_sample_data(num_candles=200):
         low = close * (1 - abs(np.random.normal(0, 0.005)))
         open_price = close * (1 + np.random.normal(0, 0.003))
         volume = np.random.uniform(100000, 1000000)
-        
+
         data.append({
             'open': open_price,
             'high': high,
@@ -50,11 +50,11 @@ def generate_sample_data(num_candles=200):
             'close': close,
             'volume': volume,
         })
-    
+
     df = pd.DataFrame(data)
-    df.index = pd.date_range(start=datetime.now() - timedelta(minutes=5*num_candles), 
+    df.index = pd.date_range(start=datetime.now() - timedelta(minutes=5*num_candles),
                              periods=num_candles, freq='5min')
-    
+
     return df
 
 
@@ -63,20 +63,20 @@ def example_1_analyze_entry():
     print("\n" + "="*60)
     print("EXAMPLE 1: Analyze Entry Opportunity")
     print("="*60 + "\n")
-    
+
     # Generate sample data
     df = generate_sample_data(num_candles=150)
-    
+
     # Initialize strategy with $10,000 balance
     strategy = ApexStrategyV7(account_balance=10000.0, enable_ai=False)
-    
+
     # Analyze entry opportunity
     analysis = strategy.analyze_entry_opportunity(df, symbol="BTC-USD")
-    
+
     # Print results
     print(f"Symbol: {analysis['symbol']}")
     print(f"Should Enter: {analysis['should_enter']}")
-    
+
     if analysis['should_enter']:
         print(f"\n✅ ENTRY SIGNAL DETECTED!")
         print(f"  Side: {analysis['side'].upper()}")
@@ -104,13 +104,13 @@ def example_2_backtest():
     print("\n" + "="*60)
     print("EXAMPLE 2: Backtest Strategy")
     print("="*60 + "\n")
-    
+
     # Generate sample data (more candles for backtest)
     df = generate_sample_data(num_candles=500)
-    
+
     # Initialize backtest with $10,000
     backtest = ApexBacktest(initial_balance=10000.0, enable_ai=False)
-    
+
     # Run backtest
     print("Running backtest...")
     results = backtest.run_backtest(
@@ -118,10 +118,10 @@ def example_2_backtest():
         symbol="BTC-USD",
         commission=0.001  # 0.1% commission
     )
-    
+
     # Print results
     backtest.print_results(results)
-    
+
     # Show first few trades
     if results['trades']:
         print("\nFirst 5 Trades:")
@@ -138,13 +138,13 @@ def example_3_position_update():
     print("\n" + "="*60)
     print("EXAMPLE 3: Update Position with Trailing Stops")
     print("="*60 + "\n")
-    
+
     # Generate sample data
     df = generate_sample_data(num_candles=150)
-    
+
     # Initialize strategy
     strategy = ApexStrategyV7(account_balance=10000.0, enable_ai=False)
-    
+
     # Simulate an open position
     position = {
         'id': 'BTC-USD_1',
@@ -159,17 +159,17 @@ def example_3_position_update():
         },
         'size_usd': 500.0,
     }
-    
+
     print(f"Position: {position['side'].upper()} {position['symbol']}")
     print(f"Entry: ${position['entry_price']:,.2f}")
     print(f"Current Stop: ${position['stop_loss']:,.2f}")
-    
+
     # Update position
     update_result = strategy.update_position('BTC-USD_1', df, position)
-    
+
     print(f"\nUpdate Result:")
     print(f"  Action: {update_result['action']}")
-    
+
     if update_result['action'] == 'update_stop':
         print(f"  New Stop: ${update_result['new_stop']:,.2f}")
         print(f"  R-Multiple: {update_result['r_multiple']:.2f}R")
@@ -185,16 +185,16 @@ def main():
     print("\n" + "="*60)
     print("NIJA APEX STRATEGY v7.1 - EXAMPLES")
     print("="*60)
-    
+
     # Run examples
     example_1_analyze_entry()
     example_2_backtest()
     example_3_position_update()
-    
+
     print("\n" + "="*60)
     print("Examples Complete!")
     print("="*60 + "\n")
-    
+
     print("Next Steps:")
     print("1. Review the code in apex_strategy_v7.py")
     print("2. Customize parameters in apex_config.py")

@@ -8,7 +8,7 @@ Custom exception classes for error handling and safety checks.
 class ExecutionError(Exception):
     """
     Critical execution error that should halt trade execution.
-    
+
     This exception is raised when safety checks fail to prevent:
     - Broker mismatches (cycle_broker != execution_broker)
     - Recording rejected orders as successful trades
@@ -42,12 +42,12 @@ class OrderRejectedError(ExecutionError):
 class ExecutionFailed(ExecutionError):
     """
     Raised when Kraken does not confirm order execution.
-    
+
     This exception is raised when Kraken fails to return:
     - txid (transaction ID)
     - descr.order (order description)
     - cost > 0 (order cost)
-    
+
     Prevents ledger writes and position increments for unconfirmed orders.
     """
     pass

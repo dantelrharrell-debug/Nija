@@ -234,7 +234,7 @@
         function createUserCard(user) {
             const isMaster = user.is_master || user.user_id === 'master';
             const cardClass = isMaster ? 'user-card master-card' : 'user-card';
-            
+
             return `
                 <div class="${cardClass}">
                     <div class="user-card-header">
@@ -246,7 +246,7 @@
                             ${user.can_trade ? '✓ Active' : '✗ Inactive'}
                         </span>
                     </div>
-                    
+
                     <div class="metric-row">
                         <div class="metric">
                             <div class="metric-label">Balance</div>
@@ -261,7 +261,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="metric-row">
                         <div class="metric">
                             <div class="metric-label">Win Rate</div>
@@ -276,7 +276,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="metric-row">
                         <div class="metric" style="grid-column: 1 / -1;">
                             <div class="metric-label">Total P&L</div>
@@ -285,7 +285,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="recent-trades-section" id="trades-${user.user_id}">
                         <div class="section-title">Recent Trades</div>
                         <div class="no-data">Loading trades...</div>
@@ -298,12 +298,12 @@
             try {
                 const response = await fetch(`/api/user/${userId}/pnl`);
                 const data = await response.json();
-                
+
                 const tradesContainer = document.getElementById(`trades-${userId}`);
                 if (!tradesContainer) return;
-                
+
                 const recentTrades = data.recent_trades || [];
-                
+
                 if (recentTrades.length === 0) {
                     tradesContainer.innerHTML = `
                         <div class="section-title">Recent Trades</div>
@@ -311,7 +311,7 @@
                     `;
                     return;
                 }
-                
+
                 const tradesHTML = recentTrades.slice(0, 5).map(trade => `
                     <div class="trade-item">
                         <span class="trade-symbol">${trade.symbol || 'N/A'}</span>
@@ -320,7 +320,7 @@
                         </span>
                     </div>
                 `).join('');
-                
+
                 tradesContainer.innerHTML = `
                     <div class="section-title">Recent Trades</div>
                     ${tradesHTML}
@@ -335,33 +335,33 @@
                 // Fetch users with master included
                 const response = await fetch('/api/users?include_master=true');
                 const data = await response.json();
-                
+
                 const container = document.getElementById('users-container');
-                
+
                 if (!data.users || data.users.length === 0) {
                     container.innerHTML = '<div class="no-data">No users found</div>';
                     return;
                 }
-                
+
                 // Sort: master first, then alphabetically
                 const sortedUsers = data.users.sort((a, b) => {
                     if (a.is_master || a.user_id === 'master') return -1;
                     if (b.is_master || b.user_id === 'master') return 1;
                     return a.user_id.localeCompare(b.user_id);
                 });
-                
+
                 container.innerHTML = `
                     <div class="user-cards-grid">
                         ${sortedUsers.map(user => createUserCard(user)).join('')}
                     </div>
                 `;
-                
+
                 // Load recent trades for each user
                 sortedUsers.forEach(user => loadRecentTrades(user.user_id));
-                
-                document.getElementById('refresh-status').textContent = 
+
+                document.getElementById('refresh-status').textContent =
                     `Last update: ${new Date().toLocaleTimeString()}`;
-                
+
             } catch (error) {
                 console.error('Error loading users:', error);
                 document.getElementById('users-container').innerHTML = `

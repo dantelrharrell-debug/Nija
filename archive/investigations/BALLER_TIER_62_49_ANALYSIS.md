@@ -1,6 +1,6 @@
 # BALLER Tier Trade Size Calculation at $62.49
 
-**Date**: January 22, 2026  
+**Date**: January 22, 2026
 **Analysis**: Safe trade size for BALLER tier with $62.49 balance
 
 ---
@@ -193,7 +193,7 @@ COINBASE_SPREAD_COST = 0.002       # 0.2% spread
 
 ## Conclusion
 
-**FINAL ANSWER**: 
+**FINAL ANSWER**:
 
 **The exact maximum dollar amount the bot will ATTEMPT with BALLER tier at $62.49 is: $62.49**
 
@@ -229,7 +229,7 @@ python calculate_safe_trade_size.py --balance 25000 --tier BALLER
 
 ---
 
-**Report Generated**: January 22, 2026  
-**Tool**: `calculate_safe_trade_size.py`  
-**Bot Version**: NIJA v7.1  
+**Report Generated**: January 22, 2026
+**Tool**: `calculate_safe_trade_size.py`
+**Bot Version**: NIJA v7.1
 **Status**: ✅ Calculation Complete

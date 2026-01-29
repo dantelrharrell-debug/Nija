@@ -1,7 +1,7 @@
 # Kraken Profit-Taking Fix - Implementation Summary
 
-**Date**: January 25, 2026  
-**Issue**: Master and users experiencing 2 losing trades on Kraken  
+**Date**: January 25, 2026
+**Issue**: Master and users experiencing 2 losing trades on Kraken
 **Status**: ✅ FIXED
 
 ---
@@ -199,9 +199,9 @@ If for any reason this causes issues, you can revert by:
 
 ## Summary
 
-**Problem**: Kraken losing trades due to Coinbase fee assumptions  
-**Root Cause**: Hard-coded 1.4% fees for all brokers  
-**Solution**: Broker-aware profit-taking with correct fee structure  
+**Problem**: Kraken losing trades due to Coinbase fee assumptions
+**Root Cause**: Hard-coded 1.4% fees for all brokers
+**Solution**: Broker-aware profit-taking with correct fee structure
 **Result**: Kraken takes profits 60-70% faster at NET profitable levels
 
 **Your Action**: None required - bot will automatically use new logic on next cycle
@@ -212,5 +212,5 @@ If for any reason this causes issues, you can revert by:
 
 **Questions?** Check the logs for broker fee detection and profit exit messages.
 
-**Last Updated**: January 25, 2026  
+**Last Updated**: January 25, 2026
 **Version**: v7.1 + Broker-Aware Profit-Taking

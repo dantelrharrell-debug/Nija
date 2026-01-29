@@ -2,10 +2,10 @@
 NIJA Fee-Aware Configuration
 Critical profitability settings to overcome Coinbase fees
 
-PROBLEM: Coinbase fees (2-4% per side = 6-8% round-trip) destroy profitability 
+PROBLEM: Coinbase fees (2-4% per side = 6-8% round-trip) destroy profitability
          on small positions (<$50).
 
-SOLUTION: 
+SOLUTION:
 1. Increase minimum position size to $50-100
 2. Increase profit targets to cover fees
 3. Use limit orders (0.6% vs 3% fees)
@@ -173,10 +173,10 @@ MAX_TOTAL_EXPOSURE_NORMAL = 0.40  # 40% max for normal accounts (leave 60% reser
 def get_position_size_pct(account_balance: float) -> float:
     """
     Get recommended position size % based on account balance.
-    
+
     Args:
         account_balance: Current account balance in USD
-    
+
     Returns:
         Position size as decimal (e.g., 0.50 = 50%)
     """
@@ -195,18 +195,18 @@ def get_position_size_pct(account_balance: float) -> float:
 def get_min_profit_target(use_limit_order: bool = True, account_balance: float = 100.0) -> float:
     """
     Get minimum profit target to overcome fees.
-    
+
     Args:
         use_limit_order: True if using limit orders, False for market
         account_balance: Current account balance (affects fee ratio)
-    
+
     Returns:
         Minimum profit target as decimal (e.g., 0.02 = 2%)
     """
     # Micro-balances need higher targets due to higher fee ratios
     if account_balance < MICRO_BALANCE_THRESHOLD:
         return MICRO_BALANCE_MIN_PROFIT_TARGET  # 3.5%
-    
+
     if use_limit_order:
         return LIMIT_ORDER_MIN_PROFIT_TARGET
     else:
@@ -216,10 +216,10 @@ def get_min_profit_target(use_limit_order: bool = True, account_balance: float =
 def calculate_min_position_size(account_balance: float) -> float:
     """
     Calculate minimum position size in USD.
-    
+
     Args:
         account_balance: Current account balance
-    
+
     Returns:
         Minimum position size in USD (lowered to $1 to allow very small account trading)
         ⚠️ CRITICAL WARNING: Positions under $10 face severe fee pressure (~1.4% round-trip)
@@ -227,7 +227,7 @@ def calculate_min_position_size(account_balance: float) -> float:
     """
     position_pct = get_position_size_pct(account_balance)
     calculated_size = account_balance * position_pct
-    
+
     # MICRO TRADE PREVENTION: Enforce $1 minimum (lowered from $10)
     # ⚠️ CRITICAL WARNING: Very small positions are likely unprofitable due to fees
     # Recommended minimum is $10+ for better results
@@ -235,54 +235,54 @@ def calculate_min_position_size(account_balance: float) -> float:
     return max(calculated_size, MIN_ABSOLUTE_POSITION)
 
 
-def should_trade(account_balance: float, trades_today: int, 
+def should_trade(account_balance: float, trades_today: int,
                 last_trade_time: float = 0) -> tuple[bool, str]:
     """
     Check if we should allow trading based on profitability rules.
-    
+
     Args:
         account_balance: Current balance
         trades_today: Number of trades executed today
         last_trade_time: Timestamp of last trade
-    
+
     Returns:
         Tuple of (allow_trade: bool, reason: str)
     """
     import time
-    
+
     # Check 1: Minimum balance
     if account_balance < MIN_BALANCE_TO_TRADE:
         return False, f"Balance ${account_balance:.2f} below minimum ${MIN_BALANCE_TO_TRADE}"
-    
+
     # Check 2: Daily trade limit
     if trades_today >= MAX_TRADES_PER_DAY:
         return False, f"Reached daily limit ({MAX_TRADES_PER_DAY} trades)"
-    
+
     # Check 3: Time between trades
     if last_trade_time > 0:
         seconds_since_last = time.time() - last_trade_time
         if seconds_since_last < MIN_SECONDS_BETWEEN_TRADES:
             wait_time = int(MIN_SECONDS_BETWEEN_TRADES - seconds_since_last)
             return False, f"Wait {wait_time}s before next trade"
-    
+
     return True, "OK to trade"
 
 
-def get_fee_adjusted_targets(entry_price: float, side: str, 
+def get_fee_adjusted_targets(entry_price: float, side: str,
                             use_limit_order: bool = True) -> dict:
     """
     Calculate fee-adjusted profit targets and stop loss.
-    
+
     Args:
         entry_price: Entry price
         side: 'BUY' or 'SELL'
         use_limit_order: True for limit orders (lower fees)
-    
+
     Returns:
         Dict with tp1, tp2, tp3, stop_loss prices
     """
     min_target = get_min_profit_target(use_limit_order)
-    
+
     if side == 'BUY':
         return {
             'tp1': entry_price * (1 + TP1_TARGET),
@@ -317,35 +317,35 @@ def print_config_summary():
     print(f"   Small balance (<$100): {SMALL_BALANCE_POSITION_PCT*100}% per trade")
     print(f"   Medium balance ($100-500): {MEDIUM_BALANCE_POSITION_PCT*100}% per trade")
     print(f"   Normal balance (>$500): {NORMAL_MIN_POSITION_PCT*100}-{NORMAL_MAX_POSITION_PCT*100}%")
-    
+
     print(f"\n📊 PROFIT TARGETS (Fee-Aware):")
     print(f"   Minimum (limit orders): {LIMIT_ORDER_MIN_PROFIT_TARGET*100}%")
     print(f"   TP1: {TP1_TARGET*100}%")
     print(f"   TP2: {TP2_TARGET*100}%")
     print(f"   TP3: {TP3_TARGET*100}%")
-    
+
     print(f"\n🛑 RISK MANAGEMENT:")
     print(f"   Stop loss: {STOP_LOSS_NORMAL*100}%")
     print(f"   Max trades/day: {MAX_TRADES_PER_DAY}")
     print(f"   Min time between trades: {MIN_SECONDS_BETWEEN_TRADES}s")
-    
+
     print(f"\n💸 FEE STRUCTURE:")
     print(f"   Limit order round-trip: {LIMIT_ORDER_ROUND_TRIP*100:.1f}%")
     print(f"   Market order round-trip: {MARKET_ORDER_ROUND_TRIP*100:.1f}%")
     print(f"   Prefer limit orders: {PREFER_LIMIT_ORDERS}")
-    
+
     print(f"\n🎯 SIGNAL QUALITY:")
     print(f"   Minimum signal strength: {MIN_SIGNAL_STRENGTH}/5")
     print(f"   Minimum ADX: {MIN_ADX_SMALL_BALANCE} (small), {MIN_ADX_NORMAL} (normal)")
     print(f"   Volume multiplier: {MIN_VOLUME_MULTIPLIER}x")
-    
+
     print(f"\n⚠️  VERY SMALL POSITION WARNING:")
     print(f"   Positions as low as $1.00 are now allowed (lowered from $10)")
     print(f"   ⚠️  CRITICAL: Positions under $10 face severe fee pressure (~1.4% round-trip)")
     print(f"   Example: $2 position needs 1.4% gain just to break even on fees")
     print(f"   Example: $5 position needs 2.8% gain to profit $0.10 after fees")
     print(f"   💡 RECOMMENDATION: Fund account to $30+ for viable trading")
-    
+
     print("="*70 + "\n")
 
 

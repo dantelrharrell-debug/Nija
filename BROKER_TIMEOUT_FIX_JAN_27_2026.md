@@ -30,7 +30,7 @@ NETWORK_BUFFER_TIMEOUT = 15  # Additional buffer
 BALANCE_FETCH_TIMEOUT = KRAKEN_API_TIMEOUT + NETWORK_BUFFER_TIMEOUT  # Total: 45 seconds
 ```
 
-**Impact**: 
+**Impact**:
 - Kraken balance fetch took 45 seconds
 - If Coinbase also timed out, that's another 45 seconds
 - Total delay: 90+ seconds before market scanning could even start
@@ -78,7 +78,7 @@ entry_broker, entry_broker_name, broker_eligibility = self._select_entry_broker(
 # Log broker eligibility status
 for broker_name, status in broker_eligibility.items():
     # ... logging ...
-    
+
 except Exception as broker_check_error:
     logger.error(f"ERROR: {broker_check_error}")
     can_enter = False
@@ -136,7 +136,7 @@ else:
         broker_session_age = time.time() - broker.connected_at
     elif hasattr(broker, 'created_at'):
         broker_session_age = time.time() - broker.created_at
-    
+
     # Only use untimestamped cache if broker connected in last 10 minutes
     if broker_session_age is not None and broker_session_age <= 600:
         cache_is_fresh = True  # ✅ Use cache from current session
@@ -240,17 +240,17 @@ Created comprehensive test suite: `bot/tests/test_timeout_fix.py`
 00:09:09 | INFO |    Available brokers: COINBASE, KRAKEN
 00:09:29 | WARNING | kraken balance fetch timed out after 20s
 00:09:29 | INFO |    ✅ Using cached balance for KRAKEN: $56.36
-00:09:29 | INFO | 
+00:09:29 | INFO |
 00:09:29 | INFO |    📊 Broker Eligibility Results:
 00:09:29 | INFO |       ✅ KRAKEN: Eligible (cached $56.36 >= $10.00 min)
 00:09:29 | INFO |       ⚪ OKX: Not configured
 00:09:29 | INFO |       ⚪ BINANCE: Not configured
 00:09:29 | INFO |       ✅ COINBASE: Eligible ($24.17 >= $10.00 min)
-00:09:29 | INFO | 
+00:09:29 | INFO |
 00:09:29 | INFO | ═══════════════════════════════════════════════════════════
 00:09:29 | INFO | 🟢 RESULT: CONDITIONS PASSED FOR KRAKEN
 00:09:29 | INFO | ═══════════════════════════════════════════════════════════
-00:09:29 | INFO | 
+00:09:29 | INFO |
 00:09:29 | INFO | 🔍 Scanning for new opportunities (positions: 0/8, balance: $56.36, min: $2.00)...
 00:09:29 | INFO |    🔄 Refreshing market list from API...
 00:09:30 | INFO |    ✅ Cached 732 markets
@@ -312,9 +312,9 @@ After deployment, we should see:
 
 ---
 
-**Fixed by**: GitHub Copilot  
-**Date**: January 27, 2026  
-**Issue**: No trades executing due to 45-second timeout blocking broker selection  
-**Root cause**: Excessive timeout + race condition + overly conservative cache fallback  
-**Solution**: Reduced timeout to 20s, fixed race condition, safer cache fallback, better logging  
+**Fixed by**: GitHub Copilot
+**Date**: January 27, 2026
+**Issue**: No trades executing due to 45-second timeout blocking broker selection
+**Root cause**: Excessive timeout + race condition + overly conservative cache fallback
+**Solution**: Reduced timeout to 20s, fixed race condition, safer cache fallback, better logging
 **Impact**: Bot now trades reliably even during API slowness

@@ -58,10 +58,10 @@ MIN_BASE_SIZES = {
 def get_exchange_min_trade_size(exchange: str = 'coinbase') -> float:
     """
     Get minimum trade size for a specific exchange (with fee buffer included).
-    
+
     Args:
         exchange: Exchange name (kraken, coinbase, okx, binance, etc.)
-    
+
     Returns:
         Minimum trade size in USD (includes fee buffer)
     """
@@ -79,7 +79,7 @@ def calculate_user_position_size(
 ) -> Dict:
     """
     Calculate appropriate position size for a user account.
-    
+
     Args:
         master_size: Size of the master account's trade
         master_balance: Total balance of master account
@@ -87,7 +87,7 @@ def calculate_user_position_size(
         size_type: "quote" (USD amount) or "base" (crypto amount)
         symbol: Trading pair symbol (e.g., "BTC-USD") - used for minimum size validation
         min_position_usd: Minimum position size in USD (default: $1.00)
-        
+
     Returns:
         Dictionary with:
             - 'size': Calculated position size for user
@@ -95,7 +95,7 @@ def calculate_user_position_size(
             - 'valid': True if position meets minimum requirements
             - 'reason': Explanation if position is invalid
             - 'scale_factor': Ratio of user_balance to master_balance
-            
+
     Example:
         Master: $10,000 balance, $500 BTC trade
         User: $1,000 balance
@@ -112,7 +112,7 @@ def calculate_user_position_size(
                 'reason': f'Invalid master balance: {master_balance}',
                 'scale_factor': 0
             }
-        
+
         if user_balance <= 0:
             logger.warning(f"⚠️  User has zero or negative balance: {user_balance}")
             return {
@@ -122,7 +122,7 @@ def calculate_user_position_size(
                 'reason': f'User balance too low: ${user_balance:.2f}',
                 'scale_factor': 0
             }
-        
+
         if master_size <= 0:
             logger.error(f"❌ Invalid master_size: {master_size}")
             return {
@@ -132,19 +132,19 @@ def calculate_user_position_size(
                 'reason': f'Invalid master size: {master_size}',
                 'scale_factor': 0
             }
-        
+
         # Calculate scale factor (user equity as % of master equity)
         scale_factor = user_balance / master_balance
-        
+
         # Calculate scaled position size
         user_size = master_size * scale_factor
-        
+
         logger.info(f"📊 Position Sizing Calculation:")
         logger.info(f"   Master: ${master_balance:.2f} balance, {master_size} size ({size_type})")
         logger.info(f"   User: ${user_balance:.2f} balance")
         logger.info(f"   Scale Factor: {scale_factor:.4f} ({scale_factor*100:.2f}%)")
         logger.info(f"   Calculated User Size: {user_size} ({size_type})")
-        
+
         # Validate minimum position size
         if size_type == 'quote':
             # For USD-denominated trades, check against minimum USD
@@ -157,12 +157,12 @@ def calculate_user_position_size(
                     'reason': f'Position too small: ${user_size:.2f} < ${min_position_usd:.2f} minimum',
                     'scale_factor': scale_factor
                 }
-        
+
         elif size_type == 'base' and symbol:
             # For crypto-denominated trades, check against exchange minimums
             base_currency = symbol.split('-')[0] if '-' in symbol else symbol
             min_base = MIN_BASE_SIZES.get(base_currency, 0.0001)
-            
+
             if user_size < min_base:
                 logger.warning(f"   ⚠️  Position too small: {user_size} {base_currency} < {min_base} minimum")
                 return {
@@ -172,9 +172,9 @@ def calculate_user_position_size(
                     'reason': f'Position too small: {user_size} < {min_base} {base_currency} minimum',
                     'scale_factor': scale_factor
                 }
-        
+
         logger.info(f"   ✅ Position size valid: {user_size} ({size_type})")
-        
+
         return {
             'size': user_size,
             'size_type': size_type,
@@ -182,7 +182,7 @@ def calculate_user_position_size(
             'reason': 'Position size valid',
             'scale_factor': scale_factor
         }
-        
+
     except Exception as e:
         logger.error(f"❌ Error calculating position size: {e}")
         import traceback
@@ -204,39 +204,39 @@ def validate_position_size(
 ) -> Dict:
     """
     Validate if a position size meets minimum requirements.
-    
+
     Args:
         size: Position size to validate
         size_type: "quote" (USD) or "base" (crypto)
         symbol: Trading pair symbol (e.g., "BTC-USD")
         min_position_usd: Minimum position value in USD
-        
+
     Returns:
         Dictionary with 'valid' (bool) and 'reason' (str)
     """
     try:
         if size <= 0:
             return {'valid': False, 'reason': 'Size must be positive'}
-        
+
         if size_type == 'quote':
             if size < min_position_usd:
                 return {
                     'valid': False,
                     'reason': f'Size ${size:.2f} below minimum ${min_position_usd:.2f}'
                 }
-        
+
         elif size_type == 'base' and symbol:
             base_currency = symbol.split('-')[0] if '-' in symbol else symbol
             min_base = MIN_BASE_SIZES.get(base_currency, 0.0001)
-            
+
             if size < min_base:
                 return {
                     'valid': False,
                     'reason': f'Size {size} {base_currency} below minimum {min_base}'
                 }
-        
+
         return {'valid': True, 'reason': 'Valid position size'}
-        
+
     except Exception as e:
         logger.error(f"❌ Error validating position size: {e}")
         return {'valid': False, 'reason': f'Validation error: {e}'}
@@ -249,12 +249,12 @@ def round_to_exchange_precision(
 ) -> float:
     """
     Round position size to exchange-specific precision requirements.
-    
+
     Args:
         size: Position size to round
         symbol: Trading pair symbol (e.g., "BTC-USD")
         size_type: "quote" (USD) or "base" (crypto)
-        
+
     Returns:
         Rounded position size
     """
@@ -262,11 +262,11 @@ def round_to_exchange_precision(
         if size_type == 'quote':
             # USD amounts typically use 2 decimal places
             return round(size, 2)
-        
+
         elif size_type == 'base' and symbol:
             # Crypto amounts vary by currency
             base_currency = symbol.split('-')[0] if '-' in symbol else symbol
-            
+
             # Precision map based on typical exchange requirements
             precision_map = {
                 'BTC': 8,
@@ -280,13 +280,13 @@ def round_to_exchange_precision(
                 'LINK': 4,
                 'LTC': 8,
             }
-            
+
             precision = precision_map.get(base_currency, 4)  # Default to 4 decimals
             return round(size, precision)
-        
+
         # Fallback: return original size
         return size
-        
+
     except Exception as e:
         logger.warning(f"⚠️  Error rounding position size: {e}, returning original")
         return size

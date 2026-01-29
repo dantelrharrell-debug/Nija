@@ -1,7 +1,7 @@
 # 🎯 NIJA Elite Performance Targets (v7.3)
 
-**Implementation Date:** January 28, 2026  
-**Strategy Version:** 7.3 (Elite Tier)  
+**Implementation Date:** January 28, 2026
+**Strategy Version:** 7.3 (Elite Tier)
 **Performance Tier:** Top 0.1% of Automated Trading Systems Worldwide
 
 ---
@@ -594,7 +594,7 @@ For questions about elite performance targets:
 
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** January 28, 2026  
-**Author:** NIJA Trading Systems  
+**Document Version:** 1.0
+**Last Updated:** January 28, 2026
+**Author:** NIJA Trading Systems
 **Strategy Version:** 7.3 (Elite Tier)

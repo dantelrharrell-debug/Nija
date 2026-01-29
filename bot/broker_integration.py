@@ -19,7 +19,7 @@ import traceback
 # Import Kraken order validator for minimum order validation
 try:
     from bot.kraken_order_validator import (
-        validate_and_adjust_order, log_order_validation, 
+        validate_and_adjust_order, log_order_validation,
         get_pair_minimums
     )
 except ImportError:
@@ -122,7 +122,7 @@ except ImportError:
         import sys
         import io
         from contextlib import contextmanager
-        
+
         @contextmanager
         def suppress_pykrakenapi_prints():
             original_stdout = sys.stdout
@@ -183,22 +183,22 @@ class BrokerInterface(ABC):
     Abstract base class for broker integrations.
     All broker adapters must implement these methods.
     """
-    
+
     @abstractmethod
     def connect(self) -> bool:
         """
         Establish connection to broker API.
-        
+
         Returns:
             bool: True if connection successful
         """
         pass
-    
+
     @abstractmethod
     def get_account_balance(self) -> Dict[str, float]:
         """
         Get account balance information.
-        
+
         Returns:
             dict: {
                 'total_balance': float,
@@ -207,18 +207,18 @@ class BrokerInterface(ABC):
             }
         """
         pass
-    
+
     @abstractmethod
     def get_market_data(self, symbol: str, timeframe: str = '5m',
                        limit: int = 100) -> Optional[Dict]:
         """
         Get market data (OHLCV candles) for symbol.
-        
+
         Args:
             symbol: Trading symbol
             timeframe: Candle timeframe (e.g., '1m', '5m', '1h')
             limit: Number of candles to retrieve
-        
+
         Returns:
             dict: {
                 'symbol': str,
@@ -227,19 +227,19 @@ class BrokerInterface(ABC):
             }
         """
         pass
-    
+
     @abstractmethod
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote') -> Optional[Dict]:
         """
         Place market order.
-        
+
         Args:
             symbol: Trading symbol
             side: 'buy' or 'sell'
             size: Order size
             size_type: 'quote' (USD value) or 'base' (asset quantity)
-        
+
         Returns:
             dict: {
                 'order_id': str,
@@ -252,43 +252,43 @@ class BrokerInterface(ABC):
             }
         """
         pass
-    
+
     @abstractmethod
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote') -> Optional[Dict]:
         """
         Place limit order.
-        
+
         Args:
             symbol: Trading symbol
             side: 'buy' or 'sell'
             size: Order size
             price: Limit price
             size_type: 'quote' (USD value) or 'base' (asset quantity)
-        
+
         Returns:
             dict: Order details (same as place_market_order)
         """
         pass
-    
+
     @abstractmethod
     def cancel_order(self, order_id: str) -> bool:
         """
         Cancel an open order.
-        
+
         Args:
             order_id: Order ID to cancel
-        
+
         Returns:
             bool: True if cancelled successfully
         """
         pass
-    
+
     @abstractmethod
     def get_open_positions(self) -> List[Dict]:
         """
         Get all open positions.
-        
+
         Returns:
             list: List of position dicts with keys:
                 - symbol: str
@@ -299,31 +299,31 @@ class BrokerInterface(ABC):
                 - pnl_pct: float
         """
         pass
-    
+
     @abstractmethod
     def get_order_status(self, order_id: str) -> Optional[Dict]:
         """
         Get status of an order.
-        
+
         Args:
             order_id: Order ID
-        
+
         Returns:
             dict: Order status details
         """
         pass
-    
+
     def get_real_entry_price(self, symbol: str) -> Optional[float]:
         """
         ✅ FIX 1: Attempt to get real entry price from broker order history.
-        
+
         This is an optional method that brokers can implement to provide
         real entry prices from their order history. If not available,
         returns None (caller should use fallback logic).
-        
+
         Args:
             symbol: Trading symbol
-            
+
         Returns:
             Real entry price if available, None otherwise
         """
@@ -335,14 +335,14 @@ class BrokerInterface(ABC):
 class CoinbaseBrokerAdapter(BrokerInterface):
     """
     Coinbase Advanced Trade API adapter.
-    
+
     Integrates with existing Coinbase client in the codebase.
     """
-    
+
     def __init__(self, api_key: str = None, api_secret: str = None):
         """
         Initialize Coinbase broker adapter.
-        
+
         Args:
             api_key: Coinbase API key (loaded from environment if None)
             api_secret: Coinbase API secret (loaded from environment if None)
@@ -351,7 +351,7 @@ class CoinbaseBrokerAdapter(BrokerInterface):
         self.api_secret = api_secret
         self.client = None
         logger.info("Coinbase broker adapter initialized")
-    
+
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade API."""
         try:
@@ -364,7 +364,7 @@ class CoinbaseBrokerAdapter(BrokerInterface):
         except Exception as e:
             logger.error(f"Failed to connect to Coinbase: {e}")
             return False
-    
+
     def get_account_balance(self) -> Dict[str, float]:
         """Get Coinbase account balance."""
         # TODO: Implement using existing broker_manager methods
@@ -374,37 +374,37 @@ class CoinbaseBrokerAdapter(BrokerInterface):
             'available_balance': 0.0,
             'currency': 'USD'
         }
-    
+
     def get_market_data(self, symbol: str, timeframe: str = '5m',
                        limit: int = 100) -> Optional[Dict]:
         """Get market data from Coinbase."""
         # TODO: Implement using existing Coinbase candle fetching
         logger.info(f"Fetching market data for {symbol} ({timeframe})...")
         return None
-    
+
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote') -> Optional[Dict]:
         """Place market order on Coinbase."""
         # TODO: Implement using existing broker_manager order methods
         logger.info(f"Placing Coinbase market {side} order: {symbol} size={size}")
         return None
-    
+
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote') -> Optional[Dict]:
         """Place limit order on Coinbase."""
         logger.info(f"Placing Coinbase limit {side} order: {symbol} @ {price}")
         return None
-    
+
     def cancel_order(self, order_id: str) -> bool:
         """Cancel order on Coinbase."""
         logger.info(f"Cancelling Coinbase order: {order_id}")
         return False
-    
+
     def get_open_positions(self) -> List[Dict]:
         """Get open positions from Coinbase."""
         # TODO: Implement using existing position tracking
         return []
-    
+
     def get_order_status(self, order_id: str) -> Optional[Dict]:
         """Get order status from Coinbase."""
         logger.info(f"Checking Coinbase order status: {order_id}")
@@ -414,15 +414,15 @@ class CoinbaseBrokerAdapter(BrokerInterface):
 class BinanceBrokerAdapter(BrokerInterface):
     """
     Binance API adapter (skeleton for future implementation).
-    
+
     Supports both spot and futures trading.
     """
-    
+
     def __init__(self, api_key: str = None, api_secret: str = None,
                  testnet: bool = False):
         """
         Initialize Binance broker adapter.
-        
+
         Args:
             api_key: Binance API key
             api_secret: Binance API secret
@@ -433,7 +433,7 @@ class BinanceBrokerAdapter(BrokerInterface):
         self.testnet = testnet
         self.client = None
         logger.info(f"Binance broker adapter initialized (testnet={testnet})")
-    
+
     def connect(self) -> bool:
         """Connect to Binance API."""
         logger.info("Connecting to Binance API...")
@@ -442,7 +442,7 @@ class BinanceBrokerAdapter(BrokerInterface):
         # from binance.client import Client
         # self.client = Client(self.api_key, self.api_secret, testnet=self.testnet)
         return False
-    
+
     def get_account_balance(self) -> Dict[str, float]:
         """Get Binance account balance."""
         logger.info("Fetching Binance account balance...")
@@ -451,34 +451,34 @@ class BinanceBrokerAdapter(BrokerInterface):
             'available_balance': 0.0,
             'currency': 'USDT'
         }
-    
+
     def get_market_data(self, symbol: str, timeframe: str = '5m',
                        limit: int = 100) -> Optional[Dict]:
         """Get market data from Binance."""
         logger.info(f"Fetching Binance market data for {symbol}...")
         return None
-    
+
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote') -> Optional[Dict]:
         """Place market order on Binance."""
         logger.info(f"Placing Binance market {side} order: {symbol}")
         return None
-    
+
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote') -> Optional[Dict]:
         """Place limit order on Binance."""
         logger.info(f"Placing Binance limit {side} order: {symbol} @ {price}")
         return None
-    
+
     def cancel_order(self, order_id: str) -> bool:
         """Cancel order on Binance."""
         logger.info(f"Cancelling Binance order: {order_id}")
         return False
-    
+
     def get_open_positions(self) -> List[Dict]:
         """Get open positions from Binance."""
         return []
-    
+
     def get_order_status(self, order_id: str) -> Optional[Dict]:
         """Get order status from Binance."""
         logger.info(f"Checking Binance order status: {order_id}")
@@ -489,12 +489,12 @@ class AlpacaBrokerAdapter(BrokerInterface):
     """
     Alpaca API adapter for stock/crypto trading (skeleton for future implementation).
     """
-    
+
     def __init__(self, api_key: str = None, api_secret: str = None,
                  paper: bool = True):
         """
         Initialize Alpaca broker adapter.
-        
+
         Args:
             api_key: Alpaca API key
             api_secret: Alpaca API secret
@@ -505,7 +505,7 @@ class AlpacaBrokerAdapter(BrokerInterface):
         self.paper = paper
         self.client = None
         logger.info(f"Alpaca broker adapter initialized (paper={paper})")
-    
+
     def connect(self) -> bool:
         """Connect to Alpaca API."""
         logger.info("Connecting to Alpaca API...")
@@ -514,7 +514,7 @@ class AlpacaBrokerAdapter(BrokerInterface):
         # from alpaca.trading.client import TradingClient
         # self.client = TradingClient(self.api_key, self.api_secret, paper=self.paper)
         return False
-    
+
     def get_account_balance(self) -> Dict[str, float]:
         """Get Alpaca account balance."""
         logger.info("Fetching Alpaca account balance...")
@@ -523,34 +523,34 @@ class AlpacaBrokerAdapter(BrokerInterface):
             'available_balance': 0.0,
             'currency': 'USD'
         }
-    
+
     def get_market_data(self, symbol: str, timeframe: str = '5m',
                        limit: int = 100) -> Optional[Dict]:
         """Get market data from Alpaca."""
         logger.info(f"Fetching Alpaca market data for {symbol}...")
         return None
-    
+
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote') -> Optional[Dict]:
         """Place market order on Alpaca."""
         logger.info(f"Placing Alpaca market {side} order: {symbol}")
         return None
-    
+
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote') -> Optional[Dict]:
         """Place limit order on Alpaca."""
         logger.info(f"Placing Alpaca limit {side} order: {symbol} @ {price}")
         return None
-    
+
     def cancel_order(self, order_id: str) -> bool:
         """Cancel order on Alpaca."""
         logger.info(f"Cancelling Alpaca order: {order_id}")
         return False
-    
+
     def get_open_positions(self) -> List[Dict]:
         """Get open positions from Alpaca."""
         return []
-    
+
     def get_order_status(self, order_id: str) -> Optional[Dict]:
         """Get order status from Alpaca."""
         logger.info(f"Checking Alpaca order status: {order_id}")
@@ -560,28 +560,28 @@ class AlpacaBrokerAdapter(BrokerInterface):
 class KrakenBrokerAdapter(BrokerInterface):
     """
     Kraken Pro API adapter for cryptocurrency spot trading.
-    
+
     Supports spot trading with USD/USDT pairs.
     Documentation: https://docs.kraken.com/rest/
     """
-    
+
     # Class-level flag to track if detailed permission error instructions have been logged
     # This prevents spamming the logs with duplicate permission error messages
     # The detailed instructions are logged ONCE GLOBALLY across all adapter instances
     # Thread-safe: uses lock for concurrent access protection
     _permission_error_details_logged = False
     _permission_errors_lock = threading.Lock()
-    
+
     def __init__(self, api_key: str = None, api_secret: str = None):
         """
         Initialize Kraken broker adapter.
-        
+
         Args:
             api_key: Kraken API key
             api_secret: Kraken API private key
         """
         import os
-        
+
         # Use explicit credentials if both are provided, otherwise use environment variables
         if api_key and api_secret:
             # Explicit credentials provided - use them directly
@@ -595,7 +595,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             master_secret = os.getenv("KRAKEN_MASTER_API_SECRET", "").strip()
             legacy_key = os.getenv("KRAKEN_API_KEY", "").strip()
             legacy_secret = os.getenv("KRAKEN_API_SECRET", "").strip()
-            
+
             # Use master credentials if both are available, otherwise try legacy
             if master_key and master_secret:
                 self.api_key = master_key
@@ -610,21 +610,21 @@ class KrakenBrokerAdapter(BrokerInterface):
                 self.api_key = None
                 self.api_secret = None
                 logger.warning("Kraken broker adapter initialized without credentials")
-        
+
         self.api = None
         self.kraken_api = None
-    
+
     def _kraken_api_call(self, method: str, params: dict = None):
         """
         Helper method to make Kraken API calls with global serialization lock.
-        
+
         This method wraps all query_private calls with the global API lock
         to ensure only ONE Kraken API call happens at a time across all accounts.
-        
+
         Args:
             method: Kraken API method name
             params: Optional parameters dict
-            
+
         Returns:
             API response
         """
@@ -643,17 +643,17 @@ class KrakenBrokerAdapter(BrokerInterface):
                     return self.api.query_private(method, params)
                 else:
                     return self.api.query_private(method)
-    
+
     def connect(self) -> bool:
         """Connect to Kraken API."""
         try:
             import krakenex
             from pykrakenapi import KrakenAPI
-            
+
             if not self.api_key or not self.api_secret:
                 logger.error("Kraken credentials not found")
                 return False
-            
+
             # ✅ REQUIREMENT 3: Verify per-API key execution
             try:
                 from bot.kraken_order_validator import verify_per_api_key_execution
@@ -661,38 +661,38 @@ class KrakenBrokerAdapter(BrokerInterface):
                 verify_per_api_key_execution(self.api_key, account_type)
             except ImportError:
                 logger.debug("Kraken order validator not available, skipping per-API key verification")
-            
+
             self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
-            
+
             # FINAL FIX: Override nonce generator to use GLOBAL Kraken Nonce Manager
             # ONE global source for all users (master + users)
             if get_global_kraken_nonce is not None:
                 def _global_nonce():
                     """Generate nonce using global manager (nanosecond precision)."""
                     return str(get_global_kraken_nonce())
-                
+
                 self.api._nonce = _global_nonce
                 logger.debug("✅ Global Kraken Nonce Manager installed for KrakenBrokerAdapter")
             else:
                 logger.warning("⚠️ Global nonce manager not available, using krakenex default")
-            
+
             self.kraken_api = KrakenAPI(self.api)
-            
+
             # Test connection - use helper method for serialized API call
             balance = self._kraken_api_call('Balance')
-            
+
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
-                
+
                 # Check if it's a permission error
                 is_permission_error = any(keyword in error_msgs.lower() for keyword in [
-                    'permission denied', 'egeneral:permission', 
+                    'permission denied', 'egeneral:permission',
                     'eapi:invalid permission', 'insufficient permission'
                 ])
-                
+
                 if is_permission_error:
                     logger.error(f"❌ Kraken connection test failed: {error_msgs}")
-                    
+
                     # Thread-safe check and update of global flag
                     with KrakenBrokerAdapter._permission_errors_lock:
                         # Only log detailed permission error instructions ONCE GLOBALLY
@@ -704,7 +704,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                             should_log_details = True
                         else:
                             should_log_details = False
-                    
+
                     if should_log_details:
                         logger.error("   ⚠️  API KEY PERMISSION ERROR")
                         logger.error("   Your Kraken API key does not have the required permissions.")
@@ -730,28 +730,28 @@ class KrakenBrokerAdapter(BrokerInterface):
                         logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                 else:
                     logger.error(f"Kraken connection test failed: {error_msgs}")
-                
+
                 return False
-            
+
             if balance and 'result' in balance:
                 logger.info("✅ Kraken connected")
                 return True
-            
+
             return False
-                
+
         except ImportError:
             logger.error("Kraken SDK not installed. Install with: pip install krakenex pykrakenapi")
             return False
         except Exception as e:
             logger.error(f"Failed to connect to Kraken: {e}")
             return False
-    
+
     def get_account_balance(self, verbose: bool = True) -> Dict[str, float]:
         """Get Kraken account balance with proper error handling.
-        
+
         Args:
             verbose: If True, log balance info. If False, suppress verbose logging.
-        
+
         Returns:
             Dict with balance information including total_balance, available_balance, currency, and error status.
         """
@@ -764,10 +764,10 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'error': True,
                     'error_message': 'API not connected'
                 }
-            
+
             # Use helper method for serialized API call
             balance = self._kraken_api_call('Balance')
-            
+
             # Check for API errors
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
@@ -780,23 +780,23 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'error': True,
                     'error_message': f'API error: {error_msgs}'
                 }
-            
+
             if balance and 'result' in balance:
                 result = balance['result']
                 usd_balance = float(result.get('ZUSD', 0))
                 usdt_balance = float(result.get('USDT', 0))
                 total = usd_balance + usdt_balance
-                
+
                 if verbose:
                     logger.info(f"Kraken balance: USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
-                
+
                 return {
                     'total_balance': total,
                     'available_balance': total,
                     'currency': 'USD',
                     'error': False
                 }
-            
+
             # Unexpected response format
             return {
                 'total_balance': 0.0,
@@ -805,7 +805,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'error': True,
                 'error_message': 'Unexpected API response format'
             }
-            
+
         except Exception as e:
             if verbose:
                 logger.error(f"Error fetching Kraken balance: {e}")
@@ -816,32 +816,32 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'error': True,
                 'error_message': str(e)
             }
-    
+
     def get_market_data(self, symbol: str, timeframe: str = '5m',
                        limit: int = 100) -> Optional[Dict]:
         """Get market data from Kraken."""
         try:
             if not self.kraken_api:
                 return None
-            
+
             # Convert symbol format using helper method
             kraken_symbol = self._convert_to_kraken_symbol(symbol)
-            
+
             # Map timeframe to Kraken interval (in minutes)
             interval_map = {
                 "1m": 1, "5m": 5, "15m": 15, "30m": 30,
                 "1h": 60, "4h": 240, "1d": 1440
             }
-            
+
             kraken_interval = interval_map.get(timeframe.lower(), 5)
-            
+
             # Fetch OHLC data
             ohlc, last = self.kraken_api.get_ohlc_data(
                 kraken_symbol,
                 interval=kraken_interval,
                 ascending=True
             )
-            
+
             # Convert to standard format
             candles = []
             for idx, row in ohlc.tail(limit).iterrows():
@@ -853,81 +853,81 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'close': float(row['close']),
                     'volume': float(row['volume'])
                 })
-            
+
             logger.info(f"Fetched {len(candles)} candles for {kraken_symbol} from Kraken")
-            
+
             return {
                 'symbol': kraken_symbol,
                 'timeframe': timeframe,
                 'candles': candles
             }
-            
+
         except Exception as e:
             logger.error(f"Error fetching Kraken market data: {e}")
             return None
-    
+
     def _convert_to_kraken_symbol(self, symbol: str) -> str:
         """
         Convert a symbol to Kraken format.
-        
+
         Helper method to ensure consistent symbol conversion across all methods.
         Uses the centralized kraken_adapter module for normalization.
-        
+
         Args:
             symbol: Symbol in various formats (BTC-USD, ETH/USDT, etc.)
-            
+
         Returns:
             Kraken-formatted symbol (BTCUSD, ETHUSD, etc.)
         """
         # ✅ FIX (MANDATORY): Use centralized Kraken symbol normalization
         if normalize_kraken_symbol:
             return normalize_kraken_symbol(symbol)
-        
+
         # Fallback: Use symbol mapper if available
         if convert_to_kraken:
             kraken_symbol = convert_to_kraken(symbol)
             if kraken_symbol:
                 return kraken_symbol
-        
+
         # Fallback: Manual conversion
         # Remove separators and uppercase
         kraken_symbol = symbol.replace('-', '').replace('/', '').upper()
-        
+
         # Modern Kraken API uses BTC (not XBT) for Bitcoin pairs
         return kraken_symbol
-    
-    def _validate_kraken_order(self, symbol: str, side: str, size: float, 
-                              size_type: str = 'quote', 
+
+    def _validate_kraken_order(self, symbol: str, side: str, size: float,
+                              size_type: str = 'quote',
                               current_price: float = None) -> Tuple[bool, Optional[str], Optional[str]]:
         """
         Validate Kraken order before placing it.
-        
+
         This method enforces:
         1. Symbol format validation (Kraken only supports USD/USDT pairs)
         2. Order minimum validation (Kraken minimums)
         3. Tier-based minimum enforcement (prevent fee-destroying trades)
         4. Proper symbol conversion (BTC -> XBT, etc.)
-        
+
         Args:
             symbol: Trading pair symbol (e.g., "BTC-USD", "ETH/USDT")
             side: 'buy' or 'sell'
             size: Order size (quantity)
             size_type: 'quote' (USD value) or 'base' (asset quantity)
             current_price: Optional current price for USD calculation
-            
+
         Returns:
             Tuple of (is_valid, kraken_symbol, error_message)
         """
         # ✅ REQUIREMENT #1: Symbol format validation (case-insensitive)
         # Kraken only supports */USD and */USDT pairs
         symbol_upper = symbol.upper()
-        if not (symbol_upper.endswith('/USD') or symbol_upper.endswith('/USDT') or 
+        if not (symbol_upper.endswith('/USD') or symbol_upper.endswith('/USDT') or
                 symbol_upper.endswith('-USD') or symbol_upper.endswith('-USDT')):
             return (False, None, f"Kraken only supports USD/USDT pairs. Symbol '{symbol}' is not supported.")
-        
+
         # ✅ REQUIREMENT #2: Convert to Kraken format using helper method
         kraken_symbol = self._convert_to_kraken_symbol(symbol)
-        
+
         # ✅ REQUIREMENT #3: Validate order size meets Kraken minimums
         # Calculate USD notional value
         if size_type == 'quote':
@@ -936,26 +936,26 @@ class KrakenBrokerAdapter(BrokerInterface):
             order_size_usd = size * current_price
         else:
             order_size_usd = size  # Assume it's in USD if we can't calculate
-        
+
         # FIX #3: Kraken minimum order size enforcement with $10.00 best practice
         # Always enforce our FIX #3 constant ($10.00), regardless of KrakenAdapter setting
         KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($10.00)
-        
+
         if order_size_usd < KRAKEN_MIN_ORDER_USD:
-            return (False, kraken_symbol, 
+            return (False, kraken_symbol,
                     f"Order size ${order_size_usd:.2f} below Kraken minimum ${KRAKEN_MIN_ORDER_USD:.2f} (FIX #3 safety buffer)")
-        
+
         # ✅ REQUIREMENT #4: Tier-based minimum enforcement
         # Check if user's balance tier allows this trade size
         tier_validation_result = None  # Store result to log outside try-except
-        
+
         if get_tier_from_balance and validate_trade_size:
             try:
                 # Get current balance
                 balance_info = self.get_account_balance()
                 if balance_info and not balance_info.get('error', False):
                     current_balance = balance_info.get('total_balance', 0.0)
-                    
+
                     # Check if balance meets minimum to operate bot (SAVER tier minimum)
                     # Get minimum from tier config for consistency
                     min_balance = 10.0  # Default if tier_config not available
@@ -965,19 +965,19 @@ class KrakenBrokerAdapter(BrokerInterface):
                             min_balance = saver_config.capital_min
                         except Exception:
                             pass  # Use default
-                    
+
                     if current_balance < min_balance:
                         return (False, kraken_symbol,
                                 f"Account balance ${current_balance:.2f} below minimum to operate bot (${min_balance:.2f}). Cannot execute trades.")
-                    
+
                     # Determine user's tier
                     user_tier = get_tier_from_balance(current_balance)
                     tier_config = get_tier_config(user_tier)
-                    
+
                     # AUTO-RESIZE trade instead of rejecting (smarter approach)
                     if auto_resize_trade:
                         resized_size, resize_reason = auto_resize_trade(order_size_usd, user_tier, current_balance)
-                        
+
                         if resized_size == 0.0:
                             # Trade is below minimum
                             return (False, kraken_symbol,
@@ -995,18 +995,18 @@ class KrakenBrokerAdapter(BrokerInterface):
                     else:
                         # Fallback to old validation
                         is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
-                        
+
                         if not is_valid:
                             return (False, kraken_symbol,
                                     f"[{user_tier.value} Tier] {reason}. Account balance: ${current_balance:.2f}")
-                        
+
                         # Store validation success for logging outside try-except
                         tier_validation_result = (user_tier.value, order_size_usd, False)
-                    
+
             except Exception as tier_err:
                 # Don't block trade if tier validation fails - just log warning
                 logger.warning(f"⚠️  Tier validation error (allowing trade): {tier_err}")
-        
+
         # Log tier validation success (outside try-except for performance)
         if tier_validation_result:
             if len(tier_validation_result) == 3:
@@ -1018,7 +1018,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             else:
                 tier_name, validated_size = tier_validation_result
                 logger.info(f"✅ Tier validation passed: [{tier_name}] ${validated_size:.2f} trade")
-        
+
         # ✅ REQUIREMENT #5: Broker adapter validation (if available)
         if BrokerAdapterFactory and TradeIntent and OrderIntent:
             try:
@@ -1033,31 +1033,31 @@ class KrakenBrokerAdapter(BrokerInterface):
                     force_execute=False,
                     reason="Strategy signal"
                 )
-                
+
                 # Validate with Kraken adapter
                 adapter = BrokerAdapterFactory.create_adapter("kraken")
                 validated = adapter.validate_and_adjust(intent)
-                
+
                 if not validated.valid:
                     return (False, kraken_symbol, validated.error_message)
-                
+
                 # Log any warnings
                 if validated.warnings:
                     for warning in validated.warnings:
                         logger.warning(f"⚠️  {warning}")
-                        
+
             except Exception as adapter_err:
                 # Don't block trade if adapter validation fails - just log warning
                 logger.warning(f"⚠️  Adapter validation error (allowing trade): {adapter_err}")
-        
+
         # All validations passed
         return (True, kraken_symbol, None)
-    
+
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote') -> Optional[Dict]:
         """
         Place market order on Kraken with comprehensive validation.
-        
+
         This method now includes:
         - Symbol format validation
         - Order minimum enforcement (Kraken + tier minimums)
@@ -1078,13 +1078,13 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'error': 'API_NOT_CONNECTED',
                     'timestamp': datetime.now()
                 }
-            
+
             # ✅ COMPREHENSIVE ORDER VALIDATION (REQUIREMENT #1)
             # Validates: symbol format, minimums, tier requirements, symbol conversion
             is_valid, kraken_symbol, error_msg = self._validate_kraken_order(
                 symbol, side, size, size_type
             )
-            
+
             if not is_valid:
                 logger.error(f"❌ ORDER VALIDATION FAILED [kraken] {symbol}")
                 logger.error(f"   Reason: {error_msg}")
@@ -1100,11 +1100,11 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'message': error_msg,
                     'timestamp': datetime.now()
                 }
-            
+
             # Log validated order details
             logger.info(f"📝 Placing Kraken market {side} order: {kraken_symbol}")
             logger.info(f"   Size: {size} {size_type}, Validation: PASSED")
-            
+
             # Get current price for validation (rough estimate for market orders)
             # NOTE: This adds latency (~50-200ms) to fetch ticker data for validation.
             # Alternative: Could use cached price data or skip validation for market orders
@@ -1120,7 +1120,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             except Exception as price_err:
                 logger.debug(f"Could not fetch price for validation: {price_err}")
                 current_price = 0.0
-            
+
             # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
             # FIX #3: Kraken hard minimum enforcement ($10.00 best practice)
             # Kraken requires $10.00 minimum to prevent fee erosion
@@ -1137,7 +1137,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 else:  # base
                     order_cost_usd = size * current_price
                     volume_to_validate = size
-                
+
                 # Check if order meets Kraken's minimum cost requirement
                 if order_cost_usd < KRAKEN_MIN_ORDER_COST:
                     logger.error("=" * 70)
@@ -1159,7 +1159,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                         'error': f'FIX #3: Below Kraken $10.00 minimum (${order_cost_usd:.2f})',
                         'timestamp': datetime.now()
                     }
-                
+
                 # Validate using base currency volume
                 is_valid, adjusted_volume, error_msg = validate_and_adjust_order(
                     pair=kraken_symbol,
@@ -1168,9 +1168,9 @@ class KrakenBrokerAdapter(BrokerInterface):
                     side=side,
                     ordertype='market'
                 )
-                
+
                 log_order_validation(kraken_symbol, volume_to_validate, current_price, side, is_valid, error_msg)
-                
+
                 if not is_valid:
                     logger.error(f"❌ Order rejected - fails Kraken minimums: {error_msg}")
                     return {
@@ -1183,7 +1183,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                         'error': f'Order validation failed: {error_msg}',
                         'timestamp': datetime.now()
                     }
-                
+
                 # Use adjusted volume (fee-adjusted, already in base currency)
                 size = adjusted_volume
                 logger.info(f"   Using fee-adjusted volume: {size:.8f}")
@@ -1195,7 +1195,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.warning(f"   Kraken will reject if order doesn't meet minimums")
                 minimums = get_pair_minimums(kraken_symbol)
                 logger.info(f"   Expected pair minimums: {minimums}")
-                
+
                 # ✅ CRITICAL FIX: Convert USD to base currency volume when price unavailable
                 # Even without validation, we must convert quote to base for Kraken API
                 if size_type == 'quote':
@@ -1212,12 +1212,12 @@ class KrakenBrokerAdapter(BrokerInterface):
                         'message': error_msg,
                         'timestamp': datetime.now()
                     }
-            
+
             # Note: At this point, 'size' variable is in base currency:
             # - If price was available: converted and validated above
             # - If size_type was 'base': already in base currency
             # - If size_type was 'quote' and no price: we returned early above
-            
+
             # Place market order
             # ✅ REQUIREMENT #2: Build order parameters with proper format
             # Ensure parameters match Kraken API requirements exactly
@@ -1227,11 +1227,11 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'ordertype': 'market',
                 'volume': str(size)  # Must be string format, in base currency
             }
-            
+
             # ✅ REQUIREMENT #3: Execute order via serialized API call
             # Use helper method for global nonce management and thread safety
             result = self._kraken_api_call('AddOrder', order_params)
-            
+
             # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
             # DO NOT allow rejected orders to be recorded as successful trades
             if result and 'error' in result and result['error']:
@@ -1245,13 +1245,13 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.error("=" * 70)
                 # Raise exception to prevent recording this as a successful trade
                 raise OrderRejectedError(f"Order rejected by Kraken: {error_msgs}")
-            
+
             # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
-                
+
                 # ✅ REQUIREMENT 3: HARD-FAIL if no txid (Requirement from problem statement)
                 # If no txid → trade not executed → raise ExecutionFailed
                 if not order_id:
@@ -1265,7 +1265,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     # Raise ExecutionFailed to prevent recording this as a successful trade
                     # NO position, NO ledger write, NO stop-loss, NO cap increment
                     raise ExecutionFailed("Kraken order not confirmed")
-                
+
                 # ✅ REQUIREMENT 1: HARD-FAIL - Verify descr.order exists
                 descr = order_result.get('descr', {})
                 order_description = descr.get('order', '')
@@ -1279,7 +1279,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("   ⚠️  ORDER NOT CONFIRMED - Kraken must return descr.order")
                     logger.error("=" * 70)
                     raise ExecutionFailed("Kraken order not confirmed - no order description")
-                
+
                 # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0
                 # cost field represents the total cost/value of the order
                 cost = float(order_result.get('cost', '0'))
@@ -1294,18 +1294,18 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("   ⚠️  ORDER NOT CONFIRMED - Cost must be greater than zero")
                     logger.error("=" * 70)
                     raise ExecutionFailed(f"Kraken order not confirmed - invalid cost: {cost}")
-                
+
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Market {side} order: {kraken_symbol} (ID: {order_id})")
                 logger.info(f"   Order Description: {order_description}")
                 logger.info(f"   Order Cost: ${cost:.2f}")
-                
+
                 # ✅ REQUIREMENT #2: Attempt to fetch order fill details
                 # Query the order to get filled price and volume
                 filled_price = 0.0
                 filled_volume = size
                 order_verified = False  # Track if order passes verification
-                
+
                 if order_id:
                     try:
                         # Give the order a moment to fill
@@ -1313,20 +1313,20 @@ class KrakenBrokerAdapter(BrokerInterface):
                         import time
                         order_query_delay = 0.5  # seconds - can be adjusted based on broker response time
                         time.sleep(order_query_delay)
-                        
+
                         # Query order details to get filled price
                         order_query = self._kraken_api_call('QueryOrders', {'txid': order_id})
-                        
+
                         if order_query and 'result' in order_query:
                             order_details = order_query['result'].get(order_id, {})
                             filled_price = float(order_details.get('price', 0.0))
                             filled_volume = float(order_details.get('vol_exec', size))
                             order_status = order_details.get('status', 'unknown')
-                            
+
                             # ✅ REQUIREMENT #2: Verify Kraken returns status=closed and vol_exec > 0
                             is_filled = (order_status == 'closed' and filled_volume > 0)
                             order_verified = is_filled
-                            
+
                             # ✅ SAFETY CHECK #4: Kill zero-price fills immediately
                             # Invalid fill price indicates data corruption or API error
                             if filled_price <= 0:
@@ -1340,7 +1340,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                                 logger.error("=" * 70)
                                 # Raise exception to prevent recording this trade
                                 raise InvalidFillPriceError(f"Invalid fill price: {filled_price}")
-                            
+
                             if is_filled:
                                 # ✅ ORDER CONFIRMATION LOGGING (REQUIREMENT #2)
                                 logger.info(f"   ✅ ORDER CONFIRMED:")
@@ -1348,7 +1348,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                                 logger.info(f"      • Filled Volume: {filled_volume:.8f} {kraken_symbol[:3]}")
                                 logger.info(f"      • Filled Price: ${filled_price:.2f}")
                                 logger.info(f"      • Status: {order_status}")
-                                
+
                                 # Note: Balance delta requires fetching balance before/after
                                 # We can calculate approximate delta from filled volume * price
                                 if side.lower() == 'sell':
@@ -1367,15 +1367,15 @@ class KrakenBrokerAdapter(BrokerInterface):
                         logger.warning(f"   ⚠️  Could not query order details: {query_err}")
                         logger.warning(f"      Order verification failed - marking as 'pending'")
                         logger.warning(f"      Check order status manually if needed")
-                
+
                 # Only mark as 'filled' if verification passed
                 # If verification failed (exception or didn't meet criteria), mark as 'pending'
                 final_status = 'filled' if order_verified else 'pending'
-                
+
                 if not order_verified and order_id:
                     logger.info("   ℹ️  Order placed but verification inconclusive - status: 'pending'")
                     logger.info("      This is a safety measure - order may still have filled successfully")
-                
+
                 return {
                     'order_id': order_id,
                     'symbol': kraken_symbol,
@@ -1386,13 +1386,13 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'status': final_status,
                     'timestamp': datetime.now()
                 }
-            
+
             # Order failed - log comprehensive error details
             error_msg = result.get('error', ['Unknown error'])[0] if result else 'No response'
             logger.error(f"❌ ORDER FAILED [kraken] {symbol}: {error_msg}")
             logger.error(f"   Side: {side}, Size: {size}, Type: {size_type}")
             logger.error(f"   Full result: {result}")
-            
+
             return {
                 'order_id': None,
                 'symbol': symbol,
@@ -1403,14 +1403,14 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'error': error_msg,
                 'timestamp': datetime.now()
             }
-            
+
         except Exception as e:
             # ✅ FIX 4: LOG ALL ORDER EXCEPTIONS
             logger.error(f"❌ ORDER FAILED [kraken] {symbol}: {e}")
             logger.error(f"   Exception type: {type(e).__name__}")
             logger.error(f"   Side: {side}, Size: {size}")
             logger.error(f"   Traceback: {traceback.format_exc()}")
-            
+
             # ✅ FIX (STRONGLY RECOMMENDED): Reconcile position on failed exit
             if side.lower() == 'sell':
                 logger.warning(f"⚠️  Failed SELL order detected - triggering position reconciliation")
@@ -1418,7 +1418,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     self.reconcile_position_after_failed_exit(symbol, size)
                 except Exception as reconcile_err:
                     logger.error(f"❌ Position reconciliation error: {reconcile_err}")
-            
+
             return {
                 'order_id': None,
                 'symbol': symbol,
@@ -1429,12 +1429,12 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'error': str(e),
                 'timestamp': datetime.now()
             }
-    
+
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote') -> Optional[Dict]:
         """
         Place limit order on Kraken with comprehensive validation.
-        
+
         This method now includes:
         - Symbol format validation
         - Order minimum enforcement (Kraken + tier minimums)
@@ -1455,12 +1455,12 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'error': 'API_NOT_CONNECTED',
                     'timestamp': datetime.now()
                 }
-            
+
             # ✅ COMPREHENSIVE ORDER VALIDATION (REQUIREMENT #1)
             # FIX #3: Kraken hard minimum enforcement ($10.00 best practice)
             # Calculate USD size for validation (limit orders use price)
             order_size_usd = size * price if size_type == 'base' else size
-            
+
             # Check minimum order cost before AddOrder
             if order_size_usd < KRAKEN_MIN_ORDER_COST:
                 logger.error("=" * 70)
@@ -1480,12 +1480,12 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'error': f'FIX #3: Below Kraken $10.00 minimum (${order_size_usd:.2f})',
                     'timestamp': datetime.now()
                 }
-            
+
             # Validate symbol and convert to Kraken format
             is_valid, kraken_symbol, error_msg = self._validate_kraken_order(
                 symbol, side, size, size_type, current_price=price
             )
-            
+
             if not is_valid:
                 logger.error(f"❌ ORDER VALIDATION FAILED [kraken limit] {symbol}")
                 logger.error(f"   Reason: {error_msg}")
@@ -1500,11 +1500,11 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'error': f'Order validation failed: {error_msg}',
                     'timestamp': datetime.now()
                 }
-            
+
             # Log validated order details
             logger.info(f"📝 Placing Kraken limit {side} order: {kraken_symbol} @ ${price}")
             logger.info(f"   Size: {size} {size_type}, USD Value: ${order_size_usd:.2f}, Validation: PASSED")
-            
+
             # ✅ SAFETY CHECK #4: Validate limit price before placing order
             # For limit orders, validate the limit price itself before API call
             if price <= 0:
@@ -1517,7 +1517,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.error("=" * 70)
                 # Raise exception to prevent placing order
                 raise InvalidFillPriceError(f"Invalid limit price: {price}")
-            
+
             # ✅ REQUIREMENT #2: Build order parameters with proper format
             order_params = {
                 'pair': kraken_symbol,
@@ -1526,10 +1526,10 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'price': str(price),
                 'volume': str(size)
             }
-            
+
             # ✅ REQUIREMENT #3: Execute order via serialized API call
             result = self._kraken_api_call('AddOrder', order_params)
-            
+
             # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
             # DO NOT allow rejected orders to be recorded as successful trades
             if result and 'error' in result and result['error']:
@@ -1543,14 +1543,14 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.error("=" * 70)
                 # Raise exception to prevent recording this as a successful trade
                 raise OrderRejectedError(f"Limit order rejected by Kraken: {error_msgs}")
-            
+
             # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
             # ✅ REQUIREMENT #4: Verify txid and return comprehensive response
             if result and 'result' in result:
                 order_result = result['result']
                 txid = order_result.get('txid', [])
                 order_id = txid[0] if txid else None
-                
+
                 # ✅ REQUIREMENT 3: HARD-FAIL if no txid (Requirement from problem statement)
                 # If no txid → trade not executed → raise ExecutionFailed
                 if not order_id:
@@ -1564,7 +1564,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     # Raise ExecutionFailed to prevent recording this as a successful trade
                     # NO position, NO ledger write, NO stop-loss, NO cap increment
                     raise ExecutionFailed("Kraken order not confirmed")
-                
+
                 # ✅ REQUIREMENT 1: HARD-FAIL - Verify descr.order exists
                 descr = order_result.get('descr', {})
                 order_description = descr.get('order', '')
@@ -1578,7 +1578,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("   ⚠️  ORDER NOT CONFIRMED - Kraken must return descr.order")
                     logger.error("=" * 70)
                     raise ExecutionFailed("Kraken limit order not confirmed - no order description")
-                
+
                 # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0 (for limit orders, cost may be 0 until filled)
                 # For limit orders, we'll verify volume instead since they may not fill immediately
                 volume = float(order_result.get('volume', '0'))
@@ -1593,7 +1593,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("   ⚠️  ORDER NOT CONFIRMED - Volume must be greater than zero")
                     logger.error("=" * 70)
                     raise ExecutionFailed(f"Kraken limit order not confirmed - invalid volume: {volume}")
-                
+
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Limit {side} order: {kraken_symbol} @ ${price} (ID: {order_id})")
                 logger.info(f"   Order Description: {order_description}")
@@ -1606,7 +1606,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.info(f"   • Size: {size} {size_type}")
                 else:
                     logger.warning(f"⚠️  Kraken limit order accepted but no txid returned")
-                
+
                 return {
                     'order_id': order_id,
                     'symbol': kraken_symbol,
@@ -1616,13 +1616,13 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'status': 'open',
                     'timestamp': datetime.now()
                 }
-            
+
             # Order failed
             error_msg = result.get('error', ['Unknown error'])[0] if result else 'No response'
             logger.error(f"❌ ORDER FAILED [kraken limit] {symbol}: {error_msg}")
             logger.error(f"   Side: {side}, Size: {size}, Price: ${price}, Type: {size_type}")
             logger.error(f"   Full result: {result}")
-            
+
             return {
                 'order_id': None,
                 'symbol': symbol,
@@ -1633,13 +1633,13 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'error': error_msg,
                 'timestamp': datetime.now()
             }
-            
+
         except Exception as e:
             logger.error(f"❌ ORDER FAILED [kraken limit] {symbol}: {e}")
             logger.error(f"   Exception type: {type(e).__name__}")
             logger.error(f"   Side: {side}, Size: {size}, Price: ${price}")
             logger.error(f"   Traceback: {traceback.format_exc()}")
-            
+
             # ✅ FIX (STRONGLY RECOMMENDED): Reconcile position on failed exit
             if side.lower() == 'sell':
                 logger.warning(f"⚠️  Failed SELL limit order detected - triggering position reconciliation")
@@ -1647,7 +1647,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     self.reconcile_position_after_failed_exit(symbol, size)
                 except Exception as reconcile_err:
                     logger.error(f"❌ Position reconciliation error: {reconcile_err}")
-            
+
             return {
                 'order_id': None,
                 'symbol': symbol,
@@ -1658,52 +1658,52 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'error': str(e),
                 'timestamp': datetime.now()
             }
-    
+
     def cancel_order(self, order_id: str) -> bool:
         """Cancel order on Kraken."""
         try:
             if not self.api:
                 return False
-            
+
             # Use helper method for serialized API call
             result = self._kraken_api_call('CancelOrder', {'txid': order_id})
-            
+
             if result and 'result' in result and 'count' in result['result']:
                 count = result['result']['count']
                 logger.info(f"Cancelled {count} Kraken order(s): {order_id}")
                 return count > 0
-            
+
             return False
-            
+
         except Exception as e:
             logger.error(f"Kraken cancel order error: {e}")
             return False
-    
+
     def get_open_positions(self) -> List[Dict]:
         """
         ✅ REQUIREMENT 2: Get open positions from Kraken exchange data.
-        
+
         Position counting MUST come from exchange, not internal memory:
         - OpenOrders: Active open orders
         - Balance: Non-zero crypto balances (excluding dust)
         - TradeBalance: Held funds verification
-        
+
         If Kraken reports no open orders and no balances → positions = 0
-        
+
         Returns:
             List of position dicts with symbol, size, entry_price, etc.
         """
         try:
             if not self.api:
                 return []
-            
+
             positions = []
-            
+
             # ✅ STEP 1: Get open orders from Kraken
             # This tells us what positions we're actively managing
             open_orders_result = self._kraken_api_call('OpenOrders')
             open_order_symbols = set()
-            
+
             if open_orders_result and 'result' in open_orders_result:
                 open_orders = open_orders_result['result'].get('open', {})
                 for order_id, order in open_orders.items():
@@ -1712,29 +1712,29 @@ class KrakenBrokerAdapter(BrokerInterface):
                     if pair:
                         open_order_symbols.add(pair)
                         logger.info(f"   📋 Open order found: {pair} (ID: {order_id})")
-            
+
             # ✅ STEP 2: Get account balances to find actual holdings
             balance = self._kraken_api_call('Balance')
-            
+
             if balance and 'result' in balance:
                 result = balance['result']
-                
+
                 for asset, amount in result.items():
                     balance_val = float(amount)
-                    
+
                     # Skip USD/USDT and zero balances
                     if asset in ['ZUSD', 'USDT'] or balance_val <= 0:
                         continue
-                    
+
                     # Convert Kraken asset codes
                     currency = asset
                     if currency.startswith('X') and len(currency) == 4:
                         currency = currency[1:]
                     if currency == 'XBT':
                         currency = 'BTC'
-                    
+
                     symbol = f'{currency}USD'
-                    
+
                     # ✅ REQUIREMENT 3: Exclude dust positions
                     # Get current price to calculate USD value
                     try:
@@ -1752,9 +1752,9 @@ class KrakenBrokerAdapter(BrokerInterface):
                             else:
                                 # Try standard format
                                 ticker_pair = f'X{currency}ZUSD'
-                        
+
                         ticker_result = self._kraken_api_call('Ticker', {'pair': ticker_pair})
-                        
+
                         current_price = 0.0
                         if ticker_result and 'result' in ticker_result:
                             # Ticker result may have the pair name as key
@@ -1763,24 +1763,24 @@ class KrakenBrokerAdapter(BrokerInterface):
                             if not ticker_data and ticker_result['result']:
                                 # Use first available ticker if exact match fails
                                 ticker_data = list(ticker_result['result'].values())[0]
-                            
+
                             if ticker_data:
                                 # Get last price from ticker
                                 last_price = ticker_data.get('c', [0, 0])
                                 current_price = float(last_price[0]) if isinstance(last_price, list) else float(last_price)
-                        
+
                         usd_value = balance_val * current_price if current_price > 0 else 0
-                        
+
                         # ✅ FIX (MANDATORY): DUST EXCLUSION - If usd_value < DUST_THRESHOLD_USD, IGNORE COMPLETELY
                         if is_dust_position and is_dust_position(usd_value):
                             logger.info(f"   🗑️  Excluding dust position: {symbol} (${usd_value:.4f} < ${DUST_THRESHOLD_USD})")
                             continue
-                        
+
                         # ✅ FIX: If price is zero, skip position (cannot value it)
                         if current_price <= 0:
                             logger.warning(f"   ⚠️  Skipping {symbol}: price unavailable (cannot determine if dust)")
                             continue
-                        
+
                         positions.append({
                             'symbol': symbol,
                             'size': balance_val,
@@ -1790,14 +1790,14 @@ class KrakenBrokerAdapter(BrokerInterface):
                             'pnl_pct': 0.0,
                             'usd_value': usd_value
                         })
-                        
+
                     except Exception as price_err:
                         logger.warning(f"Could not get price for {symbol}: {price_err}")
                         # ✅ FIX: Do NOT include positions we cannot price
                         # Cannot determine if dust without price, so skip to be safe
                         logger.warning(f"   ⚠️  Skipping {symbol}: cannot verify dust threshold without price")
                         continue
-            
+
             # ✅ REQUIREMENT 2: If Kraken reports no positions → positions = 0
             if not positions:
                 logger.info("   ✅ Kraken reports ZERO open positions (no balances above dust threshold)")
@@ -1805,64 +1805,64 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.info(f"   ✅ Kraken reports {len(positions)} open position(s)")
                 for pos in positions:
                     logger.info(f"      • {pos['symbol']}: {pos['size']:.8f} (${pos.get('usd_value', 0):.2f})")
-            
+
             return positions
-            
+
         except Exception as e:
             logger.error(f"Error fetching Kraken positions: {e}")
             return []
-    
+
     def get_order_status(self, order_id: str) -> Optional[Dict]:
         """Get order status from Kraken."""
         try:
             if not self.api:
                 return None
-            
+
             # Use helper method for serialized API call
             result = self._kraken_api_call('QueryOrders', {'txid': order_id})
-            
+
             if result and 'result' in result:
                 orders = result['result']
                 if order_id in orders:
                     order = orders[order_id]
                     logger.info(f"Kraken order status: {order_id} - {order.get('status', 'unknown')}")
                     return order
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Kraken get order status error: {e}")
             return None
-    
+
     def get_real_entry_price(self, symbol: str) -> Optional[float]:
         """
         ✅ FIX 1: Try to get real entry price from Kraken order history.
-        
+
         This method attempts to fetch the actual entry price from the broker's
         order history. If not available, returns None (caller should use fallback).
-        
+
         Args:
             symbol: Trading symbol
-            
+
         Returns:
             Real entry price if available, None otherwise
         """
         try:
             if not self.api:
                 return None
-            
+
             # Convert symbol format to Kraken format
             kraken_symbol = symbol.replace('-', '').upper()
             if kraken_symbol.startswith('BTC'):
                 kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
-            
+
             # Query closed orders (last 50)
             # Use helper method for serialized API call
             result = self._kraken_api_call('ClosedOrders', {'trades': True})
-            
+
             if result and 'result' in result and 'closed' in result['result']:
                 closed_orders = result['result']['closed']
-                
+
                 # Find most recent buy order for this symbol
                 for order_id, order_data in sorted(
                     closed_orders.items(),
@@ -1876,106 +1876,106 @@ class KrakenBrokerAdapter(BrokerInterface):
                             if avg_price > 0:
                                 logger.debug(f"Found real entry price for {symbol}: ${avg_price:.2f}")
                                 return avg_price
-            
+
             # No entry price found in recent orders
             logger.debug(f"No real entry price found for {symbol} in Kraken order history")
             return None
-            
+
         except Exception as e:
             logger.debug(f"Error fetching real entry price for {symbol}: {e}")
             return None
-    
+
     def refresh_positions_from_exchange(self) -> List[Dict]:
         """
         ✅ FIX (STRONGLY RECOMMENDED): Refresh positions from Kraken exchange.
-        
+
         This method forces a refresh of positions directly from the exchange API,
         ensuring internal state matches reality. Used after failed exits to prevent
         phantom positions.
-        
+
         Returns:
             List of actual positions from Kraken exchange
         """
         logger.info("🔄 Refreshing positions from Kraken exchange...")
-        
+
         try:
             # Use get_open_positions which already implements dust filtering
             positions = self.get_open_positions()
-            
+
             logger.info(f"✅ Refreshed {len(positions)} positions from Kraken")
             for pos in positions:
                 logger.info(f"   • {pos['symbol']}: {pos['size']:.8f} @ ${pos.get('current_price', 0):.2f}")
-            
+
             return positions
-            
+
         except Exception as e:
             logger.error(f"❌ Failed to refresh positions from Kraken: {e}")
             return []
-    
+
     def reconcile_position_after_failed_exit(self, symbol: str, attempted_size: float) -> bool:
         """
         ✅ FIX (STRONGLY RECOMMENDED): Reconcile position after failed exit attempt.
-        
+
         After any failed exit, force reconciliation to prevent:
         - Phantom positions (internal state says position exists, but it doesn't)
         - Position cap pollution (counting positions that don't exist)
         - Endless cleanup attempts (trying to exit non-existent positions)
-        
+
         Args:
             symbol: Symbol that failed to exit
             attempted_size: Size that was attempted to exit
-            
+
         Returns:
             True if reconciliation successful, False otherwise
         """
         logger.warning(f"🔄 Reconciling position after failed exit: {symbol}")
         logger.warning(f"   Attempted to exit: {attempted_size}")
-        
+
         try:
             # Use kraken_adapter reconciliation if available
             if reconcile_kraken_position_after_failed_exit:
                 return reconcile_kraken_position_after_failed_exit(
                     symbol, attempted_size, broker_adapter=self
                 )
-            
+
             # Fallback: Simple position refresh
             positions = self.refresh_positions_from_exchange()
-            
+
             # Check if position still exists
             position_exists = any(p.get('symbol') == symbol for p in positions)
-            
+
             if position_exists:
                 logger.warning(f"   ⚠️  Position still exists after failed exit: {symbol}")
             else:
                 logger.info(f"   ✅ Position no longer exists: {symbol}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Position reconciliation failed for {symbol}: {e}")
             return False
-    
+
     def filter_dust_positions(self, positions: List[Dict]) -> List[Dict]:
         """
         ✅ FIX (MANDATORY): Filter out dust positions below $1.00 USD value.
-        
+
         This prevents dust positions from:
         - Polluting position cap count
         - Triggering endless cleanup attempts
         - Appearing in position tracking
-        
+
         Args:
             positions: List of positions
-            
+
         Returns:
             Filtered list without dust positions
         """
         filtered = []
         dust_count = 0
-        
+
         for pos in positions:
             usd_value = pos.get('usd_value', 0.0)
-            
+
             # Use is_dust_position from kraken_adapter if available
             if is_dust_position and is_dust_position(usd_value):
                 dust_count += 1
@@ -1983,10 +1983,10 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.debug(f"   🗑️  Filtering dust position: {symbol} (${usd_value:.4f})")
             else:
                 filtered.append(pos)
-        
+
         if dust_count > 0:
             logger.info(f"🧹 Filtered {dust_count} dust positions (< ${DUST_THRESHOLD_USD:.2f})")
-        
+
         return filtered
 
 
@@ -1994,21 +1994,21 @@ class KrakenBrokerAdapter(BrokerInterface):
 class OKXBrokerAdapter(BrokerInterface):
     """
     OKX Exchange API adapter for cryptocurrency spot and futures trading.
-    
+
     Supports:
     - Spot trading (USDT pairs)
     - Futures/Perpetual contracts
     - Testnet for paper trading
     - Advanced order types
-    
+
     Documentation: https://www.okx.com/docs-v5/en/
     """
-    
+
     def __init__(self, api_key: str = None, api_secret: str = None,
                  passphrase: str = None, testnet: bool = False):
         """
         Initialize OKX broker adapter.
-        
+
         Args:
             api_key: OKX API key
             api_secret: OKX API secret
@@ -2024,30 +2024,30 @@ class OKXBrokerAdapter(BrokerInterface):
         self.market_api = None
         self.trade_api = None
         logger.info(f"OKX broker adapter initialized (testnet={self.testnet})")
-    
+
     def connect(self) -> bool:
         """Connect to OKX API."""
         try:
             from okx.api import Account, Market, Trade
-            
+
             if not self.api_key or not self.api_secret or not self.passphrase:
                 logger.error("OKX credentials not found")
                 return False
-            
+
             # API flag: "1" for testnet, "0" for live
             flag = "1" if self.testnet else "0"
-            
+
             # Initialize OKX API clients
-            self.account_api = Account(self.api_key, self.api_secret, 
+            self.account_api = Account(self.api_key, self.api_secret,
                                        self.passphrase, flag)
             self.market_api = Market(self.api_key, self.api_secret,
                                      self.passphrase, flag)
             self.trade_api = Trade(self.api_key, self.api_secret,
                                    self.passphrase, flag)
-            
+
             # Test connection
             result = self.account_api.get_balance()
-            
+
             if result and result.get('code') == '0':
                 env_type = "testnet" if self.testnet else "live"
                 logger.info(f"✅ OKX connected ({env_type})")
@@ -2056,14 +2056,14 @@ class OKXBrokerAdapter(BrokerInterface):
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
                 logger.error(f"OKX connection test failed: {error_msg}")
                 return False
-                
+
         except ImportError:
             logger.error("OKX SDK not installed or incompatible version. Install with: pip install okx==2.1.2")
             return False
         except Exception as e:
             logger.error(f"Failed to connect to OKX: {e}")
             return False
-    
+
     def get_account_balance(self) -> Dict[str, float]:
         """Get OKX account balance."""
         try:
@@ -2073,38 +2073,38 @@ class OKXBrokerAdapter(BrokerInterface):
                     'available_balance': 0.0,
                     'currency': 'USDT'
                 }
-            
+
             result = self.account_api.get_balance()
-            
+
             if result and result.get('code') == '0':
                 data = result.get('data', [])
                 if data and len(data) > 0:
                     # Get total equity
                     total_eq = float(data[0].get('totalEq', 0))
-                    
+
                     # Find USDT available balance
                     details = data[0].get('details', [])
                     usdt_available = 0.0
-                    
+
                     for detail in details:
                         if detail.get('ccy') == 'USDT':
                             usdt_available = float(detail.get('availBal', 0))
                             break
-                    
+
                     logger.info(f"OKX balance: Total ${total_eq:.2f}, Available USDT: ${usdt_available:.2f}")
-                    
+
                     return {
                         'total_balance': total_eq,
                         'available_balance': usdt_available,
                         'currency': 'USDT'
                     }
-            
+
             return {
                 'total_balance': 0.0,
                 'available_balance': 0.0,
                 'currency': 'USDT'
             }
-            
+
         except Exception as e:
             logger.error(f"Error fetching OKX balance: {e}")
             return {
@@ -2112,35 +2112,35 @@ class OKXBrokerAdapter(BrokerInterface):
                 'available_balance': 0.0,
                 'currency': 'USDT'
             }
-    
+
     def get_market_data(self, symbol: str, timeframe: str = '5m',
                        limit: int = 100) -> Optional[Dict]:
         """Get market data from OKX."""
         try:
             if not self.market_api:
                 return None
-            
+
             # Convert symbol format (BTC-USD -> BTC-USDT)
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
-            
+
             # Map timeframe to OKX format
             timeframe_map = {
                 "1m": "1m", "5m": "5m", "15m": "15m",
                 "1h": "1H", "4h": "4H", "1d": "1D"
             }
             okx_timeframe = timeframe_map.get(timeframe.lower(), "5m")
-            
+
             # Fetch candles
             result = self.market_api.get_candles(
                 instId=okx_symbol,
                 bar=okx_timeframe,
                 limit=str(min(limit, 100))
             )
-            
+
             if result and result.get('code') == '0':
                 data = result.get('data', [])
                 candles = []
-                
+
                 for candle in data:
                     candles.append({
                         'timestamp': int(candle[0]),
@@ -2150,31 +2150,31 @@ class OKXBrokerAdapter(BrokerInterface):
                         'close': float(candle[4]),
                         'volume': float(candle[5])
                     })
-                
+
                 logger.info(f"Fetched {len(candles)} candles for {okx_symbol} from OKX")
-                
+
                 return {
                     'symbol': okx_symbol,
                     'timeframe': timeframe,
                     'candles': candles
                 }
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Error fetching OKX market data: {e}")
             return None
-    
+
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote') -> Optional[Dict]:
         """Place market order on OKX."""
         try:
             if not self.trade_api:
                 return None
-            
+
             # Convert symbol format
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
-            
+
             # Place order
             result = self.trade_api.place_order(
                 instId=okx_symbol,
@@ -2183,13 +2183,13 @@ class OKXBrokerAdapter(BrokerInterface):
                 ordType='market',
                 sz=str(size)
             )
-            
+
             if result and result.get('code') == '0':
                 data = result.get('data', [])
                 if data and len(data) > 0:
                     order_id = data[0].get('ordId')
                     logger.info(f"OKX market {side} order placed: {okx_symbol} (ID: {order_id})")
-                    
+
                     return {
                         'order_id': order_id,
                         'symbol': okx_symbol,
@@ -2199,25 +2199,25 @@ class OKXBrokerAdapter(BrokerInterface):
                         'status': 'filled',
                         'timestamp': datetime.now()
                     }
-            
+
             error_msg = result.get('msg', 'Unknown error') if result else 'No response'
             logger.error(f"OKX order failed: {error_msg}")
             return None
-            
+
         except Exception as e:
             logger.error(f"OKX order error: {e}")
             return None
-    
+
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote') -> Optional[Dict]:
         """Place limit order on OKX."""
         try:
             if not self.trade_api:
                 return None
-            
+
             # Convert symbol format
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
-            
+
             # Place limit order
             result = self.trade_api.place_order(
                 instId=okx_symbol,
@@ -2227,13 +2227,13 @@ class OKXBrokerAdapter(BrokerInterface):
                 px=str(price),
                 sz=str(size)
             )
-            
+
             if result and result.get('code') == '0':
                 data = result.get('data', [])
                 if data and len(data) > 0:
                     order_id = data[0].get('ordId')
                     logger.info(f"OKX limit {side} order placed: {okx_symbol} @ ${price} (ID: {order_id})")
-                    
+
                     return {
                         'order_id': order_id,
                         'symbol': okx_symbol,
@@ -2243,49 +2243,49 @@ class OKXBrokerAdapter(BrokerInterface):
                         'status': 'open',
                         'timestamp': datetime.now()
                     }
-            
+
             error_msg = result.get('msg', 'Unknown error') if result else 'No response'
             logger.error(f"OKX limit order failed: {error_msg}")
             return None
-            
+
         except Exception as e:
             logger.error(f"OKX limit order error: {e}")
             return None
-    
+
     def cancel_order(self, order_id: str) -> bool:
         """Cancel order on OKX."""
         try:
             if not self.trade_api:
                 return False
-            
+
             # Note: OKX needs both ordId and instId to cancel
             # This is a simplified version - you'd need to track instId
             logger.warning("OKX order cancellation requires instrument ID - not implemented")
             return False
-            
+
         except Exception as e:
             logger.error(f"OKX cancel order error: {e}")
             return False
-    
+
     def get_open_positions(self) -> List[Dict]:
         """Get open positions from OKX."""
         try:
             if not self.account_api:
                 return []
-            
+
             result = self.account_api.get_balance()
-            
+
             if result and result.get('code') == '0':
                 positions = []
                 data = result.get('data', [])
-                
+
                 if data and len(data) > 0:
                     details = data[0].get('details', [])
-                    
+
                     for detail in details:
                         ccy = detail.get('ccy')
                         available = float(detail.get('availBal', 0))
-                        
+
                         # Only non-zero, non-USDT balances
                         if ccy != 'USDT' and available > 0:
                             positions.append({
@@ -2296,15 +2296,15 @@ class OKXBrokerAdapter(BrokerInterface):
                                 'pnl': 0.0,
                                 'pnl_pct': 0.0
                             })
-                
+
                 return positions
-            
+
             return []
-            
+
         except Exception as e:
             logger.error(f"Error fetching OKX positions: {e}")
             return []
-    
+
     def get_order_status(self, order_id: str) -> Optional[Dict]:
         """Get order status from OKX."""
         logger.info(f"Checking OKX order status: {order_id}")
@@ -2316,24 +2316,24 @@ class BrokerFactory:
     """
     Factory class for creating broker adapters.
     """
-    
+
     @staticmethod
     def create_broker(broker_name: str, **kwargs) -> BrokerInterface:
         """
         Create a broker adapter instance.
-        
+
         Args:
             broker_name: Name of broker ('coinbase', 'binance', 'kraken', 'alpaca', 'okx')
             **kwargs: Broker-specific configuration
-        
+
         Returns:
             BrokerInterface: Broker adapter instance
-        
+
         Raises:
             ValueError: If broker_name is not supported
         """
         broker_name = broker_name.lower()
-        
+
         if broker_name == 'coinbase':
             return CoinbaseBrokerAdapter(**kwargs)
         elif broker_name == 'binance':

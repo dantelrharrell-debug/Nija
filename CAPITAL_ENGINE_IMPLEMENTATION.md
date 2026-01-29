@@ -185,21 +185,21 @@ class TradingStrategy:
             base_capital=base_capital,
             strategy="moderate"
         )
-    
+
     def calculate_position_size(self, available_balance):
         # Check protection status
         can_trade, reason = self.capital_engine.can_trade()
         if not can_trade:
             logger.warning(f"Trading blocked: {reason}")
             return 0.0
-        
+
         # Get optimal size
         return self.capital_engine.get_optimal_position_size(available_balance)
-    
+
     def on_trade_close(self, profit, fees, is_win, new_balance):
         # Record in capital engine
         self.capital_engine.record_trade(profit, fees, is_win, new_balance)
-        
+
         # Log status
         logger.info(self.capital_engine.get_quick_summary())
 ```
@@ -351,7 +351,7 @@ BASE_POSITION_PCT=0.05
 
 ## Conclusion
 
-The NIJA Capital Scaling & Compounding Engine is **complete and ready for production use**. 
+The NIJA Capital Scaling & Compounding Engine is **complete and ready for production use**.
 
 ### What Works
 ✅ All core functionality implemented
@@ -376,8 +376,8 @@ The engine provides a solid foundation for capital management. The next step is 
 
 ---
 
-**Implementation Date**: January 28, 2026  
-**Version**: 1.0  
-**Status**: COMPLETE ✅  
-**Author**: NIJA Trading Systems  
+**Implementation Date**: January 28, 2026
+**Version**: 1.0
+**Status**: COMPLETE ✅
+**Author**: NIJA Trading Systems
 **Total Development Time**: ~4 hours

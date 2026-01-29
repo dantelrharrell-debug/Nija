@@ -11,7 +11,7 @@ from bot.unified_execution_engine import execute_trade
 # Buy $100 of BTC on Coinbase
 result = execute_trade('coinbase', 'BTC-USD', 'buy', 100.0, 'market')
 
-# Sell 0.5 ETH on Kraken  
+# Sell 0.5 ETH on Kraken
 result = execute_trade('kraken', 'ETH/USD', 'sell', 0.5, 'market', size_type='base')
 
 # Limit buy on Binance

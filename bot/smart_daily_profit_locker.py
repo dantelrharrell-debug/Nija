@@ -62,14 +62,14 @@ class DailyProfitState:
     trading_mode: str
     trades_today: int
     winning_trades: int
-    
+
     @property
     def target_progress_pct(self) -> float:
         """Calculate progress toward daily target as percentage"""
         if self.daily_target == 0:
             return 0.0
         return (self.daily_profit / self.daily_target) * 100
-    
+
     @property
     def win_rate_today(self) -> float:
         """Calculate today's win rate"""
@@ -82,27 +82,27 @@ class SmartDailyProfitLocker:
     """
     Manages daily profit locking and protection mechanisms
     """
-    
+
     # Data persistence
     DATA_DIR = Path(__file__).parent.parent / "data"
     STATE_FILE = DATA_DIR / "daily_profit_state.json"
     HISTORY_FILE = DATA_DIR / "daily_profit_history.json"
-    
+
     def __init__(self, base_capital: float, config: Dict = None):
         """
         Initialize Smart Daily Profit Locker
-        
+
         Args:
             base_capital: Base account capital
             config: Optional configuration dictionary
         """
         self.base_capital = base_capital
         self.config = config or {}
-        
+
         # Daily profit target (default 2% of base capital per day)
         self.daily_target_pct = self.config.get('daily_target_pct', 0.02)  # 2%
         self.daily_target = base_capital * self.daily_target_pct
-        
+
         # Profit locking thresholds (as % of daily target)
         self.lock_thresholds = {
             ProfitLockLevel.LEVEL_1: 0.50,  # Lock 25% profit at 50% of target
@@ -110,7 +110,7 @@ class SmartDailyProfitLocker:
             ProfitLockLevel.LEVEL_3: 1.50,  # Lock 75% profit at 150% of target
             ProfitLockLevel.LEVEL_4: 2.00,  # Lock 90% profit at 200% of target
         }
-        
+
         # Profit lock percentages at each level
         self.lock_percentages = {
             ProfitLockLevel.LEVEL_1: 0.25,  # Lock 25% of profit
@@ -118,10 +118,10 @@ class SmartDailyProfitLocker:
             ProfitLockLevel.LEVEL_3: 0.75,  # Lock 75% of profit
             ProfitLockLevel.LEVEL_4: 0.90,  # Lock 90% of profit
         }
-        
+
         # Trading mode transitions
         self.stop_trading_at_target_pct = self.config.get('stop_trading_at_target_pct', None)  # None = never stop
-        
+
         # Daily state tracking
         self.today_date = str(date.today())
         self.starting_balance = base_capital
@@ -132,16 +132,16 @@ class SmartDailyProfitLocker:
         self.trading_mode = TradingMode.NORMAL
         self.trades_today = 0
         self.winning_trades = 0
-        
+
         # History tracking
         self.daily_history: List[Dict] = []
-        
+
         # Ensure data directory exists
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        
+
         # Load existing state or initialize
         self._load_state()
-        
+
         logger.info("=" * 70)
         logger.info("🔒 Smart Daily Profit Locking System Initialized")
         logger.info("=" * 70)
@@ -150,24 +150,24 @@ class SmartDailyProfitLocker:
         logger.info(f"Today's Date: {self.today_date}")
         logger.info(f"Starting Balance: ${self.starting_balance:,.2f}")
         logger.info("=" * 70)
-    
+
     def _load_state(self):
         """Load daily state from persistent storage"""
         if not self.STATE_FILE.exists():
             return
-        
+
         try:
             with open(self.STATE_FILE, 'r') as f:
                 data = json.load(f)
-            
+
             saved_date = data.get('date', '')
-            
+
             # If it's a new day, reset state
             if saved_date != self.today_date:
                 logger.info(f"📅 New day detected. Resetting daily state.")
                 self._reset_daily_state()
                 return
-            
+
             # Load saved state
             self.starting_balance = data.get('starting_balance', self.base_capital)
             self.current_balance = data.get('current_balance', self.base_capital)
@@ -177,13 +177,13 @@ class SmartDailyProfitLocker:
             self.trading_mode = TradingMode(data.get('trading_mode', 'normal'))
             self.trades_today = data.get('trades_today', 0)
             self.winning_trades = data.get('winning_trades', 0)
-            
+
             logger.info(f"✅ Loaded daily state for {self.today_date}")
-            
+
         except Exception as e:
             logger.warning(f"Failed to load daily state: {e}")
             self._reset_daily_state()
-    
+
     def _save_state(self):
         """Save current daily state"""
         try:
@@ -200,21 +200,21 @@ class SmartDailyProfitLocker:
                 'winning_trades': self.winning_trades,
                 'last_updated': datetime.now().isoformat(),
             }
-            
+
             with open(self.STATE_FILE, 'w') as f:
                 json.dump(data, f, indent=2)
-            
+
             logger.debug("💾 Daily profit state saved")
-            
+
         except Exception as e:
             logger.error(f"Failed to save daily state: {e}")
-    
+
     def _reset_daily_state(self):
         """Reset state for a new trading day"""
         # Save yesterday's results to history
         if self.daily_profit != 0 or self.trades_today > 0:
             self._save_to_history()
-        
+
         # Reset for new day
         self.today_date = str(date.today())
         self.starting_balance = self.current_balance
@@ -224,10 +224,10 @@ class SmartDailyProfitLocker:
         self.trading_mode = TradingMode.NORMAL
         self.trades_today = 0
         self.winning_trades = 0
-        
+
         logger.info(f"🔄 Daily state reset for {self.today_date}")
         self._save_state()
-    
+
     def _save_to_history(self):
         """Save current day's results to history"""
         try:
@@ -237,7 +237,7 @@ class SmartDailyProfitLocker:
                     history = json.load(f)
             else:
                 history = []
-            
+
             # Add today's results
             today_record = {
                 'date': self.today_date,
@@ -251,26 +251,26 @@ class SmartDailyProfitLocker:
                 'win_rate': (self.winning_trades / self.trades_today * 100) if self.trades_today > 0 else 0,
                 'target_achieved': self.daily_profit >= self.daily_target,
             }
-            
+
             history.append(today_record)
-            
+
             # Keep only last 90 days
             if len(history) > 90:
                 history = history[-90:]
-            
+
             # Save
             with open(self.HISTORY_FILE, 'w') as f:
                 json.dump(history, f, indent=2)
-            
+
             logger.info(f"📊 Saved daily results to history")
-            
+
         except Exception as e:
             logger.error(f"Failed to save to history: {e}")
-    
+
     def record_trade(self, profit: float, is_win: bool):
         """
         Record a trade result and update profit locking
-        
+
         Args:
             profit: Net profit/loss from trade
             is_win: True if trade was profitable
@@ -279,57 +279,57 @@ class SmartDailyProfitLocker:
         current_date = str(date.today())
         if current_date != self.today_date:
             self._reset_daily_state()
-        
+
         # Update trade counts
         self.trades_today += 1
         if is_win:
             self.winning_trades += 1
-        
+
         # Update balances and profit
         self.current_balance += profit
         self.daily_profit = self.current_balance - self.starting_balance
-        
+
         # Check and update profit locking
         self._update_profit_locking()
-        
+
         # Update trading mode
         self._update_trading_mode()
-        
+
         # Save state
         self._save_state()
-        
+
         logger.info(f"📊 Trade Recorded:")
         logger.info(f"   P/L: ${profit:+.2f}, Daily Profit: ${self.daily_profit:+.2f}")
         logger.info(f"   Target Progress: {self.get_target_progress_pct():.1f}%")
         logger.info(f"   Locked Profit: ${self.locked_profit:.2f}")
         logger.info(f"   Trading Mode: {self.trading_mode.value.upper()}")
-    
+
     def _update_profit_locking(self):
         """Update profit locking based on current progress"""
         if self.daily_profit <= 0:
             # No profit to lock
             return
-        
+
         # Calculate progress ratio
         progress_ratio = self.daily_profit / self.daily_target if self.daily_target > 0 else 0
-        
+
         # Determine appropriate lock level
         new_lock_level = ProfitLockLevel.NONE
-        
+
         for level, threshold in sorted(self.lock_thresholds.items(), key=lambda x: x[1], reverse=True):
             if progress_ratio >= threshold:
                 new_lock_level = level
                 break
-        
+
         # If lock level increased, update locked profit
         if new_lock_level != self.current_lock_level:
             old_level = self.current_lock_level
             self.current_lock_level = new_lock_level
-            
+
             if new_lock_level != ProfitLockLevel.NONE:
                 lock_pct = self.lock_percentages[new_lock_level]
                 self.locked_profit = self.daily_profit * lock_pct
-                
+
                 logger.info("=" * 70)
                 logger.info(f"🔒 PROFIT LOCK ACTIVATED: {new_lock_level.value.upper()}")
                 logger.info("=" * 70)
@@ -337,11 +337,11 @@ class SmartDailyProfitLocker:
                 logger.info(f"Locked: ${self.locked_profit:.2f} ({lock_pct*100:.0f}% of profit)")
                 logger.info(f"At Risk: ${self.daily_profit - self.locked_profit:.2f}")
                 logger.info("=" * 70)
-    
+
     def _update_trading_mode(self):
         """Update trading mode based on profit progress"""
         progress_pct = self.get_target_progress_pct()
-        
+
         # Determine trading mode
         if self.stop_trading_at_target_pct and progress_pct >= self.stop_trading_at_target_pct:
             new_mode = TradingMode.STOPPED
@@ -351,37 +351,37 @@ class SmartDailyProfitLocker:
             new_mode = TradingMode.CONSERVATIVE
         else:
             new_mode = TradingMode.NORMAL
-        
+
         # Log mode change
         if new_mode != self.trading_mode:
             old_mode = self.trading_mode
             self.trading_mode = new_mode
-            
+
             logger.info(f"🔄 Trading Mode Changed: {old_mode.value.upper()} → {new_mode.value.upper()}")
-    
+
     def get_target_progress_pct(self) -> float:
         """Get progress toward daily target as percentage"""
         if self.daily_target == 0:
             return 0.0
         return (self.daily_profit / self.daily_target) * 100
-    
+
     def should_take_new_trade(self) -> bool:
         """
         Determine if new trades should be taken
-        
+
         Returns:
             True if allowed to trade, False otherwise
         """
         if self.trading_mode == TradingMode.STOPPED:
             logger.warning("⛔ Trading stopped for the day (target achieved)")
             return False
-        
+
         return True
-    
+
     def get_position_size_multiplier(self) -> float:
         """
         Get position size multiplier based on trading mode
-        
+
         Returns:
             Multiplier (1.0 = normal, <1.0 = reduced risk)
         """
@@ -391,13 +391,13 @@ class SmartDailyProfitLocker:
             TradingMode.PROTECTIVE: 0.30,  # Reduce to 30%
             TradingMode.STOPPED: 0.00,  # No new positions
         }
-        
+
         return multipliers.get(self.trading_mode, 1.0)
-    
+
     def get_daily_state(self) -> DailyProfitState:
         """
         Get current daily profit state
-        
+
         Returns:
             DailyProfitState object
         """
@@ -413,11 +413,11 @@ class SmartDailyProfitLocker:
             trades_today=self.trades_today,
             winning_trades=self.winning_trades,
         )
-    
+
     def get_profit_locking_report(self) -> str:
         """Generate detailed profit locking report"""
         state = self.get_daily_state()
-        
+
         report = [
             "\n" + "=" * 90,
             "SMART DAILY PROFIT LOCKING REPORT",
@@ -451,35 +451,35 @@ class SmartDailyProfitLocker:
             f"  Allow New Trades:         {'YES' if self.should_take_new_trade() else 'NO':>5s}",
             "=" * 90,
         ]
-        
+
         return "\n".join(report)
-    
+
     def update_balance(self, new_balance: float):
         """
         Update current balance (for manual corrections)
-        
+
         Args:
             new_balance: New balance value
         """
         old_balance = self.current_balance
         self.current_balance = new_balance
         self.daily_profit = new_balance - self.starting_balance
-        
+
         self._update_profit_locking()
         self._update_trading_mode()
         self._save_state()
-        
+
         logger.info(f"💰 Balance Updated: ${old_balance:.2f} → ${new_balance:.2f}")
 
 
 def get_smart_daily_profit_locker(base_capital: float, config: Dict = None) -> SmartDailyProfitLocker:
     """
     Factory function to create SmartDailyProfitLocker
-    
+
     Args:
         base_capital: Base account capital
         config: Optional configuration
-        
+
     Returns:
         SmartDailyProfitLocker instance
     """
@@ -489,26 +489,26 @@ def get_smart_daily_profit_locker(base_capital: float, config: Dict = None) -> S
 # Example usage
 if __name__ == "__main__":
     import logging
-    
+
     logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
-    
+
     # Create profit locker
     config = {
         'daily_target_pct': 0.02,  # 2% daily target
     }
     locker = get_smart_daily_profit_locker(base_capital=10000.0, config=config)
-    
+
     # Simulate some trades
     print("\n📈 Simulating trading day...\n")
-    
+
     locker.record_trade(profit=50.0, is_win=True)  # Small win
     locker.record_trade(profit=75.0, is_win=True)  # Good win (now at $125 = 62.5% of target)
     locker.record_trade(profit=30.0, is_win=True)  # Another win (now at $155 = 77.5% of target)
     locker.record_trade(profit=50.0, is_win=True)  # Hit target! (now at $205 = 102.5% of target)
-    
+
     # Print report
     print(locker.get_profit_locking_report())
-    
+
     # Check if we should continue trading
     print(f"\n✅ Should take new trade: {locker.should_take_new_trade()}")
     print(f"   Position size multiplier: {locker.get_position_size_multiplier():.0%}")

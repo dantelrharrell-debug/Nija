@@ -1,8 +1,8 @@
 # User Balance Visibility Guide
 
-**✨ LATEST UPDATE (Jan 23, 2026):** User account visibility has been significantly improved! 
-All configured user accounts and their brokers are now visible in balance reports, even when 
-they are not connected or don't have credentials configured. This ensures maximum transparency 
+**✨ LATEST UPDATE (Jan 23, 2026):** User account visibility has been significantly improved!
+All configured user accounts and their brokers are now visible in balance reports, even when
+they are not connected or don't have credentials configured. This ensures maximum transparency
 and helps users understand their account status.
 
 This guide explains how to view and monitor user account balances in the NIJA copy trading system.
@@ -207,11 +207,11 @@ import time
 
 while trading:
     # Your trading logic...
-    
+
     # Log balances every hour
     if should_log_balances():
         multi_account_broker_manager.log_all_balances()
-    
+
     time.sleep(60)
 ```
 
@@ -258,7 +258,7 @@ To force a fresh balance fetch, restart the bot or wait for cache expiration.
 3. Check broker logs for connection errors
 4. Ensure required SDKs are installed (krakenex, alpaca-py, etc.)
 
-**IMPORTANT (Jan 23, 2026):** As of the latest update, ALL configured users and their brokers 
+**IMPORTANT (Jan 23, 2026):** As of the latest update, ALL configured users and their brokers
 are now visible in balance reports, even if:
 - No credentials are configured
 - Connection failed due to missing SDK
