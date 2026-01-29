@@ -50,11 +50,12 @@ class EnhancedEntryScorer:
         self.config = config or {}
         
         # Score thresholds (out of 100)
-        # EMERGENCY RELAXATION (Jan 29, 2026): Bot finding ZERO signals with 75/100 threshold
-        # Balance: $52.70 and dropping - CRITICAL need for signal generation
-        # Strategy: Lower threshold to 50/100, monitor quality, increase if win rate < 40%
-        self.min_score_threshold = self.config.get('min_score_threshold', 50)  # EMERGENCY: Lowered from 75 to 50 to re-enable trading
-        self.excellent_score_threshold = self.config.get('excellent_score_threshold', 70)  # Lowered from 85 to 70
+        # OPTIMIZED (Jan 29, 2026): Balance signal generation with trade quality
+        # Previous emergency setting (50/100) was too low, leading to marginal trades
+        # New strategy: 60/100 minimum for good setups, 75/100 for excellent setups
+        # Target: 60-65% win rate with quality entries
+        self.min_score_threshold = self.config.get('min_score_threshold', 60)  # OPTIMIZED: Good quality threshold (was 50 emergency, 75 original)
+        self.excellent_score_threshold = self.config.get('excellent_score_threshold', 75)  # OPTIMIZED: Excellent threshold (was 70, raised for clarity)
         
         # Weights for different factors (must sum to 100)
         self.weights = {

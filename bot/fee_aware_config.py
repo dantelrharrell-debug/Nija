@@ -37,15 +37,14 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # PROFITABILITY FIX: December 28, 2025
 # UPDATED: December 30, 2025 - Lowered to allow very small account trading
 # UPDATED: January 21, 2026 - OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
-# ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to fees (~1.4% round-trip)
-# With $2-5 positions, expect fees to consume most/all profits
-# This setting allows trading for learning/testing but profitability will be limited
-# STRONG RECOMMENDATION: Fund account to $30+ for viable trading
+# OPTIMIZED: January 29, 2026 - Increased to $5 for better profitability
+# ⚠️ CRITICAL: Positions under $5 are unprofitable due to fees (~1.4% round-trip)
+# With $2-3 positions, fees consume 50-70% of potential profits
+# $5 minimum ensures realistic profit potential after fees
+# RECOMMENDATION: Fund account to $50+ for consistent profitable trading
 
-# OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
-# MIN_TRADE_USD = max(2.00, balance * 0.15)
-# For $1-50 balance: Trade with 50% positions (leave 50% reserve)
-MIN_BALANCE_TO_TRADE = 2.0  # $2 minimum (OPTION 1: Lowered from $5 to allow small account trading)
+# OPTIMIZED MINIMUM: $5 for Coinbase (was $2, increased for profitability)
+MIN_BALANCE_TO_TRADE = 5.0  # $5 minimum (ensures fee-positive trades)
 MICRO_BALANCE_THRESHOLD = 50.0
 MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position
 
@@ -87,16 +86,20 @@ NORMAL_MIN_POSITION_PCT = 0.10  # 10%
 NORMAL_MAX_POSITION_PCT = 0.20  # 20% (reduced from 25%, more conservative)
 
 # ============================================================================
-# PROFIT TARGETS (Must exceed fees)
+# PROFIT TARGETS (Must exceed fees) - OPTIMIZED FOR PROFITABILITY
 # ============================================================================
+# OPTIMIZATION (Jan 29, 2026): Dynamic profit targets based on position size and fees
+# Small positions need higher targets to overcome fee impact
+# Large positions can use tighter targets due to better fee efficiency
+
 # For micro-balances ($10-50), fees are ~2-4% per side, need higher targets
-MICRO_BALANCE_MIN_PROFIT_TARGET = 0.035  # 3.5% minimum for tiny positions
+MICRO_BALANCE_MIN_PROFIT_TARGET = 0.040  # 4.0% minimum (was 3.5%, increased for better profitability)
 
 # Market orders need 1.4% to break even, add buffer:
-MARKET_ORDER_MIN_PROFIT_TARGET = 0.025  # 2.5% minimum target
+MARKET_ORDER_MIN_PROFIT_TARGET = 0.030  # 3.0% minimum target (was 2.5%, increased for safety margin)
 
 # Limit orders need 1.0% to break even, add buffer:
-LIMIT_ORDER_MIN_PROFIT_TARGET = 0.020   # 2.0% minimum target
+LIMIT_ORDER_MIN_PROFIT_TARGET = 0.025   # 2.5% minimum target (was 2.0%, increased for safety margin)
 
 # Trailing stop activation (only trail after this profit)
 TRAILING_ACTIVATION_MIN = LIMIT_ORDER_MIN_PROFIT_TARGET  # 2.0%
