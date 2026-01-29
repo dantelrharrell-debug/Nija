@@ -1114,7 +1114,10 @@ class NIJAApexStrategyV71:
                     
                     # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
                     # Get broker-specific round-trip fee and use it for dynamic profit targets
-                    # Enhanced with volatility-based adaptive targeting for institutional performance
+                    # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
+                    # - Expands targets in high volatility to capture bigger trends
+                    # - Contracts targets in low volatility to lock profits faster and avoid whipsaws
+                    # - Always maintains minimum fee coverage (1.8x broker fee)
                     broker_capabilities = self._get_broker_capabilities(symbol)
                     broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
                     
@@ -1225,7 +1228,10 @@ class NIJAApexStrategyV71:
                     
                     # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
                     # Get broker-specific round-trip fee and use it for dynamic profit targets
-                    # Enhanced with volatility-based adaptive targeting for institutional performance
+                    # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
+                    # - Expands targets in high volatility to capture bigger trends
+                    # - Contracts targets in low volatility to lock profits faster and avoid whipsaws
+                    # - Always maintains minimum fee coverage (1.8x broker fee)
                     broker_capabilities = self._get_broker_capabilities(symbol)
                     broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
                     

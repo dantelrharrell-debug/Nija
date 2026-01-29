@@ -697,9 +697,10 @@ class AdaptiveRiskManager:
         
         INSTITUTIONAL UPGRADE (Jan 29, 2026): Adaptive Profit Target Engine
         When ATR and volatility metrics are provided, uses adaptive targets that:
-        - Expand exits in high volatility (capture bigger moves)
-        - Tighten exits in choppy markets (lock profits faster)
+        - Expand exits in high volatility to capture bigger trend moves
+        - Contract exits in low volatility to lock profits faster and avoid whipsaws
         - Maximize trend capture with institutional-level precision
+        - Always maintain minimum fee coverage (1.8x broker fee)
         
         OPTIMIZED (Jan 29, 2026): Minimum 1:2 R:R ratio for better profitability
         Previous logic used 1:1 R:R which led to break-even trades after fees
@@ -848,11 +849,11 @@ class AdaptiveRiskManager:
         - Ensures profitability after fees with 1.8x multiplier (safety buffer)
         
         Args:
-            entry_price: Entry price of the position
+            entry_price: Entry price of the position (must be positive)
             base_target_pct: Base profit target percentage (e.g., from R-multiples)
             broker_fee_pct: Round-trip broker fee as decimal (e.g., 0.014 = 1.4%)
-            atr: Current ATR(14) value
-            volatility_bandwidth: Bollinger Bands bandwidth (normalized volatility measure)
+            atr: Current ATR(14) value (must be non-negative)
+            volatility_bandwidth: Bollinger Bands bandwidth (normalized volatility measure, must be non-negative)
         
         Returns:
             Adaptive profit target percentage (as decimal, e.g., 0.025 = 2.5%)
@@ -862,9 +863,22 @@ class AdaptiveRiskManager:
             - Base: 2.0%
             - Fee-based: 1.8 * 1.4% = 2.52%
             - ATR-based: ($2 / $100) * 2.5 = 5.0%
-            - Volatility-adjusted: 2% * (1 + 0.10 * 5) = 3.0%
-            → Result: max(2.0%, 2.52%, 5.0%, 3.0%) = 5.0% (high volatility expansion)
+            - Volatility-adjusted: 2% * (0.7 + 0.10 * 3) = 2.0% (low vol tightens)
+            → Result: max(2.0%, 2.52%, 5.0%, 2.0%) = 5.0% (ATR dominates)
+            
+            With high volatility (bandwidth=0.18):
+            - Volatility-adjusted: 2% * (0.7 + 0.18 * 3) = 2.48%
+            → Combined with high ATR, total target expands significantly
         """
+        # Validate inputs
+        if entry_price <= 0:
+            logger.warning(f"Invalid entry_price: {entry_price}. Using fallback base_target.")
+            return base_target_pct
+        
+        if atr < 0 or volatility_bandwidth < 0:
+            logger.warning(f"Invalid volatility metrics (ATR={atr}, BW={volatility_bandwidth}). Using base_target.")
+            return base_target_pct
+        
         # 1. Base target from R-multiples or configured minimum
         base_target = base_target_pct
         
@@ -880,28 +894,31 @@ class AdaptiveRiskManager:
         
         # 4. Volatility-adjusted target using Bollinger Bands bandwidth
         # Bandwidth measures market volatility:
-        # - High bandwidth (>0.15) = high volatility = expand targets
-        # - Low bandwidth (<0.05) = low volatility/chop = tighten targets
+        # - High bandwidth (>0.15) = high volatility = expand targets significantly
+        # - Low bandwidth (<0.05) = low volatility/chop = tighten targets below base
         # - Medium bandwidth (0.05-0.15) = normal conditions
         #
-        # Formula: base_target * (1 + bandwidth * scaling_factor)
-        # Scaling factor of 5 means:
-        # - Bandwidth 0.15 (high vol) → 1.75x multiplier → 75% larger target
-        # - Bandwidth 0.05 (low vol) → 1.25x multiplier → 25% larger target
-        # - Bandwidth 0.02 (very low) → 1.10x multiplier → 10% larger target
-        volatility_scaling_factor = 5.0  # Optimized for crypto volatility
-        volatility_multiplier = 1 + (volatility_bandwidth * volatility_scaling_factor)
+        # Formula: base_target * (base_multiplier + bandwidth * scaling_factor)
+        # Base multiplier of 0.7 allows tightening in low volatility
+        # Scaling factor of 3 creates appropriate expansion/contraction:
+        # - Bandwidth 0.02 (very low) → 0.76x multiplier → 24% TIGHTER target
+        # - Bandwidth 0.05 (low) → 0.85x multiplier → 15% TIGHTER target
+        # - Bandwidth 0.10 (medium) → 1.00x multiplier → same as base
+        # - Bandwidth 0.15 (high) → 1.15x multiplier → 15% WIDER target
+        # - Bandwidth 0.20 (very high) → 1.30x multiplier → 30% WIDER target
+        base_multiplier = 0.7  # Allows targets to go below base in low volatility
+        volatility_scaling_factor = 3.0  # Optimized for crypto volatility range
+        volatility_multiplier = base_multiplier + (volatility_bandwidth * volatility_scaling_factor)
         volatility_adjusted_target = base_target_pct * volatility_multiplier
         
         # Take the maximum of all targets to ensure:
         # 1. Profitability after fees (fee-based minimum)
         # 2. Volatility-appropriate exits (ATR and bandwidth scaling)
-        # 3. Baseline risk-reward maintenance (base target)
+        # 3. Never go below fee coverage even in extreme low volatility
         adaptive_target = max(
-            base_target,
-            fee_based_target,
-            atr_based_target,
-            volatility_adjusted_target
+            fee_based_target,        # Always maintain minimum fee coverage
+            atr_based_target,        # ATR-scaled target
+            volatility_adjusted_target  # Volatility-scaled target (can be below base in low vol)
         )
         
         # Log the decision for transparency and debugging
@@ -910,7 +927,7 @@ class AdaptiveRiskManager:
             f"Base={base_target*100:.2f}%, "
             f"Fee={fee_based_target*100:.2f}%, "
             f"ATR={atr_based_target*100:.2f}%, "
-            f"Vol={volatility_adjusted_target*100:.2f}% "
+            f"Vol={volatility_adjusted_target*100:.2f}% (mult={volatility_multiplier:.2f}x) "
             f"→ Final={adaptive_target*100:.2f}%"
         )
         
