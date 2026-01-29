@@ -1411,6 +1411,34 @@ class NIJAApexStrategyV71:
             return False
     
     # ============================================================
+    # INSTITUTIONAL-GRADE RSI ENTRY FILTERS
+    # ============================================================
+    
+    def _rsi_long_filter(self, rsi: float) -> bool:
+        """
+        Institutional long entry RSI filter: buy weakness, not strength.
+        
+        Args:
+            rsi: Current RSI value
+            
+        Returns:
+            True if RSI is in optimal long entry zone (25-45), False otherwise
+        """
+        return 25 <= rsi <= 45
+    
+    def _rsi_short_filter(self, rsi: float) -> bool:
+        """
+        Institutional short entry RSI filter: sell strength, not weakness.
+        
+        Args:
+            rsi: Current RSI value
+            
+        Returns:
+            True if RSI is in optimal short entry zone (55-75), False otherwise
+        """
+        return 55 <= rsi <= 75
+    
+    # ============================================================
     # AI MOMENTUM SCORING (SKELETON - PLACEHOLDER FOR FUTURE)
     # ============================================================
     
