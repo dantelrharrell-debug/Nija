@@ -106,13 +106,13 @@ async function handleLogin(event) {
         
         if (response.ok) {
             // Save token
-            authToken = data.token;
+            authToken = data.access_token;
             localStorage.setItem('nija_token', authToken);
             
             // Load dashboard
             loadDashboard();
         } else {
-            showError(data.error || 'Login failed');
+            showError(data.detail || 'Login failed');
         }
     } catch (error) {
         console.error('Login error:', error);
@@ -140,13 +140,13 @@ async function handleRegister(event) {
         
         if (response.ok) {
             // Save token
-            authToken = data.token;
+            authToken = data.access_token;
             localStorage.setItem('nija_token', authToken);
             
             // Load dashboard
             loadDashboard();
         } else {
-            showError(data.error || 'Registration failed');
+            showError(data.detail || 'Registration failed');
         }
     } catch (error) {
         console.error('Registration error:', error);
@@ -203,10 +203,10 @@ async function loadDashboard() {
 
 async function loadStats() {
     try {
-        const stats = await apiRequest('/api/user/stats');
+        const stats = await apiRequest('/api/pnl');
         
         document.getElementById('stat-pnl').textContent = formatCurrency(stats.total_pnl);
-        document.getElementById('stat-winrate').textContent = formatPercent(stats.win_rate);
+        document.getElementById('stat-winrate').textContent = formatPercent(stats.win_rate / 100);
         document.getElementById('stat-trades').textContent = stats.total_trades;
         document.getElementById('stat-positions').textContent = stats.active_positions;
         
@@ -224,13 +224,13 @@ async function loadStats() {
 
 async function loadTradingStatus() {
     try {
-        const status = await apiRequest('/api/trading/status');
+        const status = await apiRequest('/api/status');
         
         document.getElementById('status-text').textContent = 
             status.trading_enabled ? 'Trading Active' : 'Trading Paused';
         document.getElementById('engine-status').textContent = status.engine_status;
         document.getElementById('last-trade').textContent = 
-            status.last_trade_time ? new Date(status.last_trade_time).toLocaleString() : 'Never';
+            status.last_activity ? new Date(status.last_activity).toLocaleString() : 'Never';
         
         // Update status dot color
         const dotEl = document.getElementById('status-dot');
@@ -348,7 +348,7 @@ async function apiRequest(endpoint, options = {}) {
     
     if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'API request failed');
+        throw new Error(error.detail || 'API request failed');
     }
     
     return response.json();
@@ -398,19 +398,19 @@ async function handleTradingToggle() {
     const statusText = document.getElementById('status-text');
     const statusDot = document.getElementById('status-dot');
     
-    const action = toggle.checked ? 'start' : 'stop';
+    const isEnabled = toggle.checked;
+    const endpoint = isEnabled ? '/api/start_bot' : '/api/stop_bot';
     
     try {
-        await apiRequest('/api/trading/control', {
-            method: 'POST',
-            body: JSON.stringify({ action })
+        await apiRequest(endpoint, {
+            method: 'POST'
         });
         
         // Update UI
-        statusText.textContent = toggle.checked ? 'Trading ON' : 'Trading OFF';
-        statusDot.style.background = toggle.checked ? '#10b981' : '#94a3b8';
+        statusText.textContent = isEnabled ? 'Trading ON' : 'Trading OFF';
+        statusDot.style.background = isEnabled ? '#10b981' : '#94a3b8';
         
-        console.log(`✅ Trading ${toggle.checked ? 'enabled' : 'disabled'}`);
+        console.log(`✅ Trading ${isEnabled ? 'enabled' : 'disabled'}`);
         
         // Reload status after a delay
         setTimeout(loadTradingStatus, 1000);
@@ -426,7 +426,7 @@ async function handleTradingToggle() {
 // Enhanced loadTradingStatus to sync toggle state
 async function loadTradingStatus() {
     try {
-        const status = await apiRequest('/api/trading/status');
+        const status = await apiRequest('/api/status');
         
         // Update toggle
         const toggle = document.getElementById('trading-toggle');
@@ -438,7 +438,7 @@ async function loadTradingStatus() {
             status.trading_enabled ? 'Trading ON' : 'Trading OFF';
         document.getElementById('engine-status').textContent = status.engine_status;
         document.getElementById('last-trade').textContent = 
-            status.last_trade_time ? new Date(status.last_trade_time).toLocaleString() : 'Never';
+            status.last_activity ? new Date(status.last_activity).toLocaleString() : 'Never';
         
         // Update status dot color
         const dotEl = document.getElementById('status-dot');

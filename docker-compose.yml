@@ -51,14 +51,24 @@ services:
     environment:
       # Database
       DATABASE_URL: postgresql://nija_user:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/nija
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: nija
+      POSTGRES_USER: nija_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
       # Redis
       REDIS_URL: redis://redis:6379/0
       # JWT
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
-      JWT_EXPIRATION_HOURS: 24
+      JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
       # Server
       PORT: 8000
       DEBUG: ${DEBUG:-false}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-}
+      # Rate Limiting
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-100}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
       # Existing NIJA env vars (optional - for master account)
       COINBASE_API_KEY: ${COINBASE_API_KEY:-}
       COINBASE_API_SECRET: ${COINBASE_API_SECRET:-}
@@ -68,7 +78,7 @@ services:
       - ./:/app
       - /app/__pycache__
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,6 +87,12 @@ services:
     networks:
       - nija-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   # Web Dashboard (Next.js) - TODO: Create separate service
   # web:

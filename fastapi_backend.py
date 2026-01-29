@@ -16,17 +16,20 @@ Architecture:
 
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+from collections import defaultdict
 import jwt
 import hashlib
 import secrets
 import os
 import logging
+import time
 
 from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
@@ -47,17 +50,32 @@ app = FastAPI(
     description="Autonomous cryptocurrency trading with AI-powered strategies",
     version="2.0.0",
     docs_url="/api/docs",
-    redoc_url="/api/redoc"
+    redoc_url="/api/redoc",
+    openapi_tags=[
+        {"name": "health", "description": "Health check and monitoring endpoints"},
+        {"name": "auth", "description": "Authentication and user management"},
+        {"name": "brokers", "description": "Exchange API credential management"},
+        {"name": "trading", "description": "Trading bot control and monitoring"},
+        {"name": "analytics", "description": "Performance analytics and reporting"},
+    ]
 )
 
 # CORS configuration
+allowed_origins = os.getenv('ALLOWED_ORIGINS', '*').split(',')
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Trusted host middleware (security)
+if os.getenv('TRUSTED_HOSTS'):
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=os.getenv('TRUSTED_HOSTS').split(',')
+    )
 
 # Configuration
 JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', secrets.token_hex(32))
@@ -75,8 +93,10 @@ user_control = get_user_control_backend()
 # Security
 security = HTTPBearer()
 
-# In-memory user credentials (TODO: replace with PostgreSQL)
-user_credentials = {}
+# Rate limiting storage (in-memory, use Redis in production)
+rate_limit_storage = defaultdict(list)
+RATE_LIMIT_REQUESTS = int(os.getenv('RATE_LIMIT_REQUESTS', '100'))
+RATE_LIMIT_WINDOW = int(os.getenv('RATE_LIMIT_WINDOW', '60'))  # seconds
 
 
 # ========================================
@@ -180,7 +200,43 @@ def decode_access_token(token: str) -> Optional[Dict]:
         return None
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+async def check_rate_limit(request: Request, user_id: str = None):
+    """
+    Rate limiting middleware - prevents API abuse.
+    
+    Args:
+        request: FastAPI request object
+        user_id: Optional user ID for per-user limits
+    
+    Raises:
+        HTTPException: If rate limit exceeded
+    """
+    # Use IP address or user_id as key
+    key = user_id if user_id else request.client.host if request.client else "unknown"
+    current_time = time.time()
+    
+    # Get request timestamps for this key
+    timestamps = rate_limit_storage[key]
+    
+    # Remove timestamps outside the window
+    timestamps = [t for t in timestamps if current_time - t < RATE_LIMIT_WINDOW]
+    
+    # Check if limit exceeded
+    if len(timestamps) >= RATE_LIMIT_REQUESTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded. Max {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds."
+        )
+    
+    # Add current request
+    timestamps.append(current_time)
+    rate_limit_storage[key] = timestamps
+
+
+async def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> str:
     """
     Dependency to get current authenticated user from JWT token.
     
@@ -200,14 +256,19 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    return payload['user_id']
+    user_id = payload['user_id']
+    
+    # Check rate limit for authenticated user
+    await check_rate_limit(request, user_id)
+    
+    return user_id
 
 
 # ========================================
 # Health & Info Endpoints
 # ========================================
 
-@app.get("/health")
+@app.get("/health", tags=["health"])
 async def health_check():
     """Health check endpoint for monitoring."""
     return {
@@ -218,7 +279,7 @@ async def health_check():
     }
 
 
-@app.get("/api/info")
+@app.get("/api/info", tags=["health"])
 async def get_info():
     """Get API information and available endpoints."""
     return {
@@ -246,7 +307,7 @@ async def get_info():
 # Authentication Endpoints
 # ========================================
 
-@app.post("/api/auth/register", response_model=TokenResponse)
+@app.post("/api/auth/register", response_model=TokenResponse, tags=["auth"])
 async def register(user_data: UserRegister, request: Request):
     """
     Register a new user account.
@@ -308,7 +369,7 @@ async def register(user_data: UserRegister, request: Request):
     )
 
 
-@app.post("/api/auth/login", response_model=TokenResponse)
+@app.post("/api/auth/login", response_model=TokenResponse, tags=["auth"])
 async def login(credentials: UserLogin, request: Request):
     """
     Login user and return JWT token.
@@ -359,7 +420,7 @@ async def login(credentials: UserLogin, request: Request):
 # User Management Endpoints
 # ========================================
 
-@app.get("/api/user/profile", response_model=UserProfile)
+@app.get("/api/user/profile", response_model=UserProfile, tags=["auth"])
 async def get_profile(user_id: str = Depends(get_current_user)):
     """Get current user's profile."""
     user_profile = user_manager.get_user(user_id)
@@ -387,14 +448,14 @@ async def get_profile(user_id: str = Depends(get_current_user)):
 # Broker Management Endpoints
 # ========================================
 
-@app.get("/api/user/brokers")
+@app.get("/api/user/brokers", tags=["brokers"])
 async def list_brokers(user_id: str = Depends(get_current_user)):
     """List all configured brokers for user."""
     brokers = vault.list_user_brokers(user_id)
     return {"user_id": user_id, "brokers": brokers, "count": len(brokers)}
 
 
-@app.post("/api/user/brokers/{broker_name}")
+@app.post("/api/user/brokers/{broker_name}", tags=["brokers"])
 async def add_broker(
     broker_name: str,
     credentials: BrokerCredentials,
@@ -434,7 +495,7 @@ async def add_broker(
     return {"message": f"{broker_name} credentials added successfully", "broker": broker_name}
 
 
-@app.delete("/api/user/brokers/{broker_name}")
+@app.delete("/api/user/brokers/{broker_name}", tags=["brokers"])
 async def remove_broker(
     broker_name: str,
     request: Request,
@@ -461,7 +522,7 @@ async def remove_broker(
 # NIJA Bot Control Endpoints (Headless Microservice Interface)
 # ========================================
 
-@app.post("/api/start_bot")
+@app.post("/api/start_bot", tags=["trading"])
 async def start_bot(user_id: str = Depends(get_current_user)):
     """
     Start NIJA trading bot for user.
@@ -486,7 +547,7 @@ async def start_bot(user_id: str = Depends(get_current_user)):
     }
 
 
-@app.post("/api/stop_bot")
+@app.post("/api/stop_bot", tags=["trading"])
 async def stop_bot(user_id: str = Depends(get_current_user)):
     """
     Stop NIJA trading bot for user.
@@ -510,7 +571,7 @@ async def stop_bot(user_id: str = Depends(get_current_user)):
     }
 
 
-@app.get("/api/status", response_model=TradingStatus)
+@app.get("/api/status", response_model=TradingStatus, tags=["trading"])
 async def get_status(user_id: str = Depends(get_current_user)):
     """
     Get current NIJA bot status for user.
@@ -528,7 +589,7 @@ async def get_status(user_id: str = Depends(get_current_user)):
     )
 
 
-@app.get("/api/positions", response_model=List[Position])
+@app.get("/api/positions", response_model=List[Position], tags=["trading"])
 async def get_positions(user_id: str = Depends(get_current_user)):
     """
     Get active trading positions.
@@ -541,7 +602,7 @@ async def get_positions(user_id: str = Depends(get_current_user)):
     return positions
 
 
-@app.get("/api/pnl", response_model=Stats)
+@app.get("/api/pnl", response_model=Stats, tags=["trading"])
 async def get_pnl(user_id: str = Depends(get_current_user)):
     """
     Get profit & loss statistics.
@@ -561,7 +622,7 @@ async def get_pnl(user_id: str = Depends(get_current_user)):
     )
 
 
-@app.get("/api/config")
+@app.get("/api/config", tags=["trading"])
 async def get_config(user_id: str = Depends(get_current_user)):
     """
     Get user's trading configuration.
@@ -583,6 +644,256 @@ async def get_config(user_id: str = Depends(get_current_user)):
         "max_positions": permissions.max_positions,
         "enabled": permissions.enabled
     }
+
+
+# ========================================
+# Analytics & Reporting Endpoints
+# ========================================
+
+@app.get("/api/analytics/trades", tags=["analytics"])
+async def get_trade_history(
+    user_id: str = Depends(get_current_user),
+    limit: int = 100,
+    offset: int = 0,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
+    """
+    Get trade history with pagination and date filtering.
+    
+    Args:
+        limit: Number of trades to return (max 1000)
+        offset: Offset for pagination
+        start_date: ISO format start date (optional)
+        end_date: ISO format end date (optional)
+    """
+    if limit > 1000:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Limit cannot exceed 1000"
+        )
+    
+    # TODO: Implement actual trade history retrieval from database
+    trades = user_control.get_user_trades(
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    return {
+        "user_id": user_id,
+        "trades": trades,
+        "count": len(trades),
+        "limit": limit,
+        "offset": offset
+    }
+
+
+@app.get("/api/analytics/performance", tags=["analytics"])
+async def get_performance_metrics(
+    user_id: str = Depends(get_current_user),
+    period: str = "30d"
+):
+    """
+    Get comprehensive performance metrics.
+    
+    Args:
+        period: Time period (7d, 30d, 90d, 1y, all)
+    """
+    valid_periods = ['7d', '30d', '90d', '1y', 'all']
+    if period not in valid_periods:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid period. Must be one of: {', '.join(valid_periods)}"
+        )
+    
+    # TODO: Calculate actual metrics from database
+    metrics = user_control.get_performance_metrics(user_id, period)
+    
+    return {
+        "user_id": user_id,
+        "period": period,
+        "metrics": metrics or {
+            "total_return": 0.0,
+            "annualized_return": 0.0,
+            "sharpe_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "win_rate": 0.0,
+            "profit_factor": 0.0,
+            "total_trades": 0,
+            "avg_trade_duration": "0h",
+            "best_trade": 0.0,
+            "worst_trade": 0.0
+        }
+    }
+
+
+@app.get("/api/analytics/daily", tags=["analytics"])
+async def get_daily_pnl(
+    user_id: str = Depends(get_current_user),
+    days: int = 30
+):
+    """
+    Get daily P&L breakdown.
+    
+    Args:
+        days: Number of days to retrieve (max 365)
+    """
+    if days > 365:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Days cannot exceed 365"
+        )
+    
+    # TODO: Get actual daily P&L from database
+    daily_pnl = user_control.get_daily_pnl(user_id, days)
+    
+    return {
+        "user_id": user_id,
+        "days": days,
+        "data": daily_pnl or []
+    }
+
+
+@app.get("/api/analytics/markets", tags=["analytics"])
+async def get_market_breakdown(user_id: str = Depends(get_current_user)):
+    """
+    Get performance breakdown by market/pair.
+    """
+    # TODO: Get actual market breakdown from database
+    breakdown = user_control.get_market_breakdown(user_id)
+    
+    return {
+        "user_id": user_id,
+        "markets": breakdown or []
+    }
+
+
+# ========================================
+# Subscription & Billing Endpoints
+# ========================================
+
+class SubscriptionUpdate(BaseModel):
+    tier: str = Field(..., pattern="^(basic|pro|enterprise)$")
+
+
+@app.get("/api/subscription", tags=["subscription"])
+async def get_subscription(user_id: str = Depends(get_current_user)):
+    """Get current subscription details."""
+    user_profile = user_db.get_user_by_id(user_id)
+    
+    if not user_profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # TODO: Integrate with actual billing system (Stripe)
+    return {
+        "user_id": user_id,
+        "tier": user_profile.get('subscription_tier', 'basic'),
+        "status": "active",
+        "next_billing_date": None,
+        "features": {
+            "max_position_size": {
+                "basic": 100,
+                "pro": 1000,
+                "enterprise": 10000
+            }.get(user_profile.get('subscription_tier', 'basic'), 100),
+            "max_positions": {
+                "basic": 3,
+                "pro": 10,
+                "enterprise": 50
+            }.get(user_profile.get('subscription_tier', 'basic'), 3)
+        }
+    }
+
+
+@app.post("/api/subscription/upgrade", tags=["subscription"])
+async def upgrade_subscription(
+    request: Request,
+    data: SubscriptionUpdate,
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Upgrade/downgrade subscription tier.
+    
+    This would integrate with Stripe in production.
+    """
+    # TODO: Implement Stripe payment flow
+    # For now, just update the tier (placeholder)
+    
+    logger.info(f"🔄 User {user_id} requesting tier change to: {data.tier}")
+    
+    return {
+        "message": "Subscription upgrade initiated",
+        "user_id": user_id,
+        "new_tier": data.tier,
+        "payment_required": True,
+        "checkout_url": "/api/subscription/checkout"  # TODO: Generate Stripe URL
+    }
+
+
+# ========================================
+# WebSocket Support (for real-time updates)
+# ========================================
+
+from fastapi import WebSocket, WebSocketDisconnect
+
+class ConnectionManager:
+    """Manage WebSocket connections for real-time updates."""
+    
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = defaultdict(list)
+    
+    async def connect(self, user_id: str, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections[user_id].append(websocket)
+        logger.info(f"📡 WebSocket connected for user {user_id}")
+    
+    def disconnect(self, user_id: str, websocket: WebSocket):
+        if user_id in self.active_connections:
+            self.active_connections[user_id].remove(websocket)
+            logger.info(f"📡 WebSocket disconnected for user {user_id}")
+    
+    async def send_personal_message(self, user_id: str, message: Dict[str, Any]):
+        """Send message to specific user's connections."""
+        for connection in self.active_connections.get(user_id, []):
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.error(f"Failed to send WebSocket message: {e}")
+
+manager = ConnectionManager()
+
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    """
+    WebSocket endpoint for real-time trading updates.
+    
+    Sends real-time notifications for:
+    - Trade executions
+    - Position updates
+    - P&L changes
+    - System alerts
+    """
+    await manager.connect(user_id, websocket)
+    try:
+        while True:
+            # Keep connection alive and handle incoming messages
+            data = await websocket.receive_text()
+            
+            # Echo back for now (placeholder)
+            await websocket.send_json({
+                "type": "ack",
+                "message": "Message received",
+                "timestamp": datetime.utcnow().isoformat()
+            })
+    except WebSocketDisconnect:
+        manager.disconnect(user_id, websocket)
 
 
 # ========================================
