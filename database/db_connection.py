@@ -42,10 +42,13 @@ def get_database_url() -> str:
         db_port = os.getenv('POSTGRES_PORT', '5432')
         db_name = os.getenv('POSTGRES_DB', 'nija')
         db_user = os.getenv('POSTGRES_USER', 'nija_user')
-        db_password = os.getenv('POSTGRES_PASSWORD', '')
+        db_password = os.getenv('POSTGRES_PASSWORD')
         
         if not db_password:
-            logger.warning("POSTGRES_PASSWORD not set - using empty password")
+            raise ValueError(
+                "POSTGRES_PASSWORD environment variable is required for database connection. "
+                "Please set POSTGRES_PASSWORD or provide a complete DATABASE_URL."
+            )
         
         db_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
     
