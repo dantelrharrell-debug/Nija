@@ -35,7 +35,7 @@ jobs:
         safety check || echo "::warning::Vulnerabilities found in dependencies"
 
     - name: Upload Safety report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v4.4.3
       if: always()
       with:
         name: safety-report
@@ -128,7 +128,7 @@ jobs:
         bandit -r . --exclude ./archive,./venv,./mobile,./frontend || echo "::warning::Security issues found by Bandit"
 
     - name: Upload Bandit report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v4.4.3
       if: always()
       with:
         name: bandit-report

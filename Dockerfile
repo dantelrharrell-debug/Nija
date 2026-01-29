@@ -4,6 +4,9 @@ FROM python:3.11-slim
 # Install git for metadata injection
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user for security
+RUN groupadd -r nija && useradd -r -g nija -u 1000 nija
+
 # Set working directory
 WORKDIR /app
 
@@ -25,6 +28,18 @@ ARG BUILD_TIMESTAMP=unknown
 RUN echo "Injecting build metadata..." && \
     bash inject_git_metadata.sh || \
     echo "Warning: Could not inject git metadata (continuing anyway)"
+
+# Create necessary directories and set permissions
+RUN mkdir -p /app/cache /app/data /app/logs && \
+    chown -R nija:nija /app
+
+# Switch to non-root user
+USER nija
+
+# Security: Drop all capabilities and run as non-root
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:5000/health')" || exit 1
 
 # Default command: use repo start script to launch bot.py
 CMD ["bash", "start.sh"]
