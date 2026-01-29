@@ -146,15 +146,15 @@ jobs:
         python -m pip install --upgrade pip setuptools wheel build
         # Create a minimal setup.py if it doesn't exist
         if [ ! -f setup.py ]; then
-          cat > setup.py << 'EOF'
-from setuptools import setup, find_packages
-setup(
-    name="nija",
-    version="1.0.0",
-    packages=find_packages(),
-    install_requires=[line.strip() for line in open('requirements.txt')],
-)
-EOF
+          cat > setup.py << 'SETUPEOF'
+        from setuptools import setup, find_packages
+        setup(
+            name="nija",
+            version="1.0.0",
+            packages=find_packages(),
+            install_requires=[line.strip() for line in open('requirements.txt')],
+        )
+        SETUPEOF
         fi
         python -m build --wheel --sdist
 
