@@ -1435,6 +1435,52 @@ class NIJAApexStrategyV71:
             return False
     
     # ============================================================
+    # INSTITUTIONAL-GRADE RSI ENTRY FILTERS
+    # ============================================================
+    
+    def _rsi_long_filter(self, rsi: float) -> bool:
+        """
+        Institutional long entry RSI filter: buy weakness, not strength.
+        
+        Args:
+            rsi: Current RSI value (expected range: 0-100)
+            
+        Returns:
+            True if RSI is in optimal long entry zone (25-45), False otherwise
+            
+        Note:
+            Invalid RSI values (NaN, infinity, or outside 0-100) return False
+        """
+        # Validate RSI is a valid number within expected range
+        if not isinstance(rsi, (int, float)) or np.isnan(rsi) or np.isinf(rsi):
+            return False
+        if rsi < 0 or rsi > 100:
+            return False
+        
+        return 25 <= rsi <= 45
+    
+    def _rsi_short_filter(self, rsi: float) -> bool:
+        """
+        Institutional short entry RSI filter: sell strength, not weakness.
+        
+        Args:
+            rsi: Current RSI value (expected range: 0-100)
+            
+        Returns:
+            True if RSI is in optimal short entry zone (55-75), False otherwise
+            
+        Note:
+            Invalid RSI values (NaN, infinity, or outside 0-100) return False
+        """
+        # Validate RSI is a valid number within expected range
+        if not isinstance(rsi, (int, float)) or np.isnan(rsi) or np.isinf(rsi):
+            return False
+        if rsi < 0 or rsi > 100:
+            return False
+        
+        return 55 <= rsi <= 75
+    
+    # ============================================================
     # AI MOMENTUM SCORING (SKELETON - PLACEHOLDER FOR FUTURE)
     # ============================================================
     
