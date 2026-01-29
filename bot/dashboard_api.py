@@ -178,4 +178,4 @@ else:
         )
         
         logger.info("Starting Dashboard API on http://0.0.0.0:5002")
-        app.run(host='0.0.0.0', port=5002, debug=True)
+        app.run(host='0.0.0.0', port=5002, debug=False)
