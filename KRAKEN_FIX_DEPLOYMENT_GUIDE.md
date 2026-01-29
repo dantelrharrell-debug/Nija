@@ -58,9 +58,9 @@ exit_levels = [
 
 **Option A: Railway Deployment (Recommended)**
 ```bash
-# 1. Push changes to main branch
+# 1. Merge changes to main branch (replace branch-name with your actual branch)
 git checkout main
-git merge copilot/monitor-trading-losses
+git merge <your-branch-name>  # e.g., copilot/monitor-trading-losses
 git push origin main
 
 # 2. Railway will auto-deploy
@@ -124,9 +124,9 @@ cd /home/runner/work/Nija/Nija
 grep "0.012, 0.10" bot/execution_engine.py
 # Should return: (0.012, 0.10, 'tp_exit_1.2pct')
 
-# If not found, pull latest code:
+# If not found, pull latest code from your branch:
 git fetch origin
-git checkout origin/copilot/monitor-trading-losses
+git checkout <your-branch-name>  # e.g., copilot/monitor-trading-losses or main
 git pull
 
 # Restart bot
@@ -223,20 +223,19 @@ git pull
 ## ✅ Verification Commands
 
 ```bash
-# Verify code changes
+# Verify profit target changes (PRIMARY FIX)
 grep "tp_exit_1.2pct" bot/execution_engine.py
 grep "tp_exit_1.7pct" bot/execution_engine.py
 grep "tp_exit_2.2pct" bot/execution_engine.py
 grep "tp_exit_3.0pct" bot/execution_engine.py
-
 # All should return matches with new profit targets
 
-# Verify filter settings
+# Verify filter settings (SECONDARY - already optimized)
 python3 fix_kraken_losses.py
+# This verifies filter settings (ADX, confidence, etc.) are optimized
+# Note: Filter settings were previously fixed - this is verification only
 
-# Should show: "✅ ALL SETTINGS OPTIMIZED!"
-
-# Check bot logs for new targets
+# Check bot logs for new profit targets being used
 tail -f logs/nija.log | grep "tp_exit"
 # Should see: tp_exit_1.2pct, tp_exit_1.7pct, etc. (NOT 0.7pct, 1.0pct)
 ```

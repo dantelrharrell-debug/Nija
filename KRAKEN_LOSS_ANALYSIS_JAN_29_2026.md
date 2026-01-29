@@ -141,20 +141,21 @@ if broker_round_trip_fee <= 0.005:  # Kraken (0.36% fees)
     ]
 ```
 
-**Proposed Kraken targets (OPTIMIZED):**
+**Proposed Kraken targets (OPTIMIZED - IMPLEMENTED):**
 ```python
 if broker_round_trip_fee <= 0.005:  # Kraken (0.36% fees)
     exit_levels = [
-        (0.010, 0.10, 'tp_exit_1.0pct'),   # Exit 10% at 1.0%  ← Better
-        (0.015, 0.15, 'tp_exit_1.5pct'),   # Exit 15% at 1.5%  ← Better
-        (0.020, 0.25, 'tp_exit_2.0pct'),   # Exit 25% at 2.0%  ← Better
-        (0.030, 0.50, 'tp_exit_3.0pct'),   # Exit 50% at 3.0%  ← Better
+        (0.012, 0.10, 'tp_exit_1.2pct'),   # Exit 10% at 1.2%  ← Better (was 0.7%)
+        (0.017, 0.15, 'tp_exit_1.7pct'),   # Exit 15% at 1.7%  ← Better (was 1.0%)
+        (0.022, 0.25, 'tp_exit_2.2pct'),   # Exit 25% at 2.2%  ← Better (was 1.5%)
+        (0.030, 0.50, 'tp_exit_3.0pct'),   # Exit 50% at 3.0%  ← Better (was 2.5%)
     ]
 ```
 
 **Impact:**
 - Net profit per partial exit increases
-- 1.0% exit = 0.64% net (vs 0.34% with 0.7% exit)
+- 1.2% exit = 0.84% net (vs 0.34% with 0.7% exit)
+- 1.7% exit = 1.34% net (vs 0.64% with 1.0% exit)
 - More room for winners to run
 - Better risk/reward balance
 
@@ -193,10 +194,10 @@ if broker_round_trip_fee <= 0.005:  # Kraken (0.36% fees)
    - Confirm ADX=10, MIN_CONFIDENCE=0.60, entry_score=60
    - If not deployed, deploy immediately
 
-2. ⏳ **IMPLEMENT PROFIT TARGET FIX**
-   - Update `bot/execution_engine.py` lines 1154-1160
-   - Raise Kraken profit targets to 1.0%, 1.5%, 2.0%, 3.0%
-   - Test in paper trading first (if time permits)
+2. ⏳ **IMPLEMENT PROFIT TARGET FIX** ✅ ALREADY IMPLEMENTED
+   - Updated `bot/execution_engine.py` lines 1154-1160
+   - Raised Kraken profit targets to 1.2%, 1.7%, 2.2%, 3.0%
+   - Tested logic and verified calculations
 
 3. ⏳ **MONITOR FOR 24 HOURS**
    - Track win rate, avg win, avg loss
@@ -220,8 +221,8 @@ if broker_round_trip_fee <= 0.005:  # Kraken (0.36% fees)
    - Verify min_score_threshold = 60
 
 3. **bot/execution_engine.py** (lines 1154-1160)
-   - Update Kraken profit targets
-   - Raise from 0.7%/1.0%/1.5%/2.5% to 1.0%/1.5%/2.0%/3.0%
+   - Updated Kraken profit targets ✅ ALREADY DONE
+   - Raised from 0.7%/1.0%/1.5%/2.5% to 1.2%/1.7%/2.2%/3.0%
 
 4. **Production Environment**
    - Check if latest code is deployed

@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-Fix Kraken Losses - Tighten Overly Relaxed Filters
+Verify Filter Settings for Kraken Trading Bot
 
-This script verifies and fixes the trading strategy filter settings that were 
-relaxed too much during emergency filter relaxations on Jan 29, 2026.
+This script verifies that the trading strategy filter settings are optimized
+and not using the overly-relaxed emergency settings from Jan 29, 2026.
 
-Problem:
-- Emergency filter relaxations allowed LOW-QUALITY trades
-- ADX=6, Entry Score=50, Volume=0.1% → weak trades → losses
-- Kraken lost $4.28 in one day due to these weak trades
+NOTE: This script verifies FILTER SETTINGS (ADX, confidence, entry score, volume).
+      The main fix for Kraken losses was PROFIT TARGETS in execution_engine.py
+      (raised to 1.2%, 1.7%, 2.2%, 3.0%). This script doesn't verify profit targets.
 
-Solution:
-- Verify current settings in nija_apex_strategy_v71.py
-- Verify current settings in enhanced_entry_scoring.py  
-- Confirm OPTIMIZED settings are active:
-  * ADX = 10 (moderate trends, not 6 = extremely weak)
-  * MIN_CONFIDENCE = 0.60 (60%, not 0.50 = too low)
-  * min_score_threshold = 60 (good quality, not 50 = marginal)
-  * volume_min_threshold = 0.002 (0.2%, not 0.001 = virtually none)
-  * min_trend_confirmation = 2 (2/5 indicators, not 1/5 = too loose)
-  * candle_exclusion_seconds = 2 (avoid false breakouts, not 0 = disabled)
+Background:
+- Emergency filter relaxations in Jan 29, 2026 allowed LOW-QUALITY trades
+- ADX=6, Entry Score=50, Volume=0.1% → weak trades
+- These settings have since been OPTIMIZED to ADX=10, Score=60, Volume=0.2%
+  
+This Script Verifies:
+✅ ADX = 10 (moderate trends, not 6 = extremely weak)
+✅ MIN_CONFIDENCE = 0.60 (60%, not 0.50 = too low)
+✅ min_score_threshold = 60 (good quality, not 50 = marginal)
+✅ volume_min_threshold = 0.002 (0.2%, not 0.001 = virtually none)
+✅ min_trend_confirmation = 2 (2/5 indicators, not 1/5 = too loose)
+✅ candle_exclusion_seconds = 2 (avoid false breakouts, not 0 = disabled)
 
 Expected Result:
-- Fewer but HIGHER QUALITY trades
-- 60-65% win rate (vs current losses)
-- Balanced signal generation (3-8 quality signals/day)
+- Confirms filter settings are BALANCED for quality trades
+- Separate from profit target fix (see execution_engine.py for that)
 """
 
 import os
