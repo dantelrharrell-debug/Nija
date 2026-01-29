@@ -338,7 +338,13 @@ class PerformanceMetricsCalculator:
         
         # Annualized return
         if days_trading > 0:
-            annualized_return_pct = (((self.current_equity / self.initial_capital) ** (365 / days_trading)) - 1) * 100
+            try:
+                # Protect against overflow for very small days_trading values
+                days_trading = max(days_trading, 7)  # Minimum 7 days for annualization
+                annualized_return_pct = (((self.current_equity / self.initial_capital) ** (365 / days_trading)) - 1) * 100
+            except OverflowError:
+                # Fallback for extreme values
+                annualized_return_pct = total_return_pct * (365 / days_trading)
         else:
             annualized_return_pct = 0.0
         
