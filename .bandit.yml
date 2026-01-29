@@ -1,0 +1,81 @@
+# Bandit security configuration for NIJA
+# Used by pre-commit hooks and CI workflows
+
+skips:
+  # Skip test files that may have intentional security issues
+  - 'B101'  # Assert used - common in tests
+  - 'B601'  # Shell injection via subprocess - used carefully in scripts
+
+exclude_dirs:
+  - '/archive/'
+  - '/venv/'
+  - '/mobile/'
+  - '/frontend/'
+  - '/.venv/'
+  - '/node_modules/'
+  - '/build/'
+  - '/dist/'
+
+tests:
+  # High severity checks
+  - B201  # Flask debug mode
+  - B301  # Pickle usage
+  - B302  # Marshal usage
+  - B303  # MD5 usage
+  - B304  # Insecure cipher
+  - B305  # Insecure cipher mode
+  - B306  # Insecure mktemp
+  - B307  # eval() usage
+  - B308  # mark_safe usage
+  - B309  # HTTPSConnection
+  - B310  # urllib urlopen
+  - B311  # Random for crypto
+  - B312  # Telnet usage
+  - B313  # XML vulnerabilities
+  - B314  # XML vulnerabilities
+  - B315  # XML vulnerabilities
+  - B316  # XML vulnerabilities
+  - B317  # XML vulnerabilities
+  - B318  # XML vulnerabilities
+  - B319  # XML vulnerabilities
+  - B320  # XML vulnerabilities
+  - B321  # FTP usage
+  - B322  # Input function
+  - B323  # Unverified SSL context
+  - B324  # Insecure hash functions
+  - B325  # Insecure temp file
+  - B401  # Import of telnetlib
+  - B402  # Import of ftplib
+  - B403  # Import of pickle
+  - B404  # Import of subprocess
+  - B405  # Import of xml
+  - B406  # Import of xml
+  - B407  # Import of xml
+  - B408  # Import of xml
+  - B409  # Import of xml
+  - B410  # Import of xml
+  - B411  # Import of xml
+  - B412  # Import of telnetlib
+  - B413  # Import of pycrypto
+  - B501  # Request with verify=False
+  - B502  # SSL with bad version
+  - B503  # SSL with bad ciphers
+  - B504  # SSL with default context
+  - B505  # Weak cryptographic key
+  - B506  # yaml.load
+  - B507  # SSH with no host key verification
+  - B601  # Parameterized shell
+  - B602  # Shell injection
+  - B603  # Subprocess without shell=True
+  - B604  # Shell=True
+  - B605  # Shell=True with user input
+  - B606  # Process without shell
+  - B607  # Start process with shell
+  - B608  # SQL injection
+  - B609  # Wildcard injection
+
+# Severity levels: LOW, MEDIUM, HIGH
+severity: MEDIUM
+
+# Confidence levels: LOW, MEDIUM, HIGH
+confidence: MEDIUM

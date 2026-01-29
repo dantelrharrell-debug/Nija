@@ -17,14 +17,14 @@ def run_backtest(client, pairs, historical_data, strategy_kwargs=None):
     strategy_kwargs = strategy_kwargs or {}
     paper_account = get_paper_account(initial_balance=10000.0)
     strategy = TradingStrategy(client, pairs=pairs, paper_mode=True, **strategy_kwargs)
-    
+
     for pair in pairs:
         df = historical_data[pair]
         for i in range(50, len(df)):
             # Simulate a rolling window
             window = df.iloc[:i].copy()
             strategy.run_trading_cycle_for_backtest(pair, window)
-    
+
     paper_account.print_summary()
     return paper_account.get_stats()
 

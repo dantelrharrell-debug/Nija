@@ -138,7 +138,7 @@ MIN_CONFIDENCE = 0.60  # Change to your desired threshold (0.0-1.0)
 
 **Scenario:** Bot calculates $3.50 position size based on account balance
 
-**Before:** Would execute trade, likely lose money to fees  
+**Before:** Would execute trade, likely lose money to fees
 **After:** Trade skipped with log:
 ```
 ⏭️  Skipping trade: Position $3.50 below minimum $5.00
@@ -151,7 +151,7 @@ Reason: Position too small (increase account size for better trading)
 
 **Scenario:** Market shows uptrend but entry signal is marginal (score: 2/5 = 0.40 confidence)
 
-**Before:** Would execute trade, higher chance of loss  
+**Before:** Would execute trade, higher chance of loss
 **After:** Trade skipped with log:
 ```
 ⏭️  Skipping trade: Confidence 0.40 below minimum 0.60
@@ -164,7 +164,7 @@ Reason: Confidence too low (weak entry signal)
 
 **Scenario:** Strong uptrend, excellent entry signal (score: 4/5 = 0.80 confidence), $25 position size
 
-**Before:** Would execute trade  
+**Before:** Would execute trade
 **After:** Trade executes with confirmation log:
 ```
 ✅ Trade approved: Size=$25.00, Confidence=0.80
@@ -190,7 +190,7 @@ Reason: Confidence too low (weak entry signal)
 
 **Cause:** Account balance too small relative to position sizing logic
 
-**Solution:** 
+**Solution:**
 - Fund account to at least $50-100 for $5+ positions
 - Or temporarily lower MIN_POSITION_USD to $3.00 (not recommended - less profitable)
 

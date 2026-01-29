@@ -12,7 +12,7 @@ This extends the base Capital Scaling & Compounding Engine with autonomous decis
 Automatically injects build-time Git information for version tracking:
 - **GIT_BRANCH**: Current Git branch
 - **GIT_COMMIT**: Full commit hash
-- **GIT_COMMIT_SHORT**: Short commit hash  
+- **GIT_COMMIT_SHORT**: Short commit hash
 - **BUILD_TIMESTAMP**: ISO 8601 build timestamp
 
 **Usage:**
@@ -134,10 +134,10 @@ autonomous_config = AutonomousScalingConfig(
     min_leverage=0.3,
     max_leverage=3.0,
     volatility_leverage_sensitivity=1.2,
-    
+
     enable_risk_adjustment=True,
     target_sharpe_ratio=2.5,
-    
+
     enable_regime_allocation=True,
     regime_allocations={
         MarketRegime.BULL_TRENDING: 1.2,  # 120% in bull markets
@@ -146,7 +146,7 @@ autonomous_config = AutonomousScalingConfig(
         MarketRegime.VOLATILE: 0.3,
         MarketRegime.CRISIS: 0.1
     },
-    
+
     enable_adaptive_compounding=True,
     enable_realtime_optimization=True,
     optimization_window_days=60
@@ -176,13 +176,13 @@ engine = AutonomousScalingEngine(
 ```python
 def detect_market_regime(price_data, volume_data):
     """Detect current market regime from price/volume data"""
-    
+
     # Calculate metrics
     volatility = calculate_annualized_volatility(price_data)
     trend = calculate_trend_strength(price_data)
     momentum = calculate_momentum(price_data)
     liquidity = calculate_liquidity(volume_data)
-    
+
     # Classify volatility state
     if volatility < 10:
         vol_state = VolatilityState.VERY_LOW
@@ -194,7 +194,7 @@ def detect_market_regime(price_data, volume_data):
         vol_state = VolatilityState.HIGH
     else:
         vol_state = VolatilityState.EXTREME
-    
+
     # Classify regime
     if volatility > 60 and trend < -0.7:
         regime = MarketRegime.CRISIS
@@ -206,7 +206,7 @@ def detect_market_regime(price_data, volume_data):
         regime = MarketRegime.BEAR_TRENDING
     else:
         regime = MarketRegime.RANGING
-    
+
     return MarketConditions(
         volatility_pct=volatility,
         trend_strength=trend,
@@ -229,20 +229,20 @@ class AutonomousScalingConfig:
     min_leverage: float = 0.5  # Minimum leverage (50%)
     max_leverage: float = 2.0  # Maximum leverage (200%)
     volatility_leverage_sensitivity: float = 1.0  # Responsiveness
-    
+
     # Risk adjustment
     enable_risk_adjustment: bool = True
     risk_free_rate: float = 0.05  # 5% annual
     target_sharpe_ratio: float = 2.0
-    
+
     # Market regime allocation
     enable_regime_allocation: bool = True
     regime_allocations: Dict[MarketRegime, float] = ...
-    
+
     # Auto-compounding enhancements
     enable_adaptive_compounding: bool = True
     performance_based_reinvestment: bool = True
-    
+
     # Real-time optimization
     enable_realtime_optimization: bool = True
     optimization_window_days: int = 30
@@ -494,7 +494,7 @@ class VolatilityState(Enum):
 
 ---
 
-**Version**: 7.3.0  
-**Release Name**: Autonomous Scaling Engine  
-**Date**: January 28, 2026  
+**Version**: 7.3.0
+**Release Name**: Autonomous Scaling Engine
+**Date**: January 28, 2026
 **Author**: NIJA Trading Systems

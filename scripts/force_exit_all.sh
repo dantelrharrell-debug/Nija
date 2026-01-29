@@ -11,8 +11,8 @@ cd "$ROOT_DIR"
 : > FORCE_EXIT_OVERRIDE.conf
 : > FORCE_EXIT_ALL.conf
 
-echo "[force_exit_all] Flags set at $ROOT_DIR:" 
-echo "  - FORCE_EXIT_OVERRIDE.conf" 
-echo "  - FORCE_EXIT_ALL.conf" 
+echo "[force_exit_all] Flags set at $ROOT_DIR:"
+echo "  - FORCE_EXIT_OVERRIDE.conf"
+echo "  - FORCE_EXIT_ALL.conf"
 
-echo "Bot will force-exit all positions on the next cycle, even in sell-only mode." 
+echo "Bot will force-exit all positions on the next cycle, even in sell-only mode."

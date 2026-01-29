@@ -38,13 +38,13 @@ ALLOCATION_TOLERANCE = 0.01  # 1% tolerance for capital allocation sum validatio
 ENHANCED_SCORING_CONFIG = {
     # Enable enhanced scoring (0-100 weighted system)
     'use_enhanced_scoring': True,
-    
+
     # Minimum score to enter trade (out of 100)
     # PROFITABILITY FIX (Jan 26, 2026): Increased thresholds to only take high-quality trades
     # 75 = very good setup, 85+ = excellent (filters out marginal 60-70 trades that caused losses)
     'min_score_threshold': 75,  # Stricter threshold to improve win rate
     'excellent_score_threshold': 85,  # Increase position size on excellent setups
-    
+
     # Score weights (must sum to 100)
     'scoring_weights': {
         'trend_strength': 25,      # ADX, EMA alignment
@@ -63,12 +63,12 @@ ENHANCED_SCORING_CONFIG = {
 REGIME_DETECTION_CONFIG = {
     # Enable market regime detection
     'use_regime_detection': True,
-    
+
     # Regime classification thresholds
     'trending_adx_min': 25,        # ADX > 25 = trending market
     'ranging_adx_max': 20,         # ADX < 20 = ranging market
     'volatile_atr_threshold': 0.03, # 3% ATR/price = volatile
-    
+
     # Regime-specific parameters
     # PROFITABILITY FIX (Jan 26, 2026): Increased all min_entry_score thresholds by 15 points
     'regime_params': {
@@ -101,7 +101,7 @@ REGIME_DETECTION_CONFIG = {
 STEPPED_PROFIT_CONFIG = {
     # Enable stepped profit-taking (partial exits)
     'enable_stepped_exits': True,
-    
+
     # Exit levels: {profit_pct: portion_to_exit}
     # Example: At 1% profit, exit 15% of position
     'coinbase_exit_levels': {
@@ -110,7 +110,7 @@ STEPPED_PROFIT_CONFIG = {
         0.035: 0.25,  # Exit 25% at 3.5% profit (excellent profit)
         0.050: 0.50,  # Exit 50% at 5.0% profit (let rest run)
     },
-    
+
     # Kraken has lower fees, so can take profits sooner
     # Note: Exit levels are lower percentages to reflect the 53% fee savings
     # (0.67% fees vs 1.4% on Coinbase allows for faster profit-taking)
@@ -141,7 +141,7 @@ FEE_OPTIMIZATION_CONFIG = {
         'taker_fee_pct': 0.0026,  # 0.26% taker fee
         'round_trip_cost_pct': 0.0067,  # 0.67% total round-trip
     },
-    
+
     # Broker routing preferences based on position size
     'routing_rules': {
         'prefer_kraken_for_small_positions': True,  # Route small positions to Kraken (lower fees)
@@ -161,7 +161,7 @@ POSITION_SIZING_CONFIG = {
     'min_position_pct': 0.02,  # 2% minimum per position
     'max_position_pct': 0.10,  # 10% maximum per position (was 20%, reducing for more positions)
     'max_total_exposure': 0.80,  # 80% maximum total exposure
-    
+
     # Dynamic sizing based on signal quality
     'use_dynamic_sizing': True,
     'signal_score_multipliers': {
@@ -170,7 +170,7 @@ POSITION_SIZING_CONFIG = {
         80: 1.20,  # Excellent setup = 120% of base size
         90: 1.40,  # Outstanding setup = 140% of base size
     },
-    
+
     # ADX-based position sizing (trend strength)
     'use_adx_sizing': True,
     'adx_size_map': {
@@ -193,11 +193,11 @@ MULTI_EXCHANGE_CONFIG = {
         'coinbase': 0.50,  # 50% of capital to Coinbase (most reliable)
         'kraken': 0.50,    # 50% of capital to Kraken (lower fees)
     },
-    
+
     # Market scanning optimization
     'distribute_scanning': True,  # Split markets across exchanges
     'scan_delay_per_exchange': 4.0,  # 4s delay per exchange (8s total)
-    
+
     # Exchange-specific minimums
     'min_position_usd': {
         'coinbase': 5.0,   # $5 minimum on Coinbase
@@ -213,13 +213,13 @@ MULTI_EXCHANGE_CONFIG = {
 ADVANCED_FEATURES_CONFIG = {
     # Enable aggressive profit-taking mode
     'aggressive_profit_taking': True,
-    
+
     # Enable pro mode features (if available)
     'enable_pro_mode': True,
-    
+
     # Enable emergency liquidation for capital preservation
     'enable_emergency_liquidation': True,
-    
+
     # Enable copy trading (for multi-account setups)
     'enable_copy_trading': True,
 }
@@ -232,12 +232,12 @@ ADVANCED_FEATURES_CONFIG = {
 def get_profit_optimization_config() -> Dict:
     """
     Build complete profit optimization configuration.
-    
+
     Returns:
         Dict with all optimization parameters
     """
     config = {}
-    
+
     # Merge all config sections
     config.update(ENHANCED_SCORING_CONFIG)
     config.update(REGIME_DETECTION_CONFIG)
@@ -246,7 +246,7 @@ def get_profit_optimization_config() -> Dict:
     config.update(POSITION_SIZING_CONFIG)
     config['multi_exchange'] = MULTI_EXCHANGE_CONFIG
     config.update(ADVANCED_FEATURES_CONFIG)
-    
+
     logger.info("=" * 70)
     logger.info("🚀 PROFIT OPTIMIZATION CONFIGURATION LOADED")
     logger.info("=" * 70)
@@ -257,28 +257,28 @@ def get_profit_optimization_config() -> Dict:
     logger.info("✅ Dynamic position sizing: ENABLED (signal + ADX based)")
     logger.info("✅ Multi-exchange optimization: ENABLED (Coinbase + Kraken)")
     logger.info("=" * 70)
-    
+
     return config
 
 
 def get_exchange_specific_config(exchange: str) -> Dict:
     """
     Get exchange-specific configuration.
-    
+
     Args:
         exchange: Exchange name ('coinbase' or 'kraken')
-        
+
     Returns:
         Dict with exchange-specific parameters
     """
     exchange_lower = exchange.lower()
-    
+
     config = {
         'exchange': exchange_lower,
         'fee_config': FEE_OPTIMIZATION_CONFIG.get(exchange_lower, {}),
         'min_position_usd': MULTI_EXCHANGE_CONFIG['min_position_usd'].get(exchange_lower, 5.0),
     }
-    
+
     # Add exchange-specific profit targets
     if exchange_lower == 'coinbase':
         config['stepped_exits'] = STEPPED_PROFIT_CONFIG['coinbase_exit_levels']
@@ -286,7 +286,7 @@ def get_exchange_specific_config(exchange: str) -> Dict:
         config['stepped_exits'] = STEPPED_PROFIT_CONFIG['kraken_exit_levels']
     else:
         config['stepped_exits'] = STEPPED_PROFIT_CONFIG['coinbase_exit_levels']  # Default
-    
+
     return config
 
 
@@ -297,10 +297,10 @@ def get_exchange_specific_config(exchange: str) -> Dict:
 def validate_config(config: Dict) -> bool:
     """
     Validate configuration for consistency.
-    
+
     Args:
         config: Configuration dictionary
-        
+
     Returns:
         True if valid, False otherwise
     """
@@ -311,22 +311,22 @@ def validate_config(config: Dict) -> bool:
             if abs(total_weight - 100) > WEIGHT_TOLERANCE:
                 logger.error(f"❌ Scoring weights must sum to 100 (got {total_weight})")
                 return False
-        
+
         # Check capital allocation sums to 1.0
         if 'multi_exchange' in config:
             total_allocation = sum(config['multi_exchange']['capital_allocation'].values())
             if abs(total_allocation - 1.0) > ALLOCATION_TOLERANCE:
                 logger.error(f"❌ Capital allocation must sum to 1.0 (got {total_allocation})")
                 return False
-        
+
         # Check position sizing constraints
         if config.get('min_position_pct', 0) > config.get('max_position_pct', 1):
             logger.error("❌ min_position_pct must be <= max_position_pct")
             return False
-        
+
         logger.info("✅ Configuration validation passed")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Configuration validation failed: {e}")
         return False
@@ -339,7 +339,7 @@ def validate_config(config: Dict) -> bool:
 if __name__ == "__main__":
     # Example usage
     config = get_profit_optimization_config()
-    
+
     if validate_config(config):
         print("\n✅ Configuration is valid and ready to use")
         print(f"\nKey Settings:")

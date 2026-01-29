@@ -1,7 +1,7 @@
 # NIJA API Routes - Complete Specification
 
-**Version:** 2.0  
-**Last Updated:** January 29, 2026  
+**Version:** 2.0
+**Last Updated:** January 29, 2026
 **Base URL:** `https://api.nija.com/api/v1`
 
 ---
@@ -1748,6 +1748,6 @@ await client.ws.connect();
 
 ---
 
-**Version:** 2.0  
-**Last Updated:** January 29, 2026  
+**Version:** 2.0
+**Last Updated:** January 29, 2026
 **Maintained By:** NIJA Engineering Team

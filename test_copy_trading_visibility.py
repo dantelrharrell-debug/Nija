@@ -20,11 +20,11 @@ logger = logging.getLogger('test')
 
 def test_copy_trading_status_logging():
     """Test the enhanced copy trading status logging."""
-    
+
     print("\n" + "="*80)
     print("TEST 1: Copy Trading Status Logging")
     print("="*80)
-    
+
     # Simulate log_copy_trading_status output
     logger.info("=" * 70)
     logger.info("📋 COPY TRADING REQUIREMENTS STATUS")
@@ -48,11 +48,11 @@ def test_copy_trading_status_logging():
 
 def test_copy_trade_signal_received():
     """Test the copy trade signal received logging."""
-    
+
     print("\n" + "="*80)
     print("TEST 2: Copy Trade Signal Received")
     print("="*80)
-    
+
     logger.info("=" * 70)
     logger.info("🔔 RECEIVED MASTER ENTRY SIGNAL")
     logger.info("=" * 70)
@@ -64,11 +64,11 @@ def test_copy_trade_signal_received():
 
 def test_copy_trade_blocked_no_users():
     """Test logging when no users are configured."""
-    
+
     print("\n" + "="*80)
     print("TEST 3: Copy Trade Blocked - No Users Configured")
     print("="*80)
-    
+
     logger.warning("=" * 70)
     logger.warning("⚠️  NO USER ACCOUNTS CONFIGURED")
     logger.warning("=" * 70)
@@ -79,11 +79,11 @@ def test_copy_trade_blocked_no_users():
 
 def test_copy_trade_blocked_user_requirements():
     """Test logging when user requirements are not met."""
-    
+
     print("\n" + "="*80)
     print("TEST 4: Copy Trade Blocked - User Requirements Not Met")
     print("="*80)
-    
+
     logger.warning("      " + "=" * 50)
     logger.warning("      ⚠️  COPY TRADE BLOCKED FOR DAIVON_FRAZIER")
     logger.warning("      " + "=" * 50)
@@ -102,11 +102,11 @@ def test_copy_trade_blocked_user_requirements():
 
 def test_copy_trade_execution_summary():
     """Test the copy trade execution summary logging."""
-    
+
     print("\n" + "="*80)
     print("TEST 5: Copy Trade Execution Summary")
     print("="*80)
-    
+
     # Scenario 1: All users receive trade
     logger.info("=" * 70)
     logger.info("📊 COPY TRADE EXECUTION SUMMARY")
@@ -121,9 +121,9 @@ def test_copy_trade_execution_summary():
     logger.info("      • daivon_frazier: $15.00 base")
     logger.info("      • tania_gilbert: $20.00 base")
     logger.info("=" * 70)
-    
+
     print("\n")
-    
+
     # Scenario 2: Some users blocked
     logger.info("=" * 70)
     logger.info("📊 COPY TRADE EXECUTION SUMMARY")
@@ -149,13 +149,13 @@ def main():
     print("This demonstrates the enhanced logging that will help diagnose")
     print("why copy trading might not be working as expected.")
     print("="*80)
-    
+
     test_copy_trading_status_logging()
     test_copy_trade_signal_received()
     test_copy_trade_blocked_no_users()
     test_copy_trade_blocked_user_requirements()
     test_copy_trade_execution_summary()
-    
+
     print("\n" + "="*80)
     print("✅ ALL TESTS COMPLETED")
     print("="*80)

@@ -314,7 +314,7 @@ python test_advanced_portfolio_systems.py
 
 **Test Coverage:**
 - ✅ Portfolio Optimizer
-- ✅ Correlation Weighting  
+- ✅ Correlation Weighting
 - ✅ Risk Regime Allocator
 - ✅ Volatility Targeting
 - ✅ Regime Strategy Selector

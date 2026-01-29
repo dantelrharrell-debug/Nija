@@ -65,19 +65,19 @@ else:
 def _check_live_capital_verification(self) -> bool:
     """
     Check if LIVE CAPITAL VERIFIED is enabled.
-    
+
     This is the MASTER kill-switch that must be explicitly set to 'true'
     in the environment variables to allow live trading.
-    
+
     Returns:
         bool: True if live capital trading is verified and enabled
     """
     # Check environment variable (must be explicitly set to 'true')
     verified_str = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower().strip()
-    
+
     # Only accept explicit 'true', '1', 'yes', or 'enabled'
     verified = verified_str in ['true', '1', 'yes', 'enabled']
-    
+
     return verified
 ```
 
@@ -86,26 +86,26 @@ def _check_live_capital_verification(self) -> bool:
 def can_trade(self, user_id: str) -> tuple[bool, Optional[str]]:
     """
     Check if user can trade (checks all kill switches).
-    
+
     Args:
         user_id: User identifier
-        
+
     Returns:
         (can_trade, error_message)
     """
     # CRITICAL: Check LIVE CAPITAL VERIFIED first (master kill-switch)
     if not self.live_capital_verified:
         return False, "🔴 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading."
-    
+
     # Check global kill switch
     if self.global_kill_switch == KillSwitchStatus.TRIGGERED:
         return False, "Global trading halted (kill switch triggered)"
-    
+
     # Check user kill switch
     if user_id in self.user_kill_switches:
         if self.user_kill_switches[user_id] == KillSwitchStatus.TRIGGERED:
             return False, "User trading halted (kill switch triggered)"
-    
+
     return True, None
 ```
 
@@ -114,7 +114,7 @@ def can_trade(self, user_id: str) -> tuple[bool, Optional[str]]:
 def is_live_capital_verified(self) -> bool:
     """
     Check if LIVE CAPITAL VERIFIED is enabled.
-    
+
     Returns:
         bool: True if live capital trading is verified and enabled
     """
@@ -123,7 +123,7 @@ def is_live_capital_verified(self) -> bool:
 def get_verification_status(self) -> Dict[str, any]:
     """
     Get detailed verification status for dashboard display.
-    
+
     Returns:
         Dict with verification details
     """
@@ -157,7 +157,7 @@ try:
     controls_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'controls')
     if controls_path not in sys.path:
         sys.path.insert(0, controls_path)
-    
+
     from controls import get_hard_controls
     HARD_CONTROLS_AVAILABLE = True
     logger.info("✅ Hard controls module loaded for LIVE CAPITAL VERIFIED checks")
@@ -176,7 +176,7 @@ except ImportError as e:
 if HARD_CONTROLS_AVAILABLE and get_hard_controls:
     hard_controls = get_hard_controls()
     can_trade, error_msg = hard_controls.can_trade(self.user_id)
-    
+
     if not can_trade:
         logger.error("=" * 80)
         logger.error("🔴 TRADE EXECUTION BLOCKED")
@@ -206,11 +206,11 @@ if HARD_CONTROLS_AVAILABLE and get_hard_controls:
 def get_live_capital_status():
     """
     Get LIVE CAPITAL VERIFIED status.
-    
+
     This endpoint returns the current status of the LIVE CAPITAL VERIFIED
     kill-switch, which is the master safety control that must be enabled
     for live trading.
-    
+
     Returns:
         JSON with verification status and details
     """
@@ -222,10 +222,10 @@ def get_live_capital_status():
                 'can_trade': False,
                 'status': 'error'
             }), 503
-        
+
         hard_controls = get_hard_controls()
         status = hard_controls.get_verification_status()
-        
+
         # Add human-readable status
         if status['live_capital_verified']:
             status['status'] = 'LIVE TRADING ENABLED'
@@ -237,9 +237,9 @@ def get_live_capital_status():
             status['status_class'] = 'success'
             status['icon'] = '🟢'
             status['message'] = 'Live trading is disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable.'
-        
+
         return jsonify(status)
-    
+
     except Exception as e:
         logger.error(f"Error getting live capital status: {e}")
         return jsonify({
@@ -292,7 +292,7 @@ index original..modified
  6. Auto-disable on errors/API abuse
 +7. LIVE CAPITAL VERIFIED - Explicit verification required for live trading
  """
- 
+
  import logging
 +import os
  from typing import Dict, Optional, List
@@ -303,19 +303,19 @@ index original..modified
          self.daily_loss_trackers: Dict[str, DailyLossTracker] = {}
          self.user_error_counts: Dict[str, int] = {}
          self.strategy_locked = True  # Strategy is always locked
-         
+
 +        # CRITICAL SAFETY: LIVE CAPITAL VERIFIED kill-switch
 +        # This is the MASTER safety switch that must be explicitly enabled
 +        # to allow live trading with real capital. Defaults to False (disabled).
 +        # Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading.
 +        self.live_capital_verified = self._check_live_capital_verification()
-+        
++
          # Enable trading for master account and all user accounts
          self._initialize_trading_accounts()
-         
+
 @@ -77,6 +85,18 @@ class HardControls:
          logger.info(f"Position limits: {self.MIN_POSITION_PCT*100:.0f}% - {self.MAX_POSITION_PCT*100:.0f}%")
-+        
++
 +        # Log verification status prominently
 +        if self.live_capital_verified:
 +            logger.warning("=" * 80)
@@ -326,20 +326,20 @@ index original..modified
 +            logger.info("🟢 LIVE CAPITAL VERIFIED: FALSE - TRADING DISABLED (SAFE MODE)")
 +            logger.info("   To enable live trading, set LIVE_CAPITAL_VERIFIED=true in .env")
 +            logger.info("=" * 80)
-     
+
 +    def _check_live_capital_verification(self) -> bool:
 +        """Check if LIVE CAPITAL VERIFIED is enabled."""
 +        verified_str = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower().strip()
 +        verified = verified_str in ['true', '1', 'yes', 'enabled']
 +        return verified
-+    
++
      def can_trade(self, user_id: str) -> tuple[bool, Optional[str]]:
          """Check if user can trade (checks all kill switches)."""
-+        
++
 +        # CRITICAL: Check LIVE CAPITAL VERIFIED first (master kill-switch)
 +        if not self.live_capital_verified:
 +            return False, "🔴 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading."
-+        
++
          # Check global kill switch
          if self.global_kill_switch == KillSwitchStatus.TRIGGERED:
              return False, "Global trading halted (kill switch triggered)"
@@ -353,15 +353,15 @@ index original..modified
  import logging
 +import sys
 +import os
- 
+
  logger = logging.getLogger("nija")
- 
+
 +# Import hard controls for LIVE CAPITAL VERIFIED check
 +try:
 +    controls_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'controls')
 +    if controls_path not in sys.path:
 +        sys.path.insert(0, controls_path)
-+    
++
 +    from controls import get_hard_controls
 +    HARD_CONTROLS_AVAILABLE = True
 +    logger.info("✅ Hard controls module loaded for LIVE CAPITAL VERIFIED checks")
@@ -380,7 +380,7 @@ index original..modified
 +            if HARD_CONTROLS_AVAILABLE and get_hard_controls:
 +                hard_controls = get_hard_controls()
 +                can_trade, error_msg = hard_controls.can_trade(self.user_id)
-+                
++
 +                if not can_trade:
 +                    logger.error("=" * 80)
 +                    logger.error("🔴 TRADE EXECUTION BLOCKED")
@@ -389,7 +389,7 @@ index original..modified
 +                    logger.error(f"   Reason: {error_msg}")
 +                    logger.error("=" * 80)
 +                    return None
-+            
++
              # FIX #3 (Jan 19, 2026): Check if broker supports this symbol
 
 diff --git a/bot/dashboard_server.py b/bot/dashboard_server.py
@@ -412,10 +412,10 @@ index original..modified
 +                'can_trade': False,
 +                'status': 'error'
 +            }), 503
-+        
++
 +        hard_controls = get_hard_controls()
 +        status = hard_controls.get_verification_status()
-+        
++
 +        # Add human-readable status
 +        if status['live_capital_verified']:
 +            status['status'] = 'LIVE TRADING ENABLED'
@@ -427,7 +427,7 @@ index original..modified
 +            status['status_class'] = 'success'
 +            status['icon'] = '🟢'
 +            status['message'] = 'Live trading disabled.'
-+        
++
 +        return jsonify(status)
 +    except Exception as e:
 +        return jsonify({'error': str(e)}), 500

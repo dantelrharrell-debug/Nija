@@ -87,7 +87,7 @@ CAPITAL_ALLOCATION_CONFIG = {
     'min_allocation_per_market': 0.05,  # Minimum 5% per market
     'max_allocation_per_market': 0.50,  # Maximum 50% per market
     'allocation_strategy': 'adaptive',  # 'fixed', 'adaptive', 'aggressive'
-    
+
     # Adaptive allocation based on metrics
     'allocation_metrics': {
         'sharpe_ratio_weight': 0.3,
@@ -96,7 +96,7 @@ CAPITAL_ALLOCATION_CONFIG = {
         'opportunity_count_weight': 0.15,
         'correlation_diversity_weight': 0.15,
     },
-    
+
     # Fixed allocation (if strategy = 'fixed')
     'fixed_allocation': {
         'crypto': 0.40,
@@ -128,7 +128,7 @@ MMIN_ENGINE_CONFIG = {
     'max_markets_active': 5,  # Maximum concurrent markets
     'cross_market_signals_required': 2,  # Require confirmation from N markets
     'intelligence_level': 'god_mode',  # 'basic', 'advanced', 'god_mode'
-    
+
     # Performance thresholds
     'performance_thresholds': {
         'min_sharpe_ratio': 1.5,
@@ -136,7 +136,7 @@ MMIN_ENGINE_CONFIG = {
         'min_profit_factor': 1.8,
         'max_drawdown': 0.15,
     },
-    
+
     # Update frequencies
     'correlation_update_interval': 300,  # 5 minutes
     'regime_update_interval': 600,  # 10 minutes

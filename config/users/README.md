@@ -83,21 +83,21 @@ To create a new user configuration:
 - **user_id** (required): Unique identifier for the user (lowercase, underscores for spaces)
   - Used to match environment variables: `KRAKEN_USER_JOHN_API_KEY`
   - Format: `firstname_lastname` or just `firstname`
-  
+
 - **name** (required): Display name for the user (used in logs)
 
 - **account_type** (required): Type of account
   - `"retail"` - Individual retail trading account
   - `"investor"` - Investor/institutional account
   - Must match the filename (e.g., "retail" for retail_kraken.json)
-  
+
 - **broker_type** (required): The brokerage this user account is for
   - Must match the filename (e.g., "kraken" for retail_kraken.json)
-  
+
 - **enabled** (required): Whether this user account is active
   - `true` - Bot will attempt to connect and trade
   - `false` - Bot will skip this user (use this when credentials are not configured)
-  
+
 - **description** (optional): Human-readable description or notes
 
 ## Adding a New User

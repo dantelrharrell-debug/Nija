@@ -60,66 +60,66 @@ _state_lock = threading.Lock()
 
 class DashboardUpdateThread(threading.Thread):
     """Background thread for updating dashboard metrics"""
-    
+
     def __init__(self, update_interval: int = 5):
         super().__init__(daemon=True)
         self.update_interval = update_interval
         self.running = False
-        
+
     def run(self):
         """Run the update loop"""
         self.running = True
         logger.info(f"Dashboard update thread started (interval: {self.update_interval}s)")
-        
+
         while self.running:
             try:
                 self._update_metrics()
             except Exception as e:
                 logger.error(f"Error updating dashboard metrics: {e}")
-            
+
             time.sleep(self.update_interval)
-    
+
     def stop(self):
         """Stop the update thread"""
         self.running = False
         logger.info("Dashboard update thread stopped")
-    
+
     def _update_metrics(self):
         """Update all dashboard metrics"""
         global _dashboard_state
-        
+
         metrics = {}
-        
+
         # Get risk engine metrics
         if RISK_ENGINE_AVAILABLE:
             try:
                 risk_engine = get_global_risk_engine()
                 status = risk_engine.get_status_summary()
-                
+
                 metrics['portfolio'] = status.get('portfolio_metrics', {})
                 metrics['risk_events'] = status.get('recent_events', [])
                 metrics['accounts'] = status.get('accounts', {})
-                
+
             except Exception as e:
                 logger.error(f"Error getting risk engine metrics: {e}")
-        
+
         # Get system health
         try:
             metrics['system_health'] = self._get_system_health()
         except Exception as e:
             logger.error(f"Error getting system health: {e}")
             metrics['system_health'] = {}
-        
+
         # Update global state
         with _state_lock:
             _dashboard_state.update(metrics)
             _dashboard_state['last_update'] = datetime.now().isoformat()
-    
+
     def _get_system_health(self) -> Dict[str, Any]:
         """Get system health metrics"""
         try:
             import psutil
-            
+
             return {
                 'cpu_percent': psutil.cpu_percent(interval=1),
                 'memory_percent': psutil.virtual_memory().percent,
@@ -144,7 +144,7 @@ _update_thread = None
 def start_dashboard_updates(interval: int = 5):
     """Start dashboard background updates"""
     global _update_thread
-    
+
     if _update_thread is None or not _update_thread.is_alive():
         _update_thread = DashboardUpdateThread(update_interval=interval)
         _update_thread.start()
@@ -154,7 +154,7 @@ def start_dashboard_updates(interval: int = 5):
 def stop_dashboard_updates():
     """Stop dashboard background updates"""
     global _update_thread
-    
+
     if _update_thread and _update_thread.running:
         _update_thread.stop()
         logger.info("Dashboard updates stopped")
@@ -179,7 +179,7 @@ def health_check():
 def get_dashboard_overview():
     """
     Get dashboard overview with all metrics
-    
+
     Returns comprehensive dashboard data including:
     - Portfolio metrics
     - Account summaries
@@ -202,11 +202,11 @@ def get_portfolio_metrics():
             'success': False,
             'error': 'Risk engine not available'
         }), 503
-    
+
     try:
         risk_engine = get_global_risk_engine()
         portfolio = risk_engine.calculate_portfolio_metrics()
-        
+
         return jsonify({
             'success': True,
             'data': portfolio.to_dict(),
@@ -225,7 +225,7 @@ def get_accounts():
     """Get all account summaries"""
     with _state_lock:
         accounts = _dashboard_state.get('accounts', {})
-    
+
     return jsonify({
         'success': True,
         'data': {
@@ -244,17 +244,17 @@ def get_account_details(account_id: str):
             'success': False,
             'error': 'Risk engine not available'
         }), 503
-    
+
     try:
         risk_engine = get_global_risk_engine()
         metrics = risk_engine.get_account_metrics(account_id)
-        
+
         if metrics is None:
             return jsonify({
                 'success': False,
                 'error': f'Account {account_id} not found'
             }), 404
-        
+
         return jsonify({
             'success': True,
             'data': metrics.to_dict(),
@@ -272,7 +272,7 @@ def get_account_details(account_id: str):
 def get_risk_events():
     """
     Get risk events with optional filtering
-    
+
     Query parameters:
     - account_id: Filter by account
     - risk_level: Filter by risk level (LOW, MODERATE, HIGH, CRITICAL, EMERGENCY)
@@ -284,14 +284,14 @@ def get_risk_events():
             'success': False,
             'error': 'Risk engine not available'
         }), 503
-    
+
     try:
         # Parse query parameters
         account_id = request.args.get('account_id')
         risk_level_str = request.args.get('risk_level')
         event_type_str = request.args.get('event_type')
         hours = int(request.args.get('hours', 24))
-        
+
         # Convert string parameters to enums
         risk_level = None
         if risk_level_str:
@@ -302,7 +302,7 @@ def get_risk_events():
                     'success': False,
                     'error': f'Invalid risk level: {risk_level_str}'
                 }), 400
-        
+
         event_type = None
         if event_type_str:
             try:
@@ -312,7 +312,7 @@ def get_risk_events():
                     'success': False,
                     'error': f'Invalid event type: {event_type_str}'
                 }), 400
-        
+
         # Get events from risk engine
         risk_engine = get_global_risk_engine()
         events = risk_engine.get_risk_events(
@@ -321,7 +321,7 @@ def get_risk_events():
             risk_level=risk_level,
             hours=hours
         )
-        
+
         return jsonify({
             'success': True,
             'data': {
@@ -352,11 +352,11 @@ def get_risk_status():
             'success': False,
             'error': 'Risk engine not available'
         }), 503
-    
+
     try:
         risk_engine = get_global_risk_engine()
         status = risk_engine.get_status_summary()
-        
+
         return jsonify({
             'success': True,
             'data': status,
@@ -374,7 +374,7 @@ def get_risk_status():
 def check_position():
     """
     Check if a new position can be opened
-    
+
     Request body:
     {
         "account_id": "account_1",
@@ -386,22 +386,22 @@ def check_position():
             'success': False,
             'error': 'Risk engine not available'
         }), 503
-    
+
     try:
         data = request.get_json()
-        
+
         if not data or 'account_id' not in data or 'position_size' not in data:
             return jsonify({
                 'success': False,
                 'error': 'Missing required fields: account_id, position_size'
             }), 400
-        
+
         account_id = data['account_id']
         position_size = float(data['position_size'])
-        
+
         risk_engine = get_global_risk_engine()
         allowed, reason = risk_engine.can_open_position(account_id, position_size)
-        
+
         return jsonify({
             'success': True,
             'data': {
@@ -425,7 +425,7 @@ def get_system_health():
     """Get system health metrics"""
     with _state_lock:
         health = _dashboard_state.get('system_health', {})
-    
+
     return jsonify({
         'success': True,
         'data': health,
@@ -437,7 +437,7 @@ def get_system_health():
 def stream_metrics():
     """
     Server-Sent Events (SSE) endpoint for real-time metrics streaming
-    
+
     Usage: EventSource('/api/metrics/stream')
     Note: This endpoint streams indefinitely. Clients should handle connection cleanup.
     """
@@ -451,13 +451,13 @@ def stream_metrics():
                         'system_health': _dashboard_state.get('system_health', {}),
                         'timestamp': datetime.now().isoformat()
                     }
-                
+
                 yield f"data: {json.dumps(data)}\n\n"
                 time.sleep(5)  # Update every 5 seconds
         except GeneratorExit:
             # Client disconnected - cleanup
             logger.debug("SSE client disconnected")
-    
+
     return Response(generate(), mimetype='text/event-stream')
 
 
@@ -468,23 +468,23 @@ def stream_metrics():
 def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
     """
     Create and configure the dashboard application
-    
+
     Args:
         config: Optional configuration dictionary
-        
+
     Returns:
         Configured Flask application
     """
     if config:
         app.config.update(config)
-    
+
     # Start background updates
     start_dashboard_updates(interval=config.get('update_interval', 5) if config else 5)
-    
+
     logger.info("Central Monitoring Dashboard initialized")
     logger.info(f"Risk Engine: {'Available' if RISK_ENGINE_AVAILABLE else 'Not Available'}")
     logger.info(f"Monitoring System: {'Available' if MONITORING_SYSTEM_AVAILABLE else 'Not Available'}")
-    
+
     return app
 
 
@@ -494,10 +494,10 @@ if __name__ == '__main__':
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     # Create and run app
     app = create_app()
-    
+
     try:
         logger.info("Starting Central Monitoring Dashboard on http://0.0.0.0:5001")
         app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)

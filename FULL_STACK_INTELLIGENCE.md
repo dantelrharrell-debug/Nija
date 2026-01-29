@@ -81,7 +81,7 @@ opportunities = mmin.analyze_markets()
 # But GMIG filters and weights everything:
 gmig_params = gmig.get_integration_parameters('mmin')
 filtered_signals = gmig_mmin_integration.apply_signal_filters(
-    opportunities['signals'], 
+    opportunities['signals'],
     gmig_params['gmig_state']
 )
 
@@ -255,7 +255,7 @@ Position: GLD (Gold ETF)
 ```bash
 # Test all three layers
 python test_gmig.py              # Strategic layer
-python test_mmin.py              # Tactical layer  
+python test_mmin.py              # Tactical layer
 python test_meta_ai_evolution.py # Evolution layer
 python test_gmig_integrations.py # Integration points
 ```
@@ -443,6 +443,6 @@ See: [GMIG_QUICKSTART.md](GMIG_QUICKSTART.md)
 
 ---
 
-**Version:** 1.0.0 (Full-Stack Intelligence Complete)  
-**Date:** January 28, 2026  
+**Version:** 1.0.0 (Full-Stack Intelligence Complete)
+**Date:** January 28, 2026
 **Status:** Production Ready

@@ -3,20 +3,20 @@
 ## Overview
 Three institutional-grade features that push NIJA into the top 1% of algorithmic trading systems.
 
-**Status:** ✅ IMPLEMENTED & TESTED  
+**Status:** ✅ IMPLEMENTED & TESTED
 **Date:** January 29, 2026
 
 ---
 
 ## 1. Regime-Adaptive Risk Multipliers
 
-**What:** Scale position size by regime confidence  
-**Formula:** `risk = base_risk * (0.5 + regime_confidence * 0.7)`  
+**What:** Scale position size by regime confidence
+**Formula:** `risk = base_risk * (0.5 + regime_confidence * 0.7)`
 **Range:** 0.78x (low confidence) to 1.20x (max confidence)
 
 **Effect:**
 - Low confidence (0.4): 78% position size
-- Medium confidence (0.6): 92% position size  
+- Medium confidence (0.6): 92% position size
 - High confidence (0.8): 106% position size
 - Max confidence (1.0): 120% position size
 
@@ -26,8 +26,8 @@ Three institutional-grade features that push NIJA into the top 1% of algorithmic
 
 ## 2. Volatility-Weighted RSI Bands
 
-**What:** Dynamic RSI overbought/oversold levels that adapt to market volatility  
-**Formula:** `rsi_width = base_width / (0.6*ATR + 0.4*inverse_ADX)`  
+**What:** Dynamic RSI overbought/oversold levels that adapt to market volatility
+**Formula:** `rsi_width = base_width / (0.6*ATR + 0.4*inverse_ADX)`
 **Range:** 5-20 point widths from centerline (50)
 
 **Examples:**
@@ -51,8 +51,8 @@ elif rsi.iloc[-1] > upper.iloc[-1]:
 
 ## 3. Multi-Timeframe RSI Agreement
 
-**What:** Require 70% agreement across timeframes before allowing entries  
-**Logic:** Only trade when 1min, 5min, and 15min RSI all point same direction  
+**What:** Require 70% agreement across timeframes before allowing entries
+**Logic:** Only trade when 1min, 5min, and 15min RSI all point same direction
 **Effect:** Prevents counter-trend trades, improves win rate
 
 **Returns:**
@@ -69,7 +69,7 @@ elif rsi.iloc[-1] > upper.iloc[-1]:
 ```python
 from indicators import check_multi_timeframe_rsi_agreement
 
-mtf = check_multi_timeframe_rsi_agreement(df, 
+mtf = check_multi_timeframe_rsi_agreement(df,
     higher_timeframes=['5min', '15min'])
 
 if long_signal and mtf['allow_long']:
@@ -123,8 +123,8 @@ NIJA is now in the top 1% of algorithmic systems! 🚀
 
 ## Security
 
-✅ CodeQL scan: **0 vulnerabilities**  
-✅ All tests: **PASSING**  
+✅ CodeQL scan: **0 vulnerabilities**
+✅ All tests: **PASSING**
 ✅ Integration: **VALIDATED**
 
 ---

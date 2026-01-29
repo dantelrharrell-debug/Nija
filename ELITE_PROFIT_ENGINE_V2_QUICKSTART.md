@@ -140,34 +140,34 @@ from bot.trade_frequency_optimizer import SignalQuality
 class NIJAEliteStrategy:
     def __init__(self, broker):
         self.broker = broker
-        
+
         # Initialize Elite Profit Engine v2
         config = get_config_profile('moderate')
         self.elite_engine = get_elite_profit_engine_v2(
             base_capital=broker.get_balance(),
             config=config
         )
-    
+
     def scan_and_trade(self):
         """Main trading loop"""
-        
+
         # Get market data
         df = self.broker.get_candles('BTC-USD', '5m', 100)
         indicators = self.calculate_indicators(df)
-        
+
         # Generate signal
         signal_score = self.calculate_signal_score(df, indicators)
-        
+
         # Check if should take trade
         should_take, reason = self.elite_engine.should_take_trade(
             signal_score=signal_score,
             min_quality=SignalQuality.FAIR
         )
-        
+
         if not should_take:
             print(f"No trade: {reason}")
             return
-        
+
         # Calculate optimal position size
         position = self.elite_engine.calculate_optimal_position_size(
             df=df,
@@ -175,18 +175,18 @@ class NIJAEliteStrategy:
             signal_score=signal_score,
             strategy_type=StrategyType.MOMENTUM
         )
-        
+
         # Execute trade
         order = self.broker.buy(
             symbol='BTC-USD',
             size_usd=position['final_position_usd']
         )
-        
+
         print(f"✅ Trade executed: ${position['final_position_usd']:.2f}")
-        
+
         # Monitor and close when signal exits
         # ... (your exit logic)
-        
+
         # After trade closes, record result
         self.elite_engine.record_trade_result(
             strategy_type=StrategyType.MOMENTUM,
@@ -194,18 +194,18 @@ class NIJAEliteStrategy:
             fees=5.0,            # Your actual fees
             is_win=True          # True if profitable
         )
-    
+
     def calculate_indicators(self, df):
         """Calculate required indicators"""
         from bot.indicators import calculate_atr, calculate_rsi, calculate_macd
-        
+
         return {
             'atr': calculate_atr(df, period=14),
             'rsi': calculate_rsi(df, period=14),
             'adx': self.calculate_adx(df),  # Your ADX calculation
             # ... other indicators
         }
-    
+
     def calculate_signal_score(self, df, indicators):
         """Calculate signal quality (0-100)"""
         # Your signal scoring logic
@@ -289,19 +289,19 @@ config['compounding_strategy'] = 'conservative'  # More preservation
 
 ## FAQ
 
-**Q: How often should I check it?**  
+**Q: How often should I check it?**
 A: Daily for profit status, weekly for detailed review. System runs autonomously.
 
-**Q: Can I use this with paper trading?**  
+**Q: Can I use this with paper trading?**
 A: Yes! Set leverage_mode to 'disabled' for paper trading.
 
-**Q: What if I want to disable a feature?**  
+**Q: What if I want to disable a feature?**
 A: Edit the config before initializing. See "Configuration Tweaks" above.
 
-**Q: How do I know if it's working?**  
+**Q: How do I know if it's working?**
 A: Check locked_profit > 0 and trading_mode changes as you hit targets.
 
-**Q: Can I run multiple instances?**  
+**Q: Can I run multiple instances?**
 A: Yes, create separate instances with different configs/capitals.
 
 ---

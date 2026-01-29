@@ -36,12 +36,12 @@ def serve_static(path):
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
-    
+
     print(f"Starting NIJA Platform on port {port}")
     print(f"Frontend: http://localhost:{port}/")
     print(f"API: http://localhost:{port}/api/")
     print(f"Mobile API: http://localhost:{port}/api/mobile/")
-    
+
     api_app.run(
         host='0.0.0.0',
         port=port,

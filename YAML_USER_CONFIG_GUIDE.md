@@ -145,7 +145,7 @@ The YAML loader validates:
 
 **Problem:** The loader can't find your YAML file.
 
-**Solution:** 
+**Solution:**
 1. Ensure the file is in `config/users/` directory
 2. Filename should be `username.yaml` (e.g., `tania_gilbert.yaml`)
 3. Don't use `.example` extension for real configs
@@ -231,6 +231,6 @@ For issues or questions:
 
 ---
 
-**Version:** 1.0  
-**Last Updated:** January 21, 2026  
+**Version:** 1.0
+**Last Updated:** January 21, 2026
 **Status:** ✅ YAML Configuration Support Active

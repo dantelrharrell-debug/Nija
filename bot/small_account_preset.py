@@ -41,17 +41,17 @@ RISK_LIMITS = {
     'max_position_size_pct': 0.05,  # 5% max position size
     'min_position_size_pct': 0.02,  # 2% min position size
     'min_position_size_usd': 5.00,  # $5 minimum per trade
-    
+
     # Account-Level Limits
     'max_daily_loss_pct': 0.02,  # 2% max daily loss
     'max_weekly_loss_pct': 0.04,  # 4% max weekly loss
     'max_total_exposure_pct': 0.15,  # 15% max total exposure
     'max_drawdown_pct': 0.08,  # 8% max drawdown before stopping
-    
+
     # Position Limits
     'max_concurrent_positions': 2,  # Only 2 positions max
     'max_positions_per_symbol': 1,  # One per symbol
-    
+
     # Trade Frequency Limits
     'max_trades_per_day': 8,  # Maximum 8 trades per day
     'max_trades_per_hour': 3,  # Maximum 3 per hour
@@ -67,7 +67,7 @@ POSITION_SIZING = {
     'base_position_pct': 0.03,  # 3% base position
     'max_position_pct': 0.05,  # 5% maximum
     'min_position_pct': 0.02,  # 2% minimum
-    
+
     # Signal-based adjustments (conservative)
     'signal_multipliers': {
         6: 1.0,  # Perfect signal: 3% (base)
@@ -75,7 +75,7 @@ POSITION_SIZING = {
         4: 0.8,  # Good signal: 2.4%
         3: None,  # Skip trade (signal quality too low for small account safety)
     },
-    
+
     # Balance-based adjustments
     'balance_tiers': {
         'under_30': 0.02,  # $20-30: 2% positions
@@ -83,7 +83,7 @@ POSITION_SIZING = {
         'under_75': 0.04,  # $50-75: 4% positions
         'over_75': 0.05,   # $75-100: 5% positions
     },
-    
+
     # Never exceed these limits
     'absolute_max_position_usd': 10.00,  # Never more than $10 per trade
     'absolute_min_position_usd': 5.00,   # Never less than $5 (fee efficiency)
@@ -98,13 +98,13 @@ STOP_LOSS = {
     'default_stop_pct': 0.005,  # 0.5% default stop
     'min_stop_pct': 0.003,  # 0.3% minimum
     'max_stop_pct': 0.007,  # 0.7% maximum
-    
+
     # Stop-loss type
     'use_hard_stops': True,  # Always use hard stops
     'use_trailing_stops': True,  # Enable trailing
     'trailing_activation_pct': 0.008,  # Activate at +0.8%
     'trailing_distance_pct': 0.003,  # Trail at 0.3%
-    
+
     # Move to breakeven
     'move_to_breakeven_at_pct': 0.008,  # Move to BE at +0.8%
     'breakeven_buffer_pct': 0.001,  # 0.1% buffer above BE
@@ -118,7 +118,7 @@ TAKE_PROFIT = {
     # Fee-aware profit targets
     # For small accounts, must beat fees + spread
     'min_profit_threshold_pct': 0.015,  # 1.5% minimum to beat fees
-    
+
     # Tiered profit taking
     'tp1': {
         'pct': 0.015,  # +1.5% first target
@@ -135,7 +135,7 @@ TAKE_PROFIT = {
         'exit_size': 0.20,  # Close remaining 20%
         'action': 'full_exit',
     },
-    
+
     # Profit protection
     'use_time_based_exit': True,  # Exit if profit stalls
     'max_hold_time_minutes': 60,  # Max 1 hour per trade
@@ -150,17 +150,17 @@ ENTRY_REQUIREMENTS = {
     # Signal quality (require high quality)
     'min_signal_score': 5,  # Require 5/6 confirmations
     'require_all_confirmations': False,  # At least 5 of 6
-    
+
     # Technical requirements (strict)
     'require_ema_alignment': True,  # Must have EMA alignment
     'require_vwap_alignment': True,  # Must align with VWAP
     'min_adx': 25,  # Strong trend required (ADX > 25)
     'min_volume_multiplier': 1.5,  # Volume must be 1.5x average
-    
+
     # Spread/liquidity filters
     'max_spread_pct': 0.002,  # 0.2% max spread
     'min_liquidity_usd': 50000,  # $50k min liquidity
-    
+
     # Avoid risky conditions
     'avoid_high_volatility': True,
     'max_atr_pct': 0.03,  # 3% max ATR
@@ -176,18 +176,18 @@ COPY_TRADING = {
     # Enable copy trading by default
     'enabled': True,
     'mode': 'MASTER_FOLLOW',  # Follow master account
-    
+
     # Position scaling
     'allocation_strategy': 'proportional',  # Scale by balance ratio
     'max_copy_position_pct': 0.05,  # Never exceed 5% on copy
     'min_copy_position_usd': 5.00,  # Minimum $5 per copy trade
-    
+
     # Safety limits for copy trading
     'max_copied_trades_per_day': 8,  # Max 8 copied trades/day
     'respect_local_risk_limits': True,  # Always respect local limits
     'can_reduce_position_size': True,  # Can reduce (never increase)
     'can_skip_trades': True,  # Can skip if too risky
-    
+
     # Sync settings
     'sync_exits': True,  # Follow master exits
     'sync_stop_adjustments': True,  # Follow stop adjustments
@@ -201,7 +201,7 @@ COPY_TRADING = {
 EXCHANGE_PREFERENCES = {
     # Prefer low-fee exchanges for small accounts
     'priority_order': ['kraken', 'okx', 'binance', 'coinbase'],
-    
+
     # Exchange-specific settings
     'kraken': {
         'enabled': True,
@@ -221,7 +221,7 @@ EXCHANGE_PREFERENCES = {
         'max_allocation_pct': 0.0,  # No allocation
         'min_balance': 100.00,  # Only enable if balance > $100
     },
-    
+
     # Minimum balances to use each exchange
     'use_kraken_under': 100.00,  # Use Kraken for accounts under $100
     'use_coinbase_above': 100.00,  # Only use Coinbase above $100
@@ -234,16 +234,16 @@ EXCHANGE_PREFERENCES = {
 PRO_MODE = {
     # Enable PRO mode for better capital efficiency
     'enabled': True,
-    
+
     # Reserve settings (conservative for safety)
     'min_reserve_pct': 0.20,  # Keep 20% in reserve
     'target_reserve_pct': 0.30,  # Target 30% reserve
-    
+
     # Position rotation (gentle for small accounts)
     'allow_position_rotation': True,
     'min_profit_to_rotate_pct': 0.015,  # Need +1.5% to rotate
     'rotate_weakest_first': True,  # Close worst performer first
-    
+
     # Capital efficiency
     'count_positions_as_capital': True,  # Count position values
     'use_total_equity_for_sizing': True,  # Use total equity
@@ -257,27 +257,27 @@ SAFETY_FEATURES = {
     # Automatic circuit breakers
     'daily_loss_circuit_breaker': True,
     'daily_loss_limit_pct': 0.02,  # Stop at 2% daily loss
-    
+
     'consecutive_loss_breaker': True,
     'max_consecutive_losses': 3,  # Stop after 3 losses in a row
-    
+
     'drawdown_protection': True,
     'max_drawdown_before_stop_pct': 0.08,  # Stop at 8% drawdown
-    
+
     # Burn-down mode (reduce size after losses)
     'burn_down_mode': True,
     'trigger_consecutive_losses': 2,  # Trigger after 2 losses
     'burn_down_position_pct': 0.02,  # Reduce to 2% positions
     'burn_down_duration_trades': 3,  # For next 3 trades
-    
+
     # Recovery mode
     'recovery_mode': True,
     'recovery_wins_required': 2,  # 2 wins to exit burn-down
-    
+
     # Emergency stops
     'emergency_stop_enabled': True,
     'emergency_stop_balance': 15.00,  # Stop trading below $15
-    
+
     # Profit protection
     'lock_profits_above_pct': 0.10,  # Lock profits at +10%
     'locked_profit_protection_pct': 0.50,  # Protect 50% of profit
@@ -292,12 +292,12 @@ MONITORING = {
     'log_level': 'INFO',
     'log_all_trades': True,
     'log_all_signals': True,
-    
+
     # Performance tracking
     'track_daily_pnl': True,
     'track_win_rate': True,
     'track_sharpe_ratio': False,  # Not relevant for small account
-    
+
     # Alerts (if webhook configured)
     'alert_on_trade': False,  # Don't spam on every trade
     'alert_on_loss': True,  # Alert on losses
@@ -316,13 +316,13 @@ TRADING_PAIRS = {
         'ETH-USD', 'ETHUSD',  # Ethereum
         'SOL-USD', 'SOLUSD',  # Solana
     ],
-    
+
     # Blacklist risky pairs
     'blacklisted_pairs': [
         'XRP-USD', 'XRPUSD',  # High spread, low profit potential for small accounts
         # Add any other risky pairs here
     ],
-    
+
     # Pair-specific limits
     'max_positions_per_pair': 1,  # One position per pair max
     'prefer_btc_eth': True,  # Prefer BTC/ETH over others
@@ -337,11 +337,11 @@ EXECUTION = {
     'default_order_type': 'limit',
     'use_market_on_urgency': False,  # Never use market orders
     'limit_order_timeout_seconds': 30,
-    
+
     # Slippage protection
     'max_slippage_pct': 0.002,  # 0.2% max slippage
     'cancel_order_on_slippage': True,
-    
+
     # Timing
     'scan_interval_seconds': 300,  # Scan every 5 minutes
     'avoid_first_candle_seconds': 10,  # Wait 10s after new candle
@@ -371,7 +371,7 @@ PRESET_INFO = {
 def get_environment_variables():
     """
     Get environment variables for small-account preset.
-    
+
     Returns:
         Dict of environment variable names and values
     """
@@ -388,23 +388,23 @@ def get_environment_variables():
 def apply_small_account_preset(set_env_vars=True):
     """
     Apply safe small-account preset configuration.
-    
+
     Args:
         set_env_vars: If True, sets environment variables. If False, only returns config.
-    
+
     Returns:
         Dict with all preset configurations and environment variables
     """
     import os
-    
+
     # Get environment variables
     env_vars = get_environment_variables()
-    
+
     # Optionally set environment variables
     if set_env_vars:
         for key, value in env_vars.items():
             os.environ[key] = value
-    
+
     # Return all preset configs
     return {
         'account_size': ACCOUNT_SIZE,
@@ -488,7 +488,7 @@ def get_preset_summary():
 
 This preset is optimized for:
 ✅ Capital preservation
-✅ Controlled risk exposure  
+✅ Controlled risk exposure
 ✅ Fee-efficient trading
 ✅ Copy trading with proportional sizing
 ✅ Maximum safety for small accounts
@@ -500,7 +500,7 @@ To activate this preset, use: apply_small_account_preset()
 if __name__ == "__main__":
     # Print preset summary
     print(get_preset_summary())
-    
+
     # Apply preset
     config = apply_small_account_preset()
     print(f"\n✅ Preset applied successfully!")

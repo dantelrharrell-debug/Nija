@@ -441,23 +441,23 @@ body {
         flex-direction: column;
         gap: 16px;
     }
-    
+
     .navbar-menu {
         width: 100%;
         justify-content: space-around;
     }
-    
+
     .nav-link {
         padding: 8px 12px;
         font-size: 0.9rem;
     }
-    
+
     .dashboard-header {
         flex-direction: column;
         align-items: flex-start;
         gap: 16px;
     }
-    
+
     .stats-grid {
         grid-template-columns: 1fr;
     }

@@ -26,31 +26,31 @@ logger = logging.getLogger("nija.brain")
 class NIJABrain:
     """
     Integrated trading intelligence system
-    
+
     Coordinates all AI components for optimal trading performance
     """
-    
+
     def __init__(self, total_capital: float, config: Optional[Dict] = None):
         """
         Initialize NIJA Brain
-        
+
         Args:
             total_capital: Total trading capital
             config: Optional configuration
         """
         self.total_capital = total_capital
         self.config = config or {}
-        
+
         # Initialize components
         self.orchestrator = None
         self.execution_intelligence = None
         self.learning_engine = None
         self.metrics_engine = None
-        
+
         self._initialize_components()
-        
+
         logger.info("🧠 NIJA Brain initialized - All systems operational")
-    
+
     def _initialize_components(self):
         """Initialize all brain components"""
         try:
@@ -59,14 +59,14 @@ class NIJABrain:
             logger.info("✅ Strategy Orchestrator online")
         except Exception as e:
             logger.error(f"Failed to initialize orchestrator: {e}")
-        
+
         try:
             from core.execution_intelligence import create_execution_intelligence
             self.execution_intelligence = create_execution_intelligence(self.config.get('execution'))
             logger.info("✅ Execution Intelligence online")
         except Exception as e:
             logger.error(f"Failed to initialize execution intelligence: {e}")
-        
+
         try:
             from core.self_learning_engine import create_learning_engine
             self.learning_engine = create_learning_engine(
@@ -76,7 +76,7 @@ class NIJABrain:
             logger.info("✅ Self-Learning Engine online")
         except Exception as e:
             logger.error(f"Failed to initialize learning engine: {e}")
-        
+
         try:
             from core.investor_metrics import create_metrics_engine
             self.metrics_engine = create_metrics_engine(
@@ -86,18 +86,18 @@ class NIJABrain:
             logger.info("✅ Investor Metrics Engine online")
         except Exception as e:
             logger.error(f"Failed to initialize metrics engine: {e}")
-    
-    def analyze_opportunity(self, symbol: str, df: pd.DataFrame, 
+
+    def analyze_opportunity(self, symbol: str, df: pd.DataFrame,
                           indicators: Dict, broker_name: str = "coinbase") -> Dict[str, Any]:
         """
         Comprehensive opportunity analysis using all brain components
-        
+
         Args:
             symbol: Trading symbol
             df: OHLCV DataFrame
             indicators: Technical indicators
             broker_name: Broker name
-            
+
         Returns:
             Complete analysis with trading decision
         """
@@ -108,15 +108,15 @@ class NIJABrain:
             'confidence': 0.0,
             'components': {}
         }
-        
+
         # 1. Get signals from strategy orchestrator
         if self.orchestrator:
             signals = self.orchestrator.get_trading_signals(symbol, df, indicators, broker_name)
-            
+
             if signals:
                 # Use ensemble voting
                 consensus = self.orchestrator.execute_ensemble_vote(signals)
-                
+
                 if consensus:
                     analysis['decision'] = consensus.get('action', 'no_action')
                     analysis['confidence'] = consensus.get('confidence', 0)
@@ -131,14 +131,14 @@ class NIJABrain:
                         'consensus': None,
                         'reason': 'Insufficient agreement among strategies'
                     }
-        
+
         # 2. Get execution intelligence recommendation (if we have a position)
         # This would be called when evaluating exit opportunities
         analysis['components']['execution'] = {
             'status': 'ready',
             'slippage_stats': self.execution_intelligence.slippage_stats if self.execution_intelligence else {}
         }
-        
+
         # 3. Learning engine insights
         if self.learning_engine and analysis['decision'] != 'no_action':
             # Get parameter suggestions
@@ -146,22 +146,22 @@ class NIJABrain:
             analysis['components']['learning'] = {
                 'optimization_suggestions': suggestions
             }
-        
+
         logger.debug(f"Opportunity analysis for {symbol}: {analysis['decision']} ({analysis['confidence']:.0%} confidence)")
-        
+
         return analysis
-    
+
     def evaluate_exit(self, symbol: str, df: pd.DataFrame, indicators: Dict,
                      position: Dict) -> Dict[str, Any]:
         """
         Evaluate exit opportunity for existing position
-        
+
         Args:
             symbol: Trading symbol
             df: OHLCV DataFrame
             indicators: Technical indicators
             position: Current position details
-            
+
         Returns:
             Exit recommendation
         """
@@ -172,23 +172,23 @@ class NIJABrain:
             'exit_pct': 0.0,
             'reason': ''
         }
-        
+
         if not self.execution_intelligence:
             return exit_analysis
-        
+
         # Get exit signal from execution intelligence
         exit_signal = self.execution_intelligence.calculate_exit_score(
             symbol, df, indicators, position
         )
-        
+
         # Calculate optimal exit size
         exit_size, reason = self.execution_intelligence.calculate_optimal_exit_size(
             position, exit_signal, self.total_capital
         )
-        
+
         position_size = position.get('size', 0)
         exit_pct = exit_size / position_size if position_size > 0 else 0
-        
+
         exit_analysis.update({
             'should_exit': exit_size > 0,
             'exit_size': exit_size,
@@ -201,16 +201,16 @@ class NIJABrain:
                 'score': exit_signal.exit_score
             }
         })
-        
+
         logger.info(f"Exit evaluation for {symbol}: {'EXIT' if exit_analysis['should_exit'] else 'HOLD'} "
                    f"({exit_pct*100:.0f}% of position)")
-        
+
         return exit_analysis
-    
+
     def record_trade_completion(self, trade_data: Dict):
         """
         Record completed trade across all systems
-        
+
         Args:
             trade_data: Complete trade information
         """
@@ -218,7 +218,7 @@ class NIJABrain:
         if self.learning_engine:
             try:
                 from core.self_learning_engine import TradeRecord
-                
+
                 trade_record = TradeRecord(
                     trade_id=trade_data['trade_id'],
                     strategy_id=trade_data.get('strategy_id', 'unknown'),
@@ -242,11 +242,11 @@ class NIJABrain:
                     max_favorable_excursion=trade_data.get('mfe', 0),
                     max_adverse_excursion=trade_data.get('mae', 0)
                 )
-                
+
                 self.learning_engine.record_trade(trade_record)
             except Exception as e:
                 logger.error(f"Error recording trade with learning engine: {e}")
-        
+
         # Record with orchestrator
         if self.orchestrator:
             try:
@@ -258,7 +258,7 @@ class NIJABrain:
                 )
             except Exception as e:
                 logger.error(f"Error recording trade with orchestrator: {e}")
-        
+
         # Update metrics engine
         if self.metrics_engine:
             try:
@@ -270,14 +270,14 @@ class NIJABrain:
                 )
             except Exception as e:
                 logger.error(f"Error updating metrics: {e}")
-        
+
         logger.info(f"✅ Trade recorded: {trade_data['symbol']} {trade_data['side']} - "
                    f"P&L: ${trade_data['pnl']:.2f}")
-    
+
     def get_performance_report(self) -> Dict[str, Any]:
         """
         Generate comprehensive performance report
-        
+
         Returns:
             Complete performance report from all systems
         """
@@ -290,37 +290,37 @@ class NIJABrain:
                 'metrics_engine': self.metrics_engine is not None
             }
         }
-        
+
         # Orchestrator performance
         if self.orchestrator:
             report['strategy_performance'] = self.orchestrator.get_performance_summary()
-        
+
         # Execution quality
         if self.execution_intelligence:
             report['execution_quality'] = self.execution_intelligence.get_execution_quality_report()
-        
+
         # Learning insights
         if self.learning_engine:
             report['learning_insights'] = {
                 'total_trades_analyzed': len(self.learning_engine.trade_history),
                 'active_ab_tests': len(self.learning_engine.active_tests)
             }
-        
+
         # Investor metrics
         if self.metrics_engine:
             report['investor_metrics'] = self.metrics_engine.generate_investor_report()
-        
+
         return report
-    
+
     def perform_daily_review(self):
         """Perform daily system review and optimization"""
         logger.info("🔍 Performing daily system review...")
-        
+
         # Review strategy performance
         if self.orchestrator:
             review_results = self.orchestrator.review_strategy_performance()
             logger.info(f"Strategy review: {len(review_results['actions_taken'])} actions taken")
-        
+
         # Get learning insights
         if self.learning_engine:
             suggestions = self.learning_engine.get_optimization_suggestions('apex_v72')
@@ -328,18 +328,18 @@ class NIJABrain:
                 logger.info(f"💡 {len(suggestions)} optimization suggestions available")
                 for sugg in suggestions:
                     logger.info(f"   - {sugg['parameter']}: {sugg['reason']}")
-        
+
         logger.info("✅ Daily review complete")
 
 
 def create_nija_brain(total_capital: float, config: Optional[Dict] = None) -> NIJABrain:
     """
     Factory function to create NIJA Brain
-    
+
     Args:
         total_capital: Total trading capital
         config: Optional configuration
-        
+
     Returns:
         NIJABrain instance
     """

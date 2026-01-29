@@ -42,7 +42,7 @@ Kraken and Coinbase SPOT markets **do NOT support shorting**:
 
 1. **Fee Differences**
    - Coinbase: 1.4% round-trip fees
-   - Kraken: 0.4% round-trip fees  
+   - Kraken: 0.4% round-trip fees
    - 3.5x more fees if master on Coinbase
 
 2. **Overtrading**

@@ -27,14 +27,14 @@ if __name__ == '__main__':
     print(f"Mode 1: Autonomous - Scans 732 markets every 2.5 minutes")
     print(f"Mode 2: TradingView Webhooks - Instant execution on alerts")
     print(f"{'='*70}\n")
-    
+
     # Run both services in parallel threads
     bot_thread = threading.Thread(target=run_autonomous_bot, daemon=True)
     webhook_thread = threading.Thread(target=run_webhook_service, daemon=True)
-    
+
     bot_thread.start()
     webhook_thread.start()
-    
+
     # Keep main thread alive
     try:
         while True:

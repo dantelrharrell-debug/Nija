@@ -2,8 +2,8 @@
 
 ## 🌐 ULTRA MODE - Elite Macro Intelligence
 
-**Version:** 1.0.0  
-**Status:** Production Ready  
+**Version:** 1.0.0
+**Status:** Production Ready
 **Date:** January 28, 2026
 
 ---
@@ -458,12 +458,12 @@ python -c "from bot.gmig import CrisisWarningSystem; cw = CrisisWarningSystem();
 
 GMIG is based on research from elite macro funds and academic studies:
 
-1. **Yield Curve Inversions:** 
+1. **Yield Curve Inversions:**
    - Estrella & Mishkin (1996) - "The Yield Curve as a Predictor of Recessions"
-   
+
 2. **Liquidity Stress:**
    - Brunnermeier & Pedersen (2009) - "Market Liquidity and Funding Liquidity"
-   
+
 3. **Crisis Detection:**
    - Reinhart & Rogoff (2009) - "This Time Is Different"
 

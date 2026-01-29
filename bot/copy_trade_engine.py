@@ -63,18 +63,18 @@ class CopyTradeResult:
 class CopyTradeEngine:
     """
     Engine that copies master trades to user accounts.
-    
+
     Runs in a background thread, consuming trade signals and replicating them to users.
-    
+
     Supports two modes:
     - Normal mode: Executes trades on user accounts
     - Observe mode: Tracks balances, positions, P&L but does NOT execute trades
     """
-    
+
     def __init__(self, multi_account_manager=None, observe_only=False):
         """
         Initialize the copy trade engine.
-        
+
         Args:
             multi_account_manager: MultiAccountBrokerManager instance (uses global if None)
             observe_only: If True, track signals but don't execute trades (observe mode)
@@ -88,7 +88,7 @@ class CopyTradeEngine:
         self._total_signals_observed = 0  # Track signals in observe mode
         self._lock = threading.Lock()
         self.observe_only = observe_only
-        
+
         # P2: Initialize trade ledger for copy trade map visibility
         try:
             from bot.trade_ledger_db import get_trade_ledger_db
@@ -100,7 +100,7 @@ class CopyTradeEngine:
             except ImportError:
                 logger.warning("⚠️  Trade ledger not available - copy trade visibility will be limited")
                 self.trade_ledger = None
-        
+
         logger.info("=" * 70)
         if observe_only:
             logger.info("🔄 COPY TRADE ENGINE INITIALIZED - OBSERVE MODE")
@@ -108,27 +108,27 @@ class CopyTradeEngine:
         else:
             logger.info("🔄 COPY TRADE ENGINE INITIALIZED")
         logger.info("=" * 70)
-    
+
     @property
     def active(self) -> bool:
         """
         Check if the copy trade engine is currently active/running.
-        
+
         Returns:
             bool: True if engine is running, False otherwise
         """
         return self._running
-    
+
     def start(self):
         """Start the copy trade engine in a background thread."""
         if self._running:
             logger.warning("⚠️  Copy trade engine already running")
             return
-        
+
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="CopyTradeEngine")
         self._thread.start()
-        
+
         logger.info("=" * 70)
         if self.observe_only:
             logger.info("✅ COPY TRADE ENGINE STARTED - OBSERVE MODE")
@@ -138,16 +138,16 @@ class CopyTradeEngine:
         logger.info("=" * 70)
         logger.info("   Listening for master trade signals...")
         logger.info("=" * 70)
-    
+
     def stop(self):
         """Stop the copy trade engine."""
         if not self._running:
             return
-        
+
         self._running = False
         if self._thread:
             self._thread.join(timeout=5.0)
-        
+
         logger.info("=" * 70)
         logger.info("🛑 COPY TRADE ENGINE STOPPED")
         logger.info("=" * 70)
@@ -157,25 +157,25 @@ class CopyTradeEngine:
             logger.info(f"   Total Trades Copied: {self._total_trades_copied}")
             logger.info(f"   Total Failures: {self._total_copy_failures}")
         logger.info("=" * 70)
-    
+
     def _run_loop(self):
         """Main loop that processes trade signals."""
         mode_str = "observe-only" if self.observe_only else "copy-trading"
         logger.info(f"📡 Copy engine thread started in {mode_str} mode, waiting for signals...")
-        
+
         while self._running:
             try:
                 # Wait for next signal (with timeout to allow checking _running flag)
                 signal = self.signal_emitter.get_signal(timeout=1.0)
-                
+
                 if signal is None:
                     # No signal available, continue waiting
                     continue
-                
+
                 # Determine signal type for enhanced logging
                 is_exit = signal.side.lower() == 'sell'
                 signal_type = "EXIT/PROFIT-TAKING" if is_exit else "ENTRY"
-                
+
                 # Process the signal
                 logger.info("=" * 70)
                 logger.info(f"🔔 RECEIVED MASTER {signal_type} SIGNAL")
@@ -188,12 +188,12 @@ class CopyTradeEngine:
                     logger.info(f"   ✅ PROFIT-TAKING: Master is exiting position")
                     logger.info(f"   📤 Users will exit simultaneously")
                 logger.info("=" * 70)
-                
+
                 if self.observe_only:
                     # OBSERVE MODE: Log signal but don't execute
                     with self._lock:
                         self._total_signals_observed += 1
-                    
+
                     logger.info("=" * 70)
                     logger.info("👁️  OBSERVE MODE - Signal Logged (NO TRADE EXECUTED)")
                     logger.info("=" * 70)
@@ -203,11 +203,11 @@ class CopyTradeEngine:
                 else:
                     # NORMAL MODE: Copy trade to all users
                     results = self.copy_trade_to_users(signal)
-                    
+
                     # Log results with enhanced details
                     successful = sum(1 for r in results if r.success)
                     failed = len(results) - successful
-                    
+
                     logger.info("=" * 70)
                     logger.info("📊 COPY TRADE EXECUTION SUMMARY")
                     logger.info("=" * 70)
@@ -230,27 +230,27 @@ class CopyTradeEngine:
                             if not r.success:
                                 logger.info(f"      • {r.user_id}: {r.error_message}")
                     logger.info("=" * 70)
-                
+
             except Exception as e:
                 logger.error(f"❌ Error in copy engine loop: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
                 time.sleep(1.0)  # Prevent tight error loop
-        
+
         logger.info("📡 Copy engine thread exiting...")
-    
+
     def copy_trade_to_users(self, signal: TradeSignal) -> List[CopyTradeResult]:
         """
         Copy a master trade to all active user accounts.
-        
+
         Args:
             signal: Trade signal from master account
-            
+
         Returns:
             List of CopyTradeResult objects, one per user
         """
         results: List[CopyTradeResult] = []
-        
+
         # Get broker type from signal
         broker_type_map = {
             'coinbase': BrokerType.COINBASE,
@@ -259,12 +259,12 @@ class CopyTradeEngine:
             'alpaca': BrokerType.ALPACA,
             'binance': BrokerType.BINANCE,
         }
-        
+
         broker_type = broker_type_map.get(signal.broker.lower())
         if broker_type is None:
             logger.error(f"❌ Unknown broker type: {signal.broker}")
             return results
-        
+
         # 🔥 CRITICAL: VALIDATE MASTER REQUIREMENTS (non-negotiable)
         # Copy trading will NOT work unless ALL 4 master requirements are met:
         # 1. MASTER PRO_MODE=true
@@ -280,7 +280,7 @@ class CopyTradeEngine:
                 logger.error(f"Failed to import copy trading requirements module: {e}")
                 logger.error("Cannot validate copy trading requirements - blocking all copy trades")
                 return results
-        
+
         master_reqs = check_master_requirements(self.multi_account_manager)
         if not master_reqs.all_met():
             unmet = master_reqs.get_unmet_requirements()
@@ -301,7 +301,7 @@ class CopyTradeEngine:
             logger.warning("      KRAKEN_MASTER_API_SECRET=<secret>")
             logger.warning("=" * 70)
             return results  # Block copy trading when master requirements not met
-        
+
         # ✅ FIX 5: Copy Trading Should Be Optional
         # CRITICAL CHECK: Verify master account is still connected before copying
         # When master is offline, copy trading is disabled but users can still:
@@ -320,10 +320,10 @@ class CopyTradeEngine:
             logger.warning(f"   ℹ️  Copy trading will resume when MASTER reconnects")
             logger.warning("=" * 70)
             return results  # Skip copy trading when master offline (users trade independently)
-        
+
         # Get all user accounts for this broker
         user_brokers = self.multi_account_manager.user_brokers
-        
+
         if not user_brokers:
             logger.warning("=" * 70)
             logger.warning("⚠️  NO USER ACCOUNTS CONFIGURED")
@@ -333,17 +333,17 @@ class CopyTradeEngine:
             logger.warning("   💡 To enable copy trading, add user accounts in config/users/")
             logger.warning("=" * 70)
             return results
-        
+
         logger.info("=" * 70)
         logger.info(f"🔄 COPY TRADING: Processing {len(user_brokers)} user account(s)")
         logger.info("=" * 70)
-        
+
         # Process each user account
         for user_id, user_broker_dict in user_brokers.items():
             # Check if user has this broker type
             if broker_type not in user_broker_dict:
                 logger.debug(f"   ⏭️  {user_id}: No {signal.broker} account configured")
-                
+
                 # P2: Record skipped trade in trade map
                 if self.trade_ledger:
                     try:
@@ -358,15 +358,15 @@ class CopyTradeEngine:
                         )
                     except Exception as ledger_err:
                         logger.debug(f"Could not record skipped trade: {ledger_err}")
-                
+
                 continue
-            
+
             user_broker = user_broker_dict[broker_type]
-            
+
             # Check if broker is connected
             if not user_broker.connected:
                 logger.warning(f"   ⚠️  {user_id}: {signal.broker} not connected - skipping")
-                
+
                 # P2: Record skipped trade in trade map
                 if self.trade_ledger:
                     try:
@@ -381,7 +381,7 @@ class CopyTradeEngine:
                         )
                     except Exception as ledger_err:
                         logger.debug(f"Could not record skipped trade: {ledger_err}")
-                
+
                 results.append(CopyTradeResult(
                     user_id=user_id,
                     success=False,
@@ -391,7 +391,7 @@ class CopyTradeEngine:
                     size_type=signal.size_type
                 ))
                 continue
-            
+
             # Copy trade to this user
             result = self._copy_to_single_user(
                 user_id=user_id,
@@ -399,9 +399,9 @@ class CopyTradeEngine:
                 signal=signal
             )
             results.append(result)
-        
+
         return results
-    
+
     def _copy_to_single_user(
         self,
         user_id: str,
@@ -410,18 +410,18 @@ class CopyTradeEngine:
     ) -> CopyTradeResult:
         """
         Copy a trade to a single user account.
-        
+
         Args:
             user_id: User identifier
             user_broker: User's broker instance
             signal: Trade signal to copy
-            
+
         Returns:
             CopyTradeResult with execution details
         """
         try:
             logger.info(f"   🔄 Copying to user: {user_id}")
-            
+
             # Get user account balance
             balance_data = user_broker.get_account_balance()
             if not balance_data:
@@ -437,11 +437,11 @@ class CopyTradeEngine:
                     size=0,
                     size_type=signal.size_type
                 )
-            
+
             user_balance = balance_data.get('trading_balance', 0.0)
             logger.info(f"      User Balance: ${user_balance:.2f}")
             logger.info(f"      Master Balance: ${signal.master_balance:.2f}")
-            
+
             # 🔥 CRITICAL: VALIDATE USER REQUIREMENTS (non-negotiable)
             # User will NOT receive copy trades unless ALL 5 requirements are met:
             # 1. USER PRO_MODE=true
@@ -465,20 +465,20 @@ class CopyTradeEngine:
                         size=0,
                         size_type=signal.size_type
                     )
-            
+
             # Get copy_from_master setting from user config
             # Default to True if not specified
             copy_from_master = True
             if hasattr(user_broker, 'copy_from_master'):
                 copy_from_master = user_broker.copy_from_master
-            
+
             user_reqs = check_user_requirements(
                 user_id=user_id,
                 user_balance=user_balance,
                 user_broker=user_broker,
                 copy_from_master=copy_from_master
             )
-            
+
             if not user_reqs.all_met():
                 unmet = user_reqs.get_unmet_requirements()
                 error_msg = f"User requirements not met: {', '.join(unmet)}"
@@ -498,7 +498,7 @@ class CopyTradeEngine:
                 logger.warning("         3. Ensure account balance meets tier minimum")
                 logger.warning("         4. Check user config: copy_from_master=true")
                 logger.warning("      " + "=" * 50)
-                
+
                 # P2: Record blocked trade in trade map
                 if self.trade_ledger:
                     try:
@@ -513,7 +513,7 @@ class CopyTradeEngine:
                         )
                     except Exception as ledger_err:
                         logger.debug(f"Could not record blocked trade: {ledger_err}")
-                
+
                 return CopyTradeResult(
                     user_id=user_id,
                     success=False,
@@ -522,7 +522,7 @@ class CopyTradeEngine:
                     size=0,
                     size_type=signal.size_type
                 )
-            
+
             # Calculate scaled position size for user
             sizing_result = calculate_user_position_size(
                 master_size=signal.size,
@@ -531,7 +531,7 @@ class CopyTradeEngine:
                 size_type=signal.size_type,
                 symbol=signal.symbol
             )
-            
+
             if not sizing_result['valid']:
                 error_msg = sizing_result['reason']
                 logger.warning(f"      ⚠️  Position sizing failed: {error_msg}")
@@ -543,34 +543,34 @@ class CopyTradeEngine:
                     size=sizing_result['size'],
                     size_type=signal.size_type
                 )
-            
+
             user_size = sizing_result['size']
             scale_factor = sizing_result['scale_factor']
-            
+
             # Round to exchange precision
             user_size_rounded = round_to_exchange_precision(
                 size=user_size,
                 symbol=signal.symbol,
                 size_type=signal.size_type
             )
-            
+
             # ✅ FIX: Normalize symbol for broker if needed
             normalized_symbol = signal.symbol
             if normalize_symbol and signal.broker.lower() == 'kraken':
                 normalized_symbol = normalize_symbol(signal.symbol, 'kraken')
                 if normalized_symbol != signal.symbol:
                     logger.info(f"      Symbol normalized: {signal.symbol} → {normalized_symbol}")
-            
+
             logger.info(f"      Calculated Size: {user_size_rounded} ({signal.size_type})")
             logger.info(f"      Scale Factor: {scale_factor:.4f} ({scale_factor*100:.2f}%)")
-            
+
             # ✅ FIX (MANDATORY): Check if position size is dust (< $1.00 USD)
             # Skip copy trade if the calculated size is below dust threshold
             # Note: For base currency (e.g., BTC), broker validation will catch dust positions
             # since we cannot determine USD value without current price here
             if signal.size_type == 'quote':  # USD value
                 position_usd_value = user_size_rounded
-                
+
                 if is_dust_position and is_dust_position(position_usd_value):
                     error_msg = f"Position size ${position_usd_value:.4f} below dust threshold ${DUST_THRESHOLD_USD}"
                     logger.warning(f"      ⚠️  Skipping dust position: {error_msg}")
@@ -582,28 +582,28 @@ class CopyTradeEngine:
                         size=user_size_rounded,
                         size_type=signal.size_type
                     )
-            
+
             # Place order on user's exchange
             logger.info(f"      📤 Placing {signal.side.upper()} order...")
-            
+
             order_result = user_broker.execute_order(
                 symbol=normalized_symbol,  # Use normalized symbol
                 side=signal.side,
                 quantity=user_size_rounded,
                 size_type=signal.size_type
             )
-            
+
             # Check if order was successful
             # P1: Verify order has FILLED or PARTIALLY_FILLED status
             # This is the second layer of defense after signal emission guard
             order_status = order_result.get('status', 'unknown') if order_result else 'no_response'
-            
+
             # P1 ENFORCEMENT: Only accept filled orders, not pending/approved signals
             # Consistent with emit_trade_signal() guard which only allows FILLED/PARTIALLY_FILLED
             if order_result and order_status in ['filled', 'FILLED', 'partially_filled', 'PARTIALLY_FILLED']:
                 order_id = order_result.get('order_id', order_result.get('id', 'unknown'))
                 broker_name = signal.broker.upper()
-                
+
                 logger.info("      " + "=" * 50)
                 logger.info("      🟢 COPY TRADE SUCCESS")
                 logger.info("      " + "=" * 50)
@@ -616,10 +616,10 @@ class CopyTradeEngine:
                 logger.info(f"      Size: {user_size_rounded} ({signal.size_type})")
                 logger.info(f"      Order Status: {order_status}")
                 logger.info("      " + "=" * 50)
-                
+
                 with self._lock:
                     self._total_trades_copied += 1
-                
+
                 # P2: Record copy trade result in trade map for visibility
                 if self.trade_ledger:
                     try:
@@ -635,7 +635,7 @@ class CopyTradeEngine:
                         )
                     except Exception as ledger_err:
                         logger.warning(f"      ⚠️  Could not record copy trade in map: {ledger_err}")
-                
+
                 return CopyTradeResult(
                     user_id=user_id,
                     success=True,
@@ -654,10 +654,10 @@ class CopyTradeEngine:
                 logger.error(f"      Error: {error_msg}")
                 logger.error(f"      Order Status: {order_status}")
                 logger.error("      " + "=" * 50)
-                
+
                 with self._lock:
                     self._total_copy_failures += 1
-                
+
                 # P2: Record copy trade failure in trade map
                 if self.trade_ledger:
                     try:
@@ -673,7 +673,7 @@ class CopyTradeEngine:
                         )
                     except Exception as ledger_err:
                         logger.warning(f"      ⚠️  Could not record copy trade in map: {ledger_err}")
-                
+
                 return CopyTradeResult(
                     user_id=user_id,
                     success=False,
@@ -682,16 +682,16 @@ class CopyTradeEngine:
                     size=user_size_rounded,
                     size_type=signal.size_type
                 )
-                
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"      ❌ Exception copying to {user_id}: {error_msg}")
             import traceback
             logger.error(traceback.format_exc())
-            
+
             with self._lock:
                 self._total_copy_failures += 1
-            
+
             return CopyTradeResult(
                 user_id=user_id,
                 success=False,
@@ -700,7 +700,7 @@ class CopyTradeEngine:
                 size=0,
                 size_type=signal.size_type
             )
-    
+
     def get_stats(self) -> Dict:
         """Get statistics about copy trading."""
         with self._lock:
@@ -709,13 +709,13 @@ class CopyTradeEngine:
                 'observe_only': self.observe_only,
                 'signal_queue_stats': self.signal_emitter.get_stats()
             }
-            
+
             if self.observe_only:
                 stats['total_signals_observed'] = self._total_signals_observed
             else:
                 stats['total_trades_copied'] = self._total_trades_copied
                 stats['total_failures'] = self._total_copy_failures
-            
+
             return stats
 
 
@@ -726,10 +726,10 @@ _copy_engine: Optional[CopyTradeEngine] = None
 def get_copy_engine(observe_only: bool = False) -> CopyTradeEngine:
     """
     Get the global copy trade engine instance (singleton pattern).
-    
+
     Args:
         observe_only: If True, engine runs in observe mode (no trades executed)
-    
+
     Returns:
         Global CopyTradeEngine instance
     """
@@ -742,7 +742,7 @@ def get_copy_engine(observe_only: bool = False) -> CopyTradeEngine:
 def start_copy_engine(observe_only: bool = False):
     """
     Start the global copy trade engine.
-    
+
     Args:
         observe_only: If True, engine runs in observe mode (no trades executed)
     """

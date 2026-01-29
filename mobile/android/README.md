@@ -53,7 +53,7 @@ Required permissions for the NIJA app:
     android:theme="@style/AppTheme"
     android:usesCleartextTraffic="false"
     android:networkSecurityConfig="@xml/network_security_config">
-    
+
     <!-- Main Activity -->
     <activity
         android:name=".MainActivity"
@@ -62,13 +62,13 @@ Required permissions for the NIJA app:
         android:launchMode="singleTask"
         android:theme="@style/AppTheme.NoActionBarLaunch"
         android:exported="true">
-        
+
         <intent-filter>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
     </activity>
-    
+
     <!-- Firebase Cloud Messaging -->
     <service
         android:name=".FirebaseMessagingService"
@@ -92,7 +92,7 @@ Create `app/src/main/res/xml/network_security_config.xml`:
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-    
+
     <!-- For development only - remove in production -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">localhost</domain>
@@ -131,7 +131,7 @@ android {
         versionCode 1
         versionName "1.0.0"
     }
-    
+
     buildTypes {
         release {
             minifyEnabled true
@@ -139,7 +139,7 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
-    
+
     signingConfigs {
         release {
             storeFile file(System.getenv("ANDROID_KEYSTORE_PATH") ?: "release.keystore")

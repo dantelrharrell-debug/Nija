@@ -1,7 +1,7 @@
 # Security Summary - Filter Relaxation Changes
 
-**Date:** January 26, 2026  
-**Pull Request:** Fix trading bot not finding signals - Relax filter thresholds  
+**Date:** January 26, 2026
+**Pull Request:** Fix trading bot not finding signals - Relax filter thresholds
 **Branch:** copilot/fix-no-trades-issue
 
 ## Security Scan Results
@@ -148,7 +148,7 @@ The primary considerations are **trading performance and risk management**, whic
 
 ---
 
-**Reviewed by:** GitHub Copilot Agent  
-**Security Scan:** CodeQL (Python)  
-**Date:** January 26, 2026  
+**Reviewed by:** GitHub Copilot Agent
+**Security Scan:** CodeQL (Python)
+**Date:** January 26, 2026
 **Status:** ✅ No vulnerabilities found

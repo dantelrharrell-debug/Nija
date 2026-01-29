@@ -69,9 +69,9 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.2);
             margin-bottom: 20px;
         }
-        .card h2 { 
-            font-size: 18px; 
-            margin-bottom: 15px; 
+        .card h2 {
+            font-size: 18px;
+            margin-bottom: 15px;
             color: #1d9bf0;
             display: flex;
             justify-content: space-between;
@@ -261,7 +261,7 @@
                     </button>
                 </div>
             </h2>
-            
+
             <div class="filters">
                 <input type="text" class="filter-input" id="filter-symbol-open" placeholder="Filter by symbol...">
                 <select class="filter-input" id="filter-user-open">
@@ -285,7 +285,7 @@
                     </button>
                 </div>
             </h2>
-            
+
             <div class="filters">
                 <input type="text" class="filter-input" id="filter-symbol-history" placeholder="Filter by symbol...">
                 <select class="filter-input" id="filter-user-history">
@@ -309,7 +309,7 @@
                     </button>
                 </div>
             </h2>
-            
+
             <div class="filters">
                 <input type="text" class="filter-input" id="filter-symbol-ledger" placeholder="Filter by symbol...">
                 <select class="filter-input" id="filter-user-ledger">
@@ -330,18 +330,18 @@
         // Switch between tabs
         function switchTab(tab) {
             currentTab = tab;
-            
+
             // Update button states
             document.querySelectorAll('.tab-button').forEach(btn => {
                 btn.classList.remove('active');
             });
             event.target.classList.add('active');
-            
+
             // Show/hide cards
             document.getElementById('open-positions-card').style.display = tab === 'open' ? 'block' : 'none';
             document.getElementById('trade-history-card').style.display = tab === 'history' ? 'block' : 'none';
             document.getElementById('raw-ledger-card').style.display = tab === 'ledger' ? 'block' : 'none';
-            
+
             // Load data for the selected tab
             if (tab === 'open') loadOpenPositions();
             else if (tab === 'history') loadTradeHistory();
@@ -353,17 +353,17 @@
             try {
                 const response = await fetch('/api/trades/statistics');
                 const data = await response.json();
-                
+
                 const stats = data.statistics;
-                
+
                 document.getElementById('stat-total-trades').textContent = stats.total_trades || 0;
                 document.getElementById('stat-win-rate').textContent = (stats.win_rate || 0).toFixed(1) + '%';
-                
+
                 const totalPnl = stats.total_pnl || 0;
                 const pnlElement = document.getElementById('stat-total-pnl');
                 pnlElement.textContent = '$' + totalPnl.toFixed(2);
                 pnlElement.className = 'stat-value ' + (totalPnl >= 0 ? 'positive' : 'negative');
-                
+
                 document.getElementById('stat-open-positions').textContent = stats.open_positions || 0;
                 document.getElementById('stat-total-fees').textContent = '$' + (stats.total_fees || 0).toFixed(2);
                 document.getElementById('stat-best-trade').textContent = '$' + (stats.best_trade || 0).toFixed(2);
@@ -377,23 +377,23 @@
             try {
                 const symbol = document.getElementById('filter-symbol-open')?.value || '';
                 const userId = document.getElementById('filter-user-open')?.value || '';
-                
+
                 let url = '/api/positions/open?';
                 if (symbol) url += `symbol=${symbol}&`;
                 if (userId) url += `user_id=${userId}&`;
-                
+
                 const response = await fetch(url);
                 const data = await response.json();
-                
+
                 const container = document.getElementById('open-positions-content');
-                
+
                 if (data.positions && data.positions.length > 0) {
                     let html = '<table><thead><tr>';
                     html += '<th>Symbol</th><th>Side</th><th>Entry Price</th><th>Quantity</th>';
                     html += '<th>Size (USD)</th><th>Stop Loss</th><th>Take Profit</th>';
                     html += '<th>Entry Time</th><th>User</th>';
                     html += '</tr></thead><tbody>';
-                    
+
                     data.positions.forEach(pos => {
                         const sideClass = pos.side.toLowerCase() === 'long' ? 'badge-long' : 'badge-short';
                         html += '<tr>';
@@ -408,7 +408,7 @@
                         html += `<td>${pos.user_id}</td>`;
                         html += '</tr>';
                     });
-                    
+
                     html += '</tbody></table>';
                     container.innerHTML = html;
                 } else {
@@ -416,7 +416,7 @@
                 }
             } catch (error) {
                 console.error('Error loading open positions:', error);
-                document.getElementById('open-positions-content').innerHTML = 
+                document.getElementById('open-positions-content').innerHTML =
                     '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Error loading positions</p></div>';
             }
         }
@@ -426,28 +426,28 @@
             try {
                 const symbol = document.getElementById('filter-symbol-history')?.value || '';
                 const userId = document.getElementById('filter-user-history')?.value || '';
-                
+
                 let url = '/api/trades/history?limit=50&';
                 if (symbol) url += `symbol=${symbol}&`;
                 if (userId) url += `user_id=${userId}&`;
-                
+
                 const response = await fetch(url);
                 const data = await response.json();
-                
+
                 const container = document.getElementById('trade-history-content');
-                
+
                 if (data.trades && data.trades.length > 0) {
                     let html = '<table><thead><tr>';
                     html += '<th>Symbol</th><th>Side</th><th>Entry Price</th><th>Exit Price</th>';
                     html += '<th>Size (USD)</th><th>Net P&L</th><th>P&L %</th>';
                     html += '<th>Duration</th><th>Exit Reason</th><th>Exit Time</th>';
                     html += '</tr></thead><tbody>';
-                    
+
                     data.trades.forEach(trade => {
                         const sideClass = trade.side.toLowerCase() === 'long' ? 'badge-long' : 'badge-short';
                         const pnlClass = trade.net_profit >= 0 ? 'positive' : 'negative';
                         const duration = formatDuration(trade.duration_seconds);
-                        
+
                         html += '<tr>';
                         html += `<td><strong>${trade.symbol}</strong></td>`;
                         html += `<td><span class="badge ${sideClass}">${trade.side}</span></td>`;
@@ -461,7 +461,7 @@
                         html += `<td>${new Date(trade.exit_time).toLocaleString()}</td>`;
                         html += '</tr>';
                     });
-                    
+
                     html += '</tbody></table>';
                     container.innerHTML = html;
                 } else {
@@ -469,7 +469,7 @@
                 }
             } catch (error) {
                 console.error('Error loading trade history:', error);
-                document.getElementById('trade-history-content').innerHTML = 
+                document.getElementById('trade-history-content').innerHTML =
                     '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Error loading history</p></div>';
             }
         }
@@ -479,25 +479,25 @@
             try {
                 const symbol = document.getElementById('filter-symbol-ledger')?.value || '';
                 const userId = document.getElementById('filter-user-ledger')?.value || '';
-                
+
                 let url = '/api/trades/ledger?limit=100&';
                 if (symbol) url += `symbol=${symbol}&`;
                 if (userId) url += `user_id=${userId}&`;
-                
+
                 const response = await fetch(url);
                 const data = await response.json();
-                
+
                 const container = document.getElementById('raw-ledger-content');
-                
+
                 if (data.transactions && data.transactions.length > 0) {
                     let html = '<table><thead><tr>';
                     html += '<th>Timestamp</th><th>Symbol</th><th>Side</th><th>Action</th>';
                     html += '<th>Price</th><th>Quantity</th><th>Size (USD)</th><th>Fee</th><th>User</th>';
                     html += '</tr></thead><tbody>';
-                    
+
                     data.transactions.forEach(tx => {
                         const sideClass = tx.side === 'BUY' ? 'badge-buy' : 'badge-sell';
-                        
+
                         html += '<tr>';
                         html += `<td>${new Date(tx.timestamp).toLocaleString()}</td>`;
                         html += `<td><strong>${tx.symbol}</strong></td>`;
@@ -510,7 +510,7 @@
                         html += `<td>${tx.user_id}</td>`;
                         html += '</tr>';
                     });
-                    
+
                     html += '</tbody></table>';
                     container.innerHTML = html;
                 } else {
@@ -518,7 +518,7 @@
                 }
             } catch (error) {
                 console.error('Error loading ledger:', error);
-                document.getElementById('raw-ledger-content').innerHTML = 
+                document.getElementById('raw-ledger-content').innerHTML =
                     '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Error loading ledger</p></div>';
             }
         }
@@ -544,7 +544,7 @@
                 'filter-symbol-history', 'filter-user-history',
                 'filter-symbol-ledger', 'filter-user-ledger'
             ];
-            
+
             filters.forEach(id => {
                 const element = document.getElementById(id);
                 if (element) {

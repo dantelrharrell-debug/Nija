@@ -108,9 +108,9 @@ def select_primary_master_broker(self):
     if not self.active_broker:
         logger.warning("⚠️ No primary broker set")
         return
-    
+
     current_primary = self.active_broker.broker_type.value.upper()
-    
+
     if self.active_broker.exit_only_mode:
         # Try to promote Kraken
         if BrokerType.KRAKEN in self.brokers:
@@ -134,7 +134,7 @@ def select_primary_master_broker(self):
 def select_primary_master_broker(self):
     """
     FIX #2: Make Kraken the PRIMARY broker for entries when Coinbase is exit_only.
-    
+
     Priority rules:
     1. If Coinbase is in exit_only mode → Kraken becomes PRIMARY for all new entries
     2. Coinbase exists ONLY for: Emergency exits, Position closures, Legacy compatibility
@@ -142,15 +142,15 @@ def select_primary_master_broker(self):
     if not self.active_broker:
         logger.warning("⚠️ No primary broker set")
         return
-    
+
     current_primary = self.active_broker.broker_type.value.upper()
-    
+
     # FIX #2: Check if Coinbase is in exit_only mode (Kraken becomes PRIMARY)
     if self.active_broker.exit_only_mode:
         should_promote_kraken = True
         promotion_reason = f"{current_primary} in EXIT-ONLY mode"
         logger.info(f"🔍 {current_primary} is in EXIT_ONLY mode → Kraken will become PRIMARY")
-        
+
         if BrokerType.KRAKEN in self.brokers:
             kraken = self.brokers[BrokerType.KRAKEN]
             if kraken.connected and not kraken.exit_only_mode:

@@ -454,7 +454,7 @@ export default function TradingDashboard() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>NIJA Trading Dashboard</Text>
-      
+
       {balance && (
         <View style={styles.balanceCard}>
           <Text style={styles.label}>Balance</Text>
@@ -606,15 +606,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 class NijaApiClient {
   // Default to production URL, override via constructor
   final String baseUrl;
-  
+
   NijaApiClient({
     this.baseUrl = 'https://your-nija-deployment.railway.app'
   });
-  
+
   Future<Map<String, String>> _getHeaders() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('jwt_token') ?? '';
-    
+
     return {
       'Content-Type': 'application/json',
       if (token.isNotEmpty) 'Authorization': 'Bearer $token',
@@ -628,7 +628,7 @@ class NijaApiClient {
       headers: headers,
       body: json.encode({}),
     );
-    
+
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
@@ -643,7 +643,7 @@ class NijaApiClient {
       headers: headers,
       body: json.encode({}),
     );
-    
+
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
@@ -657,7 +657,7 @@ class NijaApiClient {
       Uri.parse('$baseUrl/api/v1/balance'),
       headers: headers,
     );
-    
+
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
@@ -671,7 +671,7 @@ class NijaApiClient {
       Uri.parse('$baseUrl/api/v1/positions'),
       headers: headers,
     );
-    
+
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
@@ -685,7 +685,7 @@ class NijaApiClient {
       Uri.parse('$baseUrl/api/v1/performance?period=$period'),
       headers: headers,
     );
-    
+
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
@@ -761,6 +761,6 @@ For issues or questions:
 
 ---
 
-**Version**: 1.0.0  
-**Strategy**: v7.2 (Locked - Profitability Mode)  
+**Version**: 1.0.0
+**Strategy**: v7.2 (Locked - Profitability Mode)
 **Last Updated**: January 27, 2026

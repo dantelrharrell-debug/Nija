@@ -120,7 +120,7 @@ VOLUME_MIN_THRESHOLD = 0.8     # 80% of average = minimum acceptable
 MOMENTUM_CONFIG = {
     'name': 'momentum',
     'description': 'RSI + MACD + Stochastic momentum strategy for trending markets',
-    
+
     # Entry conditions (all must be true)
     'entry_conditions': {
         'min_adx': 25,                    # Strong trend required
@@ -131,7 +131,7 @@ MOMENTUM_CONFIG = {
         'volume_surge': True,             # Volume confirmation
         'min_score': 7                    # High confidence required
     },
-    
+
     # Exit conditions
     'exit_conditions': {
         'opposite_signal': True,          # Exit on opposite entry signal
@@ -139,7 +139,7 @@ MOMENTUM_CONFIG = {
         'profit_target_pct': 2.0,         # 2% profit target
         'max_hold_minutes': 120           # Max 2 hours hold time
     },
-    
+
     # Position sizing
     'position_size': {
         'base_pct': 0.10,                 # 10% of capital base
@@ -156,7 +156,7 @@ MOMENTUM_CONFIG = {
 MEAN_REVERSION_CONFIG = {
     'name': 'mean_reversion',
     'description': 'Bollinger Bands + RSI mean reversion for ranging markets',
-    
+
     # Entry conditions
     'entry_conditions': {
         'max_adx': 20,                         # Weak trend (ranging)
@@ -165,7 +165,7 @@ MEAN_REVERSION_CONFIG = {
         'stochastic_extreme': True,            # Stochastic confirming
         'min_score': 5                         # Medium confidence acceptable
     },
-    
+
     # Exit conditions
     'exit_conditions': {
         'return_to_mean': True,                # Exit at middle Bollinger Band
@@ -173,7 +173,7 @@ MEAN_REVERSION_CONFIG = {
         'profit_target_pct': 1.5,              # 1.5% profit target (smaller than momentum)
         'max_hold_minutes': 60                 # Max 1 hour hold time
     },
-    
+
     # Position sizing
     'position_size': {
         'base_pct': 0.08,                      # 8% of capital base (more conservative)
@@ -191,7 +191,7 @@ SCALPING_CONFIG = {
     'name': 'scalping',
     'description': 'Ultra-fast scalping for high-liquidity pairs',
     'enabled': False,  # Disabled by default - requires opt-in
-    
+
     # Entry conditions (very tight)
     'entry_conditions': {
         'min_liquidity': 1000000,              # $1M+ daily volume required
@@ -199,21 +199,21 @@ SCALPING_CONFIG = {
         'momentum_confirmation': True,          # Quick momentum spike
         'min_score': 8                         # Very high confidence
     },
-    
+
     # Exit conditions (very tight)
     'exit_conditions': {
         'profit_target_pct': 0.3,              # 0.3% profit target
         'stop_loss_pct': 0.2,                  # 0.2% stop loss
         'max_hold_seconds': 180                # Max 3 minutes hold
     },
-    
+
     # Position sizing
     'position_size': {
         'base_pct': 0.05,                      # 5% of capital (very conservative)
         'max_pct': 0.10,                       # 10% maximum
         'fee_adjusted': True                   # Account for trading fees
     },
-    
+
     # Risk management
     'risk_management': {
         'max_trades_per_hour': 20,             # Limit overtrading
@@ -231,12 +231,12 @@ RISK_CONFIG = {
     'max_risk_per_trade_pct': 2.0,         # Never risk more than 2% per trade
     'max_position_size_pct': 20.0,          # Never exceed 20% of capital
     'min_position_size_usd': 2.0,           # Minimum $2 position
-    
+
     # Portfolio risk limits
     'max_total_exposure_pct': 50.0,         # Max 50% of capital in positions
     'max_concurrent_positions': 5,          # Max 5 positions at once
     'min_reserve_pct': 10.0,                # Keep 10% cash reserve
-    
+
     # Stop loss settings
     'use_atr_stop_loss': True,              # Use ATR-based dynamic stops
     'atr_multiplier': 2.0,                  # 2x ATR for stop loss
@@ -244,11 +244,11 @@ RISK_CONFIG = {
     'trailing_stop_enabled': True,          # Use trailing stops
     'trailing_stop_activation_pct': 1.0,    # Activate after 1% profit
     'trailing_stop_distance_pct': 0.5,      # Trail 0.5% below peak
-    
+
     # Time-based exits
     'max_losing_hold_minutes': 15,          # Exit losing trades after 15 min
     'max_winning_hold_hours': 4,            # Exit winning trades after 4 hours
-    
+
     # Emergency controls
     'emergency_liquidation_enabled': True,  # Emergency liquidation on extreme moves
     'emergency_loss_threshold_pct': 5.0,    # Liquidate if position down 5%
@@ -280,7 +280,7 @@ PERFORMANCE_TARGETS = {
     'target_profit_factor': 2.5,            # Win $ / Loss $ ratio
     'target_daily_return_pct': 1.5,         # 1.5% daily return
     'target_monthly_return_pct': 25.0,      # 25% monthly return
-    
+
     # Optimistic estimates (all enhancements)
     'optimal_win_rate': 0.80,               # 80% win rate optimal
     'optimal_avg_win_pct': 2.5,             # 2.5% average win

@@ -125,19 +125,19 @@ TRADE EXECUTED                   ← Actual trades happening
 ## 🎯 SUCCESS CRITERIA
 
 ### Short-Term (24 hours)
-✅ Signals generating (>0 per cycle)  
-✅ Trades executing (>10 in 24hrs)  
-✅ Balance stable or growing  
+✅ Signals generating (>0 per cycle)
+✅ Trades executing (>10 in 24hrs)
+✅ Balance stable or growing
 
 ### Medium-Term (1 week)
-✅ Win rate >40%  
-✅ Net P&L positive or break-even  
-✅ System running smoothly  
+✅ Win rate >40%
+✅ Net P&L positive or break-even
+✅ System running smoothly
 
 ### Long-Term (1 month)
-✅ Win rate >50%  
-✅ Consistent profitability  
-✅ Balance growing steadily  
+✅ Win rate >50%
+✅ Consistent profitability
+✅ Balance growing steadily
 
 ---
 
@@ -147,7 +147,7 @@ TRADE EXECUTED                   ← Actual trades happening
 1. **bot/nija_apex_strategy_v71.py**
    - Updated 7 filter thresholds
    - Fixed log message to show correct values
-   
+
 2. **bot/enhanced_entry_scoring.py**
    - Updated min_score_threshold: 75 → 50
    - Updated excellent_score_threshold: 85 → 70
@@ -156,7 +156,7 @@ TRADE EXECUTED                   ← Actual trades happening
 3. **EMERGENCY_FILTER_RELAXATION_JAN_29_2026_V4.md**
    - Complete technical documentation (12KB)
    - Historical context and rollback plan
-   
+
 4. **MONITORING_GUIDE_V4_RELAXATION.md**
    - Quick reference for monitoring (5KB)
    - What to watch and when to act
@@ -236,7 +236,7 @@ Then restart the bot.
 
 - **Full Documentation**: `EMERGENCY_FILTER_RELAXATION_JAN_29_2026_V4.md`
 - **Monitoring Guide**: `MONITORING_GUIDE_V4_RELAXATION.md`
-- **Previous Attempts**: 
+- **Previous Attempts**:
   - `EMERGENCY_FILTER_RELAXATION_JAN_29_2026.md` (Third relaxation)
   - `PROFITABILITY_FIX_JAN_27_2026.md` (Profit target fixes)
 
@@ -244,20 +244,20 @@ Then restart the bot.
 
 ## ⚡ TL;DR (Too Long; Didn't Read)
 
-**Problem**: Bot finding 0 signals → losing money  
-**Cause**: Filters too strict (even after 3 relaxations)  
-**Fix**: Lowered ALL filter thresholds aggressively  
-**Result**: Should see 3-8 signals per cycle now  
-**Risk**: Lower quality trades (50/100 vs 75/100)  
-**Monitor**: Win rate must stay >40% or rollback  
-**Files**: 2 code files changed, 2 docs added  
-**Action**: Deploy and watch logs for 6 hours  
+**Problem**: Bot finding 0 signals → losing money
+**Cause**: Filters too strict (even after 3 relaxations)
+**Fix**: Lowered ALL filter thresholds aggressively
+**Result**: Should see 3-8 signals per cycle now
+**Risk**: Lower quality trades (50/100 vs 75/100)
+**Monitor**: Win rate must stay >40% or rollback
+**Files**: 2 code files changed, 2 docs added
+**Action**: Deploy and watch logs for 6 hours
 
 ---
 
-**Status**: ✅ READY FOR DEPLOYMENT  
-**Priority**: 🚨 CRITICAL  
-**Date**: January 29, 2026  
+**Status**: ✅ READY FOR DEPLOYMENT
+**Priority**: 🚨 CRITICAL
+**Date**: January 29, 2026
 **Branch**: copilot/fix-kraken-balance-check
 
 *Your bot should start trading again within the next cycle (2.5 minutes). Monitor closely and adjust as needed.*

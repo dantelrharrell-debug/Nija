@@ -343,6 +343,6 @@ A: Set `min_reserve_pct=0.0`, but this is risky and not recommended.
 ## See Also
 
 - `TRADE_SIZE_TUNING_GUIDE.md` - Position sizing strategies
-- `RISK_PROFILES_GUIDE.md` - Risk management guidelines  
+- `RISK_PROFILES_GUIDE.md` - Risk management guidelines
 - `USER_BALANCE_GUIDE.md` - Account balance management
 - `portfolio_state.py` - Source code documentation
