@@ -50,9 +50,11 @@ class EnhancedEntryScorer:
         self.config = config or {}
         
         # Score thresholds (out of 100)
-        # PROFITABILITY FIX (Jan 26, 2026): Increased from 60 to 75 to filter out marginal trades
-        self.min_score_threshold = self.config.get('min_score_threshold', 75)  # Minimum to enter trade
-        self.excellent_score_threshold = self.config.get('excellent_score_threshold', 85)  # Excellent setup
+        # EMERGENCY RELAXATION (Jan 29, 2026): Bot finding ZERO signals with 75/100 threshold
+        # Balance: $52.70 and dropping - CRITICAL need for signal generation
+        # Strategy: Lower threshold to 50/100, monitor quality, increase if win rate < 40%
+        self.min_score_threshold = self.config.get('min_score_threshold', 50)  # EMERGENCY: Lowered from 75 to 50 to re-enable trading
+        self.excellent_score_threshold = self.config.get('excellent_score_threshold', 70)  # Lowered from 85 to 70
         
         # Weights for different factors (must sum to 100)
         self.weights = {

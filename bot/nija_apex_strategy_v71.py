@@ -58,10 +58,11 @@ except ImportError:
 # Broker-specific minimum position sizes (Jan 24, 2026)
 KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exchange rules
 
-# Trade quality thresholds (Jan 26, 2026)
-# PROFITABILITY FIX: Increased thresholds to only take high-quality trades
-# Previous: 0.60 confidence allowed too many marginal trades that resulted in losses
-MIN_CONFIDENCE = 0.75  # Minimum confidence score (0.0-1.0) to execute trade - INCREASED for profitability
+# Trade quality thresholds (Jan 29, 2026 - EMERGENCY RELAXATION)
+# CRITICAL ISSUE: 0.75 confidence threshold blocking ALL signals (0 signals found)
+# Balance: $52.70 and dropping - need to re-enable trading immediately
+# Strategy: Lower threshold temporarily, monitor quality, adjust based on win rate
+MIN_CONFIDENCE = 0.50  # EMERGENCY: Lowered from 0.75 to 0.50 to re-enable signal generation
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Import emergency liquidation for capital preservation (FIX 3)
@@ -156,14 +157,15 @@ class NIJAApexStrategyV71:
                 logger.info("ℹ️  Enhanced scoring disabled by configuration")
         
         # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
-        # EMERGENCY RELAXATION (Jan 29, 2026 - THIRD RELAXATION): Bot finding ZERO signals despite two relaxations
-        # Analysis: 28/30 markets filtered by smart filters, 0 entry signals found
-        # Issue: Filters still too strict for current low-volume market conditions
-        self.min_adx = self.config.get('min_adx', 8)  # Lowered from 12 to 8 - allow very weak trends (was 15 → 12 → 8)
-        self.volume_threshold = self.config.get('volume_threshold', 0.1)  # Lowered from 0.2 to 0.1 - 10% of 5-candle avg (was 0.3 → 0.2 → 0.1)
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.005)  # Lowered from 0.02 to 0.005 - only filter completely dead markets (was 0.05 → 0.02 → 0.005)
-        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # Keep at 2/5 - already relaxed
-        self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 1)  # Lowered from 3 to 1 second (was 6 → 3 → 1)
+        # EMERGENCY RELAXATION (Jan 29, 2026 - FOURTH RELAXATION): Bot STILL finding ZERO signals after three relaxations
+        # Analysis: 18-24/30 markets filtered by smart filters, 6-12 with no entry signal, 0 signals found
+        # Issue: volume_min_threshold 0.5% still too high, need to allow ultra-low volume markets
+        # Balance: $52.70 and dropping - CRITICAL need for signal generation
+        self.min_adx = self.config.get('min_adx', 6)  # FURTHER LOWERED from 8 to 6 - allow extremely weak trends (was 15 → 12 → 8 → 6)
+        self.volume_threshold = self.config.get('volume_threshold', 0.05)  # FURTHER LOWERED from 0.1 to 0.05 - 5% of 5-candle avg (was 0.3 → 0.2 → 0.1 → 0.05)
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.001)  # CRITICAL FIX: Lowered from 0.005 to 0.001 - only filter completely dead markets (was 0.05 → 0.02 → 0.005 → 0.001)
+        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 1)  # LOWERED from 2/5 to 1/5 - single indicator confirmation enough
+        self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 0)  # DISABLED candle timing filter - was blocking too many opportunities (was 6 → 3 → 1 → 0)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
         # PROFIT OPTIMIZATION: Stepped profit-taking configuration
@@ -347,9 +349,9 @@ class NIJAApexStrategyV71:
         - VWAP alignment (price above for uptrend, below for downtrend)
         - EMA sequence (9 > 21 > 50 for uptrend, 9 < 21 < 50 for downtrend)
         - MACD histogram alignment (positive for uptrend, negative for downtrend)
-        - ADX > min_adx (configurable, default 8 - emergency relaxation for signal generation)
-        - Volume (market filter) > volume_threshold of 5-candle average (configurable, default 10%)
-        - Volume (smart filter) > volume_min_threshold of 20-candle average (configurable, default 0.5%)
+        - ADX > min_adx (configurable, default 6 - FOURTH emergency relaxation for signal generation)
+        - Volume (market filter) > volume_threshold of 5-candle average (configurable, default 5%)
+        - Volume (smart filter) > volume_min_threshold of 20-candle average (configurable, default 0.1%)
         
         Args:
             df: Price DataFrame
@@ -608,8 +610,8 @@ class NIJAApexStrategyV71:
         # For now, this is a placeholder that always passes
         news_clear = True  # Stub: would check upcoming news events here
         
-        # Filter 2: Volume filter - threshold is configurable via volume_min_threshold (default 0.5%)
-        # EMERGENCY RELAXATION (Jan 29, 2026): Lowered from 2% to 0.5% to allow more trading opportunities
+        # Filter 2: Volume filter - threshold is configurable via volume_min_threshold (default 0.1%)
+        # EMERGENCY RELAXATION (Jan 29, 2026 - FOURTH RELAXATION): Lowered from 0.5% to 0.1% to allow ultra-low volume markets
         avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
@@ -618,8 +620,8 @@ class NIJAApexStrategyV71:
             logger.debug(f'   🔇 Smart filter (volume): {volume_ratio*100:.1f}% < {self.volume_min_threshold*100:.0f}% threshold')
             return False, f'Volume too low ({volume_ratio*100:.1f}% of avg) - threshold: {self.volume_min_threshold*100:.0f}%'
         
-        # Filter 3: Candle timing filter (first 1 second)
-        # EMERGENCY RELAXATION (Jan 29, 2026): Lowered from 3 to 1 second to allow more opportunities
+        # Filter 3: Candle timing filter (DISABLED)
+        # EMERGENCY RELAXATION (Jan 29, 2026 - FOURTH RELAXATION): DISABLED (set to 0) - was blocking too many opportunities
         # Detect new candle by comparing timestamps
         # CRITICAL FIX (Jan 27, 2026): Use per-symbol tracking to avoid cross-market contamination
         # Previously used single instance variable causing all markets to block each other
