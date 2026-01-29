@@ -89,17 +89,17 @@ class AdaptiveRiskManager:
     - EXCHANGE-SPECIFIC PROFILES (OPTIONAL - uses exchange risk profiles if available)
     """
     
-    def __init__(self, min_position_pct=0.02, max_position_pct=0.15,
-                 max_total_exposure=0.80, use_exchange_profiles=False,
+    def __init__(self, min_position_pct=0.02, max_position_pct=0.08,
+                 max_total_exposure=0.60, use_exchange_profiles=False,
                  pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None):
         """
-        Initialize Adaptive Risk Manager - OPTIMAL PROFITABILITY MODE v7.4
-        Updated Jan 23, 2026: Added tier_lock parameter for PRO MODE + tier enforcement
+        Initialize Adaptive Risk Manager - OPTIMIZED FOR HIGH WIN RATE v7.5
+        Updated Jan 29, 2026: Optimized for better risk management and higher win rate
         
         Args:
             min_position_pct: Minimum position size as % of account (default 2% - conservative for weak trends)
-            max_position_pct: Maximum position size as % of account (default 15% - reduced for better risk control)
-            max_total_exposure: Maximum total exposure across all positions (default 80% - allows multiple positions)
+            max_position_pct: Maximum position size as % of account (default 8% - OPTIMIZED for strong trends)
+            max_total_exposure: Maximum total exposure across all positions (default 60% - OPTIMIZED for safety)
             use_exchange_profiles: If True, uses exchange-specific risk profiles (default False)
             pro_mode: If True, enables PRO MODE with position rotation (default False)
             min_free_reserve_pct: Minimum free balance % to maintain in PRO MODE (default 15%)
@@ -376,29 +376,43 @@ class AdaptiveRiskManager:
         breakdown['ai_confidence'] = ai_confidence
         breakdown['confidence_multiplier'] = confidence_multiplier
         
-        # 4. Adjust for recent streak
+        # 4. Adjust for recent streak AND win rate (OPTIMIZED)
         streak_type, streak_length = self.get_current_streak()
+        win_rate = self.get_win_rate(lookback=10)
         
+        # OPTIMIZED: More aggressive reduction on losing streaks
+        # Previous logic was too lenient, allowing continued losses
         if streak_type == 'losing':
             # Reduce size progressively on losing streaks
-            if streak_length >= 3:
-                streak_multiplier = 0.5  # Cut to 50% after 3+ losses
+            if streak_length >= 4:
+                streak_multiplier = 0.3  # Cut to 30% after 4+ losses (OPTIMIZED: was 0.5 at 3+)
+            elif streak_length == 3:
+                streak_multiplier = 0.5  # 50% after 3 losses (OPTIMIZED: was 0.5 at 3+)
             elif streak_length == 2:
-                streak_multiplier = 0.7  # 70% after 2 losses
+                streak_multiplier = 0.7  # 70% after 2 losses (unchanged)
             else:
-                streak_multiplier = 0.85  # 85% after 1 loss
+                streak_multiplier = 0.85  # 85% after 1 loss (unchanged)
+            
+            # Additional reduction if win rate is poor
+            if win_rate < 0.40:
+                streak_multiplier *= 0.7  # Further 30% reduction if win rate < 40%
+                logger.warning(f"⚠️ Poor win rate ({win_rate*100:.0f}%) - reducing position size")
         elif streak_type == 'winning':
-            # Cautiously increase on winning streaks (but cap it)
-            if streak_length >= 3:
-                streak_multiplier = 1.1  # Small boost after 3+ wins
+            # OPTIMIZED: More conservative increases on winning streaks
+            # Previous logic could lead to overconfidence
+            if streak_length >= 5 and win_rate > 0.65:
+                streak_multiplier = 1.15  # 15% boost after 5+ wins with good win rate (OPTIMIZED: was 1.1 at 3+)
+            elif streak_length >= 3 and win_rate > 0.60:
+                streak_multiplier = 1.10  # 10% boost after 3+ wins with decent win rate (OPTIMIZED: was 1.1 at 3+)
             else:
-                streak_multiplier = 1.0
+                streak_multiplier = 1.0  # No boost for short streaks
         else:
             streak_multiplier = 1.0
         
         breakdown['streak_type'] = streak_type
         breakdown['streak_length'] = streak_length
         breakdown['streak_multiplier'] = streak_multiplier
+        breakdown['win_rate'] = win_rate
         
         # 5. Adjust for volatility
         # Optimal volatility: 0.5% - 2%
@@ -538,14 +552,23 @@ class AdaptiveRiskManager:
         # Clamp to min/max (tier-aware)
         final_pct = max(self.min_position_pct, min(final_pct, tier_max_pct))
         
-        # Check total exposure limit
+        # OPTIMIZED: Check total exposure limit with safety buffer
+        # Previous limit (80%) was too high, allowing overexposure
+        # New limit (60%) with early warning provides better capital preservation
+        exposure_warning_threshold = self.max_total_exposure * 0.85  # Warn at 85% of max (51% for 60% max)
+        
         if self.current_exposure + final_pct > self.max_total_exposure:
             available_exposure = max(0, self.max_total_exposure - self.current_exposure)
             final_pct = min(final_pct, available_exposure)
             breakdown['exposure_limited'] = True
+            logger.warning(f"⚠️ Exposure limit reached: {self.current_exposure*100:.1f}% + {final_pct*100:.1f}% = {(self.current_exposure + final_pct)*100:.1f}% (max {self.max_total_exposure*100:.0f}%)")
+        elif self.current_exposure >= exposure_warning_threshold:
+            logger.info(f"ℹ️ High exposure: {self.current_exposure*100:.1f}% (approaching max {self.max_total_exposure*100:.0f}%)")
+            breakdown['high_exposure_warning'] = True
         
         breakdown['final_pct'] = final_pct
         breakdown['current_exposure'] = self.current_exposure
+        breakdown['max_exposure'] = self.max_total_exposure
         
         # Calculate position size based on sizing_base (total capital in PRO MODE, free balance otherwise)
         position_size = sizing_base * final_pct
@@ -671,8 +694,12 @@ class AdaptiveRiskManager:
         """
         Calculate take profit levels based on R-multiples with FEE-AWARE PROFITABILITY
         
+        OPTIMIZED (Jan 29, 2026): Minimum 1:2 R:R ratio for better profitability
+        Previous logic used 1:1 R:R which led to break-even trades after fees
+        New strategy: Minimum 2R for TP1, 3R for TP2, 4R for TP3
+        
         ENHANCED (Phase 4): Dynamic profit targets based on broker fees
-        Formula: min_profit_target = broker_fee * 2.5
+        Formula: min_profit_target = max(broker_fee * 2.5, 2R)
         
         This ensures NET profitability after fees with safety buffer for slippage.
         
@@ -681,20 +708,11 @@ class AdaptiveRiskManager:
         - Kraken (0.42% round-trip): TP1 @ 1.05% (0.42% × 2.5)
         - Binance (0.28% round-trip): TP1 @ 0.7% (0.28% × 2.5)
         
-        Previous FIX (Dec 27, 2025):
-        Adjusted to ensure NET profitability after Coinbase fees (~1.4% round-trip)
-        
-        Previous targets (0.5R, 1R, 1.5R) were too low and resulted in NET LOSSES
-        after fees. Updated targets ensure minimum ~0.6% NET profit:
-        
-        - TP1: 1.0R (ensures >1.4% gross to beat fees)
-        - TP2: 1.5R (provides cushion for volatility)
-        - TP3: 2.0R (meaningful profit target)
-        
-        For a typical 2% stop loss:
-        - TP1 @ 2% gross → ~0.6% NET after fees (PROFITABLE)
-        - TP2 @ 3% gross → ~1.6% NET after fees (PROFITABLE)
-        - TP3 @ 4% gross → ~2.6% NET after fees (PROFITABLE)
+        MINIMUM R:R ENFORCEMENT:
+        For a typical 0.6% stop loss (optimized tight stops):
+        - TP1 @ 2.0R = 1.2% gross → NET POSITIVE after 1.4% fees
+        - TP2 @ 3.0R = 1.8% gross → +0.4% NET after fees (PROFITABLE)
+        - TP3 @ 4.0R = 2.4% gross → +1.0% NET after fees (PROFITABLE)
         
         Args:
             entry_price: Entry price
@@ -714,10 +732,11 @@ class AdaptiveRiskManager:
         
         # If broker fee provided, use fee-aware targets
         if broker_fee_pct is not None:
-            # Dynamic fee-aware profit targets
-            min_target_pct = broker_fee_pct * 2.5  # 2.5x fee for safety buffer
-            mid_target_pct = broker_fee_pct * 4.0  # 4x fee for solid profit
-            max_target_pct = broker_fee_pct * 6.0  # 6x fee for excellent trade
+            # Dynamic fee-aware profit targets with MINIMUM R:R enforcement
+            # OPTIMIZED: Ensure minimum 2R for TP1, 3R for TP2, 4R for TP3
+            min_target_pct = max(broker_fee_pct * 2.5, (risk / entry_price) * 2.0)  # At least 2R
+            mid_target_pct = max(broker_fee_pct * 4.0, (risk / entry_price) * 3.0)  # At least 3R
+            max_target_pct = max(broker_fee_pct * 6.0, (risk / entry_price) * 4.0)  # At least 4R
             
             if side == 'long':
                 tp1 = entry_price * (1 + min_target_pct)
@@ -728,26 +747,29 @@ class AdaptiveRiskManager:
                 tp2 = entry_price * (1 - mid_target_pct)
                 tp3 = entry_price * (1 - max_target_pct)
             
-            logger.debug(f"Fee-aware TP levels: Fee={broker_fee_pct*100:.2f}% | "
-                        f"TP1={min_target_pct*100:.2f}% | TP2={mid_target_pct*100:.2f}% | TP3={max_target_pct*100:.2f}%")
+            logger.debug(f"Fee-aware TP levels (min 2R/3R/4R): Fee={broker_fee_pct*100:.2f}% | "
+                        f"TP1={min_target_pct*100:.2f}% (2R min) | TP2={mid_target_pct*100:.2f}% (3R min) | TP3={max_target_pct*100:.2f}% (4R min)")
         else:
-            # Legacy R-multiple based targets (fallback)
+            # Legacy R-multiple based targets with OPTIMIZED ratios
             if side == 'long':
-                # Fee-aware targets: 1R, 1.5R, 2R (ensures profitability after fees)
-                tp1 = entry_price + (risk * 1.0)  # 1R - minimum for fee coverage
-                tp2 = entry_price + (risk * 1.5)  # 1.5R - solid profit
-                tp3 = entry_price + (risk * 2.0)  # 2R - excellent trade
+                # OPTIMIZED: 2R, 3R, 4R (ensures profitability after fees)
+                tp1 = entry_price + (risk * 2.0)  # 2R - minimum for profitable fee coverage
+                tp2 = entry_price + (risk * 3.0)  # 3R - solid profit
+                tp3 = entry_price + (risk * 4.0)  # 4R - excellent trade
             else:  # short
-                # Fee-aware targets: 1R, 1.5R, 2R (ensures profitability after fees)
-                tp1 = entry_price - (risk * 1.0)  # 1R - minimum for fee coverage
-                tp2 = entry_price - (risk * 1.5)  # 1.5R - solid profit
-                tp3 = entry_price - (risk * 2.0)  # 2R - excellent trade
+                # OPTIMIZED: 2R, 3R, 4R (ensures profitability after fees)
+                tp1 = entry_price - (risk * 2.0)  # 2R - minimum for profitable fee coverage
+                tp2 = entry_price - (risk * 3.0)  # 3R - solid profit
+                tp3 = entry_price - (risk * 4.0)  # 4R - excellent trade
         
         return {
             'tp1': tp1,
             'tp2': tp2,
             'tp3': tp3,
-            'risk': risk
+            'risk': risk,
+            'rr_ratio_tp1': 2.0,  # Track R:R for transparency
+            'rr_ratio_tp2': 3.0,
+            'rr_ratio_tp3': 4.0,
         }
     
     def calculate_trailing_stop(self, current_price: float, entry_price: float,

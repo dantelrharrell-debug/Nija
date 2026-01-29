@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 MARKET_FILTER = {
-    'adx_threshold': 15,  # ADX must be > 15 for trending market - relaxed for profitability
+    'adx_threshold': 10,  # ADX must be > 10 for trending market - OPTIMIZED for quality (was 15→6, now 10)
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.3,  # Volume must be > 30% of recent average - relaxed for profitability
+    'volume_threshold': 0.10,  # Volume must be > 10% of recent average - OPTIMIZED (was 0.3→0.05, now 0.10)
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }
@@ -53,11 +53,11 @@ INDICATORS = {
 
 MARKET_FILTERING = {
     # ADX (Average Directional Index) - Trend Strength
-    'min_adx': 15,  # Minimum ADX for trend strength (< 15 = choppy) - relaxed for profitability
+    'min_adx': 10,  # Minimum ADX for trend strength (< 10 = choppy) - OPTIMIZED (was 15→6, now 10)
     'strong_adx': 30,  # ADX above this is strong trend
     
     # Volume Requirements
-    'min_volume_multiplier': 1.2,  # Min volume vs 20-period average - relaxed for profitability
+    'min_volume_multiplier': 1.3,  # Min volume vs 20-period average - OPTIMIZED (was 1.2, now 1.3)
     'strong_volume_multiplier': 2.0,  # Strong volume confirmation
     
     # ATR (Average True Range) - Volatility
@@ -72,7 +72,7 @@ MARKET_FILTERING = {
 
 ENTRY_CONFIG = {
     # Signal Scoring (6 possible confirmations)
-    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - relaxed for profitability
+    'min_signal_score': 4,  # Minimum confirmations required (out of 6) - OPTIMIZED for quality (was 3)
     'a_plus_signal_score': 6,  # Perfect setup score
     
     # Required Conditions
@@ -125,29 +125,33 @@ ENTRY_TRIGGERS = {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# POSITION SIZING & RISK MANAGEMENT - ELITE PERFORMANCE OPTIMIZED
+# POSITION SIZING & RISK MANAGEMENT - OPTIMIZED FOR WIN RATE
 # ═══════════════════════════════════════════════════════════════════
 
 POSITION_SIZING = {
     'trend_quality': {
         'weak': {
+            'adx_range': (10, 15),
+            'position_size': 0.02,  # 2% of account (conservative, minimal risk)
+        },
+        'moderate': {
             'adx_range': (15, 20),
-            'position_size': 0.02,  # 2% of account (conservative)
+            'position_size': 0.03,  # 3% of account (balanced)
         },
         'good': {
             'adx_range': (20, 25),
-            'position_size': 0.03,  # 3% of account (optimal)
+            'position_size': 0.04,  # 4% of account (optimal)
         },
         'strong': {
             'adx_range': (25, 35),
-            'position_size': 0.04,  # 4% of account (balanced)
+            'position_size': 0.05,  # 5% of account (balanced)
         },
         'very_strong': {
             'adx_range': (35, 100),
-            'position_size': 0.05,  # 5% of account (maximum)
+            'position_size': 0.08,  # 8% of account (maximum for strong trends)
         },
     },
-    'max_position_size': 0.05,  # Hard cap at 5% (elite conservative sizing)
+    'max_position_size': 0.08,  # Hard cap at 8% (OPTIMIZED: was 5%, increased for high-confidence trades)
     'min_position_size': 0.02,  # Minimum 2%
     'optimal_position_size': 0.03,  # 3% optimal for most trades
     'max_concurrent_positions': 20,  # Up to 20 positions (5% each = 100% if all filled)
@@ -170,52 +174,58 @@ STOP_LOSS = {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# TAKE PROFIT & TRAILING STOP PARAMETERS - ELITE R:R OPTIMIZED
+# TAKE PROFIT & TRAILING STOP PARAMETERS - OPTIMIZED FOR HIGH WIN RATE
 # ═══════════════════════════════════════════════════════════════════
 
 TAKE_PROFIT = {
     'stages': [
         {
             'name': 'TP1',
-            'profit_pct': 0.005,  # 0.5% profit
-            'profit_r': 0.83,  # 0.83R (if stop is 0.6%)
-            'exit_percentage': 0.10,  # Exit 10% of position
+            'profit_pct': 0.015,  # 1.5% profit (OPTIMIZED: fee-aware minimum)
+            'profit_r': 2.5,  # 2.5R (if stop is 0.6%)
+            'exit_percentage': 0.15,  # Exit 15% of position (was 10%, more aggressive)
             'action': 'partial_exit',
         },
         {
             'name': 'TP2',
-            'profit_pct': 0.010,  # 1.0% profit
-            'profit_r': 1.67,  # 1.67R
-            'exit_percentage': 0.15,  # Exit 15% (25% total exited)
+            'profit_pct': 0.025,  # 2.5% profit (OPTIMIZED: safe profit level)
+            'profit_r': 4.17,  # 4.17R
+            'exit_percentage': 0.25,  # Exit 25% (40% total exited)
             'action': 'move_stop_to_breakeven',
         },
         {
             'name': 'TP3',
-            'profit_pct': 0.020,  # 2.0% profit
-            'profit_r': 3.33,  # 3.33R
-            'exit_percentage': 0.25,  # Exit 25% (50% total exited)
+            'profit_pct': 0.040,  # 4.0% profit (OPTIMIZED: strong profit)
+            'profit_r': 6.67,  # 6.67R
+            'exit_percentage': 0.35,  # Exit 35% (75% total exited)
             'action': 'activate_trailing',
         },
         {
             'name': 'TP4',
-            'profit_pct': 0.030,  # 3.0% profit
-            'profit_r': 5.0,  # 5.0R
-            'exit_percentage': 0.50,  # Exit 50% (100% total exited)
-            'action': 'final_exit_or_trail',
+            'profit_pct': 0.060,  # 6.0% profit (OPTIMIZED: excellent trade)
+            'profit_r': 10.0,  # 10R
+            'exit_percentage': 0.50,  # Exit 50% (only 25% remains with trailing stop)
+            'action': 'tighten_trailing',
         },
     ],
-    'use_multi_stage': True,
-    'target_avg_win': 0.012,  # Target 1.2% average win (elite performance)
-    'target_risk_reward': 2.0,  # Target 1:2 R:R (elite range 1:1.8 - 1:2.5)
-    'description': 'Stepped exits optimized for 1:1.8 - 1:2.5 risk:reward ratio',
+    'default_target': 0.030,  # 3.0% default if stages not met (OPTIMIZED: was 2.0%)
+    'description': 'Optimized for aggressive profit-taking and capital efficiency',
 }
 
 TRAILING_STOP = {
-    'activation_r': 2.0,  # Activate after 2R profit (TP3 level)
-    'atr_multiplier': 1.5,  # Trail at ATR(14) x 1.5
+    'activation_r': 1.5,  # OPTIMIZED: Activate after 1.5R profit (earlier protection)
+    'atr_multiplier': 1.2,  # OPTIMIZED: Tighter trail at ATR(14) x 1.2 (was 1.5, tighter to lock profits)
     'update_frequency': 'every_candle',  # Update on each new candle
     'never_widen': True,  # Only tighten, never widen
-    'min_trail_distance': 0.008,  # 0.8% minimum trail distance
+    'min_trail_distance': 0.006,  # OPTIMIZED: 0.6% minimum trail distance (was 0.8%, tighter)
+    'profit_step_tightening': True,  # OPTIMIZED: Tighten trail at each profit level
+    'step_levels': {
+        0.015: 1.5,  # At 1.5% profit, trail at 1.5x ATR
+        0.025: 1.2,  # At 2.5% profit, trail at 1.2x ATR (tighter)
+        0.040: 1.0,  # At 4.0% profit, trail at 1.0x ATR (very tight)
+        0.060: 0.8,  # At 6.0% profit, trail at 0.8x ATR (extremely tight)
+    },
+    'description': 'Adaptive trailing stop that tightens as profit increases for better capital efficiency',
 }
 
 # ═══════════════════════════════════════════════════════════════════
