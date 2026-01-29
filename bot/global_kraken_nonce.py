@@ -207,6 +207,9 @@ class GlobalKrakenNonceManager:
         
         Kraken hates rapid bursts of API calls, especially during startup.
         This throttles nonce generation to ensure smooth, distributed calls.
+        
+        Note: _last_nonce_time is updated in get_nonce() after successful
+        nonce generation for accurate timing.
         """
         now = time.time()
         time_since_last = now - self._last_nonce_time
@@ -215,8 +218,6 @@ class GlobalKrakenNonceManager:
             sleep_time = self.STARTUP_RATE_LIMIT_SECONDS - time_since_last
             logger.debug(f"⏳ Rate limiting: sleeping {sleep_time:.3f}s to prevent burst")
             time.sleep(sleep_time)
-        
-        self._last_nonce_time = time.time()
 
     def get_nonce(self, apply_rate_limiting: bool = True) -> int:
         """
@@ -240,7 +241,9 @@ class GlobalKrakenNonceManager:
         """
         with self._nonce_lock:
             # ELITE FEATURE: Startup burst protection
-            if apply_rate_limiting and self._check_startup_burst():
+            # Check both per-call flag and global setting
+            should_rate_limit = apply_rate_limiting and self._is_rate_limiting_enabled()
+            if should_rate_limit and self._check_startup_burst():
                 self._apply_rate_limit()
             
             # Get current timestamp in nanoseconds
@@ -253,6 +256,10 @@ class GlobalKrakenNonceManager:
             # Update state
             self._last_nonce = new_nonce
             self._total_nonces_issued += 1
+            
+            # Update timestamp AFTER nonce generation for accurate rate tracking
+            if should_rate_limit:
+                self._last_nonce_time = time.time()
             
             # ELITE FEATURE: Persist nonce (every 10th nonce to reduce I/O)
             if self._total_nonces_issued % 10 == 0:
@@ -286,21 +293,27 @@ class GlobalKrakenNonceManager:
     
     def set_rate_limiting(self, enabled: bool):
         """
-        Enable or disable startup rate limiting.
+        Enable or disable startup rate limiting globally.
         
         ELITE FEATURE: Allow dynamic control of rate limiting behavior.
         Useful for switching between startup mode and normal operation mode.
+        
+        Note: This sets a flag that affects all subsequent get_nonce() calls
+        that have apply_rate_limiting=True.
         
         Args:
             enabled: True to enable rate limiting, False to disable
         """
         with self._nonce_lock:
+            self._rate_limiting_enabled = enabled
             if enabled:
-                logger.info("✅ Startup burst protection enabled")
+                logger.info("✅ Startup burst protection enabled globally")
             else:
-                logger.info("♻️  Startup burst protection disabled (normal operation mode)")
-            # Note: Rate limiting is controlled per-call via apply_rate_limiting parameter
-            # This method is for logging/documentation purposes
+                logger.info("♻️  Startup burst protection disabled globally (normal operation mode)")
+    
+    def _is_rate_limiting_enabled(self) -> bool:
+        """Check if rate limiting is globally enabled."""
+        return getattr(self, '_rate_limiting_enabled', True)  # Default to enabled
     
     def reset_burst_tracking(self):
         """
