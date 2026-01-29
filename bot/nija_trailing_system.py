@@ -181,9 +181,60 @@ class NIJATrailingSystem:
         # Don't exit if still strong momentum
         return False, None
     
-    def manage_position(self, position_id, current_price, df, rsi, vwap):
+    def manage_institutional_partial_profits(self, position, current_price, profit_pct):
+        """
+        INSTITUTIONAL PARTIAL PROFIT SCALING
+        
+        Strategy:
+        - Take 35% at adaptive TP/2 (1.5R = halfway to full TP)
+        - Let 65% run to full adaptive TP (3R)
+        
+        Benefits:
+        1. Locks profits early → reduces giveback risk
+        2. Preserves upside → 65% still running for big wins
+        3. Improves win rate → partial wins count as wins
+        4. Increases capital efficiency → faster recycling
+        
+        Args:
+            position: Position dictionary
+            current_price: Current market price
+            profit_pct: Current profit percentage
+        
+        Returns:
+            Tuple of (action, size_to_close, reason) or None if no action
+        """
+        side = position['side']
+        
+        # Get adaptive TP levels if set
+        partial_tp_pct = position.get('partial_tp_pct', 1.0)  # Default 1.0% (adaptive TP/2)
+        full_tp_pct = position.get('full_tp_pct', 2.0)  # Default 2.0% (full adaptive TP)
+        
+        # PARTIAL EXIT: Take 35% at adaptive TP/2
+        if profit_pct >= partial_tp_pct and position['remaining_size'] == 1.0 and not position.get('partial_tp_hit', False):
+            position['remaining_size'] = 0.65
+            position['partial_tp_hit'] = True
+            position['tsl_active'] = True  # Activate trailing stop for remainder
+            return 'partial_close', 0.35, f"Institutional Partial TP (+{profit_pct:.2f}%) - 35% locked, 65% running"
+        
+        # FULL EXIT: Take remaining 65% at full adaptive TP
+        if profit_pct >= full_tp_pct and position['remaining_size'] == 0.65 and not position.get('full_tp_hit', False):
+            position['remaining_size'] = 0.0
+            position['full_tp_hit'] = True
+            return 'close_all', 0.65, f"Institutional Full TP (+{profit_pct:.2f}%) - Complete exit at 3R"
+        
+        return None
+    
+    def manage_position(self, position_id, current_price, df, rsi, vwap, use_institutional_scaling=False):
         """
         Full NIJA position management flow
+        
+        Args:
+            position_id: Unique position identifier
+            current_price: Current market price
+            df: Price DataFrame
+            rsi: RSI indicator value
+            vwap: VWAP indicator value
+            use_institutional_scaling: If True, uses 35%/65% institutional scaling instead of legacy
         
         Returns: (action, size_to_close, reason)
         """
@@ -253,25 +304,31 @@ class NIJATrailingSystem:
         elif side == 'short' and current_price >= position['stop_loss']:
             return 'close_all', position['remaining_size'], f"Stop-loss hit at {position['stop_loss']:.2f}"
         
-        # FAST PROFIT CAPTURE: TP0.5 at +0.4% → Close 30% (ultra-fast scalp)
-        if profit_pct >= 0.4 and position['remaining_size'] == 1.0 and not position.get('tp05_hit', False):
-            position['remaining_size'] = 0.70
-            position['tp05_hit'] = True
-            return 'partial_close', 0.30, f"TP0.5 hit (+{profit_pct:.2f}%) - Fast scalp lock"
-        
-        # TP1: +0.8% → Close 30% more (60% total out)
-        if profit_pct >= 0.8 and position['remaining_size'] == 0.70 and not position.get('tp1_hit', False):
-            position['remaining_size'] = 0.40
-            position['tsl_active'] = True
-            position['tp1_hit'] = True
-            return 'partial_close', 0.30, f"TP1 hit (+{profit_pct:.2f}%) - TSL activated"
-        
-        # TP2: +1.5% → Close 20% more (20% remaining)
-        if profit_pct >= 1.5 and position['remaining_size'] == 0.40 and not position.get('tp2_hit', False):
-            position['remaining_size'] = 0.20
-            position['ttp_active'] = True
-            position['tp2_hit'] = True
-            return 'partial_close', 0.20, f"TP2 hit (+{profit_pct:.2f}%) - TTP activated"
+        # INSTITUTIONAL PARTIAL PROFIT SCALING (if enabled)
+        if use_institutional_scaling:
+            result = self.manage_institutional_partial_profits(position, current_price, profit_pct)
+            if result:
+                return result
+        else:
+            # LEGACY FAST PROFIT CAPTURE: TP0.5 at +0.4% → Close 30% (ultra-fast scalp)
+            if profit_pct >= 0.4 and position['remaining_size'] == 1.0 and not position.get('tp05_hit', False):
+                position['remaining_size'] = 0.70
+                position['tp05_hit'] = True
+                return 'partial_close', 0.30, f"TP0.5 hit (+{profit_pct:.2f}%) - Fast scalp lock"
+            
+            # TP1: +0.8% → Close 30% more (60% total out)
+            if profit_pct >= 0.8 and position['remaining_size'] == 0.70 and not position.get('tp1_hit', False):
+                position['remaining_size'] = 0.40
+                position['tsl_active'] = True
+                position['tp1_hit'] = True
+                return 'partial_close', 0.30, f"TP1 hit (+{profit_pct:.2f}%) - TSL activated"
+            
+            # TP2: +1.5% → Close 20% more (20% remaining)
+            if profit_pct >= 1.5 and position['remaining_size'] == 0.40 and not position.get('tp2_hit', False):
+                position['remaining_size'] = 0.20
+                position['ttp_active'] = True
+                position['tp2_hit'] = True
+                return 'partial_close', 0.20, f"TP2 hit (+{profit_pct:.2f}%) - TTP activated"
         
         # TP3: Extended runner zone - let winners run to 20% with 95% lock protection
         if profit_pct >= 2.5 and position['remaining_size'] == 0.20:
