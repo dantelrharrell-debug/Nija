@@ -106,21 +106,25 @@ class AdaptiveProfitTargetEngine:
         side: str,
         df: pd.DataFrame,
         indicators: Dict,
-        current_regime: str = 'normal'
+        current_regime: str = 'normal',
+        atr: Optional[float] = None
     ) -> Dict:
         """
         Calculate adaptive profit targets based on current market conditions
         
         Args:
             entry_price: Position entry price
-            side: 'long' or 'short'
+            side: 'long' or 'short' (case-insensitive)
             df: Price DataFrame with OHLCV data
             indicators: Dictionary of calculated indicators
             current_regime: Current volatility regime
+            atr: Optional ATR value for stop loss calculation
             
         Returns:
             Dictionary with adaptive profit targets and metadata
         """
+        # Normalize side parameter to lowercase
+        side = side.lower()
         # 1. Assess trend strength
         trend_strength, trend_metrics = self._assess_trend_strength(indicators)
         
@@ -145,7 +149,7 @@ class AdaptiveProfitTargetEngine:
             adjusted_pct = base_pct * combined_multiplier
             
             # Calculate actual price
-            if side.lower() in ['long', 'buy']:
+            if side in ['long', 'buy']:
                 target_price = entry_price * (1 + adjusted_pct)
             else:  # short
                 target_price = entry_price * (1 - adjusted_pct)
@@ -159,12 +163,21 @@ class AdaptiveProfitTargetEngine:
         
         # 5. Calculate trailing stop activation point
         trailing_activation_pct = 0.015 * combined_multiplier  # 1.5% base, scaled
-        if side.lower() in ['long', 'buy']:
+        if side in ['long', 'buy']:
             trailing_activation = entry_price * (1 + trailing_activation_pct)
         else:
             trailing_activation = entry_price * (1 - trailing_activation_pct)
         
-        # 6. Compile results
+        # 6. Calculate stop loss if ATR provided
+        stop_loss = None
+        if atr is not None:
+            atr_buffer = atr * 1.5  # 1.5x ATR for stop
+            if side in ['long', 'buy']:
+                stop_loss = entry_price - atr_buffer
+            else:
+                stop_loss = entry_price + atr_buffer
+        
+        # 7. Compile results
         result = {
             'targets': adaptive_targets,
             'trailing_activation': trailing_activation,
@@ -267,14 +280,16 @@ class AdaptiveProfitTargetEngine:
         recent_macd = macd_hist.tail(20)
         
         # Check for bullish divergence (price lower lows, MACD higher lows)
-        price_making_lower_lows = close_prices.iloc[-1] < close_prices.iloc[-10:].min()
-        macd_making_higher_lows = recent_macd.iloc[-1] > recent_macd.iloc[-10:].min()
+        # Compare current to previous 10 (excluding current)
+        price_making_lower_lows = close_prices.iloc[-1] < close_prices.iloc[-10:-1].min()
+        macd_making_higher_lows = recent_macd.iloc[-1] > recent_macd.iloc[-10:-1].min()
         
         bullish_divergence = price_making_lower_lows and macd_making_higher_lows
         
         # Check for bearish divergence (price higher highs, MACD lower highs)
-        price_making_higher_highs = close_prices.iloc[-1] > close_prices.iloc[-10:].max()
-        macd_making_lower_highs = recent_macd.iloc[-1] < recent_macd.iloc[-10:].max()
+        # Compare current to previous 10 (excluding current)
+        price_making_higher_highs = close_prices.iloc[-1] > close_prices.iloc[-10:-1].max()
+        macd_making_lower_highs = recent_macd.iloc[-1] < recent_macd.iloc[-10:-1].max()
         
         bearish_divergence = price_making_higher_highs and macd_making_lower_highs
         
@@ -336,9 +351,12 @@ class AdaptiveProfitTargetEngine:
             target_info = targets[level]
             target_price = target_info['price']
             
+            # Normalize side parameter
+            side_norm = side.lower()
+            
             # Check if target reached
             target_reached = False
-            if side.lower() in ['long', 'buy']:
+            if side_norm in ['long', 'buy']:
                 target_reached = current_price >= target_price
             else:  # short
                 target_reached = current_price <= target_price

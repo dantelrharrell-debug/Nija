@@ -329,8 +329,12 @@ class MarketMicrostructureFilter:
         """
         Aggregate order book depth within price range
         
+        NOTE: This function assumes orders are sorted by price.
+        For bids: descending order (highest first)
+        For asks: ascending order (lowest first)
+        
         Args:
-            orders: List of [price, size] orders
+            orders: List of [price, size] orders (must be price-sorted)
             reference_price: Reference price for distance calculation
             max_distance: Maximum price distance to include
             is_bid: True for bids, False for asks
@@ -353,8 +357,11 @@ class MarketMicrostructureFilter:
             # Only include orders within range
             if distance <= max_distance:
                 total_depth += price * size
-            else:
-                # Orders are sorted, so we can break early
+            elif is_bid and price < reference_price - max_distance:
+                # For bids, once we're too far below reference, can break
+                break
+            elif not is_bid and price > reference_price + max_distance:
+                # For asks, once we're too far above reference, can break
                 break
         
         return total_depth

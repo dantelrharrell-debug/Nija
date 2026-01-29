@@ -145,6 +145,11 @@ class PositionPyramidingSystem:
         
         # 4. Check risk limits
         initial_position_size = position.get('initial_size_usd', 0)
+        
+        # Validate initial position size
+        if initial_position_size <= 0:
+            return False, "Invalid initial position size (must be > 0)", ConvictionLevel.LOW
+        
         current_total_size = position.get('total_size_usd', initial_position_size)
         
         # Calculate proposed new size after scaling
@@ -263,17 +268,22 @@ class PositionPyramidingSystem:
         scores['momentum_confirmation'] = 1.0 if macd_confirms else 0.3
         
         # 5. Pullback quality (scaling on pullback, not breakout)
+        # Minimum pullback threshold: 0.2% (configurable)
+        min_pullback = 0.002
+        # Maximum pullback for scaling (from config)
+        max_pullback = self.max_pullback_for_scale
+        
         recent_high = df['high'].tail(10).max()
         recent_low = df['low'].tail(10).min()
         
         if side.upper() in ['BUY', 'LONG']:
             # For longs, we want to scale on pullbacks from recent highs
             pullback_from_high = (recent_high - current_price) / recent_high
-            is_good_pullback = 0.002 <= pullback_from_high <= self.max_pullback_for_scale
+            is_good_pullback = min_pullback <= pullback_from_high <= max_pullback
         else:  # SHORT
             # For shorts, we want to scale on pullbacks from recent lows
             pullback_from_low = (current_price - recent_low) / recent_low
-            is_good_pullback = 0.002 <= pullback_from_low <= self.max_pullback_for_scale
+            is_good_pullback = min_pullback <= pullback_from_low <= max_pullback
         
         scores['pullback_quality'] = 1.0 if is_good_pullback else 0.4
         

@@ -85,9 +85,11 @@ should_exit, level, exit_pct = engine.should_exit_at_target(
 ```
 
 ### Expected Results
-- **+40% improvement** in profit capture vs static targets
-- **-30% reduction** in "missed runner" scenarios
-- **+15% increase** in average profit per trade
+- **+40% improvement** in profit capture vs static targets (theoretical projection)*
+- **-30% reduction** in "missed runner" scenarios (theoretical projection)*
+- **+15% increase** in average profit per trade (theoretical projection)*
+
+_*Theoretical projections based on strategy design. Actual results depend on market conditions, implementation, and testing._
 
 ---
 
@@ -164,9 +166,11 @@ if can_scale:
 ```
 
 ### Expected Results
-- **+60% profit increase** in strong trending markets
+- **+60% profit increase** in strong trending markets (theoretical projection)*
 - **2.5x maximum exposure** with strict risk management
-- **-25% reduction** in premature exits from strong trends
+- **-25% reduction** in premature exits from strong trends (theoretical projection)*
+
+_*Theoretical projections based on strategy design. Requires backtesting validation._
 
 ---
 
@@ -253,9 +257,11 @@ else:
 ```
 
 ### Expected Results
-- **-50% reduction** in slippage costs
-- **-70% reduction** in poor fills
-- **-30% reduction** in trading during illiquid periods
+- **-50% reduction** in slippage costs (theoretical projection)*
+- **-70% reduction** in poor fills (theoretical projection)*
+- **-30% reduction** in trading during illiquid periods (theoretical projection)*
+
+_*Theoretical projections based on filtering logic. Actual results depend on market conditions._
 
 ---
 
@@ -322,9 +328,11 @@ if result['signal_strength'] in ['strong', 'critical']:
 ```
 
 ### Expected Results
-- **+2-5 minute** early warning before regime flips
-- **-40% reduction** in late exits from deteriorating trends
-- **+30% improvement** in capturing early trend breakouts
+- **+2-5 minute** early warning before regime flips (design goal)*
+- **-40% reduction** in late exits from deteriorating trends (theoretical projection)*
+- **+30% improvement** in capturing early trend breakouts (theoretical projection)*
+
+_*Design goals and theoretical projections. Requires validation with historical data._
 
 ---
 
@@ -380,13 +388,14 @@ if transition['signal_strength'] in ['strong', 'critical']:
 ### Step 4: Position Entry with Adaptive Targets
 
 ```python
-# Calculate adaptive profit targets
+# Calculate adaptive targets (with ATR for stop loss)
 adaptive_targets = profit_engine.calculate_adaptive_targets(
     entry_price=entry_price,
     side='long',
     df=df,
     indicators=indicators,
-    current_regime=market_quality['overall_quality']
+    current_regime=market_quality['overall_quality'],
+    atr=current_atr  # Pass ATR for stop loss calculation
 )
 
 # Open position with adaptive targets
@@ -395,7 +404,7 @@ position = {
     'side': 'long',
     'size_usd': position_size,
     'adaptive_targets': adaptive_targets,
-    'stop_loss': adaptive_targets['targets']['stop_loss'],
+    'stop_loss': adaptive_targets['stop_loss'],  # Now available
     'pyramid_level': 0,
     'initial_size_usd': position_size,
 }
@@ -461,25 +470,35 @@ while position_open:
 
 ## 📊 Performance Comparison
 
-### Before God-Tier Enhancements
+### Theoretical Projections
+
+**IMPORTANT DISCLAIMER**: The following are theoretical projections based on the enhancement designs. These projections have NOT been validated through backtesting or live trading. Actual results will vary significantly based on market conditions, implementation quality, parameter tuning, and other factors. **DO NOT** assume these results without thorough testing.
+
+### Before God-Tier Enhancements (Baseline)
 - Win Rate: 55%
 - Avg Profit/Trade: +0.8%
 - Slippage Cost: -0.15%
 - Trend Profit Capture: 60%
 - Late Exit Rate: 35%
 
-### After God-Tier Enhancements
-- Win Rate: 62% (+7 points)
-- Avg Profit/Trade: +1.4% (+75% improvement)
-- Slippage Cost: -0.05% (-67% improvement)
-- Trend Profit Capture: 85% (+25 points)
-- Late Exit Rate: 15% (-20 points)
+### After God-Tier Enhancements (Theoretical)
+- Win Rate: 62% (+7 points) - _projection_
+- Avg Profit/Trade: +1.4% (+75% improvement) - _projection_
+- Slippage Cost: -0.05% (-67% improvement) - _projection_
+- Trend Profit Capture: 85% (+25 points) - _projection_
+- Late Exit Rate: 15% (-20 points) - _projection_
 
-### Net Impact
-- **+75% increase** in average profit per trade
-- **-67% reduction** in trading costs
-- **+40% increase** in trend profit capture
-- **-57% reduction** in late exits
+### Net Impact (Theoretical)
+- **+75% increase** in average profit per trade - _requires validation_
+- **-67% reduction** in trading costs - _requires validation_
+- **+40% increase** in trend profit capture - _requires validation_
+- **-57% reduction** in late exits - _requires validation_
+
+**⚠️ VALIDATION REQUIRED**: These projections must be validated through:
+1. Comprehensive backtesting (minimum 3-6 months historical data)
+2. Paper trading (minimum 2-4 weeks)
+3. Small position live trading (minimum 1-2 weeks)
+4. Gradual scaling to full position sizes
 
 ---
 
