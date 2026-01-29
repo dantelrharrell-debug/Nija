@@ -171,3 +171,98 @@ class DailyStatistic(Base):
     
     def __repr__(self):
         return f"<DailyStatistic(user_id='{self.user_id}', date={self.date}, total_pnl={self.total_pnl})>"
+
+
+class PerformanceSnapshot(Base):
+    """Performance snapshot for NAV and equity tracking"""
+    __tablename__ = 'performance_snapshots'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(50), ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False, index=True)
+    timestamp = Column(DateTime, nullable=False, default=func.now(), index=True)
+    
+    # NAV and equity
+    nav = Column(Numeric(18, 8), nullable=False)
+    equity = Column(Numeric(18, 8), nullable=False)
+    cash = Column(Numeric(18, 8), nullable=False)
+    positions_value = Column(Numeric(18, 8), default=0)
+    unrealized_pnl = Column(Numeric(18, 8), default=0)
+    realized_pnl_today = Column(Numeric(18, 8), default=0)
+    
+    # Trade counts
+    total_trades = Column(Integer, default=0)
+    winning_trades = Column(Integer, default=0)
+    losing_trades = Column(Integer, default=0)
+    
+    # Performance metrics
+    daily_return_pct = Column(Numeric(8, 4), default=0)
+    sharpe_ratio = Column(Numeric(8, 4), default=0)
+    max_drawdown_pct = Column(Numeric(8, 4), default=0)
+    current_drawdown_pct = Column(Numeric(8, 4), default=0)
+    
+    created_at = Column(DateTime, default=func.now())
+    
+    def __repr__(self):
+        return f"<PerformanceSnapshot(user_id='{self.user_id}', timestamp={self.timestamp}, nav={self.nav})>"
+
+
+class StrategyPerformance(Base):
+    """Track performance of individual trading strategies"""
+    __tablename__ = 'strategy_performance'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(50), ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False, index=True)
+    strategy_name = Column(String(50), nullable=False, index=True)
+    
+    # Performance metrics
+    total_trades = Column(Integer, default=0)
+    winning_trades = Column(Integer, default=0)
+    losing_trades = Column(Integer, default=0)
+    total_pnl = Column(Numeric(18, 8), default=0)
+    sharpe_ratio = Column(Numeric(8, 4), default=0)
+    max_drawdown_pct = Column(Numeric(8, 4), default=0)
+    
+    # Allocation
+    current_allocation_pct = Column(Numeric(8, 4), default=0)
+    
+    # Timestamps
+    last_updated = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, default=func.now())
+    
+    def __repr__(self):
+        return f"<StrategyPerformance(user_id='{self.user_id}', strategy='{self.strategy_name}', pnl={self.total_pnl})>"
+
+
+class MonthlyReport(Base):
+    """Monthly performance reports"""
+    __tablename__ = 'monthly_reports'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(50), ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False, index=True)
+    year = Column(Integer, nullable=False, index=True)
+    month = Column(Integer, nullable=False, index=True)
+    
+    # Capital metrics
+    start_equity = Column(Numeric(18, 8), nullable=False)
+    end_equity = Column(Numeric(18, 8), nullable=False)
+    monthly_return_pct = Column(Numeric(8, 4), default=0)
+    
+    # Trading metrics
+    total_trades = Column(Integer, default=0)
+    winning_trades = Column(Integer, default=0)
+    losing_trades = Column(Integer, default=0)
+    win_rate_pct = Column(Numeric(8, 4), default=0)
+    
+    # Risk metrics
+    max_drawdown_pct = Column(Numeric(8, 4), default=0)
+    sharpe_ratio = Column(Numeric(8, 4), default=0)
+    volatility_pct = Column(Numeric(8, 4), default=0)
+    
+    # Activity
+    trading_days = Column(Integer, default=0)
+    avg_trades_per_day = Column(Numeric(8, 4), default=0)
+    
+    created_at = Column(DateTime, default=func.now())
+    
+    def __repr__(self):
+        return f"<MonthlyReport(user_id='{self.user_id}', year={self.year}, month={self.month}, return={self.monthly_return_pct}%)>"
