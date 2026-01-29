@@ -1037,8 +1037,9 @@ class ExecutionEngine:
         """
         Check if position should execute stepped profit-taking exits
         
-        PROFITABILITY_UPGRADE_V7.2 + FEE-AWARE + BROKER-AWARE (Jan 25, 2026)
+        PROFITABILITY_UPGRADE_V7.3 + FEE-AWARE + BROKER-AWARE (Jan 29, 2026)
         Stepped exits now dynamically adjusted based on broker fees
+        OPTIMIZATION: Raised Kraken targets to let winners run longer (0.7%→1.2%, 1.0%→1.7%)
         
         BROKER-SPECIFIC FEE STRUCTURE:
         - Kraken: 0.36% round-trip (0.16% taker x2 + 0.04% spread)
@@ -1046,11 +1047,11 @@ class ExecutionEngine:
         - Binance: 0.28% round-trip (0.1% taker x2 + 0.08% spread)
         - OKX: 0.30% round-trip (0.1% taker x2 + 0.1% spread)
         
-        KRAKEN EXAMPLE (0.36% fees):
-        - Exit 10% at 0.7% gross profit → ~0.34% NET profit after fees (PROFITABLE)
-        - Exit 15% at 1.0% gross profit → ~0.64% NET profit after fees (PROFITABLE)
-        - Exit 25% at 1.5% gross profit → ~1.14% NET profit after fees (PROFITABLE)
-        - Exit 50% at 2.5% gross profit → ~2.14% NET profit after fees (PROFITABLE)
+        KRAKEN EXAMPLE (0.36% fees) - OPTIMIZED JAN 29, 2026:
+        - Exit 10% at 1.2% gross profit → ~0.84% NET profit after fees (OPTIMIZED from 0.7%)
+        - Exit 15% at 1.7% gross profit → ~1.34% NET profit after fees (OPTIMIZED from 1.0%)
+        - Exit 25% at 2.2% gross profit → ~1.84% NET profit after fees (OPTIMIZED from 1.5%)
+        - Exit 50% at 3.0% gross profit → ~2.64% NET profit after fees (OPTIMIZED from 2.5%)
         
         COINBASE EXAMPLE (1.4% fees):
         - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees (PROFITABLE)
@@ -1150,13 +1151,15 @@ class ExecutionEngine:
         # Each threshold ensures NET profit after broker-specific round-trip fees
         
         # For low-fee brokers (Kraken 0.36%, Binance 0.28%, OKX 0.30%)
-        # Use aggressive profit-taking to lock in gains faster
+        # OPTIMIZED (Jan 29, 2026): Raised targets to let winners run longer
+        # Previous targets (0.7%, 1.0%, 1.5%) were cutting winners too early
+        # New targets aligned closer to Coinbase for better performance
         if broker_round_trip_fee <= 0.005:  # <= 0.5% fees (Kraken, Binance, OKX)
             exit_levels = [
-                (0.007, 0.10, 'tp_exit_0.7pct'),   # Exit 10% at 0.7% gross → ~0.34-0.42% NET
-                (0.010, 0.15, 'tp_exit_1.0pct'),   # Exit 15% at 1.0% gross → ~0.64-0.72% NET
-                (0.015, 0.25, 'tp_exit_1.5pct'),   # Exit 25% at 1.5% gross → ~1.14-1.22% NET
-                (0.025, 0.50, 'tp_exit_2.5pct'),   # Exit 50% at 2.5% gross → ~2.14-2.22% NET
+                (0.012, 0.10, 'tp_exit_1.2pct'),   # Exit 10% at 1.2% gross → ~0.84% NET (was 0.7% = too early)
+                (0.017, 0.15, 'tp_exit_1.7pct'),   # Exit 15% at 1.7% gross → ~1.34% NET (was 1.0% = too early)
+                (0.022, 0.25, 'tp_exit_2.2pct'),   # Exit 25% at 2.2% gross → ~1.84% NET (was 1.5% = too early)
+                (0.030, 0.50, 'tp_exit_3.0pct'),   # Exit 50% at 3.0% gross → ~2.64% NET (was 2.5%, raised to 3.0%)
             ]
         # For high-fee brokers (Coinbase 1.4%)
         # Use conservative profit-taking to ensure profitability
@@ -1274,8 +1277,9 @@ class ExecutionEngine:
                 net_pnl = 0
             
             # Determine next profit target
-            if broker_round_trip_fee <= 0.005:  # Low-fee broker
-                next_targets = [0.007, 0.010, 0.015, 0.025]
+            if broker_round_trip_fee <= 0.005:  # Low-fee broker (Kraken, Binance, OKX)
+                # OPTIMIZED JAN 29, 2026: Raised targets to let winners run longer
+                next_targets = [0.012, 0.017, 0.022, 0.030]  # 1.2%, 1.7%, 2.2%, 3.0% (was 0.7%, 1.0%, 1.5%, 2.5%)
             else:  # High-fee broker
                 next_targets = [0.020, 0.025, 0.030, 0.040]
             
