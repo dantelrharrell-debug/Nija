@@ -458,6 +458,17 @@ def export_investor_report():
         {
             "output_dir": "./reports"  # Optional, defaults to ./reports
         }
+
+    Returns:
+        JSON with success status and filepath
+    """
+    # This function is handled by the export_investor_report route in dashboard_api
+    return jsonify({
+        'success': True,
+        'message': 'Please use /export-report endpoint instead'
+    }), 200
+
+
 @dashboard_bp.route('/performance/summary', methods=['GET'])
 def get_summary():
     """
@@ -474,6 +485,20 @@ def get_summary():
     try:
         dashboard = get_performance_dashboard(user_id)
         summary = dashboard.get_performance_summary()
+
+        return jsonify({
+            'success': True,
+            'data': summary
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting performance summary: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @dashboard_api.route('/export-report', methods=['POST'])
 def export_investor_report():
     """
@@ -496,10 +521,6 @@ def export_investor_report():
 
         # Export report - path validation happens inside export_investor_report()
         # This prevents path traversal attacks like output_dir="../../../etc"
-        data = request.get_json() or {}
-        output_dir = data.get('output_dir', './reports')
-
-        dashboard = get_performance_dashboard()
         filepath = dashboard.export_investor_report(output_dir=output_dir)
 
         return jsonify({
@@ -569,37 +590,6 @@ def export_csv_report():
         }), 500
 
 
-# For standalone testing
-if __name__ == '__main__':
-    from flask import Flask
-    import os
-    app = Flask(__name__)
-    app.register_blueprint(dashboard_bp)
-    # Only use debug mode in development, not production
-    debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
-    app.run(debug=debug_mode, port=5001)
-            'error': str(e)
-        }), 500
-
-
-# Flask app integration (if running standalone)
-if __name__ != '__main__':
-    from datetime import datetime
-else:
-    from flask import Flask
-    from datetime import datetime
-
-    app = Flask(__name__)
-    app.register_blueprint(dashboard_bp)
-
-    if __name__ == '__main__':
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-
-        logger.info("Starting Dashboard API on http://0.0.0.0:5002")
-        app.run(host='0.0.0.0', port=5002, debug=False)
 @dashboard_api.route('/update-snapshot', methods=['POST'])
 def update_snapshot():
     """
