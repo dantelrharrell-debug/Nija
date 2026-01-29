@@ -48,6 +48,36 @@ class MarketRegime(Enum):
     CRISIS = "crisis"
 
 
+# Regime-Based Strategy Switching Matrix
+REGIME_STRATEGY_MATRIX = {
+    MarketRegime.BULL_TRENDING: {
+        'primary': [TradingStrategy.TREND_FOLLOWING, TradingStrategy.BREAKOUT],
+        'secondary': [TradingStrategy.APEX_RSI],
+        'avoid': [TradingStrategy.MEAN_REVERSION]
+    },
+    MarketRegime.BEAR_TRENDING: {
+        'primary': [TradingStrategy.TREND_FOLLOWING],  # With short bias
+        'secondary': [TradingStrategy.VOLATILITY_EXPANSION],
+        'avoid': [TradingStrategy.BREAKOUT]
+    },
+    MarketRegime.RANGING: {
+        'primary': [TradingStrategy.MEAN_REVERSION, TradingStrategy.APEX_RSI],
+        'secondary': [TradingStrategy.PAIRS_TRADING],
+        'avoid': [TradingStrategy.TREND_FOLLOWING, TradingStrategy.BREAKOUT]
+    },
+    MarketRegime.VOLATILE: {
+        'primary': [TradingStrategy.VOLATILITY_EXPANSION, TradingStrategy.BREAKOUT],
+        'secondary': [TradingStrategy.APEX_RSI],
+        'avoid': [TradingStrategy.MEAN_REVERSION]
+    },
+    MarketRegime.CRISIS: {
+        'primary': [],  # Reduce all exposure
+        'secondary': [TradingStrategy.VOLATILITY_EXPANSION],
+        'avoid': [TradingStrategy.TREND_FOLLOWING, TradingStrategy.BREAKOUT, TradingStrategy.MEAN_REVERSION]
+    }
+}
+
+
 @dataclass
 class StrategyConfig:
     """Configuration for a single strategy"""
@@ -611,7 +641,77 @@ class StrategyPortfolioManager:
             'correlation_matrix': correlation_matrix.tolist() if correlation_matrix.size > 0 else []
         }
     
-    def save_state(self) -> None:
+    def get_regime_weights(self, regime: MarketRegime) -> Dict[str, float]:
+        """
+        Get regime-specific weights for strategies
+        
+        Args:
+            regime: Current market regime
+        
+        Returns:
+            Dictionary mapping strategy names to regime weights
+        """
+        regime_config = REGIME_STRATEGY_MATRIX.get(regime, {})
+        
+        weights = {}
+        for name, config in self.strategies.items():
+            strategy_type = config.strategy_type
+            
+            # Check strategy classification in regime
+            if strategy_type in regime_config.get('primary', []):
+                weights[name] = 1.5  # Boost primary strategies
+            elif strategy_type in regime_config.get('secondary', []):
+                weights[name] = 1.0  # Normal weight
+            elif strategy_type in regime_config.get('avoid', []):
+                weights[name] = 0.3  # Reduce avoided strategies
+            else:
+                weights[name] = 0.7  # Default reduced weight
+        
+        return weights
+    
+    def calculate_final_allocation(self, 
+                                   base_weights: Dict[str, float],
+                                   regime_weights: Dict[str, float],
+                                   correlation_adjusted_weights: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+        """
+        Calculate final capital allocation combining all factors
+        
+        Formula: capital = total_capital * strategy_weight * regime_weight * correlation_factor
+        
+        Args:
+            base_weights: Base strategy weights (0-1)
+            regime_weights: Regime-based weights
+            correlation_adjusted_weights: Correlation-adjusted weights (optional)
+        
+        Returns:
+            Dictionary mapping strategy names to capital amounts
+        """
+        final_allocations = {}
+        
+        for name in base_weights.keys():
+            # Start with base weight
+            weight = base_weights[name]
+            
+            # Apply regime weight
+            regime_weight = regime_weights.get(name, 1.0)
+            weight *= regime_weight
+            
+            # Apply correlation adjustment if provided
+            if correlation_adjusted_weights:
+                corr_factor = correlation_adjusted_weights.get(name, weight) / base_weights.get(name, 1.0)
+                weight *= corr_factor
+            
+            final_allocations[name] = weight
+        
+        # Normalize to total capital
+        total_weight = sum(final_allocations.values())
+        if total_weight > 0:
+            final_allocations = {
+                name: (weight / total_weight) * self.total_capital
+                for name, weight in final_allocations.items()
+            }
+        
+        return final_allocations
         """Save portfolio state to disk"""
         state_file = self.data_dir / "portfolio_state.json"
         
