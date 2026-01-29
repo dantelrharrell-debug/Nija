@@ -63,6 +63,24 @@ data/drawdown_protection.json
 data/milestones.json
 data/capital_allocation.json
 
+# Trading state files (runtime state, should not be committed)
+data/daily_profit_history.json
+data/daily_profit_state.json
+data/progressive_targets.json
+data/trade_history.json
+data/open_positions.json
+data/open_positions.json.*
+data/*.csv
+data/trade_ledger.db
+data/trade_ledger.db-journal
+
+# Kraken global nonce file (runtime state, should not be committed)
+data/kraken_global_nonce.txt
+
+# Demo and learning data (runtime state, should not be committed)
+data/demo_live_tracking/
+data/learning/
+
 # Secure vault database (contains encrypted credentials)
 vault.db
 vault.db-journal

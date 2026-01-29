@@ -1,3 +1,0 @@
-symbol,side,entry_price,exit_price,quantity,size_usd,entry_fee,exit_fee,total_fees,gross_profit,net_profit,profit_pct,exit_reason,entry_time,exit_time
-ETH-USD,BUY,103.650689,93.324248,0.964779,100.00,0.0000,0.0000,1.1402,-9.9627,-11.1030,-11.10,Stop loss hit @ $101.58,,2025-12-21T13:03:40.920749
-BTC-USD,LONG,50000.000000,51000.000000,0.002000,100.00,0.6000,0.6000,1.2000,2.0000,0.8000,0.80,Take profit hit,2026-01-21T16:35:36.087304,2026-01-21T16:35:36.089545
