@@ -91,7 +91,8 @@ class AdaptiveRiskManager:
     
     def __init__(self, min_position_pct=0.02, max_position_pct=0.08,
                  max_total_exposure=0.60, use_exchange_profiles=False,
-                 pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None):
+                 pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None,
+                 max_portfolio_volatility=0.04):
         """
         Initialize Adaptive Risk Manager - OPTIMIZED FOR HIGH WIN RATE v7.5
         Updated Jan 29, 2026: Optimized for better risk management and higher win rate
@@ -104,6 +105,7 @@ class AdaptiveRiskManager:
             pro_mode: If True, enables PRO MODE with position rotation (default False)
             min_free_reserve_pct: Minimum free balance % to maintain in PRO MODE (default 15%)
             tier_lock: If set, locks risk to specific tier limits (e.g., 'SAVER', 'INVESTOR')
+            max_portfolio_volatility: Maximum portfolio volatility (default 4% = 0.04) - CRITICAL for aggressive sizing
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct
@@ -111,6 +113,7 @@ class AdaptiveRiskManager:
         self.pro_mode = pro_mode
         self.min_free_reserve_pct = min_free_reserve_pct
         self.tier_lock = tier_lock  # NEW: Tier locking for PRO MODE
+        self.max_portfolio_volatility = max_portfolio_volatility  # NEW: Volatility exposure cap
         
         # Track recent trades for streak analysis
         self.recent_trades: List[Dict] = []
@@ -118,6 +121,10 @@ class AdaptiveRiskManager:
         
         # Current exposure tracking
         self.current_exposure = 0.0
+        
+        # Portfolio volatility tracking (NEW - for volatility exposure cap)
+        self.current_portfolio_volatility = 0.0
+        self.open_positions_volatility: Dict[str, float] = {}  # position_id -> volatility
         
         # Trade frequency tracking (for fee awareness)
         self.trades_today = 0
@@ -233,6 +240,55 @@ class AdaptiveRiskManager:
         total = len(recent)
         
         return wins / total if total > 0 else 0.5
+    
+    def get_regime_based_multiplier(self, volatility_pct: float, adx: float) -> Tuple[float, str]:
+        """
+        Calculate REGIME-BASED position size multiplier - CAPITAL INTELLIGENCE
+        
+        This is where hedge funds separate themselves from bots.
+        
+        Regime Behavior:
+        - LOW_VOL (Low Volatility Chop) → Reduce size (0.6x)
+        - MEDIUM (Medium Trend) → Normal size (1.0x)
+        - HIGH_VOL_TREND (High Volatility Trend) → Increase size (1.4x)
+        
+        Strategy:
+        - Low volatility (<0.5%) → 0.6x - chop risk, tighten exposure
+        - Medium volatility (0.5%-2%) → 1.0x - normal conditions
+        - High volatility trend (>2% + ADX>25) → 1.4x - ride strong trends aggressively
+        - High volatility chop (>2% + ADX<25) → 0.6x - dangerous whipsaws
+        
+        This massively increases:
+        - Capital efficiency (right-size for conditions)
+        - Compounding speed (bigger bets in ideal conditions)
+        - Risk management (smaller in dangerous conditions)
+        
+        Args:
+            volatility_pct: Current market volatility as decimal (e.g., 0.01 = 1%)
+            adx: Current ADX value for trend strength
+        
+        Returns:
+            Tuple of (multiplier, regime_description)
+        """
+        volatility_pct = scalar(volatility_pct)
+        adx = scalar(adx)
+        
+        # LOW VOLATILITY: Choppy, ranging market
+        if volatility_pct < 0.005:
+            return 0.6, "LOW_VOL"
+        
+        # HIGH VOLATILITY + TREND: Ideal for momentum strategies - AGGRESSIVE
+        elif volatility_pct > 0.02 and adx > 25:
+            return 1.4, "HIGH_VOL_TREND"
+        
+        # HIGH VOLATILITY + NO TREND: Dangerous whipsaw conditions
+        elif volatility_pct > 0.02 and adx <= 25:
+            return 0.6, "HIGH_VOLATILITY_CHOP"
+        
+        # MEDIUM VOLATILITY: Normal conditions
+        else:
+            return 1.0, "MEDIUM"
+            return 1.0, "MEDIUM_VOLATILITY"
     
     def calculate_position_size(self, account_balance: float, adx: float, 
                                signal_strength: int = 3, ai_confidence: float = 0.5,
@@ -429,6 +485,17 @@ class AdaptiveRiskManager:
         breakdown['volatility_pct'] = volatility_pct
         breakdown['volatility_multiplier'] = volatility_multiplier
         
+        # 6. REGIME-BASED POSITION SIZING (NEW - Institutional Trick)
+        # Adjust position size based on market regime:
+        # - Low volatility → smaller (chop risk)
+        # - High volatility trend → larger (ride trends)
+        # - High volatility chop → smaller (whipsaw protection)
+        regime_multiplier, regime_name = self.get_regime_based_multiplier(volatility_pct, adx)
+        breakdown['regime_multiplier'] = regime_multiplier
+        breakdown['regime_name'] = regime_name
+        
+        logger.debug(f"📊 Regime: {regime_name} → {regime_multiplier:.2f}x position multiplier")
+        
         # FEE-AWARE POSITION SIZING (NEW)
         # Override percentage calculation with fee-aware sizing for small accounts
         if self.fee_aware_mode:
@@ -468,8 +535,9 @@ class AdaptiveRiskManager:
                 logger.info(f"   ⚠️  Account < ${MICRO_ACCOUNT_THRESHOLD:.2f} - trading with minimal capital")
             else:
                 # Apply our quality multipliers to the fee-aware base
+                # UPDATED: Include regime-based multiplier for institutional-grade sizing
                 quality_multiplier = (strength_multiplier * confidence_multiplier * 
-                                    streak_multiplier * volatility_multiplier)
+                                    streak_multiplier * volatility_multiplier * regime_multiplier)
                 
                 final_pct = fee_aware_pct * quality_multiplier
                 
@@ -477,12 +545,13 @@ class AdaptiveRiskManager:
                 breakdown['quality_multiplier'] = quality_multiplier
                 
                 logger.info(f"💰 Fee-aware sizing: {fee_aware_pct*100:.1f}% base → {final_pct*100:.1f}% final")
+                logger.info(f"   Regime: {regime_name} ({regime_multiplier:.2f}x)")
         
         else:
             # Legacy sizing
-            # Calculate final position size
+            # Calculate final position size with REGIME-BASED MULTIPLIER
             final_pct = (base_pct * strength_multiplier * confidence_multiplier * 
-                        streak_multiplier * volatility_multiplier)
+                        streak_multiplier * volatility_multiplier * regime_multiplier)
         
         # TIER-AWARE RISK MANAGEMENT: Respect tier max risk percentage
         # This ensures position sizes don't exceed tier limits (e.g., STARTER tier = 15% max)
@@ -663,28 +732,125 @@ class AdaptiveRiskManager:
         
         logger.debug(f"Exposure updated: {self.current_exposure*100:.1f}% (max: {self.max_total_exposure*100:.1f}%)")
     
-    def calculate_stop_loss(self, entry_price: float, side: str, 
-                            swing_level: float, atr: float) -> float:
+    def add_position_volatility(self, position_id: str, position_size_pct: float, 
+                               volatility_pct: float) -> None:
         """
-        Calculate stop loss based on swing low/high plus ATR buffer
+        Track volatility contribution of a new position
+        
+        Since we're increasing position size in trends (1.4x multiplier),
+        we need to cap total portfolio volatility to prevent over-leveraging.
+        
+        Args:
+            position_id: Unique position identifier
+            position_size_pct: Position size as % of portfolio
+            volatility_pct: Market volatility for this position (e.g., ATR/price)
+        """
+        # Calculate volatility contribution: position_size × volatility
+        volatility_contribution = position_size_pct * volatility_pct
+        self.open_positions_volatility[position_id] = volatility_contribution
+        
+        # Update total portfolio volatility
+        self.current_portfolio_volatility = sum(self.open_positions_volatility.values())
+        
+        logger.debug(f"Volatility tracking: {position_id} → {volatility_contribution*100:.2f}%")
+        logger.debug(f"Portfolio volatility: {self.current_portfolio_volatility*100:.2f}% "
+                    f"(max: {self.max_portfolio_volatility*100:.1f}%)")
+    
+    def remove_position_volatility(self, position_id: str) -> None:
+        """
+        Remove volatility contribution when position is closed
+        
+        Args:
+            position_id: Unique position identifier
+        """
+        if position_id in self.open_positions_volatility:
+            removed_vol = self.open_positions_volatility.pop(position_id)
+            self.current_portfolio_volatility = sum(self.open_positions_volatility.values())
+            logger.debug(f"Removed volatility: {position_id} → {removed_vol*100:.2f}%")
+            logger.debug(f"Portfolio volatility: {self.current_portfolio_volatility*100:.2f}%")
+    
+    def check_volatility_exposure_cap(self, new_position_size_pct: float, 
+                                      volatility_pct: float) -> Tuple[bool, str]:
+        """
+        Check if adding a new position would exceed portfolio volatility cap
+        
+        CRITICAL for aggressive position sizing (1.4x in trends)
+        Max portfolio volatility: 3% - 5% (default 4%)
+        
+        Args:
+            new_position_size_pct: Proposed position size as % of portfolio
+            volatility_pct: Market volatility for proposed position
+        
+        Returns:
+            Tuple of (can_add, reason)
+        """
+        # Calculate what the new volatility contribution would be
+        new_volatility_contribution = new_position_size_pct * volatility_pct
+        projected_portfolio_volatility = self.current_portfolio_volatility + new_volatility_contribution
+        
+        # Check against cap
+        if projected_portfolio_volatility > self.max_portfolio_volatility:
+            reason = (f"Portfolio volatility cap exceeded: "
+                     f"{projected_portfolio_volatility*100:.2f}% > "
+                     f"{self.max_portfolio_volatility*100:.1f}% max")
+            logger.warning(f"🛑 {reason}")
+            return False, reason
+        
+        return True, "Within volatility cap"
+    
+    def calculate_stop_loss(self, entry_price: float, side: str, 
+                            swing_level: float, atr: float, bb_width: float = None) -> float:
+        """
+        Calculate ADAPTIVE stop loss with volatility coupling
+        
+        Formula: SL = max(base_SL, ATR × 1.3, BB_width × k)
+        - Expands in trends (high volatility)
+        - Tightens in chop (low volatility)
         
         Args:
             entry_price: Entry price
             side: 'long' or 'short'
             swing_level: Swing low (for long) or swing high (for short)
             atr: Current ATR(14) value
+            bb_width: Bollinger Band width (optional, normalized volatility measure)
         
         Returns:
-            Stop loss price
+            Adaptive stop loss price
         """
+        # Base stop loss (swing level + ATR buffer)
         atr_buffer = atr * 1.5  # 1.5x ATR buffer (upgraded from 0.5x - reduces stop-hunts)
         
         if side == 'long':
-            # Stop below swing low with ATR buffer
-            stop_loss = swing_level - atr_buffer
+            base_stop = swing_level - atr_buffer
         else:  # short
-            # Stop above swing high with ATR buffer
-            stop_loss = swing_level + atr_buffer
+            base_stop = swing_level + atr_buffer
+        
+        # ATR-based stop distance (1.3x ATR for institutional grade)
+        atr_stop_distance = atr * 1.3
+        
+        # Bollinger Band width-based stop (if provided)
+        bb_stop_distance = None
+        if bb_width is not None:
+            # k = 0.5 for BB width multiplier (conservative)
+            # BB width represents normalized volatility
+            bb_stop_distance = entry_price * bb_width * 0.5
+        
+        # Calculate stop distances from entry
+        base_distance = abs(entry_price - base_stop)
+        
+        # Use maximum distance for adaptive volatility coupling
+        # This expands stops in high volatility (protects from noise)
+        # and tightens in low volatility (maximizes capital efficiency)
+        if bb_stop_distance is not None:
+            adaptive_distance = max(base_distance, atr_stop_distance, bb_stop_distance)
+        else:
+            adaptive_distance = max(base_distance, atr_stop_distance)
+        
+        # Apply adaptive distance
+        if side == 'long':
+            stop_loss = entry_price - adaptive_distance
+        else:  # short
+            stop_loss = entry_price + adaptive_distance
         
         return stop_loss
     
@@ -832,6 +998,67 @@ class AdaptiveRiskManager:
         
         return trailing_stop
     
+    def calculate_partial_profit_levels(self, entry_price: float, stop_loss: float,
+                                       side: str, broker_fee_pct: float = None,
+                                       use_limit_order: bool = True) -> Dict[str, any]:
+        """
+        Calculate INSTITUTIONAL partial profit scaling levels
+        
+        Strategy:
+        - Take 35% at adaptive TP/2 (locks profits early)
+        - Let 65% run to full adaptive TP (preserves runner upside)
+        
+        This approach:
+        1. Locks in profits early (reduces giveback risk)
+        2. Preserves upside potential (65% still running)
+        3. Improves win rate (partial wins count as wins)
+        4. Increases capital efficiency (faster recycling)
+        
+        Args:
+            entry_price: Entry price
+            stop_loss: Stop loss price
+            side: 'long' or 'short'
+            broker_fee_pct: Round-trip fee as decimal (e.g., 0.014 = 1.4%)
+            use_limit_order: True for maker fees, False for taker fees
+        
+        Returns:
+            Dictionary with partial TP levels and percentages:
+            {
+                'partial_tp': price for 35% exit,
+                'full_tp': price for 65% exit,
+                'partial_pct': 0.35,
+                'runner_pct': 0.65,
+                'partial_r': R-multiple for partial TP,
+                'full_r': R-multiple for full TP
+            }
+        """
+        # Get full TP levels
+        tp_levels = self.calculate_take_profit_levels(
+            entry_price, stop_loss, side, broker_fee_pct, use_limit_order
+        )
+        
+        # Use TP2 (3R) as the full adaptive TP target
+        full_tp = tp_levels['tp2']
+        
+        # Calculate risk
+        if side == 'long':
+            risk = entry_price - stop_loss
+            # Partial TP at halfway point (1.5R = TP2/2)
+            partial_tp = entry_price + (risk * 1.5)
+        else:  # short
+            risk = stop_loss - entry_price
+            # Partial TP at halfway point (1.5R = TP2/2)
+            partial_tp = entry_price - (risk * 1.5)
+        
+        return {
+            'partial_tp': partial_tp,      # 35% exit at TP/2 (1.5R)
+            'full_tp': full_tp,            # 65% exit at full TP (3R)
+            'partial_pct': 0.35,           # 35% position size
+            'runner_pct': 0.65,            # 65% position size
+            'partial_r': 1.5,              # 1.5R for partial exit
+            'full_r': 3.0,                 # 3R for full exit
+            'risk': risk
+        }
     def calculate_adaptive_profit_target(self, entry_price: float, base_target_pct: float,
                                          broker_fee_pct: float, atr: float, 
                                          volatility_bandwidth: float) -> float:
