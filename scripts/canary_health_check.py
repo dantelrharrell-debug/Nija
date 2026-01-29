@@ -229,8 +229,8 @@ def main():
     parser.add_argument("--namespace", required=True, help="Kubernetes namespace")
     parser.add_argument("--deployment", required=True, help="Deployment name")
     parser.add_argument("--duration", type=int, default=300, help="Monitoring duration in seconds")
-    parser.add_argument("--error-threshold", type=int, default=5, help="Error rate threshold (%)")
-    parser.add_argument("--latency-threshold-ms", type=int, default=1000, help="P99 latency threshold (ms)")
+    parser.add_argument("--error-threshold", type=int, default=5, help="Error rate threshold (percent)")
+    parser.add_argument("--latency-threshold-ms", type=int, default=1000, help="P99 latency threshold in milliseconds")
     
     args = parser.parse_args()
     
