@@ -5,28 +5,6 @@ Provides comprehensive performance analytics and investor reporting capabilities
 for the NIJA trading bot. Includes portfolio summary, trade analytics, and
 secure export functionality.
 
-Author: NIJA Trading Systems
-Provides performance tracking and reporting for trading accounts.
-Includes secure export functionality with path traversal protection.
-
-Author: NIJA Trading Systems
-Date: January 29, 2026
-"""
-
-import json
-import logging
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any, List, Optional
-import pandas as pd
-
-# Import path validation utilities for security
-from bot.path_validator import validate_output_path, PathValidationError
-from typing import Dict, Any, Optional
-
-from bot.path_validator import PathValidator
-
-logger = logging.getLogger(__name__)
 Investor-grade performance dashboard providing:
 - Real-time NAV tracking
 - Equity curves
@@ -42,7 +20,17 @@ Version: 1.0
 Date: January 29, 2026
 """
 
+import json
 import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+import pandas as pd
+
+# Import path validation utilities for security
+from bot.path_validator import validate_output_path, PathValidationError, PathValidator
+
+logger = logging.getLogger(__name__)
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -174,6 +162,11 @@ class PerformanceDashboard:
             'analytics': self.get_trade_analytics(),
             'risk': self.get_risk_metrics(),
             'generated_by': 'NIJA Performance Dashboard v1.0'
+        }
+
+
+class InvestorDashboard:
+    """
     Performance dashboard for tracking and reporting trading metrics.
 
     Features:
@@ -265,6 +258,18 @@ class PerformanceDashboard:
         filepath = output_path / filename
 
         # Write report to file
+        try:
+            with open(filepath, 'w') as f:
+                json.dump(report, f, indent=2, default=str)
+            logger.info(f"📄 Report exported to {filepath}")
+            return str(filepath)
+        except Exception as e:
+            logger.error(f"Failed to write report: {e}")
+            raise
+
+
+class ComprehensiveDashboard:
+    """
     Investor-grade performance dashboard
 
     Provides comprehensive performance tracking and reporting
@@ -612,14 +617,7 @@ class PerformanceDashboard:
         except PathValidationError as e:
             self.logger.error(f"Path validation failed for output_dir: {e}")
             raise
-        Export comprehensive investor report to file
 
-        Args:
-            output_dir: Directory to save report
-
-        Returns:
-            Path to saved report file
-        """
         output_path = Path(output_dir)
         output_path.mkdir(exist_ok=True, parents=True)
 
@@ -697,93 +695,19 @@ class PerformanceDashboard:
             raise OSError(f"Failed to export CSV: {e}")
 
 
-# Singleton instance
-_dashboard_instance: Optional[PerformanceDashboard] = None
 
 
-def get_performance_dashboard() -> PerformanceDashboard:
-    """
-    Get the singleton performance dashboard instance.
-        # Add equity and drawdown curves
-        report['equity_curve'] = self.get_equity_curve()
-        report['drawdown_curve'] = self.get_drawdown_curve()
-        report['monthly_reports'] = self.get_all_monthly_reports()
-
-        # Save to file
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"investor_report_{self.user_id}_{timestamp}.json"
-        filepath = output_path / filename
-
-        with open(filepath, 'w') as f:
-            json.dump(report, f, indent=2, default=str)
-
-        logger.info(f"📄 Exported investor report to {filepath}")
-
-        return str(filepath)
-
-    def _generate_investor_report(self) -> Dict[str, Any]:
-        """
-        Generate comprehensive investor report data.
-
-        Returns:
-            Dictionary containing report data
-        """
-        return {
-            'report_type': 'investor_report',
-            'generated_at': datetime.now().isoformat(),
-            'user_id': self.user_id,
-            'performance_summary': self.get_performance_summary(),
-            'risk_metrics': {
-                'max_drawdown': 0.0,
-                'volatility': 0.0,
-                'beta': 0.0,
-                'var_95': 0.0
-            },
-            'trade_history': {
-                'total_trades': 0,
-                'recent_trades': []
-            },
-            'portfolio_allocation': {},
-            'strategy_breakdown': {}
-        }
 
 
-# Global cache for dashboard instances
-_dashboard_cache: Dict[str, PerformanceDashboard] = {}
-
-
-def get_performance_dashboard(user_id: str = "default") -> PerformanceDashboard:
-    """
-    Get or create performance dashboard instance for a user.
-
-    Args:
-        user_id: User identifier (defaults to "default")
-
-    Returns:
-        PerformanceDashboard instance
-    """
-    # Sanitize user_id
-    safe_user_id = user_id.replace('/', '_').replace('\\', '_').replace('..', '')
-
-    if safe_user_id not in _dashboard_cache:
-        _dashboard_cache[safe_user_id] = PerformanceDashboard(safe_user_id)
-
-    return _dashboard_cache[safe_user_id]
-    def save_state(self) -> None:
-        """Save all dashboard state to disk"""
-        self.metrics_calculator.save_data()
-        self.portfolio_manager.save_state()
-
-        logger.debug("Saved dashboard state")
 
 
 # Singleton instance
-_dashboard: Optional[PerformanceDashboard] = None
+_dashboard: Optional[ComprehensiveDashboard] = None
 
 
 def get_performance_dashboard(initial_capital: float = 1000.0,
                               user_id: str = "default",
-                              reset: bool = False) -> PerformanceDashboard:
+                              reset: bool = False) -> ComprehensiveDashboard:
     """
     Get or create the performance dashboard singleton
 
@@ -793,15 +717,11 @@ def get_performance_dashboard(initial_capital: float = 1000.0,
         reset: Force reset and create new instance
 
     Returns:
-        PerformanceDashboard instance
+        ComprehensiveDashboard instance
     """
-    global _dashboard_instance
-    if _dashboard_instance is None:
-        _dashboard_instance = PerformanceDashboard()
-    return _dashboard_instance
     global _dashboard
 
     if _dashboard is None or reset:
-        _dashboard = PerformanceDashboard(initial_capital, user_id)
+        _dashboard = ComprehensiveDashboard(initial_capital, user_id)
 
     return _dashboard
