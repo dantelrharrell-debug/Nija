@@ -55,7 +55,8 @@ def test_broker_selection():
             def get_positions(self):
                 return []
         
-        # Add Coinbase (will be primary first)
+        # Add Coinbase first for this test (to simulate promotion scenario)
+        # NOTE: In production code, Kraken is added first and becomes primary by default
         coinbase = MockBroker(BrokerType.COINBASE, exit_only=False)
         manager.add_broker(coinbase)
         

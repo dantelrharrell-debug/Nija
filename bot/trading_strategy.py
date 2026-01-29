@@ -526,27 +526,8 @@ class TradingStrategy:
             time.sleep(startup_delay)
             logger.info("✅ Startup delay complete, beginning broker connections...")
             
-            # Try to connect Coinbase (primary broker) - MASTER ACCOUNT
-            logger.info("📊 Attempting to connect Coinbase Advanced Trade (MASTER)...")
-            try:
-                coinbase = CoinbaseBroker()
-                if coinbase.connect():
-                    self.broker_manager.add_broker(coinbase)
-                    # Manually register in multi_account_manager (reuse same instance)
-                    self.multi_account_manager.master_brokers[BrokerType.COINBASE] = coinbase
-                    connected_brokers.append("Coinbase")
-                    logger.info("   ✅ Coinbase MASTER connected")
-                    logger.info("   ✅ Coinbase registered as MASTER broker in multi-account manager")
-                else:
-                    logger.warning("   ⚠️  Coinbase MASTER connection failed")
-            except Exception as e:
-                logger.warning(f"   ⚠️  Coinbase MASTER error: {e}")
-            
-            # Add delay between broker connections to avoid rate limiting
-            time.sleep(2.0)  # Increased from 0.5s to 2.0s
-            
-            # Try to connect Kraken Pro - MASTER ACCOUNT
-            logger.info("📊 Attempting to connect Kraken Pro (MASTER)...")
+            # Try to connect Kraken Pro (PRIMARY BROKER) - MASTER ACCOUNT
+            logger.info("📊 Attempting to connect Kraken Pro (MASTER - PRIMARY)...")
             kraken = None  # Initialize to ensure variable exists for exception handler
             try:
                 kraken = KrakenBroker(account_type=AccountType.MASTER)
@@ -633,7 +614,23 @@ class TradingStrategy:
                     self._log_broker_independence_message()
             
             # Add delay between broker connections
-            time.sleep(0.5)
+            time.sleep(2.0)  # Increased from 0.5s to 2.0s
+            
+            # Try to connect Coinbase - MASTER ACCOUNT
+            logger.info("📊 Attempting to connect Coinbase Advanced Trade (MASTER)...")
+            try:
+                coinbase = CoinbaseBroker()
+                if coinbase.connect():
+                    self.broker_manager.add_broker(coinbase)
+                    # Manually register in multi_account_manager (reuse same instance)
+                    self.multi_account_manager.master_brokers[BrokerType.COINBASE] = coinbase
+                    connected_brokers.append("Coinbase")
+                    logger.info("   ✅ Coinbase MASTER connected")
+                    logger.info("   ✅ Coinbase registered as MASTER broker in multi-account manager")
+                else:
+                    logger.warning("   ⚠️  Coinbase MASTER connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Coinbase MASTER error: {e}")
             
             # Try to connect OKX - MASTER ACCOUNT
             logger.info("📊 Attempting to connect OKX (MASTER)...")
