@@ -236,13 +236,20 @@ class AdaptiveRiskManager:
     
     def get_regime_based_multiplier(self, volatility_pct: float, adx: float) -> Tuple[float, str]:
         """
-        Calculate REGIME-BASED position size multiplier
+        Calculate REGIME-BASED position size multiplier - CAPITAL INTELLIGENCE
+        
+        This is where hedge funds separate themselves from bots.
+        
+        Regime Behavior:
+        - LOW_VOL (Low Volatility Chop) → Reduce size (0.6x)
+        - MEDIUM (Medium Trend) → Normal size (1.0x)
+        - HIGH_VOL_TREND (High Volatility Trend) → Increase size (1.4x)
         
         Strategy:
-        - Low volatility (<0.5%) → SMALLER positions (0.7x) - chop risk
-        - Medium volatility (0.5%-2%) → NORMAL positions (1.0x)
-        - High volatility trend (>2% + ADX>25) → LARGER positions (1.3x) - ride trends
-        - High volatility chop (>2% + ADX<25) → SMALLER positions (0.6x) - avoid whipsaws
+        - Low volatility (<0.5%) → 0.6x - chop risk, tighten exposure
+        - Medium volatility (0.5%-2%) → 1.0x - normal conditions
+        - High volatility trend (>2% + ADX>25) → 1.4x - ride strong trends aggressively
+        - High volatility chop (>2% + ADX<25) → 0.6x - dangerous whipsaws
         
         This massively increases:
         - Capital efficiency (right-size for conditions)
@@ -261,11 +268,11 @@ class AdaptiveRiskManager:
         
         # LOW VOLATILITY: Choppy, ranging market
         if volatility_pct < 0.005:
-            return 0.7, "LOW_VOLATILITY_CHOP"
+            return 0.6, "LOW_VOL"
         
-        # HIGH VOLATILITY + TREND: Ideal for momentum strategies
+        # HIGH VOLATILITY + TREND: Ideal for momentum strategies - AGGRESSIVE
         elif volatility_pct > 0.02 and adx > 25:
-            return 1.3, "HIGH_VOLATILITY_TREND"
+            return 1.4, "HIGH_VOL_TREND"
         
         # HIGH VOLATILITY + NO TREND: Dangerous whipsaw conditions
         elif volatility_pct > 0.02 and adx <= 25:
@@ -273,6 +280,7 @@ class AdaptiveRiskManager:
         
         # MEDIUM VOLATILITY: Normal conditions
         else:
+            return 1.0, "MEDIUM"
             return 1.0, "MEDIUM_VOLATILITY"
     
     def calculate_position_size(self, account_balance: float, adx: float, 
