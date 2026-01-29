@@ -1101,10 +1101,14 @@ class NIJAApexStrategyV71:
                     broker_name = self._get_broker_name()
                     broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
                     
+                    # Extract regime confidence for GOD MODE+ adaptive risk (if available)
+                    regime_confidence = metadata.get('regime_confidence', None) if metadata else None
+                    
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
                         account_balance, adx, risk_score,
                         broker_name=broker_name,
-                        broker_min_position=broker_min
+                        broker_min_position=broker_min,
+                        regime_confidence=regime_confidence
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
@@ -1215,10 +1219,14 @@ class NIJAApexStrategyV71:
                     broker_name = self._get_broker_name()
                     broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
                     
+                    # Extract regime confidence for GOD MODE+ adaptive risk (if available)
+                    regime_confidence = metadata.get('regime_confidence', None) if metadata else None
+                    
                     position_size, size_breakdown = self.risk_manager.calculate_position_size(
                         account_balance, adx, risk_score,
                         broker_name=broker_name,
-                        broker_min_position=broker_min
+                        broker_min_position=broker_min,
+                        regime_confidence=regime_confidence
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)

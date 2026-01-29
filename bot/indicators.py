@@ -64,6 +64,100 @@ def calculate_rsi(df, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi.ffill().fillna(50)
 
+
+def calculate_volatility_weighted_rsi_bands(df, rsi_period=14, atr_period=14, adx_period=14, 
+                                            base_width=10):
+    """
+    Calculate Volatility-Weighted RSI Bands (GOD MODE+)
+    
+    Blends ATR + ADX to create dynamic RSI bands that adapt to market conditions:
+    - High volatility → Wider bands (less sensitive to noise)
+    - Low volatility → Tighter bands (more responsive)
+    - Strong trend (high ADX) → Narrower bands (follow trend)
+    - Weak trend (low ADX) → Wider bands (avoid false signals)
+    
+    Formula: rsi_width = base_width * (1 / normalized_volatility)
+    Where normalized_volatility combines ATR and ADX
+    
+    Args:
+        df: DataFrame with OHLCV data
+        rsi_period: RSI calculation period (default 14)
+        atr_period: ATR calculation period (default 14)
+        adx_period: ADX calculation period (default 14)
+        base_width: Base RSI band width in points (default 10)
+    
+    Returns:
+        tuple: (rsi, upper_band, lower_band, band_width)
+            - rsi: Standard RSI values
+            - upper_band: Dynamic upper band (70 adjusted)
+            - lower_band: Dynamic lower band (30 adjusted)
+            - band_width: Calculated band width
+    
+    Example:
+        In high volatility choppy market (ATR=5%, ADX=15):
+        - normalized_volatility = high → wider bands (e.g., 75/25 instead of 70/30)
+        
+        In strong trending market (ATR=2%, ADX=40):
+        - normalized_volatility = low → tighter bands (e.g., 68/32 instead of 70/30)
+    """
+    df = _ensure_numeric(df, ['high', 'low', 'close'])
+    
+    # Calculate base RSI
+    rsi = calculate_rsi(df, period=rsi_period)
+    
+    # Calculate ATR for volatility measure
+    atr = calculate_atr(df, period=atr_period)
+    
+    # Calculate ADX for trend strength
+    adx, _, _ = calculate_adx(df, period=adx_period)
+    
+    # Calculate ATR as percentage of price (normalized volatility)
+    current_price = df['close']
+    atr_pct = (atr / current_price) * 100  # Convert to percentage
+    
+    # Normalize ATR percentage to 0-1 range (capping at 10% for extreme cases)
+    # Typical crypto ATR%: 1-5%, so we use 5% as midpoint
+    normalized_atr = (atr_pct / 5.0).clip(upper=2.0)  # Normalize around 5% ATR
+    
+    # Normalize ADX to 0-1 range (inverse - higher ADX = tighter bands)
+    # ADX range typically 0-50, we use 25 as midpoint
+    # Inverse because strong trend (high ADX) should have TIGHTER bands
+    normalized_adx_inverse = (1.0 - (adx / 50.0).clip(upper=1.0))
+    
+    # Combine ATR and ADX for composite volatility metric
+    # Weight: 60% ATR (volatility), 40% inverse ADX (trend strength)
+    # High volatility OR weak trend → higher value → wider bands
+    composite_volatility = (0.6 * normalized_atr + 0.4 * normalized_adx_inverse)
+    
+    # Ensure minimum volatility to prevent division issues
+    composite_volatility = composite_volatility.clip(lower=EPSILON)
+    
+    # Calculate dynamic band width: rsi_width = base_width * (1 / normalized_volatility)
+    # Low volatility (0.5) → narrow bands (base_width * 2.0)
+    # High volatility (2.0) → wide bands (base_width * 0.5)
+    band_width = base_width / composite_volatility
+    
+    # Clip band width to reasonable range (5-20 points from centerline)
+    band_width = band_width.clip(lower=5, upper=20)
+    
+    # Calculate dynamic bands centered at 50
+    # Standard: 70/30, but we adjust based on volatility
+    center = 50
+    upper_band = center + band_width
+    lower_band = center - band_width
+    
+    # Ensure bands stay within RSI range (0-100)
+    upper_band = upper_band.clip(upper=95)
+    lower_band = lower_band.clip(lower=5)
+    
+    return (
+        rsi.ffill().fillna(50),
+        upper_band.ffill().fillna(70),
+        lower_band.ffill().fillna(30),
+        band_width.ffill().fillna(base_width)
+    )
+
+
 def calculate_ema(df, period):
     """Calculate EMA for given period"""
     df = _ensure_numeric(df, ['close'])
@@ -773,4 +867,167 @@ def calculate_indicators(df):
             "long": long_conditions,
             "short": short_conditions
         }
+    }
+
+
+def resample_to_higher_timeframe(df, target_timeframe='5min'):
+    """
+    Resample OHLCV data to a higher timeframe.
+    
+    Args:
+        df: DataFrame with OHLCV data and datetime index
+        target_timeframe: Target timeframe (e.g., '5min' for 5 minutes, '15min' for 15 minutes,
+                         '1H' for 1 hour, '4H' for 4 hours, '1D' for 1 day)
+    
+    Returns:
+        DataFrame: Resampled OHLCV data
+    """
+    # Ensure we have a datetime index
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("DataFrame must have a DatetimeIndex for resampling")
+    
+    # Resample OHLCV data
+    resampled = pd.DataFrame()
+    resampled['open'] = df['open'].resample(target_timeframe).first()
+    resampled['high'] = df['high'].resample(target_timeframe).max()
+    resampled['low'] = df['low'].resample(target_timeframe).min()
+    resampled['close'] = df['close'].resample(target_timeframe).last()
+    resampled['volume'] = df['volume'].resample(target_timeframe).sum()
+    
+    # Drop NaN rows
+    resampled = resampled.dropna()
+    
+    return resampled
+
+
+def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min', 
+                                       higher_timeframes=['5min', '15min'],
+                                       rsi_period=14,
+                                       agreement_threshold=10):
+    """
+    Check Multi-Timeframe RSI Agreement (GOD MODE+)
+    
+    Only allows entries when lower timeframe RSI aligns with higher timeframe RSI direction.
+    This prevents counter-trend trades and improves win rate significantly.
+    
+    Logic:
+    - Bullish signal: All timeframes show RSI in bullish territory or rising
+    - Bearish signal: All timeframes show RSI in bearish territory or falling
+    - No agreement: Mixed signals across timeframes = NO TRADE
+    
+    Args:
+        df: DataFrame with OHLCV data and datetime index
+        current_timeframe: Current/base timeframe (e.g., '1min' for 1 minute)
+        higher_timeframes: List of higher timeframes to check (e.g., ['5min', '15min'])
+        rsi_period: RSI calculation period (default 14)
+        agreement_threshold: RSI difference threshold for alignment (default 10)
+    
+    Returns:
+        dict: {
+            'agreement': bool - True if all timeframes agree
+            'direction': str - 'bullish', 'bearish', or 'neutral'
+            'current_rsi': float - Current timeframe RSI
+            'higher_rsis': dict - RSI values for each higher timeframe
+            'allow_long': bool - True if multi-TF analysis allows long entry
+            'allow_short': bool - True if multi-TF analysis allows short entry
+        }
+    
+    Example:
+        Current TF (1m): RSI = 35 (oversold, bullish potential)
+        Higher TF (5m): RSI = 32 (also oversold, bullish)
+        Higher TF (15m): RSI = 38 (also oversold, bullish)
+        Result: AGREEMENT = True, DIRECTION = bullish, ALLOW_LONG = True
+        
+        Current TF (1m): RSI = 35 (oversold, bullish potential)
+        Higher TF (5m): RSI = 65 (overbought, bearish)
+        Result: AGREEMENT = False, NO TRADE ALLOWED
+    """
+    # Calculate RSI for current timeframe
+    current_rsi = calculate_rsi(df, period=rsi_period).iloc[-1]
+    
+    # Determine current timeframe direction
+    # Bullish: RSI < 50 and potentially rising (oversold to neutral)
+    # Bearish: RSI > 50 and potentially falling (overbought to neutral)
+    if current_rsi < 40:
+        current_direction = 'bullish'  # Oversold, looking for reversal up
+    elif current_rsi > 60:
+        current_direction = 'bearish'  # Overbought, looking for reversal down
+    else:
+        current_direction = 'neutral'  # No clear directional bias
+    
+    # Calculate RSI for higher timeframes
+    higher_rsis = {}
+    higher_directions = []
+    
+    for htf in higher_timeframes:
+        try:
+            # Resample to higher timeframe
+            htf_df = resample_to_higher_timeframe(df, htf)
+            
+            # Need enough data for RSI calculation
+            if len(htf_df) < rsi_period + 5:
+                # Not enough data, skip this timeframe
+                continue
+            
+            # Calculate RSI for higher timeframe
+            htf_rsi = calculate_rsi(htf_df, period=rsi_period).iloc[-1]
+            higher_rsis[htf] = htf_rsi
+            
+            # Determine higher timeframe direction
+            if htf_rsi < 40:
+                htf_direction = 'bullish'
+            elif htf_rsi > 60:
+                htf_direction = 'bearish'
+            else:
+                htf_direction = 'neutral'
+            
+            higher_directions.append(htf_direction)
+            
+        except Exception as e:
+            # If resampling fails, skip this timeframe
+            import logging
+            logging.getLogger("nija.indicators").warning(
+                f"Failed to resample to {htf}: {e}"
+            )
+            continue
+    
+    # Check for agreement
+    # Agreement requires all timeframes to point in same direction
+    all_directions = [current_direction] + higher_directions
+    
+    # Count directions
+    bullish_count = all_directions.count('bullish')
+    bearish_count = all_directions.count('bearish')
+    neutral_count = all_directions.count('neutral')
+    total_timeframes = len(all_directions)
+    
+    # Determine overall agreement and direction
+    if bullish_count >= (total_timeframes * 0.7):  # 70% or more bullish
+        agreement = True
+        direction = 'bullish'
+        allow_long = True
+        allow_short = False
+    elif bearish_count >= (total_timeframes * 0.7):  # 70% or more bearish
+        agreement = True
+        direction = 'bearish'
+        allow_long = False
+        allow_short = True
+    else:
+        # Mixed signals or mostly neutral
+        agreement = False
+        direction = 'neutral'
+        allow_long = False
+        allow_short = False
+    
+    return {
+        'agreement': agreement,
+        'direction': direction,
+        'current_rsi': current_rsi,
+        'higher_rsis': higher_rsis,
+        'allow_long': allow_long,
+        'allow_short': allow_short,
+        'timeframes_checked': len(higher_rsis) + 1,
+        'bullish_count': bullish_count,
+        'bearish_count': bearish_count,
+        'neutral_count': neutral_count
     }

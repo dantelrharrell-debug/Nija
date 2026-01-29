@@ -297,7 +297,8 @@ class AdaptiveRiskManager:
                                position_value: float = 0.0,
                                portfolio_state=None,
                                broker_name: str = None,
-                               broker_min_position: float = None) -> Tuple[float, Dict]:
+                               broker_min_position: float = None,
+                               regime_confidence: float = None) -> Tuple[float, Dict]:
         """
         Calculate adaptive position size based on multiple factors.
         
@@ -333,6 +334,8 @@ class AdaptiveRiskManager:
             portfolio_state: PortfolioState instance (preferred - uses total_equity for sizing)
             broker_name: Name of broker (e.g., 'kraken', 'coinbase') for minimum adjustments
             broker_min_position: Broker's minimum position size in USD for intelligent bumping
+            regime_confidence: Regime classification confidence (0-1, optional - GOD MODE+)
+                             Scales position size by confidence: risk = base_risk * regime_confidence
         
         Returns:
             Tuple of (position_size, breakdown_dict)
@@ -494,6 +497,21 @@ class AdaptiveRiskManager:
         breakdown['regime_multiplier'] = regime_multiplier
         breakdown['regime_name'] = regime_name
         
+        # 7. REGIME CONFIDENCE MULTIPLIER (GOD MODE+)
+        # Scale position size by regime confidence: risk = base_risk * regime_confidence
+        # This ensures we bet more when we're confident in the regime classification
+        if regime_confidence is not None and regime_confidence > 0:
+            # Normalize confidence to reasonable range (0.5 - 1.2x)
+            # Low confidence (0.4) = 0.7x, Medium (0.6) = 0.9x, High (1.0) = 1.2x
+            regime_confidence_multiplier = 0.5 + (regime_confidence * 0.7)
+            breakdown['regime_confidence'] = regime_confidence
+            breakdown['regime_confidence_multiplier'] = regime_confidence_multiplier
+            logger.debug(f"📊 Regime confidence: {regime_confidence:.2f} → {regime_confidence_multiplier:.2f}x multiplier")
+        else:
+            regime_confidence_multiplier = 1.0
+            breakdown['regime_confidence'] = None
+            breakdown['regime_confidence_multiplier'] = 1.0
+        
         logger.debug(f"📊 Regime: {regime_name} → {regime_multiplier:.2f}x position multiplier")
         
         # FEE-AWARE POSITION SIZING (NEW)
@@ -535,9 +553,10 @@ class AdaptiveRiskManager:
                 logger.info(f"   ⚠️  Account < ${MICRO_ACCOUNT_THRESHOLD:.2f} - trading with minimal capital")
             else:
                 # Apply our quality multipliers to the fee-aware base
-                # UPDATED: Include regime-based multiplier for institutional-grade sizing
+                # UPDATED: Include regime-based multiplier AND regime confidence for institutional-grade sizing
                 quality_multiplier = (strength_multiplier * confidence_multiplier * 
-                                    streak_multiplier * volatility_multiplier * regime_multiplier)
+                                    streak_multiplier * volatility_multiplier * regime_multiplier * 
+                                    regime_confidence_multiplier)
                 
                 final_pct = fee_aware_pct * quality_multiplier
                 
@@ -545,13 +564,14 @@ class AdaptiveRiskManager:
                 breakdown['quality_multiplier'] = quality_multiplier
                 
                 logger.info(f"💰 Fee-aware sizing: {fee_aware_pct*100:.1f}% base → {final_pct*100:.1f}% final")
-                logger.info(f"   Regime: {regime_name} ({regime_multiplier:.2f}x)")
+                logger.info(f"   Regime: {regime_name} ({regime_multiplier:.2f}x), Confidence: {regime_confidence_multiplier:.2f}x")
         
         else:
             # Legacy sizing
-            # Calculate final position size with REGIME-BASED MULTIPLIER
+            # Calculate final position size with REGIME-BASED MULTIPLIER AND REGIME CONFIDENCE
             final_pct = (base_pct * strength_multiplier * confidence_multiplier * 
-                        streak_multiplier * volatility_multiplier * regime_multiplier)
+                        streak_multiplier * volatility_multiplier * regime_multiplier * 
+                        regime_confidence_multiplier)
         
         # TIER-AWARE RISK MANAGEMENT: Respect tier max risk percentage
         # This ensures position sizes don't exceed tier limits (e.g., STARTER tier = 15% max)
