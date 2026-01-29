@@ -6,11 +6,12 @@ Handles order execution and position management for Apex Strategy v7.1
 Enhanced with Execution Intelligence Layer for optimal trade execution.
 """
 
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Set
 from datetime import datetime
 import logging
 import sys
 import os
+import threading
 
 logger = logging.getLogger("nija")
 
@@ -195,6 +196,17 @@ class ExecutionEngine:
         self.user_id = user_id
         self.positions: Dict[str, Dict] = {}
         self.orders: List[Dict] = []
+        
+        # FIX #1: Atomic Position Close Lock - Prevent double-sells
+        # When a sell is submitted, symbol is added to closing_positions
+        # Only removed after confirmed rejection, failure, or final settlement
+        self.closing_positions: Set[str] = set()
+        self._closing_lock = threading.Lock()  # Protects closing_positions set
+        
+        # FIX #3: Block Concurrent Exit When Active Exit In Progress
+        # Tracks symbols with active exit orders to prevent concurrent exit attempts
+        self.active_exit_orders: Set[str] = set()
+        self._exit_lock = threading.Lock()  # Protects active_exit_orders set
         
         # Track rejected trades for monitoring
         self.rejected_trades_count = 0
@@ -761,6 +773,11 @@ class ExecutionEngine:
         """
         Execute exit order (full or partial)
         
+        CONCURRENCY FIXES (Issue #1):
+        - FIX #1: Atomic position close lock to prevent double-sells
+        - FIX #2: Immediate position state flush after confirmed sell
+        - FIX #3: Block concurrent exit when active exit in progress
+        
         Args:
             symbol: Trading symbol
             exit_price: Exit price
@@ -771,6 +788,18 @@ class ExecutionEngine:
             True if successful, False otherwise
         """
         try:
+            # FIX #1: Check if position is already being closed
+            with self._closing_lock:
+                if symbol in self.closing_positions:
+                    logger.warning(f"⚠️ CONCURRENCY PROTECTION: {symbol} already being closed, skipping duplicate exit")
+                    return False  # Prevent double-sell
+            
+            # FIX #3: Check if there's already an active exit order for this symbol
+            with self._exit_lock:
+                if symbol in self.active_exit_orders:
+                    logger.warning(f"⚠️ CONCURRENCY PROTECTION: Active exit order for {symbol}, skipping concurrent exit")
+                    return False  # Block concurrent exit
+            
             if symbol not in self.positions:
                 logger.warning(f"No position found for {symbol}")
                 return False
@@ -783,74 +812,131 @@ class ExecutionEngine:
             # Log exit attempt
             logger.info(f"Executing exit: {symbol} {size_pct*100:.0f}% @ {exit_price:.2f} - {reason}")
             
-            # Place exit order via broker
-            if self.broker_client:
-                order_side = 'sell' if position['side'] == 'long' else 'buy'
-                result = self.broker_client.place_market_order(
-                    symbol=symbol,
-                    side=order_side,
-                    quantity=exit_size
-                )
-                
-                if result.get('status') == 'error':
-                    logger.error(f"Exit order failed: {result.get('error')}")
-                    return False
-                
-                # Calculate exit fee
-                exit_fee = exit_size * 0.006
-                
-                # Record SELL in trade ledger database
-                if self.trade_ledger:
-                    try:
-                        order_id = result.get('order_id') or result.get('id')
-                        exit_quantity = position.get('quantity', exit_size / exit_price) * size_pct
+            # FIX #1: Lock this symbol as being closed before submitting order
+            with self._closing_lock:
+                self.closing_positions.add(symbol)
+            
+            # FIX #3: Mark as active exit order
+            with self._exit_lock:
+                self.active_exit_orders.add(symbol)
+            
+            try:
+                # Place exit order via broker
+                if self.broker_client:
+                    order_side = 'sell' if position['side'] == 'long' else 'buy'
+                    result = self.broker_client.place_market_order(
+                        symbol=symbol,
+                        side=order_side,
+                        quantity=exit_size
+                    )
+                    
+                    if result.get('status') == 'error':
+                        error_msg = result.get('error')
+                        logger.error(f"Exit order failed: {error_msg}")
                         
-                        self.trade_ledger.record_sell(
-                            symbol=symbol,
-                            price=exit_price,
-                            quantity=exit_quantity,
-                            size_usd=exit_size,
-                            fee=exit_fee,
-                            order_id=str(order_id) if order_id else None,
-                            position_id=position.get('position_id'),
-                            user_id=self.user_id,
-                            notes=f"Exit: {reason}"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not record exit in ledger: {e}")
-            
-            # Update position
-            position['remaining_size'] *= (1.0 - size_pct)
-            
-            # Close position if fully exited
-            if position['remaining_size'] < 0.01:  # Less than 1% remaining
-                position['status'] = 'closed'
-                position['closed_at'] = datetime.now()
+                        # FIX #1: Unlock on confirmed rejection
+                        with self._closing_lock:
+                            self.closing_positions.discard(symbol)
+                        
+                        # FIX #3: Remove from active exit orders on failure
+                        with self._exit_lock:
+                            self.active_exit_orders.discard(symbol)
+                        
+                        return False
+                    
+                    # Calculate exit fee
+                    exit_fee = exit_size * 0.006
+                    
+                    # Record SELL in trade ledger database
+                    if self.trade_ledger:
+                        try:
+                            order_id = result.get('order_id') or result.get('id')
+                            exit_quantity = position.get('quantity', exit_size / exit_price) * size_pct
+                            
+                            self.trade_ledger.record_sell(
+                                symbol=symbol,
+                                price=exit_price,
+                                quantity=exit_quantity,
+                                size_usd=exit_size,
+                                fee=exit_fee,
+                                order_id=str(order_id) if order_id else None,
+                                position_id=position.get('position_id'),
+                                user_id=self.user_id,
+                                notes=f"Exit: {reason}"
+                            )
+                        except Exception as e:
+                            logger.warning(f"Could not record exit in ledger: {e}")
                 
-                # Close position in database
-                if self.trade_ledger and position.get('position_id'):
-                    try:
-                        exit_fee = exit_size * 0.006
-                        self.trade_ledger.close_position(
-                            position_id=position['position_id'],
-                            exit_price=exit_price,
-                            exit_fee=exit_fee,
-                            exit_reason=reason
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not close position in ledger: {e}")
+                # Update position
+                position['remaining_size'] *= (1.0 - size_pct)
                 
-                logger.info(f"Position closed: {symbol}")
+                # Close position if fully exited
+                if position['remaining_size'] < 0.01:  # Less than 1% remaining
+                    position['status'] = 'closed'
+                    position['closed_at'] = datetime.now()
+                    
+                    # Close position in database
+                    if self.trade_ledger and position.get('position_id'):
+                        try:
+                            exit_fee = exit_size * 0.006
+                            self.trade_ledger.close_position(
+                                position_id=position['position_id'],
+                                exit_price=exit_price,
+                                exit_fee=exit_fee,
+                                exit_reason=reason
+                            )
+                        except Exception as e:
+                            logger.warning(f"Could not close position in ledger: {e}")
+                    
+                    logger.info(f"✅ TRADE COMPLETE: {symbol}")
+                    
+                    # FIX #2: Immediate Position State Flush After Sell
+                    # Instantly purge the internal position object - DO NOT wait for exchange refresh
+                    logger.info(f"🗑️ FLUSHING POSITION STATE: {symbol}")
+                    self.close_position(symbol)
+                    
+                    # FIX #1: Unlock after final settlement (position fully closed)
+                    with self._closing_lock:
+                        self.closing_positions.discard(symbol)
+                    
+                    # FIX #3: Remove from active exit orders after completion
+                    with self._exit_lock:
+                        self.active_exit_orders.discard(symbol)
+                else:
+                    logger.info(f"Partial exit: {symbol} ({position['remaining_size']*100:.0f}% remaining)")
+                    
+                    # Partial exit complete - unlock for potential future exits
+                    with self._closing_lock:
+                        self.closing_positions.discard(symbol)
+                    
+                    # FIX #3: Remove from active exit orders after partial exit completes
+                    with self._exit_lock:
+                        self.active_exit_orders.discard(symbol)
                 
-                # Remove closed position from tracking to free slot for new trades
-                self.close_position(symbol)
-            else:
-                logger.info(f"Partial exit: {symbol} ({position['remaining_size']*100:.0f}% remaining)")
-            
-            return True
+                return True
+                
+            except Exception as order_error:
+                # FIX #1: Unlock on confirmed failure
+                with self._closing_lock:
+                    self.closing_positions.discard(symbol)
+                
+                # FIX #3: Remove from active exit orders on exception
+                with self._exit_lock:
+                    self.active_exit_orders.discard(symbol)
+                
+                raise order_error
             
         except Exception as e:
             logger.error(f"Exit error: {e}")
+            
+            # FIX #1: Ensure unlock even on unexpected exceptions
+            with self._closing_lock:
+                self.closing_positions.discard(symbol)
+            
+            # FIX #3: Ensure cleanup even on unexpected exceptions
+            with self._exit_lock:
+                self.active_exit_orders.discard(symbol)
+            
             return False
     
     def update_stop_loss(self, symbol: str, new_stop: float) -> bool:
