@@ -156,13 +156,14 @@ class NIJAApexStrategyV71:
                 logger.info("ℹ️  Enhanced scoring disabled by configuration")
         
         # Strategy parameters - PROFITABILITY FIX: Balanced for crypto markets
-        # ULTRA RELAXED FILTERS (Jan 27, 2026 - SECOND RELAXATION): Further reduced to find trading opportunities
-        # First relaxation (Jan 26) still resulted in 0 signals - need more aggressive relaxation
-        self.min_adx = self.config.get('min_adx', 12)  # Lowered from 15 to 12 - allow even weaker trends
-        self.volume_threshold = self.config.get('volume_threshold', 0.2)  # Lowered from 0.3 to 0.2 - 20% of 5-candle avg
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.02)  # Lowered from 0.05 to 0.02 - only filter completely dead markets
+        # EMERGENCY RELAXATION (Jan 29, 2026 - THIRD RELAXATION): Bot finding ZERO signals despite two relaxations
+        # Analysis: 28/30 markets filtered by smart filters, 0 entry signals found
+        # Issue: Filters still too strict for current low-volume market conditions
+        self.min_adx = self.config.get('min_adx', 8)  # Lowered from 12 to 8 - allow very weak trends (was 15 → 12 → 8)
+        self.volume_threshold = self.config.get('volume_threshold', 0.1)  # Lowered from 0.2 to 0.1 - 10% of 5-candle avg (was 0.3 → 0.2 → 0.1)
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.005)  # Lowered from 0.02 to 0.005 - only filter completely dead markets (was 0.05 → 0.02 → 0.005)
         self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # Keep at 2/5 - already relaxed
-        self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 3)  # Lowered from 6 to 3 seconds
+        self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 1)  # Lowered from 3 to 1 second (was 6 → 3 → 1)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
         
         # PROFIT OPTIMIZATION: Stepped profit-taking configuration
@@ -346,9 +347,9 @@ class NIJAApexStrategyV71:
         - VWAP alignment (price above for uptrend, below for downtrend)
         - EMA sequence (9 > 21 > 50 for uptrend, 9 < 21 < 50 for downtrend)
         - MACD histogram alignment (positive for uptrend, negative for downtrend)
-        - ADX > min_adx (configurable, default 12 - relaxed for signal generation)
-        - Volume (market filter) > volume_threshold of 5-candle average (configurable, default 20%)
-        - Volume (smart filter) > volume_min_threshold of 20-candle average (configurable, default 2%)
+        - ADX > min_adx (configurable, default 8 - emergency relaxation for signal generation)
+        - Volume (market filter) > volume_threshold of 5-candle average (configurable, default 10%)
+        - Volume (smart filter) > volume_min_threshold of 20-candle average (configurable, default 0.5%)
         
         Args:
             df: Price DataFrame
@@ -454,9 +455,9 @@ class NIJAApexStrategyV71:
         
         conditions = {}
         
-        # 1. Pullback to EMA21 or VWAP (PROFITABILITY FIX: 1.0% tolerance for crypto volatility)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
-        near_vwap = abs(current_price - vwap) / vwap < 0.01
+        # 1. Pullback to EMA21 or VWAP (EMERGENCY RELAXATION Jan 29: 2.0% tolerance for crypto volatility - was 1.0%)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.02
+        near_vwap = abs(current_price - vwap) / vwap < 0.02
         conditions['pullback'] = near_ema21 or near_vwap
         
         # 2. RSI bullish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
@@ -495,7 +496,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # PROFITABILITY V7.2: 3/5 required - high conviction without missing opportunities (changed from 5/5)
+        signal = score >= 2  # EMERGENCY RELAXATION (Jan 29): 2/5 required - allow more opportunities (was 5/5 → 3/5 → 2/5)
         
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
         
@@ -535,9 +536,9 @@ class NIJAApexStrategyV71:
         
         conditions = {}
         
-        # 1. Pullback to EMA21 or VWAP (PROFITABILITY FIX: 1.0% tolerance for crypto volatility)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
-        near_vwap = abs(current_price - vwap) / vwap < 0.01
+        # 1. Pullback to EMA21 or VWAP (EMERGENCY RELAXATION Jan 29: 2.0% tolerance for crypto volatility - was 1.0%)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.02
+        near_vwap = abs(current_price - vwap) / vwap < 0.02
         conditions['pullback'] = near_ema21 or near_vwap
         
         # 2. RSI bearish pullback (PROFITABILITY FIX: Wider range 30-70 for crypto volatility)
@@ -576,7 +577,7 @@ class NIJAApexStrategyV71:
         
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # PROFITABILITY V7.2: 3/5 required - high conviction without missing opportunities (changed from 5/5)
+        signal = score >= 2  # EMERGENCY RELAXATION (Jan 29): 2/5 required - allow more opportunities (was 5/5 → 3/5 → 2/5)
         
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
         
@@ -591,8 +592,8 @@ class NIJAApexStrategyV71:
         
         Filters:
         1. No trades 5 min before/after major news (stub - placeholder for News API)
-        2. No trades if volume < 2% avg (20-candle rolling average - ultra-relaxed to find opportunities)
-        3. No trading during first 3 seconds of a new candle (per-symbol tracking)
+        2. No trades if volume < 0.5% avg (20-candle rolling average - emergency relaxation to find opportunities)
+        3. No trading during first 1 second of a new candle (per-symbol tracking)
         
         Args:
             df: Price DataFrame
@@ -607,8 +608,8 @@ class NIJAApexStrategyV71:
         # For now, this is a placeholder that always passes
         news_clear = True  # Stub: would check upcoming news events here
         
-        # Filter 2: Volume filter - threshold is configurable via volume_min_threshold (default 2%)
-        # ULTRA RELAXED (Jan 27, 2026): Lowered from 5% to 2% to allow more trading opportunities
+        # Filter 2: Volume filter - threshold is configurable via volume_min_threshold (default 0.5%)
+        # EMERGENCY RELAXATION (Jan 29, 2026): Lowered from 2% to 0.5% to allow more trading opportunities
         avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
@@ -617,8 +618,8 @@ class NIJAApexStrategyV71:
             logger.debug(f'   🔇 Smart filter (volume): {volume_ratio*100:.1f}% < {self.volume_min_threshold*100:.0f}% threshold')
             return False, f'Volume too low ({volume_ratio*100:.1f}% of avg) - threshold: {self.volume_min_threshold*100:.0f}%'
         
-        # Filter 3: Candle timing filter (first 3 seconds)
-        # ULTRA RELAXED (Jan 27, 2026): Lowered from 6 to 3 seconds to allow more opportunities
+        # Filter 3: Candle timing filter (first 1 second)
+        # EMERGENCY RELAXATION (Jan 29, 2026): Lowered from 3 to 1 second to allow more opportunities
         # Detect new candle by comparing timestamps
         # CRITICAL FIX (Jan 27, 2026): Use per-symbol tracking to avoid cross-market contamination
         # Previously used single instance variable causing all markets to block each other
