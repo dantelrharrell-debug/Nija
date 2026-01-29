@@ -1255,12 +1255,21 @@ NIJA now supports multiple cryptocurrency exchanges:
 
 ### ✅ Supported Exchanges
 
-1. **Coinbase Advanced Trade** (Primary)
+1. **Kraken Pro Exchange** (Primary) ✅
+   - Status: ✅ **Full implementation complete** - PRIMARY BROKER
+   - Features: Spot trading, 200+ pairs, 0.16% maker / 0.26% taker fees
+   - **Low fees (0.36% round-trip)** - Excellent for small accounts
+   - Setup: Set `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET` in `.env` (master account credentials)
+   - Get credentials: https://www.kraken.com/u/security/api
+   - Quick test: `python test_broker_integrations.py`
+   - Note: Requires `krakenex==2.2.2` and `pykrakenapi==0.3.2` (auto-installed via requirements.txt)
+
+2. **Coinbase Advanced Trade**
    - Status: ✅ Fully implemented and tested
    - Setup: [COINBASE_SETUP.md](COINBASE_SETUP.md)
    - ⚠️ **High fees (1.4%)** - Not recommended for micro trading
    
-2. **OKX Exchange** (✅ BEST FOR MICRO TRADING! 🏆)
+3. **OKX Exchange** (✅ BEST FOR MICRO TRADING! 🏆)
    - Status: ✅ Fully implemented, tested, and **ENABLED**
    - Setup: [OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md) or [OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)
    - Readiness: [OKX_TRADING_READINESS_STATUS.md](OKX_TRADING_READINESS_STATUS.md) ⭐ **START HERE**
@@ -1269,21 +1278,13 @@ NIJA now supports multiple cryptocurrency exchanges:
    - **Micro contracts**: Trade BTC with $100-200 instead of $10,000+
    - Quick test: `python test_okx_connection.py`
 
-3. **Binance Exchange** (✅ NEW - FULLY IMPLEMENTED!)
+4. **Binance Exchange** (✅ NEW - FULLY IMPLEMENTED!)
    - Status: ✅ **Full implementation complete** (December 30, 2024)
    - Features: Spot trading, testnet support, 600+ pairs, 0.1% fees
    - Setup: Set `BINANCE_API_KEY` and `BINANCE_API_SECRET` in `.env`
    - Get credentials: https://www.binance.com/en/my/settings/api-management
    - Quick test: `python test_broker_integrations.py`
    - Note: Requires `python-binance==1.0.21` (auto-installed via requirements.txt)
-   
-4. **Kraken Pro Exchange** (✅ NEW - FULLY IMPLEMENTED!)
-   - Status: ✅ **Full implementation complete** (December 30, 2024)
-   - Features: Spot trading, 200+ pairs, 0.16% maker / 0.26% taker fees
-   - Setup: Set `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET` in `.env` (master account credentials)
-   - Get credentials: https://www.kraken.com/u/security/api
-   - Quick test: `python test_broker_integrations.py`
-   - Note: Requires `krakenex==2.2.2` and `pykrakenapi==0.3.2` (auto-installed via requirements.txt)
    
 5. **Alpaca** (Skeleton)
    - Status: ⚠️ Placeholder implementation
@@ -1740,10 +1741,10 @@ python3 check_broker_status.py
 Expected output:
 ```
 ✅ 1 BROKER(S) CONNECTED AND READY TO TRADE:
-   🟦 Coinbase Advanced Trade [PRIMARY] - $34.54
+   🟦 Kraken Pro [PRIMARY] - $34.54
 
 ✅ NIJA IS READY TO TRADE
-   Primary Trading Broker: Coinbase Advanced Trade
+   Primary Trading Broker: Kraken Pro
 ```
 
 For detailed broker setup and troubleshooting, see [BROKER_CONNECTION_STATUS.md](BROKER_CONNECTION_STATUS.md).
@@ -1758,12 +1759,12 @@ python3 check_active_trading_per_broker.py
 Expected output:
 ```
 ✅ BROKERS ACTIVELY TRADING (1):
-   🟦 Coinbase Advanced Trade [PRIMARY]
+   🟦 Kraken Pro [PRIMARY]
       💰 Balance: $34.54
       📊 Open Positions: 3
 
 ✅ NIJA IS ACTIVELY TRADING
-   Primary Broker: Coinbase Advanced Trade
+   Primary Broker: Kraken Pro
    Active Exchanges: 1
    Combined Open Positions: 3
    Recent Activity (24h): 12 trades
@@ -1790,7 +1791,7 @@ Expected output:
 Overall Health Score: 85.7% (6/7 checks passed)
 
 1. BROKER CONNECTIONS:
-   🟦 Coinbase Advanced Trade [PRIMARY] - $34.54
+   🟦 Kraken Pro [PRIMARY] - $34.54
 
 2. PROFITABILITY CONFIGURATION: ✅ 7/7 COMPLETE
    • Profit targets: 0.5%, 1%, 2%, 3%
