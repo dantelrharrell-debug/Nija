@@ -224,11 +224,19 @@ TAKE_PROFIT = {
 }
 
 TRAILING_STOP = {
-    'activation_r': 2.0,  # Activate after 2R profit (TP3 level)
-    'atr_multiplier': 1.5,  # Trail at ATR(14) x 1.5
+    'activation_r': 1.5,  # OPTIMIZED: Activate after 1.5R profit (earlier protection)
+    'atr_multiplier': 1.2,  # OPTIMIZED: Tighter trail at ATR(14) x 1.2 (was 1.5, tighter to lock profits)
     'update_frequency': 'every_candle',  # Update on each new candle
     'never_widen': True,  # Only tighten, never widen
-    'min_trail_distance': 0.008,  # 0.8% minimum trail distance
+    'min_trail_distance': 0.006,  # OPTIMIZED: 0.6% minimum trail distance (was 0.8%, tighter)
+    'profit_step_tightening': True,  # OPTIMIZED: Tighten trail at each profit level
+    'step_levels': {
+        0.015: 1.5,  # At 1.5% profit, trail at 1.5x ATR
+        0.025: 1.2,  # At 2.5% profit, trail at 1.2x ATR (tighter)
+        0.040: 1.0,  # At 4.0% profit, trail at 1.0x ATR (very tight)
+        0.060: 0.8,  # At 6.0% profit, trail at 0.8x ATR (extremely tight)
+    },
+    'description': 'Adaptive trailing stop that tightens as profit increases for better capital efficiency',
 }
 
 # ═══════════════════════════════════════════════════════════════════
