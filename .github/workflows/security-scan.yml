@@ -60,13 +60,20 @@ jobs:
         head: ${{ github.event.pull_request.head.sha }}
         extra_args: --debug --only-verified
 
-    - name: TruffleHog Secret Scan (Push)
-      if: github.event_name == 'push'
+    - name: TruffleHog Secret Scan (Push - Diff)
+      if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
       uses: trufflesecurity/trufflehog@main
       with:
         path: ./
         base: ${{ github.event.before }}
         head: ${{ github.sha }}
+        extra_args: --debug --only-verified
+
+    - name: TruffleHog Secret Scan (Push - Full Scan for New Branch)
+      if: github.event_name == 'push' && github.event.before == '0000000000000000000000000000000000000000'
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
         extra_args: --debug --only-verified
 
     - name: TruffleHog Secret Scan (Scheduled/Full Scan)
