@@ -67,12 +67,22 @@ These settings were already relaxed and remain unchanged:
 
 ## Expected Outcomes
 
+⚠️ **IMPORTANT**: These changes are intentionally aggressive given the current zero-signal situation. The goal is to re-enable trading and then fine-tune based on actual results.
+
 ### Positive
 1. **Increased Signal Generation**: Bot should find more trading opportunities
 2. **Higher Market Participation**: More of the 30 scanned markets should pass filters
 3. **Faster Position Building**: With $53.14 balance, need active trading to recover
 
 ### Risks to Monitor
+
+⚠️ **Code Review Concerns Acknowledged**:
+- **ADX at 8**: Extremely low, indicates weak/random trends - high whipsaw risk
+- **Volume at 0.5%**: Very low, may cause slippage and execution issues
+- **2/5 Entry Score**: Only 40% of criteria met - significant quality reduction
+- **Combined Effect**: All relaxations together create aggressive conditions
+
+**Mitigation Strategy**: Close monitoring with rapid adjustment if quality drops below 40% win rate.
 1. **Signal Quality**: Lower entry requirements may reduce trade quality
 2. **False Breakouts**: Trading in weaker trends increases risk
 3. **Slippage**: Lower volume markets may have higher slippage
@@ -88,17 +98,27 @@ These settings were already relaxed and remain unchanged:
 
 ### Adjustment Triggers
 
-**If signal quality is too low** (win rate < 40%):
+**If signal quality is too low** (win rate < 40% after 20+ trades):
 - Tighten entry score requirement back to 3/5
 - Increase ADX threshold to 10
+- Increase volume_min_threshold to 0.01 (1%)
 
-**If still no signals** (0-1 per cycle after 24 hours):
+**If still insufficient signals** (0-1 per cycle after 24 hours):
 - Consider disabling candle timing filter entirely
 - Further reduce volume_min_threshold to 0.001 (0.1%)
 
-**If too many signals** (>10 per cycle with losses):
+**If too many signals with poor quality** (>10 per cycle with losses):
 - Add back some selectivity via enhanced scoring weights
 - Increase pullback tolerance requirement
+- Tighten entry score to 3/5
+
+**Warning level (win rate 40-50%)**:
+- Monitor closely but don't adjust yet
+- Collect more data (need 30+ trades for statistical significance)
+
+**Critical level (win rate < 40%)**:
+- Immediately tighten filters as described above
+- Review trade-by-trade to identify issues
 
 ## Risk Controls That Remain Active
 
