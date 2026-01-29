@@ -74,19 +74,50 @@ class NIJAApexStrategyV72:
             0.030: 0.50,  # Exit 50% at 3.0% profit (rest goes to trailing stop)
         }
         
+        # Import regime detector for adaptive RSI (MAX ALPHA UPGRADE)
+        try:
+            from market_regime_detector import RegimeDetector, MarketRegime
+            self.regime_detector = RegimeDetector(self.config)
+            self.use_adaptive_rsi = True
+            self.current_regime = None
+            logger.info("V72: Adaptive RSI enabled (MAX ALPHA upgrade)")
+        except ImportError:
+            self.regime_detector = None
+            self.use_adaptive_rsi = False
+            self.current_regime = None
+            logger.warning("V72: Regime detector not available - using static RSI ranges")
+        
         logger.info("✅ NIJA Apex Strategy v7.2 - PROFITABILITY MODE initialized")
         logger.info(f"   Signal Quality: {self.min_signal_score}/5 minimum (stricter entries)")
         logger.info(f"   Position Sizing: {self.min_position_pct*100:.0f}%-{self.max_position_pct*100:.0f}% (conservative)")
         logger.info(f"   Profit-Taking: Stepped exits enabled (0.5%, 1%, 2%, 3%)")
         logger.info(f"   Stop Width: {self.atr_stop_multiplier}x ATR (wider, less stop-hunts)")
+        logger.info(f"   Adaptive RSI: {self.use_adaptive_rsi} (regime-based entry ranges)")
+    
+    def update_regime(self, df: pd.DataFrame, indicators: Dict) -> None:
+        """
+        Update current market regime for adaptive RSI (MAX ALPHA)
+        
+        Call this before checking entries to ensure RSI ranges are current.
+        
+        Args:
+            df: Price DataFrame
+            indicators: Dictionary of indicators
+        """
+        if self.use_adaptive_rsi and self.regime_detector:
+            regime, metrics = self.regime_detector.detect_regime(df, indicators)
+            self.current_regime = regime
+            logger.debug(f"V72: Regime updated to {regime.value} (ADX={metrics['adx']:.1f})")
+        else:
+            self.current_regime = None
     
     def check_long_entry_v72(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
-        Long Entry Logic v7.2 - HIGH CONVICTION ONLY
+        Long Entry Logic v7.2 - HIGH CONVICTION ONLY (INSTITUTIONAL GRADE)
         
         Requires 3/5 of these conditions:
         1. Pullback to EMA21 or VWAP (within 0.5%)
-        2. RSI bullish pullback (30-70, rising)
+        2. RSI bullish pullback (25-45, rising - buy low, early entry)
         3. Bullish candlestick (engulfing or hammer)
         4. MACD histogram ticking up
         5. Volume >= 60% of 2-candle average
@@ -111,8 +142,20 @@ class NIJAApexStrategyV72:
         near_vwap = abs(current_price - vwap) / vwap < 0.005
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bullish pullback
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi > rsi_prev
+        # 2. RSI bullish pullback (ADAPTIVE MAX ALPHA UPGRADE)
+        # Get adaptive RSI ranges based on current market regime
+        if self.use_adaptive_rsi and self.regime_detector and self.current_regime:
+            adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
+            rsi_ranges = self.regime_detector.get_adaptive_rsi_ranges(self.current_regime, adx)
+            long_rsi_min = rsi_ranges['long_min']
+            long_rsi_max = rsi_ranges['long_max']
+        else:
+            # Fallback to institutional grade static ranges
+            long_rsi_min = 25
+            long_rsi_max = 45
+        
+        # Apply adaptive RSI condition: only buy in lower RSI range (buy low)
+        conditions['rsi_pullback'] = long_rsi_min <= rsi <= long_rsi_max and rsi > rsi_prev
         
         # 3. Bullish candlestick
         body = current['close'] - current['open']
@@ -145,12 +188,12 @@ class NIJAApexStrategyV72:
     
     def check_short_entry_v72(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
-        Short Entry Logic v7.2 - HIGH CONVICTION ONLY
+        Short Entry Logic v7.2 - HIGH CONVICTION ONLY (INSTITUTIONAL GRADE)
         
         Mirror of long entry with bearish conditions.
         Requires 3/5 of these conditions:
         1. Pullback to EMA21 or VWAP
-        2. RSI bearish pullback (30-70, falling)
+        2. RSI bearish pullback (55-75, falling - sell high, early entry)
         3. Bearish candlestick (engulfing or shooting star)
         4. MACD histogram ticking down
         5. Volume >= 60% of 2-candle average
@@ -173,8 +216,20 @@ class NIJAApexStrategyV72:
         near_vwap = abs(current_price - vwap) / vwap < 0.005
         conditions['pullback'] = near_ema21 or near_vwap
         
-        # 2. RSI bearish pullback
-        conditions['rsi_pullback'] = 30 < rsi < 70 and rsi < rsi_prev
+        # 2. RSI bearish pullback (ADAPTIVE MAX ALPHA UPGRADE)
+        # Get adaptive RSI ranges based on current market regime
+        if self.use_adaptive_rsi and self.regime_detector and self.current_regime:
+            adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
+            rsi_ranges = self.regime_detector.get_adaptive_rsi_ranges(self.current_regime, adx)
+            short_rsi_min = rsi_ranges['short_min']
+            short_rsi_max = rsi_ranges['short_max']
+        else:
+            # Fallback to institutional grade static ranges
+            short_rsi_min = 55
+            short_rsi_max = 75
+        
+        # Apply adaptive RSI condition: only sell in upper RSI range (sell high)
+        conditions['rsi_pullback'] = short_rsi_min <= rsi <= short_rsi_max and rsi < rsi_prev
         
         # 3. Bearish candlestick
         body = current['close'] - current['open']

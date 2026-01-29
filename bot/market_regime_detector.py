@@ -57,18 +57,33 @@ class RegimeDetector:
                 'position_size_multiplier': 1.2,  # Increase position size by 20%
                 'trailing_stop_distance': 1.5,  # Wider trailing stop (1.5x ATR)
                 'take_profit_multiplier': 1.5,  # Higher profit targets
+                # ADAPTIVE RSI RANGES (MAX ALPHA UPGRADE)
+                'long_rsi_min': 25,   # Tighter range for high conviction
+                'long_rsi_max': 45,   # Standard institutional grade
+                'short_rsi_min': 55,  # Standard institutional grade
+                'short_rsi_max': 75,  # Tighter range for high conviction
             },
             MarketRegime.RANGING: {
                 'min_entry_score': 4,  # Require 4/5 conditions (more selective)
                 'position_size_multiplier': 0.8,  # Reduce position size by 20%
                 'trailing_stop_distance': 1.0,  # Tighter trailing stop (1.0x ATR)
                 'take_profit_multiplier': 0.8,  # Lower profit targets (take profits faster)
+                # ADAPTIVE RSI RANGES (MAX ALPHA UPGRADE)
+                'long_rsi_min': 20,   # Wider range for more opportunities
+                'long_rsi_max': 50,   # Extended to neutral zone
+                'short_rsi_min': 50,  # Extended to neutral zone
+                'short_rsi_max': 80,  # Wider range for more opportunities
             },
             MarketRegime.VOLATILE: {
                 'min_entry_score': 4,  # Require 4/5 conditions (more selective)
                 'position_size_multiplier': 0.7,  # Reduce position size by 30%
                 'trailing_stop_distance': 2.0,  # Wider trailing stop (2.0x ATR)
                 'take_profit_multiplier': 1.0,  # Normal profit targets
+                # ADAPTIVE RSI RANGES (MAX ALPHA UPGRADE)
+                'long_rsi_min': 30,   # Conservative to avoid whipsaws
+                'long_rsi_max': 40,   # Narrow range for quality entries
+                'short_rsi_min': 60,  # Narrow range for quality entries
+                'short_rsi_max': 70,  # Conservative to avoid whipsaws
             }
         }
         
@@ -274,6 +289,89 @@ class RegimeDetector:
                 adjusted_tp[level] = price
         
         return adjusted_tp
+    
+    def get_adaptive_rsi_ranges(self, regime: MarketRegime, adx: float = None) -> Dict[str, float]:
+        """
+        Get adaptive RSI ranges based on market regime and trend strength (MAX ALPHA UPGRADE)
+        
+        This method dynamically adjusts RSI entry ranges based on market conditions:
+        - TRENDING: Tighter ranges (25-45 long, 55-75 short) for high conviction
+        - RANGING: Wider ranges (20-50 long, 50-80 short) for more opportunities
+        - VOLATILE: Conservative ranges (30-40 long, 60-70 short) to avoid whipsaws
+        
+        Optional ADX fine-tuning:
+        - Strong trend (ADX > 30): Use slightly tighter ranges for even higher conviction
+        - Weak trend (ADX < 20): Use slightly wider ranges for more opportunities
+        
+        Args:
+            regime: Current market regime
+            adx: Optional ADX value for fine-tuning (if provided)
+            
+        Returns:
+            Dictionary with keys: 'long_min', 'long_max', 'short_min', 'short_max'
+            
+        Example:
+            >>> ranges = detector.get_adaptive_rsi_ranges(MarketRegime.TRENDING, adx=35)
+            >>> # Returns: {'long_min': 25, 'long_max': 43, 'short_min': 57, 'short_max': 75}
+            >>> # Slightly tighter than base (45->43, 55->57) due to strong ADX
+        """
+        params = self.get_regime_parameters(regime)
+        
+        # Base ranges from regime configuration
+        long_min = params['long_rsi_min']
+        long_max = params['long_rsi_max']
+        short_min = params['short_rsi_min']
+        short_max = params['short_rsi_max']
+        
+        # Optional ADX fine-tuning for TRENDING regime
+        if adx is not None and regime == MarketRegime.TRENDING:
+            if adx >= 35:
+                # Very strong trend: Tighten ranges by 2 points for ultra-high conviction
+                # This captures only the best entries in powerful trends
+                long_max = max(long_min + 5, long_max - 2)  # Don't go too narrow
+                short_min = min(short_max - 5, short_min + 2)  # Don't go too narrow
+                logger.debug(f"ADX {adx:.1f} - Very strong trend: Tightened RSI ranges for max conviction")
+            elif adx >= 30:
+                # Strong trend: Tighten ranges by 1 point for higher conviction
+                long_max = max(long_min + 5, long_max - 1)
+                short_min = min(short_max - 5, short_min + 1)
+                logger.debug(f"ADX {adx:.1f} - Strong trend: Slightly tightened RSI ranges")
+        
+        # Validation: Ensure ranges don't overlap and maintain minimum width
+        min_gap = 5  # Minimum gap between long_max and short_min (neutral zone)
+        min_width = 10  # Minimum range width for each direction
+        
+        # Ensure long range has minimum width
+        if long_max - long_min < min_width:
+            long_max = long_min + min_width
+        
+        # Ensure short range has minimum width
+        if short_max - short_min < min_width:
+            short_min = short_max - min_width
+        
+        # Ensure minimum gap (neutral zone) between ranges
+        if short_min - long_max < min_gap:
+            # Adjust to create neutral zone
+            midpoint = (long_max + short_min) / 2
+            long_max = midpoint - min_gap / 2
+            short_min = midpoint + min_gap / 2
+            logger.warning(f"RSI ranges adjusted to maintain {min_gap}-point neutral zone")
+        
+        ranges = {
+            'long_min': long_min,
+            'long_max': long_max,
+            'short_min': short_min,
+            'short_max': short_max
+        }
+        
+        logger.debug(
+            f"Adaptive RSI ranges ({regime.value}): "
+            f"Long [{long_min:.0f}-{long_max:.0f}], "
+            f"Short [{short_min:.0f}-{short_max:.0f}], "
+            f"Neutral [{long_max:.0f}-{short_min:.0f}]"
+        )
+        
+        return ranges
 
 
 # Global instance
