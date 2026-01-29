@@ -43,11 +43,23 @@ scanner.out
 
 nija.log.*
 
+# Security reports and artifacts
+security-reports/
+chaos-results/
+all-reports/
+all-chaos-results/
+reports/
+*.sha256
+*-report.json
+THREAT_MODEL_REPORT.md
+CHAOS_TEST_REPORT.md
+canary-metrics*.json
+
 # Kraken nonce persistence (contains state, should not be committed)
 # Updated Jan 17, 2026: Account-specific nonce files in /data directory
 kraken_nonce.txt
 bot/kraken_nonce.txt
-data/kraken_nonce*.txt
+data/kraken*nonce*.txt
 data/kraken_nonce.txt
 data/kraken_nonce_*.txt
 
@@ -62,6 +74,27 @@ data/compounding_state.json
 data/drawdown_protection.json
 data/milestones.json
 data/capital_allocation.json
+
+# Trading state files (runtime state, should not be committed)
+# Daily profit tracking
+data/daily_profit_history.json
+data/daily_profit_state.json
+# Progressive targets
+data/progressive_targets.json
+data/progressive_targets_*.json
+# Trade history and positions
+data/trade_history.json
+data/trade_history_*.json
+data/open_positions.json
+data/open_positions.json.*
+# Trade exports and database
+data/nija_trades_*.csv
+data/trade_ledger.db
+data/trade_ledger.db-journal
+
+# Demo and learning data (runtime state, should not be committed)
+data/demo_live_tracking/
+data/learning/
 
 # Secure vault database (contains encrypted credentials)
 vault.db
@@ -319,6 +352,7 @@ example_*.py
 test_*.py
 !bot/test_*.py  # Keep bot tests
 !bot/tests/test_*.py  # Keep bot/tests directory tests
+!scripts/chaos/test_*.py  # Keep chaos testing scripts
 
 # Temporary text/config files
 *.txt.bak
