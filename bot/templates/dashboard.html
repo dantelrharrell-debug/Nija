@@ -240,7 +240,7 @@
             // Balance
             document.getElementById('current-balance').textContent = formatCurrency(data.balance?.current || 0);
             document.getElementById('peak-balance').textContent = formatCurrency(data.balance?.peak || 0);
-            
+
             const changeValue = (data.balance?.current || 0) - (data.balance?.start || 0);
             const changePct = data.balance?.change_pct || 0;
             const changeEl = document.getElementById('balance-change');
@@ -250,7 +250,7 @@
             // Performance
             document.getElementById('win-rate').textContent = `${(data.performance?.win_rate || 0).toFixed(1)}%`;
             document.getElementById('total-trades').textContent = data.performance?.total_trades || 0;
-            
+
             const netProfit = data.performance?.net_profit || 0;
             const netProfitEl = document.getElementById('net-profit');
             netProfitEl.textContent = formatCurrency(netProfit);
@@ -259,7 +259,7 @@
             // Health
             const status = data.status || 'unknown';
             document.getElementById('status-text').textContent = status.charAt(0).toUpperCase() + status.slice(1);
-            
+
             const statusDot = document.getElementById('status-dot');
             statusDot.className = 'status-indicator';
             if (status === 'healthy') statusDot.classList.add('status-healthy');
@@ -388,7 +388,7 @@
                     </tbody>
                 </table>
                 <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #2f3336; font-size: 13px;">
-                    <strong>Summary:</strong> ${positions.count} position(s) | 
+                    <strong>Summary:</strong> ${positions.count} position(s) |
                     Total Unrealized P&L: <span class="${positions.positions.reduce((sum, p) => sum + p.unrealized_pnl, 0) >= 0 ? 'positive' : 'negative'}">
                         ${formatCurrency(positions.positions.reduce((sum, p) => sum + p.unrealized_pnl, 0))}
                     </span>
@@ -398,10 +398,10 @@
 
         function formatActivityDetails(details) {
             // Format key details for display
-            const relevantKeys = ['rejection_reason', 'filter_reason', 'reason', 'ai_score', 'confidence', 
+            const relevantKeys = ['rejection_reason', 'filter_reason', 'reason', 'ai_score', 'confidence',
                                  'position_size', 'pnl', 'fees', 'tier'];
             const items = [];
-            
+
             for (const key of relevantKeys) {
                 if (details[key] !== undefined) {
                     let value = details[key];
@@ -415,7 +415,7 @@
                     items.push(`${key.replace('_', ' ')}: ${value}`);
                 }
             }
-            
+
             return items.join(' | ');
         }
 
@@ -435,7 +435,7 @@
             updatePositions(positions);
 
             lastUpdate = Date.now();
-            document.getElementById('refresh-status').textContent = 
+            document.getElementById('refresh-status').textContent =
                 `Last update: ${new Date().toLocaleTimeString()}`;
         }
 

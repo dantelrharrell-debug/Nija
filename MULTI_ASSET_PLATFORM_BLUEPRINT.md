@@ -403,5 +403,5 @@ For questions or issues:
 
 ---
 
-**NIJA Multi-Asset Platform v2.0**  
+**NIJA Multi-Asset Platform v2.0**
 *Autonomous trading across all markets*

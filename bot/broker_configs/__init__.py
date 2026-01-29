@@ -48,15 +48,15 @@ class BrokerConfigType(Enum):
 def get_broker_config(broker_type: str):
     """
     Get broker-specific configuration.
-    
+
     Args:
         broker_type: Broker type string (e.g., 'coinbase', 'kraken', 'binance', 'okx', 'alpaca')
-        
+
     Returns:
         Broker-specific configuration object
     """
     broker_type_lower = broker_type.lower()
-    
+
     if broker_type_lower == "coinbase" and CoinbaseConfig:
         return CoinbaseConfig()
     elif broker_type_lower == "kraken" and KrakenConfig:

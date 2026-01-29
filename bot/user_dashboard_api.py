@@ -74,31 +74,31 @@ def list_users():
         pnl_tracker = get_user_pnl_tracker()
         risk_manager = get_user_risk_manager()
         hard_controls = get_hard_controls()
-        
+
         # Check if we should include master
         include_master = request.args.get('include_master', 'false').lower() == 'true'
-        
+
         # Get all users from various sources
         user_ids = set()
-        
+
         # From hard controls
         for user_id in hard_controls.user_kill_switches.keys():
             if user_id != 'master' or include_master:
                 user_ids.add(user_id)
-        
+
         # From risk manager
         for user_id in risk_manager._user_states.keys():
             if user_id != 'master' or include_master:
                 user_ids.add(user_id)
-        
+
         # Build user list
         users = []
         for user_id in sorted(user_ids):
             stats = pnl_tracker.get_stats(user_id)
             risk_state = risk_manager.get_state(user_id)
-            
+
             can_trade, reason = hard_controls.can_trade(user_id)
-            
+
             users.append({
                 'user_id': user_id,
                 'can_trade': can_trade,
@@ -111,13 +111,13 @@ def list_users():
                 'circuit_breaker': risk_state.circuit_breaker_triggered,
                 'is_master': user_id == 'master'
             })
-        
+
         return jsonify({
             'users': users,
             'total_users': len(users),
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error listing users: {e}")
         return jsonify({'error': 'Failed to list users'}), 500
@@ -128,16 +128,16 @@ def get_user_pnl(user_id: str):
     """Get detailed PnL dashboard for a user."""
     try:
         pnl_tracker = get_user_pnl_tracker()
-        
+
         # Get overall stats
         stats = pnl_tracker.get_stats(user_id, force_refresh=True)
-        
+
         # Get recent trades
         recent_trades = pnl_tracker.get_recent_trades(user_id, limit=20)
-        
+
         # Get daily breakdown
         daily_breakdown = pnl_tracker.get_daily_breakdown(user_id, days=7)
-        
+
         return jsonify({
             'user_id': user_id,
             'stats': stats,
@@ -155,7 +155,7 @@ def get_user_pnl(user_id: str):
             ],
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting PnL for {user_id}: {e}")
         return jsonify({'error': 'Failed to retrieve PnL data'}), 500
@@ -172,14 +172,14 @@ def get_user_risk(user_id: str):
     """Get risk status and limits for a user."""
     try:
         risk_manager = get_user_risk_manager()
-        
+
         # Get limits and state
         limits = risk_manager.get_limits(user_id)
         state = risk_manager.get_state(user_id)
-        
+
         # Check if can trade
         can_trade, reason = risk_manager.can_trade(user_id, 0)
-        
+
         return jsonify({
             'user_id': user_id,
             'can_trade': can_trade,
@@ -200,7 +200,7 @@ def get_user_risk(user_id: str):
             },
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting risk for {user_id}: {e}")
         return jsonify({'error': 'Failed to retrieve risk data'}), 500
@@ -211,24 +211,24 @@ def update_user_risk(user_id: str):
     """Update risk limits for a user."""
     try:
         risk_manager = get_user_risk_manager()
-        
+
         data = request.get_json()
         if not data:
             return jsonify({'error': 'No data provided'}), 400
-        
+
         # Update limits
         risk_manager.update_limits(user_id, **data)
-        
+
         # Get updated limits
         limits = risk_manager.get_limits(user_id)
-        
+
         return jsonify({
             'user_id': user_id,
             'limits': limits.to_dict(),
             'message': 'Risk limits updated',
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error updating risk for {user_id}: {e}")
         return jsonify({'error': 'Failed to update risk limits'}), 500
@@ -239,18 +239,18 @@ def trigger_global_killswitch():
     """Trigger global kill switch."""
     try:
         hard_controls = get_hard_controls()
-        
+
         data = request.get_json() or {}
         reason = data.get('reason', 'Manual trigger via API')
-        
+
         hard_controls.trigger_global_kill_switch(reason)
-        
+
         return jsonify({
             'status': 'triggered',
             'reason': reason,
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error triggering global kill switch: {e}")
         return jsonify({'error': 'Failed to trigger global kill switch'}), 500
@@ -262,12 +262,12 @@ def reset_global_killswitch():
     try:
         hard_controls = get_hard_controls()
         hard_controls.reset_global_kill_switch()
-        
+
         return jsonify({
             'status': 'reset',
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error resetting global kill switch: {e}")
         return jsonify({'error': 'Failed to reset global kill switch'}), 500
@@ -278,19 +278,19 @@ def trigger_user_killswitch(user_id: str):
     """Trigger kill switch for a specific user."""
     try:
         hard_controls = get_hard_controls()
-        
+
         data = request.get_json() or {}
         reason = data.get('reason', 'Manual trigger via API')
-        
+
         hard_controls.trigger_user_kill_switch(user_id, reason)
-        
+
         return jsonify({
             'user_id': user_id,
             'status': 'triggered',
             'reason': reason,
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error triggering user kill switch: {e}")
         return jsonify({'error': 'Failed to trigger user kill switch'}), 500
@@ -302,13 +302,13 @@ def reset_user_killswitch(user_id: str):
     try:
         hard_controls = get_hard_controls()
         hard_controls.reset_user_kill_switch(user_id)
-        
+
         return jsonify({
             'user_id': user_id,
             'status': 'reset',
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error resetting user kill switch: {e}")
         return jsonify({'error': 'Failed to reset user kill switch'}), 500
@@ -321,19 +321,19 @@ def get_system_stats():
         pnl_tracker = get_user_pnl_tracker()
         webhook_notifier = get_webhook_notifier()
         hard_controls = get_hard_controls()
-        
+
         # Global kill switch status
         global_killswitch = hard_controls.global_kill_switch.value
-        
+
         # Count active users
         active_users = sum(
             1 for status in hard_controls.user_kill_switches.values()
             if status.value == 'active'
         )
-        
+
         # Webhook stats
         webhook_stats = webhook_notifier.get_stats()
-        
+
         return jsonify({
             'global_killswitch': global_killswitch,
             'active_users': active_users,
@@ -341,7 +341,7 @@ def get_system_stats():
             'webhooks': webhook_stats,
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting system stats: {e}")
         return jsonify({'error': 'Failed to retrieve system statistics'}), 500
@@ -353,13 +353,13 @@ def get_user_nonce_stats(user_id: str):
     try:
         nonce_manager = get_user_nonce_manager()
         stats = nonce_manager.get_stats(user_id)
-        
+
         return jsonify({
             'user_id': user_id,
             'nonce_stats': stats,
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting nonce stats for {user_id}: {e}")
         return jsonify({'error': 'Failed to retrieve nonce statistics'}), 500
@@ -371,13 +371,13 @@ def reset_user_nonce(user_id: str):
     try:
         nonce_manager = get_user_nonce_manager()
         nonce_manager.reset_user(user_id)
-        
+
         return jsonify({
             'user_id': user_id,
             'status': 'reset',
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error resetting nonce for {user_id}: {e}")
         return jsonify({'error': 'Failed to reset nonce'}), 500
@@ -388,20 +388,20 @@ def get_open_positions():
     """Get all open positions from trade ledger database."""
     try:
         trade_ledger = get_trade_ledger_db()
-        
+
         # Get query parameters
         user_id = request.args.get('user_id')
         symbol = request.args.get('symbol')
-        
+
         # Get open positions
         positions = trade_ledger.get_open_positions(user_id=user_id, symbol=symbol)
-        
+
         return jsonify({
             'positions': positions,
             'count': len(positions),
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting open positions: {e}")
         return jsonify({'error': 'Failed to retrieve open positions'}), 500
@@ -412,13 +412,13 @@ def get_trade_history():
     """Get trade history from trade ledger database."""
     try:
         trade_ledger = get_trade_ledger_db()
-        
+
         # Get query parameters
         user_id = request.args.get('user_id')
         symbol = request.args.get('symbol')
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
-        
+
         # Get trade history
         trades = trade_ledger.get_trade_history(
             user_id=user_id,
@@ -426,17 +426,17 @@ def get_trade_history():
             limit=limit,
             offset=offset
         )
-        
+
         # Get statistics
         stats = trade_ledger.get_statistics(user_id=user_id)
-        
+
         return jsonify({
             'trades': trades,
             'count': len(trades),
             'statistics': stats,
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting trade history: {e}")
         return jsonify({'error': 'Failed to retrieve trade history'}), 500
@@ -447,25 +447,25 @@ def get_trade_ledger():
     """Get raw trade ledger (all BUY/SELL transactions)."""
     try:
         trade_ledger = get_trade_ledger_db()
-        
+
         # Get query parameters
         user_id = request.args.get('user_id')
         symbol = request.args.get('symbol')
         limit = int(request.args.get('limit', 100))
-        
+
         # Get ledger transactions
         transactions = trade_ledger.get_ledger_transactions(
             user_id=user_id,
             symbol=symbol,
             limit=limit
         )
-        
+
         return jsonify({
             'transactions': transactions,
             'count': len(transactions),
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting trade ledger: {e}")
         return jsonify({'error': 'Failed to retrieve trade ledger'}), 500
@@ -476,44 +476,44 @@ def export_trades():
     """Export trades to CSV or PDF format."""
     try:
         trade_ledger = get_trade_ledger_db()
-        
+
         # Get query parameters
         format_type = request.args.get('format', 'csv').lower()
         table = request.args.get('table', 'completed_trades')
         user_id = request.args.get('user_id')
-        
+
         # Validate table name
         valid_tables = ['trade_ledger', 'open_positions', 'completed_trades']
         if table not in valid_tables:
             return jsonify({'error': f'Invalid table. Must be one of: {", ".join(valid_tables)}'}), 400
-        
+
         if format_type == 'csv':
             # Export to CSV
             csv_data = trade_ledger.export_to_csv(table=table, user_id=user_id)
-            
+
             # Create a file-like object
             output = io.BytesIO()
             output.write(csv_data.encode('utf-8'))
             output.seek(0)
-            
+
             # Generate filename
             filename = f'nija_{table}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-            
+
             return send_file(
                 output,
                 mimetype='text/csv',
                 as_attachment=True,
                 download_name=filename
             )
-        
+
         elif format_type == 'pdf':
             # PDF export (basic implementation)
             # For a full PDF implementation, you would use reportlab or similar
             return jsonify({'error': 'PDF export not yet implemented. Use CSV format.'}), 501
-        
+
         else:
             return jsonify({'error': 'Invalid format. Use "csv" or "pdf"'}), 400
-    
+
     except Exception as e:
         logger.error(f"Error exporting trades: {e}")
         return jsonify({'error': 'Failed to export trades'}), 500
@@ -524,19 +524,19 @@ def get_trade_statistics():
     """Get trading statistics."""
     try:
         trade_ledger = get_trade_ledger_db()
-        
+
         # Get query parameters
         user_id = request.args.get('user_id')
-        
+
         # Get statistics
         stats = trade_ledger.get_statistics(user_id=user_id)
-        
+
         return jsonify({
             'statistics': stats,
             'user_id': user_id or 'all',
             'timestamp': datetime.now().isoformat()
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting statistics: {e}")
         return jsonify({'error': 'Failed to retrieve statistics'}), 500
@@ -546,7 +546,7 @@ def get_trade_statistics():
 def get_aggregated_summary():
     """
     Get aggregated read-only summary of master + all users.
-    
+
     Returns:
         - Master account performance
         - Combined user performance
@@ -558,17 +558,17 @@ def get_aggregated_summary():
         risk_manager = get_user_risk_manager()
         hard_controls = get_hard_controls()
         trade_ledger = get_trade_ledger_db()
-        
+
         # Get master stats
         master_stats = pnl_tracker.get_stats('master', force_refresh=True)
         master_risk_state = risk_manager.get_state('master')
-        
+
         # Get all user stats (excluding master)
         all_user_ids = set()
         for user_id in risk_manager._user_states.keys():
             if user_id != 'master':
                 all_user_ids.add(user_id)
-        
+
         # Aggregate user metrics
         total_users = len(all_user_ids)
         users_can_trade = 0
@@ -577,22 +577,22 @@ def get_aggregated_summary():
         total_user_trades = 0
         total_user_wins = 0
         total_user_losses = 0
-        
+
         user_summaries = []
         for user_id in sorted(all_user_ids):
             user_stats = pnl_tracker.get_stats(user_id)
             user_risk_state = risk_manager.get_state(user_id)
             can_trade, reason = hard_controls.can_trade(user_id)
-            
+
             if can_trade:
                 users_can_trade += 1
-            
+
             total_user_balance += user_risk_state.balance
             total_user_pnl += user_stats.get('total_pnl', 0.0)
             total_user_trades += user_stats.get('completed_trades', 0)
             total_user_wins += user_stats.get('winning_trades', 0)
             total_user_losses += user_stats.get('losing_trades', 0)
-            
+
             user_summaries.append({
                 'user_id': user_id,
                 'balance': user_risk_state.balance,
@@ -601,19 +601,19 @@ def get_aggregated_summary():
                 'trades': user_stats.get('completed_trades', 0),
                 'can_trade': can_trade
             })
-        
+
         # Calculate aggregate win rate
         aggregate_win_rate = (total_user_wins / total_user_trades * 100) if total_user_trades > 0 else 0.0
-        
+
         # Get open positions count
         open_positions = trade_ledger.get_open_positions()
         master_open_positions = [p for p in open_positions if p.get('user_id') == 'master']
         user_open_positions = [p for p in open_positions if p.get('user_id') != 'master']
-        
+
         # Portfolio totals
         portfolio_balance = master_risk_state.balance + total_user_balance
         portfolio_pnl = master_stats.get('total_pnl', 0.0) + total_user_pnl
-        
+
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'master_account': {
@@ -646,7 +646,7 @@ def get_aggregated_summary():
             },
             'user_details': user_summaries
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting aggregated summary: {e}")
         return jsonify({'error': 'Failed to retrieve aggregated summary'}), 500
@@ -656,27 +656,27 @@ def get_aggregated_summary():
 def get_aggregated_performance():
     """
     Get detailed performance metrics aggregated across master and all users.
-    
+
     Query params:
         - days: Number of days to include in breakdown (default: 7)
     """
     try:
         pnl_tracker = get_user_pnl_tracker()
         days = int(request.args.get('days', 7))
-        
+
         # Get master performance
         master_stats = pnl_tracker.get_stats('master', force_refresh=True)
         master_daily = pnl_tracker.get_daily_breakdown('master', days=days)
-        
+
         # Get all user IDs
         all_user_ids = set()
         for user_id in pnl_tracker._user_pnl.keys():
             if user_id != 'master':
                 all_user_ids.add(user_id)
-        
+
         # Aggregate daily performance across all users
         daily_aggregate = {}
-        
+
         for user_id in all_user_ids:
             user_daily = pnl_tracker.get_daily_breakdown(user_id, days=days)
             for day in user_daily:
@@ -692,7 +692,7 @@ def get_aggregated_performance():
                 daily_aggregate[date_key]['pnl'] += day.total_pnl
                 daily_aggregate[date_key]['winners'] += day.winners
                 daily_aggregate[date_key]['losers'] += day.losers
-        
+
         # Format daily breakdown
         users_daily_breakdown = [
             {
@@ -705,7 +705,7 @@ def get_aggregated_performance():
             }
             for date, stats in sorted(daily_aggregate.items())
         ]
-        
+
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'period_days': days,
@@ -727,7 +727,7 @@ def get_aggregated_performance():
                 'daily_breakdown': users_daily_breakdown
             }
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting aggregated performance: {e}")
         return jsonify({'error': 'Failed to retrieve aggregated performance'}), 500
@@ -737,7 +737,7 @@ def get_aggregated_performance():
 def get_aggregated_positions():
     """
     Get portfolio-wide position summary (master + all users).
-    
+
     Returns position breakdown by:
         - Account (master vs users)
         - Symbol
@@ -745,14 +745,14 @@ def get_aggregated_positions():
     """
     try:
         trade_ledger = get_trade_ledger_db()
-        
+
         # Get all open positions
         all_positions = trade_ledger.get_open_positions()
-        
+
         # Separate master and user positions
         master_positions = [p for p in all_positions if p.get('user_id') == 'master']
         user_positions = [p for p in all_positions if p.get('user_id') != 'master']
-        
+
         # Aggregate by symbol
         symbol_aggregate = {}
         for position in all_positions:
@@ -765,16 +765,16 @@ def get_aggregated_positions():
                     'total_size': 0.0,
                     'total_unrealized_pnl': 0.0
                 }
-            
+
             symbol_aggregate[symbol]['total_positions'] += 1
             if position.get('user_id') == 'master':
                 symbol_aggregate[symbol]['master_positions'] += 1
             else:
                 symbol_aggregate[symbol]['user_positions'] += 1
-            
+
             symbol_aggregate[symbol]['total_size'] += position.get('size', 0.0)
             symbol_aggregate[symbol]['total_unrealized_pnl'] += position.get('unrealized_pnl', 0.0)
-        
+
         # Aggregate by broker
         broker_aggregate = {}
         for position in all_positions:
@@ -785,11 +785,11 @@ def get_aggregated_positions():
                     'total_size': 0.0,
                     'unrealized_pnl': 0.0
                 }
-            
+
             broker_aggregate[broker]['positions'] += 1
             broker_aggregate[broker]['total_size'] += position.get('size', 0.0)
             broker_aggregate[broker]['unrealized_pnl'] += position.get('unrealized_pnl', 0.0)
-        
+
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'summary': {
@@ -804,7 +804,7 @@ def get_aggregated_positions():
             'master_positions_list': master_positions,
             'user_positions_list': user_positions
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting aggregated positions: {e}")
         return jsonify({'error': 'Failed to retrieve aggregated positions'}), 500
@@ -814,7 +814,7 @@ def get_aggregated_positions():
 def get_aggregated_statistics():
     """
     Get comprehensive system-wide trading statistics.
-    
+
     Includes:
         - All-time performance metrics
         - Risk metrics
@@ -825,16 +825,16 @@ def get_aggregated_statistics():
         trade_ledger = get_trade_ledger_db()
         pnl_tracker = get_user_pnl_tracker()
         risk_manager = get_user_risk_manager()
-        
+
         # Get master statistics
         master_stats = trade_ledger.get_statistics(user_id='master')
-        
+
         # Get all user statistics combined
         all_user_ids = set()
         for user_id in risk_manager._user_states.keys():
             if user_id != 'master':
                 all_user_ids.add(user_id)
-        
+
         # Aggregate user statistics
         users_total_trades = 0
         users_total_volume = 0.0
@@ -842,7 +842,7 @@ def get_aggregated_statistics():
         users_total_pnl = 0.0
         users_winning_trades = 0
         users_losing_trades = 0
-        
+
         for user_id in all_user_ids:
             user_stats = pnl_tracker.get_stats(user_id)
             users_total_trades += user_stats.get('completed_trades', 0)
@@ -851,14 +851,14 @@ def get_aggregated_statistics():
             users_total_pnl += user_stats.get('total_pnl', 0.0)
             users_winning_trades += user_stats.get('winning_trades', 0)
             users_losing_trades += user_stats.get('losing_trades', 0)
-        
+
         users_win_rate = (users_winning_trades / users_total_trades * 100) if users_total_trades > 0 else 0.0
-        
+
         # System totals
         system_total_trades = master_stats.get('total_trades', 0) + users_total_trades
         system_total_pnl = master_stats.get('total_pnl', 0.0) + users_total_pnl
         system_total_fees = master_stats.get('total_fees', 0.0) + users_total_fees
-        
+
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'master_statistics': master_stats,
@@ -880,7 +880,7 @@ def get_aggregated_statistics():
                 'total_users': len(all_user_ids)
             }
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting aggregated statistics: {e}")
         return jsonify({'error': 'Failed to retrieve aggregated statistics'}), 500
@@ -890,47 +890,47 @@ def get_aggregated_statistics():
 def get_trade_traceability():
     """
     Get master-to-user trade traceability report.
-    
+
     Shows how user trades correlate to master signals and execution.
     This endpoint helps stakeholders understand copy trading performance.
-    
+
     Query params:
         - hours: Number of hours to look back (default: 24)
         - limit: Max number of trade groups to return (default: 50)
     """
     try:
         trade_ledger = get_trade_ledger_db()
-        
+
         hours = int(request.args.get('hours', 24))
         limit = int(request.args.get('limit', 50))
-        
+
         # Get recent master trades
         master_trades = trade_ledger.get_trade_history(
             user_id='master',
             limit=limit
         )
-        
+
         # For each master trade, find corresponding user trades
         # (trades with same symbol around the same time)
         traceability_report = []
-        
+
         for master_trade in master_trades:
             master_time = datetime.fromisoformat(master_trade['entry_time'])
             symbol = master_trade['symbol']
-            
+
             # Find user trades for same symbol within 5 minutes of master trade
             user_trades_for_symbol = []
-            
+
             # Get all user trades for this symbol
             all_symbol_trades = trade_ledger.get_trade_history(symbol=symbol, limit=100)
-            
+
             for trade in all_symbol_trades:
                 if trade['user_id'] == 'master':
                     continue
-                
+
                 trade_time = datetime.fromisoformat(trade['entry_time'])
                 time_diff = abs((trade_time - master_time).total_seconds())
-                
+
                 # If trade is within 5 minutes, consider it a copy trade
                 if time_diff <= 300:  # 5 minutes
                     user_trades_for_symbol.append({
@@ -942,7 +942,7 @@ def get_trade_traceability():
                         'size': trade.get('size', 0.0),
                         'time_delay_seconds': time_diff
                     })
-            
+
             traceability_report.append({
                 'master_trade': {
                     'symbol': symbol,
@@ -957,12 +957,12 @@ def get_trade_traceability():
                 'replication_count': len(user_trades_for_symbol),
                 'average_delay_seconds': sum(t['time_delay_seconds'] for t in user_trades_for_symbol) / len(user_trades_for_symbol) if user_trades_for_symbol else 0
             })
-        
+
         # Calculate summary statistics
         total_master_trades = len(master_trades)
         total_replications = sum(item['replication_count'] for item in traceability_report)
         avg_replications_per_signal = total_replications / total_master_trades if total_master_trades > 0 else 0
-        
+
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'period_hours': hours,
@@ -973,7 +973,7 @@ def get_trade_traceability():
             },
             'traceability': traceability_report
         })
-    
+
     except Exception as e:
         logger.error(f"Error getting trade traceability: {e}")
         return jsonify({'error': 'Failed to retrieve trade traceability'}), 500
@@ -982,7 +982,7 @@ def get_trade_traceability():
 def run_dashboard_api(host: str = '0.0.0.0', port: int = 5001, debug: bool = False):
     """
     Run the dashboard API server.
-    
+
     Args:
         host: Host to bind to
         port: Port to bind to
@@ -998,7 +998,7 @@ if __name__ == '__main__':
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     # Run server
     port = int(os.environ.get('DASHBOARD_PORT', 5001))
     run_dashboard_api(port=port, debug=False)

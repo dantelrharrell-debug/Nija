@@ -163,7 +163,7 @@ Your tier is automatically determined by your **account balance**:
 ✅ Tier validation passed: [INCOME] $20.00 trade
 📝 Placing Kraken market buy order: ETHUSD
    Size: 0.015 base, Validation: PASSED
-   
+
 ✅ ORDER CONFIRMED:
    • Order ID (txid): O3G7XK-XXXXX-XXXXXX
    • Filled Volume: 0.015 ETH

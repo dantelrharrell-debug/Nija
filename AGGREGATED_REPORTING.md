@@ -447,7 +447,7 @@ python -c "from bot.user_risk_manager import get_user_risk_manager; \
 ```
 
 **Issue**: Traceability shows no replications
-**Solution**: 
+**Solution**:
 - Check if users are copy-trading from master
 - Verify time window (increase `hours` parameter)
 - Confirm trades are being recorded in trade ledger
@@ -478,6 +478,6 @@ For issues or questions about aggregated reporting:
 
 ---
 
-**Last Updated**: January 21, 2026  
-**Version**: 1.0  
+**Last Updated**: January 21, 2026
+**Version**: 1.0
 **Author**: NIJA Trading Systems

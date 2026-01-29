@@ -40,18 +40,18 @@ def print_section(title):
 
 def main():
     """Main setup function"""
-    
+
     print_header("NIJA ENVIRONMENT SETUP")
-    
+
     # Check if .env already exists
     env_file = ".env"
     env_example = ".env.example"
-    
+
     if not os.path.exists(env_example):
         print("❌ Error: .env.example file not found!")
         print("   Make sure you're running this script from the repository root.")
         return 1
-    
+
     if os.path.exists(env_file):
         print(f"⚠️  Warning: {env_file} already exists!")
         response = input("   Do you want to overwrite it? (y/N): ").strip().lower()
@@ -61,14 +61,14 @@ def main():
         print("   Creating backup...")
         shutil.copy(env_file, f"{env_file}.backup")
         print(f"   ✅ Backup created: {env_file}.backup")
-    
+
     # Copy .env.example to .env
     print(f"\n📋 Creating {env_file} from {env_example}...")
     shutil.copy(env_example, env_file)
     print(f"✅ Created {env_file}")
-    
+
     print_section("📖 NEXT STEPS")
-    
+
     print("""
 To complete the setup, you need to configure your API credentials:
 
@@ -81,11 +81,11 @@ To complete the setup, you need to configure your API credentials:
    - Set in .env: KRAKEN_MASTER_API_KEY, KRAKEN_MASTER_API_SECRET
 
 3. **Kraken User Accounts (Optional - for multi-user trading)**
-   
+
    For User #1 (Daivon Frazier):
    - Get credentials from: https://www.kraken.com/u/security/api
    - Set in .env: KRAKEN_USER_DAIVON_API_KEY, KRAKEN_USER_DAIVON_API_SECRET
-   
+
    For User #2 (Tania Gilbert):
    - Get credentials from: https://www.kraken.com/u/security/api
    - Set in .env: KRAKEN_USER_TANIA_API_KEY, KRAKEN_USER_TANIA_API_SECRET
@@ -110,9 +110,9 @@ To complete the setup, you need to configure your API credentials:
    ⚠️  Enable 2FA on all exchange accounts
    ⚠️  Use API key restrictions (IP whitelisting, permissions)
 """)
-    
+
     print_header("✅ SETUP COMPLETE")
-    
+
     print("Your .env file is ready for configuration!")
     print(f"Edit {env_file} to add your API credentials.")
     print()
@@ -121,7 +121,7 @@ To complete the setup, you need to configure your API credentials:
     print("   - MULTI_USER_SETUP_GUIDE.md")
     print("   - README.md")
     print()
-    
+
     return 0
 
 

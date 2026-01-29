@@ -6,11 +6,11 @@ The Unified Exchange Execution Layer provides a **single, simple interface** for
 
 ## Supported Exchanges
 
-✅ **Kraken** - Cryptocurrency exchange  
-✅ **Coinbase Advanced** - Cryptocurrency exchange  
-✅ **Binance** - Cryptocurrency exchange  
-✅ **OKX** - Cryptocurrency and derivatives exchange  
-✅ **Alpaca** - Stock and crypto trading  
+✅ **Kraken** - Cryptocurrency exchange
+✅ **Coinbase Advanced** - Cryptocurrency exchange
+✅ **Binance** - Cryptocurrency exchange
+✅ **OKX** - Cryptocurrency and derivatives exchange
+✅ **Alpaca** - Stock and crypto trading
 
 ## The Simple Interface
 
@@ -167,9 +167,9 @@ def distribute_trade(base, quote, total_usd):
         'binance': f'{base}USDT',  # Binance uses USDT
         'okx': f'{base}-USDT',
     }
-    
+
     size_per_exchange = total_usd / len(exchanges)
-    
+
     results = []
     for exchange, symbol in exchanges.items():
         result = execute_trade(
@@ -180,7 +180,7 @@ def distribute_trade(base, quote, total_usd):
             order_type='market'
         )
         results.append((exchange, result))
-    
+
     return results
 
 # Buy $400 of BTC distributed across 4 exchanges ($100 each)
@@ -294,19 +294,19 @@ if not result.success:
     if "Unsupported exchange" in result.error_message:
         # Invalid exchange name
         print(f"Exchange not supported: {exchange}")
-    
+
     elif "below minimum" in result.error_message:
         # Order size too small
         print(f"Order too small for {exchange}")
-    
+
     elif "Invalid side" in result.error_message:
         # Invalid order side
         print("Side must be 'buy' or 'sell'")
-    
+
     elif "Price is required" in result.error_message:
         # Missing price for limit order
         print("Limit orders require a price")
-    
+
     else:
         # Other error
         print(f"Trade failed: {result.error_message}")
@@ -321,7 +321,7 @@ if validated.valid:
     # Check warnings
     for warning in validated.warnings:
         print(f"Warning: {warning}")
-    
+
     # Warnings don't prevent execution, but should be logged
 ```
 
@@ -372,7 +372,7 @@ from bot.unified_execution_engine import execute_trade
 class MyStrategy:
     def __init__(self, exchange='coinbase'):
         self.exchange = exchange
-    
+
     def execute_buy_signal(self, symbol, size_usd):
         """Execute a buy signal on configured exchange."""
         result = execute_trade(
@@ -382,14 +382,14 @@ class MyStrategy:
             size=size_usd,
             order_type='market'
         )
-        
+
         if result.success:
             self.log_trade(result)
         else:
             self.log_error(result.error_message)
-        
+
         return result
-    
+
     def execute_sell_signal(self, symbol, size_base):
         """Execute a sell signal on configured exchange."""
         result = execute_trade(
@@ -400,7 +400,7 @@ class MyStrategy:
             order_type='market',
             size_type='base'
         )
-        
+
         return result
 ```
 
@@ -413,18 +413,18 @@ class MultiExchangePortfolio:
     def __init__(self):
         self.exchanges = ['coinbase', 'kraken', 'binance', 'okx']
         self.positions = {}
-    
+
     def rebalance(self, target_allocations):
         """Rebalance portfolio across exchanges."""
         for exchange in self.exchanges:
             for symbol, target_pct in target_allocations.items():
                 current_pct = self.get_allocation(exchange, symbol)
-                
+
                 if current_pct < target_pct:
                     # Buy more
                     size = self.calculate_buy_size(target_pct - current_pct)
                     execute_trade(exchange, symbol, 'buy', size)
-                
+
                 elif current_pct > target_pct:
                     # Sell excess
                     size = self.calculate_sell_size(current_pct - target_pct)
@@ -468,10 +468,10 @@ Test strategies on lower-fee exchanges (like Kraken at 0.42%) before deploying t
 
 ## Current Status
 
-✅ **Interface Complete**: The unified execution layer is fully implemented  
-✅ **Validation Working**: All exchange-specific validation rules implemented  
-✅ **Tests Passing**: All 5 test suites pass  
-⚠️ **Execution Pending**: Actual broker execution needs integration with BrokerManager  
+✅ **Interface Complete**: The unified execution layer is fully implemented
+✅ **Validation Working**: All exchange-specific validation rules implemented
+✅ **Tests Passing**: All 5 test suites pass
+⚠️ **Execution Pending**: Actual broker execution needs integration with BrokerManager
 
 ### Next Steps for Full Integration
 

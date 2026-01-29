@@ -4,8 +4,8 @@
 
 This document describes the three advanced "God Mode+" features that push NIJA into the top 1% of algorithmic trading systems. These features implement institutional-grade trading logic that separates professional systems from basic bots.
 
-**Last Updated:** January 29, 2026  
-**Version:** 1.0  
+**Last Updated:** January 29, 2026
+**Version:** 1.0
 **Status:** ✅ IMPLEMENTED & TESTED
 
 ---
@@ -88,7 +88,7 @@ Where:
 
 **Function Signature:**
 ```python
-def calculate_volatility_weighted_rsi_bands(df, rsi_period=14, atr_period=14, 
+def calculate_volatility_weighted_rsi_bands(df, rsi_period=14, atr_period=14,
                                            adx_period=14, base_width=10)
 ```
 
@@ -168,7 +168,7 @@ agreement = (bullish_count >= 70% of timeframes) OR (bearish_count >= 70% of tim
 
 **Function Signature:**
 ```python
-def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min', 
+def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min',
                                        higher_timeframes=['5min', '15min'],
                                        rsi_period=14,
                                        agreement_threshold=10)
@@ -198,7 +198,7 @@ def check_multi_timeframe_rsi_agreement(df, current_timeframe='1min',
 - Potential long entry
 
 **Bearish (RSI > 60):**
-- Overbought territory  
+- Overbought territory
 - Looking for reversal down
 - Potential short entry
 
@@ -424,7 +424,7 @@ NIJA is now in the top 1% of algorithmic systems! 🚀
 
 ### Why These Features Work
 
-1. **Regime-Adaptive Risk**: 
+1. **Regime-Adaptive Risk**:
    - Bigger bets in clear markets
    - Smaller bets in uncertain markets
    - Capital efficiency ↑

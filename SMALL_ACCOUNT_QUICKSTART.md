@@ -4,11 +4,11 @@
 
 The NIJA Safe Small-Account Preset is a **turnkey configuration** designed specifically for accounts between **$20-$100**. This preset provides:
 
-✅ **Full copy trading support** - Mirror master account trades automatically  
-✅ **Minimal API risk** - Conservative position sizing and strict limits  
-✅ **Controlled drawdown** - Multiple circuit breakers and safety features  
-✅ **Fee optimization** - Trades on lowest-fee exchanges (Kraken recommended)  
-✅ **Beginner-friendly** - Works out of the box with minimal configuration  
+✅ **Full copy trading support** - Mirror master account trades automatically
+✅ **Minimal API risk** - Conservative position sizing and strict limits
+✅ **Controlled drawdown** - Multiple circuit breakers and safety features
+✅ **Fee optimization** - Trades on lowest-fee exchanges (Kraken recommended)
+✅ **Beginner-friendly** - Works out of the box with minimal configuration
 
 ---
 
@@ -91,7 +91,7 @@ Your position sizes automatically adjust based on your balance:
 | $50 - $75      | 4%            | $2.00 - $3.00       |
 | $75 - $100     | 5%            | $3.75 - $5.00       |
 
-**Minimum**: $5.00 per trade (for fee efficiency)  
+**Minimum**: $5.00 per trade (for fee efficiency)
 **Maximum**: $10.00 per trade (risk protection)
 
 ---
@@ -363,7 +363,7 @@ Before you start:
 
 ---
 
-**Last Updated**: January 20, 2026  
-**Version**: 1.0  
-**Preset File**: `bot/small_account_preset.py`  
+**Last Updated**: January 20, 2026
+**Version**: 1.0
+**Preset File**: `bot/small_account_preset.py`
 **Environment File**: `.env.small_account_preset`

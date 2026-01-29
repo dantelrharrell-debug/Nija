@@ -7,7 +7,7 @@
 
 **Current Situation**: The bot is experiencing API rate limiting on Coinbase while Kraken remains disconnected due to missing credentials. This creates a single point of failure where all trading load falls on Coinbase, exacerbating rate limit issues.
 
-**Impact**: 
+**Impact**:
 - ⚠️ Coinbase API health at 48% with batch size reduced to 5 markets
 - ❌ Circuit breaker triggering after 4 errors (30s cooldown)
 - ❌ Kraken NOT connected (cannot distribute load)
@@ -419,6 +419,6 @@ On startup, the bot:
 
 ---
 
-**Status**: 🟡 WAITING FOR CONFIGURATION  
-**Priority**: HIGH (blocking multi-exchange trading)  
+**Status**: 🟡 WAITING FOR CONFIGURATION
+**Priority**: HIGH (blocking multi-exchange trading)
 **Next Action**: Configure Kraken credentials per instructions above

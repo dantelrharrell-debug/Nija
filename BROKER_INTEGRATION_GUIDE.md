@@ -81,19 +81,19 @@ class MyBrokerAdapter(BrokerInterface):
     def connect(self) -> bool:
         """Establish connection to broker API."""
         pass
-    
+
     def get_account_balance(self) -> Dict[str, float]:
         """Get account balance."""
         pass
-    
+
     def get_market_data(self, symbol: str, timeframe: str, limit: int):
         """Get OHLCV candles."""
         pass
-    
+
     def place_market_order(self, symbol: str, side: str, size: float):
         """Place market order."""
         pass
-    
+
     # ... other required methods
 ```
 
@@ -172,14 +172,14 @@ broker = BrokerFactory.create_broker('coinbase')
 # Connect
 if broker.connect():
     print("Connected to Coinbase!")
-    
+
     # Get balance
     balance = broker.get_account_balance()
     print(f"Balance: ${balance['available_balance']:.2f}")
-    
+
     # Get market data
     market_data = broker.get_market_data('BTC-USD', '5m', 100)
-    
+
     # Place order
     order = broker.place_market_order('BTC-USD', 'buy', 100.0)
     print(f"Order placed: {order['order_id']}")
@@ -200,7 +200,7 @@ existing_broker = BrokerManager()
 class CoinbaseApexAdapter(CoinbaseBrokerAdapter):
     def __init__(self, broker_manager):
         self.broker = broker_manager
-    
+
     def get_account_balance(self):
         balance = self.broker.get_usd_balance()
         return {
@@ -208,7 +208,7 @@ class CoinbaseApexAdapter(CoinbaseBrokerAdapter):
             'available_balance': balance,
             'currency': 'USD'
         }
-    
+
     # Implement other methods using broker_manager...
 
 # Use with Apex Strategy
@@ -265,14 +265,14 @@ broker = BrokerFactory.create_broker('okx', testnet=False)
 # Connect
 if broker.connect():
     print("Connected to OKX!")
-    
+
     # Get balance
     balance = broker.get_account_balance()
     print(f"Available USDT: ${balance['available_balance']:.2f}")
-    
+
     # Get market data (automatically converts BTC-USD to BTC-USDT)
     market_data = broker.get_market_data('BTC-USD', '5m', 100)
-    
+
     # Place order (spot trading)
     order = broker.place_market_order('BTC-USDT', 'buy', 100.0)
     print(f"Order placed: {order['order_id']}")
@@ -289,14 +289,14 @@ okx = OKXBroker()
 # Connect
 if okx.connect():
     print("✅ OKX Connected")
-    
+
     # Get balance
     balance = okx.get_account_balance()
     print(f"USDT Balance: ${balance:.2f}")
-    
+
     # Get candles
     candles = okx.get_candles('BTC-USDT', '5m', 100)
-    
+
     # Get positions
     positions = okx.get_positions()
     for pos in positions:
@@ -516,15 +516,15 @@ strategy = NijaApexStrategyV71(account_balance=total_balance)
 # Scan each broker's pairs
 for broker_name, broker_info in brokers.items():
     broker = broker_info['broker']
-    
+
     for symbol in broker_info['pairs']:
         # Get market data
         market_data = broker.get_market_data(symbol, '5m', 100)
         df = convert_to_dataframe(market_data)
-        
+
         # Check for signals
         should_enter, trade_plan = strategy.should_enter_trade(df)
-        
+
         if should_enter:
             # Execute on specific broker
             broker.place_market_order(
@@ -577,22 +577,22 @@ class RateLimiter:
     def __init__(self, calls_per_second=10):
         self.calls_per_second = calls_per_second
         self.last_call = 0
-    
+
     def wait_if_needed(self):
         now = time.time()
         time_since_last = now - self.last_call
         min_interval = 1.0 / self.calls_per_second
-        
+
         if time_since_last < min_interval:
             time.sleep(min_interval - time_since_last)
-        
+
         self.last_call = time.time()
 
 # Use in broker adapter
 class MyBrokerAdapter(BrokerInterface):
     def __init__(self):
         self.rate_limiter = RateLimiter(calls_per_second=10)
-    
+
     def place_market_order(self, *args, **kwargs):
         self.rate_limiter.wait_if_needed()
         # Place order
@@ -607,7 +607,7 @@ from datetime import datetime
 class TradeLogger:
     def __init__(self, log_file='trades.log'):
         self.log_file = log_file
-    
+
     def log_trade(self, broker, symbol, side, size, price, order_id):
         trade_data = {
             'timestamp': datetime.utcnow().isoformat(),
@@ -618,7 +618,7 @@ class TradeLogger:
             'price': price,
             'order_id': order_id
         }
-        
+
         with open(self.log_file, 'a') as f:
             f.write(json.dumps(trade_data) + '\n')
 
@@ -636,13 +636,13 @@ Keep track of positions across all brokers:
 class PositionManager:
     def __init__(self):
         self.positions = {}
-    
+
     def sync_positions(self, brokers):
         """Sync positions from all brokers."""
         for broker_name, broker in brokers.items():
             positions = broker.get_open_positions()
             self.positions[broker_name] = positions
-    
+
     def get_total_exposure(self):
         """Get total USD exposure across all brokers."""
         total = 0
@@ -761,5 +761,5 @@ WantedBy=multi-user.target
 
 ---
 
-**Last Updated:** December 12, 2025  
+**Last Updated:** December 12, 2025
 **Version:** 7.1

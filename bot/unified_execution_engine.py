@@ -14,7 +14,7 @@ strategies to trade without caring about which exchange they're using.
 
 Usage:
     from unified_execution_engine import execute_trade
-    
+
     result = execute_trade(
         exchange='coinbase',
         symbol='BTC-USD',
@@ -28,7 +28,7 @@ This is huge for scaling - strategies don't care where they trade, they just tra
 ## Current Status
 
 ✅ **Interface Complete**: Full API implemented and tested
-✅ **Validation Working**: Exchange-specific validation rules implemented  
+✅ **Validation Working**: Exchange-specific validation rules implemented
 ✅ **Symbol Normalization**: Automatic symbol format conversion
 ✅ **Error Handling**: Consistent error handling across exchanges
 ⚠️  **Execution Pending**: Needs integration with BrokerManager for actual order placement
@@ -74,17 +74,17 @@ logger = logging.getLogger("nija.unified_execution")
 # Import broker adapters for validation
 try:
     from bot.broker_adapters import (
-        BrokerAdapterFactory, 
-        TradeIntent, 
-        ValidatedOrder, 
+        BrokerAdapterFactory,
+        TradeIntent,
+        ValidatedOrder,
         OrderIntent
     )
 except ImportError:
     try:
         from broker_adapters import (
-            BrokerAdapterFactory, 
-            TradeIntent, 
-            ValidatedOrder, 
+            BrokerAdapterFactory,
+            TradeIntent,
+            ValidatedOrder,
             OrderIntent
         )
     except ImportError:
@@ -132,7 +132,7 @@ class OrderSide(Enum):
 class TradeResult:
     """
     Result from executing a trade on an exchange.
-    
+
     Attributes:
         success: Whether the trade executed successfully
         exchange: Exchange where the trade was executed
@@ -160,15 +160,15 @@ class TradeResult:
 class UnifiedExecutionEngine:
     """
     Unified execution engine for multi-exchange trading.
-    
+
     This class provides a simple interface to execute trades across
     multiple exchanges without needing to know exchange-specific details.
     """
-    
+
     # Map of initialized broker managers (singleton pattern for sharing across calls)
     # Note: Using class variable for efficient connection reuse across execute_trade calls
     _broker_managers: Dict[str, 'BrokerManager'] = {}
-    
+
     # Map of exchange names to their adapter types
     _exchange_adapter_map = {
         'coinbase': 'coinbase',
@@ -177,29 +177,29 @@ class UnifiedExecutionEngine:
         'okx': 'okx',
         'alpaca': 'alpaca',
     }
-    
+
     @classmethod
     def _get_broker_manager(cls, exchange: str) -> Optional['BrokerManager']:
         """
         Get or create a broker manager for the specified exchange.
-        
+
         Args:
             exchange: Exchange name (coinbase, kraken, etc.)
-            
+
         Returns:
             BrokerManager instance or None if unavailable
         """
         exchange_lower = exchange.lower()
-        
+
         # Return cached instance if available
         if exchange_lower in cls._broker_managers:
             return cls._broker_managers[exchange_lower]
-        
+
         # Create new broker manager if not cached
         if BrokerManager is None:
             logger.error(f"❌ BrokerManager not available - cannot connect to {exchange}")
             return None
-        
+
         try:
             broker_manager = BrokerManager()
             cls._broker_managers[exchange_lower] = broker_manager
@@ -208,7 +208,7 @@ class UnifiedExecutionEngine:
         except Exception as e:
             logger.error(f"❌ Failed to create broker manager for {exchange}: {e}")
             return None
-    
+
     @classmethod
     def validate_trade(
         cls,
@@ -221,7 +221,7 @@ class UnifiedExecutionEngine:
     ) -> ValidatedOrder:
         """
         Validate a trade against exchange-specific rules.
-        
+
         Args:
             exchange: Exchange name (coinbase, kraken, binance, okx, alpaca)
             symbol: Trading pair symbol
@@ -229,12 +229,12 @@ class UnifiedExecutionEngine:
             size: Order size (in base or quote currency)
             size_type: Type of size ('base' or 'quote')
             force_execute: If True, bypass minimum size checks (for stop-loss)
-            
+
         Returns:
             ValidatedOrder with validation results
         """
         exchange_lower = exchange.lower()
-        
+
         # Validate exchange is supported
         if exchange_lower not in cls._exchange_adapter_map:
             logger.error(f"❌ Unsupported exchange: {exchange}")
@@ -248,7 +248,7 @@ class UnifiedExecutionEngine:
                     error_message=f"Unsupported exchange: {exchange}"
                 )
             return None
-        
+
         # If adapter factory not available, skip validation
         if BrokerAdapterFactory is None or TradeIntent is None or OrderIntent is None:
             logger.warning("⚠️ Broker adapters not available - skipping validation")
@@ -262,12 +262,12 @@ class UnifiedExecutionEngine:
                     warnings=["Validation skipped - adapters not available"]
                 )
             return None
-        
+
         # Create trade intent
         intent_type = OrderIntent.STOP_LOSS if force_execute else (
             OrderIntent.BUY if side.lower() == 'buy' else OrderIntent.SELL
         )
-        
+
         intent = TradeIntent(
             intent_type=intent_type,
             symbol=symbol,
@@ -277,17 +277,17 @@ class UnifiedExecutionEngine:
             force_execute=force_execute,
             reason=f"{side} {size} {symbol} on {exchange}"
         )
-        
+
         # Get adapter and validate
         try:
             adapter = BrokerAdapterFactory.create_adapter(exchange_lower)
             validated = adapter.validate_and_adjust(intent)
-            
+
             if validated.valid:
                 logger.info(f"✅ Trade validated for {exchange}: {symbol} {side} {size}")
             else:
                 logger.warning(f"⚠️ Trade validation failed for {exchange}: {validated.error_message}")
-            
+
             return validated
         except Exception as e:
             logger.error(f"❌ Validation error for {exchange}: {e}")
@@ -301,7 +301,7 @@ class UnifiedExecutionEngine:
                     error_message=f"Validation error: {str(e)}"
                 )
             return None
-    
+
     @classmethod
     def execute_trade(
         cls,
@@ -317,10 +317,10 @@ class UnifiedExecutionEngine:
     ) -> TradeResult:
         """
         Execute a trade on the specified exchange.
-        
+
         This is the main unified interface for executing trades across all exchanges.
         Strategies call this method without needing to know exchange-specific details.
-        
+
         Args:
             exchange: Exchange name (coinbase, kraken, binance, okx, alpaca)
             symbol: Trading pair symbol (e.g., 'BTC-USD', 'ETH/USD', 'BTCUSDT')
@@ -331,10 +331,10 @@ class UnifiedExecutionEngine:
             size_type: Type of size ('base' or 'quote')
             validate_first: If True, validate trade before executing
             **kwargs: Additional exchange-specific parameters
-            
+
         Returns:
             TradeResult with execution details
-            
+
         Example:
             # Execute a market buy on Coinbase
             result = execute_trade(
@@ -344,7 +344,7 @@ class UnifiedExecutionEngine:
                 size=100.0,  # $100 USD
                 order_type='market'
             )
-            
+
             # Execute a limit sell on Kraken
             result = execute_trade(
                 exchange='kraken',
@@ -357,12 +357,12 @@ class UnifiedExecutionEngine:
             )
         """
         logger.info(f"🎯 Executing trade: {exchange.upper()} | {symbol} | {side.upper()} | {size} | {order_type.upper()}")
-        
+
         # Validate inputs
         exchange_lower = exchange.lower()
         side_lower = side.lower()
         order_type_lower = order_type.lower()
-        
+
         # Validate exchange is supported
         if exchange_lower not in cls._exchange_adapter_map:
             error_msg = f"Unsupported exchange: {exchange}"
@@ -376,7 +376,7 @@ class UnifiedExecutionEngine:
                 order_type=order_type,
                 error_message=error_msg
             )
-        
+
         # Validate side
         if side_lower not in ['buy', 'sell']:
             error_msg = f"Invalid side: {side}. Must be 'buy' or 'sell'"
@@ -390,7 +390,7 @@ class UnifiedExecutionEngine:
                 order_type=order_type,
                 error_message=error_msg
             )
-        
+
         # Validate order type
         if order_type_lower not in ['market', 'limit', 'stop_loss']:
             error_msg = f"Invalid order type: {order_type}. Must be 'market', 'limit', or 'stop_loss'"
@@ -404,7 +404,7 @@ class UnifiedExecutionEngine:
                 order_type=order_type,
                 error_message=error_msg
             )
-        
+
         # Validate price for limit orders
         if order_type_lower == 'limit' and price is None:
             error_msg = "Price is required for limit orders"
@@ -418,7 +418,7 @@ class UnifiedExecutionEngine:
                 order_type=order_type,
                 error_message=error_msg
             )
-        
+
         # Validate trade against exchange rules
         if validate_first:
             force_execute = order_type_lower == 'stop_loss'
@@ -430,7 +430,7 @@ class UnifiedExecutionEngine:
                 size_type=size_type,
                 force_execute=force_execute
             )
-            
+
             if validated and not validated.valid:
                 error_msg = f"Validation failed: {validated.error_message}"
                 logger.error(f"❌ {error_msg}")
@@ -443,11 +443,11 @@ class UnifiedExecutionEngine:
                     order_type=order_type,
                     error_message=error_msg
                 )
-            
+
             if validated and validated.warnings:
                 for warning in validated.warnings:
                     logger.warning(f"⚠️ {warning}")
-        
+
         # Get broker manager for the exchange
         broker_manager = cls._get_broker_manager(exchange)
         if broker_manager is None:
@@ -462,13 +462,13 @@ class UnifiedExecutionEngine:
                 order_type=order_type,
                 error_message=error_msg
             )
-        
+
         # Execute the trade based on order type
         try:
             # TODO: Wire up to actual BrokerManager execution methods
             # The BrokerManager class has methods like:
             # - For Coinbase: Uses internal broker client for order placement
-            # - For Kraken: Uses Kraken API integration  
+            # - For Kraken: Uses Kraken API integration
             # - For Binance/OKX/Alpaca: Uses respective API clients
             #
             # Next steps for full integration:
@@ -476,14 +476,14 @@ class UnifiedExecutionEngine:
             # 2. Wire up result parsing from each exchange API
             # 3. Add order status tracking and fills
             # 4. Implement position management across exchanges
-            
+
             logger.info(f"📤 Sending order to {exchange.upper()}...")
-            
+
             # Placeholder: This shows the structure but needs actual broker integration
             # When integrated, this will call broker_manager methods like:
             # if order_type_lower == 'market':
             #     raw_result = broker_manager.place_market_order(
-            #         exchange=exchange, symbol=symbol, side=side, 
+            #         exchange=exchange, symbol=symbol, side=side,
             #         size=size, size_type=size_type
             #     )
             # elif order_type_lower == 'limit':
@@ -491,7 +491,7 @@ class UnifiedExecutionEngine:
             #         exchange=exchange, symbol=symbol, side=side,
             #         size=size, price=price, size_type=size_type
             #     )
-            
+
             result = TradeResult(
                 success=True,
                 exchange=exchange,
@@ -502,12 +502,12 @@ class UnifiedExecutionEngine:
                 order_id=f"{exchange}_order_{int(time.time())}",
                 error_message="Integration pending: Actual broker execution not yet wired up"
             )
-            
+
             logger.info(f"✅ Trade executed successfully on {exchange.upper()}")
             logger.info(f"   Order ID: {result.order_id}")
-            
+
             return result
-            
+
         except Exception as e:
             error_msg = f"Execution error: {str(e)}"
             logger.error(f"❌ {error_msg}")
@@ -534,10 +534,10 @@ def execute_trade(
 ) -> TradeResult:
     """
     Unified interface for executing trades across all exchanges.
-    
+
     This is the main function that strategies should use. It abstracts away
     all exchange-specific details and provides a simple, consistent interface.
-    
+
     Args:
         exchange: Exchange name (coinbase, kraken, binance, okx, alpaca)
         symbol: Trading pair symbol
@@ -545,20 +545,20 @@ def execute_trade(
         size: Order size
         order_type: Order type ('market', 'limit', 'stop_loss')
         **kwargs: Additional parameters (price, size_type, etc.)
-        
+
     Returns:
         TradeResult with execution details
-        
+
     Example:
         from unified_execution_engine import execute_trade
-        
+
         # Buy $100 of BTC on Coinbase
         result = execute_trade('coinbase', 'BTC-USD', 'buy', 100.0)
-        
+
         # Sell 0.5 ETH on Kraken
-        result = execute_trade('kraken', 'ETH/USD', 'sell', 0.5, 
+        result = execute_trade('kraken', 'ETH/USD', 'sell', 0.5,
                               size_type='base')
-        
+
         # Place limit buy on Binance
         result = execute_trade('binance', 'BTCUSDT', 'buy', 50000.0,
                               order_type='limit', price=50000.0)
@@ -583,22 +583,22 @@ def validate_trade(
 ) -> ValidatedOrder:
     """
     Validate a trade against exchange-specific rules without executing.
-    
+
     Useful for pre-flight checks before executing trades.
-    
+
     Args:
         exchange: Exchange name
         symbol: Trading pair symbol
         side: Order side ('buy' or 'sell')
         size: Order size
         **kwargs: Additional parameters (size_type, force_execute, etc.)
-        
+
     Returns:
         ValidatedOrder with validation results
-        
+
     Example:
         from unified_execution_engine import validate_trade
-        
+
         validated = validate_trade('coinbase', 'BTC-USD', 'buy', 10.0)
         if validated.valid:
             print("Trade is valid!")
@@ -617,17 +617,17 @@ def validate_trade(
 if __name__ == "__main__":
     # Example usage and testing
     import time
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s | %(levelname)-7s | %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    
+
     logger.info("=" * 70)
     logger.info("NIJA Unified Execution Engine - Example Usage")
     logger.info("=" * 70)
-    
+
     # Example 1: Validate a trade
     logger.info("\n📋 Example 1: Validate a trade on Coinbase")
     validated = validate_trade(
@@ -644,7 +644,7 @@ if __name__ == "__main__":
         if validated.warnings:
             for warning in validated.warnings:
                 logger.info(f"   Warning: {warning}")
-    
+
     # Example 2: Execute a market order
     logger.info("\n💱 Example 2: Execute a market buy on Coinbase")
     result = execute_trade(
@@ -659,7 +659,7 @@ if __name__ == "__main__":
         logger.info(f"   Order ID: {result.order_id}")
     else:
         logger.info(f"   Error: {result.error_message}")
-    
+
     # Example 3: Execute on different exchange
     logger.info("\n💱 Example 3: Execute a market sell on Kraken")
     result = execute_trade(
@@ -673,7 +673,7 @@ if __name__ == "__main__":
     logger.info(f"   Success: {result.success}")
     if not result.success:
         logger.info(f"   Error: {result.error_message}")
-    
+
     # Example 4: Execute limit order
     logger.info("\n💱 Example 4: Execute a limit buy on Binance")
     result = execute_trade(
@@ -687,7 +687,7 @@ if __name__ == "__main__":
     logger.info(f"   Success: {result.success}")
     if not result.success:
         logger.info(f"   Error: {result.error_message}")
-    
+
     logger.info("\n" + "=" * 70)
     logger.info("✅ Examples complete!")
     logger.info("=" * 70)

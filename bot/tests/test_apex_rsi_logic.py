@@ -199,7 +199,7 @@ def test_no_overlap_between_long_and_short_zones(strategy):
     # Long zone: 25-45
     # Short zone: 55-75
     # Gap: 46-54 (neutral zone)
-    
+
     # Test the gap zone - should reject both long and short
     for rsi in [46, 47, 48, 49, 50, 51, 52, 53, 54]:
         assert strategy._rsi_long_filter(rsi) is False, f"RSI {rsi} should not trigger long entry"
@@ -216,7 +216,7 @@ def test_institutional_discipline_enforcement(strategy):
     strength_zone = [46, 50, 55, 60, 65, 70, 75, 80, 85, 90]
     for rsi in strength_zone:
         assert strategy._rsi_long_filter(rsi) is False, f"Should never buy at RSI {rsi} (buying strength)"
-    
+
     # Test selling weakness prevention
     weakness_zone = [25, 30, 35, 40, 45, 50, 54]
     for rsi in weakness_zone:

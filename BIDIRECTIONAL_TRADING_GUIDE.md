@@ -1,8 +1,8 @@
 # NIJA Bidirectional Trading Guide
 ## Profiting in Both Up AND Down Markets
 
-**Version:** 1.0  
-**Date:** January 22, 2026  
+**Version:** 1.0
+**Date:** January 22, 2026
 **Status:** ✅ ACTIVE
 
 ---
@@ -339,7 +339,7 @@ Net Profit: +1.64% ($1.64) ✅
 - **Funding fees** (for perpetual futures)
 - **Higher volatility** in leveraged positions
 
-**Recommendation:** 
+**Recommendation:**
 - Start with **LONG-only** on Coinbase to learn
 - Move to **Kraken for shorts** once experienced
 - Use **low leverage** (1x-2x max) for safety
@@ -411,6 +411,6 @@ grep "SHORT.*take_profit\|take_profit.*short" nija.log
 
 ---
 
-**Last Updated:** January 22, 2026  
-**Maintained By:** NIJA Trading Systems  
+**Last Updated:** January 22, 2026
+**Maintained By:** NIJA Trading Systems
 **Version:** 1.0

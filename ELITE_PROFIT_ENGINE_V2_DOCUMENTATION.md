@@ -4,8 +4,8 @@
 
 The **Elite Profit Engine v2** is an advanced, autonomous profit optimization system that integrates 6 powerful subsystems to maximize trading returns while intelligently managing risk.
 
-**Version:** 2.0  
-**Status:** ✅ Production Ready  
+**Version:** 2.0
+**Status:** ✅ Production Ready
 **Date:** January 29, 2026
 
 ---
@@ -133,7 +133,7 @@ Conditions:
 Result:
   Calculated Leverage: 2.8x
   Confidence: 0.85 (high)
-  
+
 Position:
   Base: $500
   With Leverage: $1,400 ($500 x 2.8)
@@ -447,26 +447,26 @@ from bot.elite_profit_engine_config import get_config_profile
 class NIJAEliteStrategy:
     def __init__(self, broker, config):
         self.broker = broker
-        
+
         # Initialize Elite Profit Engine v2
         elite_config = get_config_profile('moderate')  # or 'aggressive', 'elite'
         self.elite_engine = get_elite_profit_engine_v2(
             base_capital=broker.get_balance(),
             config=elite_config
         )
-    
+
     def generate_signal(self, symbol, df, indicators):
         # Your existing signal generation logic
         score = self.calculate_entry_score(df, indicators)
         side = self.determine_side(df, indicators)
-        
+
         # Use Elite Engine to determine if trade should be taken
         should_take, reason = self.elite_engine.should_take_trade(score)
-        
+
         if not should_take:
             logger.info(f"Trade rejected: {reason}")
             return None
-        
+
         # Calculate optimal position size using Elite Engine
         position_result = self.elite_engine.calculate_optimal_position_size(
             df=df,
@@ -474,7 +474,7 @@ class NIJAEliteStrategy:
             signal_score=score,
             strategy_type=StrategyType.MOMENTUM  # or detect from signal
         )
-        
+
         return {
             'symbol': symbol,
             'side': side,
@@ -482,7 +482,7 @@ class NIJAEliteStrategy:
             'score': score,
             'elite_result': position_result
         }
-    
+
     def on_trade_close(self, trade_result):
         # Record result in Elite Engine
         self.elite_engine.record_trade_result(
@@ -569,22 +569,22 @@ Returns:
 
 ## ❓ FAQ
 
-**Q: Can I disable leverage?**  
+**Q: Can I disable leverage?**
 A: Yes, set `leverage_mode: 'disabled'` in config.
 
-**Q: How much can I make per day?**  
+**Q: How much can I make per day?**
 A: Depends on profile. Conservative: 1-2%, Moderate: 2-3%, Aggressive: 3-5%. Some days less, some more.
 
-**Q: What if I lose money?**  
+**Q: What if I lose money?**
 A: System has drawdown protection and circuit breakers. Max loss limited to 10-20% depending on profile.
 
-**Q: How often does capital rotate?**  
+**Q: How often does capital rotate?**
 A: Every market scan (2-3 minutes), but transitions are smooth (30% shift per rotation).
 
-**Q: Can I customize the config?**  
+**Q: Can I customize the config?**
 A: Yes! Edit `elite_profit_engine_config.py` or create custom config dict.
 
-**Q: Does this work with all brokers?**  
+**Q: Does this work with all brokers?**
 A: Yes, broker-agnostic. Works with Coinbase, Kraken, or any broker.
 
 ---
@@ -610,12 +610,12 @@ bot/
 The **Elite Profit Engine v2** transforms NIJA from a good trading bot into an **elite autonomous profit system**.
 
 **Key Advantages:**
-✅ Dynamically optimized position sizing  
-✅ Intelligent capital allocation  
-✅ Risk-adjusted leverage  
-✅ Automatic profit protection  
-✅ Optimized trading frequency  
-✅ Exponential compounding  
+✅ Dynamically optimized position sizing
+✅ Intelligent capital allocation
+✅ Risk-adjusted leverage
+✅ Automatic profit protection
+✅ Optimized trading frequency
+✅ Exponential compounding
 
 **Expected Results:**
 - 2-4x more trades (frequency optimization)

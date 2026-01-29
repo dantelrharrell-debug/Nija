@@ -29,18 +29,18 @@ class DashboardAPI:
     Public API for dashboard and user interface.
     Provides read-only access to trading stats and user settings.
     """
-    
+
     def __init__(self):
         self.logger = logger
         logger.info("Dashboard API initialized")
-    
+
     def get_user_stats(self, user_id: str) -> dict:
         """
         Get user trading statistics.
-        
+
         Args:
             user_id: User identifier
-            
+
         Returns:
             dict: User statistics
         """
@@ -52,14 +52,14 @@ class DashboardAPI:
             'total_pnl': 0.0,
             'active_positions': 0
         }
-    
+
     def get_user_settings(self, user_id: str) -> dict:
         """
         Get user settings.
-        
+
         Args:
             user_id: User identifier
-            
+
         Returns:
             dict: User settings
         """
@@ -69,15 +69,15 @@ class DashboardAPI:
             'notifications_enabled': True,
             'risk_level': 'medium'
         }
-    
+
     def update_user_settings(self, user_id: str, settings: dict) -> bool:
         """
         Update user settings.
-        
+
         Args:
             user_id: User identifier
             settings: Settings to update
-            
+
         Returns:
             bool: True if successful
         """

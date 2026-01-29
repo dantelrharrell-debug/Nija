@@ -49,62 +49,62 @@ MIN_CONNECTION_DELAY = 5.0  # seconds
 class MultiAccountBrokerManager:
     """
     Manages brokers for multiple accounts (master + users).
-    
+
     Each account can have connections to multiple exchanges.
     Accounts are completely isolated from each other.
     """
-    
+
     # Maximum length for error messages stored in failed connection tracking
     # Prevents excessive memory usage from very long error strings
     MAX_ERROR_MESSAGE_LENGTH = 50
-    
+
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
     # Problem: Sequential balance calls cause 1-1.2s delay per user
     # Solution: Cache balances per trading cycle to prevent repeated API calls
     BALANCE_CACHE_TTL = 120.0  # Cache balance for 2 minutes (one trading cycle)
     KRAKEN_BALANCE_CALL_DELAY = 1.1  # 1.1s delay between Kraken balance API calls
-    
+
     def __init__(self):
         """Initialize multi-account broker manager."""
         # Master account brokers
         self.master_brokers: Dict[BrokerType, BaseBroker] = {}
-        
+
         # User account brokers - structure: {user_id: {BrokerType: BaseBroker}}
         self.user_brokers: Dict[str, Dict[BrokerType, BaseBroker]] = {}
-        
+
         # FIX #3: User portfolio states for total equity tracking
         # Structure: {(user_id, broker_type): UserPortfolioState}
         self.user_portfolios: Dict[Tuple[str, str], any] = {}
-        
+
         # Track users with failed connections to avoid repeated attempts in same session
         # Structure: {(user_id, broker_type): error_reason}
         self._failed_user_connections: Dict[Tuple[str, BrokerType], str] = {}
-        
+
         # Track users without credentials (not an error - credentials are optional)
         # Structure: {(user_id, broker_type): True}
         self._users_without_credentials: Dict[Tuple[str, BrokerType], bool] = {}
-        
+
         # Track all user broker objects (even disconnected) to check credentials_configured flag
         # Structure: {(user_id, broker_type): BaseBroker}
         self._all_user_brokers: Dict[Tuple[str, BrokerType], BaseBroker] = {}
-        
+
         # CRITICAL FIX (Jan 18, 2026): Track if Kraken copy trading system is active
         # When True, skip Kraken user initialization in connect_users_from_config()
         # to prevent duplicate user creation (copy trading creates its own clients)
         self.kraken_copy_trading_active = False
-        
+
         # CRITICAL FIX (Jan 19, 2026): Balance cache to prevent repeated Kraken API calls
         # Structure: {(account_type, account_id, broker_type): (balance, timestamp)}
         # This prevents calling get_account_balance() multiple times per cycle for same user
         self._balance_cache: Dict[Tuple[str, str, BrokerType], Tuple[float, float]] = {}
         # Track last Kraken balance API call time for rate limiting
         self._last_kraken_balance_call: float = 0.0
-        
+
         # User metadata storage for audit and reporting
         # Structure: {user_id: {'name': str, 'enabled': bool, 'copy_from_master': bool, 'brokers': {BrokerType: bool}}}
         self._user_metadata: Dict[str, Dict] = {}
-        
+
         # FIX #3: Initialize portfolio manager for user portfolio states
         try:
             from portfolio_state import get_portfolio_manager
@@ -113,24 +113,24 @@ class MultiAccountBrokerManager:
         except ImportError:
             logger.warning("⚠️ Portfolio state module not available")
             self.portfolio_manager = None
-        
+
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
-    
+
     def add_master_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
         Add a broker for the master (Nija system) account.
-        
+
         Args:
             broker_type: Type of broker to add (COINBASE, KRAKEN, etc.)
-            
+
         Returns:
             BaseBroker instance or None if failed
         """
         try:
             broker = None
-            
+
             if broker_type == BrokerType.COINBASE:
                 broker = CoinbaseBroker()
             elif broker_type == BrokerType.KRAKEN:
@@ -142,7 +142,7 @@ class MultiAccountBrokerManager:
             else:
                 logger.warning(f"⚠️  Unsupported broker type for master: {broker_type.value}")
                 return None
-            
+
             # Connect the broker
             if broker.connect():
                 self.master_brokers[broker_type] = broker
@@ -151,25 +151,25 @@ class MultiAccountBrokerManager:
             else:
                 logger.warning(f"⚠️  Failed to connect master broker: {broker_type.value}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"❌ Error adding master broker {broker_type.value}: {e}")
             return None
-    
+
     def add_user_broker(self, user_id: str, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
         Add a broker for a user account.
-        
+
         Args:
             user_id: User identifier (e.g., 'tania_gilbert')
             broker_type: Type of broker to add
-            
+
         Returns:
             BaseBroker instance (even if not connected) or None if broker type unsupported
         """
         try:
             broker = None
-            
+
             if broker_type == BrokerType.KRAKEN:
                 broker = KrakenBroker(account_type=AccountType.USER, user_id=user_id)
             elif broker_type == BrokerType.ALPACA:
@@ -178,129 +178,129 @@ class MultiAccountBrokerManager:
                 logger.warning(f"⚠️  Unsupported broker type for user: {broker_type.value}")
                 logger.warning(f"   Only KRAKEN and ALPACA are currently supported for user accounts")
                 return None
-            
+
             # Store broker object in all_user_brokers for credential checking, even if connection fails
             connection_key = (user_id, broker_type)
             self._all_user_brokers[connection_key] = broker
-            
+
             # Connect the broker
             if broker.connect():
                 if user_id not in self.user_brokers:
                     self.user_brokers[user_id] = {}
-                
+
                 self.user_brokers[user_id][broker_type] = broker
                 # Note: Success/failure messages are logged by the caller (connect_users_from_config)
                 # which has access to user.name for more user-friendly messages
             else:
                 # Connection failed, but return broker object so caller can check credentials_configured
                 pass  # Caller will log appropriate message
-            
+
             return broker
-                
+
         except Exception as e:
             logger.error(f"❌ Error adding user broker {broker_type.value} for {user_id}: {e}")
             return None
-    
+
     def get_master_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
         Get a master account broker.
-        
+
         Args:
             broker_type: Type of broker to get
-            
+
         Returns:
             BaseBroker instance or None if not found
         """
         return self.master_brokers.get(broker_type)
-    
+
     def get_user_broker(self, user_id: str, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
         Get a user account broker.
-        
+
         Args:
             user_id: User identifier
             broker_type: Type of broker to get
-            
+
         Returns:
             BaseBroker instance or None if not found
         """
         user_brokers = self.user_brokers.get(user_id, {})
         return user_brokers.get(broker_type)
-    
+
     def is_master_connected(self, broker_type: BrokerType) -> bool:
         """
         Check if a master account is connected for a given broker type.
-        
+
         Args:
             broker_type: Type of broker to check
-            
+
         Returns:
             bool: True if master is connected, False otherwise
         """
         return broker_type in self.master_brokers and self.master_brokers[broker_type].connected
-    
+
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
         """
         Check if a user has credentials configured for a broker type.
-        
+
         Args:
             user_id: User identifier
             broker_type: Type of broker
-            
+
         Returns:
             bool: True if credentials are configured, False if not or unknown
         """
         connection_key = (user_id, broker_type)
-        
+
         # If explicitly tracked as no credentials, return False
         if connection_key in self._users_without_credentials:
             return False
-        
+
         # Check if we have a broker object (even if disconnected) to check credentials
         # This is the primary and most reliable check since all brokers inherit credentials_configured from BaseBroker
         if connection_key in self._all_user_brokers:
             broker = self._all_user_brokers[connection_key]
             return broker.credentials_configured
-        
+
         # Check if broker exists in user_brokers (only added when connected)
         # If connected, credentials must have been configured
         if user_id in self.user_brokers and broker_type in self.user_brokers[user_id]:
             broker = self.user_brokers[user_id][broker_type]
             return broker.credentials_configured
-        
+
         # Unknown state - default to False (no credentials)
         # This is the safe default: if we don't know, assume no credentials
         return False
-    
+
     def _get_cached_balance(self, account_type: str, account_id: str, broker_type: BrokerType, broker: BaseBroker) -> float:
         """
         Get balance with caching for Kraken to prevent repeated API calls.
-        
+
         CRITICAL FIX (Jan 19, 2026): Railway Golden Rule #3 - Kraken sequential API calls
         Problem: Users not appearing funded because balance calls are sequential (1-1.2s delay each)
         Solution: Cache balances per trading cycle, add 1-1.2s delay between calls
-        
+
         Args:
             account_type: 'master' or 'user'
             account_id: Account identifier (e.g., 'master', 'tania_gilbert')
             broker_type: Type of broker
             broker: Broker instance
-            
+
         Returns:
             Balance in USD
         """
         cache_key = (account_type, account_id, broker_type)
         current_time = time.time()
-        
+
         # Check if we have a valid cached balance
         if cache_key in self._balance_cache:
             cached_balance, cache_time = self._balance_cache[cache_key]
             age = current_time - cache_time
-            
+
             if age < self.BALANCE_CACHE_TTL:
                 logger.debug(f"Using cached balance for {account_type} {account_id} on {broker_type.value}: ${cached_balance:.2f} (age: {age:.1f}s)")
                 return cached_balance
-        
+
         # Need to fetch fresh balance from API
         # For Kraken, add delay between sequential calls to prevent rate limiting
         # NOTE: time.sleep() is intentional (Railway Golden Rule #3)
@@ -312,35 +312,35 @@ class MultiAccountBrokerManager:
                 delay = self.KRAKEN_BALANCE_CALL_DELAY - time_since_last_call
                 logger.debug(f"Kraken rate limit: waiting {delay:.2f}s before balance call")
                 time.sleep(delay)  # Intentional blocking for Kraken rate limiting
-            
+
             self._last_kraken_balance_call = time.time()
-        
+
         # Fetch balance from broker API
         balance = broker.get_account_balance()
-        
+
         # Cache the result
         self._balance_cache[cache_key] = (balance, time.time())
         logger.debug(f"Cached fresh balance for {account_type} {account_id} on {broker_type.value}: ${balance:.2f}")
-        
+
         return balance
-    
+
     def clear_balance_cache(self):
         """
         Clear the balance cache.
-        
+
         Call this at the start of each trading cycle to force fresh balance fetches.
         This ensures balances are updated once per cycle but not more frequently.
         """
         self._balance_cache.clear()
         logger.debug("Balance cache cleared for new trading cycle")
-    
+
     def get_master_balance(self, broker_type: Optional[BrokerType] = None) -> float:
         """
         Get master account balance.
-        
+
         Args:
             broker_type: Specific broker or None for total across all brokers
-            
+
         Returns:
             Balance in USD
         """
@@ -348,13 +348,13 @@ class MultiAccountBrokerManager:
             broker = self.master_brokers.get(broker_type)
             if not broker:
                 return 0.0
-            
+
             # CRITICAL FIX (Jan 19, 2026): Use cached balance for Kraken to prevent repeated API calls
             if broker_type == BrokerType.KRAKEN:
                 return self._get_cached_balance('master', 'master', broker_type, broker)
-            
+
             return broker.get_account_balance()
-        
+
         # Total across all master brokers
         total = 0.0
         for broker_type, broker in self.master_brokers.items():
@@ -364,31 +364,31 @@ class MultiAccountBrokerManager:
                 else:
                     total += broker.get_account_balance()
         return total
-    
+
     def get_user_balance(self, user_id: str, broker_type: Optional[BrokerType] = None) -> float:
         """
         Get user account balance.
-        
+
         Args:
             user_id: User identifier
             broker_type: Specific broker or None for total across all brokers
-            
+
         Returns:
             Balance in USD
         """
         user_brokers = self.user_brokers.get(user_id, {})
-        
+
         if broker_type:
             broker = user_brokers.get(broker_type)
             if not broker:
                 return 0.0
-            
+
             # CRITICAL FIX (Jan 19, 2026): Use cached balance for Kraken to prevent repeated API calls
             if broker_type == BrokerType.KRAKEN:
                 return self._get_cached_balance('user', user_id, broker_type, broker)
-            
+
             return broker.get_account_balance()
-        
+
         # Total across all user brokers
         total = 0.0
         for broker_type, broker in user_brokers.items():
@@ -398,33 +398,33 @@ class MultiAccountBrokerManager:
                 else:
                     total += broker.get_account_balance()
         return total
-    
+
     def update_user_portfolio(self, user_id: str, broker_type: BrokerType) -> Optional[any]:
         """
         Update portfolio state for a user account.
-        
+
         FIX #3: Maintains user-specific portfolio state with total equity tracking.
-        
+
         Args:
             user_id: User identifier
             broker_type: Broker type
-            
+
         Returns:
             UserPortfolioState or None if not available
         """
         if not self.portfolio_manager:
             return None
-        
+
         # Get user's broker
         broker = self.get_user_broker(user_id, broker_type)
         if not broker or not broker.connected:
             return None
-        
+
         try:
             # Get current balance and positions
             balance = broker.get_account_balance()
             positions = broker.get_positions() if hasattr(broker, 'get_positions') else []
-            
+
             # Get or create user portfolio state
             portfolio_key = (user_id, broker_type.value)
             if portfolio_key not in self.user_portfolios:
@@ -437,47 +437,47 @@ class MultiAccountBrokerManager:
                 self.user_portfolios[portfolio_key] = user_portfolio
             else:
                 user_portfolio = self.user_portfolios[portfolio_key]
-            
+
             # Update portfolio from broker data
             self.portfolio_manager.update_portfolio_from_broker(
                 portfolio=user_portfolio,
                 available_cash=balance,
                 positions=positions
             )
-            
+
             logger.debug(
                 f"Updated portfolio for {user_id} ({broker_type.value}): "
                 f"equity=${user_portfolio.total_equity:.2f}, positions={user_portfolio.position_count}"
             )
-            
+
             return user_portfolio
-            
+
         except Exception as e:
             logger.warning(f"Failed to update portfolio for {user_id} ({broker_type.value}): {e}")
             return None
-    
+
     def get_user_portfolio(self, user_id: str, broker_type: BrokerType) -> Optional[any]:
         """
         Get portfolio state for a user.
-        
+
         Args:
             user_id: User identifier
             broker_type: Broker type
-            
+
         Returns:
             UserPortfolioState or None if not found
         """
         portfolio_key = (user_id, broker_type.value)
         return self.user_portfolios.get(portfolio_key)
-    
+
     def get_all_balances(self) -> Dict:
         """
         Get balances for all accounts.
-        
+
         CRITICAL FIX (Jan 23, 2026): Include ALL configured users and their brokers,
         even if credentials are not configured or connection failed.
         This ensures maximum visibility - users can see all accounts that are supposed to exist.
-        
+
         Returns:
             dict with structure: {
                 'master': {broker_type: balance, ...},
@@ -488,24 +488,24 @@ class MultiAccountBrokerManager:
             'master': {},
             'users': {}
         }
-        
+
         # Master balances
         for broker_type, broker in self.master_brokers.items():
             if broker.connected:
                 result['master'][broker_type.value] = broker.get_account_balance()
-        
+
         # User balances - include ALL users from metadata with ALL their brokers
         # CRITICAL FIX: Use metadata as source of truth for which users/brokers should exist
         for user_id, metadata in self._user_metadata.items():
             if user_id not in result['users']:
                 result['users'][user_id] = {}
-            
+
             # Add all brokers from metadata for this user
             for broker_type in metadata.get('brokers', {}).keys():
                 broker_name = broker_type.value
                 # Initialize with $0.00 - will be updated if we can get actual balance
                 result['users'][user_id][broker_name] = 0.0
-        
+
         # Then update with actual balances for connected users
         for user_id, user_brokers in self.user_brokers.items():
             if user_id not in result['users']:
@@ -517,12 +517,12 @@ class MultiAccountBrokerManager:
                     except Exception as e:
                         logger.debug(f"Could not get balance for {user_id}/{broker_type.value}: {e}")
                         # Keep the $0.00 default
-        
+
         # Also try to get balances from _all_user_brokers (in case some are connected but not in user_brokers)
         for (user_id, broker_type), broker in self._all_user_brokers.items():
             if user_id not in result['users']:
                 result['users'][user_id] = {}
-            
+
             # Only update if broker is not already in results (avoid overwriting connected broker balances)
             # CRITICAL: Check if broker_type exists in result, not if balance is 0.0
             # This prevents overwriting legitimate $0.00 balances from connected brokers
@@ -534,28 +534,28 @@ class MultiAccountBrokerManager:
                 except Exception as e:
                     logger.debug(f"Could not get balance for {user_id}/{broker_type.value}: {e}")
                     # Keep the $0.00 default
-        
+
         return result
-    
+
     def _get_broker_credentials_status(self, broker: BaseBroker) -> bool:
         """
         Helper to safely check if broker has credentials configured.
-        
+
         Args:
             broker: Broker instance to check
-            
+
         Returns:
             True if credentials are configured, False otherwise
         """
         return getattr(broker, 'credentials_configured', False)
-    
+
     def get_all_balances_with_status(self) -> Dict:
         """
         Get balances for all accounts with connection and credential status.
-        
+
         CRITICAL FIX (Jan 23, 2026): Provide detailed status for all users to improve visibility.
         This helps users understand why they can't see their account balances.
-        
+
         Returns:
             dict with structure: {
                 'master': {broker_type: {'balance': float, 'connected': bool}, ...},
@@ -576,20 +576,20 @@ class MultiAccountBrokerManager:
             'master': {},
             'users': {}
         }
-        
+
         # Master balances with status
         for broker_type, broker in self.master_brokers.items():
             result['master'][broker_type.value] = {
                 'balance': broker.get_account_balance() if broker.connected else 0.0,
                 'connected': broker.connected
             }
-        
+
         # User balances with status - include ALL users
         # First from metadata
         for user_id in self._user_metadata.keys():
             if user_id not in result['users']:
                 result['users'][user_id] = {}
-        
+
         # Then from connected users
         for user_id, user_brokers in self.user_brokers.items():
             if user_id not in result['users']:
@@ -600,25 +600,25 @@ class MultiAccountBrokerManager:
                     'connected': broker.connected,
                     'credentials_configured': self._get_broker_credentials_status(broker)
                 }
-        
+
         # Finally from _all_user_brokers (disconnected users)
         for (user_id, broker_type), broker in self._all_user_brokers.items():
             if user_id not in result['users']:
                 result['users'][user_id] = {}
-            
+
             if broker_type.value not in result['users'][user_id]:
                 result['users'][user_id][broker_type.value] = {
                     'balance': 0.0,  # Disconnected, so balance is 0 or unknown
                     'connected': broker.connected,
                     'credentials_configured': self._get_broker_credentials_status(broker)
                 }
-        
+
         return result
-    
+
     def get_status_report(self) -> str:
         """
         Generate a status report showing all accounts and balances.
-        
+
         Returns:
             Formatted status report string
         """
@@ -626,7 +626,7 @@ class MultiAccountBrokerManager:
         lines.append("=" * 70)
         lines.append("NIJA MULTI-ACCOUNT STATUS REPORT")
         lines.append("=" * 70)
-        
+
         # Master account
         lines.append("\n🔷 MASTER ACCOUNT (Nija System)")
         lines.append("-" * 70)
@@ -642,7 +642,7 @@ class MultiAccountBrokerManager:
             lines.append(f"   TOTAL MASTER: ${master_total:,.2f}")
         else:
             lines.append("   No master brokers configured")
-        
+
         # User accounts
         lines.append("\n🔷 USER ACCOUNTS")
         lines.append("-" * 70)
@@ -660,25 +660,25 @@ class MultiAccountBrokerManager:
                 lines.append(f"      TOTAL USER: ${user_total:,.2f}")
         else:
             lines.append("   No user brokers configured")
-        
+
         lines.append("\n" + "=" * 70)
-        
+
         return "\n".join(lines)
-    
+
     def log_all_balances(self):
         """
         Log all account balances to the console.
-        
+
         This is a convenience method for quick balance visibility.
         Calls get_status_report() and logs the output.
         """
         report = self.get_status_report()
         logger.info("\n" + report)
-    
+
     def get_user_balance_summary(self) -> Dict:
         """
         Get a summary of all user balances for quick review.
-        
+
         Returns:
             dict with structure: {
                 'user_count': int,
@@ -696,10 +696,10 @@ class MultiAccountBrokerManager:
         """
         balances = self.get_all_balances()
         user_balances = balances.get('users', {})
-        
+
         users_list = []
         total_capital = 0.0
-        
+
         for user_id, brokers in user_balances.items():
             user_total = sum(brokers.values())
             users_list.append({
@@ -708,24 +708,24 @@ class MultiAccountBrokerManager:
                 'brokers': brokers
             })
             total_capital += user_total
-        
+
         # Sort by total balance (descending)
         users_list.sort(key=lambda x: x['total'], reverse=True)
-        
+
         return {
             'user_count': len(users_list),
             'total_capital': total_capital,
             'average_balance': total_capital / len(users_list) if users_list else 0,
             'users': users_list
         }
-    
+
     def connect_users_from_config(self) -> Dict[str, List[str]]:
         """
         Connect all users from configuration files.
-        
+
         Loads user configurations from config/users/*.json files and connects
         each enabled user to their specified brokerage.
-        
+
         Returns:
             dict: Summary of connected users by brokerage
                   Format: {brokerage: [user_ids]}
@@ -742,27 +742,27 @@ class MultiAccountBrokerManager:
             except ImportError:
                 logger.error("❌ Failed to import user_loader - cannot load user configurations")
                 return {}
-        
+
         # Load user configurations
         user_loader = get_user_config_loader()
         enabled_users = user_loader.get_all_enabled_users()
-        
+
         if not enabled_users:
             logger.info("⚪ No enabled users found in configuration files")
             return {}
-        
+
         logger.info("=" * 70)
         logger.info("👤 CONNECTING USERS FROM CONFIG FILES")
         logger.info("=" * 70)
         logger.info("ℹ️  Users are SECONDARY accounts - Master accounts have priority")
         logger.info("=" * 70)
-        
+
         connected_users = {}
-        
+
         # Track last connection time for each broker type to add delays between sequential connections
         # This prevents nonce conflicts and server-side rate limiting issues, especially for Kraken
         last_connection_time = {}
-        
+
         for user in enabled_users:
             # Convert broker_type string to BrokerType enum
             try:
@@ -778,7 +778,7 @@ class MultiAccountBrokerManager:
             except Exception as e:
                 logger.warning(f"⚠️  Error mapping broker type for {user.name}: {e}")
                 continue
-            
+
             # CRITICAL FIX (Jan 18, 2026): Skip Kraken users if copy trading system is active
             # The copy trading system creates its own KrakenClient instances for users
             # Attempting to create KrakenBroker instances here would duplicate connections
@@ -790,17 +790,17 @@ class MultiAccountBrokerManager:
                 logger.info("   Users managed by Kraken copy trading system — skipping global user init")
                 logger.info("=" * 70)
                 continue
-            
+
             # Check if Master account is connected for this broker type
             # IMPORTANT: Master accounts should connect first and be primary
             # User accounts are SECONDARY and should not connect if Master isn't connected
             master_connected = self.is_master_connected(broker_type)
-            
+
             if not master_connected:
                 # CRITICAL FIX (Jan 17, 2026): ENFORCE connection order for Kraken copy trading
                 # For Kraken, user accounts MUST NOT connect without master (prevents nonce conflicts & broken copy trading)
                 # For other brokers, allow connection with warning (user may want standalone trading)
-                # 
+                #
                 # FIX (Jan 18, 2026): Allow Kraken users to connect independently if master is not available
                 # This enables standalone user trading while still preferring copy trading when master is connected
                 # Copy trading will still work when master connects later
@@ -829,7 +829,7 @@ class MultiAccountBrokerManager:
                     logger.warning("=" * 70)
                     # Allow connection to proceed for non-Kraken brokers - user may want standalone trading
                     # But log the warning so they know this is not the ideal setup
-            
+
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
             if broker_type in last_connection_time:
@@ -838,7 +838,7 @@ class MultiAccountBrokerManager:
                     delay = MIN_CONNECTION_DELAY - time_since_last
                     logger.info(f"⏱️  Waiting {delay:.1f}s before connecting next user to {broker_type.value.title()}...")
                     time.sleep(delay)
-            
+
             logger.info(f"📊 Connecting {user.name} ({user.user_id}) to {broker_type.value.title()}...")
             if master_connected:
                 logger.info(f"   ✅ Master {broker_type.value.upper()} is connected (correct priority)")
@@ -851,7 +851,7 @@ class MultiAccountBrokerManager:
             # We need to flush the parent 'nija' logger's handlers to ensure all logs are written.
             for handler in _root_logger.handlers:
                 handler.flush()
-            
+
             # SMART CACHE MANAGEMENT: Clear failed connection cache to allow retry
             # This allows automatic reconnection when credentials are added/fixed without requiring bot restart
             connection_key = (user.user_id, broker_type)
@@ -863,32 +863,32 @@ class MultiAccountBrokerManager:
                 logger.info(f"   🔄 Clearing previous connection failure cache for {user.name} ({reason})")
                 logger.info(f"   Will retry connection - credentials may have been added/fixed")
                 del self._failed_user_connections[connection_key]
-            
+
             try:
                 broker = self.add_user_broker(user.user_id, broker_type)
-                
+
                 # Store/update user metadata for audit and reporting
                 # Always update to ensure we have the latest user state
                 if user.user_id not in self._user_metadata:
                     self._user_metadata[user.user_id] = {'brokers': {}}
-                
+
                 # Update user properties (may change between calls)
                 self._user_metadata[user.user_id]['name'] = user.name
                 self._user_metadata[user.user_id]['enabled'] = user.enabled
                 self._user_metadata[user.user_id]['copy_from_master'] = getattr(user, 'copy_from_master', True)
-                
+
                 if broker and broker.connected:
                     # Successfully connected
                     # Track connected user and broker connection status
                     if broker_type.value not in connected_users:
                         connected_users[broker_type.value] = []
                     connected_users[broker_type.value].append(user.user_id)
-                    
+
                     # Update metadata with connection status
                     self._user_metadata[user.user_id]['brokers'][broker_type] = True
-                    
+
                     logger.info(f"   ✅ {user.name} connected to {broker_type.value.title()}")
-                    
+
                     # Try to get and log balance
                     try:
                         balance = broker.get_account_balance()
@@ -916,7 +916,7 @@ class MultiAccountBrokerManager:
                     self._failed_user_connections[connection_key] = "broker_creation_failed"
                     # Update metadata with disconnected status
                     self._user_metadata[user.user_id]['brokers'][broker_type] = False
-            
+
             except Exception as e:
                 # Initialize metadata if not already present (needed for exception case)
                 if user.user_id not in self._user_metadata:
@@ -928,7 +928,7 @@ class MultiAccountBrokerManager:
                     }
                 # Update metadata with disconnected status
                 self._user_metadata[user.user_id]['brokers'][broker_type] = False
-                
+
                 logger.warning(f"   ⚠️  Error connecting {user.name}: {e}")
                 # Track the failed connection to avoid repeated attempts
                 # Truncate error message to prevent excessive memory usage, add ellipsis if truncated
@@ -940,17 +940,17 @@ class MultiAccountBrokerManager:
                 self._failed_user_connections[connection_key] = error_msg
                 import traceback
                 logger.debug(traceback.format_exc())
-            
+
             # Track connection time for this broker type
             last_connection_time[broker_type] = time.time()
-        
+
         # Log summary
         logger.info("=" * 70)
         logger.info("📊 ACCOUNT HIERARCHY REPORT")
         logger.info("=" * 70)
         logger.info("🎯 MASTER accounts are PRIMARY - User accounts are SECONDARY")
         logger.info("=" * 70)
-        
+
         # Show Master broker status
         logger.info("🔷 MASTER ACCOUNTS (Primary Trading Accounts):")
         if self.master_brokers:
@@ -959,10 +959,10 @@ class MultiAccountBrokerManager:
                 logger.info(f"   • {broker_type.value.upper()}: {status}")
         else:
             logger.info("   ⚠️  No master brokers connected")
-        
+
         logger.info("")
         logger.info("👤 USER ACCOUNTS (Secondary Trading Accounts):")
-        
+
         if connected_users:
             total_connected = sum(len(users) for users in connected_users.values())
             logger.info(f"   ✅ {total_connected} user(s) connected across {len(connected_users)} brokerage(s)")
@@ -972,7 +972,7 @@ class MultiAccountBrokerManager:
             # Check if there are users without credentials vs actual failures
             total_without_creds = len(self._users_without_credentials)
             total_failed = len(self._failed_user_connections)
-            
+
             if total_without_creds > 0 and total_failed == 0:
                 # Only users without credentials - this is informational
                 logger.info(f"   ⚪ No users connected ({total_without_creds} user(s) have no credentials configured)")
@@ -983,10 +983,10 @@ class MultiAccountBrokerManager:
             else:
                 # No users configured at all
                 logger.info("   ⚪ No user accounts configured")
-        
+
         # Log warnings for problematic setups
         logger.info("")
-        
+
         # Determine if there are any warnings to display
         users_without_master = []
         for brokerage, user_ids in connected_users.items():
@@ -1001,7 +1001,7 @@ class MultiAccountBrokerManager:
                 # Invalid broker type - this shouldn't happen, but handle gracefully
                 logger.warning(f"⚠️  Unknown broker type in connected users: {brokerage}")
                 continue
-        
+
         if users_without_master:
             # Display warning header only when there are actual warnings
             logger.info("⚠️  ACCOUNT PRIORITY WARNINGS:")
@@ -1054,59 +1054,59 @@ class MultiAccountBrokerManager:
             # Display positive status when there are no warnings
             logger.info("✅ ACCOUNT HIERARCHY STATUS:")
             logger.info("   ✅ All user accounts have corresponding Master accounts (correct hierarchy)")
-        
+
         logger.info("=" * 70)
-        
+
         return connected_users
-    
+
     def audit_user_accounts(self):
         """
         Audit and log all user accounts with broker status.
-        
+
         This function displays:
         - COPY_TRADING users (copy_from_master=True)
-        - MASTER-linked users 
+        - MASTER-linked users
         - Any account with status=="ACTIVE" (enabled=True)
         - Shows connection status for each broker
-        
+
         Output format is clean and investor-ready.
         Called at startup to ensure all active users are visible.
         """
         logger.info("=" * 70)
         logger.info("👥 USER ACCOUNT BALANCES AUDIT")
         logger.info("=" * 70)
-        
+
         if not self._user_metadata:
             logger.info("   ⚪ No user accounts configured")
             logger.info("=" * 70)
             return
-        
+
         # Collect all active users (enabled=True) with their broker statuses
         active_connected_count = 0
-        
+
         for user_id, user_meta in self._user_metadata.items():
             user_name = user_meta.get('name', user_id)
             is_enabled = user_meta.get('enabled', True)
             copy_from_master = user_meta.get('copy_from_master', True)
             brokers_status = user_meta.get('brokers', {})
-            
+
             # Skip disabled users
             if not is_enabled:
                 continue
-            
+
             # Determine trading mode
             trading_mode = "Copy Trading" if copy_from_master else "Independent"
-            
+
             # Get actual broker connections from user_brokers
             user_broker_dict = self.user_brokers.get(user_id, {})
-            
+
             # Track if this user has at least one active connection
             user_has_connection = False
-            
+
             # Display all configured brokers for this user
             for broker_type, is_connected in brokers_status.items():
                 broker_name = broker_type.value.upper()
-                
+
                 # Verify connection status from actual broker object
                 if broker_type in user_broker_dict:
                     broker = user_broker_dict[broker_type]
@@ -1117,11 +1117,11 @@ class MultiAccountBrokerManager:
                         logger.info(f"⚪ {user_name} ({broker_name}): Not configured")
                 else:
                     logger.info(f"⚪ {user_name} ({broker_name}): Not configured")
-            
+
             # Count users with at least one connection
             if user_has_connection:
                 active_connected_count += 1
-        
+
         # Display summary
         if active_connected_count == 0:
             logger.info("")
@@ -1129,7 +1129,7 @@ class MultiAccountBrokerManager:
         else:
             logger.info("")
             logger.info(f"✅ {active_connected_count} active user account(s) connected")
-        
+
         logger.info("=" * 70)
 
 

@@ -1,13 +1,13 @@
 # Recovery Guide - Return to Success State
 
-**Last Updated**: January 25, 2026  
+**Last Updated**: January 25, 2026
 **Success Checkpoint**: Kraken Master + Multi-User Copy Trading with Full Profit-Taking
 
 ## 🎯 Purpose
 
 This guide provides **step-by-step instructions** to restore NIJA to the verified working state where:
 - ✅ Master account trading successfully on Kraken
-- ✅ 2 user accounts copying master trades  
+- ✅ 2 user accounts copying master trades
 - ✅ 100% success rate on profit-taking
 - ✅ All risk management and position sizing working correctly
 
@@ -17,8 +17,8 @@ This guide provides **step-by-step instructions** to restore NIJA to the verifie
 
 ### Git Reference Points
 
-**Branch**: `copilot/update-readme-for-success-lock`  
-**Tag**: `success-kraken-copy-trading-2026-01-25` (local)  
+**Branch**: `copilot/update-readme-for-success-lock`
+**Tag**: `success-kraken-copy-trading-2026-01-25` (local)
 **Commit**: `cac2d97` (Archive historical documentation and create cleanup guide)
 
 ### Documentation
@@ -84,7 +84,7 @@ KRAKEN_MASTER_API_SECRET=<your-master-api-secret>
 KRAKEN_USER_DAIVON_API_KEY=<daivon-api-key>
 KRAKEN_USER_DAIVON_API_SECRET=<daivon-api-secret>
 
-# User #2 (Tania Gilbert) credentials  
+# User #2 (Tania Gilbert) credentials
 KRAKEN_USER_TANIA_API_KEY=<tania-api-key>
 KRAKEN_USER_TANIA_API_SECRET=<tania-api-secret>
 
@@ -135,7 +135,7 @@ Check for balance snapshot:
       - KRAKEN: $XX.XX
    • Tania: $XX.XX
       - KRAKEN: $XX.XX
-   
+
    🏦 TOTAL CAPITAL UNDER MANAGEMENT: $XXX.XX
 ======================================================================
 ```
@@ -185,7 +185,7 @@ When the master executes a trade, look for:
 1. Verify API credentials are set correctly
 2. Check API key has correct permissions:
    - Query Funds ✅
-   - Query Open Orders & Trades ✅  
+   - Query Open Orders & Trades ✅
    - Create & Modify Orders ✅
    - Cancel/Close Orders ✅
 3. Ensure no extra spaces in credentials
@@ -290,7 +290,7 @@ kill <PID>
 # Set environment variable
 COPY_TRADING_MODE=INDEPENDENT
 
-# Restart bot  
+# Restart bot
 ./start.sh
 ```
 
@@ -390,7 +390,7 @@ git pull origin copilot/update-readme-for-success-lock
 
 # 2. Verify environment variables (Railway/Render/Local)
 # - KRAKEN_MASTER_API_KEY + SECRET
-# - KRAKEN_USER_DAIVON_API_KEY + SECRET  
+# - KRAKEN_USER_DAIVON_API_KEY + SECRET
 # - KRAKEN_USER_TANIA_API_KEY + SECRET
 # - COPY_TRADING_MODE=MASTER_FOLLOW
 
@@ -423,6 +423,6 @@ Match these metrics to the [SUCCESS_STATE_2026_01_25.md](SUCCESS_STATE_2026_01_2
 
 ---
 
-**Status**: 🟢 Recovery procedures verified and documented  
-**Last Tested**: January 25, 2026  
+**Status**: 🟢 Recovery procedures verified and documented
+**Last Tested**: January 25, 2026
 **Confidence Level**: HIGH - Multiple recovery paths available

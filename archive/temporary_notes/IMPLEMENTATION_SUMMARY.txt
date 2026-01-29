@@ -22,34 +22,34 @@ EXACT FILE & FUNCTION LOCATIONS
 
 1. CONTROLS MODULE (Master Kill-Switch Logic)
    File: /home/runner/work/Nija/Nija/controls/__init__.py
-   
+
    Functions:
    - HardControls.__init__() - Lines 70-95
      * Initializes live_capital_verified flag
      * Logs prominent status message on startup
-   
+
    - HardControls._check_live_capital_verification() - Lines 132-149
      * Reads LIVE_CAPITAL_VERIFIED environment variable
      * Returns True only if explicitly set to 'true', '1', 'yes', or 'enabled'
      * Defaults to False (safe mode)
-   
+
    - HardControls.can_trade() - Lines 254-276
      * Checks LIVE_CAPITAL_VERIFIED FIRST (master kill-switch)
      * Returns (False, error_msg) if verification is disabled
      * Proceeds to other checks only if verification passes
-   
+
    - HardControls.get_verification_status() - Lines 323-334
      * Returns detailed status dict for dashboard integration
      * Includes verification state, env var name, and current value
 
 2. EXECUTION ENGINE (Pre-Execution Check)
    File: /home/runner/work/Nija/Nija/bot/execution_engine.py
-   
+
    Functions:
    - Import section - Lines 15-29
      * Imports get_hard_controls with fallback pattern
      * Sets HARD_CONTROLS_AVAILABLE flag
-   
+
    - ExecutionEngine.execute_entry() - Lines 124-146
      * CRITICAL SAFETY CHECK #1: LIVE CAPITAL VERIFIED
      * Checks verification BEFORE placing any orders
@@ -58,7 +58,7 @@ EXACT FILE & FUNCTION LOCATIONS
 
 3. DASHBOARD SERVER (Monitoring Endpoint)
    File: /home/runner/work/Nija/Nija/bot/dashboard_server.py
-   
+
    Endpoints:
    - GET /api/live_capital_status - Lines 179-227
      * Returns JSON with verification status
@@ -68,7 +68,7 @@ EXACT FILE & FUNCTION LOCATIONS
 
 4. ENVIRONMENT CONFIGURATION
    File: /home/runner/work/Nija/Nija/.env.example
-   
+
    Configuration:
    - LIVE_CAPITAL_VERIFIED setting - Lines 122-133
      * Defaults to 'false' (safe mode)

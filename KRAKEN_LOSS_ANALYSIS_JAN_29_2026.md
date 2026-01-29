@@ -254,10 +254,10 @@ if broker_round_trip_fee <= 0.005:  # Kraken (0.36% fees)
 
 ---
 
-**Status**: Analysis Complete  
-**Priority**: 🔴 CRITICAL - Losses accumulating  
-**Estimated Fix Time**: 30 minutes  
-**Expected Impact**: Stop losses, achieve break-even or positive P&L  
+**Status**: Analysis Complete
+**Priority**: 🔴 CRITICAL - Losses accumulating
+**Estimated Fix Time**: 30 minutes
+**Expected Impact**: Stop losses, achieve break-even or positive P&L
 
 ---
 

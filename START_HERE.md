@@ -192,11 +192,11 @@ curl -X POST http://localhost:8000/api/start_bot \
 
 Your NIJA trading platform is now:
 
-✅ Multi-user capable  
-✅ Web + Mobile ready  
-✅ Securely encrypted  
-✅ Production deployable  
-✅ Fully documented  
+✅ Multi-user capable
+✅ Web + Mobile ready
+✅ Securely encrypted
+✅ Production deployable
+✅ Fully documented
 
 **Your strategy is protected. Your users are isolated. Your platform scales.**
 

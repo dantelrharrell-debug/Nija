@@ -40,7 +40,7 @@ def health():
 def tradingview_webhook():
     """
     TradingView Webhook Endpoint
-    
+
     Expected JSON format from TradingView alert:
     {
         "secret": "nija_webhook_2025",
@@ -66,7 +66,7 @@ def tradingview_webhook():
                 'reason': 'TRADING_EMERGENCY_STOP.conf is active',
                 'action': 'Delete lockfile to resume buying'
             }), 503
-        
+
         # Parse incoming data
         data = request.get_json()
         if not data:
@@ -112,7 +112,7 @@ def tradingview_webhook():
                             'action': 'Delete lockfile to resume buying'
                         })
                         continue
-                    
+
                     df = strategy.get_product_candles(symbol)
                     if df is None or len(df) < 50:
                         results.append({'error': f'Insufficient data for {symbol}'})
@@ -189,7 +189,7 @@ def tradingview_webhook():
                     'reason': 'TRADING_EMERGENCY_STOP.conf is active (SELL-ONLY mode)',
                     'action': 'Delete lockfile to resume buying'
                 }), 503
-            
+
             df = strategy.get_product_candles(symbol)
             if df is None or len(df) < 50:
                 return jsonify({'error': f'Insufficient data for {symbol}'}), 400
@@ -254,13 +254,13 @@ def get_positions():
                 'ttp_active': position.get('ttp_active', False),
                 'pyramid_levels': position.get('pyramid_levels', [])
             })
-        
+
         return jsonify({
             'status': 'success',
             'count': len(positions_data),
             'positions': positions_data
         }), 200
-    
+
     except Exception as e:
         return jsonify({'error': 'Failed to retrieve positions'}), 500
 
@@ -274,5 +274,5 @@ if __name__ == '__main__':
     print(f"💰 Trading Mode: LIVE (Coinbase)")
     print(f"🎯 NIJA Features: 95% Profit Lock + Pyramiding + Extended Runners")
     print(f"{'='*70}\n")
-    
+
     app.run(host='0.0.0.0', port=port, debug=False)

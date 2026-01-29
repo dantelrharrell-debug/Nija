@@ -14,7 +14,7 @@ The module provides centralized symbol normalization for Kraken and Coinbase exc
 - Input: `ETH-USD`, `BTC-USD`, `SOL-USD` (with dash or slash)
 - Output: `ETHUSD`, `BTCUSD`, `SOLUSD` (no separator)
 
-#### Coinbase Format  
+#### Coinbase Format
 - Input: `ETHUSD`, `BTCUSD`, `SOL/USD` (no separator or slash)
 - Output: `ETH-USD`, `BTC-USD`, `SOL-USD` (dash separator)
 
@@ -122,7 +122,7 @@ The `broker_integration.py` module's `KrakenBrokerAdapter` integrates reconcilia
 ```python
 # In broker_integration.py
 from bot.kraken_adapter import (
-    normalize_kraken_symbol, is_dust_position, 
+    normalize_kraken_symbol, is_dust_position,
     reconcile_kraken_position_after_failed_exit
 )
 

@@ -2,10 +2,10 @@
 
 ## Vulnerability Details
 
-**CVE**: FastAPI Content-Type Header ReDoS  
-**Severity**: Medium  
-**Affected Versions**: FastAPI <= 0.109.0  
-**Patched Version**: FastAPI >= 0.109.1  
+**CVE**: FastAPI Content-Type Header ReDoS
+**Severity**: Medium
+**Affected Versions**: FastAPI <= 0.109.0
+**Patched Version**: FastAPI >= 0.109.1
 **Date Fixed**: 2026-01-27
 
 ## Description
@@ -39,7 +39,7 @@ Updated the following dependencies in `requirements.txt`:
 
 ```bash
 ✅ FastAPI library version: 0.110.0
-✅ Total routes: 20 endpoints  
+✅ Total routes: 20 endpoints
 ✅ Security vulnerability FIXED!
 ```
 
@@ -81,13 +81,13 @@ docker-compose up -d
 
 Beyond fixing this vulnerability, the NIJA platform includes:
 
-✅ **JWT Token Authentication** - Secure user sessions  
-✅ **Encrypted API Keys** - Fernet symmetric encryption  
-✅ **Password Hashing** - SHA256 (TODO: upgrade to bcrypt)  
-✅ **CORS Configuration** - Controlled cross-origin access  
-✅ **User Isolation** - Separate execution contexts  
-✅ **Permission System** - Role-based access control  
-✅ **Layer Separation** - Strategy logic never exposed  
+✅ **JWT Token Authentication** - Secure user sessions
+✅ **Encrypted API Keys** - Fernet symmetric encryption
+✅ **Password Hashing** - SHA256 (TODO: upgrade to bcrypt)
+✅ **CORS Configuration** - Controlled cross-origin access
+✅ **User Isolation** - Separate execution contexts
+✅ **Permission System** - Role-based access control
+✅ **Layer Separation** - Strategy logic never exposed
 
 ## Future Security Enhancements
 
@@ -114,7 +114,7 @@ For security concerns, please review the security documentation:
 
 ---
 
-**Status**: ✅ RESOLVED  
-**Date**: 2026-01-27  
-**Fixed By**: Automated dependency update  
+**Status**: ✅ RESOLVED
+**Date**: 2026-01-27
+**Fixed By**: Automated dependency update
 **Verified**: All tests passing

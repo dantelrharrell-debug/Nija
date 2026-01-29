@@ -4,8 +4,8 @@
 
 This document describes the path traversal vulnerability fix implemented for the NIJA trading bot dashboard export functionality.
 
-**Date:** January 29, 2026  
-**Severity:** High  
+**Date:** January 29, 2026
+**Severity:** High
 **Status:** Fixed ✅
 
 ## Vulnerability Description
@@ -90,7 +90,7 @@ def export_investor_report(self, output_dir: str = "./reports") -> str:
     except ValueError as e:
         # Fallback to safe default
         output_path = Path("./reports")
-    
+
     # ... rest of implementation
 ```
 
@@ -110,12 +110,12 @@ Flask routes implement input validation:
 def export_report():
     data = request.get_json() or {}
     output_dir = data.get('output_dir', './reports')
-    
+
     # SECURITY: Validate output_dir
     if not PathValidator.validate_directory_name(output_dir):
         output_dir = PathValidator.sanitize_directory_name(output_dir)
         logger.info(f"Sanitized output_dir to: {output_dir}")
-    
+
     # ... rest of implementation
 ```
 
@@ -164,7 +164,7 @@ SECURITY TEST SUITE - Path Traversal Protection
 
 Testing PathValidator...
 ✓ Test 1: Safe directory names
-✓ Test 2: Dangerous directory names detection  
+✓ Test 2: Dangerous directory names detection
 ✓ Test 3: Directory sanitization
 ✓ Test 4: Secure path creation
 ✓ Test 5: Path traversal prevention
@@ -187,28 +187,28 @@ ALL SECURITY TESTS PASSED ✅
 ## Attack Scenarios Prevented
 
 ### Scenario 1: Basic Path Traversal
-**Attack:** `../../../etc/passwd`  
-**Result:** Path sanitized to `etc_passwd` within `./reports/`  
+**Attack:** `../../../etc/passwd`
+**Result:** Path sanitized to `etc_passwd` within `./reports/`
 **Status:** ✅ Blocked
 
 ### Scenario 2: Absolute Path Injection
-**Attack:** `/etc/shadow` or `C:\Windows\System32`  
-**Result:** Path sanitized to `etcshadow` or `C_WindowsSystem32` within `./reports/`  
+**Attack:** `/etc/shadow` or `C:\Windows\System32`
+**Result:** Path sanitized to `etcshadow` or `C_WindowsSystem32` within `./reports/`
 **Status:** ✅ Blocked
 
 ### Scenario 3: Null Byte Injection
-**Attack:** `reports\x00/../etc`  
-**Result:** Null bytes removed, path sanitized  
+**Attack:** `reports\x00/../etc`
+**Result:** Null bytes removed, path sanitized
 **Status:** ✅ Blocked
 
 ### Scenario 4: Windows Path Traversal
-**Attack:** `..\..\..\windows\system32`  
-**Result:** Path sanitized to stay within base directory  
+**Attack:** `..\..\..\windows\system32`
+**Result:** Path sanitized to stay within base directory
 **Status:** ✅ Blocked
 
 ### Scenario 5: Home Directory Reference
-**Attack:** `~/sensitive_data`  
-**Result:** Path validation fails, sanitized to safe value  
+**Attack:** `~/sensitive_data`
+**Result:** Path validation fails, sanitized to safe value
 **Status:** ✅ Blocked
 
 ## Implementation Checklist
@@ -253,7 +253,7 @@ When adding new file operations, always:
 def new_export_function(user_input_path: str):
     """
     Export data to file with secure path handling.
-    
+
     Security:
         - Validates user_input_path to prevent path traversal
         - Ensures output stays within base directory
@@ -269,7 +269,7 @@ def new_export_function(user_input_path: str):
         logger.error(f"Path validation failed: {e}")
         # Fallback to safe default
         secure_path = Path("./exports")
-    
+
     # ... rest of implementation
 ```
 
@@ -283,7 +283,7 @@ def new_export_function(user_input_path: str):
 
 This implementation successfully prevents path traversal attacks through multiple layers of defense:
 - Input validation
-- Path sanitization  
+- Path sanitization
 - Secure path resolution
 - Base directory enforcement
 

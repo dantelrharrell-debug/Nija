@@ -46,11 +46,11 @@ push_tokens = {}
 def register_device():
     """
     Register a mobile device for push notifications.
-    
+
     SECURITY WARNING: This endpoint currently lacks authentication.
     In production, this MUST be protected with JWT authentication
     to prevent unauthorized device registration.
-    
+
     Request body:
         {
             "user_id": "user123",
@@ -65,17 +65,17 @@ def register_device():
         }
     """
     data = request.get_json()
-    
+
     if not data:
         return jsonify({'error': 'Request body is required'}), 400
-    
+
     required_fields = ['user_id', 'push_token', 'platform', 'device_id']
     for field in required_fields:
         if field not in data:
             return jsonify({'error': f'Missing required field: {field}'}), 400
-    
+
     user_id = data['user_id']
-    
+
     # TODO: In production, verify user_id matches authenticated user
     # if request.user_id != user_id:
     #     return jsonify({'error': 'Unauthorized'}), 403
@@ -83,22 +83,22 @@ def register_device():
     platform = data['platform']
     device_id = data['device_id']
     device_info = data.get('device_info', {})
-    
+
     # Validate platform
     if platform not in ['ios', 'android']:
         return jsonify({'error': 'Invalid platform. Must be ios or android'}), 400
-    
+
     # Store push token
     if user_id not in push_tokens:
         push_tokens[user_id] = []
-    
+
     # Check if device already registered
     existing_device = None
     for device in push_tokens[user_id]:
         if device['device_id'] == device_id:
             existing_device = device
             break
-    
+
     if existing_device:
         # Update existing device
         existing_device['push_token'] = push_token
@@ -117,7 +117,7 @@ def register_device():
             'updated_at': datetime.utcnow()
         })
         logger.info(f"Registered new device for user {user_id}: {device_id} ({platform})")
-    
+
     return jsonify({
         'success': True,
         'message': 'Device registered successfully',
@@ -132,9 +132,9 @@ def register_device():
 def unregister_device():
     """
     Unregister a mobile device.
-    
+
     SECURITY WARNING: Requires authentication in production.
-    
+
     Request body:
         {
             "user_id": "user123",
@@ -142,25 +142,25 @@ def unregister_device():
         }
     """
     data = request.get_json()
-    
+
     if not data or 'user_id' not in data or 'device_id' not in data:
         return jsonify({'error': 'user_id and device_id are required'}), 400
-    
+
     user_id = data['user_id']
-    
+
     # TODO: In production, verify user_id matches authenticated user
     # if request.user_id != user_id:
     #     return jsonify({'error': 'Unauthorized'}), 403
     device_id = data['device_id']
-    
+
     if user_id not in push_tokens:
         return jsonify({'error': 'User not found'}), 404
-    
+
     # Remove device
     push_tokens[user_id] = [d for d in push_tokens[user_id] if d['device_id'] != device_id]
-    
+
     logger.info(f"Unregistered device for user {user_id}: {device_id}")
-    
+
     return jsonify({
         'success': True,
         'message': 'Device unregistered successfully'
@@ -171,17 +171,17 @@ def unregister_device():
 def list_devices():
     """
     List all registered devices for a user.
-    
+
     Query params:
         user_id: User identifier
     """
     user_id = request.args.get('user_id')
-    
+
     if not user_id:
         return jsonify({'error': 'user_id is required'}), 400
-    
+
     devices = push_tokens.get(user_id, [])
-    
+
     # Return sanitized device list (without push tokens)
     sanitized_devices = [
         {
@@ -193,7 +193,7 @@ def list_devices():
         }
         for d in devices
     ]
-    
+
     return jsonify({
         'success': True,
         'devices': sanitized_devices,
@@ -208,19 +208,19 @@ def list_devices():
 def send_push_notification(user_id: str, title: str, body: str, data: Optional[Dict] = None):
     """
     Send push notification to all devices registered for a user.
-    
+
     PLACEHOLDER IMPLEMENTATION: This function does not actually send notifications.
     It requires Firebase Admin SDK (Android) or APNs (iOS) to be configured.
-    
+
     Args:
         user_id: User identifier
         title: Notification title
         body: Notification body
         data: Additional data payload
-    
+
     Returns:
         False: Always returns False as this is not yet implemented
-        
+
     TODO: Implement actual push notification sending:
         - Set up Firebase Admin SDK for Android (FCM)
         - Set up APNs for iOS
@@ -230,9 +230,9 @@ def send_push_notification(user_id: str, title: str, body: str, data: Optional[D
     if user_id not in push_tokens:
         logger.warning(f"No devices registered for user {user_id}")
         return False
-    
+
     devices = push_tokens[user_id]
-    
+
     for device in devices:
         try:
             if device['platform'] == 'android':
@@ -252,7 +252,7 @@ def send_push_notification(user_id: str, title: str, body: str, data: Optional[D
                 logger.info(f"[PLACEHOLDER] Would send APNs notification to device {device['device_id']}: {title}")
         except Exception as e:
             logger.error(f"Error in notification placeholder for device {device['device_id']}: {e}")
-    
+
     # Return False to indicate notifications were not actually sent
     return False
 
@@ -263,16 +263,16 @@ def send_push_notification(user_id: str, title: str, body: str, data: Optional[D
 def send_notification():
     """
     Send a push notification to a user.
-    
+
     SECURITY WARNING: This endpoint should be protected with admin-level
     authentication in production to prevent abuse. Regular users should
     NOT be able to send notifications to other users.
-    
+
     This endpoint is intended for:
     - Internal system notifications
     - Admin-triggered alerts
     - Automated trading notifications from the backend
-    
+
     Request body:
         {
             "user_id": "user123",
@@ -285,22 +285,22 @@ def send_notification():
         }
     """
     data = request.get_json()
-    
+
     if not data:
         return jsonify({'error': 'Request body is required'}), 400
-    
+
     required_fields = ['user_id', 'title', 'body']
     for field in required_fields:
         if field not in data:
             return jsonify({'error': f'Missing required field: {field}'}), 400
-    
+
     user_id = data['user_id']
     title = data['title']
     body = data['body']
     notification_data = data.get('data', {})
-    
+
     success = send_push_notification(user_id, title, body, notification_data)
-    
+
     if success:
         return jsonify({
             'success': True,
@@ -322,21 +322,21 @@ def send_notification():
 def get_dashboard_summary():
     """
     Get mobile-optimized dashboard summary.
-    
+
     Query params:
         user_id: User identifier
-    
+
     Returns:
         Lightweight summary optimized for mobile display
     """
     user_id = request.args.get('user_id')
-    
+
     if not user_id:
         return jsonify({'error': 'user_id is required'}), 400
-    
+
     # TODO: Fetch actual user data
     # For now, return mock data
-    
+
     return jsonify({
         'success': True,
         'data': {
@@ -364,11 +364,11 @@ def get_dashboard_summary():
 def quick_toggle_trading():
     """
     Quick toggle trading on/off (mobile-optimized).
-    
+
     SECURITY WARNING: This endpoint currently lacks authentication.
     In production, this MUST be protected to prevent unauthorized
     users from controlling other users' trading.
-    
+
     Request body:
         {
             "user_id": "user123",
@@ -376,23 +376,23 @@ def quick_toggle_trading():
         }
     """
     data = request.get_json()
-    
+
     if not data or 'user_id' not in data or 'enabled' not in data:
         return jsonify({'error': 'user_id and enabled are required'}), 400
-    
+
     user_id = data['user_id']
     enabled = data['enabled']
-    
+
     # TODO: In production, verify user_id matches authenticated user
     # if request.user_id != user_id:
     #     return jsonify({'error': 'Unauthorized: Cannot control other users\' trading'}), 403
-    
+
     # TODO: Implement actual trading toggle
     # For now, return success
-    
+
     status_text = "enabled" if enabled else "disabled"
     logger.info(f"Trading {status_text} for user {user_id}")
-    
+
     # Send push notification
     if enabled:
         send_push_notification(
@@ -408,7 +408,7 @@ def quick_toggle_trading():
             "NIJA has stopped monitoring markets",
             {"type": "trading_status", "enabled": False}
         )
-    
+
     return jsonify({
         'success': True,
         'trading_enabled': enabled,
@@ -420,21 +420,21 @@ def quick_toggle_trading():
 def get_lightweight_positions():
     """
     Get lightweight position data optimized for mobile.
-    
+
     Query params:
         user_id: User identifier
-    
+
     Returns:
         Minimal position data for quick loading
     """
     user_id = request.args.get('user_id')
-    
+
     if not user_id:
         return jsonify({'error': 'user_id is required'}), 400
-    
+
     # TODO: Fetch actual positions
     # For now, return empty array
-    
+
     return jsonify({
         'success': True,
         'positions': [],
@@ -449,23 +449,23 @@ def get_lightweight_positions():
 def get_recent_trades():
     """
     Get recent trades optimized for mobile display.
-    
+
     SECURITY WARNING: Requires authentication in production.
-    
+
     Query params:
         user_id: User identifier
         limit: Number of trades to return (default: 10, max: 50)
     """
     user_id = request.args.get('user_id')
     limit = request.args.get('limit', '10')
-    
+
     if not user_id:
         return jsonify({'error': 'user_id is required'}), 400
-    
+
     # TODO: In production, verify user_id matches authenticated user
     # if request.user_id != user_id:
     #     return jsonify({'error': 'Unauthorized'}), 403
-    
+
     # Validate and sanitize limit parameter
     try:
         limit = int(limit)
@@ -477,10 +477,10 @@ def get_recent_trades():
         return jsonify({
             'error': f'Invalid limit: {limit}. Must be an integer'
         }), 400
-    
+
     # TODO: Fetch actual trades
     # For now, return empty array
-    
+
     return jsonify({
         'success': True,
         'trades': [],
@@ -498,7 +498,7 @@ def get_recent_trades():
 def get_mobile_config():
     """
     Get mobile app configuration.
-    
+
     Returns:
         Configuration settings for the mobile app
     """

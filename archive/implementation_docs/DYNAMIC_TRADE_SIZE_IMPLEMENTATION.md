@@ -1,7 +1,7 @@
 # Dynamic Trade Size Implementation
 
-**Date:** January 21, 2026  
-**Author:** GitHub Copilot  
+**Date:** January 21, 2026
+**Author:** GitHub Copilot
 **Issue:** Trade size configuration preventing trades on small accounts
 
 ## Problem Statement
@@ -25,7 +25,7 @@ def get_dynamic_min_position_size(balance: float) -> float:
     """
     if balance < 0:
         raise ValueError(f"Balance cannot be negative: {balance}")
-    
+
     return max(BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT)
 ```
 
@@ -276,6 +276,6 @@ The system maintains investor-grade logic while being accessible to traders of a
 
 ---
 
-**Implementation Status:** ✅ Complete  
-**Security Status:** ✅ No vulnerabilities detected  
+**Implementation Status:** ✅ Complete
+**Security Status:** ✅ No vulnerabilities detected
 **Ready for Production:** ✅ Yes

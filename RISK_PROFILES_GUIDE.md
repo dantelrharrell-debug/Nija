@@ -41,10 +41,10 @@ Each tier has been carefully tuned to maximize performance while managing risk a
 **"Capital preservation + learning"**
 
 ### When to Use
-✅ You have **$100–$249 capital**  
-✅ You are **new to algorithmic trading**  
-✅ You want to **validate system execution** before scaling  
-✅ You prioritize **learning and preservation**  
+✅ You have **$100–$249 capital**
+✅ You are **new to algorithmic trading**
+✅ You want to **validate system execution** before scaling
+✅ You prioritize **learning and preservation**
 ✅ You understand this tier focuses on **capital preservation**
 
 ### Tier Specifications
@@ -62,7 +62,7 @@ Each tier has been carefully tuned to maximize performance while managing risk a
 
 ### Important Notes
 > ✅ **PRESERVATION FOCUS**: This tier emphasizes capital preservation while you learn the system.
-> 
+>
 > ✅ **STARTER TIER**: Perfect entry point for new algorithmic traders.
 
 ### Who Should Use This
@@ -91,10 +91,10 @@ cp .env.saver_tier .env
 **"Consistent participation"**
 
 ### When to Use
-✅ You have **$250–$999 capital**  
-✅ You are **learning systematic trading**  
-✅ You want **NIJA to feel 'real'** without huge risk  
-✅ You can monitor positions **once or twice daily**  
+✅ You have **$250–$999 capital**
+✅ You are **learning systematic trading**
+✅ You want **NIJA to feel 'real'** without huge risk
+✅ You can monitor positions **once or twice daily**
 ✅ You're building **trading consistency**
 
 ### Tier Specifications
@@ -115,9 +115,9 @@ cp .env.saver_tier .env
 
 ### Important Notes
 > ✅ **DEFAULT TIER**: If you don't specify a tier, you get INVESTOR.
-> 
+>
 > 📈 **"NIJA Starts to Feel Real"**: This is the minimum capital where NIJA's performance becomes noticeable.
-> 
+>
 > 🎯 **CONSISTENCY FOCUS**: Build repeatable results, reduce random outcomes.
 
 ### Who Should Use This
@@ -149,10 +149,10 @@ cp .env.investor_tier .env
 **"Serious retail trading"**
 
 ### When to Use
-✅ You have **$1,000–$4,999 capital**  
-✅ You are a **serious retail trader**  
-✅ You want **active market engagement**  
-✅ You can monitor positions **regularly**  
+✅ You have **$1,000–$4,999 capital**
+✅ You are a **serious retail trader**
+✅ You want **active market engagement**
+✅ You can monitor positions **regularly**
 ✅ You want **meaningful trading activity**
 
 ### Tier Specifications
@@ -172,9 +172,9 @@ cp .env.investor_tier .env
 
 ### Important Notes
 > ⭐ **SERIOUS RETAIL TIER**: This is where serious retail algorithmic trading happens.
-> 
+>
 > 💰 **MEANINGFUL ACTIVITY**: Capital level designed for significant trading activity.
-> 
+>
 > 🎯 **ACTIVE TRADING FOCUS**: Perfect balance of capital, frequency, and position management.
 
 ### Who Should Use This
@@ -209,10 +209,10 @@ cp .env.income_tier .env
 **"Professional-level execution"**
 
 ### When to Use
-✅ You have **$5,000–$24,999 capital**  
-✅ You are a **professional-level trader**  
-✅ You want **precision execution**  
-✅ You prioritize **professional standards**  
+✅ You have **$5,000–$24,999 capital**
+✅ You are a **professional-level trader**
+✅ You want **precision execution**
+✅ You prioritize **professional standards**
 ✅ You understand **advanced risk management**
 
 ### Tier Specifications
@@ -232,9 +232,9 @@ cp .env.income_tier .env
 
 ### Important Notes
 > 💼 **PROFESSIONAL-LEVEL EXECUTION**: This tier operates at professional standards.
-> 
+>
 > 🛡️ **PRECISION FIRST**: Professional execution prioritized over volume.
-> 
+>
 > 📊 **ADVANCED APPROACH**: Disciplined, selective, and systematic execution.
 
 ### Who Should Use This
@@ -269,10 +269,10 @@ cp .env.livable_tier .env
 **"Capital deployment"**
 
 ### When to Use
-✅ You have **$25,000+ capital**  
-✅ You are **deploying capital** at scale  
-✅ You want **institutional-grade execution**  
-✅ You can **manage large positions** professionally  
+✅ You have **$25,000+ capital**
+✅ You are **deploying capital** at scale
+✅ You want **institutional-grade execution**
+✅ You can **manage large positions** professionally
 ✅ You understand this is **capital deployment**
 
 ### Tier Specifications
@@ -292,9 +292,9 @@ cp .env.livable_tier .env
 
 ### Important Notes
 > 🏆 **CAPITAL DEPLOYMENT**: This tier is for scaling capital systematically.
-> 
+>
 > 💎 **CAPITAL PRESERVATION**: Protect large capital while generating consistent returns.
-> 
+>
 > 🎯 **PRECISION-ONLY**: Ultra-selective execution. Quality over quantity.
 
 ### Who Should Use This
@@ -341,9 +341,9 @@ cp .env.baller_tier .env
 
 ### Important Notes
 > 🔐 **SYSTEM AUTHORITY ONLY**: MASTER is the strategy source and execution coordinator.
-> 
+>
 > ⚙️ **GOVERNS PROFIT LOGIC**: MASTER defines how profits are generated, not generates them itself.
-> 
+>
 > 🚫 **NOT USER-SELECTABLE**: Users choose from SAVER, INVESTOR, INCOME, LIVABLE, or BALLER.
 
 ### MASTER Functions
@@ -418,43 +418,43 @@ If you don't set `TRADING_TIER`, the system defaults to **INVESTOR** tier.
 ## 📈 Performance Expectations by Tier
 
 ### SAVER Tier ($100–$249)
-**Target Returns**: 4-8% monthly  
-**Expected Win Rate**: 55-65%  
-**Expected Drawdowns**: 4-7%  
-**Trading Frequency**: Moderate  
-**Monitoring Required**: Daily check-ins  
+**Target Returns**: 4-8% monthly
+**Expected Win Rate**: 55-65%
+**Expected Drawdowns**: 4-7%
+**Trading Frequency**: Moderate
+**Monitoring Required**: Daily check-ins
 **Primary Focus**: Capital preservation + learning
 
 ### INVESTOR Tier ($250–$999)
-**Target Returns**: 5-10% monthly  
-**Expected Win Rate**: 60-70%  
-**Expected Drawdowns**: 4-6%  
-**Trading Frequency**: Active (several trades weekly)  
-**Monitoring Required**: Daily check-ins  
+**Target Returns**: 5-10% monthly
+**Expected Win Rate**: 60-70%
+**Expected Drawdowns**: 4-6%
+**Trading Frequency**: Active (several trades weekly)
+**Monitoring Required**: Daily check-ins
 **Primary Focus**: Consistent participation
 
 ### INCOME Tier ($1k–$4.9k) ⭐
-**Target Returns**: 6-12% monthly  
-**Expected Win Rate**: 60-70%  
-**Expected Drawdowns**: 4-7%  
-**Trading Frequency**: Very active (daily trades)  
-**Monitoring Required**: Multiple daily check-ins  
+**Target Returns**: 6-12% monthly
+**Expected Win Rate**: 60-70%
+**Expected Drawdowns**: 4-7%
+**Trading Frequency**: Very active (daily trades)
+**Monitoring Required**: Multiple daily check-ins
 **Primary Focus**: Serious retail trading
 
 ### LIVABLE Tier ($5k–$24.9k)
-**Target Returns**: 4-8% monthly  
-**Expected Win Rate**: 65-75%  
-**Expected Drawdowns**: 2-4%  
-**Trading Frequency**: Selective (high-precision)  
-**Monitoring Required**: Daily monitoring  
+**Target Returns**: 4-8% monthly
+**Expected Win Rate**: 65-75%
+**Expected Drawdowns**: 2-4%
+**Trading Frequency**: Selective (high-precision)
+**Monitoring Required**: Daily monitoring
 **Primary Focus**: Professional-level execution
 
 ### BALLER Tier ($25k+)
-**Target Returns**: 3-7% monthly  
-**Expected Win Rate**: 70-80%  
-**Expected Drawdowns**: 1-2%  
-**Trading Frequency**: Precision-only (ultra-selective)  
-**Monitoring Required**: Regular professional monitoring  
+**Target Returns**: 3-7% monthly
+**Expected Win Rate**: 70-80%
+**Expected Drawdowns**: 1-2%
+**Trading Frequency**: Precision-only (ultra-selective)
+**Monitoring Required**: Regular professional monitoring
 **Primary Focus**: Capital deployment
 
 ---
@@ -551,14 +551,14 @@ All tiers include built-in circuit breakers for protection:
 
 ### Tier Mismatch Risks
 
-❌ **Using INCOME tier with <$250**: Insufficient capital for diversification  
-❌ **Using SAVER tier with >$500**: Severe underutilization of capital  
-❌ **Frequent tier switching**: Inconsistent risk management, poor results  
+❌ **Using INCOME tier with <$250**: Insufficient capital for diversification
+❌ **Using SAVER tier with >$500**: Severe underutilization of capital
+❌ **Frequent tier switching**: Inconsistent risk management, poor results
 ❌ **Skipping tiers**: Upgrading too fast leads to poor risk management
 
-✅ **Match tier to your capital**: Use the tier appropriate for your balance  
-✅ **Stay with tier for 30+ days**: Build consistency before changing  
-✅ **Only change based on capital or performance**: Don't change randomly  
+✅ **Match tier to your capital**: Use the tier appropriate for your balance
+✅ **Stay with tier for 30+ days**: Build consistency before changing
+✅ **Only change based on capital or performance**: Don't change randomly
 ✅ **Follow upgrade progression**: Don't skip tiers (SAVER → INVESTOR → INCOME → etc.)
 
 ### Capital Requirements
@@ -678,9 +678,9 @@ TIER_CONFIG['income']['risk_per_trade'] = 0.05  # Override risk
 
 Different exchanges have different fee structures:
 
-**Kraken** (Low fees 0.16%-0.26%): Use standard tier parameters  
-**Coinbase** (Higher fees 0.4%-0.6%): Consider reducing position sizes by 20%  
-**OKX** (Very low fees 0.08%-0.10%): Can be slightly more aggressive  
+**Kraken** (Low fees 0.16%-0.26%): Use standard tier parameters
+**Coinbase** (Higher fees 0.4%-0.6%): Consider reducing position sizes by 20%
+**OKX** (Very low fees 0.08%-0.10%): Can be slightly more aggressive
 
 For high-fee exchanges like Coinbase:
 ```env
@@ -756,40 +756,40 @@ Test any tier change in paper trading mode before going live.
 
 ## ❓ Frequently Asked Questions
 
-**Q: Which tier should I start with?**  
+**Q: Which tier should I start with?**
 A: Start with **INVESTOR** tier ($250-$999) if you have the capital. If not, start with **SAVER** ($100-$249) to validate the system.
 
-**Q: Can I use BALLER tier with $5,000?**  
+**Q: Can I use BALLER tier with $5,000?**
 A: No. BALLER tier requires $25,000+ for proper diversification and position management. Use LIVABLE tier for $5k-$24.9k.
 
-**Q: What's the difference between INCOME and LIVABLE tiers?**  
+**Q: What's the difference between INCOME and LIVABLE tiers?**
 A: **INCOME** is for serious retail trading with very active participation. **LIVABLE** is for professional-level execution with precision focus.
 
-**Q: Is MASTER a user tier?**  
+**Q: Is MASTER a user tier?**
 A: No. **MASTER** is system authority for strategy governance and execution coordination. Users choose from SAVER, INVESTOR, INCOME, LIVABLE, or BALLER.
 
-**Q: Can I switch tiers mid-day?**  
+**Q: Can I switch tiers mid-day?**
 A: Yes, but it only affects **new positions**. Existing positions follow their original tier parameters.
 
-**Q: Which tier is safest?**  
+**Q: Which tier is safest?**
 A: **SAVER** is the most conservative with capital preservation focus. **INVESTOR** is the default for consistent participation.
 
-**Q: What tier is best for serious retail trading?**  
+**Q: What tier is best for serious retail trading?**
 A: **INCOME** tier ($1k-$4.9k) is specifically designed for serious retail trading with very active market participation.
 
-**Q: Can I create a custom tier?**  
+**Q: Can I create a custom tier?**
 A: Advanced users can modify `bot/apex_config.py`, but we strongly recommend using built-in tiers first and proving profitability before customizing.
 
-**Q: Do tiers affect copy trading?**  
+**Q: Do tiers affect copy trading?**
 A: Yes - follower accounts use their own tiers, so positions are scaled appropriately to each account's balance and tier.
 
-**Q: What if I have $10,000 but I'm a beginner?**  
+**Q: What if I have $10,000 but I'm a beginner?**
 A: Start with **INVESTOR** tier despite higher capital. Build experience and consistency, then upgrade to LIVABLE tier after proving profitability.
 
-**Q: How long should I stay in each tier before upgrading?**  
+**Q: How long should I stay in each tier before upgrading?**
 A: Minimum **30 days** to build consistency. Ideally **60-90 days** to prove profitability before upgrading.
 
-**Q: What happens if my balance drops below my tier's minimum?**  
+**Q: What happens if my balance drops below my tier's minimum?**
 A: The system will warn you. Consider downgrading to the appropriate tier for your new balance to maintain proper risk management.
 
 ---
@@ -798,16 +798,16 @@ A: The system will warn you. Consider downgrading to the appropriate tier for yo
 
 ### Common Issues
 
-**Issue: "Tier not recognized"**  
+**Issue: "Tier not recognized"**
 Solution: Check spelling in `.env` - must be exactly `SAVER`, `INVESTOR`, `INCOME`, `LIVABLE`, or `BALLER`
 
-**Issue: "Insufficient capital for tier"**  
+**Issue: "Insufficient capital for tier"**
 Solution: Your balance is below the tier minimum. Downgrade or deposit more capital.
 
-**Issue: "No trades executing"**  
+**Issue: "No trades executing"**
 Solution: Check if you're in SAVER tier (very low frequency) or if circuit breakers are active.
 
-**Issue: "Position sizes too small"**  
+**Issue: "Position sizes too small"**
 Solution: You may be in SAVER tier with limited capital. Upgrade when appropriate.
 
 ### Checking Your Current Tier
@@ -852,8 +852,8 @@ Before choosing your tier, answer these questions:
 
 ---
 
-**Version**: 2.0  
-**Last Updated**: January 2025  
-**Status**: ✅ Production Ready  
-**Official Tiers**: SAVER, INVESTOR, INCOME, LIVABLE, BALLER  
+**Version**: 2.0
+**Last Updated**: January 2025
+**Status**: ✅ Production Ready
+**Official Tiers**: SAVER, INVESTOR, INCOME, LIVABLE, BALLER
 **System Authority**: MASTER (not user-selectable)

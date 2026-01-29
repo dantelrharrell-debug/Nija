@@ -396,6 +396,6 @@ For issues or questions:
 
 ---
 
-**Version**: 1.0  
-**Last Updated**: January 28, 2026  
+**Version**: 1.0
+**Last Updated**: January 28, 2026
 **Author**: NIJA Trading Systems

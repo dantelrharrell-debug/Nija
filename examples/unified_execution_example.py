@@ -13,7 +13,7 @@ import logging
 import sys
 import os
 
-# Add bot directory to path  
+# Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bot'))
 
 from unified_execution_engine import execute_trade, validate_trade

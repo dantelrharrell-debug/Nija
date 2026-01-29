@@ -28,7 +28,7 @@ logger = logging.getLogger("nija.exchange_profiles")
 
 class ExchangeFees:
     """Fee structures for different exchanges"""
-    
+
     COINBASE = {
         'maker_fee': 0.004,  # 0.4% maker fee
         'taker_fee': 0.006,  # 0.6% taker fee
@@ -36,7 +36,7 @@ class ExchangeFees:
         'total_round_trip': 0.014,  # 1.4% total (market orders)
         'name': 'Coinbase Advanced Trade'
     }
-    
+
     OKX = {
         'maker_fee': 0.0008,  # 0.08% maker fee (VIP 0)
         'taker_fee': 0.0010,  # 0.10% taker fee (VIP 0)
@@ -44,7 +44,7 @@ class ExchangeFees:
         'total_round_trip': 0.003,  # 0.3% total (market orders)
         'name': 'OKX Exchange'
     }
-    
+
     KRAKEN = {
         'maker_fee': 0.0016,  # 0.16% maker fee
         'taker_fee': 0.0026,  # 0.26% taker fee
@@ -52,7 +52,7 @@ class ExchangeFees:
         'total_round_trip': 0.0067,  # 0.67% total (market orders)
         'name': 'Kraken Pro'
     }
-    
+
     BINANCE = {
         'maker_fee': 0.0010,  # 0.10% maker fee
         'taker_fee': 0.0010,  # 0.10% taker fee
@@ -69,15 +69,15 @@ class ExchangeFees:
 def get_exchange_risk_profile(exchange: str) -> Dict:
     """
     Get optimized risk profile for a specific exchange.
-    
+
     Args:
         exchange: Exchange name ('coinbase', 'okx', 'kraken', 'binance')
-        
+
     Returns:
         Dict with exchange-specific risk parameters
     """
     exchange_lower = exchange.lower()
-    
+
     if exchange_lower == 'coinbase':
         return _get_coinbase_profile()
     elif exchange_lower == 'okx':
@@ -94,20 +94,20 @@ def get_exchange_risk_profile(exchange: str) -> Dict:
 def _get_coinbase_profile() -> Dict:
     """
     Coinbase Advanced Trade - Higher fees require larger profit targets
-    
-    Fee Structure: 
+
+    Fee Structure:
     - Limit orders (maker): 1.0% round-trip (0.4% x 2 + 0.2% spread)
     - Market orders (taker): 1.4% round-trip (0.6% x 2 + 0.2% spread)
     Strategy: Larger positions, wider targets, quality over quantity
     Uses limit orders primarily to minimize fees
     """
     fees = ExchangeFees.COINBASE
-    
+
     return {
         'exchange': 'coinbase',
         'name': fees['name'],
         'fees': fees,
-        
+
         # Position Sizing (larger positions to offset fees)
         # UNIFIED MINIMUM: $25 to ensure profitability after 1.4% fees
         'min_position_pct': 0.15,  # 15% minimum (fees eat small positions)
@@ -115,32 +115,32 @@ def _get_coinbase_profile() -> Dict:
         'optimal_position_pct': 0.20,  # 20% optimal
         'min_position_usd': 25.00,  # $25 minimum for fee efficiency (unified)
         'min_position_usd': 10.00,  # $10 minimum for fee efficiency
-        
+
         # Profit Targets (must exceed 1.0% fees on limit orders)
         'min_profit_target_pct': 0.012,  # 1.2% minimum profit target (fee-aware)
         'tp1_pct': 0.030,  # 3.0% - first take profit
         'tp2_pct': 0.045,  # 4.5% - second take profit
         'tp3_pct': 0.065,  # 6.5% - third take profit
-        
+
         # Stop Loss (fee-aware: -0.4% to -0.6%)
         'stop_loss_pct': 0.005,  # 0.5% stop loss
         'max_loss_per_trade': 0.006,  # 0.6% max loss
-        
+
         # Trade Frequency (quality over quantity due to high fees - SELECTIVE TRADING)
         'max_trades_per_day': 10,  # Fewer trades, better quality (reduced from 15)
         'min_time_between_trades': 600,  # 10 min between trades (increased from 5 min)
         'preferred_order_type': 'limit',  # Use limit orders to save fees (0.4% vs 0.6%)
-        
+
         # Signal Quality (stricter filtering for selective trading)
         'min_signal_strength': 5,  # Require 5/5 signal strength (perfect setups only)
         'min_adx': 28,  # Higher ADX for stronger trends (increased from 25)
         'min_volume_multiplier': 1.5,  # Higher volume confirmation (increased from 1.2)
-        
+
         # Risk Management
         'max_total_exposure': 0.60,  # 60% max exposure
         'max_positions': 3,  # Max 3 positions due to larger sizes
         'capital_allocation_pct': 0.40,  # Default 40% of total capital
-        
+
         # Exchange Characteristics
         'reliability_score': 0.95,  # Very reliable
         'liquidity_tier': 'high',  # High liquidity
@@ -151,48 +151,48 @@ def _get_coinbase_profile() -> Dict:
 def _get_okx_profile() -> Dict:
     """
     OKX Exchange - Lowest fees enable more aggressive trading
-    
+
     Fee Structure: 0.3% round-trip (lowest)
     Strategy: Smaller positions, tighter targets, higher frequency
     """
     fees = ExchangeFees.OKX
-    
+
     return {
         'exchange': 'okx',
         'name': fees['name'],
         'fees': fees,
-        
+
         # Position Sizing (smaller positions due to low fees)
         'min_position_pct': 0.05,  # 5% minimum
         'max_position_pct': 0.20,  # 20% maximum
         'optimal_position_pct': 0.10,  # 10% optimal
         'min_position_usd': 5.00,  # $5 minimum (fees are minimal)
-        
+
         # Profit Targets (tighter due to low fees)
         'min_profit_target_pct': 0.015,  # 1.5% minimum profit target
         'tp1_pct': 0.020,  # 2.0% - first take profit
         'tp2_pct': 0.030,  # 3.0% - second take profit
         'tp3_pct': 0.045,  # 4.5% - third take profit
-        
+
         # Stop Loss (tightened Jan 28, 2026 for better capital preservation)
         'stop_loss_pct': 0.008,  # 0.8% stop loss (improved from 1.0%)
         'max_loss_per_trade': 0.010,  # 1.0% max loss (improved from 1.2%)
-        
+
         # Trade Frequency (higher frequency possible)
         'max_trades_per_day': 30,  # More trades due to low fees
         'min_time_between_trades': 180,  # 3 min between trades
         'preferred_order_type': 'market',  # Can use market orders
-        
+
         # Signal Quality (slightly more lenient)
         'min_signal_strength': 3,  # Require 3/5 signal strength
         'min_adx': 20,  # Standard ADX threshold
         'min_volume_multiplier': 1.0,  # Standard volume confirmation
-        
+
         # Risk Management
         'max_total_exposure': 0.80,  # 80% max exposure (aggressive)
         'max_positions': 6,  # Max 6 positions (more diversification)
         'capital_allocation_pct': 0.30,  # Default 30% of total capital
-        
+
         # Exchange Characteristics
         'reliability_score': 0.90,  # Reliable
         'liquidity_tier': 'high',  # High liquidity
@@ -203,48 +203,48 @@ def _get_okx_profile() -> Dict:
 def _get_kraken_profile() -> Dict:
     """
     Kraken Pro - Medium fees, balanced approach
-    
+
     Fee Structure: 0.67% round-trip (medium)
     Strategy: Balanced positions and targets
     """
     fees = ExchangeFees.KRAKEN
-    
+
     return {
         'exchange': 'kraken',
         'name': fees['name'],
         'fees': fees,
-        
+
         # Position Sizing (balanced)
         'min_position_pct': 0.10,  # 10% minimum
         'max_position_pct': 0.25,  # 25% maximum
         'optimal_position_pct': 0.15,  # 15% optimal
         'min_position_usd': 10.00,  # $10 minimum
-        
+
         # Profit Targets (balanced)
         'min_profit_target_pct': 0.020,  # 2.0% minimum profit target
         'tp1_pct': 0.025,  # 2.5% - first take profit
         'tp2_pct': 0.038,  # 3.8% - second take profit
         'tp3_pct': 0.055,  # 5.5% - third take profit
-        
+
         # Stop Loss (balanced)
         'stop_loss_pct': 0.011,  # 1.1% stop loss
         'max_loss_per_trade': 0.013,  # 1.3% max loss
-        
+
         # Trade Frequency (balanced)
         'max_trades_per_day': 20,  # Moderate frequency
         'min_time_between_trades': 240,  # 4 min between trades
         'preferred_order_type': 'limit',  # Prefer limit orders
-        
+
         # Signal Quality (balanced)
         'min_signal_strength': 3,  # Require 3/5 signal strength
         'min_adx': 22,  # Moderate ADX threshold
         'min_volume_multiplier': 1.1,  # Moderate volume confirmation
-        
+
         # Risk Management
         'max_total_exposure': 0.70,  # 70% max exposure
         'max_positions': 4,  # Max 4 positions
         'capital_allocation_pct': 0.30,  # Default 30% of total capital
-        
+
         # Exchange Characteristics
         'reliability_score': 0.92,  # Very reliable
         'liquidity_tier': 'medium-high',  # Good liquidity
@@ -255,48 +255,48 @@ def _get_kraken_profile() -> Dict:
 def _get_binance_profile() -> Dict:
     """
     Binance - Very low fees, very high liquidity
-    
+
     Fee Structure: 0.28% round-trip (very low)
     Strategy: Flexible sizing, high frequency
     """
     fees = ExchangeFees.BINANCE
-    
+
     return {
         'exchange': 'binance',
         'name': fees['name'],
         'fees': fees,
-        
+
         # Position Sizing (flexible)
         'min_position_pct': 0.05,  # 5% minimum
         'max_position_pct': 0.20,  # 20% maximum
         'optimal_position_pct': 0.12,  # 12% optimal
         'min_position_usd': 5.00,  # $5 minimum
-        
+
         # Profit Targets (tight due to very low fees)
         'min_profit_target_pct': 0.012,  # 1.2% minimum profit target
         'tp1_pct': 0.018,  # 1.8% - first take profit
         'tp2_pct': 0.028,  # 2.8% - second take profit
         'tp3_pct': 0.042,  # 4.2% - third take profit
-        
+
         # Stop Loss (tight)
         'stop_loss_pct': 0.009,  # 0.9% stop loss
         'max_loss_per_trade': 0.011,  # 1.1% max loss
-        
+
         # Trade Frequency (very high frequency possible)
         'max_trades_per_day': 35,  # Highest frequency
         'min_time_between_trades': 150,  # 2.5 min between trades
         'preferred_order_type': 'market',  # Can use market orders
-        
+
         # Signal Quality (lenient due to high liquidity)
         'min_signal_strength': 3,  # Require 3/5 signal strength
         'min_adx': 20,  # Standard ADX
         'min_volume_multiplier': 0.9,  # Lower volume requirement
-        
+
         # Risk Management
         'max_total_exposure': 0.85,  # 85% max exposure (very aggressive)
         'max_positions': 7,  # Max 7 positions
         'capital_allocation_pct': 0.0,  # Not currently integrated
-        
+
         # Exchange Characteristics
         'reliability_score': 0.88,  # Generally reliable
         'liquidity_tier': 'very-high',  # Highest liquidity
@@ -347,14 +347,14 @@ def _get_default_profile() -> Dict:
 def compare_exchange_profiles() -> None:
     """Print comparison table of all exchange profiles"""
     exchanges = ['coinbase', 'okx', 'kraken', 'binance']
-    
+
     print("\n" + "="*100)
     print("EXCHANGE RISK PROFILE COMPARISON")
     print("="*100)
-    
+
     print(f"\n{'Exchange':<15} {'Fees':<10} {'Min Pos':<10} {'Opt Pos':<10} {'Min Target':<12} {'Max Trades':<12}")
     print("-"*100)
-    
+
     for exchange in exchanges:
         profile = get_exchange_risk_profile(exchange)
         print(f"{profile['name']:<15} "
@@ -363,7 +363,7 @@ def compare_exchange_profiles() -> None:
               f"{profile['optimal_position_pct']*100:>6.1f}%   "
               f"{profile['min_profit_target_pct']*100:>8.2f}%   "
               f"{profile['max_trades_per_day']:>8}")
-    
+
     print("\n" + "="*100)
     print("\nKEY INSIGHTS:")
     print("• OKX & Binance: Low fees (0.28-0.30%) → Higher frequency, tighter targets")
@@ -372,15 +372,15 @@ def compare_exchange_profiles() -> None:
     print("="*100 + "\n")
 
 
-def get_best_exchange_for_balance(account_balance: float, 
+def get_best_exchange_for_balance(account_balance: float,
                                   available_exchanges: List[str]) -> str:
     """
     Recommend best exchange based on account balance.
-    
+
     Args:
         account_balance: Current account balance
         available_exchanges: List of available exchange names
-        
+
     Returns:
         Recommended exchange name
     """
@@ -390,21 +390,21 @@ def get_best_exchange_for_balance(account_balance: float,
             if exchange in [e.lower() for e in available_exchanges]:
                 logger.info(f"💡 Recommended for ${account_balance:.2f}: {exchange.upper()} (lowest fees)")
                 return exchange
-    
+
     elif account_balance < 200:
         # Medium accounts: prefer balance of fees and reliability
         for exchange in ['kraken', 'okx', 'coinbase']:
             if exchange in [e.lower() for e in available_exchanges]:
                 logger.info(f"💡 Recommended for ${account_balance:.2f}: {exchange.upper()} (balanced)")
                 return exchange
-    
+
     else:
         # Large accounts: prefer reliability and liquidity
         for exchange in ['coinbase', 'kraken', 'binance', 'okx']:
             if exchange in [e.lower() for e in available_exchanges]:
                 logger.info(f"💡 Recommended for ${account_balance:.2f}: {exchange.upper()} (reliable)")
                 return exchange
-    
+
     # Fallback to first available
     return available_exchanges[0].lower() if available_exchanges else 'coinbase'
 
@@ -427,7 +427,7 @@ def get_all_exchange_profiles() -> Dict[str, Dict]:
 if __name__ == "__main__":
     # Print comparison table
     compare_exchange_profiles()
-    
+
     # Test recommendations
     print("\nBALANCE-BASED RECOMMENDATIONS:")
     test_exchanges = ['coinbase', 'okx', 'kraken']
@@ -471,59 +471,59 @@ class ExchangeType(Enum):
 @dataclass
 class ExchangeRiskProfile:
     """Risk parameters for a specific exchange"""
-    
+
     # Exchange identification
     exchange_name: str
     exchange_type: ExchangeType
-    
+
     # Fee structure (as decimals, e.g., 0.006 = 0.6%)
     maker_fee: float  # Limit order fee
     taker_fee: float  # Market order fee
     withdrawal_fee_usd: float  # Typical withdrawal fee
-    
+
     # Position sizing adjustments
     min_position_size_usd: float  # Minimum viable position
     max_position_size_pct: float  # Max % of account per trade
     recommended_position_pct: float  # Recommended position size
-    
+
     # Stop-loss parameters (as decimals)
     min_stop_loss_pct: float  # Minimum stop distance
     max_stop_loss_pct: float  # Maximum stop distance
     recommended_stop_loss_pct: float  # Recommended stop
-    
+
     # Take-profit parameters (as decimals)
     min_take_profit_pct: float  # Minimum TP to cover fees
     tp1_target_pct: float  # First profit target
     tp2_target_pct: float  # Second profit target
     tp3_target_pct: float  # Third profit target
-    
+
     # Risk multipliers (1.0 = neutral)
     volatility_multiplier: float  # Adjust for exchange volatility
     liquidity_multiplier: float  # Adjust for liquidity depth
     risk_score: float  # Overall risk score (0-10, 10 = riskiest)
-    
+
     # Trading constraints
     max_trades_per_day: int
     max_open_positions: int
     max_total_exposure_pct: float  # Max total capital on exchange
-    
+
     # Exchange-specific features
     supports_limit_orders: bool
     supports_stop_loss_orders: bool
     supports_trailing_stops: bool
     has_maker_rebates: bool
-    
+
     # Performance tracking
     historical_win_rate: Optional[float] = None
     avg_trade_duration_hours: Optional[float] = None
-    
+
     def get_break_even_profit_pct(self, use_limit_order: bool = True) -> float:
         """
         Calculate break-even profit percentage including fees
-        
+
         Args:
             use_limit_order: True for maker fees, False for taker
-            
+
         Returns:
             Break-even profit % as decimal
         """
@@ -533,16 +533,16 @@ class ExchangeRiskProfile:
         # Add small buffer for slippage and price movement
         break_even = round_trip_cost * 1.2
         return break_even
-    
-    def get_adjusted_position_size(self, base_size_pct: float, 
+
+    def get_adjusted_position_size(self, base_size_pct: float,
                                    account_balance: float) -> float:
         """
         Get exchange-adjusted position size
-        
+
         Args:
             base_size_pct: Base position size as % (e.g., 0.05 = 5%)
             account_balance: Current account balance
-            
+
         Returns:
             Adjusted position size in USD
         """
@@ -550,29 +550,29 @@ class ExchangeRiskProfile:
         adjusted_pct = base_size_pct * self.liquidity_multiplier
         adjusted_pct = min(adjusted_pct, self.max_position_size_pct)
         adjusted_pct = max(adjusted_pct, self.min_position_size_usd / account_balance)
-        
+
         position_usd = account_balance * adjusted_pct
         position_usd = max(position_usd, self.min_position_size_usd)
-        
+
         return position_usd
-    
+
     def get_adjusted_stop_loss(self, base_stop_pct: float) -> float:
         """
         Get exchange-adjusted stop-loss percentage
-        
+
         Args:
             base_stop_pct: Base stop-loss %
-            
+
         Returns:
             Adjusted stop-loss % as decimal
         """
         # Adjust for exchange volatility
         adjusted_stop = base_stop_pct * self.volatility_multiplier
-        
+
         # Ensure within min/max bounds
         adjusted_stop = max(adjusted_stop, self.min_stop_loss_pct)
         adjusted_stop = min(adjusted_stop, self.max_stop_loss_pct)
-        
+
         return adjusted_stop
 
 
@@ -584,206 +584,206 @@ EXCHANGE_PROFILES = {
     ExchangeType.COINBASE: ExchangeRiskProfile(
         exchange_name="Coinbase Advanced Trade",
         exchange_type=ExchangeType.COINBASE,
-        
+
         # Coinbase fees (Advanced Trade)
         maker_fee=0.004,  # 0.4% maker (limit orders)
         taker_fee=0.006,  # 0.6% taker (market orders)
         withdrawal_fee_usd=0.0,  # Free withdrawals to Coinbase wallet
-        
+
         # Position sizing (15-25% per trade to offset fees)
         min_position_size_usd=10.0,  # $10 minimum
         max_position_size_pct=0.25,  # 25% max per trade
         recommended_position_pct=0.20,  # 20% recommended
-        
+
         # Stop-loss parameters (fee-aware: -0.4% to -0.6%)
         min_stop_loss_pct=0.004,  # 0.4% minimum
         max_stop_loss_pct=0.006,  # 0.6% maximum
         recommended_stop_loss_pct=0.005,  # 0.5% recommended
-        
+
         # Take-profit parameters (MIN_PROFIT ≥ 0.9%-1.2%)
         min_take_profit_pct=0.009,  # 0.9% minimum (covers fees)
         tp1_target_pct=0.025,  # 2.5%
         tp2_target_pct=0.040,  # 4.0%
         tp3_target_pct=0.060,  # 6.0%
-        
+
         # Risk adjustments
         volatility_multiplier=1.0,  # Average volatility
         liquidity_multiplier=1.0,  # Good liquidity
         risk_score=4.0,  # Medium-low risk
-        
+
         # Trading constraints (selective trading - fewer trades)
         max_trades_per_day=10,  # Reduced from 30 for quality over quantity
         max_open_positions=3,  # Reduced from 8 to focus on quality
         max_total_exposure_pct=0.40,  # 40% max on Coinbase
-        
+
         # Features
         supports_limit_orders=True,
         supports_stop_loss_orders=True,
         supports_trailing_stops=False,  # Not native
         has_maker_rebates=False,
     ),
-    
+
     ExchangeType.BINANCE: ExchangeRiskProfile(
         exchange_name="Binance",
         exchange_type=ExchangeType.BINANCE,
-        
+
         # Binance fees (lowest in industry)
         maker_fee=0.001,  # 0.1% maker
         taker_fee=0.001,  # 0.1% taker
         withdrawal_fee_usd=1.0,  # ~$1 typical
-        
+
         # Position sizing (more aggressive due to low fees)
         min_position_size_usd=5.0,  # $5 minimum
         max_position_size_pct=0.20,  # 20% max per trade
         recommended_position_pct=0.12,  # 12% recommended
-        
+
         # Stop-loss parameters
         min_stop_loss_pct=0.005,  # 0.5% minimum
         max_stop_loss_pct=0.020,  # 2.0% maximum
         recommended_stop_loss_pct=0.010,  # 1.0% recommended
-        
+
         # Take-profit parameters (can be tighter due to low fees)
         min_take_profit_pct=0.008,  # 0.8% minimum
         tp1_target_pct=0.015,  # 1.5%
         tp2_target_pct=0.025,  # 2.5%
         tp3_target_pct=0.040,  # 4.0%
-        
+
         # Risk adjustments
         volatility_multiplier=1.1,  # Slightly higher volatility
         liquidity_multiplier=1.2,  # Excellent liquidity
         risk_score=5.0,  # Medium risk (regulatory uncertainty)
-        
+
         # Trading constraints
         max_trades_per_day=50,  # More trades allowed (lower fees)
         max_open_positions=12,
         max_total_exposure_pct=0.35,  # 35% max on Binance
-        
+
         # Features
         supports_limit_orders=True,
         supports_stop_loss_orders=True,
         supports_trailing_stops=True,
         has_maker_rebates=True,  # VIP tiers
     ),
-    
+
     ExchangeType.OKX: ExchangeRiskProfile(
         exchange_name="OKX",
         exchange_type=ExchangeType.OKX,
-        
+
         # OKX fees
         maker_fee=0.0008,  # 0.08% maker
         taker_fee=0.0010,  # 0.10% taker
         withdrawal_fee_usd=1.5,  # ~$1.50 typical
-        
+
         # Position sizing
         min_position_size_usd=5.0,  # $5 minimum
         max_position_size_pct=0.18,  # 18% max per trade
         recommended_position_pct=0.10,  # 10% recommended
-        
+
         # Stop-loss parameters (Jan 28, 2026: Tightened to -0.5% to -1.0% range)
         min_stop_loss_pct=0.005,  # 0.5% minimum (improved from 0.6%)
         max_stop_loss_pct=0.010,  # 1.0% maximum (improved from 2.0%)
         recommended_stop_loss_pct=0.008,  # 0.8% recommended (improved from 1.2%)
-        
+
         # Take-profit parameters
         min_take_profit_pct=0.010,  # 1.0% minimum
         tp1_target_pct=0.018,  # 1.8%
         tp2_target_pct=0.030,  # 3.0%
         tp3_target_pct=0.045,  # 4.5%
-        
+
         # Risk adjustments
         volatility_multiplier=1.05,  # Slightly elevated
         liquidity_multiplier=1.15,  # Very good liquidity
         risk_score=4.5,  # Medium risk
-        
+
         # Trading constraints
         max_trades_per_day=40,
         max_open_positions=10,
         max_total_exposure_pct=0.30,  # 30% max on OKX
-        
+
         # Features
         supports_limit_orders=True,
         supports_stop_loss_orders=True,
         supports_trailing_stops=True,
         has_maker_rebates=True,
     ),
-    
+
     ExchangeType.KRAKEN: ExchangeRiskProfile(
         exchange_name="Kraken Pro",
         exchange_type=ExchangeType.KRAKEN,
-        
+
         # Kraken fees
         maker_fee=0.0016,  # 0.16% maker
         taker_fee=0.0026,  # 0.26% taker
         withdrawal_fee_usd=0.5,  # ~$0.50 typical
-        
+
         # Position sizing
         min_position_size_usd=10.0,  # $10 minimum
         max_position_size_pct=0.15,  # 15% max per trade
         recommended_position_pct=0.09,  # 9% recommended
-        
+
         # Stop-loss parameters
         min_stop_loss_pct=0.008,  # 0.8% minimum
         max_stop_loss_pct=0.022,  # 2.2% maximum
         recommended_stop_loss_pct=0.014,  # 1.4% recommended
-        
+
         # Take-profit parameters
         min_take_profit_pct=0.012,  # 1.2% minimum
         tp1_target_pct=0.020,  # 2.0%
         tp2_target_pct=0.035,  # 3.5%
         tp3_target_pct=0.050,  # 5.0%
-        
+
         # Risk adjustments
         volatility_multiplier=0.95,  # Lower volatility
         liquidity_multiplier=1.0,  # Good liquidity
         risk_score=3.0,  # Low risk (regulated, established)
-        
+
         # Trading constraints
         max_trades_per_day=35,
         max_open_positions=8,
         max_total_exposure_pct=0.25,  # 25% max on Kraken
-        
+
         # Features
         supports_limit_orders=True,
         supports_stop_loss_orders=True,
         supports_trailing_stops=False,
         has_maker_rebates=True,
     ),
-    
+
     ExchangeType.ALPACA: ExchangeRiskProfile(
         exchange_name="Alpaca Markets",
         exchange_type=ExchangeType.ALPACA,
-        
+
         # Alpaca fees (stock trading)
         maker_fee=0.0,  # Commission-free
         taker_fee=0.0,  # Commission-free
         withdrawal_fee_usd=0.0,  # Free
-        
+
         # Position sizing (stocks have different dynamics)
         min_position_size_usd=25.0,  # $25 minimum (stocks)
         max_position_size_pct=0.10,  # 10% max per trade
         recommended_position_pct=0.05,  # 5% recommended
-        
+
         # Stop-loss parameters (tighter for stocks)
         min_stop_loss_pct=0.005,  # 0.5% minimum
         max_stop_loss_pct=0.015,  # 1.5% maximum
         recommended_stop_loss_pct=0.008,  # 0.8% recommended
-        
+
         # Take-profit parameters
         min_take_profit_pct=0.008,  # 0.8% minimum
         tp1_target_pct=0.012,  # 1.2%
         tp2_target_pct=0.020,  # 2.0%
         tp3_target_pct=0.030,  # 3.0%
-        
+
         # Risk adjustments
         volatility_multiplier=0.8,  # Lower than crypto
         liquidity_multiplier=1.1,  # Good stock liquidity
         risk_score=2.5,  # Low risk (regulated, established)
-        
+
         # Trading constraints
         max_trades_per_day=25,  # PDT rules may apply
         max_open_positions=6,
         max_total_exposure_pct=0.30,  # 30% max
-        
+
         # Features
         supports_limit_orders=True,
         supports_stop_loss_orders=True,
@@ -795,61 +795,61 @@ EXCHANGE_PROFILES = {
 
 class ExchangeRiskManager:
     """Manages risk across multiple exchanges"""
-    
+
     def __init__(self):
         """Initialize exchange risk manager"""
         self.profiles = EXCHANGE_PROFILES
         logger.info("🛡️ Exchange Risk Manager initialized")
         logger.info(f"   Loaded profiles for {len(self.profiles)} exchanges")
-    
+
     def get_profile(self, exchange: ExchangeType) -> ExchangeRiskProfile:
         """
         Get risk profile for an exchange
-        
+
         Args:
             exchange: Exchange type
-            
+
         Returns:
             Exchange risk profile
         """
         return self.profiles[exchange]
-    
-    def get_optimal_position_size(self, exchange: ExchangeType, 
+
+    def get_optimal_position_size(self, exchange: ExchangeType,
                                   base_position_pct: float,
                                   account_balance: float) -> float:
         """
         Calculate optimal position size for exchange
-        
+
         Args:
             exchange: Exchange type
             base_position_pct: Base position size
             account_balance: Account balance on exchange
-            
+
         Returns:
             Position size in USD
         """
         profile = self.get_profile(exchange)
         return profile.get_adjusted_position_size(base_position_pct, account_balance)
-    
+
     def get_optimal_stop_loss(self, exchange: ExchangeType,
                              base_stop_pct: float) -> float:
         """
         Get exchange-specific stop-loss percentage
-        
+
         Args:
             exchange: Exchange type
             base_stop_pct: Base stop-loss %
-            
+
         Returns:
             Adjusted stop-loss % as decimal
         """
         profile = self.get_profile(exchange)
         return profile.get_adjusted_stop_loss(base_stop_pct)
-    
+
     def compare_exchanges(self) -> str:
         """
         Generate comparison report of all exchanges
-        
+
         Returns:
             Formatted comparison string
         """
@@ -859,7 +859,7 @@ class ExchangeRiskManager:
             "=" * 90,
             ""
         ]
-        
+
         for exchange_type, profile in self.profiles.items():
             report.extend([
                 f"\n{profile.exchange_name} ({exchange_type.value.upper()})",
@@ -881,7 +881,7 @@ class ExchangeRiskManager:
                 f"{'| Trailing' if profile.supports_trailing_stops else ''} "
                 f"{'| Rebates' if profile.has_maker_rebates else ''}",
             ])
-        
+
         report.extend(["", "=" * 90, ""])
         return "\n".join(report)
 
@@ -903,10 +903,10 @@ if __name__ == "__main__":
         level=logging.INFO,
         format='%(levelname)s - %(message)s'
     )
-    
+
     manager = ExchangeRiskManager()
     print(manager.compare_exchanges())
-    
+
     # Example calculations
     print("\nExample Position Size Calculations ($1000 account, 5% base):")
     print("-" * 60)

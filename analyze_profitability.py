@@ -48,43 +48,43 @@ class TradeStats:
 
 class ProfitabilityAnalyzer:
     """Analyzes NIJA trading profitability"""
-    
+
     def __init__(self, data_dir: str = "./data"):
         self.data_dir = Path(data_dir)
         self.db_path = self.data_dir / "trade_ledger.db"
         self.json_path = self.data_dir / "trade_history.json"
-        
+
     def load_trades(self) -> List[Dict]:
         """Load all completed trades from database and JSON"""
         all_trades = []
-        
+
         # Load from SQLite database
         if self.db_path.exists():
             all_trades.extend(self._load_from_database())
-        
+
         # Load from JSON
         if self.json_path.exists():
             all_trades.extend(self._load_from_json())
-        
+
         # Remove duplicates (prefer database over JSON)
         return self._deduplicate_trades(all_trades)
-    
+
     def _load_from_database(self) -> List[Dict]:
         """Load completed trades from SQLite database"""
         trades = []
         try:
             conn = sqlite3.connect(str(self.db_path))
             cursor = conn.cursor()
-            
+
             cursor.execute('''
-                SELECT 
+                SELECT
                     symbol, side, entry_price, exit_price, quantity, size_usd,
-                    entry_fee, exit_fee, total_fees, gross_profit, net_profit, 
+                    entry_fee, exit_fee, total_fees, gross_profit, net_profit,
                     profit_pct, exit_reason, entry_time, exit_time
                 FROM completed_trades
                 ORDER BY exit_time DESC
             ''')
-            
+
             for row in cursor.fetchall():
                 trades.append({
                     'symbol': row[0],
@@ -104,20 +104,20 @@ class ProfitabilityAnalyzer:
                     'exit_time': row[14],
                     'source': 'database'
                 })
-            
+
             conn.close()
         except Exception as e:
             print(f"Warning: Could not load database trades: {e}")
-        
+
         return trades
-    
+
     def _load_from_json(self) -> List[Dict]:
         """Load completed trades from JSON file"""
         trades = []
         try:
             with open(self.json_path, 'r') as f:
                 json_trades = json.load(f)
-            
+
             for trade in json_trades:
                 if trade.get('exit_price'):  # Only completed trades
                     trades.append({
@@ -137,58 +137,58 @@ class ProfitabilityAnalyzer:
                     })
         except Exception as e:
             print(f"Warning: Could not load JSON trades: {e}")
-        
+
         return trades
-    
+
     def _deduplicate_trades(self, trades: List[Dict]) -> List[Dict]:
         """Remove duplicate trades, preferring database over JSON"""
         seen = set()
         unique_trades = []
-        
+
         # Sort to prioritize database entries
         sorted_trades = sorted(trades, key=lambda t: (t.get('exit_time', ''), 0 if t['source'] == 'database' else 1))
-        
+
         for trade in sorted_trades:
             key = f"{trade['symbol']}_{trade.get('exit_time', '')}"
             if key not in seen:
                 seen.add(key)
                 unique_trades.append(trade)
-        
+
         return unique_trades
-    
+
     def calculate_stats(self, trades: List[Dict]) -> TradeStats:
         """Calculate comprehensive trading statistics"""
         if not trades:
             return TradeStats()
-        
+
         stats = TradeStats()
         stats.total_trades = len(trades)
-        
+
         wins = [t for t in trades if t['net_profit'] > 0]
         losses = [t for t in trades if t['net_profit'] < 0]
         breakeven = [t for t in trades if t['net_profit'] == 0]
-        
+
         stats.winning_trades = len(wins)
         stats.losing_trades = len(losses)
         stats.breakeven_trades = len(breakeven)
-        
+
         stats.total_pnl = sum(t['net_profit'] for t in trades)
         stats.total_fees = sum(t.get('total_fees', 0) for t in trades)
-        
+
         stats.win_rate = (len(wins) / len(trades) * 100) if trades else 0
-        
+
         stats.avg_win = sum(t['net_profit'] for t in wins) / len(wins) if wins else 0
         stats.avg_loss = sum(t['net_profit'] for t in losses) / len(losses) if losses else 0
-        
+
         stats.largest_win = max((t['net_profit'] for t in trades), default=0)
         stats.largest_loss = min((t['net_profit'] for t in trades), default=0)
-        
+
         total_wins = sum(t['net_profit'] for t in wins)
         total_losses = abs(sum(t['net_profit'] for t in losses))
         stats.profit_factor = total_wins / total_losses if total_losses > 0 else float('inf')
-        
+
         return stats
-    
+
     def print_report(self, trades: List[Dict], detailed: bool = False):
         """Print comprehensive profitability report"""
         print('=' * 80)
@@ -196,13 +196,13 @@ class ProfitabilityAnalyzer:
         print('=' * 80)
         print(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")}')
         print()
-        
+
         if not trades:
             self._print_no_trades_report()
             return
-        
+
         stats = self.calculate_stats(trades)
-        
+
         # Summary
         print(f'📊 Trade Summary:')
         print(f'   Total Completed Trades: {stats.total_trades}')
@@ -210,7 +210,7 @@ class ProfitabilityAnalyzer:
         print(f'   • Losing Trades: {stats.losing_trades} ({stats.losing_trades/stats.total_trades*100:.1f}%)')
         print(f'   • Break-even Trades: {stats.breakeven_trades}')
         print()
-        
+
         # Financial Summary
         print('💰 Financial Summary:')
         print(f'   • Total Net P&L: ${stats.total_pnl:.2f}')
@@ -222,16 +222,16 @@ class ProfitabilityAnalyzer:
         if stats.profit_factor != float('inf'):
             print(f'   • Profit Factor: {stats.profit_factor:.2f}')
         print()
-        
+
         # Recent trades
         if detailed:
             self._print_detailed_trades(trades)
         else:
             self._print_recent_trades(trades, limit=10)
-        
+
         # Final verdict
         self._print_verdict(stats)
-    
+
     def _print_no_trades_report(self):
         """Print report when no trades are found"""
         print('⚠️  NO COMPLETED TRADES FOUND')
@@ -243,7 +243,7 @@ class ProfitabilityAnalyzer:
         print('  • All current trades are still open (unrealized P&L)')
         print('  • Trade tracking may not be properly configured')
         print()
-        
+
         # Check for open positions
         if self.db_path.exists():
             try:
@@ -252,25 +252,25 @@ class ProfitabilityAnalyzer:
                 cursor.execute('SELECT COUNT(*) FROM open_positions')
                 open_count = cursor.fetchone()[0]
                 conn.close()
-                
+
                 if open_count > 0:
                     print(f'Note: {open_count} positions are currently OPEN')
                     print('      Wait for positions to close to see profitability')
                     print()
             except:
                 pass
-        
+
         print('Recommendation:')
         print('  1. Review open positions for unrealized gains/losses')
         print('  2. Check profit-taking configuration')
         print('  3. Monitor for position exits')
         print()
-    
+
     def _print_recent_trades(self, trades: List[Dict], limit: int = 10):
         """Print recent trades summary"""
         print(f'Recent Trades (Last {min(limit, len(trades))}):')
         print('-' * 80)
-        
+
         for trade in trades[:limit]:
             emoji = '🟢' if trade['net_profit'] > 0 else '🔴' if trade['net_profit'] < 0 else '⚪'
             print(f"{emoji} {trade['symbol']} {trade['side']}")
@@ -278,12 +278,12 @@ class ProfitabilityAnalyzer:
             print(f"   Net P&L: ${trade['net_profit']:.2f} ({trade['profit_pct']:.2f}%)")
             print(f"   Reason: {trade['exit_reason']}")
             print()
-    
+
     def _print_detailed_trades(self, trades: List[Dict]):
         """Print all trades with full details"""
         print('All Completed Trades (Detailed):')
         print('-' * 80)
-        
+
         for i, trade in enumerate(trades, 1):
             emoji = '🟢' if trade['net_profit'] > 0 else '🔴' if trade['net_profit'] < 0 else '⚪'
             print(f"{i}. {emoji} {trade['symbol']} {trade['side']}")
@@ -295,14 +295,14 @@ class ProfitabilityAnalyzer:
             print(f"   Reason: {trade['exit_reason']}")
             print(f"   Time: {trade.get('exit_time', 'N/A')}")
             print()
-    
+
     def _print_verdict(self, stats: TradeStats):
         """Print final profitability verdict"""
         print('=' * 80)
         print('🎯 FINAL VERDICT')
         print('=' * 80)
         print()
-        
+
         if stats.total_pnl > 0:
             print('✅ ✅ ✅ NIJA IS PROFITABLE ✅ ✅ ✅')
             print()
@@ -335,21 +335,21 @@ class ProfitabilityAnalyzer:
             print('   No net profit or loss')
             print('   Continue monitoring performance')
             print()
-        
+
         print('=' * 80)
-    
+
     def export_csv(self, trades: List[Dict], filename: Optional[str] = None) -> str:
         """Export trades to CSV file"""
         if not filename:
             filename = f"nija_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        
+
         csv_path = self.data_dir / filename
-        
+
         with open(csv_path, 'w') as f:
             f.write("symbol,side,entry_price,exit_price,quantity,size_usd,")
             f.write("entry_fee,exit_fee,total_fees,gross_profit,net_profit,profit_pct,")
             f.write("exit_reason,entry_time,exit_time\n")
-            
+
             for trade in trades:
                 f.write(f"{trade['symbol']},{trade['side']},")
                 f.write(f"{trade['entry_price']:.6f},{trade['exit_price']:.6f},")
@@ -358,7 +358,7 @@ class ProfitabilityAnalyzer:
                 f.write(f"{trade.get('total_fees', 0):.4f},")
                 f.write(f"{trade['gross_profit']:.4f},{trade['net_profit']:.4f},{trade['profit_pct']:.2f},")
                 f.write(f"{trade['exit_reason']},{trade.get('entry_time', '')},{trade.get('exit_time', '')}\n")
-        
+
         print(f"✅ Trades exported to: {csv_path}")
         return str(csv_path)
 
@@ -375,34 +375,34 @@ Examples:
   python analyze_profitability.py --export-csv # Export trades to CSV
         '''
     )
-    
+
     parser.add_argument('--detailed', action='store_true',
                        help='Show detailed information for all trades')
     parser.add_argument('--export-csv', action='store_true',
                        help='Export trades to CSV file')
     parser.add_argument('--data-dir', default='./data',
                        help='Directory containing trade data (default: ./data)')
-    
+
     args = parser.parse_args()
-    
+
     # Create analyzer
     analyzer = ProfitabilityAnalyzer(data_dir=args.data_dir)
-    
+
     # Load trades
     trades = analyzer.load_trades()
-    
+
     # Print report
     analyzer.print_report(trades, detailed=args.detailed)
-    
+
     # Export if requested
     if args.export_csv and trades:
         analyzer.export_csv(trades)
         print()
-    
+
     # Exit code based on profitability
     if not trades:
         sys.exit(2)  # No trades - cannot determine
-    
+
     stats = analyzer.calculate_stats(trades)
     if stats.total_pnl < 0:
         sys.exit(1)  # Losing money - action required

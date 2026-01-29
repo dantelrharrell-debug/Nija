@@ -60,15 +60,15 @@ This document summarizes the testing performed for the broker-aware strategy imp
 
 ## Summary
 
-**Total Tests:** 3/3 ✅ PASSED  
-**Short Detection Tests:** 6/6 ✅ PASSED  
-**Market Mode Tests:** 6/6 ✅ PASSED  
+**Total Tests:** 3/3 ✅ PASSED
+**Short Detection Tests:** 6/6 ✅ PASSED
+**Market Mode Tests:** 6/6 ✅ PASSED
 
 ## Key Improvements Validated
 
-✅ **Broker-Aware Short Blocking:** System correctly identifies and blocks short signals on SPOT markets  
-✅ **Fee-Aware Profit Targets:** Dynamic profit targets scale based on broker fees  
-✅ **Market Mode Detection:** Accurate detection of SPOT vs FUTURES/PERPETUALS  
+✅ **Broker-Aware Short Blocking:** System correctly identifies and blocks short signals on SPOT markets
+✅ **Fee-Aware Profit Targets:** Dynamic profit targets scale based on broker fees
+✅ **Market Mode Detection:** Accurate detection of SPOT vs FUTURES/PERPETUALS
 
 ## Profitability Impact
 

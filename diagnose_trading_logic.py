@@ -14,15 +14,15 @@ def check_trading_logic_mapping():
     print("=" * 70)
     print("DIAGNOSTIC 1: Trading Logic Mapping")
     print("=" * 70)
-    
+
     # From execution_engine.py line 269
     print("\n✓ Checking long/short to buy/sell mapping...")
-    
+
     test_cases = [
         ('long', 'buy'),
         ('short', 'sell'),
     ]
-    
+
     all_correct = True
     for side, expected_order in test_cases:
         order_side = 'buy' if side == 'long' else 'sell'
@@ -30,7 +30,7 @@ def check_trading_logic_mapping():
         print(f"   {side:6s} → {order_side:4s} [{status}]")
         if order_side != expected_order:
             all_correct = False
-    
+
     return all_correct
 
 
@@ -39,13 +39,13 @@ def check_rsi_interpretation():
     print("\n" + "=" * 70)
     print("DIAGNOSTIC 2: RSI Signal Interpretation")
     print("=" * 70)
-    
+
     print("\n✓ Checking RSI thresholds...")
     print("   RSI 30-50  → BUY zone  (oversold bounce) ✅")
     print("   RSI > 55   → SELL zone (overbought) ✅")
     print("   RSI < 30   → Extreme oversold (risky) ⚠️")
     print("   RSI > 70   → Extreme overbought (risky) ⚠️")
-    
+
     return True
 
 
@@ -54,7 +54,7 @@ def check_shorting_capability():
     print("\n" + "=" * 70)
     print("DIAGNOSTIC 3: Shorting Capability Issues")
     print("=" * 70)
-    
+
     print("\n❗ CRITICAL FINDING:")
     print("   Spot markets (Kraken, Coinbase) do NOT support shorting")
     print("   SHORT signals on these brokers will be BLOCKED")
@@ -74,7 +74,7 @@ def check_shorting_capability():
     print("   💡 RECOMMENDATION:")
     print("   If master is on Kraken/Coinbase SPOT, disable SHORT signals")
     print("   to avoid wasted cycles and missed opportunities.")
-    
+
     return False  # This is an issue
 
 
@@ -83,7 +83,7 @@ def check_fee_structure():
     print("\n" + "=" * 70)
     print("DIAGNOSTIC 4: Fee Structure Analysis")
     print("=" * 70)
-    
+
     print("\n✓ Comparing broker fees (round-trip)...")
     print("   Coinbase:  1.4% (0.7% per side + spread)")
     print("   Kraken:    0.4% (0.2% per side)")
@@ -92,7 +92,7 @@ def check_fee_structure():
     print("   💡 IMPACT:")
     print("   If master is on Coinbase and users on Kraken,")
     print("   master pays 3.5x more in fees for same trades!")
-    
+
     return False  # This is an issue
 
 
@@ -101,12 +101,12 @@ def check_copy_trading_logic():
     print("\n" + "=" * 70)
     print("DIAGNOSTIC 5: Copy Trading Signal Propagation")
     print("=" * 70)
-    
+
     print("\n✓ Checking signal propagation...")
     print("   Master BUY  → Users BUY  ✅")
     print("   Master SELL → Users SELL ✅")
     print("   No signal inversion in copy trading engine")
-    
+
     return True
 
 
@@ -115,7 +115,7 @@ def analyze_master_user_difference():
     print("\n" + "=" * 70)
     print("DIAGNOSTIC 6: Master vs User Differences")
     print("=" * 70)
-    
+
     print("\n📊 Why master might lose while users profit:")
     print("")
     print("1. ❌ SHORT Attempts on Spot Markets")
@@ -124,7 +124,7 @@ def analyze_master_user_difference():
     print("   Wasted cycles, missed LONG opportunities")
     print("   Users may not even attempt these trades")
     print("")
-    print("2. 💰 Fee Differences")  
+    print("2. 💰 Fee Differences")
     print("   Master on Coinbase: 1.4% fees")
     print("   Users on Kraken: 0.4% fees")
     print("   Same trade, 3.5x more fees for master")
@@ -143,7 +143,7 @@ def analyze_master_user_difference():
     print("5. 💵 Position Sizing")
     print("   Different account balances → different position sizes")
     print("   Smaller positions may perform better (lower impact)")
-    
+
     return False  # These are issues
 
 
@@ -154,7 +154,7 @@ def main():
     print("=" * 70)
     print("Analyzing why master loses money while users profit...")
     print()
-    
+
     results = {
         "Logic Mapping": check_trading_logic_mapping(),
         "RSI Interpretation": check_rsi_interpretation(),
@@ -162,22 +162,22 @@ def main():
         "Fee Structure": check_fee_structure(),
         "Copy Trading Logic": check_copy_trading_logic(),
     }
-    
+
     # Final analysis
     analyze_master_user_difference()
-    
+
     # Summary
     print("\n" + "=" * 70)
     print("DIAGNOSTIC SUMMARY")
     print("=" * 70)
-    
+
     logic_issues = sum(1 for v in [results["Logic Mapping"], results["Copy Trading Logic"]] if not v)
     operational_issues = sum(1 for v in [results["Shorting Capability"], results["Fee Structure"]] if not v)
-    
+
     print(f"\n Logic Issues: {logic_issues}")
     print(f" Operational Issues: {operational_issues}")
     print("")
-    
+
     if logic_issues > 0:
         print("❌ INVERTED LOGIC DETECTED!")
         print("The trading logic has inversions that need to be fixed.")
@@ -186,7 +186,7 @@ def main():
         print("✅ NO INVERTED LOGIC")
         print("All buy/sell mappings are correct.")
         print("")
-    
+
     if operational_issues > 0:
         print("⚠️  OPERATIONAL ISSUES FOUND")
         print("Master-user P&L divergence is caused by:")
@@ -201,11 +201,11 @@ def main():
         print("  • Add fee-adjusted profit targets")
         print("  • Optimize master scan frequency")
         print("")
-    
+
     print("=" * 70)
     print("For detailed analysis, see: TRADING_LOGIC_ANALYSIS.md")
     print("=" * 70)
-    
+
     return 0 if logic_issues == 0 else 1
 
 

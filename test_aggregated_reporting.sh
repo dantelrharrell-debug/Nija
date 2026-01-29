@@ -44,12 +44,12 @@ ENDPOINTS=(
 for endpoint in "${ENDPOINTS[@]}"; do
     echo ""
     echo "Testing: ${endpoint}"
-    
+
     http_code=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}${endpoint}")
-    
+
     if [ "$http_code" = "200" ]; then
         echo "  ✅ Status: ${http_code} OK"
-        
+
         # Get a sample of the response
         response=$(curl -s "${BASE_URL}${endpoint}" | jq -r '.timestamp // .error // "No timestamp"' 2>/dev/null)
         echo "  📊 Response: ${response}"
@@ -57,7 +57,7 @@ for endpoint in "${ENDPOINTS[@]}"; do
         echo "  ⚠️  Status: ${http_code} Service Unavailable (modules not loaded)"
     else
         echo "  ❌ Status: ${http_code} FAILED"
-        
+
         # Show error message
         error=$(curl -s "${BASE_URL}${endpoint}" | jq -r '.error // "Unknown error"' 2>/dev/null)
         echo "  ❌ Error: ${error}"

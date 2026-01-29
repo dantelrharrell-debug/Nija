@@ -22,8 +22,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
 from tier_config import (
-    get_tier_from_balance, 
-    TradingTier, 
+    get_tier_from_balance,
+    TradingTier,
     get_tier_config,
     auto_resize_trade
 )
@@ -34,76 +34,76 @@ def test_tier_kraken_conflict():
     print("\n" + "="*70)
     print("TEST: Tier Limit vs Kraken Minimum Conflict Resolution")
     print("="*70)
-    
+
     # Scenario from the issue
     balance = 58.78
     requested_trade = 10.58
     kraken_min = 10.00
-    
+
     print(f"\n📊 Test Scenario:")
     print(f"  ├─ Account balance: ${balance:.2f}")
     print(f"  ├─ Requested trade: ${requested_trade:.2f}")
     print(f"  └─ Kraken minimum: ${kraken_min:.2f}")
-    
+
     # Get tier for this balance
     tier = get_tier_from_balance(balance, is_master=False)
     config = get_tier_config(tier)
-    
+
     print(f"\n📊 Tier Assignment:")
     print(f"  ├─ Tier: {tier.value}")
     print(f"  ├─ Trade size range: ${config.trade_size_min:.2f}-${config.trade_size_max:.2f}")
     print(f"  └─ Max risk: {config.risk_per_trade_pct[1]:.0f}% of balance")
-    
+
     # Calculate max allowed by tier
     max_by_tier = balance * (config.risk_per_trade_pct[1] / 100.0)
     max_allowed = min(config.trade_size_max, max_by_tier)
-    
+
     print(f"\n📊 Trade Size Analysis:")
     print(f"  ├─ Max by tier config: ${config.trade_size_max:.2f}")
     print(f"  ├─ Max by risk %: ${max_by_tier:.2f} ({config.risk_per_trade_pct[1]:.0f}% of ${balance:.2f})")
     print(f"  └─ Effective max: ${max_allowed:.2f}")
-    
+
     # Test auto_resize_trade
     resized_size, resize_reason = auto_resize_trade(
-        requested_trade, 
-        tier, 
-        balance, 
-        is_master=False, 
+        requested_trade,
+        tier,
+        balance,
+        is_master=False,
         exchange='kraken'
     )
-    
+
     print(f"\n📊 Auto-Resize Result:")
     print(f"  ├─ Requested: ${requested_trade:.2f}")
     print(f"  ├─ Resized to: ${resized_size:.2f}")
     print(f"  └─ Reason: {resize_reason}")
-    
+
     # Verify tier resize worked
     assert resized_size < requested_trade, "Trade should be resized down"
     assert resized_size <= max_allowed, f"Resized trade ${resized_size:.2f} exceeds max ${max_allowed:.2f}"
     print(f"  ✅ Tier auto-resize correctly limited trade to ${resized_size:.2f}")
-    
+
     # Check if resized amount is below Kraken minimum
     if resized_size < kraken_min:
         print(f"\n⚠️  CONFLICT DETECTED:")
         print(f"  ├─ Tier-adjusted size: ${resized_size:.2f}")
         print(f"  ├─ Kraken minimum: ${kraken_min:.2f}")
         print(f"  └─ Gap: ${kraken_min - resized_size:.2f} short of minimum")
-        
+
         print(f"\n✅ EXPECTED BEHAVIOR:")
         print(f"  └─ Trade should be REJECTED (not bumped to ${kraken_min:.2f})")
         print(f"     Reason: Bumping up would violate tier risk limits")
         print(f"     Protection: Tier limits protect small accounts from excessive risk")
-        
+
         # In the actual broker_manager code, this should return an error
         # We can't test that here without mocking the entire broker, but we can
         # verify the logic conditions
         assert resized_size < kraken_min, "Conflict condition exists"
         assert resized_size <= max_allowed, "Tier limit must be respected"
-        
+
         print(f"\n✅ TEST PASSED:")
         print(f"  └─ Code correctly identifies that ${resized_size:.2f} < ${kraken_min:.2f}")
         print(f"     The broker_manager should reject this trade to protect tier limits")
-        
+
         return True
     else:
         print(f"\n❌ TEST FAILED:")
@@ -117,38 +117,38 @@ def test_valid_trade_still_works():
     print("\n" + "="*70)
     print("TEST: Valid Trade (Meeting Both Requirements)")
     print("="*70)
-    
+
     # Scenario: Larger balance where tier limit is above Kraken minimum
     balance = 100.00
     requested_trade = 12.00
     kraken_min = 10.00
-    
+
     print(f"\n📊 Test Scenario:")
     print(f"  ├─ Account balance: ${balance:.2f}")
     print(f"  ├─ Requested trade: ${requested_trade:.2f}")
     print(f"  └─ Kraken minimum: ${kraken_min:.2f}")
-    
+
     tier = get_tier_from_balance(balance, is_master=False)
     config = get_tier_config(tier)
-    
+
     print(f"\n📊 Tier Assignment:")
     print(f"  ├─ Tier: {tier.value}")
     print(f"  └─ Max risk: {config.risk_per_trade_pct[1]:.0f}% of balance")
-    
+
     # Test auto_resize_trade
     resized_size, resize_reason = auto_resize_trade(
-        requested_trade, 
-        tier, 
-        balance, 
-        is_master=False, 
+        requested_trade,
+        tier,
+        balance,
+        is_master=False,
         exchange='kraken'
     )
-    
+
     print(f"\n📊 Auto-Resize Result:")
     print(f"  ├─ Requested: ${requested_trade:.2f}")
     print(f"  ├─ Resized to: ${resized_size:.2f}")
     print(f"  └─ Reason: {resize_reason}")
-    
+
     # This trade should be allowed (meets both requirements)
     if resized_size >= kraken_min:
         print(f"\n✅ VALID TRADE:")
@@ -167,47 +167,47 @@ def test_master_account_not_subject_to_tiers():
     print("\n" + "="*70)
     print("TEST: Master Account NOT Subject to Tier Limits")
     print("="*70)
-    
+
     # Scenario: Master account with small balance (same as conflict scenario)
     balance = 58.78
     requested_trade = 10.58
     kraken_min = 10.00
-    
+
     print(f"\n📊 Test Scenario:")
     print(f"  ├─ Account type: MASTER")
     print(f"  ├─ Account balance: ${balance:.2f}")
     print(f"  ├─ Requested trade: ${requested_trade:.2f}")
     print(f"  └─ Kraken minimum: ${kraken_min:.2f}")
-    
+
     # Master accounts always get BALLER tier
     tier = get_tier_from_balance(balance, is_master=True)
     config = get_tier_config(tier)
-    
+
     print(f"\n📊 Tier Assignment:")
     print(f"  ├─ Tier: {tier.value}")
     print(f"  └─ Note: Master accounts ALWAYS get BALLER tier")
-    
+
     # Test auto_resize_trade with is_master=True
     resized_size, resize_reason = auto_resize_trade(
-        requested_trade, 
-        tier, 
-        balance, 
+        requested_trade,
+        tier,
+        balance,
         is_master=True,  # MASTER account
         exchange='kraken'
     )
-    
+
     print(f"\n📊 Auto-Resize Result:")
     print(f"  ├─ Requested: ${requested_trade:.2f}")
     print(f"  ├─ Resized to: ${resized_size:.2f}")
     print(f"  └─ Reason: {resize_reason}")
-    
+
     # Master accounts have flexible limits
     # Even if resized, they should be allowed to bump up to Kraken minimum
     print(f"\n✅ MASTER ACCOUNT BEHAVIOR:")
     print(f"  ├─ Master accounts are NOT subject to tier limits")
     print(f"  ├─ Always assigned BALLER tier (regardless of balance)")
     print(f"  └─ Can bump up to Kraken minimum even if tier-resized")
-    
+
     # For master account, even if resized below Kraken min, should be allowed
     # because master accounts are exempt from tier restrictions
     if tier == TradingTier.BALLER:
@@ -225,9 +225,9 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("TIER LIMIT VS KRAKEN MINIMUM CONFLICT TESTS")
     print("="*70)
-    
+
     results = []
-    
+
     # Test 1: Conflict scenario for USER accounts (should reject)
     try:
         result1 = test_tier_kraken_conflict()
@@ -237,7 +237,7 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         results.append(("USER: Tier-Kraken Conflict", False))
-    
+
     # Test 2: Valid trade scenario for USER accounts (should allow)
     try:
         result2 = test_valid_trade_still_works()
@@ -247,7 +247,7 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         results.append(("USER: Valid Trade", False))
-    
+
     # Test 3: Master account exemption (should NOT be blocked by tier limits)
     try:
         result3 = test_master_account_not_subject_to_tiers()
@@ -257,7 +257,7 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         results.append(("MASTER: Not Subject to Tiers", False))
-    
+
     # Summary
     print("\n" + "="*70)
     print("TEST SUMMARY")
@@ -265,7 +265,7 @@ if __name__ == "__main__":
     for test_name, passed in results:
         status = "✅ PASSED" if passed else "❌ FAILED"
         print(f"  {status}: {test_name}")
-    
+
     all_passed = all(r[1] for r in results)
     if all_passed:
         print("\n✅ ALL TESTS PASSED")

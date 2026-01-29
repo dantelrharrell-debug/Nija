@@ -100,7 +100,7 @@ from bot.mmin import TransferLearningEngine
 transfer = TransferLearningEngine()
 
 # Learn from crypto
-pattern = transfer.learn_pattern(crypto_data, 'crypto', 'breakout', 
+pattern = transfer.learn_pattern(crypto_data, 'crypto', 'breakout',
                                  outcome={'profit': 0.03, 'win': True})
 
 # Apply to equities
@@ -139,12 +139,12 @@ from bot.mmin import MMINEngine
 class YourStrategy:
     def __init__(self):
         self.mmin = MMINEngine()
-    
+
     def generate_signals(self):
         # Get MMIN analysis
         analysis = self.mmin.analyze_markets()
         regime = analysis['macro_regime']['regime']
-        
+
         # Adjust strategy based on regime
         if regime.value == 'risk_off':
             self.reduce_positions()
@@ -152,7 +152,7 @@ class YourStrategy:
         elif regime.value == 'risk_on':
             self.increase_positions()
             self.widen_targets()
-        
+
         # Use MMIN signals with cross-market confirmation
         for signal in analysis['signals']:
             if signal['cross_market_confirmations'] >= 2:
@@ -272,10 +272,10 @@ print(f"Learning Stats: {status['learning_stats']}")
 
 **MMIN transforms NIJA from a single-market bot into a GLOBAL TRADING INTELLIGENCE**
 
-🧬 Cross-market learning  
-🧠 Transfer learning  
-📊 Macro forecasting  
-💰 Global capital routing  
-🔗 Correlation intelligence  
+🧬 Cross-market learning
+🧠 Transfer learning
+📊 Macro forecasting
+💰 Global capital routing
+🔗 Correlation intelligence
 
 **You're ready to trade like a global hedge fund!** 🚀
