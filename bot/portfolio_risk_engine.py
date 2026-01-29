@@ -176,7 +176,16 @@ class PortfolioRiskEngine:
         Returns:
             True if position was added, False if rejected by risk checks
         """
-        pct_of_portfolio = size_usd / portfolio_value if portfolio_value > 0 else 0
+        # Input validation
+        if portfolio_value <= 0:
+            logger.error(f"Invalid portfolio value: {portfolio_value}")
+            return False
+        
+        if size_usd <= 0:
+            logger.error(f"Invalid position size: {size_usd}")
+            return False
+        
+        pct_of_portfolio = size_usd / portfolio_value
         
         # Create position exposure
         position = PositionExposure(
@@ -251,15 +260,20 @@ class PortfolioRiskEngine:
         
         # Build DataFrame of returns
         returns_data = {}
-        min_length = min(len(series) for series in self.price_history.values())
         
-        if min_length < 20:  # Need at least 20 periods
+        # Use consistent lookback period across all symbols
+        max_lookback = min(
+            min(len(series) for series in self.price_history.values()),
+            self.correlation_lookback
+        )
+        
+        if max_lookback < 20:  # Need at least 20 periods
             logger.debug("Not enough price history for correlation calculation")
             return
         
         for symbol, series in self.price_history.items():
-            # Use last N periods
-            recent_prices = series.iloc[-min(len(series), self.correlation_lookback):]
+            # Use last N periods (same for all symbols)
+            recent_prices = series.iloc[-max_lookback:]
             returns = recent_prices.pct_change().dropna()
             returns_data[symbol] = returns
         

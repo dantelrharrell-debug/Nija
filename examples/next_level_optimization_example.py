@@ -137,21 +137,12 @@ class OptimizedTradingStrategy:
         logger.info(f"Strategy: {strategy_result.selected_strategy.value}")
         logger.info(f"Confidence: {strategy_result.regime_detection.confidence:.2%}")
         
-        # 2. Check if strategy allows entry
-        # For this example, assume a simple signal score (would be calculated in real system)
-        signal_score = 4  # Mock score
-        
-        if not self.regime_selector.current_regime:
-            logger.info("❌ No regime detected - skipping")
-            return None
-        
-        # 3. Get regime-specific parameters
+        # 2. Check if regime was detected and strategy is available
         if self.regime_selector.current_regime is None:
             logger.info("❌ No regime detected - skipping")
             return None
         
         # Get strategy params from current detection
-        strategy_result_obj = strategy_result.regime_detection
         playbook = strategy_result.strategy_params
         
         if playbook is None:

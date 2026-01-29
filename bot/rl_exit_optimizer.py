@@ -408,9 +408,10 @@ class RLExitOptimizer:
             model_data = json.load(f)
         
         # Restore Q-table (convert string keys back to tuples)
+        import ast
         self.q_table = {}
         for k_str, v in model_data['q_table'].items():
-            k_tuple = eval(k_str)  # Convert string representation back to tuple
+            k_tuple = ast.literal_eval(k_str)  # Safely convert string to tuple
             self.q_table[k_tuple] = np.array(v)
         
         self.epsilon = model_data['epsilon']
