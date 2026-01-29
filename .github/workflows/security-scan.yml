@@ -61,6 +61,8 @@ jobs:
         extra_args: --debug --only-verified
 
     - name: TruffleHog Secret Scan (Push - Diff)
+      # Only scan diff when github.event.before is valid (not the Git null SHA)
+      # The null SHA (all zeros) indicates a new branch or initial commit
       if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
       uses: trufflesecurity/trufflehog@main
       with:
@@ -70,6 +72,7 @@ jobs:
         extra_args: --debug --only-verified
 
     - name: TruffleHog Secret Scan (Push - Full Scan for New Branch)
+      # Full scan when github.event.before is the Git null SHA (new branch/initial commit)
       if: github.event_name == 'push' && github.event.before == '0000000000000000000000000000000000000000'
       uses: trufflesecurity/trufflehog@main
       with:
