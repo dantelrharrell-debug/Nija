@@ -62,13 +62,18 @@ def get_portfolio_summary():
     try:
         dashboard = get_performance_dashboard()
         summary = dashboard.get_portfolio_summary()
-        JSON with health status
-    """
-    return jsonify({
-        'status': 'healthy',
-        'service': 'dashboard_api',
-        'timestamp': str(datetime.now())
-    })
+        
+        return jsonify({
+            'success': True,
+            'data': summary
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting portfolio summary: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 @dashboard_bp.route('/performance', methods=['GET'])
@@ -326,6 +331,24 @@ def get_investor_summary():
 
     Returns:
         JSON with complete investor report
+    """
+    try:
+        dashboard = get_performance_dashboard()
+        summary = dashboard.get_investor_summary()
+        
+        return jsonify({
+            'success': True,
+            'data': summary
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting investor summary: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @dashboard_api.route('/monthly-reports', methods=['GET'])
 def get_all_monthly_reports():
     """
@@ -416,7 +439,6 @@ def get_investor_summary():
         return jsonify({
             'success': True,
             'data': summary
-        })
         }), 200
 
     except Exception as e:
@@ -494,19 +516,6 @@ def export_investor_report():
             'error': 'Invalid output directory path',
             'details': str(e)
         }), 400
-            'data': {
-                'user_id': summary['user_id'],
-                'portfolio_value': summary['portfolio_value'],
-                'total_pnl': summary['total_pnl'],
-                'win_rate': summary['win_rate'],
-                'total_trades': summary['total_trades']
-            }
-        })
-    except Exception as e:
-        logger.error(f"Error getting summary: {e}")
-                'filepath': filepath
-            }
-        }), 200
 
     except Exception as e:
         logger.error(f"Error exporting investor report: {e}")
