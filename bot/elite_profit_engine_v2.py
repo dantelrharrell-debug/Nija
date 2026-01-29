@@ -25,12 +25,21 @@ from datetime import datetime
 import pandas as pd
 
 # Import all optimization modules
-from bot.volatility_adaptive_sizer import VolatilityAdaptiveSizer, get_volatility_adaptive_sizer
-from bot.smart_capital_rotator import SmartCapitalRotator, StrategyType, get_smart_capital_rotator
-from bot.adaptive_leverage_system import AdaptiveLeverageSystem, get_adaptive_leverage_system, LeverageMode
-from bot.smart_daily_profit_locker import SmartDailyProfitLocker, get_smart_daily_profit_locker
-from bot.trade_frequency_optimizer import TradeFrequencyOptimizer, get_trade_frequency_optimizer, SignalQuality
-from bot.profit_compounding_engine import ProfitCompoundingEngine, get_compounding_engine
+try:
+    from volatility_adaptive_sizer import VolatilityAdaptiveSizer, get_volatility_adaptive_sizer
+    from smart_capital_rotator import SmartCapitalRotator, StrategyType, get_smart_capital_rotator
+    from adaptive_leverage_system import AdaptiveLeverageSystem, get_adaptive_leverage_system, LeverageMode
+    from smart_daily_profit_locker import SmartDailyProfitLocker, get_smart_daily_profit_locker
+    from trade_frequency_optimizer import TradeFrequencyOptimizer, get_trade_frequency_optimizer, SignalQuality
+    from profit_compounding_engine import ProfitCompoundingEngine, get_compounding_engine
+except ImportError:
+    # Try absolute imports if relative imports fail
+    from bot.volatility_adaptive_sizer import VolatilityAdaptiveSizer, get_volatility_adaptive_sizer
+    from bot.smart_capital_rotator import SmartCapitalRotator, StrategyType, get_smart_capital_rotator
+    from bot.adaptive_leverage_system import AdaptiveLeverageSystem, get_adaptive_leverage_system, LeverageMode
+    from bot.smart_daily_profit_locker import SmartDailyProfitLocker, get_smart_daily_profit_locker
+    from bot.trade_frequency_optimizer import TradeFrequencyOptimizer, get_trade_frequency_optimizer, SignalQuality
+    from bot.profit_compounding_engine import ProfitCompoundingEngine, get_compounding_engine
 
 logger = logging.getLogger("nija.elite_engine")
 
@@ -397,7 +406,7 @@ if __name__ == "__main__":
     )
     
     # Create sample data
-    dates = pd.date_range('2024-01-01', periods=100, freq='1H')
+    dates = pd.date_range('2024-01-01', periods=100, freq='1h')
     df = pd.DataFrame({
         'timestamp': dates,
         'close': np.random.randn(100).cumsum() + 100,
@@ -407,7 +416,10 @@ if __name__ == "__main__":
     })
     
     # Calculate indicators
-    from bot.indicators import calculate_atr, calculate_rsi, calculate_macd
+    try:
+        from indicators import calculate_atr, calculate_rsi, calculate_macd
+    except ImportError:
+        from bot.indicators import calculate_atr, calculate_rsi, calculate_macd
     df['atr'] = calculate_atr(df, period=14)
     df['rsi'] = calculate_rsi(df, period=14)
     macd, signal, hist = calculate_macd(df)
