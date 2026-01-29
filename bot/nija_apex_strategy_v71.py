@@ -194,7 +194,7 @@ class NIJAApexStrategyV71:
         if self.use_enhanced_scoring:
             logger.info("✅ Enhanced entry scoring: ENABLED (0-100 weighted scoring)")
             logger.info("✅ Regime detection: ENABLED (trending/ranging/volatile)")
-            min_score = self.config.get('min_score_threshold', 75)
+            min_score = self.config.get('min_score_threshold', 50)  # EMERGENCY FIX: Updated default from 75 to 50
             logger.info(f"✅ Minimum entry score: {min_score}/100 (quality threshold)")
         if self.enable_stepped_exits:
             logger.info("✅ Stepped profit-taking: ENABLED (partial exits at multiple levels)")
