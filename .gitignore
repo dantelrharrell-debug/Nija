@@ -59,7 +59,7 @@ canary-metrics*.json
 # Updated Jan 17, 2026: Account-specific nonce files in /data directory
 kraken_nonce.txt
 bot/kraken_nonce.txt
-data/kraken_nonce*.txt
+data/kraken*nonce*.txt
 data/kraken_nonce.txt
 data/kraken_nonce_*.txt
 
@@ -74,6 +74,27 @@ data/compounding_state.json
 data/drawdown_protection.json
 data/milestones.json
 data/capital_allocation.json
+
+# Trading state files (runtime state, should not be committed)
+# Daily profit tracking
+data/daily_profit_history.json
+data/daily_profit_state.json
+# Progressive targets
+data/progressive_targets.json
+data/progressive_targets_*.json
+# Trade history and positions
+data/trade_history.json
+data/trade_history_*.json
+data/open_positions.json
+data/open_positions.json.*
+# Trade exports and database
+data/nija_trades_*.csv
+data/trade_ledger.db
+data/trade_ledger.db-journal
+
+# Demo and learning data (runtime state, should not be committed)
+data/demo_live_tracking/
+data/learning/
 
 # Secure vault database (contains encrypted credentials)
 vault.db
